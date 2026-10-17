@@ -45,7 +45,7 @@ This keeps the business layer understandable and makes future Mercur upgrades mo
 
 ## Accepted baseline deviations
 
-The current Mercur 2.3.6 baseline includes accepted local deviations that must be documented and re-evaluated on every upgrade.
+The current Mercur 2.3.7 baseline includes accepted local deviations that must be documented and re-evaluated on every upgrade.
 
 ### Upstream known issue
 
@@ -59,6 +59,6 @@ The current Mercur 2.3.6 baseline includes accepted local deviations that must b
 
 ### Project customization
 
-Current status: `None.`
+Current status: DoğruAdres-owned `dogruadresAccess` module and `/dogruadres` routes implement Person-to-framework-actor mappings, Organization membership checks, fail-closed Organization scoping, protected invitation/role workflows and a shared transactional audit-event model. Platform Organization provisioning is restricted to authenticated Medusa `user` actors and assigns initial protected Owners. No Mercur/Medusa source is modified. The current invite acceptance depends on an existing verified email record from Medusa Auth; no new provider or invitation-mail provider was introduced. Vehicle routes and Store/Organization associations are outside this checkpoint.
 
 These temporary adjustments are not permanent architecture. Every Mercur upgrade must explicitly re-check whether the compatibility adjustment is still necessary.
