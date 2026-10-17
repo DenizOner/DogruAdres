@@ -1,10 +1,10 @@
 # Vehicle-0C — B2 Transaction Contract Review and C Architecture Exception Assessment
 
-- **Status:** Technical research COMPLETE; architecture decision PROPOSED / AWAITING explicit Product Owner adoption. This document is NOT an accepted ADR.
+- **Status:** Historical research COMPLETED; C was PROPOSED during this assessment, but was SUBSEQUENTLY ACCEPTED on 2026-10-18 in [ADR-0004](../adr/ADR-0004-co-located-vehicle-access-transactional-audit.md). Research evidence preserved; atomicity remains UNPROVEN.
 - **Recorded:** 2026-10-18. Do not infer or invent the original historical Product Owner approval timestamp.
 - **Base:** merged Foundation main d87ba52f99f74d7fec52af70a815fe91a989fc3f; Vehicle review branch feature/vehicle-management-mvp.
 - **Owner and authority:** DogruAdres Technical Consultant, Product Owner. REQUIREMENTS.md DA-AUTO-001/006, V-01–V-07, N-01/P1, N-02/C1, SECURITY.md, accepted ADR-0002 and Mercur v2.3.7 / Medusa v2.21.2 contracts.
-- **Checkpoint boundary:** The Product Owner authorized independent comparison of supported B2 APIs and C's architectural cost. They have NOT yet selected C, authorized a new proof run, implemented Vehicle-1, merged this branch, migrated a protected database or deployed software.
+- **Checkpoint timeline:** This research was originally authorized as assessment only; the Product Owner LATER adopted C in ADR-0004. No new C proof has been authorized or run; Vehicle-1, protected migration, branch merge and deployment remain prohibited.
 
 ## Objective
 
@@ -87,9 +87,9 @@ Sources above show useful supported primitives but NOT a documented stable publi
 
 **Gate 0 (complete):** Independent review of failed B1 proof and version-matched API/documentation. Classification INCONCLUSIVE.
 
-**Gate 1 (OPEN — Product Owner):** Explicitly approve or reject C's scoped physical-module exception. The current approval authorizes ASSESSMENT ONLY, not architectural adoption. If rejected, B2 research may resume only with a specific stable official API contract, not speculative metadata patching.
+**Gate 1 (CLOSED — Product Owner):** C scoped physical-module/internal Vehicle-service exception was explicitly ACCEPTED in ADR-0004. This is architecture approval only, NOT atomicity PASS or Vehicle-1 permission. B2 remains unproven.
 
-**Gate 2 (OPEN — separate runtime authorization):** After Gate 1, perform an isolated, disposable, minimum same-module C feasibility proof using unmodified Access+Audit code and temporary Vehicle-like model inside an isolated snapshot (never existing repository working trees or databases). Prove:
+**Gate 2 (OPEN — SEPARATE RUNTIME AUTHORIZATION NOT YET GRANTED):** After ADR-0004 adoption, a new explicit Product Owner approval is required before performing or delegating an isolated, disposable, minimum same-module C feasibility proof using unmodified Access+Audit code and temporary Vehicle-like model inside an isolated snapshot (never existing repository working trees or databases). DO NOT execute now. Prove:
 - Both successful writes persist together through actual Medusa same-module service API.
 - Injected audit insert failure rolls back Vehicle create, update and soft-delete; injected Vehicle failure leaves no audit.
 - Independent connection sees no intermediate committed partial state; collect same PID/transaction ID, actual SQL and postcondition queries.
@@ -101,9 +101,9 @@ Sources above show useful supported primitives but NOT a documented stable publi
 ## Documentation and change-control
 
 - N-01/P1, N-02/C1 and V-01–V-07 remain approved product rules.
-- This architecture assessment is PROPOSED and is NOT an accepted ADR; no replacement of ADR-0002.
+- This historical assessment PROPOSED C at the time; C was later ACCEPTED as a narrowly scoped architecture exception in ADR-0004. The runtime C atomicity proof is still UNPROVEN and ADR-0002 remains Accepted and unchanged.
 - No new requirement IDs, no whole-record decision-status changes, no claims of Vehicle implementation and no back-dated product-owner approvals.
-- Capture any actual Product Owner adoption of C in a later reviewed architecture decision (new accepted ADR if required by repository governance), plus scoped REQUIREMENTS and Vehicle plan amendments.
+- The subsequent Product Owner adoption is now documented in Accepted ADR-0004 and scoped project requirements/plans. Neither new proof execution nor feature implementation is authorized by this documentation checkpoint.
 
 ## Verification, files and rollback
 

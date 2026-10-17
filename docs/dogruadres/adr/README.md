@@ -43,3 +43,4 @@ Use one of the following statuses:
 - `ADR-0001-mercur-as-marketplace-engine.md`
 - `ADR-0002-automotive-domain-isolation.md`
 - `ADR-0003-mercur-core-modification-policy.md`
+- `ADR-0004-co-located-vehicle-access-transactional-audit.md` — Accepted, manual Vehicle MVP only; SQL proof pending

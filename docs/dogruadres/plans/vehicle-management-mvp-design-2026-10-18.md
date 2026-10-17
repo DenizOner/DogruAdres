@@ -34,6 +34,10 @@ No VIN decoder, vehicle identification/lookup service, OEM or LexCom connection,
 
 Existing unrelated Storefront, dashboard, Mercur upgrade and production-deployment limitations are not implicitly resolved by Vehicle development. Do not alter Mercur/Medusa source.
 
+## Accepted ADR-0004 and proof gate
+
+The narrow C co-located physical module boundary is Accepted in [ADR-0004](../adr/ADR-0004-co-located-vehicle-access-transactional-audit.md), but physical audit atomicity is NOT YET PROVEN. The mandatory disposable C-01–C-10 proof requires a separate explicit Product Owner approval. No Vehicle code is implemented or authorized.
+
 ## Existing architecture
 
 - Mercur 2.3.7 / Medusa 2.21.2 are the installed baseline declared by ARCHITECTURE.md and pinned in API package manifests.
@@ -46,7 +50,7 @@ Existing unrelated Storefront, dashboard, Mercur upgrade and production-deployme
 
 ### Module and physical ownership
 
-A dedicated project-owned Vehicle domain module is the recommended logical home for Vehicle state, for example dogruadresVehicle (final identifier is a technical design choice). Keep Organization/Person/Membership and the existing audit model under dogruadresAccess; do not duplicate identity or permission authority inside Vehicle.
+**ADR-0004 accepted physical boundary (manual Vehicle MVP only):** Retain the existing project-owned dogruadresAccess physical Medusa module as the persistence/metadata home for Foundation Person/Organization/Membership/Invitation/AuditEvent AND prospective Vehicle model. Place Vehicle behavior in logically separate internal service(s), domain helpers, validators and workflows. Do NOT bootstrap a second independent Vehicle module for the MVP, move Vehicle into Mercur marketplace metadata, or duplicate the canonical shared audit. This design exception does not authorize code.
 
 Proposed logical Vehicle attributes:
 
@@ -64,7 +68,7 @@ No creator ownership field, no creator attribution in arbitrary Vehicle metadata
 
 Propose two distinct partial unique constraints for (organization_id, plate_key) and (organization_id, vin_key), restricted to non-deleted rows and non-empty normalized values. Also enforce V-01 through consistent application validation and an appropriate database-level invariant when feasible; decide the concrete null/empty representation and generated normalized key population together. Verify behavior during concurrent create AND concurrent update, not only sequential requests.
 
-Because the existing Organization module and a dedicated Vehicle module are distinct boundaries, do not assume that a direct ORM relation, physical cross-module FK, module link or transaction sharing is supported. Inspect the installed version-matched Mercur documentation and Medusa 2.21.2 source/contracts, then choose a supported reference-integrity and module-integration strategy. Never weaken the domain's Organization ownership because of a framework convenience limitation.
+**Reference/transaction boundary:** With ADR-0004, Organization and Vehicle will reside in one project-owned physical module, but Organization is still the immutable Vehicle owner and Person never owns it. Same-module entity metadata MAY permit both Vehicle and AuditEvent service operations, but same physical PostgreSQL transaction must be proved via separately authorized C-01–C-10 tests. Any future cross-link to Mercur primitives requires supported extensions; no undocumented cross-module foreign key or relaxed authorization is implied.
 
 ### N-01/N-02 approved P1 and C1 canonicalization profiles — 2026-10-18
 
@@ -117,7 +121,7 @@ All routes authenticate real Medusa actor context, map it to Person and active O
 
 The shared audit trail remains in dogruadresAccess. Proposed event actions: vehicle.created, vehicle.updated, vehicle.deleted; exact names and allowed before/after fields are technical design choices.
 
-CRITICAL GATE: Cross-module Vehicle mutation plus mandatory shared Foundation audit must use the SAME proven PostgreSQL transaction; workflow compensation and a passed sharedContext do not prove it. See the detailed Vehicle-0B proof gate below. No Vehicle-1 implementation until verified and independently approved.
+CRITICAL GATE: Accepted ADR-0004 co-locates future Vehicle and canonical AuditEvent metadata, but does NOT prove a common PostgreSQL transaction. The mandatory C-01–C-10 disposable same-module audit-INSERT failure test requires a SEPARATE Product Owner authorization and independent PASS review. Mere metadata visibility, forwarded sharedContext or workflow compensation does NOT suffice. No Vehicle-1 implementation until then.
 
 ### Vehicle-0B shared audit: official-version proof gate (NOT YET PASSED)
 
@@ -138,7 +142,7 @@ Verified version-matched sources:
 
 ## Vehicle-0C — B1 Evidence, B2 Contract Review and C Candidate
 
-[Vehicle-0C architecture review](vehicle-0c-atomicity-architecture-review-2026-10-18.md) records the independent INCONCLUSIVE B1 test result, rescan of Mercur v2.3.7/Medusa v2.21.2 APIs, and conditional C recommendation. B2 is not proven or categorically impossible; no stable supported cross-module physical SQL transaction contract was positively verified. Medusa supports multiple internal services within one module, which can preserve logical Vehicle code separation in candidate C, but C requires an explicit Product Owner architecture-exception decision and a NEW authorized isolated same-module audit-failure proof. Neither has happened. Vehicle-1 remains NOT AUTHORIZED.
+[Vehicle-0C architecture review](vehicle-0c-atomicity-architecture-review-2026-10-18.md) preserves independent INCONCLUSIVE B1 evidence and source-backed B2 uncertainties. C was subsequently ACCEPTED solely as an architecture exception in [ADR-0004](../adr/ADR-0004-co-located-vehicle-access-transactional-audit.md). The C-01–C-10 disposable proof still requires separate authorization and has NOT been run; Vehicle-1 remains NOT AUTHORIZED.
 
 ## Mercur extension points involved
 
@@ -146,7 +150,7 @@ Proposed project-owned modules, explicit HTTP routes and request middleware, Med
 
 ## Files and components affected (prospective only)
 
-- packages/api/src/modules/ — new project-owned Vehicle module and model(s), subject to approval.
+- packages/api/src/modules/dogruadres-access/ — proposed Vehicle model registration plus logically separated internal Vehicle service/helpers in the existing physical module, subject to later proof PASS and Vehicle-1 authorization.
 - packages/api/src/api/dogruadres/ — Organization-scoped Vehicle routes and explicit authentication middleware.
 - packages/api/src/utils/ or project access layer — explicit vehicle.read/create/update/delete policy extension.
 - packages/api/src/workflows/ — bounded mutations and audit orchestration.
@@ -175,7 +179,7 @@ Automotive domain code must remain in project-owned boundaries and use installed
 
 ## Risks and open questions
 
-1. **BLOCKING technical gate:** shared cross-module audit atomicity and version-matched transaction support, including deterministic audit-failure rollback.
+1. **BLOCKING technical gate:** Accepted ADR-0004 same-module Vehicle and canonical AuditEvent boundary must still prove one physical SQL transaction and true audit-INSERT-failure rollback for create/update/soft-delete under C-01–C-10.
 2. **APPROVED N-01/N-02 scope; remaining validation details:** P1/C1 algorithms and Unicode refusal are approved. Max lengths, auxiliary/year bounds, PATCH/error semantics and normalization-version migration still require precise design.
 3. **Implementation contract to finalize:** pagination, deleted-record HTTP responses, update/empty-value semantics, error codes and any Organization inactive handling.
 4. **Future deferred:** restore, retention, Organization transfer, attachments, branch-level access, Quotations, OEM providers, automatic fitment and integrations.
@@ -238,5 +242,5 @@ For documentation-only errors, use a reviewed forward correction on the review b
 
 ## Approval status
 
-V-01–V-07 plus N-01/P1 and N-02/C1 are APPROVED by explicit Product Owner acceptance. A narrowly bounded isolated NON-PRODUCTION cross-module transaction proof is authorized in principle; its result is NOT YET VERIFIED. Vehicle-1 coding, production/migrations, full UI/CI, PR merge and deployment remain NOT AUTHORIZED.
+V-01–V-07 and N-01/P1/N-02/C1 product decisions remain APPROVED. ADR-0004 C one-physical-module, logically separated internal Vehicle-services architecture exception is ACCEPTED only as a design boundary. A new C-01–C-10 disposable proof has NOT been executed or authorized by this documentation request. The earlier B1 proof was INCONCLUSIVE. Vehicle-1 coding, migrations, CI/UI, branch merge and deployment remain NOT AUTHORIZED.
 
