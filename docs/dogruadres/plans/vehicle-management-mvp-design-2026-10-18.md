@@ -136,6 +136,10 @@ Verified version-matched sources:
 
 **Decision boundary:** Actual PASS evidence is required before selecting architecture B or authorizing Vehicle-1. Failure or inconclusiveness must be reported for independent technical review, not patched by silently weakening audit atomicity.
 
+## Vehicle-0C — B1 Evidence, B2 Contract Review and C Candidate
+
+[Vehicle-0C architecture review](vehicle-0c-atomicity-architecture-review-2026-10-18.md) records the independent INCONCLUSIVE B1 test result, rescan of Mercur v2.3.7/Medusa v2.21.2 APIs, and conditional C recommendation. B2 is not proven or categorically impossible; no stable supported cross-module physical SQL transaction contract was positively verified. Medusa supports multiple internal services within one module, which can preserve logical Vehicle code separation in candidate C, but C requires an explicit Product Owner architecture-exception decision and a NEW authorized isolated same-module audit-failure proof. Neither has happened. Vehicle-1 remains NOT AUTHORIZED.
+
 ## Mercur extension points involved
 
 Proposed project-owned modules, explicit HTTP routes and request middleware, Medusa workflows, supported query or module-link facilities where required. Specific Mercur/Medusa extension API names and cross-module transaction facilities are not accepted until validated against installed 2.3.7 / 2.21.2 documentation and source. Consult installed node_modules/@mercurjs/docs/llms.txt and relevant MDX files before writing code.

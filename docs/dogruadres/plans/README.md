@@ -30,6 +30,8 @@ Keep the plan in the repository while the work is in scope. If a plan is superse
 
 - [Vehicle Management MVP — Vehicle-0 Decision and Design Plan](vehicle-management-mvp-design-2026-10-18.md) — V-01–V-07 plus N-01/P1 and N-02/C1 approved; shared-audit physical SQL atomicity proof pending. Vehicle-1 coding not authorized.
 
+- [Vehicle-0C B2/C Architecture Assessment](vehicle-0c-atomicity-architecture-review-2026-10-18.md) — independent metadata-blocked proof review, supported API research and a conditional C exception recommendation; C not adopted and no Vehicle-1 authorization.
+
 ## Template
 
 Use `TEMPLATE.md` for the minimum required structure.
