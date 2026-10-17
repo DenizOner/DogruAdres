@@ -28,7 +28,7 @@ Keep the plan in the repository while the work is in scope. If a plan is superse
 
 ## Active Vehicle planning
 
-- [Vehicle Management MVP — Vehicle-0 Decision and Design Plan](vehicle-management-mvp-design-2026-10-18.md) — V-01–V-07 product scope approved; technical design proposed; cross-module audit and normalization gates open. No application implementation authorization.
+- [Vehicle Management MVP — Vehicle-0 Decision and Design Plan](vehicle-management-mvp-design-2026-10-18.md) — V-01–V-07 plus N-01/P1 and N-02/C1 approved; shared-audit physical SQL atomicity proof pending. Vehicle-1 coding not authorized.
 
 ## Template
 

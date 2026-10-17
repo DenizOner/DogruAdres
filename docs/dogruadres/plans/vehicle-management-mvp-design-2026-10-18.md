@@ -66,11 +66,36 @@ Propose two distinct partial unique constraints for (organization_id, plate_key)
 
 Because the existing Organization module and a dedicated Vehicle module are distinct boundaries, do not assume that a direct ORM relation, physical cross-module FK, module link or transaction sharing is supported. Inspect the installed version-matched Mercur documentation and Medusa 2.21.2 source/contracts, then choose a supported reference-integrity and module-integration strategy. Never weaken the domain's Organization ownership because of a framework convenience limitation.
 
-### Required resolution before backend implementation: V-02 canonicalization
+### N-01/N-02 approved P1 and C1 canonicalization profiles — 2026-10-18
 
-Approval of canonicalization DIRECTION is not approval of an arbitrary implementation algorithm. Record a separate exact test-case table for: Turkish/other locale casing, Unicode normalization, whitespace types, dash and separator character set, leading/trailing spaces, case-folding, blank inputs, invalid control characters, VIN character policy, and persisted normalization-version stability.
+**Decision status:** P1 plate and C1 VIN/chassis input/equality profiles APPROVED for the *first* manual Vehicle MVP. International plates, broader alphabets and external VIN validation are excluded, not silently supported. An identifier equality key proves neither legal plate validity nor physical vehicle identity.
 
-Examples to evaluate: plate "34 ABC 123" vs "34ABC123"; VIN "wvwzzz1jzxw000001" vs "WVWZZZ1JZXW000001". These illustrate intended equivalence, not authorization to discard every punctuation or impose a universal 17-character VIN validation. Distinguish known formatting equivalences from collisions caused by overly aggressive normalization. Implement only after the final algorithm is explicitly approved.
+**P1 plate pipeline:** Validate original code points against ASCII A-Z/a-z/0-9, ordinary ASCII space U+0020, NBSP U+00A0 and ASCII hyphen-minus U+002D ONLY. Reject unsupported Unicode (including Turkish dotted/dotless I, fullwidth forms, zero-width/bidi/control characters), slash, dot, underscore, newline/tab, en-dash and non-approved spaces; NEVER transliterate, locale-fold or NFKC-transform. Retain accepted meaningful display text separately. Form canonical plate_key with ASCII-only uppercasing and deletion of ONLY U+0020, U+00A0 and U+002D. A separator-only plate gives a missing/null key, not an empty index string. No plate registration pattern or province code validation.
+
+| Plate input | P1 result |
+| --- | --- |
+| 34 ABC 123, 34ABC123, 34-ABC-123, 34 abc 123 | SAME key 34ABC123 |
+| 34 + U+00A0 + ABC + U+00A0 + 123 | SAME key 34ABC123 |
+| only approved spaces/NBSP/hyphens | missing/null key |
+| 34/ABC/123, 34 + en-dash + ABC123 | REJECT |
+| 34İBC123, 34ıBC123, fullwidth ABC, embedded U+200B | REJECT |
+| tab/newline inside, unsupported whitespace | REJECT |
+| 34 | key 34; no official plate validity asserted |
+
+**C1 VIN/chassis pipeline:** Remove ONLY leading/trailing ASCII U+0020 spaces. After trimming, accept ASCII letters/digits and literal ASCII hyphen-minus U+002D, dot U+002E and slash U+002F. Uppercase ASCII letters only, PRESERVE those punctuation marks. Reject *internal* ASCII spaces, NBSP, tabs/newlines, Unicode lookalikes, other punctuation or invisible characters. No 17-character mandatory length, no VIN check digit, no OEM lookup, no I/O/Q ban and no legal/authenticity assertion.
+
+| VIN/chassis input | C1 result |
+| --- | --- |
+| wvwzzz1jzxw000001, WVWZZZ1JZXW000001 | SAME key WVWZZZ1JZXW000001 |
+| leading/trailing ASCII spaces around value | same trimmed key |
+| AB-123, AB.123, AB/123, AB123 | FOUR DIFFERENT keys, punctuation preserved |
+| AB 123, AB + NBSP + 123, fullwidth letters, U+200B inside | REJECT |
+| ASCII-space-only input | missing/null key |
+| I0OQ1 | key I0OQ1; no modern-VIN validity assertion |
+
+The test fixtures must use REAL Unicode code points matching the U+XXXX representations, not the literal five-character text. For both profiles: effective missing values are stored as NULL, and BOTH identifiers missing violates V-01. Live partial unique indexes on (organization_id, plate_key) and separately (organization_id, vin_key) must enforce concurrent writes with deleted_at IS NULL. Soft-deleted identifiers may be reused. Keep normalization contracts versioned; future broader profiles require migration and collision review.
+
+**Implementation technical details still OPEN:** maximum string lengths, optional label/make/model/model-year validation limits, handling of malformed separator-only supplied fields when VIN exists, PATCH null/empty behavior, API errors/pagination/deleted-resource responses and migration mechanics. No product-meaningful equivalence can be changed without approval.
 
 ### Deletion/reuse boundary
 
@@ -92,7 +117,24 @@ All routes authenticate real Medusa actor context, map it to Person and active O
 
 The shared audit trail remains in dogruadresAccess. Proposed event actions: vehicle.created, vehicle.updated, vehicle.deleted; exact names and allowed before/after fields are technical design choices.
 
-CRITICAL GATE: Do not assume a Medusa workflow compensation, cross-module call, or two service transactions equals a single PostgreSQL commit. Before selecting an architecture, verify version-matched module and transaction behavior and prove that a targeted audit insert failure leaves no committed Vehicle mutation. If supported single-transaction atomicity is impossible with isolated Vehicle and Access modules, present alternatives and trade-offs for Product Owner/Technical Consultant approval BEFORE implementing an eventually consistent substitute. Avoid secrets, identifiers that reveal other Organizations, and unnecessary personal data in audit values.
+CRITICAL GATE: Cross-module Vehicle mutation plus mandatory shared Foundation audit must use the SAME proven PostgreSQL transaction; workflow compensation and a passed sharedContext do not prove it. See the detailed Vehicle-0B proof gate below. No Vehicle-1 implementation until verified and independently approved.
+
+### Vehicle-0B shared audit: official-version proof gate (NOT YET PASSED)
+
+The Product Owner approved a **narrow isolated, disposable non-production feasibility proof**, not a Vehicle-1 code checkpoint. Actual cross-module SQL atomicity remains UNPROVEN.
+
+Verified version-matched sources:
+- Mercur v2.3.7 thin-modules rule: https://github.com/mercurjs/mercur/blob/v2.3.7/apps/docs/resources/best-practices/modules.mdx — module owns its own tables, no cross-module service dependency.
+- Mercur v2.3.7 module links: https://github.com/mercurjs/mercur/blob/v2.3.7/apps/docs/resources/best-practices/module-links.mdx — links and Query are not raw same-transaction promises.
+- Mercur v2.3.7 workflows: https://github.com/mercurjs/mercur/blob/v2.3.7/apps/docs/resources/best-practices/workflows.mdx — compensation of completed steps is not an atomic PostgreSQL rollback.
+- Medusa v2.21.2 @InjectTransactionManager: https://github.com/medusajs/medusa/blob/v2.21.2/packages/core/utils/src/modules-sdk/decorators/inject-transaction-manager.ts — reuses an existing context.transactionManager or starts its own repository transaction. This alone does not show that two independent module repositories share the same connection.
+- Medusa v2.21.2 @InjectManager: https://github.com/medusajs/medusa/blob/v2.21.2/packages/core/utils/src/modules-sdk/decorators/inject-manager.ts — forwarded context also is not cross-module atomicity proof.
+
+**Architecture candidate order:** (B) dedicated Vehicle module and existing Access audit using one demonstrably supported physical SQL transaction; then, ONLY IF B fails, separately evaluate (C) co-located physical Vehicle+audit transaction boundary as a Mercur one-domain-module exception, or (D) database-trigger audit as a coupling-heavy alternative. (A) independent workflow compensation is NOT sufficient by itself.
+
+**Proof guardrails:** Only inspect installed Mercur 2.3.7 / Medusa 2.21.2 documentation/source and, if a truly isolated non-protected disposable PostgreSQL target exists, run a small ephemeral source-control-external probe; no project Vehicle model/routes/migrations, no commits, no protected DB/volumes, no cloud billing/production, no framework patches. Evidence MUST include physical transaction identity/connection as available, both writes committed together on success, audit write failure causing zero persisted Vehicle mutation, Vehicle failure leaving no audit record, and independent DB querying of final state. Return PASS, FAIL or INCONCLUSIVE transparently with original sanitized commands/logs and provenance. A user-facing 200 or successful compensation is insufficient.
+
+**Decision boundary:** Actual PASS evidence is required before selecting architecture B or authorizing Vehicle-1. Failure or inconclusiveness must be reported for independent technical review, not patched by silently weakening audit atomicity.
 
 ## Mercur extension points involved
 
@@ -130,7 +172,7 @@ Automotive domain code must remain in project-owned boundaries and use installed
 ## Risks and open questions
 
 1. **BLOCKING technical gate:** shared cross-module audit atomicity and version-matched transaction support, including deterministic audit-failure rollback.
-2. **BLOCKING product/validation detail:** exact normalized plate/VIN input and key algorithm; invalid/blank/Unicode behavior; length and year constraints.
+2. **APPROVED N-01/N-02 scope; remaining validation details:** P1/C1 algorithms and Unicode refusal are approved. Max lengths, auxiliary/year bounds, PATCH/error semantics and normalization-version migration still require precise design.
 3. **Implementation contract to finalize:** pagination, deleted-record HTTP responses, update/empty-value semantics, error codes and any Organization inactive handling.
 4. **Future deferred:** restore, retention, Organization transfer, attachments, branch-level access, Quotations, OEM providers, automatic fitment and integrations.
 5. **Evidence:** untested Vehicle authorization, database concurrency and authenticated UI remain NOT ASSESSED until actually executed.
@@ -138,7 +180,7 @@ Automotive domain code must remain in project-owned boundaries and use installed
 ## Implementation steps (prospective, separate approval gates)
 
 1. **Vehicle-0:** Record V-01–V-07 product decisions and this proposed design plan; Technical Consultant validates documentation, remaining gates and branch diff. No code, migration or runtime work.
-2. **Vehicle-0B (if needed):** Resolve exact normalization and cross-module audit strategy using version-matched official documentation and a strictly bounded non-production design/feasibility approval. Do not claim approved architecture when only options have been discussed.
+2. **Vehicle-0B (N-01/N-02 approved; audit proof pending):** Record P1/C1 example vectors, consult exact Mercur/Medusa source, then run only approved disposable isolated transaction feasibility probe if safe. Preserve raw DB evidence and stop for consultant evaluation; do not infer architecture acceptance.
 3. **Vehicle-1:** Upon separate approval, implement Vehicle backend model, migrations, scoped API and policy, database uniqueness, transactionally atomic audit and targeted unit/native HTTP regression tests in a dedicated feature branch/review checkpoint.
 4. **Vehicle-2:** Upon separate approval, implement the authenticated Organization-facing manual UI and real-browser E2E regression evidence.
 5. **Vehicle-3:** Consolidate CI, integration/security evidence and risk review; obtain explicit Product Owner merge approval. Deployment, production migrations and Vehicle scope expansion remain separate.
@@ -173,7 +215,7 @@ Automotive domain code must remain in project-owned boundaries and use installed
 | VEH-24 | Same Person, different roles in Orgs A/B | Independent resource permissions |
 | VEH-25 | Revocation races with mutation | Approved linearization/transaction rule enforced |
 | VEH-26 | Authentication absent/client context spoofed | Rejected; no mutation |
-| VEH-27 | Unicode and separator canonicalization cases | Exactly match separately approved algorithm |
+| VEH-27 | P1/C1 Unicode, separators and canonicalization | PASS only on exact approved vectors above, including Unicode rejection |
 | VEH-28 | Authenticated Organization UI browser flow | Create/list/detail/edit/delete permissions demonstrable |
 
 Require HTTP response assertions AND persistent DB evidence for security/concurrency/rollback cases. Do not use test skips as passing evidence. CI static/build success does not imply native HTTP or browser/E2E completion.
@@ -192,5 +234,5 @@ For documentation-only errors, use a reviewed forward correction on the review b
 
 ## Approval status
 
-V-01–V-07 and the manual Vehicle MVP product boundaries: APPROVED by explicit Product Owner acceptance in the current conversation. Exact schema/API/runtime implementation, module transaction architecture, validation parameters, migrations, CI, UI and deployment: NOT YET AUTHORIZED for coding or execution. This plan is a proposal for Technical Consultant and Product Owner review; it does not itself grant implementation permission.
+V-01–V-07 plus N-01/P1 and N-02/C1 are APPROVED by explicit Product Owner acceptance. A narrowly bounded isolated NON-PRODUCTION cross-module transaction proof is authorized in principle; its result is NOT YET VERIFIED. Vehicle-1 coding, production/migrations, full UI/CI, PR merge and deployment remain NOT AUTHORIZED.
 
