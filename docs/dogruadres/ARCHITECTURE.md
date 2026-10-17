@@ -39,9 +39,9 @@ DoğruAdres owns the automotive domain and the product-specific logic layered on
 
 The identity/Organization foundation is implemented in its own Medusa module and does not reuse Mercur Member, Seller or Store as the canonical Person or Organization. No automatic Seller/Store association is created.
 
-**Prospective Vehicle physical boundary (Accepted ADR-0004, documented 2026-10-18):** For manual Vehicle MVP ONLY, existing project-owned dogruadresAccess may register Vehicle persistence in its physical Medusa module with shared canonical AuditEvent, while Vehicle business rules stay logically separated in dedicated internal services, models, validators and workflows. This explicitly bounded exception to Mercur's thin one-domain module preference does NOT change ADR-0002's isolation from Mercur marketplace primitives or authorize other automotive domains in Access. The C-01–C-10 same-transaction audit proof is UNPROVEN and REQUIRES separate authorization. There is no approved Vehicle implementation, production migration or deployment.
+**Binding physical module architecture (Accepted ADR-0005):** Vehicle Management MUST be a separate, independently registered DoğruAdres-owned physical Medusa module (provisional ID dogruadresVehicle) with its OWN models, metadata, services and migrations. Identity/Organization remains in dogruadresAccess with its existing canonical shared AuditEvent. No Vehicle model may be registered inside Access. This non-negotiable boundary applies to all project domain modules, and ADR-0004 C co-location was REVOKED/SUPERSEDED. ADR-0002 continues isolating automotive domain from Mercur marketplace primitives.
 
-These are architectural ownership declarations, not implementations.
+**Blocking integration question:** The required cross-module security audit semantics remain unresolved. B1 forwarded Vehicle manager failed with an AuditEvent metadata error (INCONCLUSIVE); investigate documented, version-matched cross-module approaches without altering physical module ownership or implicitly weakening the approved audit invariant.
 
 ## Integration boundary
 

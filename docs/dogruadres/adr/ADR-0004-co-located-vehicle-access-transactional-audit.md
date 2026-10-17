@@ -1,10 +1,15 @@
 # ADR-0004: co-located Vehicle and Access persistence for transactional audit
 
-- Status: Accepted
+- Status: Superseded
+- Superseded by: [ADR-0005](ADR-0005-mandatory-independent-physical-domain-modules.md), following explicit Product Owner withdrawal on 2026-10-18.
 - Date: 2026-10-18
 - Scope: DogruAdres manual Vehicle Management MVP ONLY
 - Decision authority: Product Owner explicitly approved the controlled C architecture exception in the current conversation; 2026-10-18 is this documentation record date, not a fabricated earlier approval timestamp or permalink.
 - Proof and delivery state: NOT PROVEN / NOT IMPLEMENTED. Accepted architecture DOES NOT authorize the disposable proof, Vehicle-1, migrations, deployment or merge.
+
+## Current authority notice
+
+**REVOKED — NOT AN AUTHORIZED DESIGN.** The Product Owner explicitly rejected physical Vehicle/Access co-location and requires all domain modules to be independently registered. This decision is retained solely as historical evidence; its design instructions MUST NOT be implemented. [ADR-0005](ADR-0005-mandatory-independent-physical-domain-modules.md) is authoritative.
 
 ## Context
 

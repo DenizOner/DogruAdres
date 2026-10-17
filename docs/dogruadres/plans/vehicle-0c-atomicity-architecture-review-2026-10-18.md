@@ -1,6 +1,6 @@
 # Vehicle-0C — B2 Transaction Contract Review and C Architecture Exception Assessment
 
-- **Status:** Historical research COMPLETED; C was PROPOSED during this assessment, but was SUBSEQUENTLY ACCEPTED on 2026-10-18 in [ADR-0004](../adr/ADR-0004-co-located-vehicle-access-transactional-audit.md). Research evidence preserved; atomicity remains UNPROVEN.
+- **Status:** HISTORICAL research. C was proposed and temporarily accepted, but Product Owner subsequently REVOKED co-location in favor of binding [ADR-0005](../adr/ADR-0005-mandatory-independent-physical-domain-modules.md). ADR-0004 is Superseded. The original B1 proof remains INCONCLUSIVE.
 - **Recorded:** 2026-10-18. Do not infer or invent the original historical Product Owner approval timestamp.
 - **Base:** merged Foundation main d87ba52f99f74d7fec52af70a815fe91a989fc3f; Vehicle review branch feature/vehicle-management-mvp.
 - **Owner and authority:** DogruAdres Technical Consultant, Product Owner. REQUIREMENTS.md DA-AUTO-001/006, V-01–V-07, N-01/P1, N-02/C1, SECURITY.md, accepted ADR-0002 and Mercur v2.3.7 / Medusa v2.21.2 contracts.
@@ -87,9 +87,9 @@ Sources above show useful supported primitives but NOT a documented stable publi
 
 **Gate 0 (complete):** Independent review of failed B1 proof and version-matched API/documentation. Classification INCONCLUSIVE.
 
-**Gate 1 (CLOSED — Product Owner):** C scoped physical-module/internal Vehicle-service exception was explicitly ACCEPTED in ADR-0004. This is architecture approval only, NOT atomicity PASS or Vehicle-1 permission. B2 remains unproven.
+**Gate 1 (REVOKED — Product Owner):** C co-location approval was expressly withdrawn and ADR-0004 Superseded by Accepted ADR-0005. No future proof or implementation may use C; independent physical modules are mandatory.
 
-**Gate 2 (OPEN — SEPARATE RUNTIME AUTHORIZATION NOT YET GRANTED):** After ADR-0004 adoption, a new explicit Product Owner approval is required before performing or delegating an isolated, disposable, minimum same-module C feasibility proof using unmodified Access+Audit code and temporary Vehicle-like model inside an isolated snapshot (never existing repository working trees or databases). DO NOT execute now. Prove:
+**Gate 2 (CANCELLED — C same-module proof):** The former C proof plan below is retained as historical evidence only and MUST NOT be run. Any new proof must use independently registered Vehicle/Access modules and a separately reviewed supported integration design. Historical cancelled expectations:
 - Both successful writes persist together through actual Medusa same-module service API.
 - Injected audit insert failure rolls back Vehicle create, update and soft-delete; injected Vehicle failure leaves no audit.
 - Independent connection sees no intermediate committed partial state; collect same PID/transaction ID, actual SQL and postcondition queries.

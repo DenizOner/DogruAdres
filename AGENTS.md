@@ -62,6 +62,10 @@ Before any non-trivial Mercur-related work:
 
 Never guess Mercur API behavior.
 
+## Mandatory independently registered domain modules
+
+**Binding Product Owner decision, Accepted ADR-0005:** All DoğruAdres domain capabilities MUST be implemented in separately registered, physically independent Medusa modules with their own models, entity metadata, services, data/migration ownership and test boundary. Vehicle belongs in its own dogruadresVehicle module; NEVER embed its persistence in dogruadresAccess or substitute internal service files for real module independence. ADR-0004 C co-location approval was expressly REVOKED and Superseded. Preserve Foundation's canonical shared audit and security rules; unsupported cross-module transactions are an unresolved integration issue, not authorization to co-locate domains or downgrade audit consistency. Stop any conflicting integration and escalate. See [ADR-0005](docs/dogruadres/adr/ADR-0005-mandatory-independent-physical-domain-modules.md).
+
 ## Project documentation rule
 
 Before DoğruAdres architectural or domain work, read the relevant project documents under `docs/dogruadres/` and use `docs/dogruadres/README.md` as the router.

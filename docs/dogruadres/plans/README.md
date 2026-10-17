@@ -30,9 +30,10 @@ Keep the plan in the repository while the work is in scope. If a plan is superse
 
 - [Vehicle Management MVP — Vehicle-0 Decision and Design Plan](vehicle-management-mvp-design-2026-10-18.md) — V-01–V-07 plus N-01/P1 and N-02/C1 approved; shared-audit physical SQL atomicity proof pending. Vehicle-1 coding not authorized.
 
-- [Vehicle-0C B2/C Architecture Assessment](vehicle-0c-atomicity-architecture-review-2026-10-18.md) — historical metadata-blocked B1 proof and B2 research; C was subsequently ACCEPTED under ADR-0004, but C proof remains pending and Vehicle-1 unauthorized.
+- [Vehicle-0C B2/C Architecture Assessment](vehicle-0c-atomicity-architecture-review-2026-10-18.md) — historical B1 evidence, C co-location proposal now revoked; ADR-0005 independent modules control.
 
-- [ADR-0004 — Co-located Vehicle and Access transactional audit](../adr/ADR-0004-co-located-vehicle-access-transactional-audit.md) — Accepted architecture boundary ONLY; C-01–C-10 disposable proof requires separate permission.
+- [ADR-0004 — Co-located Vehicle and Access transactional audit](../adr/ADR-0004-co-located-vehicle-access-transactional-audit.md) — Superseded, historical only.
+- [ADR-0005 — Mandatory independent physical domain modules](../adr/ADR-0005-mandatory-independent-physical-domain-modules.md) — Accepted and binding for all project modules; shared audit integration unresolved.
 
 ## Template
 

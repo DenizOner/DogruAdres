@@ -22,6 +22,10 @@ DoğruAdres owns domain concepts such as vehicle, make, model, generation, engin
 
 These are domain concerns. They are not Mercur's marketplace primitives and must remain logically separated from framework internals.
 
+## 2A. Non-negotiable physical module independence
+
+The Product Owner explicitly requires EVERY DoğruAdres domain capability to be a separately registered and physically independent Medusa module, owning its own models, metadata, service and migration boundaries. Vehicle Management MUST be a standalone dogruadresVehicle module, never an internal service or model inside dogruadresAccess. This rule applies to all present and future DoğruAdres domain modules. ADR-0004 C co-location approval was expressly withdrawn and Superseded by [Accepted ADR-0005](adr/ADR-0005-mandatory-independent-physical-domain-modules.md). Preserve existing security audit requirements; a framework integration challenge is never permission to co-locate domains or quietly weaken audit semantics. When a supported independent-module solution is unproven, report the exact constraint and stop the affected operation.
+
 ## 3. Upgradeability is an acceptance criterion
 
 Mercur must remain upgradeable. Do not treat Mercur internals as a project dependency or a place to patch casually.

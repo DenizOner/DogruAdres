@@ -34,9 +34,9 @@ No VIN decoder, vehicle identification/lookup service, OEM or LexCom connection,
 
 Existing unrelated Storefront, dashboard, Mercur upgrade and production-deployment limitations are not implicitly resolved by Vehicle development. Do not alter Mercur/Medusa source.
 
-## Accepted ADR-0004 and proof gate
+## Binding physical-module rule — Accepted ADR-0005
 
-The narrow C co-located physical module boundary is Accepted in [ADR-0004](../adr/ADR-0004-co-located-vehicle-access-transactional-audit.md), but physical audit atomicity is NOT YET PROVEN. The mandatory disposable C-01–C-10 proof requires a separate explicit Product Owner approval. No Vehicle code is implemented or authorized.
+The Product Owner rejected C co-location and withdrew ALL such approvals. [ADR-0004](../adr/ADR-0004-co-located-vehicle-access-transactional-audit.md) is Superseded by [Accepted ADR-0005](../adr/ADR-0005-mandatory-independent-physical-domain-modules.md). Vehicle MUST be a separately registered physical dogruadresVehicle module; dogruadresAccess remains separate and owns canonical Foundation data and AuditEvent. Shared audit atomicity across the modules remains OPEN/BLOCKING after INCONCLUSIVE B1. Solve or escalate the integration issue without co-location or silent security downgrade. No implementation is claimed.
 
 ## Existing architecture
 
@@ -50,7 +50,7 @@ The narrow C co-located physical module boundary is Accepted in [ADR-0004](../ad
 
 ### Module and physical ownership
 
-**ADR-0004 accepted physical boundary (manual Vehicle MVP only):** Retain the existing project-owned dogruadresAccess physical Medusa module as the persistence/metadata home for Foundation Person/Organization/Membership/Invitation/AuditEvent AND prospective Vehicle model. Place Vehicle behavior in logically separate internal service(s), domain helpers, validators and workflows. Do NOT bootstrap a second independent Vehicle module for the MVP, move Vehicle into Mercur marketplace metadata, or duplicate the canonical shared audit. This design exception does not authorize code.
+**ADR-0005 mandatory standalone module:** Vehicle domain persistence, models, service and migrations belong in separately registered dogruadresVehicle. Identity/Organization, Membership/Invitation and canonical AuditEvent remain in dogruadresAccess. Vehicle may NOT be registered inside the Access module merely as an internal service. Keep marketplace Mercur primitives separate.
 
 Proposed logical Vehicle attributes:
 
@@ -68,7 +68,7 @@ No creator ownership field, no creator attribution in arbitrary Vehicle metadata
 
 Propose two distinct partial unique constraints for (organization_id, plate_key) and (organization_id, vin_key), restricted to non-deleted rows and non-empty normalized values. Also enforce V-01 through consistent application validation and an appropriate database-level invariant when feasible; decide the concrete null/empty representation and generated normalized key population together. Verify behavior during concurrent create AND concurrent update, not only sequential requests.
 
-**Reference/transaction boundary:** With ADR-0004, Organization and Vehicle will reside in one project-owned physical module, but Organization is still the immutable Vehicle owner and Person never owns it. Same-module entity metadata MAY permit both Vehicle and AuditEvent service operations, but same physical PostgreSQL transaction must be proved via separately authorized C-01–C-10 tests. Any future cross-link to Mercur primitives requires supported extensions; no undocumented cross-module foreign key or relaxed authorization is implied.
+**Reference/transaction boundary:** Vehicle and Organization are distinct physical modules. Vehicle.organization_id references the server-validated immutable Organization identifier, not a cross-module ORM relationship by assumption. Use officially supported links, Query, workflows and explicit permissions. The direct B1 Vehicle EntityManager forwarding method failed with DaAuditEvent metadata error and is NOT approved; physical cross-module audit consistency is still an unresolved security/design gate.
 
 ### N-01/N-02 approved P1 and C1 canonicalization profiles — 2026-10-18
 
@@ -121,7 +121,7 @@ All routes authenticate real Medusa actor context, map it to Person and active O
 
 The shared audit trail remains in dogruadresAccess. Proposed event actions: vehicle.created, vehicle.updated, vehicle.deleted; exact names and allowed before/after fields are technical design choices.
 
-CRITICAL GATE: Accepted ADR-0004 co-locates future Vehicle and canonical AuditEvent metadata, but does NOT prove a common PostgreSQL transaction. The mandatory C-01–C-10 disposable same-module audit-INSERT failure test requires a SEPARATE Product Owner authorization and independent PASS review. Mere metadata visibility, forwarded sharedContext or workflow compensation does NOT suffice. No Vehicle-1 implementation until then.
+CRITICAL GATE: ADR-0004 C co-location and its same-module C-01–C-10 proof proposal are REVOKED/SUPERSEDED. The binding ADR-0005 requires independent physical modules. The Foundation shared-audit all-or-nothing security requirement still applies, but no supported cross-module implementation has been proven. Do not represent B1 metadata failure, workflow compensation or passing sharedContext as an atomicity PASS; resolve through a supported design or escalate the security contract conflict.
 
 ### Vehicle-0B shared audit: official-version proof gate (NOT YET PASSED)
 
@@ -142,7 +142,7 @@ Verified version-matched sources:
 
 ## Vehicle-0C — B1 Evidence, B2 Contract Review and C Candidate
 
-[Vehicle-0C architecture review](vehicle-0c-atomicity-architecture-review-2026-10-18.md) preserves independent INCONCLUSIVE B1 evidence and source-backed B2 uncertainties. C was subsequently ACCEPTED solely as an architecture exception in [ADR-0004](../adr/ADR-0004-co-located-vehicle-access-transactional-audit.md). The C-01–C-10 disposable proof still requires separate authorization and has NOT been run; Vehicle-1 remains NOT AUTHORIZED.
+[Vehicle-0C research](vehicle-0c-atomicity-architecture-review-2026-10-18.md) is historical and preserves the INCONCLUSIVE B1 proof. Its C recommendation was expressly rejected, ADR-0004 is Superseded, and [ADR-0005](../adr/ADR-0005-mandatory-independent-physical-domain-modules.md) controls. Future Vehicle work MUST use a standalone physical module; cross-module audit integration remains a blocking design gate.
 
 ## Mercur extension points involved
 
@@ -150,7 +150,7 @@ Proposed project-owned modules, explicit HTTP routes and request middleware, Med
 
 ## Files and components affected (prospective only)
 
-- packages/api/src/modules/dogruadres-access/ — proposed Vehicle model registration plus logically separated internal Vehicle service/helpers in the existing physical module, subject to later proof PASS and Vehicle-1 authorization.
+- packages/api/src/modules/dogruadres-vehicle/ — NEW independent physical Vehicle Medusa module with its own model, service, metadata and migration boundary; NEVER register Vehicle persistence in dogruadresAccess.
 - packages/api/src/api/dogruadres/ — Organization-scoped Vehicle routes and explicit authentication middleware.
 - packages/api/src/utils/ or project access layer — explicit vehicle.read/create/update/delete policy extension.
 - packages/api/src/workflows/ — bounded mutations and audit orchestration.
@@ -179,7 +179,7 @@ Automotive domain code must remain in project-owned boundaries and use installed
 
 ## Risks and open questions
 
-1. **BLOCKING technical gate:** Accepted ADR-0004 same-module Vehicle and canonical AuditEvent boundary must still prove one physical SQL transaction and true audit-INSERT-failure rollback for create/update/soft-delete under C-01–C-10.
+1. **BLOCKING technical gate:** Accepted ADR-0005 requires independent Vehicle/Access modules. Cross-module audit all-or-nothing behavior is unresolved after the INCONCLUSIVE B1 metadata proof; supported integration, proof design or separately approved audit-security decision is required before deploying Vehicle mutations.
 2. **APPROVED N-01/N-02 scope; remaining validation details:** P1/C1 algorithms and Unicode refusal are approved. Max lengths, auxiliary/year bounds, PATCH/error semantics and normalization-version migration still require precise design.
 3. **Implementation contract to finalize:** pagination, deleted-record HTTP responses, update/empty-value semantics, error codes and any Organization inactive handling.
 4. **Future deferred:** restore, retention, Organization transfer, attachments, branch-level access, Quotations, OEM providers, automatic fitment and integrations.
@@ -242,5 +242,5 @@ For documentation-only errors, use a reviewed forward correction on the review b
 
 ## Approval status
 
-V-01–V-07 and N-01/P1/N-02/C1 product decisions remain APPROVED. ADR-0004 C one-physical-module, logically separated internal Vehicle-services architecture exception is ACCEPTED only as a design boundary. A new C-01–C-10 disposable proof has NOT been executed or authorized by this documentation request. The earlier B1 proof was INCONCLUSIVE. Vehicle-1 coding, migrations, CI/UI, branch merge and deployment remain NOT AUTHORIZED.
+V-01–V-07 and N-01/P1/N-02/C1 remain APPROVED. ADR-0004 C co-location was REVOKED and Superseded by Accepted ADR-0005: standalone physical Vehicle module mandatory. No Vehicle code or migration has been implemented yet; cross-module audit consistency remains an unresolved design gate. Future independent-module implementation must respect separately reviewed source, data and merge safety gates.
 
