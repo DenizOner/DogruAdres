@@ -1,6 +1,6 @@
 # DoğruAdres — Product Requirements
 
-**CONTROLLED BASELINE v1.0 — MIXED DECISION STATUS**
+**CONTROLLED BASELINE v1.0 — MIXED DECISION STATUS; G1 APPROVED AMENDMENT RECORDED**
 
 Baseline sürümü: v1.0, G0 / Step 4-C controlled mixed-status acceptance. Approval provenance: latest explicit Product Owner instruction §§3–8. Kayıt tarihi: 2026-10-10; geçmiş approval date, signature veya conversation permalink üretilmez.
 
@@ -98,11 +98,11 @@ Horizon kodları bu belgenin navigation sınıflarıdır; release taahhüdü vey
 | H-FUTURE | Gelecek AI/OEM/external integration; bu görevde delivery yok |
 | H-DEFERRED | Seçim açıkça ertelenmiş |
 
-Tüm kayıtların implementation status’u **NOT_ASSESSED**’dır: bu görev kapsamlı source/runtime implementation audit’i değildir. Mevcut ARCHITECTURE ve raporlar DoğruAdres domain implementation kanıtı vermiyor. Framework extension point’in varlığı PARTIAL veya VERIFIED_IMPLEMENTED işareti üretmez. İleride VERIFIED_IMPLEMENTED için exact source/version/commit, executed verification sonucu ve kapsam sınırı birlikte gerekir. Governance dosyasının mevcut olması domain software implementation sayılmaz. Hiçbir acceptance concept bu görevde çalıştırılmış test değildir. A6 release sırası ve süre önerileri bağlayıcı plan değildir.
+G0-S4-C baseline v1.0’daki tüm implementation status’ları tarihsel snapshot olarak **NOT_ASSESSED**’dır. Sonraki G1 amendment’ları bu değerleri geriye dönük değiştirmez; kod/uygulama kapsamı ve doğrulama sonuçları ilgili amendment/checkpoint raporunda ayrı kaydedilir. Framework extension point’in varlığı PARTIAL veya VERIFIED_IMPLEMENTED işareti üretmez. A6 release sırası ve süre önerileri bağlayıcı plan değildir.
 
 ## 6. ID ve provenance kuralları
 
-Özgün G0-S2 92 ve G0-S3 ek7 olmak üzere existing99 DA-<DOMAIN>-<NNN> provisional ID aynen korunmuştur; G0-S3-P ek10 kayıtla109 ID; G0-S3-T DA-UX-004 ile current110 ID vardır; controlled baseline v1.0 içinde stable reference olarak kabul edilmiştir. ID tekrar kullanılmaz ve sessiz renumber yapılmaz. Her §7 kaydı G0-S2 §6 aynı ID satırına karşılık gelir veya G0-S3/G0-S3-P ek kayıt notu taşır. Ekler §9.2’de gerekçelendirilmiştir; hiçbir original kayıt düşürülmemiştir.
+Özgün G0-S2 92, G0-S3 ek7, G0-S3-P ek10 ve G0-S3-T DA-UX-004 olmak üzere v1.0’daki 110 ID korunur; G1 amendment DA-AUTO-006 ile current111 stable IDs’dir. ID tekrar kullanılmaz ve sessiz renumber yapılmaz. Her §7 kaydı kaynak/provenance taşımalıdır; ekler ve amendments §9’da kaydedilir. Hiçbir original kayıt düşürülmemiştir.
 
 Her kayıt: normatif davranış, intended owner, bağımsız decision/evidence, exact source section, briefing provenance, horizon/implementation, dependencies/ADR ilişki etiketi, acceptance concept ve open parameters içerir. §11 tablosu domain kayıtlarının open sorularını gruplayan register’dır; onların yerine geçmez.
 
@@ -143,7 +143,8 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Dependencies:** Actor eşleme.
 - **ADR / architecture relation:** P02. P etiketleri proposed research topics; implementation yetkisi değildir.
 - **Acceptance concept:** Aynı kişi iki Organization’da aynı person ID ile görülür.
-- **Open parameters / decisions:** Birleştirme, kurtarma ve hesap eşleme protokolü?
+- **Current approved clause:** Each supported authenticated framework actor is explicitly mapped server-side to a canonical Person. Matching email alone never merges or links identities.
+- **Open parameters / decisions:** Account recovery and explicit identity-linking/merge workflows remain unapproved; actor mappings are provisioned by the protected platform flow or a valid invitation acceptance.
 
 <a id="da-id-002"></a>
 
@@ -177,7 +178,8 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Dependencies:** Doğrulama state modeli.
 - **ADR / architecture relation:** P02/P03. P etiketleri proposed research topics; implementation yetkisi değildir.
 - **Acceptance concept:** E-posta doğrulama sosyal yazma izni vermez.
-- **Open parameters / decisions:** Durum iptali, süresi ve yeniden doğrulama?
+- **Current approved clause:** Organization invitation acceptance requires an authenticated actor whose existing authentication verification record proves a verified email matching the intended recipient. This does not select a new verification provider or equate email verification with real-world identity verification.
+- **Open parameters / decisions:** Verification revocation, expiry and re-verification lifecycle outside invitation acceptance remain open.
 
 <a id="da-id-004"></a>
 
@@ -247,7 +249,8 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Dependencies:** DA-ID-001.
 - **ADR / architecture relation:** P02. P etiketleri proposed research topics; implementation yetkisi değildir.
 - **Acceptance concept:** Org A rolü Org B erişimi sağlamaz.
-- **Open parameters / decisions:** Birden çok Owner ve temsil yetkisi matrisi?
+- **Current approved clause:** Multiple protected Owners are allowed. Ordinary role management cannot demote or revoke the last active protected Owner.
+- **Open parameters / decisions:** Transfer, recovery and exceptional representation mechanisms remain open; ordinary role operations do not provide a recovery bypass.
 
 <a id="da-org-002"></a>
 
@@ -281,24 +284,25 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Dependencies:** DA-ID-003.
 - **ADR / architecture relation:** P02/P03. P etiketleri proposed research topics; implementation yetkisi değildir.
 - **Acceptance concept:** Yanlış alıcı, replay, expired token kabul edilmez.
-- **Open parameters / decisions:** TTL, tek kullanımlılık, iptal ve email değişimi politikası?
+- **Current approved clause:** Invitations expire after seven days, are single-use, and may be revoked before acceptance. Acceptance requires an authenticated actor with a verified email matching the intended recipient. The token is stored only as a cryptographic hash; an email match never merges identities. A revoked membership cannot be reactivated or role-managed through ordinary membership operations; reactivation requires acceptance of a fresh valid invitation after recipient, expiry, revocation, single-use and verified-email checks pass.
+- **Open parameters / decisions:** Email-change and account-recovery policy remains open.
 
 <a id="da-org-004"></a>
 
 ### DA-ORG-004
 
-**Davranış:** Protected Owner yetkisi ve son Owner’ın kaybını önleyen devretme/kurtarma yöntemi tasarlanmalıdır.
+**Davranış:** Protected Owner üyeliği ayrı korunur; birden çok Owner desteklenir ve normal role-management işlemleri son aktif protected Owner’ı demote/revoke edemez. Protected Owner transferi veya kurtarması bu görevde tanımlanmaz.
 
 - **Owner / intended owner:** DoğruAdres Organization / Membership; Store lifecycle Mercur adapter.
-- **Decision / evidence:** PROPOSED / RECOMMENDED.
+- **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A5](research/A5-canonical-identity-organizations-and-authorization.md) §§7,12,15.
-- **Conversation provenance:** PO-BAD.2 yalnız protected Owner kavramını onaylar.
+- **Conversation provenance:** PO-BAD.2 protected Owner kavramı; current explicit Product Owner instruction in G1 / Step 0B task resolves multiple-Owner and last-active-Owner role-management rules. No separate message permalink or approval timestamp was provided.
 - **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.2, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ORG-001.
 - **ADR / architecture relation:** P02/P03. P etiketleri proposed research topics; implementation yetkisi değildir.
 - **Acceptance concept:** Son Owner sıradan rol düzenlemesiyle kaldırılamaz.
-- **Open parameters / decisions:** Owner sayısı, transfer onayı ve acil kurtarma?
+- **Open parameters / decisions:** Transfer, recovery and emergency ownership mechanisms remain open. Multiple protected Owners are allowed; only ordinary demotion/revocation is constrained by the last-active-Owner invariant.
 
 <a id="da-org-005"></a>
 
@@ -366,7 +370,8 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Dependencies:** DA-ORG-001; DA-ID-005.
 - **ADR / architecture relation:** P02/P03. P etiketleri proposed research topics; implementation yetkisi değildir.
 - **Acceptance concept:** Normal rol ya da Seller Owner statüsü Golden için protected Owner koşulunu tek başına karşılamaz.
-- **Open parameters / decisions:** Protected Owner lifecycle, en az bir Owner kuralının kapsamı, transfer/recovery OPEN; DA-ORG-004 PROPOSED.
+- **Current approved clause:** The protected designation is distinct from the role label and Mercur Seller ownership. A protected Owner may add another protected Owner through the protected membership-management workflow; normal changes may not remove/demote the last active protected Owner.
+- **Open parameters / decisions:** Transfer/recovery and emergency access remain open; no recovery mechanism is implemented here.
 
 <a id="da-org-009"></a>
 
@@ -425,10 +430,10 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 ### DA-SEC-003
 
-**Davranış:** Actor→person→membership→app→resource zinciri her istekte güvenilir bağlamdan çözülür; istemci org_id tek başına yeterli değildir.
+**Davranış:** Authenticated actor→canonical Person→active membership→policy→server-resolved resource scope zinciri her istekte fail-closed çözülür; istemci organization ID tek başına yetki vermez.
 
 - **Owner / intended owner:** DoğruAdres authorization / session / security.
-- **Decision / evidence:** PROPOSED / RECOMMENDED.
+- **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A5](research/A5-canonical-identity-organizations-and-authorization.md) §§4–5,8.
 - **Conversation provenance:** PO-ID.4,7–8.; G0-S3-P §4 Other Mixed-Status Records; G0-S3-R F21/F22.
 - **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.3, aynı ID satırı; original ID korundu.
@@ -436,8 +441,8 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Dependencies:** DA-ID-001; DA-ORG-001.
 - **ADR / architecture relation:** P03. P etiketleri proposed research topics; implementation yetkisi değildir.
 - **Acceptance concept:** Sahte org_id ve çoklu sekme context karışması reddedilir.
-- **Open parameters / decisions:** Context taşıma, version ve cache invalidation modeli?
-- **Alt-kural decision scope:** Trusted scope/no client org_id privilege APPROVED/VERIFIED DA-SEC-001/002 ve DA-ORG-005; actor→person→membership→app→resource chain implementation PROPOSED. Resolver/context taşıma ve cache/version implementation OPEN.
+- **Open parameters / decisions:** Trusted background principals and future job/file/export/search surfaces remain separately scoped; this request path performs no authorization caching.
+- **Alt-kural decision scope:** The request-time actor→Person→active membership→policy→resource chain, server-resolved Organization scope, immediate revocation effect and fail-closed behavior are APPROVED by the current Product Owner instruction. This does not implement background, file, export or search policies.
 
 <a id="da-sec-004"></a>
 
@@ -507,6 +512,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Acceptance concept:** SEC-007.A secret/unauthorized fields log/audit/export’ta yok; B actor/context/action güvenlik izi bulunur; C detailed audit functional surface DA-SEC-009’un permitted-field şartlarıyla değerlendirilir.
 - **Open parameters / decisions:** Physical audit/log/ledger architecture PROPOSED; tamper resistance, synchronous vs durable capture, retention/read access/redaction ve storage OPEN.
 - **Alt-kural decision scope:** APPROVED/VERIFIED: SECURITY Mandatory rules ve DA-SEC-002/006/008 confidentiality/auditability. PROPOSED/RECOMMENDED: physical separation/persistence architecture.
+- **Current approved clause:** Identity/Organization security mutations use the shared project audit trail; audit events are persisted with the mutation transaction and contain no credentials, plaintext invitation tokens or unrelated personal data. This bounded implementation does not choose retention, tamper-resistance or financial-ledger architecture.
 
 <a id="da-sec-008"></a>
 
@@ -542,6 +548,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Acceptance concept:** SEC-009.A event identity/Org/role/action/target/time/permitted changes; B OrgA reader OrgB audit/search/count/export alamaz; C CSV/Excel same authorized redacted dataset; D before/after secret fields yok.
 - **Open parameters / decisions:** C-05 exact event/field/module scope OPEN. Role at event-time vs current role, create/delete/missing-before semantics, redaction/field permissions, XLSX vs Excel-compatible format, filters/timezone/export limits/encoding/retention/physical audit architecture OPEN.
 - **Alt-kural decision scope:** APPROVED confidentiality/auditability inherited SECURITY/SEC-007; detailed functional scope PROPOSED, original historical blanket approval iddiası yok.
+- **Current approved clause:** For Organization provisioning, protected Owner assignment, invitations, and membership/role changes, the persisted event includes actor identity/type, role context, action, module/resource, timestamp, target, Organization context, and permitted before/after values. Search, exports and the broader audit product surface remain PROPOSED/OPEN.
 
 ## 7.4. Uygulamalar, launcher, bildirimler ve teslimat
 
@@ -1647,7 +1654,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 ### DA-AUTO-001
 
-**Davranış:** Vehicle Management DoğruAdres domain’idir ve AI/OEM olmadan işler.
+**Davranış:** Vehicle Management DoğruAdres domain’idir ve AI/OEM olmadan işler. Every Vehicle belongs to exactly one Organization; the vehicle scope and uniqueness rules are recorded in DA-AUTO-006.
 
 - **Owner / intended owner:** DoğruAdres automotive / Vehicle / Quotations; provider adapter.
 - **Decision / evidence:** APPROVED / VERIFIED.
@@ -1658,7 +1665,8 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Dependencies:** Manual vehicle model.
 - **ADR / architecture relation:** ADR-0002; P01. P etiketleri proposed research topics; implementation yetkisi değildir.
 - **Acceptance concept:** OEM outage manuel vehicle kaydını engellemez.
-- **Open parameters / decisions:** VIN normalize ve vehicle duplicate/link sahipliği?
+- **Current approved clause:** Vehicle ownership is Organization-level, not person-level; new active members access Organization vehicles according to current permissions, and revocation removes subsequent access. See DA-AUTO-006.
+- **Open parameters / decisions:** Vehicle-specific field requirements beyond the approved plate/VIN uniqueness rules, and quotation/link lifecycle details remain subject to their own requirements.
 
 <a id="da-auto-002"></a>
 
@@ -1729,6 +1737,23 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Acceptance concept:** Ambiguous provider result confirmed fitment veya automatic product merge üretmez; manual workflow bağımsız sürer.
 - **Open parameters / decisions:** Exact matching/confidence standardı, supplier responsibility/legal contract, namespace/revision/vehicle configuration ve merge authority OPEN ve yeni owner approval ister; immediate automatic fitment seçilmedi.
 - **Alt-kural decision scope:** APPROVED/VERIFIED: G0-S3-P §5 lookup direction’ın otomatik guaranteed fitment olmadığı sınırı. PROPOSED/RECOMMENDED: detailed equivalence/fitment/matching model.
+
+<a id="da-auto-006"></a>
+
+### DA-AUTO-006
+
+**Davranış:** Each Vehicle belongs to exactly one Organization and never to its creating Person. Plate and VIN/chassis-number uniqueness are independently scoped to an Organization. Supplied non-empty values use normalized uniqueness keys and database-enforced constraints as well as application validation; the display values may be retained. The same normalized plate or VIN may exist in different Organizations, but duplicates within one Organization are rejected under concurrent writes too. Members may view/create/update Organization vehicles; delete is Owner/Admin only. Actor attribution for create/change is recorded only in the shared audit trail, never as creator ownership fields on Vehicle or metadata. Membership revocation removes subsequent vehicle access and does not delete or hide historical Organization vehicles.
+
+- **Owner / intended owner:** DoğruAdres automotive / Vehicle; Organization authorization and shared audit trail.
+- **Decision / evidence:** APPROVED / VERIFIED.
+- **Research ve exact section:** Current Product Owner instruction §§3 and 6–7 in this task.
+- **Conversation provenance:** Current explicit Product Owner decision in this task; no separate approval timestamp or message permalink was provided.
+- **Primary trace:** New stable ID DA-AUTO-006; no existing ID renumbered or reused.
+- **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; Vehicle implementation is a later separately reviewed checkpoint.
+- **Dependencies:** DA-ORG-001; DA-SEC-001–003; DA-SEC-007.
+- **ADR / architecture relation:** ADR-0002; no ADR changes or new architecture decision.
+- **Acceptance concept:** Two Organizations may reuse the same plate/VIN; duplicate normalized supplied values inside one Organization fail at both validation and database constraint. Cross-Organization reads/writes fail after membership revocation; creator departure preserves the Organization vehicle. No `created_by*` ownership field exists.
+- **Open parameters / decisions:** Exact locale-specific normalization details and requiredness of plate/VIN remain open. Uniqueness applies to each supplied non-empty value; no new VIN syntax, length or ownership validation is implied. Vehicle module implementation remains deferred to the next checkpoint.
 
 ## 7.13. AI/BYOK ve gelecek entegrasyonlar
 
@@ -2137,9 +2162,9 @@ Bütün original92 ID §7’de bir defa requirement heading olarak yer alır; re
 | AI — AI/BYOK ve gelecek entegrasyonlar | 7 | 1 | 0 | 0 | 8 |
 | UX — Uluslararasılaştırma, RTL ve erişilebilirlik | 3 | 0 | 0 | 1 | 4 |
 | DATA — Saklama, arşivleme, silme ve belge yönetişimi | 4 | 1 | 1 | 0 | 6 |
-| **Total** | **92** | **7** | **10** | **1** | **110** |
+| **Total at v1.0** | **92** | **7** | **10** | **1** | **110** |
 
-Current whole-record distribution: **77 APPROVED,28 PROPOSED,3 OPEN,2 DEFERRED**. Clause-level inherited approval/proposed parameters ayrı scope satırlarında; bu sayılar technical implementation approval değildir. All110 implementation statuses **NOT_ASSESSED**. Original99 ve current Q öncesi109 unique IDs retained; G0-S3-Q/S new IDs0; G0-S3-T one newID DA-UX-004; original109 retained; renumber/deletion/reuse yok. SUPERSEDED historical directions §9.3’te, current record yok.
+Historical v1.0 whole-record distribution: **77 APPROVED,28 PROPOSED,3 OPEN,2 DEFERRED**. Clause-level inherited approval/proposed parameters ayrı scope satırlarında; these counts are not implementation approval. All 110 v1.0 implementation statuses were **NOT_ASSESSED**. Baseline history and IDs remain unchanged.
 
 ### 9.5. G0-S3-P controlled amendment ve audit disposition
 
@@ -2222,6 +2247,18 @@ Original109 IDs retained; newDA-UX-004 only,110total/15domains;76APPROVED/29PROP
 
 Latest explicit Product Owner instruction §§3–8 approval provenance’dır. MKT-010/LOY-008/DATA-001 OPEN/UNVERIFIED retained; approved direction/invariants unresolved parameters’dan ayrıldı. AUTO-004 OPEN/UNVERIFIED → DEFERRED/VERIFIED (verified only explicit deferral, external agreement unverified). DATA-006 PROPOSED/RECOMMENDED → APPROVED/VERIFIED (eligible module bins/authorized restore/conditional thirty-day default/durable protected failures/finance preservation). Original110 IDs retained/new0;77/28/3/2,allNOT_ASSESSED. Mixed-status acceptance proposed mechanisms/software/ADRs için approval değildir.
 
+### 9.10. G1 canonical identity and Organization foundation amendment
+
+The current explicit Product Owner instruction in this task §§2–8 records the approved architecture and bounded implementation authorization. Record date is 2026-10-17, not an asserted approval timestamp; no permalink or prior approval date was provided. The v1.0 history above remains intact. DA-ORG-004 and DA-SEC-003 change from PROPOSED to APPROVED; DA-AUTO-006 is a new APPROVED stable ID. Current register count is 111 IDs: 80 APPROVED, 26 PROPOSED, 3 OPEN and 2 DEFERRED. The amendment resolves canonical actor-to-Person mapping without email-based linking; Organization/membership separation; protected platform provisioning and initial Owner assignment; multiple protected Owners and ordinary last-active-Owner protection; seven-day, single-use, revocable hashed-token invitations with verified-recipient acceptance; request-time fail-closed Organization authorization; and the minimum shared transactional audit requirements. Vehicle ownership, Organization-scoped plate/VIN uniqueness, access/revocation and audit attribution are approved in DA-AUTO-006, but Vehicle implementation remains explicitly out of this checkpoint. No ADR or unrelated research report is changed.
+
+### 9.11. G1 identity/Organization security repair clarification
+
+Current explicit Product Owner instruction dated 2026-10-17 clarifies implementation of existing approved requirements; no prior approval date or permalink is asserted. A revoked membership cannot be reactivated or role-managed through ordinary membership-management routes; only acceptance of a fresh valid invitation after all checks may reactivate its existing membership record. Invitation acceptance requires a verified record with the email entity type tied to the authenticated actor/provider identity and matching the authenticated email; unrelated verification entity types fail closed. Shared audit events carry a server-owned `module` value in addition to `resource`; adding that column requires a follow-up migration because the earlier migration was already applied. This clarification does not change IDs, historical statuses, baseline counts, vehicle scope, or financial requirements.
+
+### 9.12. Executable invitation verification repair
+
+The current explicit Product Owner repair instruction (record date 2026-10-17; no historical approval date or permalink asserted) clarifies that invitation acceptance verifies an existing non-deleted Medusa `email` record independently of global `authVerificationsPerActor` login enforcement. The authenticated actor's email is resolved server-side by authenticated actor ID, matched against the unique authenticated provider identity and verified record; a present signed email claim must agree. Client email/verification flags are never trusted. This supersedes any implementation coupling of acceptance to global login policy in the preceding repair checkpoint, without changing DA-ORG-003, decision-status counts, or the approved verified-recipient invariant.
+
 ## 10. Deferred decisions register
 
 | Ref | Açıkça deferred olan seçim / delivery | Korunan gereksinim ve review sınırı |
@@ -2239,9 +2276,9 @@ Her satır ilgili §7 record’larının open parameters alanına ek navigation�
 
 | Ref / related records | Çözülmesi gereken karar | Review zamanı |
 |---|---|---|
-| O-01 / DA-ID-001–004,DA-ORG-001/003/007 | Actor mapping/merge/recovery/email verification lifecycle; invitation recipient/TTL/replay/revoke; legal Organization verification criteria/provider/documents/purchasing lifecycle. Email alone Org privilege sağlamaz | Identity/Organization contract; personal provider D-01 DEFERRED |
-| O-02 / DA-ORG-002/004–008 | Store ownership/transfer/exceptions; protected Owner count/transfer/recovery/last-owner policy; branch inheritance; Owner Store permissions | İlgili ownership/security design öncesi |
-| O-03 / DA-SEC-001–008 | Fail-closed resolver/context protocol, legacy endpoints, trusted background principal, lock one/all sessions, password unlock, revoke latency, cache/job/file/export/search recheck; support/break-glass/audit | Bounded authorization PoC architecture/scope review öncesi; gerçek identity technology gerekmez |
+| O-01 / DA-ID-001–004,DA-ORG-001/003/007 | Account recovery/explicit linking, verification lifecycle outside invitation acceptance; legal Organization verification criteria/provider/documents/purchasing lifecycle. Email alone Org privilege sağlamaz | Identity/Organization contract; personal provider D-01 DEFERRED |
+| O-02 / DA-ORG-002/004–008 | Store ownership/transfer/exceptions; protected Owner transfer/recovery; branch inheritance; Owner Store permissions. Multiple Owner and ordinary last-active protected Owner safeguards are resolved | İlgili ownership/security design öncesi |
+| O-03 / DA-SEC-001–008 | Request-time Organization authorization contract is approved and implemented for current DogruAdres routes. Remaining: legacy endpoints, trusted background principal, lock one/all sessions, password unlock, revoke latency for sessions, job/file/export/search recheck; support/break-glass/audit surface | Bounded authorization PoC architecture/scope review öncesi; real identity technology gerekmez |
 | O-04 / DA-APP-001–009 | App lists/sector taxonomy/default matrix/entitlement implementation/uninstall/historical-access rights; preference key/sync/defaults; notification read/unread/dedup/timing. Categories/initial activation/no automatic disabling/launcher independence/protected history APPROVED business rules olarak yeniden açılmaz | Foundation/app brief; advanced search scope C-05 |
 | O-05 / DA-CAT-001–005 | Global/private product/Brand/normalized MPN authority, canonical link/merge; Contacts ownership; stock authority, branch permissions, reservations | Catalog/Inventory functional brief |
 | O-06 / DA-MKT-002–008/010 | FX series/bid-ask, unit/quote basis, precision/rounding/markup, revision calendar, publication transaction boundaries/partial failure, stale/outage, locking/revalidation/quote TTL; history display/retention | Price/FX design ve contract review |
@@ -2251,7 +2288,7 @@ Her satır ilgili §7 record’larının open parameters alanına ek navigation�
 | O-10 / DA-LOY-001–011,DA-ID-005/006,DA-FIN-005 | Purchase/login clock definition/start/reset/onboarding/restoration/stale events; Golden amount/period; representative actual monthly target amounts/exact earning event/rates/discount-Kumbara/vesting/refund-dispute corrections and backdated exceptions/approvers/history access OPEN | Twelve calendar months/start/end/ZEROatT/FULL first-month target/no proration APPROVED;90/30OR and Golden separate |
 | O-11 / DA-SOC-001–006 | Media types/size/file owner; moderation/review/appeal; cross-post canonical source/visibility/lifecycle, masking and indirect identifiers; configurable 500/default/counting; verification revoke impact | Meydan/reviews functional brief; exact notification/qualification timings ilgili policy |
 | O-12 / DA-JOB-001–004 | Permitted index/preview fields, full-content leakage prevention, applications/attachments visibility/retention, moderation, Org eligibility; optional HR scope | Job Board bağımsız functional brief; full HR activation prerequisite değil |
-| O-13 / DA-AUTO-001–005 | VIN normalization/private data, quotation version/approval/expiry, fitment confidence/matching/merge; deferred provider selection/licensing D-03, future API/cache/preservation/display/redistribution/AI transfer | Manual domain brief önce; gerçek contract/pilot sonra |
+| O-13 / DA-AUTO-001–006 | DA-AUTO-006 resolves Organization ownership, scoped plate/VIN uniqueness, member access/revocation, and audit attribution. Remaining: exact normalization/requiredness details, private VIN policy, quotation version/approval/expiry, fitment confidence/matching/merge; deferred provider selection/licensing D-03, future API/cache/preservation/display/redistribution/AI transfer | Vehicle implementation checkpoint and separate quotation/provider design |
 | O-14 / DA-AI-001–008 | Provider/model/SDK, secret custody/KEK/rotation/restore, budget/retention/outbound terms, bounded tools, consent/delegation/expiry/MFA/high-impact list, service principal; ERP field authority/sync/cutover/reconcile | Future AI/integration pilot öncesi; BYOK kendi başına veri işleme izni değil |
 | O-15 / DA-UX-001–004 | Final locale tags/fallback/translations; accessibility conformance thresholds/test matrix; chart libraries/tokens/graph types/animation/layout/module visual design OPEN | Sole MSA+RTL and helpful accessible responsive permission-preserving visual communication APPROVED; DESIGN not binding |
 | O-16 / DA-DATA-001/002/005/006,DA-APP-003 | Class retention/legal holds/archive/restore/bin/purge/start/reset/backup expiry,legal deletion conflict; permanent failure-reason retention/redaction/access. Confirmed legally eligible classes için thirty-day default APPROVED C-06; exact class/legal/clock policy OPEN, no universal deadline,protected financial records destructive delete edilemez | Data lifecycle/classification review; no destructive policy implemented |
@@ -2351,10 +2388,12 @@ Security companion: [permissions middleware v2.3.6](https://github.com/mercurjs/
 | G0-S3-Q decision/calendar reconciliation | Previous explicit owner §§3–6; hazırlama/inceleme tarihi2026-10-10 | Existing109 IDs retained, new0; §9.6 C-01/C-02/C-04/MSA; 75 APPROVED/29 PROPOSED/4 OPEN/1 DEFERRED, all NOT_ASSESSED; REQUIREMENTS +single report/index only; DRAFT |
 | G0-S3-S controlled decisions | Previous owner§§3–5;2026-10-10 preparation |109IDs/new0, unchangedwhole-record75/29/4/1; clausesapproved§9.7;DRAFT/allNOT_ASSESSED; onlyrequirements+singlereport/index |
 | G0-S3-T controlled amendment | Historical owner §§3–5;2026-10-10 preparation | Original109 retained+DA-UX-004,110records;76/29/4/1;allNOT_ASSESSED,DRAFT;§9.8;onlyauthorizedrequirements/report/index |
-| G0-S4-C controlled baseline v1.0 | Latest explicit Product Owner instruction §§3–8; kayıt tarihi 2026-10-10 | CONTROLLED BASELINE v1.0 — MIXED DECISION STATUS;110 IDs/77APPROVED/28PROPOSED/3OPEN/2DEFERRED/allNOT_ASSESSED. AUTO-004 deferred, DATA-006 approved; MKT-010/LOY-008/DATA-001 remainOPEN. Only REQUIREMENTS/local commit authorized |
+| G0-S4-C controlled baseline v1.0 | Latest explicit Product Owner instruction §§3–8; kayıt tarihi 2026-10-10 | Historical snapshot: CONTROLLED BASELINE v1.0,110 IDs/77APPROVED/28PROPOSED/3OPEN/2DEFERRED/allNOT_ASSESSED. AUTO-004 deferred, DATA-006 approved; MKT-010/LOY-008/DATA-001 remainOPEN. |
+| G1 identity/Organization foundation amendment | Current explicit Product Owner instruction §§2–8 in this task; record date 2026-10-17 (not an asserted approval date) | Adds DA-AUTO-006; updates DA-ORG-004 and DA-SEC-003 to APPROVED while preserving historical baseline snapshot; current 111 IDs,80 APPROVED/26 PROPOSED/3 OPEN/2 DEFERRED. Records canonical actor mapping, invite policy, multiple/last protected Owner rules, fail-closed request scope, shared transactional audit minimum and Vehicle ownership/uniqueness/access requirements. Vehicle coding remains deferred. No permalink or prior approval date invented. |
+| G1 identity/Organization security repair clarification | Current explicit Product Owner instruction §§1–8 in this task; record date 2026-10-17 (not an asserted approval date) | Clarifies DA-ORG-003 and existing security invariants without adding IDs or changing decision-status counts; revoked memberships can reactivate only through fresh valid invitation acceptance; email verification is tied to the authenticated identity/provider; shared audit schema adds module context through a follow-up migration. No permalink or historical approval date invented. |
 
 Sonraki değişiklikte affected IDs, önce/sonra behavior/status, exact evidence, approver/reference, approved invariant vs open parameter, horizon ve implementation etkisi kaydedilmelidir. Olmayan approval date veya permalink üretilmez. Superseded kayıt korunur, replacement ilişkisi açık olur, ID reuse yapılmaz. Research evidence ve accepted ADR bytes sessizce yeniden yazılmaz.
 
 Product-owner G0-S4-C §7 controlled acceptance §3–6 conventions, §7 records, §8 invariants ve §9–14 registers/change control için mixed-status semantics’i kabul eder. Proposed/open/deferred scopes kendi statülerinde kalır. Future changes affected scope/approval provenance ile kaydedilir; baseline provider/payment/schema/security/dependency veya bütün feature implementation için toplu yetki sayılmaz.
 
-**Burada durulur: belge CONTROLLED BASELINE v1.0 — MIXED DECISION STATUS’tur. Ayrı açık yetki olmadan ADR, implementation plan veya kod yazılmaz; remote push yetkisi verilmemiştir.**
+G0-S4-C remains the historical controlled baseline v1.0 snapshot. The G1 amendment above records only the current explicit Product Owner decisions and this bounded implementation checkpoint. It does not amend accepted ADRs, approve vehicle implementation in this checkpoint, or authorize merging/deployment.

@@ -1,0 +1,104 @@
+name: Identity Organization Foundation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Foundation static checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout PR merge ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Record source provenance
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
+        run: |
+          echo "PR head: $PR_HEAD_SHA"
+          echo "Merge ref: $MERGE_SHA"
+          test "$(git rev-parse HEAD)" = "$MERGE_SHA"
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+          no-cache: true
+      - name: Install locked dependencies
+        id: install
+        run: bun install --frozen-lockfile
+      - name: Focused security and authorization unit tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: packages/api
+        run: bun test src/modules/dogruadres-access/__tests__/security.unit.spec.ts src/utils/__tests__/organization-authorization.unit.spec.ts
+      - name: API TypeScript check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: packages/api
+        run: node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json
+      - name: Native HTTP test syntax only
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: packages/api
+        run: node --check integration-tests/http/dogruadres-foundation.native.test.mjs
+
+  build:
+    name: API backend build — test configuration
+    needs: static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PR merge ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Record source provenance
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
+        run: |
+          echo "PR head: $PR_HEAD_SHA"
+          echo "Merge ref: $MERGE_SHA"
+          test "$(git rev-parse HEAD)" = "$MERGE_SHA"
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+          no-cache: true
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Build API backend under test configuration
+        working-directory: packages/api
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://ci@127.0.0.1:1/dogruadres_ci_build_sentinel
+          REDIS_URL: redis://127.0.0.1:1
+          STORE_CORS: http://127.0.0.1:19040
+          ADMIN_CORS: http://127.0.0.1:19040
+          VENDOR_CORS: http://127.0.0.1:19040
+          AUTH_CORS: http://127.0.0.1:19040
+        run: |
+          # Build only: no API, migrations, services or production dashboard claim.
+          export JWT_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
+          export COOKIE_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
+          export DOGRUADRES_INVITATION_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
+          bun run build

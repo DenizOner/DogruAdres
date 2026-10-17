@@ -64,5 +64,8 @@ module.exports = withMercur({
         ],
       },
     },
+    {
+      resolve: './src/modules/dogruadres-access',
+    },
   ],
 })

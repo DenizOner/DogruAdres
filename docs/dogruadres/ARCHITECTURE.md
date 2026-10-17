@@ -2,13 +2,13 @@
 
 ## Current architecture
 
-The repository is an accepted Mercur 2.3.6 + Medusa 2.21.2 baseline. Mercur provides the marketplace platform, the admin and vendor dashboards, and the multi-vendor runtime architecture. The project is currently a clean baseline with no DoğruAdres business-domain implementation.
+The repository uses Mercur 2.3.7 + Medusa 2.21.2. Mercur provides the marketplace platform, the admin and vendor dashboards, and the multi-vendor runtime architecture. The project-owned `dogruadresAccess` module now provides canonical Person/actor mappings, Organizations, memberships, invitation records, transactional security audit events and protected API routes under `/dogruadres`. Organization authorization resolves the authenticated actor, mapped Person, active membership, policy and Organization scope on every request. Manual Vehicle Management remains unimplemented and is a later checkpoint; approved ownership and uniqueness requirements are in REQUIREMENTS.md.
 
 ## Ownership boundaries
 
 ### Mercur-owned
 
-Mercur-owned concerns include the marketplace primitives and framework capabilities that Mercur already models and ships. The exact boundary should be verified against the installed Mercur 2.3.6 documentation and source, but the relevant concerns include:
+Mercur-owned concerns include the marketplace primitives and framework capabilities that Mercur already models and ships. The exact boundary should be verified against the installed Mercur 2.3.7 documentation and source, but the relevant concerns include:
 
 - seller and seller-member concepts
 - offer and product catalog relationships
@@ -36,6 +36,8 @@ DoğruAdres owns the automotive domain and the product-specific logic layered on
 - automotive taxonomy
 - catalog enrichment
 - automotive-specific search/filter semantics
+
+The identity/Organization foundation is implemented in its own Medusa module and does not reuse Mercur Member, Seller or Store as the canonical Person or Organization. No automatic Seller/Store association is created.
 
 These are architectural ownership declarations, not implementations.
 
