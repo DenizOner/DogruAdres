@@ -52,6 +52,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if (!supportedActorTypes.has(actor.actor_type) || !actor.actor_id) {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "Unsupported authenticated actor")
     }
+    // First-use mapping and Person creation are one transaction. Serialize before
+    // reading so a competing first use returns the committed canonical Person.
+    await this.lockActor_(actor, sharedContext)
     const mappings = await this.listActorMappings(
       { actor_type: actor.actor_type, actor_id: actor.actor_id },
       { take: 2 },
@@ -123,6 +126,19 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return invitations.length === 1 ? invitations[0] : null
   }
 
+  private actorLockKey_(actor: ActorReference) {
+    return JSON.stringify([actor.actor_type, actor.actor_id])
+  }
+
+  private async lockActor_(actor: ActorReference, sharedContext: Context) {
+    const transactionManager = sharedContext.transactionManager as AdvisoryLockManager | undefined
+    if (!transactionManager) throw new Error("Actor mapping changes require an active database transaction")
+    await transactionManager.execute(
+      "SELECT pg_advisory_xact_lock(hashtext('dogruadres-actor'), hashtext(?))",
+      [this.actorLockKey_(actor)]
+    )
+  }
+
   private async lockInvitation_(invitationId: string, sharedContext: Context) {
     const transactionManager = sharedContext.transactionManager as AdvisoryLockManager | undefined
     if (!transactionManager) throw new Error("Invitation changes require an active database transaction")
@@ -141,9 +157,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // other and ordinary membership changes. JSON tuple encoding avoids ambiguous
     // concatenation; hash collisions can only serialize otherwise unrelated pairs.
     // EntityManager.execute must use the active transaction, never autocommit.
-    // Lock order: acceptance takes invitation -> membership; ordinary changes take
-    // Organization -> membership. Neither path takes another lock after membership,
-    // so there is no reverse edge between invitation and Organization locks.
+    // Advisory order: acceptance takes invitation -> actor -> membership;
+    // ordinary changes take Organization -> membership. Provisioning prelocks all
+    // actors in sorted order, then takes no invitation/Organization/membership locks.
+    // No path takes an earlier lock class after membership, avoiding a cycle.
     await transactionManager.execute(
       "SELECT pg_advisory_xact_lock(hashtext('dogruadres-membership'), hashtext(?))",
       [JSON.stringify([personId, organizationId])]
@@ -157,6 +174,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   ) {
     const name = input.name.trim()
     if (!name || !input.initial_owners.length) throw new MedusaError(MedusaError.Types.INVALID_DATA, "Organization name and at least one initial Owner are required")
+    // Provisioning may resolve several actors. Acquire the complete set in one
+    // deterministic order before ensureActorPerson_ re-enters those same locks,
+    // including the provisioner: different Owner lists must not invert the order.
+    const actorsToLock = new Map([input.provisioned_by, ...input.initial_owners].map((actor) => [this.actorLockKey_(actor), actor]))
+    for (const key of [...actorsToLock.keys()].sort()) {
+      await this.lockActor_(actorsToLock.get(key)!, sharedContext)
+    }
     const provisioner = await this.ensureActorPerson_(input.provisioned_by, input.provisioned_by, sharedContext)
     const owners: Array<{ id: string }> = []
     for (const actor of input.initial_owners) {

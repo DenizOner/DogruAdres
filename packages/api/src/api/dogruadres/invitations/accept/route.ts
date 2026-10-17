@@ -28,9 +28,11 @@ const verifiedEmailFor = async (req: AuthenticatedMedusaRequest) => {
   // local to invitation acceptance and does not change global login policy.
   const verifications = await authModule.listAuthVerifications({
     auth_identity_id: identityId,
-    entity_id: providerIdentities[0].entity_id,
     entity_type: "email",
-  })
+  }, { take: null })
+  // Match entity IDs only after canonical normalization. Exact raw filtering
+  // would discard valid case/whitespace variants before the proof is checked.
+  // Read all email proofs for this identity, rather than a default first page.
   return verifiedEmailForActor({
     actorType: req.auth_context.actor_type,
     actorId: req.auth_context.actor_id,

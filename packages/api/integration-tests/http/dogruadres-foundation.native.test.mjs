@@ -166,6 +166,53 @@ test("DogruAdres Organization authorization, invitation, and audit HTTP regressi
       assert.equal((await request("POST", "/dogruadres/invitations/accept", undefined, { token: "not-a-real-token", email: inviteeEmail, email_verified: true })).status, 401)
     })
 
+    await t.test("concurrent first-use invitations create one canonical Person and ActorMapping", async () => {
+      const organizationId = await createOrganization("g1-http-first-actor")
+      const mappingsBefore = await db.query("select id from da_actor_mapping where actor_type=$1 and actor_id=$2 and deleted_at is null", [invitee.actor_type, invitee.actor_id])
+      assert.equal(mappingsBefore.rowCount, 0, "The synthetic invitee must not have a DogruAdres mapping yet")
+      const peopleBefore = new Set((await db.query("select id from da_person")).rows.map((row) => row.id))
+      const competing = [await createInvitation(organizationId, inviteeEmail, "member"), await createInvitation(organizationId, inviteeEmail, "admin")]
+      try {
+        assert.notEqual(competing[0].id, competing[1].id)
+        assert.ok(competing[0].token !== competing[1].token, "First-use requests require distinct tokens")
+        const pending = await db.query("select status, recipient_email from da_organization_invitation where id=any($1::text[]) and organization_id=$2 and deleted_at is null", [competing.map((entry) => entry.id), organizationId])
+        assert.equal(pending.rowCount, 2)
+        assert.ok(pending.rows.every((row) => row.status === "pending" && row.recipient_email === inviteeEmail))
+        const responses = await Promise.all(competing.map((entry) => accept(entry.token)))
+        assert.deepEqual(responses.map((response) => response.status).sort(), [200, 403])
+        const winnerIndex = responses.findIndex((response) => response.status === 200)
+        assert.equal(responses[1 - winnerIndex].data.type, "forbidden")
+        assert.match(responses[1 - winnerIndex].data.message, /active membership.*already exists/i)
+        const mapping = await db.query("select person_id from da_actor_mapping where actor_type=$1 and actor_id=$2 and deleted_at is null", [invitee.actor_type, invitee.actor_id])
+        assert.equal(mapping.rowCount, 1)
+        const personId = mapping.rows[0].person_id
+        const newPeople = (await db.query("select id from da_person")).rows.filter((row) => !peopleBefore.has(row.id))
+        assert.deepEqual(newPeople.map((row) => row.id), [personId], "No duplicate or orphan Person may be created by first-use requests")
+        const membership = await db.query("select id, role, status from da_organization_membership where person_id=$1 and organization_id=$2 and deleted_at is null", [personId, organizationId])
+        assert.equal(membership.rowCount, 1)
+        assert.equal(membership.rows[0].status, "active")
+        assert.equal(membership.rows[0].id, responses[winnerIndex].data.membership.id)
+        assert.equal(membership.rows[0].role, winnerIndex === 0 ? "member" : "admin")
+        const persisted = await db.query("select id, status, accepted_by_person_id, accepted_at from da_organization_invitation where id=any($1::text[]) and deleted_at is null", [competing.map((entry) => entry.id)])
+        assert.equal(persisted.rowCount, 2)
+        const winner = persisted.rows.find((row) => row.id === competing[winnerIndex].id)
+        const loser = persisted.rows.find((row) => row.id === competing[1 - winnerIndex].id)
+        assert.equal(winner.status, "accepted")
+        assert.equal(winner.accepted_by_person_id, personId)
+        assert.ok(winner.accepted_at)
+        assert.equal(loser.status, "pending")
+        assert.equal(loser.accepted_by_person_id, null)
+        assert.equal(loser.accepted_at, null)
+        const audit = await db.query("select target_id, actor_person_id, new_values from da_audit_event where action='organization.invitation_accepted' and target_id=any($1::text[]) and deleted_at is null", [competing.map((entry) => entry.id)])
+        assert.equal(audit.rowCount, 1)
+        assert.equal(audit.rows[0].target_id, winner.id)
+        assert.equal(audit.rows[0].actor_person_id, personId)
+        assert.equal(audit.rows[0].new_values.membership_id, membership.rows[0].id)
+      } finally {
+        for (const entry of competing) entry.token = ""
+      }
+    })
+
     await t.test("fresh verified invitation establishes a real HTTP membership", async () => {
       const organizationId = await createOrganization("g1-http-org-a")
       const invitation = await createInvitation(organizationId)
@@ -360,6 +407,77 @@ test("DogruAdres Organization authorization, invitation, and audit HTTP regressi
         assert.equal(audit.rows[0].new_values.membership_id, inviteeMembership.id)
       } finally {
         for (const entry of competing) entry.token = ""
+      }
+    })
+
+    await t.test("normalized email verification accepts raw case and whitespace differences", async () => {
+      const organizationId = await createOrganization("g1-http-normalized-email")
+      const invitation = await createInvitation(organizationId)
+      const rawEmail = `  ${providerIdentity.rows[0].entity_id.toUpperCase()}  `
+      assert.notEqual(rawEmail, providerIdentity.rows[0].entity_id)
+      assert.equal(rawEmail.trim().toLowerCase(), inviteeEmail.trim().toLowerCase())
+      try {
+        await db.query("update auth_verification set entity_id=$2 where id=$1", [verificationFixtureId, rawEmail])
+        const result = await accept(invitation.token)
+        assert.equal(result.status, 200)
+        const persisted = await db.query("select status, accepted_by_person_id from da_organization_invitation where id=$1", [invitation.id])
+        assert.equal(persisted.rows[0].status, "accepted")
+        assert.equal(persisted.rows[0].accepted_by_person_id, inviteeMembership.person_id)
+        assert.equal(result.data.membership.organization_id, organizationId)
+        assert.equal(result.data.membership.status, "active")
+      } finally {
+        await db.query("update auth_verification set entity_id=$2 where id=$1", [verificationFixtureId, providerIdentity.rows[0].entity_id])
+        invitation.token = ""
+      }
+    })
+
+    await t.test("targeted audit insert failure rolls back invitation acceptance and membership reactivation", async () => {
+      assert.equal((await change(orgA, inviteeMembership.id, ownerBearer, { status: "revoked" })).status, 200)
+      await assertInviteeMembershipRevoked()
+      const before = await db.query("select role, protected_owner, revoked_at from da_organization_membership where id=$1", [inviteeMembership.id])
+      const invitation = await createInvitation(orgA)
+      const artifact = `da_test_audit_${randomBytes(12).toString("hex")}`
+      assert.match(artifact, /^[a-z0-9_]+$/)
+      assert.match(invitation.id, /^[a-zA-Z0-9_]+$/)
+      try {
+        try {
+          await db.query(`CREATE FUNCTION public.${artifact}() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+              IF NEW.action = 'organization.invitation_accepted' AND NEW.target_id = TG_ARGV[0] THEN
+                RAISE EXCEPTION 'DogruAdres targeted audit fault';
+              END IF;
+              RETURN NEW;
+            END $$`)
+          await db.query(`CREATE TRIGGER ${artifact} BEFORE INSERT ON public.da_audit_event FOR EACH ROW EXECUTE FUNCTION public.${artifact}('${invitation.id}')`)
+          const result = await accept(invitation.token)
+          assert.equal(result.status, 500, "Targeted audit failure must fail the real HTTP request")
+          const membership = await db.query("select status, role, protected_owner, revoked_at from da_organization_membership where id=$1", [inviteeMembership.id])
+          assert.equal(membership.rows[0].status, "revoked")
+          assert.equal(membership.rows[0].role, before.rows[0].role)
+          assert.equal(membership.rows[0].protected_owner, before.rows[0].protected_owner)
+          assert.deepEqual(membership.rows[0].revoked_at, before.rows[0].revoked_at)
+          const pending = await db.query("select status, accepted_by_person_id, accepted_at from da_organization_invitation where id=$1", [invitation.id])
+          assert.equal(pending.rows[0].status, "pending")
+          assert.equal(pending.rows[0].accepted_by_person_id, null)
+          assert.equal(pending.rows[0].accepted_at, null)
+          const audit = await db.query("select id from da_audit_event where action='organization.invitation_accepted' and target_id=$1", [invitation.id])
+          assert.equal(audit.rowCount, 0)
+        } finally {
+          try {
+            await db.query(`DROP TRIGGER IF EXISTS ${artifact} ON public.da_audit_event`)
+          } finally {
+            await db.query(`DROP FUNCTION IF EXISTS public.${artifact}()`)
+          }
+        }
+        const leftovers = await db.query("select (select count(*) from pg_trigger where tgname=$1)::int as triggers, (select count(*) from pg_proc where proname=$1)::int as functions", [artifact])
+        assert.deepEqual(leftovers.rows[0], { triggers: 0, functions: 0 })
+        const normal = await accept(invitation.token)
+        assert.equal(normal.status, 200, "The same pending invitation must work after removing the injected fault")
+        assert.equal(normal.data.membership.id, inviteeMembership.id)
+        const audit = await db.query("select id from da_audit_event where action='organization.invitation_accepted' and target_id=$1", [invitation.id])
+        assert.equal(audit.rowCount, 1)
+      } finally {
+        invitation.token = ""
       }
     })
 

@@ -100,3 +100,17 @@ for the same revoked Person/Organization membership. Exactly one acceptance must
 succeed; persisted membership role, invitation states and the single acceptance
 audit must agree with the observed winner. Ordinary membership changes share the
 transaction-scoped membership lock; no schema migration is needed.
+
+Additional native regressions cover concurrent first-use ActorMapping creation
+(no duplicate/orphan Person), normalized email-proof entity IDs, and atomic
+rollback when a targeted acceptance audit insert fails. The last case creates a
+uniquely named temporary PostgreSQL trigger/function only in the guarded G1
+database, removes both in finally, checks that no artifacts remain, then retries
+the same pending invitation normally. The database role must have permission to
+create/drop that test-only function and trigger; no migration is involved.
+
+Actor mapping locks precede the mapping read. Provisioning acquires all actor
+keys in sorted order before resolving its provisioner and Owners; acceptance
+uses invitation -> actor -> membership, and ordinary changes retain
+Organization -> membership. Email-proof lookup is limited to the authenticated
+identity and email type; raw entity IDs are compared only after normalization.
