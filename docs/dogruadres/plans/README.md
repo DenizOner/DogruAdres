@@ -26,6 +26,10 @@ Plans are required before implementation when a task is large, cross-cutting, ri
 
 Keep the plan in the repository while the work is in scope. If a plan is superseded, keep the historical artifact or move it to a clearly marked archive only if the team wants a lighter operational view.
 
+## Active Vehicle planning
+
+- [Vehicle Management MVP — Vehicle-0 Decision and Design Plan](vehicle-management-mvp-design-2026-10-18.md) — V-01–V-07 product scope approved; technical design proposed; cross-module audit and normalization gates open. No application implementation authorization.
+
 ## Template
 
 Use `TEMPLATE.md` for the minimum required structure.
