@@ -1,34 +1,36 @@
 import type { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import type { IAuthModuleService } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import type { AcceptInvitationBody } from "../../validators"
 import { acceptInvitationWorkflow } from "../../../../workflows/dogruadres-access/accept-invitation"
-import { verifiedEmailForActor, type AuthVerificationRecord } from "../../../../modules/dogruadres-access/security"
-
-type AuthModuleVerificationReader = Readonly<{
-  listAuthVerifications: (filters: { auth_identity_id: string }) => Promise<AuthVerificationRecord[]>
-  listAuthIdentities: (
-    filters: { id: string },
-    config: { relations: string[] }
-  ) => Promise<ReadonlyArray<{ id: string; provider_identities?: ReadonlyArray<{ provider: string; entity_id: string }> }>>
-}>
+import { normalizeEmail, verifiedEmailForActor } from "../../../../modules/dogruadres-access/security"
 
 const verifiedEmailFor = async (req: AuthenticatedMedusaRequest) => {
-  const email = req.auth_context.user_metadata?.email
+  const claimedEmail = req.auth_context.user_metadata?.email
   const identityId = req.auth_context.auth_identity_id
   const authProvider = req.auth_context.auth_provider
-  if (typeof email !== "string" || !identityId || !authProvider) return null
-  const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
-  const configuredVerifications = config.projectConfig.http.authVerificationsPerActor?.[req.auth_context.actor_type]
-  const matchingConfigurations = configuredVerifications?.filter((verification) => verification.auth_provider === authProvider) ?? []
-  // Medusa's verification type is configured per actor/provider; absence or
-  // ambiguity must never turn an unrelated verification into email proof.
-  if (matchingConfigurations.length !== 1 || matchingConfigurations[0].entity_type !== "email") return null
-  const authModule = req.scope.resolve(Modules.AUTH) as unknown as AuthModuleVerificationReader
-  const identities = await authModule.listAuthIdentities({ id: identityId }, { relations: ["provider_identities"] })
+  const actorType = req.auth_context.actor_type
+  const actorId = req.auth_context.actor_id
+  if (!identityId || !authProvider || !actorId || !["user", "member", "customer"].includes(actorType)) return null
+  // Normal emailpass JWTs do not include an email claim. Resolve the actual
+  // authenticated actor on the server rather than accepting a client email.
+  const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
+  const { data: actors } = await query.graph({ entity: actorType, fields: ["id", "email"], filters: { id: actorId } })
+  if (actors.length !== 1 || typeof actors[0].email !== "string") return null
+  const email = actors[0].email
+  if (claimedEmail !== undefined && (typeof claimedEmail !== "string" || normalizeEmail(claimedEmail) !== normalizeEmail(email))) return null
+  const authModule = req.scope.resolve<IAuthModuleService>(Modules.AUTH)
+  const identities = await authModule.listAuthIdentities({ id: [identityId] }, { relations: ["provider_identities"] })
   if (identities.length !== 1 || identities[0].id !== identityId) return null
   const providerIdentities = identities[0].provider_identities?.filter((identity) => identity.provider === authProvider) ?? []
   if (providerIdentities.length !== 1) return null
-  const verifications = await authModule.listAuthVerifications({ auth_identity_id: identityId })
+  // Medusa's default list query excludes soft-deleted records. This proof is
+  // local to invitation acceptance and does not change global login policy.
+  const verifications = await authModule.listAuthVerifications({
+    auth_identity_id: identityId,
+    entity_id: providerIdentities[0].entity_id,
+    entity_type: "email",
+  })
   return verifiedEmailForActor({
     actorType: req.auth_context.actor_type,
     actorId: req.auth_context.actor_id,

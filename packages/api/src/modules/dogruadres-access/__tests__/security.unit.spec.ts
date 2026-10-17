@@ -74,6 +74,7 @@ describe("DogruAdres organization security rules", () => {
     expect(verifiedEmailForActor({ ...context, authenticatedEmail: "other@example.test" })).toBeNull()
     expect(verifiedEmailForActor({ ...context, providerIdentityEmail: "other@example.test" })).toBeNull()
     expect(verifiedEmailForActor({ ...context, verifications: [] })).toBeNull()
+    expect(verifiedEmailForActor({ ...context, verifications: [{ ...context.verifications[0], deleted_at: new Date() }] })).toBeNull()
     expect(verifiedEmailForActor({ ...context, authProvider: undefined })).toBeNull()
   })
 })

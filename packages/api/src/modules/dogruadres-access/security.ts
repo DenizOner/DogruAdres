@@ -14,6 +14,7 @@ export type AuthVerificationRecord = Readonly<{
   entity_id?: string
   entity_type?: string
   verified_at?: string | Date | null
+  deleted_at?: string | Date | null
 }>
 
 export const verifiedEmailForActor = (input: Readonly<{
@@ -30,6 +31,7 @@ export const verifiedEmailForActor = (input: Readonly<{
   if (!email || normalizeEmail(input.providerIdentityEmail) !== email) return null
   return input.verifications.some((verification) =>
     verification.entity_type === "email" &&
+    !verification.deleted_at &&
     Boolean(verification.verified_at) &&
     typeof verification.entity_id === "string" &&
     normalizeEmail(verification.entity_id) === email

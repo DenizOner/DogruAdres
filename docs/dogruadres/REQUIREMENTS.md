@@ -2255,6 +2255,10 @@ The current explicit Product Owner instruction in this task §§2–8 records th
 
 Current explicit Product Owner instruction dated 2026-10-17 clarifies implementation of existing approved requirements; no prior approval date or permalink is asserted. A revoked membership cannot be reactivated or role-managed through ordinary membership-management routes; only acceptance of a fresh valid invitation after all checks may reactivate its existing membership record. Invitation acceptance requires a verified record with the email entity type tied to the authenticated actor/provider identity and matching the authenticated email; unrelated verification entity types fail closed. Shared audit events carry a server-owned `module` value in addition to `resource`; adding that column requires a follow-up migration because the earlier migration was already applied. This clarification does not change IDs, historical statuses, baseline counts, vehicle scope, or financial requirements.
 
+### 9.12. Executable invitation verification repair
+
+The current explicit Product Owner repair instruction (record date 2026-10-17; no historical approval date or permalink asserted) clarifies that invitation acceptance verifies an existing non-deleted Medusa `email` record independently of global `authVerificationsPerActor` login enforcement. The authenticated actor's email is resolved server-side by authenticated actor ID, matched against the unique authenticated provider identity and verified record; a present signed email claim must agree. Client email/verification flags are never trusted. This supersedes any implementation coupling of acceptance to global login policy in the preceding repair checkpoint, without changing DA-ORG-003, decision-status counts, or the approved verified-recipient invariant.
+
 ## 10. Deferred decisions register
 
 | Ref | Açıkça deferred olan seçim / delivery | Korunan gereksinim ve review sınırı |

@@ -1,34 +1,33 @@
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import { execFileSync } from "node:child_process"
 import { createRequire } from "node:module"
 import { dirname, resolve } from "node:path"
 import { realpathSync } from "node:fs"
 import { test } from "node:test"
 
-const pgId = "3ce2330099192bf2fa4adae01379465c76dbd835494603ee053f36c5aec0e960"
-const redisId = "c306809c600c106d0df2ed000d4937c6a2999a5ad2d30cae035136dbd0c677c3"
 const authorizedDatabase = "g10k_20261017125120_7d460ec3"
 const apiUrl = process.env.DOGRUADRES_TEST_API_URL ?? "http://127.0.0.1:19040"
-const ownerBearer = process.env.DOGRUADRES_TEST_OWNER_BEARER
-const inviteeBearer = process.env.DOGRUADRES_TEST_INVITEE_BEARER
+let ownerBearer
+let inviteeBearer
 const databaseUrl = process.env.DATABASE_URL
 const missingInputs = [
-  ["DOGRUADRES_TEST_OWNER_BEARER", ownerBearer],
-  ["DOGRUADRES_TEST_INVITEE_BEARER", inviteeBearer],
   ["DATABASE_URL", databaseUrl],
+  ["REDIS_URL", process.env.REDIS_URL],
 ].filter(([, value]) => !value).map(([name]) => name)
 
-function verifyDockerTarget(id, expectedName, expectedPort, expectedMountDestination) {
-  const inspected = JSON.parse(execFileSync("docker", ["inspect", "--format", "{{json .}}", id], { encoding: "utf8" }))
-  assert.equal(inspected.Id, id, "Docker container ID mismatch")
+function verifyDockerTarget(expectedName, containerPort, expectedPort, expectedMountDestination) {
+  const inspected = JSON.parse(execFileSync("docker", ["inspect", "--format", "{{json .}}", expectedName], { encoding: "utf8" }))
+  assert.match(inspected.Id, /^[a-f0-9]{64}$/, "Docker container ID missing")
   assert.equal(inspected.Name, `/${expectedName}`, "Docker container name mismatch")
   assert.equal(inspected.State.Status, "running", "G1 test container must be running")
   assert.equal(inspected.Config.Labels?.["dogruadres.task"], "g1-0b", "G1 task label mismatch")
   const portBindings = Object.values(inspected.HostConfig.PortBindings ?? {}).flat()
-  assert.ok(portBindings.some((binding) => binding.HostIp === "127.0.0.1" && binding.HostPort === String(expectedPort)), "Loopback port binding mismatch")
+  assert.equal(portBindings.length, 1, "Unexpected additional host bindings")
+  assert.deepEqual(inspected.HostConfig.PortBindings[`${containerPort}/tcp`], [{ HostIp: "127.0.0.1", HostPort: String(expectedPort) }], "Loopback port binding mismatch")
   const mounts = inspected.Mounts ?? []
-  assert.ok(mounts.some((mount) => mount.Type === "volume" && mount.Destination === expectedMountDestination), "Expected isolated volume mount is missing")
+  assert.equal(mounts.length, 1, "Unexpected additional mounts")
+  assert.ok(mounts.some((mount) => mount.Type === "volume" && mount.Destination === expectedMountDestination && mount.RW && /^[a-f0-9]{64}$/.test(mount.Name)), "Expected isolated volume mount is missing")
   assert.ok(mounts.every((mount) => mount.Name !== "dogruadres-postgres-data"), "Protected development volume must never be mounted")
 }
 
@@ -60,20 +59,37 @@ async function request(method, path, bearer, body) {
   return { status: response.status, data }
 }
 
-const run = missingInputs.length === 0
-
-test("DogruAdres Organization authorization, invitation, and audit HTTP regressions", {
-  skip: run ? false : `Set test-only inputs: ${missingInputs.join(", ")}`,
-}, async (t) => {
+test("DogruAdres Organization authorization, invitation, and audit HTTP regressions", async (t) => {
+  assert.equal(missingInputs.length, 0, `Missing test-only environment: ${missingInputs.join(", ")}`)
+  assert.equal(process.env.NODE_ENV, "test")
   const database = new URL(databaseUrl)
   assert.equal(database.hostname, "127.0.0.1", "Test database must be loopback-only")
   assert.equal(database.port, "55437", "Test database must use the verified G1 port")
   assert.equal(database.pathname.slice(1), authorizedDatabase, "Test database must be the authorized G1 database")
   assert.equal(new URL(apiUrl).hostname, "127.0.0.1", "Test API must bind to loopback")
   assert.equal(new URL(apiUrl).port, "19040", "Test API must use the verified loopback port")
-  verifyDockerTarget(pgId, "dogruadres-g1-0b-postgres", 55437, "/var/lib/postgresql/data")
-  verifyDockerTarget(redisId, "dogruadres-g1-0b-redis", 56379, "/data")
+  verifyDockerTarget("dogruadres-g1-0b-postgres", 5432, 55437, "/var/lib/postgresql/data")
+  verifyDockerTarget("dogruadres-g1-0b-redis", 6379, 56379, "/data")
   assert.equal(process.env.REDIS_URL, "redis://127.0.0.1:56379", "Redis target must be the isolated G1 instance")
+
+  const credentials = [0, 1].map(() => ({ email: `g1-http-${randomUUID()}@example.invalid`, password: randomBytes(32).toString("base64url") }))
+  try {
+    execFileSync(process.execPath, ["node_modules/@medusajs/cli/cli.js", "exec", "integration-tests/fixtures/provision-native-users.ts"], {
+      cwd: process.cwd(), env: { ...process.env, DOGRUADRES_TEST_USER_FIXTURES: JSON.stringify(credentials) },
+      stdio: "pipe", timeout: 120_000,
+    })
+  } catch {
+    throw new Error("Supported synthetic user provisioning failed; no credentials or child output are emitted")
+  }
+  const bearers = []
+  for (const credential of credentials) {
+    const login = await request("POST", "/auth/user/emailpass", undefined, credential)
+    assert.equal(login.status, 200, "Normal Medusa authentication failed")
+    assert.equal(typeof login.data.token, "string", "Normal login did not return an authenticated bearer")
+    bearers.push(login.data.token)
+    credential.password = ""
+  }
+  ;[ownerBearer, inviteeBearer] = bearers
 
   const owner = tokenClaims(ownerBearer)
   const invitee = tokenClaims(inviteeBearer)
@@ -81,8 +97,7 @@ test("DogruAdres Organization authorization, invitation, and audit HTTP regressi
   assert.equal(invitee.actor_type, "user", "Invitee must be an independently authenticated platform user")
   assert.ok(owner.actor_id && invitee.actor_id && owner.actor_id !== invitee.actor_id, "Two distinct authenticated users are required")
   assert.ok(invitee.auth_identity_id && invitee.auth_provider, "Invitee authentication identity/provider are required")
-  const inviteeEmail = invitee.user_metadata?.email
-  assert.equal(typeof inviteeEmail, "string", "Invitee email must come from signed authentication context")
+  const inviteeEmail = credentials[1].email
 
   const db = pgClient()
   await db.connect()
@@ -96,13 +111,15 @@ test("DogruAdres Organization authorization, invitation, and audit HTTP regressi
 
     const health = await request("GET", "/health")
     assert.equal(health.status, 200, "Native API health request failed")
-    for (const bearer of [ownerBearer, inviteeBearer]) {
+    for (const [index, bearer] of [ownerBearer, inviteeBearer].entries()) {
       const authCheck = await request("GET", "/admin/users/me", bearer)
       assert.equal(authCheck.status, 200, "A test bearer is not an authenticated platform user")
+      assert.equal(authCheck.data.user.id, [owner, invitee][index].actor_id)
+      assert.equal(authCheck.data.user.email, credentials[index].email)
     }
 
     const providerIdentity = await db.query(
-      "select entity_id from auth_provider_identity where auth_identity_id=$1 and provider=$2",
+      "select entity_id from provider_identity where auth_identity_id=$1 and provider=$2 and deleted_at is null",
       [invitee.auth_identity_id, invitee.auth_provider]
     )
     assert.equal(providerIdentity.rowCount, 1, "Invitee must have exactly one identity for the authenticated provider")
@@ -144,6 +161,11 @@ test("DogruAdres Organization authorization, invitation, and audit HTTP regressi
       assert.equal(state.rows[0].status, "revoked", "Rejected invitation must not reactivate the membership")
     }
 
+    await t.test("authentication is required and client verification flags grant no access", async () => {
+      assert.equal((await request("POST", "/admin/dogruadres/organizations", undefined, { name: "denied", initial_owners: [] })).status, 401)
+      assert.equal((await request("POST", "/dogruadres/invitations/accept", undefined, { token: "not-a-real-token", email: inviteeEmail, email_verified: true })).status, 401)
+    })
+
     await t.test("fresh verified invitation establishes a real HTTP membership", async () => {
       const organizationId = await createOrganization("g1-http-org-a")
       const invitation = await createInvitation(organizationId)
@@ -164,6 +186,8 @@ test("DogruAdres Organization authorization, invitation, and audit HTTP regressi
       const organizationB = await createOrganization("g1-http-org-b")
       const denied = await request("GET", `/dogruadres/organizations/${organizationB}`, inviteeBearer)
       assert.equal(denied.status, 403)
+      const deniedWrite = await change(organizationB, inviteeMembership.id, inviteeBearer, { role: "admin" })
+      assert.equal(deniedWrite.status, 403)
     })
 
     await t.test("revocation removes access and ordinary membership changes cannot reactivate or role-edit", async () => {
@@ -212,6 +236,28 @@ test("DogruAdres Organization authorization, invitation, and audit HTTP regressi
       mismatchedVerification.token = ""
       await db.query("update auth_verification set entity_id=$2 where id=$1", [verificationFixtureId, providerIdentity.rows[0].entity_id])
 
+      const foreignVerification = await createInvitation(orgA)
+      await db.query("update auth_verification set auth_identity_id=$2 where id=$1", [verificationFixtureId, owner.auth_identity_id])
+      try {
+        assert.equal((await accept(foreignVerification.token)).status, 403)
+        await assertInviteeMembershipRevoked()
+      } finally {
+        await db.query("update auth_verification set auth_identity_id=$2 where id=$1", [verificationFixtureId, invitee.auth_identity_id])
+        foreignVerification.token = ""
+      }
+
+      const ambiguousProvider = await createInvitation(orgA)
+      const extraProviderId = `authprov_${randomUUID()}`
+      await db.query("insert into provider_identity (id,auth_identity_id,entity_id,provider) values ($1,$2,$3,$4)",
+        [extraProviderId, invitee.auth_identity_id, `ambiguous-${randomUUID()}@example.invalid`, invitee.auth_provider])
+      try {
+        assert.equal((await accept(ambiguousProvider.token)).status, 403)
+        await assertInviteeMembershipRevoked()
+      } finally {
+        await db.query("delete from provider_identity where id=$1", [extraProviderId])
+        ambiguousProvider.token = ""
+      }
+
       const unverified = await createInvitation(orgA)
       await db.query("update auth_verification set verified_at=null where id=$1", [verificationFixtureId])
       assert.equal((await accept(unverified.token)).status, 403)
@@ -219,12 +265,22 @@ test("DogruAdres Organization authorization, invitation, and audit HTTP regressi
       unverified.token = ""
       await db.query("update auth_verification set verified_at=now() where id=$1", [verificationFixtureId])
 
-      const missing = await createInvitation(orgA)
+      const deleted = await createInvitation(orgA)
       await db.query("update auth_verification set deleted_at=now() where id=$1", [verificationFixtureId])
+      assert.equal((await accept(deleted.token)).status, 403)
+      await assertInviteeMembershipRevoked()
+      deleted.token = ""
+      await db.query("update auth_verification set deleted_at=null where id=$1", [verificationFixtureId])
+
+      const missing = await createInvitation(orgA)
+      await db.query("delete from auth_verification where id=$1", [verificationFixtureId])
       assert.equal((await accept(missing.token)).status, 403)
       await assertInviteeMembershipRevoked()
       missing.token = ""
-      await db.query("update auth_verification set deleted_at=null where id=$1", [verificationFixtureId])
+      await db.query(`insert into auth_verification
+        (id, auth_identity_id, entity_id, entity_type, code_provider, verified_at, requested_at, created_at, updated_at)
+        values ($1,$2,$3,'email','token',now(),now(),now(),now())`,
+        [verificationFixtureId, invitee.auth_identity_id, providerIdentity.rows[0].entity_id])
 
       const expired = await createInvitation(orgA)
       await db.query("update da_organization_invitation set expires_at=now()-interval '1 second' where id=$1", [expired.id])

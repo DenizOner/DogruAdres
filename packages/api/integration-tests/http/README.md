@@ -34,16 +34,37 @@ Run the focused suite from `packages/api` with Node's built-in test runner:
 node --test integration-tests/http/dogruadres-foundation.native.test.mjs
 ```
 
+Start the existing production build separately from `packages/api/.medusa/server`
+with the same isolated `DATABASE_URL`, `REDIS_URL`, `NODE_ENV=test` and
+`MEDUSA_WORKER_MODE=server` process environment:
+
+```powershell
+node ../../node_modules/@medusajs/cli/cli.js start --host 127.0.0.1 --port 19040
+```
+
+Set fresh test-only `JWT_SECRET`, `COOKIE_SECRET`, and
+`DOGRUADRES_INVITATION_SECRET` in that process (see `.env.template` for secure
+generation). Never reuse production credentials. Stop only that API after
+testing; preserve the existing G1 containers and test evidence. No migration,
+seed, additional container, or external provider is required by this suite.
+
 The test talks to a running native API at `http://127.0.0.1:19040` and the
 existing isolated G1 PostgreSQL/Redis services. It will not start services or
-create containers. Before the test can execute, the developer must establish
-the documented G1 test-only environment and obtain two independently
-authenticated Medusa user bearer tokens through the normal authentication
-flow. Pass the bearer values only through the process environment variables
-`DOGRUADRES_TEST_OWNER_BEARER` and `DOGRUADRES_TEST_INVITEE_BEARER`; never
-write them to a file, shell history, test report, or log. `DATABASE_URL` and
-`REDIS_URL` must point to the verified G1 endpoints, and the test validates
-the exact authorized database and loopback API endpoint before making requests.
+create containers. Set `NODE_ENV=test`, `DATABASE_URL` to the authorized
+`postgres://postgres@127.0.0.1:55437/g10k_20261017125120_7d460ec3`, and
+`REDIS_URL=redis://127.0.0.1:56379` in the test process. Missing prerequisites
+fail the suite; they never produce a skipped success. Container names, exact
+loopback bindings, task labels, isolated volume mounts and the protected-volume
+exclusion are checked before any database or API request.
+
+The suite generates two synthetic credentials in process memory, provisions
+users with the supported Medusa `exec` fixture at
+`integration-tests/fixtures/provision-native-users.ts`, then logs each in through
+`POST /auth/user/emailpass`. The fixture uses the same workflow/auth-service
+sequence as the Medusa 2.21.2 `user` command. Passwords are passed only through
+the child-process environment; bearer tokens come from real login responses
+and remain in memory. No production credentials, forged tokens, or external
+email delivery are used. Synthetic users remain in the disposable database.
 
 The suite provisions synthetic Organizations and invitations through the real
 HTTP routes. It inserts one synthetic, correctly typed verified-email record
@@ -58,12 +79,18 @@ Coverage includes cross-Organization denial, membership revocation and
 ordinary reactivation/role-change denial, fresh invitation reactivation,
 invitation recipient/type/verification/expiry/revocation/replay checks,
 concurrent one-time acceptance, concurrent last-protected-Owner changes, and
-server-owned audit module attribution. Missing test-only bearer credentials
-cause an explicit skip; a skip is not a passing HTTP result.
+server-owned audit module attribution. A skip is not a passing HTTP result.
 
-Invitation acceptance also requires one unambiguous Medusa
-`projectConfig.http.authVerificationsPerActor` entry for the authenticated
-actor/provider with `entity_type: "email"`. The current application does not
-configure that entry. Acceptance intentionally fails closed until that
-configuration and its effect on the normal login flow are reviewed; inserting
-a synthetic verification record alone does not bypass this prerequisite.
+Invitation acceptance checks an existing Medusa verification with
+`entity_type: "email"`, non-null `verified_at`, matching auth identity and
+provider entity. Soft-deleted records are excluded. This proof is independent
+of `projectConfig.http.authVerificationsPerActor`, which controls global login
+enforcement; this suite and repair do not change that global policy.
+Normal emailpass tokens may omit an email claim: the route resolves the email
+from the authenticated actor's server-side record. If a signed email claim is
+present it must also match; a client-provided email is never evidence.
+
+Both concurrency tests send real simultaneous HTTP requests and verify the
+persisted invitation/membership postconditions. Foundation advisory locks must
+use `EntityManager.execute`, which forwards the active transaction context;
+raw `getConnection().execute` without that context does not protect the mutation.

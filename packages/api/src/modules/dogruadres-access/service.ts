@@ -29,9 +29,7 @@ type ChangeMembershipInput = Readonly<{
 }>
 
 type AdvisoryLockManager = Readonly<{
-  getConnection: () => Readonly<{
-    execute: (query: string, parameters: string[]) => Promise<unknown>
-  }>
+  execute: (query: string, parameters: string[]) => Promise<unknown>
 }>
 
 const activeStatus = "active"
@@ -128,7 +126,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   private async lockInvitation_(invitationId: string, sharedContext: Context) {
     const transactionManager = sharedContext.transactionManager as AdvisoryLockManager | undefined
     if (!transactionManager) throw new Error("Invitation changes require an active database transaction")
-    await transactionManager.getConnection().execute(
+    // EntityManager.execute forwards the active transaction context. Calling
+    // getConnection().execute directly acquires a lock in autocommit instead.
+    await transactionManager.execute(
       "SELECT pg_advisory_xact_lock(hashtext('dogruadres-invitation'), hashtext(?))",
       [invitationId]
     )
@@ -198,7 +198,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   ) {
     const transactionManager = sharedContext.transactionManager as AdvisoryLockManager | undefined
     if (!transactionManager) throw new Error("Membership changes require an active database transaction")
-    await transactionManager.getConnection().execute(
+    await transactionManager.execute(
       "SELECT pg_advisory_xact_lock(hashtext('dogruadres-owner-change'), hashtext(?))",
       [input.organization_id]
     )
