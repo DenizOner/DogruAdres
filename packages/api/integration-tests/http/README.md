@@ -90,7 +90,13 @@ Normal emailpass tokens may omit an email claim: the route resolves the email
 from the authenticated actor's server-side record. If a signed email claim is
 present it must also match; a client-provided email is never evidence.
 
-Both concurrency tests send real simultaneous HTTP requests and verify the
+The concurrency tests send real simultaneous HTTP requests and verify the
 persisted invitation/membership postconditions. Foundation advisory locks must
 use `EntityManager.execute`, which forwards the active transaction context;
 raw `getConnection().execute` without that context does not protect the mutation.
+
+The different-invitation race uses two pending invitations with different roles
+for the same revoked Person/Organization membership. Exactly one acceptance must
+succeed; persisted membership role, invitation states and the single acceptance
+audit must agree with the observed winner. Ordinary membership changes share the
+transaction-scoped membership lock; no schema migration is needed.

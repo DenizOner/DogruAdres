@@ -134,6 +134,22 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     )
   }
 
+  private async lockMembership_(personId: string, organizationId: string, sharedContext: Context) {
+    const transactionManager = sharedContext.transactionManager as AdvisoryLockManager | undefined
+    if (!transactionManager) throw new Error("Membership changes require an active database transaction")
+    // Different invitations for one Person/Organization must serialize with each
+    // other and ordinary membership changes. JSON tuple encoding avoids ambiguous
+    // concatenation; hash collisions can only serialize otherwise unrelated pairs.
+    // EntityManager.execute must use the active transaction, never autocommit.
+    // Lock order: acceptance takes invitation -> membership; ordinary changes take
+    // Organization -> membership. Neither path takes another lock after membership,
+    // so there is no reverse edge between invitation and Organization locks.
+    await transactionManager.execute(
+      "SELECT pg_advisory_xact_lock(hashtext('dogruadres-membership'), hashtext(?))",
+      [JSON.stringify([personId, organizationId])]
+    )
+  }
+
   @InjectTransactionManager()
   async provisionOrganization(
     input: ProvisionOrganizationInput,
@@ -202,12 +218,17 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       "SELECT pg_advisory_xact_lock(hashtext('dogruadres-owner-change'), hashtext(?))",
       [input.organization_id]
     )
+    const initialTarget = await this.getMembershipInOrganization(input.membership_id, input.organization_id, sharedContext)
+    if (!initialTarget) throw new MedusaError(MedusaError.Types.NOT_FOUND, "Membership not found in the selected Organization")
+    await this.lockMembership_(initialTarget.person_id, input.organization_id, sharedContext)
+    // Waiting may have allowed an invitation to reactivate this membership.
+    // Re-read persisted target and actor authorization before transition decisions.
     const actorMembership = await this.getActiveMembership(input.actor_person_id, input.organization_id, sharedContext)
     if (!actorMembership || !["owner", "admin"].includes(actorMembership.role)) {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "Active Owner or Admin membership is required")
     }
     const target = await this.getMembershipInOrganization(input.membership_id, input.organization_id, sharedContext)
-    if (!target) throw new MedusaError(MedusaError.Types.NOT_FOUND, "Membership not found in the selected Organization")
+    if (!target || target.person_id !== initialTarget.person_id) throw new MedusaError(MedusaError.Types.NOT_FOUND, "Membership not found in the selected Organization")
     if (!canManageMembership(target.status)) {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "Revoked membership can only be reactivated by accepting a fresh valid invitation")
     }
@@ -352,6 +373,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "Invitation is invalid, expired, revoked, or already used")
     }
     const person = await this.ensureActorPerson_(input.actor, input.actor, sharedContext)
+    await this.lockMembership_(person.id, invitation.organization_id, sharedContext)
+    // Read after the shared lock: a different invitation may have activated the
+    // same membership while we waited. Reject it before any membership/audit write.
     const existing = await this.listMemberships({ person_id: person.id, organization_id: invitation.organization_id }, { take: 2 }, sharedContext)
     if (existing.length > 1 || existing[0]?.status === "active") {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "An active membership for this Person and Organization already exists")

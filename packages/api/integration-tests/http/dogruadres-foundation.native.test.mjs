@@ -147,8 +147,8 @@ test("DogruAdres Organization authorization, invitation, and audit HTTP regressi
       organizations.push(response.data.organization.id)
       return response.data.organization.id
     }
-    const createInvitation = async (organizationId, email = inviteeEmail) => {
-      const response = await request("POST", `/dogruadres/organizations/${organizationId}/invitations`, ownerBearer, { email, role: "member" })
+    const createInvitation = async (organizationId, email = inviteeEmail, role = "member") => {
+      const response = await request("POST", `/dogruadres/organizations/${organizationId}/invitations`, ownerBearer, { email, role })
       assert.equal(response.status, 201, "Invitation creation failed")
       assert.ok(response.data.invitation?.id && response.data.invitation_token, "Invitation response must contain the one-time link token")
       invitations.push(response.data.invitation.id)
@@ -314,6 +314,53 @@ test("DogruAdres Organization authorization, invitation, and audit HTTP regressi
       const accepted = await db.query("select status, accepted_by_person_id from da_organization_invitation where id=$1", [invitation.id])
       assert.equal(accepted.rows[0].status, "accepted")
       invitation.token = ""
+    })
+
+    await t.test("different invitations serialize reactivation of the same Person/Organization membership", async () => {
+      assert.equal((await change(orgA, inviteeMembership.id, ownerBearer, { status: "revoked" })).status, 200)
+      await assertInviteeMembershipRevoked()
+      const competing = [await createInvitation(orgA, inviteeEmail, "member"), await createInvitation(orgA, inviteeEmail, "admin")]
+      try {
+        assert.notEqual(competing[0].id, competing[1].id, "Distinct invitation records are required")
+        assert.ok(competing[0].token !== competing[1].token, "Distinct invitation tokens are required")
+        const before = await db.query("select id, status, recipient_email from da_organization_invitation where id=any($1::text[]) and organization_id=$2 and deleted_at is null", [competing.map((entry) => entry.id), orgA])
+        assert.equal(before.rowCount, 2)
+        assert.ok(before.rows.every((row) => row.status === "pending" && row.recipient_email === inviteeEmail.trim().toLowerCase()))
+        const responses = await Promise.all(competing.map((entry) => accept(entry.token)))
+        assert.deepEqual(responses.map((response) => response.status).sort(), [200, 403])
+        const winnerIndex = responses.findIndex((response) => response.status === 200)
+        const winner = competing[winnerIndex]
+        const loser = competing[1 - winnerIndex]
+        assert.equal(responses[1 - winnerIndex].data.type, "forbidden")
+        assert.match(responses[1 - winnerIndex].data.message, /active membership.*already exists/i)
+        assert.equal(responses[winnerIndex].data.membership.id, inviteeMembership.id)
+        const state = await db.query("select id, person_id, role, status, protected_owner, revoked_at from da_organization_membership where person_id=$1 and organization_id=$2 and deleted_at is null", [inviteeMembership.person_id, orgA])
+        assert.equal(state.rowCount, 1)
+        assert.equal(state.rows[0].id, inviteeMembership.id)
+        assert.equal(state.rows[0].status, "active")
+        assert.equal(state.rows[0].role, winnerIndex === 0 ? "member" : "admin")
+        assert.equal(state.rows[0].protected_owner, false)
+        assert.equal(state.rows[0].revoked_at, null)
+        const persisted = await db.query("select id, role, status, accepted_by_person_id, accepted_at from da_organization_invitation where id=any($1::text[]) and deleted_at is null", [competing.map((entry) => entry.id)])
+        assert.equal(persisted.rowCount, 2)
+        const accepted = persisted.rows.find((row) => row.id === winner.id)
+        const pending = persisted.rows.find((row) => row.id === loser.id)
+        assert.equal(accepted.status, "accepted")
+        assert.equal(accepted.accepted_by_person_id, inviteeMembership.person_id)
+        assert.ok(accepted.accepted_at)
+        assert.equal(state.rows[0].role, accepted.role)
+        assert.equal(pending.status, "pending")
+        assert.equal(pending.accepted_by_person_id, null)
+        assert.equal(pending.accepted_at, null)
+        const audit = await db.query("select target_id, actor_person_id, module, new_values from da_audit_event where action='organization.invitation_accepted' and target_id=any($1::text[]) and organization_id=$2 and deleted_at is null", [competing.map((entry) => entry.id), orgA])
+        assert.equal(audit.rowCount, 1, "Only one successful acceptance may be audited")
+        assert.equal(audit.rows[0].target_id, winner.id)
+        assert.equal(audit.rows[0].actor_person_id, inviteeMembership.person_id)
+        assert.equal(audit.rows[0].module, "dogruadres-access")
+        assert.equal(audit.rows[0].new_values.membership_id, inviteeMembership.id)
+      } finally {
+        for (const entry of competing) entry.token = ""
+      }
     })
 
     await t.test("concurrent last-protected-Owner revocation leaves one active protected Owner", async () => {
