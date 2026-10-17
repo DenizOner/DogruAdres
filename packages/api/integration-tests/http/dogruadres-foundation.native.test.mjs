@@ -261,6 +261,14 @@ test("DogruAdres Organization authorization, invitation, and audit HTTP regressi
       const unverified = await createInvitation(orgA)
       await db.query("update auth_verification set verified_at=null where id=$1", [verificationFixtureId])
       assert.equal((await accept(unverified.token)).status, 403)
+      const spoofedVerification = await request("POST", "/dogruadres/invitations/accept", inviteeBearer, {
+        token: unverified.token,
+        email: inviteeEmail,
+        email_verified: true,
+      })
+      assert.equal(spoofedVerification.status, 400, "Client verification fields must be rejected by the strict request validator")
+      assert.equal(spoofedVerification.data.type, "invalid_data")
+      assert.match(spoofedVerification.data.message, /Unrecognized fields: 'email, email_verified'/)
       await assertInviteeMembershipRevoked()
       unverified.token = ""
       await db.query("update auth_verification set verified_at=now() where id=$1", [verificationFixtureId])
