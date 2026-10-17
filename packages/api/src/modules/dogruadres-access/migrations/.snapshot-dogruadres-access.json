@@ -935,6 +935,22 @@
           "enumItems": [],
           "mappedType": "text"
         },
+        "module": {
+          "name": "module",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'dogruadres-access'",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
         "resource": {
           "name": "resource",
           "type": "text",

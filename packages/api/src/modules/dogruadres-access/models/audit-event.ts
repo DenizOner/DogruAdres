@@ -9,6 +9,7 @@ export const AuditEvent = model.define("da_audit_event", {
   role_context: model.text().nullable(),
   organization_id: model.text().nullable(),
   action: model.text(),
+  module: model.text().default("dogruadres-access"),
   resource: model.text(),
   target_id: model.text().nullable(),
   previous_values: model.json().nullable(),

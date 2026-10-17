@@ -5,7 +5,7 @@ import {
   MedusaError,
 } from "@medusajs/framework/utils"
 import type { Context } from "@medusajs/framework/types"
-import { isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
+import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
 import { ActorMapping, AuditEvent, Invitation, Membership, Organization, Person } from "./models"
 import { randomBytes } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
@@ -36,6 +36,7 @@ type AdvisoryLockManager = Readonly<{
 
 const activeStatus = "active"
 const supportedActorTypes = new Set(["user", "member", "customer"])
+export const DOGRUADRES_AUDIT_MODULE = "dogruadres-access"
 
 export default class DogruAdresAccessModuleService extends MedusaService({
   Person,
@@ -167,6 +168,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         role_context: "platform_administrator",
         organization_id: organization.id,
         action: "organization.provisioned",
+        module: DOGRUADRES_AUDIT_MODULE,
         resource: "organization",
         target_id: organization.id,
         new_values: { name: organization.name, initial_owner_count: memberships.length },
@@ -179,6 +181,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         role_context: "platform_administrator",
         organization_id: organization.id,
         action: "organization.owner_assigned",
+        module: DOGRUADRES_AUDIT_MODULE,
         resource: "membership",
         target_id: membership.id,
         new_values: { role: "owner", protected_owner: true, person_id: owners[index].id },
@@ -205,6 +208,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }
     const target = await this.getMembershipInOrganization(input.membership_id, input.organization_id, sharedContext)
     if (!target) throw new MedusaError(MedusaError.Types.NOT_FOUND, "Membership not found in the selected Organization")
+    if (!canManageMembership(target.status)) {
+      throw new MedusaError(MedusaError.Types.FORBIDDEN, "Revoked membership can only be reactivated by accepting a fresh valid invitation")
+    }
 
     const changesProtectedOwner = target.protected_owner || target.role === "owner" || input.role === "owner"
     if (changesProtectedOwner && !actorMembership.protected_owner) {
@@ -237,6 +243,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       role_context: actorMembership.role,
       organization_id: input.organization_id,
       action: "organization.membership_changed",
+      module: DOGRUADRES_AUDIT_MODULE,
       resource: "membership",
       target_id: target.id,
       previous_values: { role: target.role, status: target.status, protected_owner: target.protected_owner },
@@ -281,6 +288,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       role_context: actorMembership.role,
       organization_id: organization.id,
       action: "organization.invitation_created",
+      module: DOGRUADRES_AUDIT_MODULE,
       resource: "invitation",
       target_id: invitation.id,
       new_values: { role: input.role, expires_at: updated.expires_at },
@@ -309,6 +317,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       role_context: actorMembership.role,
       organization_id: input.organization_id,
       action: "organization.invitation_revoked",
+      module: DOGRUADRES_AUDIT_MODULE,
       resource: "invitation",
       target_id: invitation.id,
       previous_values: { status: current.status },
@@ -375,6 +384,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       role_context: invitation.role,
       organization_id: invitation.organization_id,
       action: "organization.invitation_accepted",
+      module: DOGRUADRES_AUDIT_MODULE,
       resource: "invitation",
       target_id: invitation.id,
       new_values: { status: accepted.status, membership_id: membership.id },

@@ -10,6 +10,32 @@ const invitationSecret = () => {
 
 export const normalizeEmail = (value: string) => value.trim().toLowerCase()
 
+export type AuthVerificationRecord = Readonly<{
+  entity_id?: string
+  entity_type?: string
+  verified_at?: string | Date | null
+}>
+
+export const verifiedEmailForActor = (input: Readonly<{
+  actorType?: string
+  actorId?: string
+  authIdentityId?: string
+  authProvider?: string
+  authenticatedEmail?: string
+  providerIdentityEmail?: string
+  verifications: readonly AuthVerificationRecord[]
+}>) => {
+  if (!input.actorType || !input.actorId || !input.authIdentityId || !input.authProvider || !input.authenticatedEmail || !input.providerIdentityEmail) return null
+  const email = normalizeEmail(input.authenticatedEmail)
+  if (!email || normalizeEmail(input.providerIdentityEmail) !== email) return null
+  return input.verifications.some((verification) =>
+    verification.entity_type === "email" &&
+    Boolean(verification.verified_at) &&
+    typeof verification.entity_id === "string" &&
+    normalizeEmail(verification.entity_id) === email
+  ) ? email : null
+}
+
 export const deriveInvitationToken = (invitationId: string) =>
   createHmac("sha256", invitationSecret())
     .update(`dogruadres-invitation:v1:${invitationId}`)
@@ -26,3 +52,5 @@ export const invitationTokenMatches = (token: string, expectedHash: string) => {
 
 export const isOwnerDemotionAllowed = (activeProtectedOwnerCount: number) =>
   Number.isInteger(activeProtectedOwnerCount) && activeProtectedOwnerCount > 1
+
+export const canManageMembership = (status: string) => status === "active"

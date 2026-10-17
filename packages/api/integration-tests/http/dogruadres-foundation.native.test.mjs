@@ -1,0 +1,290 @@
+import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
+import { execFileSync } from "node:child_process"
+import { createRequire } from "node:module"
+import { dirname, resolve } from "node:path"
+import { realpathSync } from "node:fs"
+import { test } from "node:test"
+
+const pgId = "3ce2330099192bf2fa4adae01379465c76dbd835494603ee053f36c5aec0e960"
+const redisId = "c306809c600c106d0df2ed000d4937c6a2999a5ad2d30cae035136dbd0c677c3"
+const authorizedDatabase = "g10k_20261017125120_7d460ec3"
+const apiUrl = process.env.DOGRUADRES_TEST_API_URL ?? "http://127.0.0.1:19040"
+const ownerBearer = process.env.DOGRUADRES_TEST_OWNER_BEARER
+const inviteeBearer = process.env.DOGRUADRES_TEST_INVITEE_BEARER
+const databaseUrl = process.env.DATABASE_URL
+const missingInputs = [
+  ["DOGRUADRES_TEST_OWNER_BEARER", ownerBearer],
+  ["DOGRUADRES_TEST_INVITEE_BEARER", inviteeBearer],
+  ["DATABASE_URL", databaseUrl],
+].filter(([, value]) => !value).map(([name]) => name)
+
+function verifyDockerTarget(id, expectedName, expectedPort, expectedMountDestination) {
+  const inspected = JSON.parse(execFileSync("docker", ["inspect", "--format", "{{json .}}", id], { encoding: "utf8" }))
+  assert.equal(inspected.Id, id, "Docker container ID mismatch")
+  assert.equal(inspected.Name, `/${expectedName}`, "Docker container name mismatch")
+  assert.equal(inspected.State.Status, "running", "G1 test container must be running")
+  assert.equal(inspected.Config.Labels?.["dogruadres.task"], "g1-0b", "G1 task label mismatch")
+  const portBindings = Object.values(inspected.HostConfig.PortBindings ?? {}).flat()
+  assert.ok(portBindings.some((binding) => binding.HostIp === "127.0.0.1" && binding.HostPort === String(expectedPort)), "Loopback port binding mismatch")
+  const mounts = inspected.Mounts ?? []
+  assert.ok(mounts.some((mount) => mount.Type === "volume" && mount.Destination === expectedMountDestination), "Expected isolated volume mount is missing")
+  assert.ok(mounts.every((mount) => mount.Name !== "dogruadres-postgres-data"), "Protected development volume must never be mounted")
+}
+
+function tokenClaims(bearer) {
+  const parts = bearer.split(".")
+  assert.equal(parts.length, 3, "Bearer must be a JWT")
+  return JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"))
+}
+
+function pgClient() {
+  const requireFromApi = createRequire(resolve(process.cwd(), "package.json"))
+  const frameworkEntry = realpathSync(requireFromApi.resolve("@medusajs/framework"))
+  const pgEntry = requireFromApi.resolve("pg", { paths: [dirname(frameworkEntry)] })
+  const { Client } = requireFromApi(pgEntry)
+  return new Client({ connectionString: databaseUrl })
+}
+
+async function request(method, path, bearer, body) {
+  const response = await fetch(new URL(path, apiUrl), {
+    method,
+    headers: {
+      ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+  let data = {}
+  try { data = await response.json() } catch { /* body is intentionally omitted from diagnostics */ }
+  return { status: response.status, data }
+}
+
+const run = missingInputs.length === 0
+
+test("DogruAdres Organization authorization, invitation, and audit HTTP regressions", {
+  skip: run ? false : `Set test-only inputs: ${missingInputs.join(", ")}`,
+}, async (t) => {
+  const database = new URL(databaseUrl)
+  assert.equal(database.hostname, "127.0.0.1", "Test database must be loopback-only")
+  assert.equal(database.port, "55437", "Test database must use the verified G1 port")
+  assert.equal(database.pathname.slice(1), authorizedDatabase, "Test database must be the authorized G1 database")
+  assert.equal(new URL(apiUrl).hostname, "127.0.0.1", "Test API must bind to loopback")
+  assert.equal(new URL(apiUrl).port, "19040", "Test API must use the verified loopback port")
+  verifyDockerTarget(pgId, "dogruadres-g1-0b-postgres", 55437, "/var/lib/postgresql/data")
+  verifyDockerTarget(redisId, "dogruadres-g1-0b-redis", 56379, "/data")
+  assert.equal(process.env.REDIS_URL, "redis://127.0.0.1:56379", "Redis target must be the isolated G1 instance")
+
+  const owner = tokenClaims(ownerBearer)
+  const invitee = tokenClaims(inviteeBearer)
+  assert.equal(owner.actor_type, "user", "Provisioning identity must be an authenticated platform user")
+  assert.equal(invitee.actor_type, "user", "Invitee must be an independently authenticated platform user")
+  assert.ok(owner.actor_id && invitee.actor_id && owner.actor_id !== invitee.actor_id, "Two distinct authenticated users are required")
+  assert.ok(invitee.auth_identity_id && invitee.auth_provider, "Invitee authentication identity/provider are required")
+  const inviteeEmail = invitee.user_metadata?.email
+  assert.equal(typeof inviteeEmail, "string", "Invitee email must come from signed authentication context")
+
+  const db = pgClient()
+  await db.connect()
+  let verificationFixtureId
+  const organizations = []
+  const invitations = []
+  try {
+    const dbIdentity = await db.query("select current_database() as name, inet_server_addr()::text as address")
+    assert.equal(dbIdentity.rows[0].name, authorizedDatabase)
+    assert.ok(dbIdentity.rows[0].address, "PostgreSQL must report an active server address")
+
+    const health = await request("GET", "/health")
+    assert.equal(health.status, 200, "Native API health request failed")
+    for (const bearer of [ownerBearer, inviteeBearer]) {
+      const authCheck = await request("GET", "/admin/users/me", bearer)
+      assert.equal(authCheck.status, 200, "A test bearer is not an authenticated platform user")
+    }
+
+    const providerIdentity = await db.query(
+      "select entity_id from auth_provider_identity where auth_identity_id=$1 and provider=$2",
+      [invitee.auth_identity_id, invitee.auth_provider]
+    )
+    assert.equal(providerIdentity.rowCount, 1, "Invitee must have exactly one identity for the authenticated provider")
+    assert.equal(providerIdentity.rows[0].entity_id.trim().toLowerCase(), inviteeEmail.trim().toLowerCase(), "Signed email must match the authenticated provider identity")
+
+    const existingVerification = await db.query(
+      "select id from auth_verification where auth_identity_id=$1 and entity_id=$2 and entity_type='email' and deleted_at is null",
+      [invitee.auth_identity_id, providerIdentity.rows[0].entity_id]
+    )
+    assert.equal(existingVerification.rowCount, 0, "Use a fresh synthetic invitee auth identity without an existing email-verification fixture")
+    verificationFixtureId = `authver_${randomUUID()}`
+    await db.query(
+      `insert into auth_verification
+       (id, auth_identity_id, entity_id, entity_type, code_provider, verified_at, requested_at, created_at, updated_at)
+       values ($1,$2,$3,'email','token',now(),now(),now(),now())`,
+      [verificationFixtureId, invitee.auth_identity_id, providerIdentity.rows[0].entity_id]
+    )
+
+    const createOrganization = async (name, actors = [owner]) => {
+      const response = await request("POST", "/admin/dogruadres/organizations", ownerBearer, {
+        name: `${name}-${randomUUID()}`,
+        initial_owners: actors.map((actor) => ({ actor_type: actor.actor_type, actor_id: actor.actor_id })),
+      })
+      assert.equal(response.status, 201, "Organization provisioning failed")
+      organizations.push(response.data.organization.id)
+      return response.data.organization.id
+    }
+    const createInvitation = async (organizationId, email = inviteeEmail) => {
+      const response = await request("POST", `/dogruadres/organizations/${organizationId}/invitations`, ownerBearer, { email, role: "member" })
+      assert.equal(response.status, 201, "Invitation creation failed")
+      assert.ok(response.data.invitation?.id && response.data.invitation_token, "Invitation response must contain the one-time link token")
+      invitations.push(response.data.invitation.id)
+      return { id: response.data.invitation.id, token: response.data.invitation_token }
+    }
+    const accept = (token) => request("POST", "/dogruadres/invitations/accept", inviteeBearer, { token })
+    const change = (organizationId, membershipId, bearer, body) => request("POST", `/dogruadres/organizations/${organizationId}/memberships/${membershipId}`, bearer, body)
+    const assertInviteeMembershipRevoked = async () => {
+      const state = await db.query("select status from da_organization_membership where id=$1", [inviteeMembership.id])
+      assert.equal(state.rows[0].status, "revoked", "Rejected invitation must not reactivate the membership")
+    }
+
+    await t.test("fresh verified invitation establishes a real HTTP membership", async () => {
+      const organizationId = await createOrganization("g1-http-org-a")
+      const invitation = await createInvitation(organizationId)
+      const accepted = await accept(invitation.token)
+      assert.equal(accepted.status, 200)
+      assert.equal(accepted.data.membership.status, "active")
+      assert.equal(accepted.data.membership.organization_id, organizationId)
+      t.after(() => { invitation.token = "" })
+    })
+
+    const orgA = organizations.at(-1)
+    let memberships = await request("GET", `/dogruadres/organizations/${orgA}/memberships`, ownerBearer)
+    assert.equal(memberships.status, 200)
+    const inviteeMembership = memberships.data.memberships.find((entry) => entry.status === "active" && entry.role === "member")
+    assert.ok(inviteeMembership, "The invitee membership was not persisted")
+
+    await t.test("Organization IDs do not grant cross-Organization reads", async () => {
+      const organizationB = await createOrganization("g1-http-org-b")
+      const denied = await request("GET", `/dogruadres/organizations/${organizationB}`, inviteeBearer)
+      assert.equal(denied.status, 403)
+    })
+
+    await t.test("revocation removes access and ordinary membership changes cannot reactivate or role-edit", async () => {
+      const revoked = await change(orgA, inviteeMembership.id, ownerBearer, { status: "revoked" })
+      assert.equal(revoked.status, 200)
+      const accessAfterRevocation = await request("GET", `/dogruadres/organizations/${orgA}`, inviteeBearer)
+      assert.equal(accessAfterRevocation.status, 403)
+      for (const body of [{ status: "active" }, { role: "admin" }]) {
+        const denied = await change(orgA, inviteeMembership.id, ownerBearer, body)
+        assert.equal(denied.status, 403)
+        const persisted = await db.query("select status, role from da_organization_membership where id=$1", [inviteeMembership.id])
+        assert.equal(persisted.rows[0].status, "revoked")
+        assert.equal(persisted.rows[0].role, "member")
+      }
+    })
+
+    await t.test("only a fresh valid invitation reactivates the existing membership; replay is denied", async () => {
+      const fresh = await createInvitation(orgA)
+      const accepted = await accept(fresh.token)
+      assert.equal(accepted.status, 200)
+      assert.equal(accepted.data.membership.id, inviteeMembership.id)
+      assert.equal(accepted.data.membership.status, "active")
+      const replay = await accept(fresh.token)
+      assert.equal(replay.status, 403)
+      fresh.token = ""
+    })
+
+    await t.test("wrong-recipient, expired, revoked, unverified, missing and unrelated-type verification cannot accept", async () => {
+      assert.equal((await change(orgA, inviteeMembership.id, ownerBearer, { status: "revoked" })).status, 200)
+      const wrongRecipient = await createInvitation(orgA, `wrong-${randomUUID()}@example.invalid`)
+      assert.equal((await accept(wrongRecipient.token)).status, 403)
+      await assertInviteeMembershipRevoked()
+      wrongRecipient.token = ""
+
+      const unrelated = await createInvitation(orgA)
+      await db.query("update auth_verification set entity_type='invitation' where id=$1", [verificationFixtureId])
+      assert.equal((await accept(unrelated.token)).status, 403)
+      await assertInviteeMembershipRevoked()
+      unrelated.token = ""
+      await db.query("update auth_verification set entity_type='email' where id=$1", [verificationFixtureId])
+
+      const mismatchedVerification = await createInvitation(orgA)
+      await db.query("update auth_verification set entity_id=$2 where id=$1", [verificationFixtureId, `different-${randomUUID()}@example.invalid`])
+      assert.equal((await accept(mismatchedVerification.token)).status, 403)
+      await assertInviteeMembershipRevoked()
+      mismatchedVerification.token = ""
+      await db.query("update auth_verification set entity_id=$2 where id=$1", [verificationFixtureId, providerIdentity.rows[0].entity_id])
+
+      const unverified = await createInvitation(orgA)
+      await db.query("update auth_verification set verified_at=null where id=$1", [verificationFixtureId])
+      assert.equal((await accept(unverified.token)).status, 403)
+      await assertInviteeMembershipRevoked()
+      unverified.token = ""
+      await db.query("update auth_verification set verified_at=now() where id=$1", [verificationFixtureId])
+
+      const missing = await createInvitation(orgA)
+      await db.query("update auth_verification set deleted_at=now() where id=$1", [verificationFixtureId])
+      assert.equal((await accept(missing.token)).status, 403)
+      await assertInviteeMembershipRevoked()
+      missing.token = ""
+      await db.query("update auth_verification set deleted_at=null where id=$1", [verificationFixtureId])
+
+      const expired = await createInvitation(orgA)
+      await db.query("update da_organization_invitation set expires_at=now()-interval '1 second' where id=$1", [expired.id])
+      assert.equal((await accept(expired.token)).status, 403)
+      await assertInviteeMembershipRevoked()
+      expired.token = ""
+
+      const revoked = await createInvitation(orgA)
+      const revoke = await request("DELETE", `/dogruadres/organizations/${orgA}/invitations/${revoked.id}`, ownerBearer)
+      assert.equal(revoke.status, 200)
+      assert.equal((await accept(revoked.token)).status, 403)
+      await assertInviteeMembershipRevoked()
+      revoked.token = ""
+    })
+
+    await t.test("concurrent acceptance consumes one fresh invitation exactly once", async () => {
+      await assertInviteeMembershipRevoked()
+      const invitation = await createInvitation(orgA)
+      const responses = await Promise.all([accept(invitation.token), accept(invitation.token)])
+      assert.deepEqual(responses.map((response) => response.status).sort(), [200, 403])
+      const state = await db.query("select status from da_organization_membership where id=$1", [inviteeMembership.id])
+      assert.equal(state.rows[0].status, "active")
+      const accepted = await db.query("select status, accepted_by_person_id from da_organization_invitation where id=$1", [invitation.id])
+      assert.equal(accepted.rows[0].status, "accepted")
+      invitation.token = ""
+    })
+
+    await t.test("concurrent last-protected-Owner revocation leaves one active protected Owner", async () => {
+      const organizationId = await createOrganization("g1-http-org-concurrent-owner", [owner, invitee])
+      const ownerRows = await request("GET", `/dogruadres/organizations/${organizationId}/memberships`, ownerBearer)
+      const protectedOwners = ownerRows.data.memberships.filter((entry) => entry.protected_owner && entry.status === "active")
+      assert.equal(protectedOwners.length, 2)
+      const firstActor = protectedOwners.find((entry) => entry.person_id !== protectedOwners[0].person_id)
+      assert.ok(firstActor)
+      const first = change(organizationId, firstActor.id, ownerBearer, { status: "revoked" })
+      const second = change(organizationId, protectedOwners[0].id, inviteeBearer, { status: "revoked" })
+      const responses = await Promise.all([first, second])
+      assert.equal(responses.filter((response) => response.status === 200).length, 1)
+      assert.equal(responses.filter((response) => response.status === 403).length, 1)
+      const state = await db.query("select count(*)::int as count from da_organization_membership where organization_id=$1 and status='active' and protected_owner=true", [organizationId])
+      assert.equal(state.rows[0].count, 1)
+    })
+
+    await t.test("all foundation audit events persist the server-owned module value", async () => {
+      const audit = await db.query(
+        "select action, module from da_audit_event where organization_id = any($1::text[])",
+        [organizations]
+      )
+      const actions = new Set(audit.rows.filter((row) => row.module === "dogruadres-access").map((row) => row.action))
+      for (const action of ["organization.provisioned", "organization.owner_assigned", "organization.membership_changed", "organization.invitation_created", "organization.invitation_revoked", "organization.invitation_accepted"]) {
+        assert.ok(actions.has(action), `Missing module-tagged audit event for ${action}`)
+      }
+      assert.ok(audit.rows.every((row) => row.module === "dogruadres-access"), "A foundation audit event has an unexpected module")
+    })
+  } finally {
+    if (verificationFixtureId) {
+      await db.query("delete from auth_verification where id=$1", [verificationFixtureId])
+    }
+    await db.end()
+    // Organizations and their audit evidence are deliberately retained in the disposable G1 database.
+    void invitations
+  }
+})

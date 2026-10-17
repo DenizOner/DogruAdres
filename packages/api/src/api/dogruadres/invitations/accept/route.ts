@@ -1,24 +1,43 @@
 import type { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import type { AcceptInvitationBody } from "../../validators"
 import { acceptInvitationWorkflow } from "../../../../workflows/dogruadres-access/accept-invitation"
+import { verifiedEmailForActor, type AuthVerificationRecord } from "../../../../modules/dogruadres-access/security"
 
-type AuthVerification = Readonly<{ entity_id?: string; verified_at?: string | Date | null }>
 type AuthModuleVerificationReader = Readonly<{
-  listAuthVerifications: (filters: { auth_identity_id: string }) => Promise<AuthVerification[]>
+  listAuthVerifications: (filters: { auth_identity_id: string }) => Promise<AuthVerificationRecord[]>
+  listAuthIdentities: (
+    filters: { id: string },
+    config: { relations: string[] }
+  ) => Promise<ReadonlyArray<{ id: string; provider_identities?: ReadonlyArray<{ provider: string; entity_id: string }> }>>
 }>
 
 const verifiedEmailFor = async (req: AuthenticatedMedusaRequest) => {
   const email = req.auth_context.user_metadata?.email
   const identityId = req.auth_context.auth_identity_id
-  if (typeof email !== "string" || !identityId) return null
+  const authProvider = req.auth_context.auth_provider
+  if (typeof email !== "string" || !identityId || !authProvider) return null
+  const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
+  const configuredVerifications = config.projectConfig.http.authVerificationsPerActor?.[req.auth_context.actor_type]
+  const matchingConfigurations = configuredVerifications?.filter((verification) => verification.auth_provider === authProvider) ?? []
+  // Medusa's verification type is configured per actor/provider; absence or
+  // ambiguity must never turn an unrelated verification into email proof.
+  if (matchingConfigurations.length !== 1 || matchingConfigurations[0].entity_type !== "email") return null
   const authModule = req.scope.resolve(Modules.AUTH) as unknown as AuthModuleVerificationReader
+  const identities = await authModule.listAuthIdentities({ id: identityId }, { relations: ["provider_identities"] })
+  if (identities.length !== 1 || identities[0].id !== identityId) return null
+  const providerIdentities = identities[0].provider_identities?.filter((identity) => identity.provider === authProvider) ?? []
+  if (providerIdentities.length !== 1) return null
   const verifications = await authModule.listAuthVerifications({ auth_identity_id: identityId })
-  const normalized = email.trim().toLowerCase()
-  const verified = verifications.some((item) =>
-    item.verified_at && typeof item.entity_id === "string" && item.entity_id.trim().toLowerCase() === normalized
-  )
-  return verified ? normalized : null
+  return verifiedEmailForActor({
+    actorType: req.auth_context.actor_type,
+    actorId: req.auth_context.actor_id,
+    authIdentityId: identityId,
+    authProvider,
+    authenticatedEmail: email,
+    providerIdentityEmail: providerIdentities[0].entity_id,
+    verifications,
+  })
 }
 
 export const POST = async (req: AuthenticatedMedusaRequest<AcceptInvitationBody>, res: MedusaResponse) => {
