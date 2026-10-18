@@ -1,0 +1,93 @@
+name: SAFE-0A Isolated Baseline and Guards
+
+on:
+  push:
+    branches: [feature/safe-0a-production-checks]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: safe-0a-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  storefront-baseline:
+    name: Storefront baseline diagnostics (non-acceptance)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout immutable main baseline (not the candidate)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: d87ba52f99f74d7fec52af70a815fe91a989fc3f
+          persist-credentials: false
+      - name: Validate baseline source
+        run: test "$(git rev-parse HEAD)" = "d87ba52f99f74d7fec52af70a815fe91a989fc3f"
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+          no-cache: true
+      - name: Install pinned baseline dependencies
+        run: bun install --frozen-lockfile
+      - name: Record actual storefront baseline checks (failures are evidence, NOT PASS)
+        working-directory: apps/storefront
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+          NODE_ENV: production
+        shell: bash
+        run: |
+          set +e
+          echo '### SAFE-0A unmodified main baseline' >> "$GITHUB_STEP_SUMMARY"
+          echo "Immutable HEAD: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json > /tmp/safe0a-tsc.log 2>&1
+          tsc_status=$?
+          timeout 180s bun run lint > /tmp/safe0a-lint.log 2>&1
+          lint_status=$?
+          timeout 420s bun run build > /tmp/safe0a-next-build.log 2>&1
+          build_status=$?
+          for name in tsc lint next-build; do
+            echo "::group::baseline $name"
+            sed -n '1,100p' "/tmp/safe0a-$name.log"
+            echo "::endgroup::"
+          done
+          echo "Typecheck exit=$tsc_status; lint exit=$lint_status; baseline build exit=$build_status"
+          printf '\nBaseline status: tsc=%s, lint=%s, next-build=%s. Nonzero means NOT PASSED.\n' "$tsc_status" "$lint_status" "$build_status" >> "$GITHUB_STEP_SUMMARY"
+          # This baseline diagnostic job intentionally stays neutral; output is not a product acceptance.
+          exit 0
+
+  candidate-guards:
+    name: Candidate production secret tests and API typecheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 16
+    steps:
+      - name: Checkout SAFE-0A branch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show exact SHA
+        run: git rev-parse HEAD
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+          no-cache: true
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Production-secret negative unit tests
+        working-directory: packages/api
+        run: bun test src/utils/__tests__/production-secrets.unit.test.ts
+      - name: API TypeScript check
+        working-directory: packages/api
+        run: node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json
