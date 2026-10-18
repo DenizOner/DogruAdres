@@ -37,13 +37,26 @@ export async function withVehicleUnitOfWork<T>(vehicle: VehicleModuleService,
       if (!object(manager) || typeof manager.execute !== "function") throw incompatible()
       let activeManager: unknown = manager
       let active = true
-      const context: VehicleUowContext = Object.freeze({
-        __type: "MedusaContext" as const,
-        enableNestedTransactions: false,
-        get transactionManager(): unknown {
-          if (!accepting || !active) throw new Error("VEHICLE_UOW_CONTEXT_CLOSED")
-          return activeManager
+      const assertActive = () => {
+        if (!accepting || !active) throw new Error("VEHICLE_UOW_CONTEXT_CLOSED")
+      }
+      // InjectManager forwards enumerable properties, then writes __type through
+      // its forwarding setter. Seal keeps accessors non-configurable; constrained
+      // setters permit only the framework's expected values, never replacement.
+      // Do not add manager/messageAggregator here: InjectManager/InjectIntoContext
+      // populate those on their own extensible copy, not this sealed root context.
+      const context: VehicleUowContext = Object.seal({
+        get __type(): "MedusaContext" { assertActive(); return "MedusaContext" },
+        set __type(value: "MedusaContext") {
+          assertActive()
+          if (value !== "MedusaContext") throw incompatible()
         },
+        get enableNestedTransactions(): false { assertActive(); return false },
+        set enableNestedTransactions(value: boolean) {
+          assertActive()
+          if (value !== false) throw incompatible()
+        },
+        get transactionManager(): unknown { assertActive(); return activeManager },
       })
       try { return await task(context) }
       catch (error) { callbackFailed = true; callbackError = error; throw error }
