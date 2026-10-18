@@ -28,16 +28,18 @@ Keep the plan in the repository while the work is in scope. If a plan is superse
 
 ## Active Vehicle planning
 
-- [Vehicle Management MVP — Vehicle-0 Decision and Design Plan](vehicle-management-mvp-design-2026-10-18.md) — V-01–V-07 plus N-01/P1 and N-02/C1 approved; shared-audit physical SQL atomicity proof pending. Vehicle-1 coding not authorized.
+- [Vehicle Management MVP — Vehicle-0 Decision and Design Plan](vehicle-management-mvp-design-2026-10-18.md) — V-01–V-07 plus N-01/P1 and N-02/C1 approved; current ADR-0006 requires Vehicle-local atomic audit/outbox and independent Audit Index, not physical cross-module Access audit proof. Vehicle-1 coding not authorized.
 
 - [Vehicle-0C B2/C Architecture Assessment](vehicle-0c-atomicity-architecture-review-2026-10-18.md) — historical B1 evidence, C co-location proposal now revoked; ADR-0005 independent modules control.
 
 - [ADR-0004 — Co-located Vehicle and Access transactional audit](../adr/ADR-0004-co-located-vehicle-access-transactional-audit.md) — Superseded, historical only.
-- [ADR-0005 — Mandatory independent physical domain modules](../adr/ADR-0005-mandatory-independent-physical-domain-modules.md) — Accepted and binding for all project modules; shared audit integration unresolved.
+- [ADR-0005 — Mandatory independent physical domain modules](../adr/ADR-0005-mandatory-independent-physical-domain-modules.md) — Accepted and binding for all project domain modules; ADR-0006 supersedes the Vehicle-to-Access physical audit-write requirement, while local audit/outbox + index proofs remain pending.
 
 - [Audit-first coding and central index plan](audit-first-architecture-and-delivery-2026-10-18.md) — required in initial implementation; acceptance matrix and phased remediation.
 - [Foundation and earlier code findings](foundation-baseline-review-2026-10-18.md) — source-confirmed gaps and IR-0 cross reference.
 - [IR-0 — Dashboard, Finance and Integrations Code Review](dashboard-finance-integrations-code-review-2026-10-18.md) — 25 source-grounded findings, SAFE-0/COM-1/FIN-0 gates, explicit provider/runtime limitations.
+
+- [UI-0 Reference Apps and SAFE-0A implementation preflight](reference-ui-strategy-and-safe-0a-2026-10-18.md) — User-confirmed custom DoğruAdres Admin/Vendor/Storefront intent; supported extension-vs-owned-UI choices; isolated production secrets / Next TypeScript engineering checkpoint.
 
 ## Template
 

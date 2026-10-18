@@ -4,6 +4,18 @@
 
 The repository uses Mercur 2.3.7 + Medusa 2.21.2. Mercur provides the marketplace platform, the admin and vendor dashboards, and the multi-vendor runtime architecture. The project-owned `dogruadresAccess` module now provides canonical Person/actor mappings, Organizations, memberships, invitation records, transactional security audit events and protected API routes under `/dogruadres`. Organization authorization resolves the authenticated actor, mapped Person, active membership, policy and Organization scope on every request. Manual Vehicle Management remains unimplemented and is a later checkpoint; approved ownership and uniqueness requirements are in REQUIREMENTS.md.
 
+## User-confirmed reference apps vs target UI (2026-10-18)
+
+The Product Owner clarified the ORIGINAL PURPOSE of `apps/admin`, `apps/vendor`, and `apps/storefront`: these Mercur-based applications were brought into DoğruAdres as REFERENCE/SCAFFOLD examples for routes, integration contracts, interaction flows and implementation patterns; they are NOT the final approved DoğruAdres Admin Dashboard, Vendor Portal or Storefront design.
+
+The long-term product WILL have project-designed Admin Dashboard, Vendor and Storefront experiences. Do not equate the absence of custom DoğruAdres financial dashboard pages in the current reference app with an unexpected unfinished promised deliverable or with a defect in Mercur. The current reference apps have executable code and MUST remain secure if run/exposed; reference status is not permission to ship insecure demo workflows to production.
+
+Two OFFICIALLY SUPPORTED interface approaches must be evaluated for each approved functional UI brief before implementation:
+1. Use Mercur 2.3.7 supported Admin/Vendor panel extensions (routes, widgets, custom fields, navigation, typed SDK) where they satisfy DoğruAdres UX/business needs.
+2. If product requirements require owning layout/navigation or substantial UI beyond supported panel extensions, build a separately owned DoğruAdres frontend talking to public Admin/Vendor/Store APIs and project-owned protected API routes, WITHOUT changing Mercur/Medusa core or copying private dashboard internals.
+
+This chooses no final UI framework or replacement strategy by assumption. The functional brief, permissions, localization (TR/EN/MSA-RTL), accessibility, route/API mapping, coexistence/cutover, testing and product design approval are required in **UI-0**, independently of ADR-0005's physical DOMAIN-module rule. UI apps are not Medusa data modules merely because they are separate frontends. See [UI strategy / SAFE-0A plan](plans/reference-ui-strategy-and-safe-0a-2026-10-18.md).
+
 ## Ownership boundaries
 
 ### Mercur-owned
@@ -39,9 +51,9 @@ DoğruAdres owns the automotive domain and the product-specific logic layered on
 
 The identity/Organization foundation is implemented in its own Medusa module and does not reuse Mercur Member, Seller or Store as the canonical Person or Organization. No automatic Seller/Store association is created.
 
-**Binding physical module architecture (Accepted ADR-0005):** Vehicle Management MUST be a separate, independently registered DoğruAdres-owned physical Medusa module (provisional ID dogruadresVehicle) with its OWN models, metadata, services and migrations. Identity/Organization remains in dogruadresAccess with its existing canonical shared AuditEvent. No Vehicle model may be registered inside Access. This non-negotiable boundary applies to all project domain modules, and ADR-0004 C co-location was REVOKED/SUPERSEDED. ADR-0002 continues isolating automotive domain from Mercur marketplace primitives.
+**Binding physical module architecture (Accepted ADR-0005):** Vehicle Management MUST be a separate, independently registered DoğruAdres-owned physical Medusa module (provisional ID dogruadresVehicle) with its OWN models, metadata, services and migrations. Identity/Organization remains in dogruadresAccess with its own canonical Foundation AuditEvent. No Vehicle model may be registered inside Access. This non-negotiable boundary applies to all project domain modules, and ADR-0004 C co-location was REVOKED/SUPERSEDED. ADR-0002 continues isolating automotive domain from Mercur marketplace primitives.
 
-**Blocking integration question:** The required cross-module security audit semantics remain unresolved. B1 forwarded Vehicle manager failed with an AuditEvent metadata error (INCONCLUSIVE); investigate documented, version-matched cross-module approaches without altering physical module ownership or implicitly weakening the approved audit invariant.
+**Historical B1 proof (INCONCLUSIVE, not current architecture):** Forwarding the Vehicle EntityManager to Access failed at AuditEvent metadata resolution. The later Accepted ADR-0006 supersedes the Vehicle-to-Access physical audit INSERT dependency: independent Vehicle owns its own transactional VehicleAuditEvent/VehicleAuditOutbox; Audit Index separately projects it. Local atomicity, durable relay and index authorization remain UNPROVEN implementation gates. Do not repeat B1 or resurrect co-location.
 
 ## Approved module-owned audit and unified index (ADR-0006)
 

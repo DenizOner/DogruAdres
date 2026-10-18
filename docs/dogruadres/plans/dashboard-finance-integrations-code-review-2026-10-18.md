@@ -7,6 +7,17 @@
 - Source-reference base: https://github.com/DenizOner/DogruAdres/blob/d87ba52f99f74d7fec52af70a815fe91a989fc3f/
 - Framework baseline: Mercur 2.3.7, Medusa 2.21.2, Storefront Next 15.5.24.
 
+## Product Owner clarification: reference applications are intentional, not missing final UI
+
+On 2026-10-18 the Product Owner explicitly stated that `apps/admin`, `apps/vendor` and `apps/storefront` were installed to study Mercur/Medusa structure, URL/API contracts and usage flows before building the project-specific DoğruAdres Admin Dashboard/Storefront and related UX. Therefore:
+- Treat the thin admin/vendor wrappers as EXPECTED reference bootstraps, not deficient or incomplete DoğruAdres financial dashboard implementation.
+- Any absence of DoğruAdres-specific admin pages is a future UI-0 design/delivery item, NOT an existing runtime defect.
+- Evaluate supported Mercur panel extensions versus a separately developed DoğruAdres frontend from the APPROVED functional brief. No implication that the framework core or upstream UI source should be modified.
+- `apps/storefront` is nevertheless runnable and contains real commerce code, so IR-01 and IR-05–IR-23 remain genuine source observations/risk/production gates when the reference app is run or relied upon; any later replacement needs an independently tested safe cutover. Do not expend unapproved rewrite effort merely to preserve a disposable scaffold.
+- Missing separately scoped payout/accounting DoğruAdres business functionality (IR-25) stays a FUTURE product/domain design gate, independent of using packaged Mercur example panels.
+
+See [UI-0 and SAFE-0A implementation checkpoint](reference-ui-strategy-and-safe-0a-2026-10-18.md). The historical IR-0 source observations below are preserved without falsely presenting these reference apps as final products.
+
 ## What the repository actually implements
 
 Admin and Vendor: apps/admin and apps/vendor bootstrap the packaged @mercurjs/admin and @mercurjs/vendor apps with Vite SDK/client config. They do not contain independently implemented DoğruAdres payout, finance, accounting, Vehicle or Audit Index dashboards. Production panel artifact assembly is in packages/api/scripts/bundle-dashboards.mjs; paths /dashboard and /seller have explicit checks, but no real production bundle/browser evidence from current CI.

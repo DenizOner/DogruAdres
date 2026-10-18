@@ -62,6 +62,10 @@ Before any non-trivial Mercur-related work:
 
 Never guess Mercur API behavior.
 
+## Project-owned frontends: reference sources, not final DoğruAdres interfaces
+
+Explicit Product Owner clarification (2026-10-18): the repo's Mercur Admin/Vendor panel bootstraps and Storefront were intentionally installed as reference/scaffold code for routes, integration and workflow inspection. They are NOT a decision to retain Mercur's default user interface as the final DoğruAdres Admin Dashboard, Vendor Portal or Storefront. Respect DoğruAdres-approved functional UI briefs; propose supported Mercur 2.3.7 extensions first and, where deep UI ownership is necessary, a separate project-owned frontend consuming the version-matched public APIs. NEVER patch Mercur/Medusa core or assume private UI implementation paths are stable APIs. Distinguish independent UI apps from the mandatory physically separate domain Medusa modules. See [UI-0 plan](docs/dogruadres/plans/reference-ui-strategy-and-safe-0a-2026-10-18.md).
+
 ## Mandatory independently registered domain modules
 
 **Binding Product Owner decision, Accepted ADR-0005:** All DoğruAdres domain capabilities MUST be implemented in separately registered, physically independent Medusa modules with their own models, entity metadata, services, data/migration ownership and test boundary. Vehicle belongs in its own dogruadresVehicle module; NEVER embed its persistence in dogruadresAccess or substitute internal service files for real module independence. ADR-0004 C co-location approval was expressly REVOKED and Superseded. Preserve Foundation's canonical shared audit and security rules; unsupported cross-module transactions are an unresolved integration issue, not authorization to co-locate domains or downgrade audit consistency. Stop any conflicting integration and escalate. See [ADR-0005](docs/dogruadres/adr/ADR-0005-mandatory-independent-physical-domain-modules.md).

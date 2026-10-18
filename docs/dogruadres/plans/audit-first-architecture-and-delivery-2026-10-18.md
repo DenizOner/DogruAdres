@@ -16,6 +16,12 @@ Source schema proposals (not yet final): SourceAuditEvent {event_id, actor_perso
 
 Index schema proposal: AuditIndexEntry unique (source_module,source_event_id), org_id, actor reference, action/resource/target, source timestamp, indexed_at, schema version, safe filter fields. IndexCheckpoint/reconciliation/deadletter support. No cross-module ORM relation or direct foreign key by assumption. Source remains authoritative.
 
+## Reference frontend ownership and UI-0 planning (Product Owner clarification 2026-10-18)
+
+Installed `apps/admin`, `apps/vendor` and `apps/storefront` are reference/scaffold apps, NOT the final DoğruAdres Admin Dashboard/Vendor/Storefront UX. Future DoğruAdres-owned frontend delivery must be designed against function-by-function business briefs, identity/Organization permissions and TR/EN/MSA-RTL requirements. UI-0 evaluates version-matched Mercur panel extension APIs versus entirely project-owned frontend shells using supported public APIs. Neither modifying upstream UI internals nor keeping default Mercur screens is presumed necessary. Preserve the independent physical Medusa DOMAIN modules required by ADR-0005 separately from presentation-layer apps.
+
+**SAFE-0A (next bounded pre-implementation checkpoint):** Before touching production config or permanently enabling Next TypeScript gates, conduct a clean, reproducible isolated preflight for IR-01 and IR-02 (source, environment, actual typecheck/lint/build failures, Medusa production secret handling), then implement only verified targeted corrections with the matching tests. This is distinct from a wholesale Storefront rewrite or UI-0 design. See [UI-0 and SAFE-0A plan](reference-ui-strategy-and-safe-0a-2026-10-18.md).
+
 ## Bounded development sequence
 
 **AF-0 — Architecture docs and IR-0 source investigation (completed):** ADR-0006, security/requirements/Vehicle plan, defect register and this roadmap; preserve old requirements, ADR-0004 history, historical status counts.
