@@ -1,6 +1,6 @@
 /** NOT TESTED. Separate disposable-runtime authorization is mandatory.
  * Future Node 24 command (not executed in AF-1A1/A2):
- * node --test src/modules/dogruadres-access/__tests__/audit-persistence.postgres.spec.ts
+ * node --test integration-tests/http/foundation-audit-persistence.evidence.mts
  * Requires the unchanged AF-1C runtime authorization contract, both migrations
  * plus Migration20261018000000 already applied ONLY to the new disposable DB,
  * and two pre-provisioned synthetic emailpass users. This file starts nothing.
@@ -12,7 +12,7 @@ import { test } from "node:test"
 import { randomBytes, randomUUID } from "node:crypto"
 
 test("Foundation append-only audit and transactional outbox PostgreSQL/HTTP evidence", { timeout: 240000 }, async t => {
-  const h = await import("../../../../integration-tests/helpers/isolated-foundation-runtime.mjs")
+  const h = await import("../helpers/isolated-foundation-runtime.mjs")
   const m = h.authorizeRuntime()
   const credentials = JSON.parse(process.env.DOGRUADRES_AF1_AUDIT_USERS ?? "[]")
   assert.equal(credentials.length, 2, "Two separately provisioned synthetic users required; never production credentials")
