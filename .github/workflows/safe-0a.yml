@@ -113,6 +113,8 @@ jobs:
           fi
           if ! printf '%s' "$output" | grep -q 'Production requires distinct'; then
             echo "Config rejected, but NOT by the expected production secret validation"
+            # This run supplies only public CI placeholders; sanitize even those before displaying diagnostics.
+            printf '%s\n' "$output" | sed 's/supersecret/[REDACTED CI FIXTURE]/g' | head -n 25
             exit 1
           fi
           echo "PASS: production configuration rejected scaffold secrets before startup"
