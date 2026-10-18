@@ -6,6 +6,19 @@ import { matchesAuditIndexProjection, projectFoundationAuditEvent } from "./enve
 type LockManager = { execute(query: string, parameters: string[]): Promise<unknown> }
 
 export default class AuditIndexModuleService extends MedusaService({ AuditIndexEntry }) {
+  // Internal read interface; caller must first authorize current Organization membership.
+  async readOrganizationTimeline(organizationId: string, limit: number, boundary?: { occurred_at: string; id: string }) {
+    if (!organizationId || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("INVALID_TIMELINE_SCOPE")
+    const filters = { organization_id: organizationId, ...(boundary ? { $or: [
+      { occurred_at: { $lt: new Date(boundary.occurred_at) } },
+      { occurred_at: new Date(boundary.occurred_at), id: { $lt: boundary.id } },
+    ] } : {}) }
+    const rows = await this.listAuditIndexEntries(filters, {
+      take: limit + 1, order: { occurred_at: "DESC", id: "DESC" },
+      select: ["id", "source_module", "source_event_id", "occurred_at", "indexed_at", "action", "resource", "target_id", "actor_person_id"],
+    })
+    return rows.map(row => ({ ...row, occurred_at: new Date(row.occurred_at).toISOString() }))
+  }
   // Fresh Index-owned read transaction; caller must NOT pass source context.
   @InjectTransactionManager()
   async inspectFoundationAuditEvent(sourceEvent: unknown, @MedusaContext() sharedContext: Context = {}) {

@@ -10,6 +10,12 @@ import {
 export default defineMiddlewares({
   routes: [
     {
+      matcher: "/dogruadres/organizations/:id/audit-timeline",
+      methods: ["GET"],
+      // Runs before authentication, including authentication error responses.
+      middlewares: [(_req, res, next) => { res.setHeader("Cache-Control", "no-store"); next() }],
+    },
+    {
       matcher: "/admin/dogruadres/organizations",
       methods: ["POST"],
       middlewares: [

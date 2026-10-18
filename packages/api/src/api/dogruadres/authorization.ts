@@ -10,7 +10,7 @@ import { DOGRUADRES_ACCESS_MODULE } from "../../modules/dogruadres-access"
 export async function requireOrganizationAccess(
   req: AuthenticatedMedusaRequest,
   organizationId: string,
-  action: "organization.read" | "membership.list" | "membership.manage" | "invitation.manage"
+  action: "audit.timeline.read" | "organization.read" | "membership.list" | "membership.manage" | "invitation.manage"
 ) {
   const principal = {
     actorId: req.auth_context.actor_id,
@@ -47,7 +47,7 @@ export async function requireOrganizationAccess(
       const membership = await service.getActiveMembership(personId, orgId)
       if (!membership || membership.status !== "active") return false
       if (requestedAction === "organization.read") return true
-      if (["membership.list", "membership.manage", "invitation.manage"].includes(requestedAction)) {
+      if (["audit.timeline.read", "membership.list", "membership.manage", "invitation.manage"].includes(requestedAction)) {
         return membership.role === "owner" || membership.role === "admin"
       }
       return false
