@@ -22,3 +22,30 @@
 ## Explicitly forbidden
 
 `git reset --hard`, `git clean`, `git checkout -f`, `git switch -f`, force pull, `git pull --rebase` on a dirty checkout, deleting/moving untracked user files, dropping stashes, auto-merging, changing branch under uncommitted files, touching original/G1 PostgreSQL/Redis, or changing GitHub main/PR state. No automatic `stash` either. If mismatch or secret-bearing remote URL, STOP and report minimally.
+
+## LOCAL-0 Agent report received — BLOCKED (2026-10-18)
+
+The Agent completed the instructed, non-destructive local review. This record is based on the Agent's report, NOT on independent access to the Windows local filesystem. Remote branch references were independently rechecked on GitHub by Technical Advisor and still matched at the time of this documentation update.
+
+| Checkout | Local HEAD and branch | Changes / remote comparison | AF-1 readiness |
+| --- | --- | --- | --- |
+| `D:\DogruAdres` | `chore/mercur-2.3.7-security-upgrade` / `97d6111eca5970b39b16bfecc229b2a20b62e6fe` | 9 tracked unstaged + 33 untracked; no origin/upstream; no common ancestor with authoritative main reported | **NOT SAFE**. User-owned data and history must not be modified |
+| `D:\DogruAdres-publication-20261017-145345` | `feature/identity-organization-foundation` / `39e014abeed71c9a23b06b0c5f23255c7f631d26` | Clean. Equal to corresponding remote feature; 0 ahead / 1 behind current main. Its local main is `50a82a490cd1d054c94cf6f03980b6141ed13633`, 0 ahead / 8 behind origin/main | **NOT AT CURRENT MAIN**; suitable as a Git metadata source for a new detached linked worktree only |
+
+Publication `origin` fetch refspec originally covered main only; Agent fetched needed remote references explicitly without modifying the refspec, active checkout, working files, databases or volumes. SAFE and Vehicle remote branches have no local branch.
+
+Current authoritative refs checked: `main=d87ba52f99f74d7fec52af70a815fe91a989fc3f`; SAFE-0A `0639603a2d90ec2c48ba8f5c4a6f3028c84c45fa`; Vehicle review `ef0e127affb37f9a343591a44e847e4e8918adc3`. Draft PR #3 remains distinct; no main merge.
+
+**Result: BLOCKED.** No verified clean, isolated worktree at current main exists. **Next scoped checkpoint LOCAL-1, subject to explicit task approval:** create only one detached linked worktree at `D:\DogruAdres-af1a` from the VERIFIED immutable main SHA via the publication checkout. Confirm the path is absent, SHA exists locally and publication checkout is unchanged; then check the new worktree HEAD, clean status and registry. Do not make a feature branch, install dependencies, write code, run test/migration or touch protected resources. Report READY only after verifying exact HEAD and zero changes.
+
+Proposed command (PowerShell, to be executed only in approved LOCAL-1; not executed by Technical Advisor):
+
+```powershell
+git -C "D:\DogruAdres-publication-20261017-145345" `
+  -c safe.directory="D:/DogruAdres-publication-20261017-145345" `
+  worktree add --detach "D:\DogruAdres-af1a" `
+  d87ba52f99f74d7fec52af70a815fe91a989fc3f
+```
+
+Official Git worktree contract: https://git-scm.com/docs/git-worktree.html — linked checkout shares repository objects/refs and creates Git administrative worktree metadata; does NOT independently clone the repository. Do not use `--force`, hard reset or clean for this task. A failed/preexisting destination requires STOP/report, not overwrite.
+
