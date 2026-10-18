@@ -1,5 +1,6 @@
 import {
   InjectTransactionManager,
+  InjectManager,
   MedusaContext,
   MedusaService,
   MedusaError,
@@ -12,6 +13,8 @@ import { randomBytes } from "node:crypto"
 import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
 import type { OutboxClaim, DeliveryErrorCode } from "./audit-delivery-policy"
 import { mayAcceptInvitation } from "./invitation-policy"
+
+import { AUTHORIZATION_ALIAS, AUTHORIZATION_SCHEMA, validateAuthorizationRequest, readAuthorizationProjection, type PrimaryReadConnection } from "./authorization-projection"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -66,7 +69,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   __joinerConfig() {
     // Keep every Foundation model in schema/linkable/primary-key/prefix metadata.
     // Same registration identity as Module(); do not import index.ts (cycle).
-    return defineJoinerConfig("dogruadresAccess", {
+    const config = defineJoinerConfig("dogruadresAccess", {
       models: [Person, ActorMapping, Organization, Membership, Invitation, AuditEvent, AuditOutbox],
       alias: [
         { name: ["da_actor_mapping", "da_actor_mappings"], entity: "DaActorMapping", args: { methodSuffix: "ActorMappings" } },
@@ -78,6 +81,23 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         { name: ["da_audit_outbox", "da_audit_outboxes"], entity: "DaAuditOutbox", args: { methodSuffix: "AuditOutboxes" } },
       ],
     })
+    // Virtual read-only entity, no physical model/table or ID-prefix registration.
+    return { ...config, schema: config.schema + "\n" + AUTHORIZATION_SCHEMA, alias: [...(Array.isArray(config.alias) ? config.alias : [config.alias]), AUTHORIZATION_ALIAS] }
+  }
+  async listAuthorizationObservations(filters: unknown, options: unknown) {
+    const request = validateAuthorizationRequest(filters, options)
+    // No external sharedContext argument: only our private injected read gets one.
+    return this.readAuthorizationObservation_(request)
+  }
+  @InjectManager()
+  private async readAuthorizationObservation_(request: ReturnType<typeof validateAuthorizationRequest>, @MedusaContext() context: Context = {}) {
+    const manager = context.manager as { getConnection(type: "write"): PrimaryReadConnection; isInTransaction(): boolean } | undefined
+    if (context.transactionManager || !manager || typeof manager.getConnection !== "function" || typeof manager.isInTransaction !== "function" || manager.isInTransaction()) {
+      throw new Error("FOUNDATION_AUTHORIZATION_PROJECTION_UNAVAILABLE")
+    }
+    // Connection.execute without a transaction ctx avoids EntityManager.execute's
+    // ambient getContext().getTransactionContext(). Explicit writer connection.
+    return readAuthorizationProjection(manager.getConnection("write"), request)
   }
   // Every operation owns a short Foundation transaction. No Index call occurs
   // while a Foundation row lock/EntityManager is held across module boundaries.

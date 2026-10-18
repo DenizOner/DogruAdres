@@ -1,6 +1,7 @@
 import { defineJoinerConfig, toPascalCase } from "@medusajs/framework/utils"
 import Service from "../service"
 import { Person, ActorMapping, Organization, Membership, Invitation, AuditEvent, AuditOutbox } from "../models"
+import { AUTHORIZATION_ALIAS, AUTHORIZATION_SCHEMA } from "../authorization-projection"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
@@ -17,7 +18,12 @@ const expected = [
   { entity: "DaAuditOutbox", suffix: "AuditOutboxes", names: ["da_audit_outbox", "da_audit_outboxes"] },
 ]
 const baseline = () => defineJoinerConfig("dogruadresAccess", { models })
-const repaired = () => Service.prototype.__joinerConfig()
+const complete = () => Service.prototype.__joinerConfig()
+const repaired = () => {
+  const config = complete()
+  return { ...config, schema: config.schema.slice(0, -(AUTHORIZATION_SCHEMA.length + 1)),
+    alias: aliases(config).filter(a => a.entity !== AUTHORIZATION_ALIAS.entity) }
+}
 function aliases(config: ReturnType<typeof baseline>) {
   if (!Array.isArray(config.alias)) throw new Error("EXPECTED_ALIAS_ARRAY")
   return config.alias
@@ -77,4 +83,13 @@ describe("Foundation Query registration metadata", () => {
     expect(Service.prototype.provisionOrganization).toBeDefined()
     expect(Service.prototype.acceptOrganizationInvitation).toBeDefined()
   })
+})
+
+it("registers virtual projection with a real list dispatch target and selected schema fields", () => {
+  const config = complete()
+  expect(aliases(config)).toHaveLength(8)
+  expect(aliases(config).find(a => a.entity === AUTHORIZATION_ALIAS.entity)).toEqual(AUTHORIZATION_ALIAS)
+  expect(config.schema).toContain(AUTHORIZATION_SCHEMA)
+  expect(typeof Service.prototype.listAuthorizationObservations).toBe("function")
+  expect(config.idPrefixToEntityName).toEqual(baseline().idPrefixToEntityName)
 })
