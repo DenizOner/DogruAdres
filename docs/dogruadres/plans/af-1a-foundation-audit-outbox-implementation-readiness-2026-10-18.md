@@ -15,6 +15,10 @@
 - Existing CI is unit+API TS and *HTTP syntax*, not a real database HTTP execution. The original Foundation API and protected-Owner flows must remain regression targets.
 - AuditIndex and Vehicle do not yet exist in merged main. NO shared new physical audit table: AF-1 outbox belongs ONLY to `dogruadresAccess`.
 
+## AF-1A0 evidence update (2026-10-18)
+
+The [AF-1A0 full source trace](af-1a0-foundation-mutation-audit-source-trace-2026-10-18.md) has now mapped five write paths, their canonical audit actions, prior native targeted invitation-acceptance audit failure test and gaps. In particular, create/revoke invitation membership-revocation races need independent tests, while audit failures on other paths and local outbox remain unproven. The [mandatory first Agent local Git preflight](local-repository-freshness-preflight-2026-10-18.md) precedes any local engineering. No local Windows worktree, DB or runtime was inspected in this GitHub-only review.
+
 ## AF-1 implementation milestones — exact independent gates
 
 **AF-1A0 — Source proof + transaction boundary inventory (READ-ONLY or isolated test planning).**
