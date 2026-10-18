@@ -12,6 +12,9 @@ const expected = [
   { entity: "DaPerson", suffix: "People", names: ["da_person", "da_people"] },
   { entity: "DaOrganization", suffix: "Organizations", names: ["da_organization", "da_organizations"] },
   { entity: "DaOrganizationMembership", suffix: "Memberships", names: ["da_organization_membership", "da_organization_memberships"] },
+  { entity: "DaOrganizationInvitation", suffix: "Invitations", names: ["da_organization_invitation", "da_organization_invitations"] },
+  { entity: "DaAuditEvent", suffix: "AuditEvents", names: ["da_audit_event", "da_audit_events"] },
+  { entity: "DaAuditOutbox", suffix: "AuditOutboxes", names: ["da_audit_outbox", "da_audit_outboxes"] },
 ]
 const baseline = () => defineJoinerConfig("dogruadresAccess", { models })
 const repaired = () => Service.prototype.__joinerConfig()
@@ -36,15 +39,22 @@ describe("Foundation Query registration metadata", () => {
       expect(typeof Reflect.get(Service.prototype, method)).toBe("function")
     }
   })
-  it("preserves all original entry aliases and unchanged metadata for the other entities", () => {
+  it("preserves all original aliases and metadata except the seven intended methodSuffix changes", () => {
     const original = baseline(), current = repaired()
     for (const alias of aliases(original)) {
       const actual = aliases(current).find(a => a.entity === alias.entity)!
       expect(actual.name).toEqual(alias.name)
-      const mapped = expected.some(e => e.entity === alias.entity)
-      if (!mapped) expect(actual).toEqual(alias)
-      else expect({ ...actual, args: alias.args }).toEqual(alias)
+      expect(expected.some(e => e.entity === alias.entity)).toBe(true)
+      expect(actual.args).toEqual({ ...alias.args, methodSuffix: expected.find(e => e.entity === alias.entity)!.suffix })
+      expect({ ...actual, args: alias.args }).toEqual(alias)
     }
+  })
+  it("has unique aliases and exactly one mapping per entity", () => {
+    const entries = aliases(repaired())
+    const names = entries.flatMap(a => typeof a.name === "string" ? [a.name] : a.name)
+    expect(names).toHaveLength(14)
+    expect(new Set(names).size).toBe(names.length)
+    expect(new Set(entries.map(a => a.entity)).size).toBe(7)
   })
   it("preserves graph schema, relationships, primary/linkable keys and ID prefixes", () => {
     const original = baseline(), current = repaired()

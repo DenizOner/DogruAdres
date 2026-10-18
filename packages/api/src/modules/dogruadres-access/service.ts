@@ -73,6 +73,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         { name: ["da_person", "da_people"], entity: "DaPerson", args: { methodSuffix: "People" } },
         { name: ["da_organization", "da_organizations"], entity: "DaOrganization", args: { methodSuffix: "Organizations" } },
         { name: ["da_organization_membership", "da_organization_memberships"], entity: "DaOrganizationMembership", args: { methodSuffix: "Memberships" } },
+        { name: ["da_organization_invitation", "da_organization_invitations"], entity: "DaOrganizationInvitation", args: { methodSuffix: "Invitations" } },
+        { name: ["da_audit_event", "da_audit_events"], entity: "DaAuditEvent", args: { methodSuffix: "AuditEvents" } },
+        { name: ["da_audit_outbox", "da_audit_outboxes"], entity: "DaAuditOutbox", args: { methodSuffix: "AuditOutboxes" } },
       ],
     })
   }
