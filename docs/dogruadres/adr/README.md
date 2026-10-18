@@ -45,3 +45,4 @@ Use one of the following statuses:
 - `ADR-0003-mercur-core-modification-policy.md`
 - `ADR-0004-co-located-vehicle-access-transactional-audit.md` — Superseded; C co-location approval explicitly withdrawn
 - `ADR-0005-mandatory-independent-physical-domain-modules.md` — Accepted; binding independent physical domain modules
+- `ADR-0006-module-owned-atomic-audit-central-index.md` — Accepted; module-local atomic audit, durable outbox, independent central index

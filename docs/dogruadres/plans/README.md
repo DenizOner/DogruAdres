@@ -35,6 +35,9 @@ Keep the plan in the repository while the work is in scope. If a plan is superse
 - [ADR-0004 — Co-located Vehicle and Access transactional audit](../adr/ADR-0004-co-located-vehicle-access-transactional-audit.md) — Superseded, historical only.
 - [ADR-0005 — Mandatory independent physical domain modules](../adr/ADR-0005-mandatory-independent-physical-domain-modules.md) — Accepted and binding for all project modules; shared audit integration unresolved.
 
+- [Audit-first coding and central index plan](audit-first-architecture-and-delivery-2026-10-18.md) — required in initial implementation; acceptance matrix and phased remediation.
+- [Foundation and earlier code findings](foundation-baseline-review-2026-10-18.md) — source-confirmed gaps separated from untested risks.
+
 ## Template
 
 Use `TEMPLATE.md` for the minimum required structure.

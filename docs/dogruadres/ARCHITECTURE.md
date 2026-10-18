@@ -43,6 +43,13 @@ The identity/Organization foundation is implemented in its own Medusa module and
 
 **Blocking integration question:** The required cross-module security audit semantics remain unresolved. B1 forwarded Vehicle manager failed with an AuditEvent metadata error (INCONCLUSIVE); investigate documented, version-matched cross-module approaches without altering physical module ownership or implicitly weakening the approved audit invariant.
 
+## Approved module-owned audit and unified index (ADR-0006)
+
+- dogruadresAccess retains its existing canonical Foundation da_audit_event and gains a future local durable outbox without replacing old rows.
+- Standalone dogruadresVehicle owns its domain data, VehicleAuditEvent and VehicleAuditOutbox. Vehicle writes do not target Access's audit table.
+- Standalone dogruadresAuditIndex owns ONLY derived unified index/checkpoint/replay state, included in the initial coding program, not postponed. Post-commit durable outbox relay and idempotent projection decouple source commits from index availability.
+- Each source domain mutation + audit + outbox MUST commit/rollback atomically in its own module. Index searches require current Organization/resource rights, safe field allowlists, replay and lag reporting. This is a scoped correction to older Vehicle-to-Access physical audit assumptions; ADR-0005 independence remains controlling.
+
 ## Integration boundary
 
 The intended integration model is:

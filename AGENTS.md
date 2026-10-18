@@ -66,6 +66,10 @@ Never guess Mercur API behavior.
 
 **Binding Product Owner decision, Accepted ADR-0005:** All DoğruAdres domain capabilities MUST be implemented in separately registered, physically independent Medusa modules with their own models, entity metadata, services, data/migration ownership and test boundary. Vehicle belongs in its own dogruadresVehicle module; NEVER embed its persistence in dogruadresAccess or substitute internal service files for real module independence. ADR-0004 C co-location approval was expressly REVOKED and Superseded. Preserve Foundation's canonical shared audit and security rules; unsupported cross-module transactions are an unresolved integration issue, not authorization to co-locate domains or downgrade audit consistency. Stop any conflicting integration and escalate. See [ADR-0005](docs/dogruadres/adr/ADR-0005-mandatory-independent-physical-domain-modules.md).
 
+## Audit-first mandatory project architecture
+
+[Accepted ADR-0006](docs/dogruadres/adr/ADR-0006-module-owned-atomic-audit-central-index.md) requires each independent domain module to own a local canonical audit and durable outbox atomic with each sensitive mutation. The independently registered dogruadresAuditIndex is a first-release derived read model, NOT a shared physical source ledger. Foundation keeps existing da_audit_event; Vehicle MUST NOT write that Access entity. Use source-local rollback fault tests, version-matched supported outbox/relay APIs, idempotent index ingestion, current-policy query authorization and replay. Read the [audit-first implementation plan](docs/dogruadres/plans/audit-first-architecture-and-delivery-2026-10-18.md) and [source findings inventory](docs/dogruadres/plans/foundation-baseline-review-2026-10-18.md); never represent untested past code as repaired.
+
 ## Project documentation rule
 
 Before DoğruAdres architectural or domain work, read the relevant project documents under `docs/dogruadres/` and use `docs/dogruadres/README.md` as the router.

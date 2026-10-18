@@ -26,6 +26,10 @@ These are domain concerns. They are not Mercur's marketplace primitives and must
 
 The Product Owner explicitly requires EVERY DoğruAdres domain capability to be a separately registered and physically independent Medusa module, owning its own models, metadata, service and migration boundaries. Vehicle Management MUST be a standalone dogruadresVehicle module, never an internal service or model inside dogruadresAccess. This rule applies to all present and future DoğruAdres domain modules. ADR-0004 C co-location approval was expressly withdrawn and Superseded by [Accepted ADR-0005](adr/ADR-0005-mandatory-independent-physical-domain-modules.md). Preserve existing security audit requirements; a framework integration challenge is never permission to co-locate domains or quietly weaken audit semantics. When a supported independent-module solution is unproven, report the exact constraint and stop the affected operation.
 
+## 2B. Local atomic audit and central index from first release
+
+Under [Accepted ADR-0006](adr/ADR-0006-module-owned-atomic-audit-central-index.md), each separately registered domain module OWNS its own mandatory local audit and durable transactionally persisted outbox. A separately registered dogruadresAuditIndex is a derived unified audit index required in the FIRST development plan, never the source of truth. Existing Foundation da_audit_event remains Foundation-owned; Vehicle owns VehicleAuditEvent in dogruadresVehicle. Index propagation is retryable/idempotent/replayable; source business operations remain atomic with their own audit. No cross-module ORM writes, unauthorized audit contents or misleading compensation-based SQL rollback claims.
+
 ## 3. Upgradeability is an acceptance criterion
 
 Mercur must remain upgradeable. Do not treat Mercur internals as a project dependency or a place to patch casually.

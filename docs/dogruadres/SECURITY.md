@@ -29,6 +29,10 @@ This document is intentionally project-specific. It does not duplicate generic O
 - Persist Organization, protected Owner, invitation and membership/role audit events in the same database transaction as the corresponding mutation. Audit values must not contain credentials or plaintext invitation tokens.
 - These controls cover the Organization routes implemented in this checkpoint. They do not imply that background jobs, files, exports, search or future Vehicle routes are already scoped; those surfaces must use the same server-side policy before release.
 
+## Local canonical audits and derived index (ADR-0006)
+
+Each independent domain module must persist sensitive mutations, local immutable-intended audit evidence and its durable outbox in ONE source-module SQL transaction. Foundation's existing da_audit_event remains authoritative for Foundation; VehicleAuditEvent stays inside the independent Vehicle module. dogruadresAuditIndex is a separately registered, eventually consistent derived read model with idempotent, retryable, replayable ingest and monitored gaps/lag. Source audit is never lost if index is offline. Source/index reads, counts and pagination require current, server-resolved Organization/resource authorization; revocation removes subsequent access. Event-time actor/role are historical facts, not current grants. Never index secret/private/unapproved fields. Retention, sensitive-field display and broad export rights require separately scoped decisions.
+
 ## Approval rule
 
 Any architecture change affecting auth, authorization, payment behavior, seller isolation, or security boundaries requires external approval before implementation.

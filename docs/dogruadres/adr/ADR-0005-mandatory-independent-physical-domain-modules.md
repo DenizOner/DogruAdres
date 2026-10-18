@@ -45,6 +45,10 @@ Validate each independently registered domain module, owned metadata/data/migrat
 
 Official reference: https://github.com/mercurjs/mercur/blob/v2.3.7/apps/docs/resources/best-practices/modules.mdx
 
+## Later approved audit architecture clarification
+
+[Accepted ADR-0006](ADR-0006-module-owned-atomic-audit-central-index.md) establishes per-module canonical audit + outbox and a separately registered central derived index. This ends the earlier requirement that Vehicle write directly into Access's physical audit table; it does NOT weaken this ADR's mandatory independent-module boundary. B1 proof remains historically INCONCLUSIVE.
+
 ## Follow-up
 
 1. Mark ADR-0004 Superseded, preserving its historical text. Update project constitution, architecture, requirements, plans and indexes.
