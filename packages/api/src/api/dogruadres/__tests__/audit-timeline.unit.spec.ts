@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { cursorKey, encodeCursor, decodeCursor, pagination, timelinePage } from "../audit-timeline"
 import { requireOrganizationAccess } from "../authorization"
 import Service from "../../../modules/dogruadres-audit-index/service"
@@ -89,5 +91,23 @@ describe("Audit timeline pagination and response contract", () => {
       { occurred_at: { $lt: new Date(boundary.occurred_at) } },
       { occurred_at: new Date(boundary.occurred_at), id: { $lt: "daidx_b" } },
     ] }, expect.objectContaining({ take: 26, order: { occurred_at: "DESC", id: "DESC" } }))
+  })
+})
+
+// Registration source regression only; does not execute the HTTP router.
+describe("Timeline cache middleware registration", () => {
+  it("uses a methodless global descriptor without changing wildcard GET authentication", () => {
+    const source = readFileSync(resolve(__dirname, "../../middlewares.ts"), "utf8")
+    const start = source.indexOf('matcher: "/dogruadres/organizations/:id/audit-timeline"')
+    expect(start).toBeGreaterThan(-1)
+    const descriptor = source.slice(start, source.indexOf("\n    },", start))
+    expect(descriptor).not.toMatch(/\bmethods?\s*:/)
+    expect(descriptor).toContain('req.method === "GET"')
+    expect(descriptor).toContain('req.originalUrl.split("?")[0]')
+    expect(descriptor).toContain('res.setHeader("Cache-Control", "no-store")')
+    expect(descriptor).toContain("next()")
+    expect(source).toContain(`matcher: "/dogruadres/organizations/*",
+      methods: ["GET"],
+      middlewares: [authenticate(["user", "member", "customer"], ["session", "bearer"])],`)
   })
 })
