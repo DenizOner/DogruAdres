@@ -123,13 +123,13 @@ All routes authenticate real Medusa actor context, map it to Person and active O
 
 ### Transactional audit architecture gate
 
-The shared audit trail remains in dogruadresAccess. Proposed event actions: vehicle.created, vehicle.updated, vehicle.deleted; exact names and allowed before/after fields are technical design choices.
+**Current ADR-0006:** The canonical Vehicle audit trail MUST be inside the independently registered dogruadresVehicle module, using a VehicleAuditEvent and durable VehicleAuditOutbox committed atomically with each Vehicle mutation. Foundation's da_audit_event remains Foundation-owned ONLY. The independent dogruadresAuditIndex presents the authorized combined timeline. Vehicle action labels such as vehicle.created/updated/deleted are proposed event contract details subject to technical review.
 
 CRITICAL GATE NOW ADR-0006: independent Vehicle mutation + its OWN VehicleAuditEvent + its OWN durable VehicleAuditOutbox MUST be proven atomic locally. Direct Vehicle writes into Access AuditEvent are no longer required. Independently registered central AuditIndex must accept only authorized redacted projections via reliable idempotent delivery, with proof of retries, failures and replay. Existing B1 remained INCONCLUSIVE; it is no longer the selected integration.
 
-### Vehicle-0B shared audit: official-version proof gate (NOT YET PASSED)
+### Historical Vehicle-0B shared-Access-audit proof (INCONCLUSIVE; no longer an active implementation gate)
 
-The Product Owner approved a **narrow isolated, disposable non-production feasibility proof**, not a Vehicle-1 code checkpoint. Actual cross-module SQL atomicity remains UNPROVEN.
+The earlier Product Owner approved a narrow disposable B1 feasibility test. It was run and classified INCONCLUSIVE due to missing DaAuditEvent metadata. This historical cross-module shared-Access-table approach has been replaced by ADR-0006: source-local audit/outbox with reliable projection. The B1 proof is retained for evidence only; it is NOT required or authorized to be rerun as part of the new plan.
 
 Verified version-matched sources:
 - Mercur v2.3.7 thin-modules rule: https://github.com/mercurjs/mercur/blob/v2.3.7/apps/docs/resources/best-practices/modules.mdx — module owns its own tables, no cross-module service dependency.
@@ -138,15 +138,15 @@ Verified version-matched sources:
 - Medusa v2.21.2 @InjectTransactionManager: https://github.com/medusajs/medusa/blob/v2.21.2/packages/core/utils/src/modules-sdk/decorators/inject-transaction-manager.ts — reuses an existing context.transactionManager or starts its own repository transaction. This alone does not show that two independent module repositories share the same connection.
 - Medusa v2.21.2 @InjectManager: https://github.com/medusajs/medusa/blob/v2.21.2/packages/core/utils/src/modules-sdk/decorators/inject-manager.ts — forwarded context also is not cross-module atomicity proof.
 
-**Architecture candidate order:** (B) dedicated Vehicle module and existing Access audit using one demonstrably supported physical SQL transaction; then, ONLY IF B fails, separately evaluate (C) co-located physical Vehicle+audit transaction boundary as a Mercur one-domain-module exception, or (D) database-trigger audit as a coupling-heavy alternative. (A) independent workflow compensation is NOT sufficient by itself.
+**Historical alternatives, NOT current instructions:** B1 directly forwarded Vehicle's manager to Access and failed at entity metadata; B2 remained unproven; C physical co-location was expressly revoked and ADR-0004 Superseded; D trigger coupling was not selected. ADR-0005 standalone modules and ADR-0006 local audit/outbox + independent central index are CURRENT accepted instructions.
 
-**Proof guardrails:** Only inspect installed Mercur 2.3.7 / Medusa 2.21.2 documentation/source and, if a truly isolated non-protected disposable PostgreSQL target exists, run a small ephemeral source-control-external probe; no project Vehicle model/routes/migrations, no commits, no protected DB/volumes, no cloud billing/production, no framework patches. Evidence MUST include physical transaction identity/connection as available, both writes committed together on success, audit write failure causing zero persisted Vehicle mutation, Vehicle failure leaving no audit record, and independent DB querying of final state. Return PASS, FAIL or INCONCLUSIVE transparently with original sanitized commands/logs and provenance. A user-facing 200 or successful compensation is insufficient.
+**Historical B1 proof protocol:** The earlier isolated proof recorded physical transaction identity and rollback attempts, but audit INSERT failures were masked by ORM metadata error. No B1 PASS was proven. Future proof guardrails are AUD-01–AUD-16 in the current [audit-first plan](audit-first-architecture-and-delivery-2026-10-18.md), testing source-local audit and outbox atomicity, independent index idempotency, outage recovery and authorization on a separately authorized disposable database.
 
-**Decision boundary:** Actual PASS evidence is required before selecting architecture B or authorizing Vehicle-1. Failure or inconclusiveness must be reported for independent technical review, not patched by silently weakening audit atomicity.
+**Current proof gate:** Future Vehicle development must pass Vehicle-local mutation + VehicleAuditEvent + VehicleAuditOutbox atomic rollback, and source-to-index durable/idempotent/replayable delivery plus current-policy authorization. Physical Vehicle-to-Access audit insert or B1 rerun is not required under ADR-0006; no blanket Vehicle-1/production approval is implied.
 
 ## Vehicle-0C — B1 Evidence, B2 Contract Review and C Candidate
 
-[Vehicle-0C research](vehicle-0c-atomicity-architecture-review-2026-10-18.md) is historical and preserves the INCONCLUSIVE B1 proof. Its C recommendation was expressly rejected, ADR-0004 is Superseded, and [ADR-0005](../adr/ADR-0005-mandatory-independent-physical-domain-modules.md) controls. Future Vehicle work MUST use a standalone physical module; cross-module audit integration remains a blocking design gate.
+[Vehicle-0C research](vehicle-0c-atomicity-architecture-review-2026-10-18.md) is historical and preserves the INCONCLUSIVE B1 proof. Its C recommendation was expressly rejected, ADR-0004 is Superseded, and [ADR-0005](../adr/ADR-0005-mandatory-independent-physical-domain-modules.md) controls. Future Vehicle work MUST use a standalone physical module. The historical cross-module Access-audit blocker is bypassed by ADR-0006 local audit ownership; SOURCE-LOCAL atomicity and the independent central index transport/security remain the current implementation/acceptance gates.
 
 ## Mercur extension points involved
 
