@@ -40,6 +40,8 @@ Keep the plan in the repository while the work is in scope. If a plan is superse
 - [IR-0 — Dashboard, Finance and Integrations Code Review](dashboard-finance-integrations-code-review-2026-10-18.md) — 25 source-grounded findings, SAFE-0/COM-1/FIN-0 gates, explicit provider/runtime limitations.
 
 - [UI-0 Reference Apps and SAFE-0A implementation preflight](reference-ui-strategy-and-safe-0a-2026-10-18.md) — User-confirmed custom DoğruAdres Admin/Vendor/Storefront intent; supported extension-vs-owned-UI choices; isolated production secrets / Next TypeScript engineering checkpoint.
+- [UI-0A capability/role/API matrix](ui-0a-capability-roles-api-matrix-2026-10-18.md) — scoped current reference-vs-owned UI choices, official Mercur v2.3.7 capabilities and explicit open Product Owner decisions.
+- [AF-1A Foundation audit/outbox readiness](af-1a-foundation-audit-outbox-implementation-readiness-2026-10-18.md) — write-path inventory, future isolated proof matrix, safe migrations and index/backfill gates.
 
 ## Template
 
