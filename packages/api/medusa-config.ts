@@ -70,5 +70,8 @@ module.exports = withMercur({
     {
       resolve: './src/modules/dogruadres-audit-index',
     },
+    {
+      resolve: './src/modules/dogruadres-vehicle',
+    },
   ],
 })
