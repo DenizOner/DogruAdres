@@ -64,3 +64,19 @@ export function projectFoundationAuditEvent(value: unknown): AuditIndexEnvelopeV
 
 // Stable field order comes from validation, not the caller's object key order.
 export const envelopeFingerprint = (value: unknown) => JSON.stringify(validateAuditIndexEnvelope(value))
+
+// Inspect BOTH envelope and persisted indexing columns, never identity alone.
+export function matchesAuditIndexProjection(value: unknown, expected: AuditIndexEnvelopeV1): boolean {
+  try {
+    if (!value || typeof value !== "object") return false
+    const row = value as Record<string, unknown>
+    if (row.deleted_at != null || row.envelope_version !== 1 || envelopeFingerprint(row.envelope) !== envelopeFingerprint(expected)) return false
+    const actual = { source_module: row.source_module, source_event_id: row.source_event_id, organization_id: row.organization_id,
+      actor_person_id: row.actor_person_id, actor_type: row.actor_type, actor_id: row.actor_id,
+      action: row.action, resource: row.resource, target_id: row.target_id, occurred_at: new Date(row.occurred_at as string | Date).toISOString() }
+    const wanted = { source_module: expected.source_module, source_event_id: expected.source_event_id, organization_id: expected.organization_id,
+      actor_person_id: expected.actor.person_id, actor_type: expected.actor.type, actor_id: expected.actor.id,
+      action: expected.action, resource: expected.resource, target_id: expected.target_id, occurred_at: expected.occurred_at }
+    return JSON.stringify(actual) === JSON.stringify(wanted)
+  } catch { return false }
+}

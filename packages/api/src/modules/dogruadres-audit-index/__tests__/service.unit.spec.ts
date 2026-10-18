@@ -7,6 +7,13 @@ import type { Context } from "@medusajs/framework/types"
 const source = () => ({ id: "daaud_example", module: "dogruadres-access", organization_id: "daorg_example", actor_person_id: "daprs_example",
   actor_type: "user", actor_id: "user_example", role_context: "owner", action: "organization.membership_changed", resource: "membership",
   target_id: "damem_example", occurred_at: new Date("2026-10-18T00:00:00.000Z") })
+function persisted() {
+  const event = source()
+  return { id: "daidx_existing", source_module: event.module, source_event_id: event.id, envelope_version: 1,
+    organization_id: event.organization_id, actor_person_id: event.actor_person_id, actor_type: event.actor_type, actor_id: event.actor_id,
+    action: event.action, resource: event.resource, target_id: event.target_id, occurred_at: event.occurred_at,
+    envelope: projectFoundationAuditEvent(event), deleted_at: null as Date | null }
+}
 function fixture(existing: Record<string, unknown>[] = []) {
   const service = Object.create(Service.prototype) as Service
   const execute = jest.fn(async () => undefined)
@@ -31,13 +38,13 @@ describe("Audit Index internal service persistence foundation", () => {
     expect(JSON.stringify(row)).not.toContain("do-not-project")
   })
   it("returns an identical retry without inserting a second identity", async () => {
-    const f = fixture([{ id: "daidx_existing", envelope: projectFoundationAuditEvent(source()), deleted_at: null }])
+    const f = fixture([persisted()])
     const result = await f.service.indexFoundationAuditEvent(source(), f.context)
     expect(result.created).toBe(false)
     expect(f.create).not.toHaveBeenCalled()
   })
   it.each(["different-payload", "soft-deleted", "ambiguous"])("rejects duplicate identity with %s", async kind => {
-    const entry = { envelope: projectFoundationAuditEvent(source()), deleted_at: kind === "soft-deleted" ? new Date() : null }
+    const entry = { ...persisted(), deleted_at: kind === "soft-deleted" ? new Date() : null }
     const rows = kind === "ambiguous" ? [entry, entry] : [entry]
     const f = fixture(rows)
     await expect(f.service.indexFoundationAuditEvent(kind === "different-payload" ? { ...source(), target_id: "damem_other" } : source(), f.context)).rejects.toThrow()
@@ -51,5 +58,17 @@ describe("Audit Index internal service persistence foundation", () => {
   it("does not swallow an index persistence failure", async () => {
     const f = fixture(); f.create.mockRejectedValueOnce(new Error("synthetic write failure"))
     await expect(f.service.indexFoundationAuditEvent(source(), f.context)).rejects.toThrow("synthetic write failure")
+  })
+  it("requires matching projection columns as well as envelope/identity", async () => {
+    const f = fixture([{ ...persisted(), organization_id: "daorg_wrong" }])
+    expect(await f.service.inspectFoundationAuditEvent(source(), f.context)).toBe("conflict")
+    await expect(f.service.indexFoundationAuditEvent(source(), f.context)).rejects.toThrow("AUDIT_INDEX_IDENTITY_CONFLICT")
+    expect(f.create).not.toHaveBeenCalled()
+  })
+  it("reports fresh committed identity inspection without writing", async () => {
+    const absent = fixture(), present = fixture([persisted()])
+    expect(await absent.service.inspectFoundationAuditEvent(source(), absent.context)).toBe("missing")
+    expect(await present.service.inspectFoundationAuditEvent(source(), present.context)).toBe("matching")
+    expect(present.create).not.toHaveBeenCalled()
   })
 })

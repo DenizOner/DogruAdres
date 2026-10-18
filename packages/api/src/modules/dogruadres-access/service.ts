@@ -8,6 +8,8 @@ import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
 import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
 import { randomBytes } from "node:crypto"
+import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
+import type { OutboxClaim, DeliveryErrorCode } from "./audit-delivery-policy"
 import { mayAcceptInvitation } from "./invitation-policy"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
@@ -60,6 +62,32 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   AuditEvent,
   AuditOutbox,
 }) {
+  // Every operation owns a short Foundation transaction. No Index call occurs
+  // while a Foundation row lock/EntityManager is held across module boundaries.
+  @InjectTransactionManager()
+  async claimFoundationAuditOutbox(@MedusaContext() context: Context = {}) {
+    return claimAuditDelivery(this.auditDeliveryManager_(context))
+  }
+  @InjectTransactionManager()
+  async readClaimedFoundationAudit(claim: OutboxClaim, @MedusaContext() context: Context = {}) {
+    return loadClaimedAuditEvent(this.auditDeliveryManager_(context), claim)
+  }
+  @InjectTransactionManager()
+  async acknowledgeFoundationAudit(claim: OutboxClaim, @MedusaContext() context: Context = {}) {
+    return acknowledgeAuditDelivery(this.auditDeliveryManager_(context), claim)
+  }
+  @InjectTransactionManager()
+  async deferFoundationAudit(claim: OutboxClaim, code: DeliveryErrorCode, @MedusaContext() context: Context = {}) {
+    return deferAuditDelivery(this.auditDeliveryManager_(context), claim, code)
+  }
+  @InjectTransactionManager()
+  async quarantineFoundationAudit(claim: OutboxClaim, code: DeliveryErrorCode, @MedusaContext() context: Context = {}) {
+    return quarantineAuditDelivery(this.auditDeliveryManager_(context), claim, code)
+  }
+  private auditDeliveryManager_(context: Context): DeliveryManager {
+    if (!context.transactionManager) throw new Error("FOUNDATION_DELIVERY_TRANSACTION_REQUIRED")
+    return context.transactionManager as unknown as DeliveryManager
+  }
   private async persistAuditEventsWithOutbox_(input: FoundationAuditInput[], sharedContext: Context) {
     // No decorator here: the five mutation entrypoints already own the physical
     // module transaction. Refuse accidental use without that active manager.

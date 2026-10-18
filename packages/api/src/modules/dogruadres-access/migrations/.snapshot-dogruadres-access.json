@@ -1432,7 +1432,9 @@
           "default": "'pending'",
           "comment": null,
           "enumItems": [
-            "pending"
+            "pending",
+            "delivered",
+            "quarantined"
           ],
           "mappedType": "text"
         },
@@ -1483,6 +1485,109 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "datetime"
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "0",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "delivered_at": {
+          "name": "delivered_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "lease_token": {
+          "name": "lease_token",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [
+            "SOURCE_INVALID",
+            "ENVELOPE_INVALID",
+            "INDEX_CONFLICT",
+            "INDEX_UNAVAILABLE",
+            "ATTEMPTS_EXHAUSTED",
+            "RECONCILIATION_DEFERRED"
+          ],
+          "mappedType": "text"
         }
       },
       "name": "da_audit_outbox",
@@ -1524,9 +1629,29 @@
           "constraint": true,
           "primary": true,
           "unique": true
+        },
+        {
+          "keyName": "IDX_da_audit_outbox_delivery_due",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_da_audit_outbox_delivery_due\" ON \"da_audit_outbox\" (\"status\", \"next_attempt_at\", \"lease_expires_at\", \"created_at\", \"id\") WHERE deleted_at IS NULL"
         }
       ],
-      "checks": [],
+      "checks": [
+        {
+          "name": "da_audit_outbox_attempt_bounds",
+          "expression": "\"attempt_count\" between 0 and 5",
+          "definition": "CHECK ((\"attempt_count\" between 0 and 5))"
+        },
+        {
+          "name": "da_audit_outbox_delivery_state",
+          "expression": "((\"lease_token\" is null) = (\"lease_expires_at\" is null)) and (\"lease_token\" is null or (\"status\" = 'pending' and \"attempt_count\" >= 1)) and ((\"status\" = 'delivered') = (\"delivered_at\" is not null)) and (\"status\" = 'pending' or (\"lease_token\" is null and \"next_attempt_at\" is null)) and (\"status\" <> 'quarantined' or \"last_error_code\" is not null) and (\"status\" <> 'delivered' or \"last_error_code\" is null) and (\"attempt_count\" >= 1 or (\"status\" = 'pending' and \"lease_token\" is null and \"next_attempt_at\" is null and \"last_error_code\" is null))",
+          "definition": "CHECK ((((\"lease_token\" is null) = (\"lease_expires_at\" is null)) and (\"lease_token\" is null or (\"status\" = 'pending' and \"attempt_count\" >= 1)) and ((\"status\" = 'delivered') = (\"delivered_at\" is not null)) and (\"status\" = 'pending' or (\"lease_token\" is null and \"next_attempt_at\" is null)) and (\"status\" <> 'quarantined' or \"last_error_code\" is not null) and (\"status\" <> 'delivered' or \"last_error_code\" is null) and (\"attempt_count\" >= 1 or (\"status\" = 'pending' and \"lease_token\" is null and \"next_attempt_at\" is null and \"last_error_code\" is null))))"
+        }
+      ],
       "foreignKeys": {
         "da_audit_outbox_source_audit_event_id_foreign": {
           "constraintName": "da_audit_outbox_source_audit_event_id_foreign",
