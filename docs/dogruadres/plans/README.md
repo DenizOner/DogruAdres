@@ -43,6 +43,7 @@ Keep the plan in the repository while the work is in scope. If a plan is superse
 - [UI-0A capability/role/API matrix](ui-0a-capability-roles-api-matrix-2026-10-18.md) — scoped current reference-vs-owned UI choices, official Mercur v2.3.7 capabilities and explicit open Product Owner decisions.
 - [AF-1A Foundation audit/outbox readiness](af-1a-foundation-audit-outbox-implementation-readiness-2026-10-18.md) — write-path inventory, future isolated proof matrix, safe migrations and index/backfill gates.
 - [AF-1A0 source trace and risk matrix](af-1a0-foundation-mutation-audit-source-trace-2026-10-18.md) — five concrete security writes, audit map, concurrency risk and native fault-proof gaps.
+- [AF-1B review / AF-1C proposed test-only scope](af-1b-review-af-1c-test-checkpoint-2026-10-18.md) — local Agent READY, concurrency linearization proposal, strict disposable-target guards and separate coding/runtime authorization.
 - [Mandatory local Git freshness preflight](local-repository-freshness-preflight-2026-10-18.md) — first Agent task, do not overwrite dirty Windows worktrees or assume remote equals local.
 
 ## Template

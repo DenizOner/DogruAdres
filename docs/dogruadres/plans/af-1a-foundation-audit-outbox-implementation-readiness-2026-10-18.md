@@ -19,6 +19,10 @@
 
 The [AF-1A0 full source trace](af-1a0-foundation-mutation-audit-source-trace-2026-10-18.md) has now mapped five write paths, their canonical audit actions, prior native targeted invitation-acceptance audit failure test and gaps. In particular, create/revoke invitation membership-revocation races need independent tests, while audit failures on other paths and local outbox remain unproven. The [mandatory first Agent local Git preflight](local-repository-freshness-preflight-2026-10-18.md) precedes any local engineering. No local Windows worktree, DB or runtime was inspected in this GitHub-only review.
 
+## AF-1B checkpoint review (2026-10-18)
+
+AF-1B local branch was reported READY by the Agent: `D:\DogruAdres-af1a` is clean on local-only `feature/af-1-foundation-audit-outbox` at immutable main `d87ba52f99f74d7fec52af70a815fe91a989fc3f`; no push or code. The detailed independent review and proposed next strictly **test-only** checkpoint are in [AF-1B / AF-1C review](af-1b-review-af-1c-test-checkpoint-2026-10-18.md). Its overlap/revocation ordering is a proposed bounded acceptance clarification and not falsely represented as separately approved Product Owner policy. Existing G1-hardcoded test targets remain protected; a disposable DB/Redis/API and dependency install need separate future explicit authorization. AF-1C has not started.
+
 ## AF-1 implementation milestones — exact independent gates
 
 **AF-1A0 — Source proof + transaction boundary inventory (READ-ONLY or isolated test planning).**
