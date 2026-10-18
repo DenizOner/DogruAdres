@@ -91,3 +91,47 @@ jobs:
       - name: API TypeScript check
         working-directory: packages/api
         run: node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json
+      - name: Production Medusa config rejects scaffold secrets (no server)
+        working-directory: packages/api
+        env:
+          NODE_ENV: production
+          DATABASE_URL: postgres://ci@127.0.0.1:1/safe0a_build_sentinel
+          REDIS_URL: redis://127.0.0.1:1
+          STORE_CORS: http://127.0.0.1:19040
+          ADMIN_CORS: http://127.0.0.1:19040
+          VENDOR_CORS: http://127.0.0.1:19040
+          AUTH_CORS: http://127.0.0.1:19040
+        shell: bash
+        run: |
+          set +e
+          output=$(JWT_SECRET=supersecret COOKIE_SECRET=supersecret bun -e "require('./medusa-config.ts')" 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "UNSAFE: accepted scaffold secrets in production"
+            exit 1
+          fi
+          if ! printf '%s' "$output" | grep -q 'Production requires distinct'; then
+            echo "Config rejected, but NOT by the expected production secret validation"
+            exit 1
+          fi
+          echo "PASS: production configuration rejected scaffold secrets before startup"
+      - name: Medusa production-config build with ephemeral synthetic secrets (no database)
+        working-directory: packages/api
+        timeout-minutes: 10
+        env:
+          NODE_ENV: production
+          DATABASE_URL: postgres://ci@127.0.0.1:1/safe0a_build_sentinel
+          REDIS_URL: redis://127.0.0.1:1
+          STORE_CORS: http://127.0.0.1:19040
+          ADMIN_CORS: http://127.0.0.1:19040
+          VENDOR_CORS: http://127.0.0.1:19040
+          AUTH_CORS: http://127.0.0.1:19040
+          FILE_BACKEND_URL: http://127.0.0.1:19040/static
+        shell: bash
+        run: |
+          export JWT_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
+          export COOKIE_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
+          export DOGRUADRES_INVITATION_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
+          # Compile only; do not start server, migrate, access provider or bundle dashboards.
+          bunx medusa build
