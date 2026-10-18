@@ -3,6 +3,7 @@ import {
   MedusaContext,
   MedusaService,
   MedusaError,
+  defineJoinerConfig,
 } from "@medusajs/framework/utils"
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
@@ -62,6 +63,19 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   AuditEvent,
   AuditOutbox,
 }) {
+  __joinerConfig() {
+    // Keep every Foundation model in schema/linkable/primary-key/prefix metadata.
+    // Same registration identity as Module(); do not import index.ts (cycle).
+    return defineJoinerConfig("dogruadresAccess", {
+      models: [Person, ActorMapping, Organization, Membership, Invitation, AuditEvent, AuditOutbox],
+      alias: [
+        { name: ["da_actor_mapping", "da_actor_mappings"], entity: "DaActorMapping", args: { methodSuffix: "ActorMappings" } },
+        { name: ["da_person", "da_people"], entity: "DaPerson", args: { methodSuffix: "People" } },
+        { name: ["da_organization", "da_organizations"], entity: "DaOrganization", args: { methodSuffix: "Organizations" } },
+        { name: ["da_organization_membership", "da_organization_memberships"], entity: "DaOrganizationMembership", args: { methodSuffix: "Memberships" } },
+      ],
+    })
+  }
   // Every operation owns a short Foundation transaction. No Index call occurs
   // while a Foundation row lock/EntityManager is held across module boundaries.
   @InjectTransactionManager()
