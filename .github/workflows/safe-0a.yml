@@ -104,7 +104,8 @@ jobs:
         shell: bash
         run: |
           set +e
-          output=$(JWT_SECRET=supersecret COOKIE_SECRET=supersecret bun -e "require('./medusa-config.ts')" 2>&1)
+          # The Medusa CLI uses its own mixed TS/CommonJS config loader; direct bun -e does not.
+          output=$(JWT_SECRET=supersecret COOKIE_SECRET=supersecret timeout 120s bunx medusa build 2>&1)
           status=$?
           set -e
           if [ "$status" -eq 0 ]; then
