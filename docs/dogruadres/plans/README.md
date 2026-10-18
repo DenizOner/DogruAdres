@@ -36,7 +36,8 @@ Keep the plan in the repository while the work is in scope. If a plan is superse
 - [ADR-0005 — Mandatory independent physical domain modules](../adr/ADR-0005-mandatory-independent-physical-domain-modules.md) — Accepted and binding for all project modules; shared audit integration unresolved.
 
 - [Audit-first coding and central index plan](audit-first-architecture-and-delivery-2026-10-18.md) — required in initial implementation; acceptance matrix and phased remediation.
-- [Foundation and earlier code findings](foundation-baseline-review-2026-10-18.md) — source-confirmed gaps separated from untested risks.
+- [Foundation and earlier code findings](foundation-baseline-review-2026-10-18.md) — source-confirmed gaps and IR-0 cross reference.
+- [IR-0 — Dashboard, Finance and Integrations Code Review](dashboard-finance-integrations-code-review-2026-10-18.md) — 25 source-grounded findings, SAFE-0/COM-1/FIN-0 gates, explicit provider/runtime limitations.
 
 ## Template
 

@@ -33,6 +33,10 @@ This document is intentionally project-specific. It does not duplicate generic O
 
 Each independent domain module must persist sensitive mutations, local immutable-intended audit evidence and its durable outbox in ONE source-module SQL transaction. Foundation's existing da_audit_event remains authoritative for Foundation; VehicleAuditEvent stays inside the independent Vehicle module. dogruadresAuditIndex is a separately registered, eventually consistent derived read model with idempotent, retryable, replayable ingest and monitored gaps/lag. Source audit is never lost if index is offline. Source/index reads, counts and pagination require current, server-resolved Organization/resource authorization; revocation removes subsequent access. Event-time actor/role are historical facts, not current grants. Never index secret/private/unapproved fields. Retention, sensitive-field display and broad export rights require separately scoped decisions.
 
+## Production commerce and external integration safety gate (IR-0)
+
+Before ANY real-money payment/payout, live private chat or production go-live, verify safe production secrets and storefront typechecked build, backend-authoritative payment/amount/status, no unintended demo-manual payment/seed, verified TalkJS signed user tokens and conversation access, bounded authenticated cache invalidation, privacy-safe error logs and image proxy host allowlists. A storefront button or framework provider dependency is not evidence of an approved financial module. Document exact sandbox/provider/backend contracts and isolated end-to-end negative tests before enablement. See [IR-0 source review](plans/dashboard-finance-integrations-code-review-2026-10-18.md). These are security/operational gates, not allegations of exploitation or code-change authorizations.
+
 ## Approval rule
 
 Any architecture change affecting auth, authorization, payment behavior, seller isolation, or security boundaries requires external approval before implementation.

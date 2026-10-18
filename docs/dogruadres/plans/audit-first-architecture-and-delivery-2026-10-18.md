@@ -18,7 +18,7 @@ Index schema proposal: AuditIndexEntry unique (source_module,source_event_id), o
 
 ## Bounded development sequence
 
-**AF-0 — Docs/review (current):** ADR-0006, security/requirements/Vehicle plan, defect register and this roadmap; preserve old requirements, ADR-0004 history, historical status counts.
+**AF-0 — Architecture docs and IR-0 source investigation (completed):** ADR-0006, security/requirements/Vehicle plan, defect register and this roadmap; preserve old requirements, ADR-0004 history, historical status counts.
 
 **AF-1 — Foundation repair + source audit/outbox:** Separately reviewed implementation checkpoint for append-only/tamper-resistant source audit contract, forced rollback tests for audit and outbox, additive outbox, safe historical backfill, production secret fail-fast, nondestructive migration/rollback plan, native HTTP CI. Never run destructive Foundation down migration against protected DB. Preserve already working Organization/membership invitation flows.
 
@@ -28,7 +28,24 @@ Index schema proposal: AuditIndexEntry unique (source_module,source_event_id), o
 
 **AF-4 — Full regression/operational acceptance:** Real DB native authenticated HTTP + migration dry-run/restore, original Foundation regression, missing/duplicate/reordered event cases, index outage and replay, revocation-based index authorization, no cross-Organization counts leakage, authenticated browser E2E, CI production bundle check and readiness. Production deploy/merge always separate.
 
-**AF-5 — Other previous custom code:** Broad audit across routes, jobs, subscribers, dashboards, config and platform adapters to find actual defects; maintain file-specific evidence, risks and targeted repairs rather than unbounded changes.
+**IR-0 — Completed source review (2026-10-18):** [Dashboard/finance/integrations IR-0 report](dashboard-finance-integrations-code-review-2026-10-18.md) inspects repository-owned payment, order, returns, cache, TalkJS, backend integrations, admin/vendor entrypoints, seed and deployment config. IR-01–IR-25 are classified CONFIRMED/RISK/ABSENT/COVERAGE; full runtime, package internals and unrelated presentational UI leaves remain NOT VERIFIED.
+
+**SAFE-0 — Before production or live payment/chat:** Priority IR-01/02/03/04/14/15/17/18/19: secure production secrets, remove ignored storefront TypeScript errors, enable signed chat auth, isolate manual-test payment, constrain revalidate endpoint/logging/image proxy, prevent production demo seeding, and establish real integration/build quality gate. Separate scoped implementation approval is required; NOT a mass rewrite.
+
+**COM-1 — Checkout/payment/returns/cache quality:** IR-05/06/07/08/09/10/11/12/13/20/21/22/23: fix and prove checkout address/billing, payment provider and status errors, no-op cancellation, safe returns and authoritative totals, reliable stock/offer invalidation, API contract types, region consistency and secure customer cache. Must pass before REAL MONEY acceptance; separate source/task branch and tests.
+
+**FIN-0 — Independent future financial domain gate:** No DogruAdres-owned payout/bank/settlement/accounting module or financial admin exists in source. Consult v2.3.7/v2.21.2 installed public payment/capture/refund/settlement provider contracts, product policy, Turkish holiday/banking requirements, immutable ledgers, idempotency and dedicated audit; require separate approval before any real-money payout. An existing Mercur dependency is not proof of product completion.
+
+**AF-5 — Unverified areas beyond this read-only review:** Full installed third-party Mercur/Medusa internals, paid provider/live configuration, every presentational UI leaf, runtime/browser accessibility and real staging proof are NOT claimed audited; investigate as release gates, documenting evidence rather than guessing.
+
+## Revised task order and acceptance dependencies
+
+1. **IR-0 completed:** repository-controlled code review and [25 findings](dashboard-finance-integrations-code-review-2026-10-18.md) are recorded. Live provider/runtime package internals remain separate verification.
+2. **SAFE-0 early:** fail-closed production configuration and live chat/real-payment safety. Independently approved fixes only; no source branch merge until quality evidence.
+3. **AF-1 Foundation** local append-only audit/outbox + real native DB CI; **COM-1 commerce repairs** may be planned in parallel but must use separate approved code scopes. P0/P1 remain production blockers, even if AF-1 is successful.
+4. **AF-2 central Audit Index:** retains first-release priority, must not slip behind Vehicle completion.
+5. **AF-3 standalone Vehicle** own source audit/outbox + authorized index integration.
+6. **FIN-0** domain/provider specification and separate real-money policy gate; **AF-4** comprehensive integration/production readiness with actual browser, payment sandbox, dashboard bundling and migration acceptance.
 
 ## Initial acceptance matrix
 
