@@ -16,7 +16,7 @@ describe("production Medusa HTTP secrets", () => {
   })
 
   it("rejects scaffold placeholders, weak values and whitespace", () => {
-    for (const value of ["supersecret", "secret", "short", " ".repeat(36), "x".repeat(64), "supersecret".repeat(4), strongJwt + " "]) {
+    for (const value of ["supersecret", "secret", "short", " ".repeat(36), "x".repeat(64), "abcd".repeat(16), "aB3_x".repeat(12), "supersecret".repeat(4), strongJwt + " "]) {
       expect(() => resolveHttpSecrets({ ...prod, JWT_SECRET: value })).toThrow("Production requires")
     }
   })
@@ -25,14 +25,16 @@ describe("production Medusa HTTP secrets", () => {
     expect(() => resolveHttpSecrets({ ...prod, COOKIE_SECRET: strongJwt })).toThrow("Production requires")
   })
 
-  it("does not disclose secret contents in errors", () => {
+  it("throws a redacted validation error on unsafe production input", () => {
+    let errorMessage = ""
     try {
       resolveHttpSecrets({ ...prod, COOKIE_SECRET: "supersecret" })
-      throw new Error("Expected validation error")
     } catch (error) {
-      expect(String(error)).not.toContain(strongJwt)
-      expect(String(error)).not.toContain(strongCookie)
+      errorMessage = String(error)
     }
+    expect(errorMessage).toContain("Production requires")
+    expect(errorMessage).not.toContain(strongJwt)
+    expect(errorMessage).not.toContain(strongCookie)
   })
 
   it("preserves current development and test defaults", () => {

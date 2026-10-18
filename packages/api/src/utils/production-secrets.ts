@@ -8,12 +8,21 @@ type HttpSecretEnvironment = {
 const DEVELOPMENT_FALLBACK = "supersecret"
 const PLACEHOLDER_MARKERS = /(supersecret|change.?me|placeholder|example.?secret|sample.?secret|password|123456)/i
 
+// Reject obvious deterministic/repeated patterns, not a substitute for CSPRNG entropy.
+function hasRepeatedShortMotif(value: string): boolean {
+  for (let length = 1; length <= 8 && length <= value.length / 2; length++) {
+    if (value.length % length === 0 && value.slice(0, length).repeat(value.length / length) === value) {
+      return true
+    }
+  }
+  return false
+}
+
 function isUnacceptableProductionSecret(value: string | undefined): boolean {
   if (!value || value.trim() !== value) return true
   if (Buffer.byteLength(value, "utf8") < 32) return true
   if (PLACEHOLDER_MARKERS.test(value)) return true
-  // A long repeated character is not a random secret.
-  if ([...value].every((character) => character === value[0])) return true
+  if (hasRepeatedShortMotif(value)) return true
   return false
 }
 
