@@ -76,8 +76,10 @@ The issue links below track the **completion of the research deliverables only**
 
 | Inventory ID | Historical research | GitHub Issue | Issue outcome |
 | --- | --- | --- | --- |
-| HIST-A1 | A1 domain ownership / Mercur integration | [#14](https://github.com/DenizOner/DogruAdres/issues/14) | Closed / completed — research only |
-| HIST-A2 | A2 platform-core integration topology | [#15](https://github.com/DenizOner/DogruAdres/issues/15) | Closed / completed — research only |
-| HIST-A3 | A3 Bigcapital feasibility (historical, later reassessed in A3-R) | [#16](https://github.com/DenizOner/DogruAdres/issues/16) | Closed / completed — research only |
+| HIST-A1 | A1 domain ownership / Mercur integration | [#4](https://github.com/DenizOner/DogruAdres/issues/4) | Closed / completed — research only |
+| HIST-A2 | A2 platform-core integration topology | [#5](https://github.com/DenizOner/DogruAdres/issues/5) | Closed / completed — research only |
+| HIST-A3 | A3 Bigcapital feasibility (historical, later reassessed in A3-R) | [#6](https://github.com/DenizOner/DogruAdres/issues/6) | Closed / completed — research only |
 
 This register is incrementally expanded when an independently verified inventory slice is published. Current product authority remains `../REQUIREMENTS.md` and accepted ADRs; no research file or historical evidence has been deleted or shortened.
+
+Historical import correction: duplicate issue records [#14](https://github.com/DenizOner/DogruAdres/issues/14), [#15](https://github.com/DenizOner/DogruAdres/issues/15), and [#16](https://github.com/DenizOner/DogruAdres/issues/16) are closed as duplicates; they are **not** counted as separate completed tasks. Canonical records are #4–#6 above.
