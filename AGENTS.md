@@ -160,6 +160,16 @@ If project policy conflicts with a real Mercur framework/API constraint, do not 
 - At each checkpoint, report active branches, their purpose, base, current SHA, and cleanup candidates. Do not clean up branches automatically.
 - Never push to `main`, merge, force-push, deploy, or change repository settings without separate explicit authorization.
 
+## Cross-branch documentation cutover and safe integration
+
+When a feature branch predates the GitHub-only governance cutover, its `docs/dogruadres/**` source files may still exist and may contain newer product approvals or unique engineering evidence. **Do not blindly merge them back into `main`, delete them in-place, rewrite their history, or treat their presence as a second canonical rulebook.**
+
+1. Compare the exact feature-branch blobs with the canonical GitHub Issues and immutable provenance on the branch being integrated; transfer every genuinely newer accepted scope, source-specific supersession, and unique bounded test report before considering removal. An archived `REQUIREMENTS.md` is not proof its old open parameters remain unresolved after later dated Product Owner approvals.
+2. Treat accepted ADR-0005/ADR-0006 and later scoped Vehicle/Audit amendments as binding only within their recorded approval scope. The earlier ADR-0004 co-location approval is superseded. Preserve historic wording, but route agents to the latest explicit accepted decision and the current authorized implementation gate.
+3. Reconcile `docs/dogruadres/**` paths in a **separately reviewed integration/cleanup change** so that merging an old feature branch does not silently resurrect already retired governance documentation. Source blob IDs and Issue links must survive, including active AF-1, Vehicle and SAFE-0A evidence records.
+4. Independently review the complete code diff and scope, not merely the Markdown cleanup. In particular, `feature/af-1-foundation-audit-outbox` also contains `dogruadres-vehicle` source and migrations; no blanket branch merge or accidental Vehicle implementation authorization follows from a documentation migration or accepted ADR.
+5. Do not delete or rewrite an active dirty local worktree or feature branch to perform cutover. Do not merge into `main`, promote a draft PR, deploy, create fixtures, run data mutations, or alter repository protection settings without the required separate Product Owner authority.
+
 ## GitHub-centered decision, task, evidence and migration workflow
 
 **Ownership:** GitHub is the project's single collaboration platform; different GitHub record types have non-overlapping responsibilities. This is an organizational change, not authorization to build features, modify database state, merge, deploy, or bypass security gates.
