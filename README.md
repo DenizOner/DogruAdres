@@ -145,3 +145,15 @@ This project bundles its documentation as a dependency (`@mercurjs/docs`), so AI
 ## Questions
 
 If you have any issues or questions start a [GitHub discussion](https://github.com/mercurjs/mercur/discussions).
+
+## DoğruAdres GitHub project governance
+
+The DoğruAdres-specific product and engineering collaboration records are managed in this repository's GitHub Issues. The upstream Mercur template material above is a development reference, not the project's approved product specification.
+
+- [Governance migration and review gate — Issue #18](https://github.com/DenizOner/DogruAdres/issues/18)
+- [Controlled requirements baseline and provenance — Issue #141](https://github.com/DenizOner/DogruAdres/issues/141)
+- [M0 Identity / User / Organization acceptance — Issue #147](https://github.com/DenizOner/DogruAdres/issues/147)
+- [Historical IR-0 review and 25 tracked findings — Issue #153](https://github.com/DenizOner/DogruAdres/issues/153)
+- [Root AGENTS.md](AGENTS.md) for permanent agent workflow, approval boundaries and official version-matched Mercur documentation lookup.
+
+Every approved decision, proposed requirement, test outcome and implementation is tracked separately. Historical issue closure does **not** assert feature delivery; an accepted product decision does **not** imply a test passed. The current governance cleanup lives on a review branch and must not be treated as merged until Product Owner approval. Unresolved product decisions remain explicitly open; Discussions are enabled but no Discussion publication is assumed without verified access.
