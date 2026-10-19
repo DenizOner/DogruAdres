@@ -11,16 +11,13 @@ This directory temporarily contains only historical research files **not yet mig
 
 | Research ID | Pending source file |
 | --- | --- |
-| A3-R | Report(./A3-R-native-basic-accounting-reassessment.md) |
-| A4 | Report(./A4-multi-currency-pricing-and-tcmb-exchange-rates.md) |
-| A5 | Report(./A5-canonical-identity-organizations-and-authorization.md) |
-| A6 | Report(./A6-development-roadmap-and-release-sequencing.md) |
-| A7 | Report(./A7-ai-byok-and-future-oem-architecture.md) |
-| G0 / Step 1 | Report(./G0-step-1-architecture-decisions-and-documentation-gap-audit.md) |
-| G0 / Step 2 | Report(./G0-step-2-requirements-and-decision-traceability-2026-10-10.md) |
-| G0 / Step 3-R | Report(./G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) |
-| G0 / Step 3-Q | Report(./G0-step-3-Q-business-decisions-and-calendar-feasibility-2026-10-10.md) |
-| G0 / Step 3-S | Report(./G0-step-3-S-google-calendar-representative-and-try-settlement-2026-10-10.md) |
-| G0 / Step 3-T | Report(./G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) |
+| A6 | [Report](./A6-development-roadmap-and-release-sequencing.md) |
+| A7 | [Report](./A7-ai-byok-and-future-oem-architecture.md) |
+| G0 / Step 1 | [Report](./G0-step-1-architecture-decisions-and-documentation-gap-audit.md) |
+| G0 / Step 2 | [Report](./G0-step-2-requirements-and-decision-traceability-2026-10-10.md) |
+| G0 / Step 3-R | [Report](./G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) |
+| G0 / Step 3-Q | [Report](./G0-step-3-Q-business-decisions-and-calendar-feasibility-2026-10-10.md) |
+| G0 / Step 3-S | [Report](./G0-step-3-S-google-calendar-representative-and-try-settlement-2026-10-10.md) |
+| G0 / Step 3-T | [Report](./G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) |
 
 Once every remaining report has been fully transferred and independently verified, remove this temporary index and the empty research directory. Git commit history retains the original source provenance.
