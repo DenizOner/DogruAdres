@@ -1,6 +1,6 @@
 # Architecture decision records
 
-This directory stores the major project decisions that affect architecture, ownership, provider boundaries, or upgrade safety.
+This directory is temporary during migration. Accepted architectural decisions now have their canonical records in GitHub Issues; the older source documents remain retrievable in Git history.
 
 ## What an ADR is
 
@@ -40,6 +40,10 @@ Use one of the following statuses:
 
 ## ADR index
 
-- `ADR-0001-mercur-as-marketplace-engine.md`
-- `ADR-0002-automotive-domain-isolation.md`
-- `ADR-0003-mercur-core-modification-policy.md`
+- [ADR-0001 — Accepted](https://github.com/DenizOner/DogruAdres/issues/29)
+- [ADR-0002 — Accepted](https://github.com/DenizOner/DogruAdres/issues/30)
+- [ADR-0003 — Accepted](https://github.com/DenizOner/DogruAdres/issues/31)
+- [ADR-0004 — Superseded](https://github.com/DenizOner/DogruAdres/issues/32)
+- [ADR-0005 — Accepted](https://github.com/DenizOner/DogruAdres/issues/33)
+- [ADR-0006 — Accepted](https://github.com/DenizOner/DogruAdres/issues/34)
+- [ADR-0007 — Accepted](https://github.com/DenizOner/DogruAdres/issues/35)
