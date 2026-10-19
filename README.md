@@ -160,6 +160,7 @@ The DoğruAdres-specific product and engineering collaboration records are manag
 - [Vehicle-MVP approved scope and blocked design gate — Issue #158](https://github.com/DenizOner/DogruAdres/issues/158)
 - [Later Vehicle/Audit approved source deltas — DA-AUTO-006 #122](https://github.com/DenizOner/DogruAdres/issues/122) and [DA-SEC-007 #51](https://github.com/DenizOner/DogruAdres/issues/51) / [DA-SEC-009 #53](https://github.com/DenizOner/DogruAdres/issues/53)
 - [R0 architecture consolidation: full historical evidence and review gate — Issue #206](https://github.com/DenizOner/DogruAdres/issues/206)
+- [Historical research archive router and complete original index — Issue #17](https://github.com/DenizOner/DogruAdres/issues/17#issuecomment-6276057019)
 - [Retired historical planning router — Issue #146](https://github.com/DenizOner/DogruAdres/issues/146#issuecomment-6275919883)
 - [Draft GitHub-only docs cutover — PR #205](https://github.com/DenizOner/DogruAdres/pull/205) (requires separate Product Owner merge authorization)
 - [Root AGENTS.md](AGENTS.md) for permanent agent workflow, approval boundaries and official version-matched Mercur documentation lookup.
