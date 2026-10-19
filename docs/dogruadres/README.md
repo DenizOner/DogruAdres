@@ -22,7 +22,7 @@ These documents are intentionally small and opinionated. They define how the pro
 ## Read this first
 
 - `README.md` — router for the project docs
-- [REQUIREMENTS.md](./REQUIREMENTS.md) — draft product requirements, decision classifications, provenance and open/deferred questions; pending product-owner review.
+- [GitHub requirements governance #141](https://github.com/DenizOner/DogruAdres/issues/141) — controlled requirements baseline, cross-domain invariants, open/deferred questions; each DA-* ID has one canonical `[DEC DA-*]` Issue.
 - [AGENTS.md](../../AGENTS.md) — engineering constitution, agent roles and GitHub workflow (single canonical policy)
 - `ARCHITECTURE.md` — high-level ownership and integration model
 - `MERCUR-INTEGRATION.md` — extension and compatibility rules
@@ -31,7 +31,7 @@ These documents are intentionally small and opinionated. They define how the pro
 
 ## ADRs and plans
 
-- ADRs: `./adr/README.md`
+- ADRs: [canonical architecture decisions](https://github.com/DenizOner/DogruAdres/issues/29) (ADR-0001 through ADR-0007 are indexed in root `AGENTS.md`)
 - Plans: `./plans/README.md`
 
 ## Authority and source hierarchy
