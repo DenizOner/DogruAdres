@@ -23,7 +23,7 @@ These documents are intentionally small and opinionated. They define how the pro
 
 - `README.md` — router for the project docs
 - [REQUIREMENTS.md](./REQUIREMENTS.md) — draft product requirements, decision classifications, provenance and open/deferred questions; pending product-owner review.
-- `PRINCIPLES.md` — engineering constitution
+- [AGENTS.md](../../AGENTS.md) — engineering constitution, agent roles and GitHub workflow (single canonical policy)
 - `ARCHITECTURE.md` — high-level ownership and integration model
 - `MERCUR-INTEGRATION.md` — extension and compatibility rules
 - `UPGRADE-POLICY.md` — upgrade workflow and compatibility re-review
