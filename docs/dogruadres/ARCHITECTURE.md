@@ -2,7 +2,7 @@
 
 ## Current architecture
 
-The repository uses Mercur 2.3.7 + Medusa 2.21.2. Mercur provides the marketplace platform, the admin and vendor dashboards, and the multi-vendor runtime architecture. The project-owned `dogruadresAccess` module now provides canonical Person/actor mappings, Organizations, memberships, invitation records, transactional security audit events and protected API routes under `/dogruadres`. Organization authorization resolves the authenticated actor, mapped Person, active membership, policy and Organization scope on every request. Manual Vehicle Management remains unimplemented and is a later checkpoint; approved ownership and uniqueness requirements are in REQUIREMENTS.md.
+The repository uses Mercur 2.3.7 + Medusa 2.21.2. Mercur provides the marketplace platform, the admin and vendor dashboards, and the multi-vendor runtime architecture. The project-owned `dogruadresAccess` module now provides canonical Person/actor mappings, Organizations, memberships, invitation records, transactional security audit events and protected API routes under `/dogruadres`. Organization authorization resolves the authenticated actor, mapped Person, active membership, policy and Organization scope on every request. Manual Vehicle Management remains unimplemented and is a later checkpoint; approved Organization-owned vehicle access and plate/VIN uniqueness requirements are recorded in [DA-AUTO-006](https://github.com/DenizOner/DogruAdres/issues/122); supporting decisions and unresolved fields remain in the linked DA-AUTO records.
 
 ## Ownership boundaries
 
