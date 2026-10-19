@@ -110,9 +110,9 @@ Provenance sözlüğü:
 
 - **G0-S2 / PO-***: [G0 Step 2 §2.2](https://github.com/DenizOner/DogruAdres/issues/13) içindeki chat-provided owner briefing kodları. Original transcript/message permalink verilmemiştir; bağımsız original conversation quote/date uydurulmaz. APPROVED kayıtlar bu belgede kaydedilmiş briefing kanıtını taşır; review bu izi teyit eder.
 - **G0-S3**: bu görevin 'Create the Authoritative Product Requirements Draft' talimatı; §3.A–I açık correction/decision briefing’i; §6 coverage ve §1 dar write authorization. 2026-10-10 bu draft hazırlanma tarihidir; önceki onay tarihi değildir. Message ID/permalink sağlanmadı.
-- **G0-S3-R**: [coverage/approval audit](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md), özellikle §§4/7/8/9/10. Findings F01–F22 recommendation specification’dır; bu rapor requirements acceptance değildir.
+- **G0-S3-R**: [coverage/approval audit](https://github.com/DenizOner/DogruAdres/issues/19), özellikle §§4/7/8/9/10. Findings F01–F22 recommendation specification’dır; bu rapor requirements acceptance değildir.
 - **G0-S3-P**: current “Controlled Requirements Amendment” görevi §4 safe corrections, §5 cross-conversation briefing ve §1/6/7 dar amendment yetkisi. Explicit product-owner instruction current source’tur; historical approval dates/original messages verilmedi. Tarih2026-10-10 bu amendment’ın hazırlama tarihidir. Uncertain historical scope PROPOSED/OPEN annotation’da görünür kalır.
-- **G0-S3-Q**: current “Final Business-Decision Corrections and Calendar Feasibility” §3 C-01, §4 C-02, §5 C-04 ve §6 MSA-only açık owner decisions; [archived reconciliation](research/G0-step-3-Q-business-decisions-and-calendar-feasibility-2026-10-10.md) §§2–8. 2026-10-10 hazırlama/inceleme tarihi, invented historical approval date/permalink değil. Calendar sources feasibility evidence’dır, provider acceptance değildir.
+- **G0-S3-Q**: current “Final Business-Decision Corrections and Calendar Feasibility” §3 C-01, §4 C-02, §5 C-04 ve §6 MSA-only açık owner decisions; [archived reconciliation](https://github.com/DenizOner/DogruAdres/issues/20) §§2–8. 2026-10-10 hazırlama/inceleme tarihi, invented historical approval date/permalink değil. Calendar sources feasibility evidence’dır, provider acceptance değildir.
 - **G0-S3-S**: current explicit owner §§3/4/5 approves Google preferred source/automatic sync/default payout calendar,12-calendar-month first-of-effective-month period+ZERO-atT turnover, initial Turkey-scoped mandatoryTRY charge/settlement/payout; [report](research/G0-step-3-S-google-calendar-representative-and-try-settlement-2026-10-10.md) §§3–8 separates live publicICS evidence from unverified authenticatedAPI and operational/provider choices. No historical approval date/permalink invented.
 - **G0-S3-T**: current explicit owner §§3/4/5: selectableA/B/C withB default, fullfirstpartial-month monthlytarget/no day-proration, visualcommunication APPROVED; [report](research/G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) §§3–6. HistoricalS/Q/R unresolved statements remain historical, currentregister corrected; no approvaldate/permalink invented.
 - **P01–P09**: G0-S2 §8’in proposed architecture topics’idir; accepted veya oluşturulmuş ADR değildir. Requirements owner veya module boundary onayı yerine geçmez.
@@ -539,7 +539,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Authorized audit surface; security governance.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A2](https://github.com/DenizOner/DogruAdres/issues/5) §8 Audit records; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §8; [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F16.
+- **Research ve exact section:** [A2](https://github.com/DenizOner/DogruAdres/issues/5) §8 Audit records; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §8; [G0 Step 3-R](https://github.com/DenizOner/DogruAdres/issues/19) §4 F16.
 - **Conversation provenance:** G0-S3-P §4 Audit, Search and Data Lifecycle; S3-R §3.F detailed historical approval uncertainty; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı.
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -697,7 +697,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres search application capability; each domain retains data authority.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 Notifications/audit/search row; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §3 advanced search ertelenebilir; [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F17.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 Notifications/audit/search row; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §3 advanced search ertelenebilir; [G0 Step 3-R](https://github.com/DenizOner/DogruAdres/issues/19) §4 F17.
 - **Conversation provenance:** G0-S3-P §4 Audit, Search and Data Lifecycle; S3-R §3.F coverage uncertainty; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı.
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -992,7 +992,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Store commercial policy / authorized configuration.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F12; [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 customer segment pricing bağlamı (threshold approval kanıtı değil).
+- **Research ve exact section:** [G0 Step 3-R](https://github.com/DenizOner/DogruAdres/issues/19) §4 F12; [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 customer segment pricing bağlamı (threshold approval kanıtı değil).
 - **Conversation provenance:** G0-S3-P §4 Store Commercial Rules; S3-R §3.D historical approval-scope uncertainty retained; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı.; G0-S3-Q §5 C-04 current explicit Store-Owned Commercial Settings decision; eski historical scope uncertainty bu açık kapsam için resolved, eski onay tarihi icat edilmedi; G0-S3-S §5 limited commercial/mandatoryTRY cross-reference; numerical thresholds unchanged
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -1010,7 +1010,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Personal user preferences / shared UX; Offer pricing authority ve marketplace finance currency contracts ayrı. Intended ownership physical module/database boundary kararı değildir.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F13; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §3/§7 source vs settlement; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §3 localization hedefi.
+- **Research ve exact section:** [G0 Step 3-R](https://github.com/DenizOner/DogruAdres/issues/19) §4 F13; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §3/§7 source vs settlement; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §3 localization hedefi.
 - **Conversation provenance:** G0-S3-P §4 Store Commercial Rules; S3-R §3.D historical preference scope uncertainty; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı.; G0-S3-Q §5 C-04 current explicit User-Owned Preferences and currency boundaries; historical C-04 uncertainty bu kapsam için superseded; G0-S3-S §5 user ownership/TRY contract and display vs charge distinction
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -1134,7 +1134,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Marketplace finance / Store payout policy.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A6](https://github.com/DenizOner/DogruAdres/issues/10) §§6–9 payout request önerisi; [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F03/§7.2.; [G0 Step 3-Q](research/G0-step-3-Q-business-decisions-and-calendar-feasibility-2026-10-10.md) §§3–5 resmî calendar evidence/limitations; [G0 Step 3-S](research/G0-step-3-S-google-calendar-representative-and-try-settlement-2026-10-10.md) §§3–5 Google identifier/API/public-feed/official-calendar evidence and limitations; [G0 Step 3-T](research/G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) §§3/6 decision semantics and historical reconciliation
+- **Research ve exact section:** [A6](https://github.com/DenizOner/DogruAdres/issues/10) §§6–9 payout request önerisi; [G0 Step 3-R](https://github.com/DenizOner/DogruAdres/issues/19) §4 F03/§7.2.; [G0 Step 3-Q](https://github.com/DenizOner/DogruAdres/issues/20) §§3–5 resmî calendar evidence/limitations; [G0 Step 3-S](research/G0-step-3-S-google-calendar-representative-and-try-settlement-2026-10-10.md) §§3–5 Google identifier/API/public-feed/official-calendar evidence and limitations; [G0 Step 3-T](research/G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) §§3/6 decision semantics and historical reconciliation
 - **Conversation provenance:** G0-S3-P §4 Payouts; S3-R §3.B; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı.; G0-S3-Q §3 C-01 current explicit owner decision; önceki Friday/holiday confirmation scope bu karar kapsamında superseded; G0-S3-S §3 C-01 explicit preferred Google source/default Friday/next eligible day/default non-processing half-days/configurability decisions; G0-S3-T §3 current explicit owner approval: A/B/C adjustment choices, B initial default; existing Google/half-day/funds/slider safeguards retained
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -1152,7 +1152,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Marketplace finance / authorized receipt access.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F04; [A1](https://github.com/DenizOner/DogruAdres/issues/4) §8 financial privacy.
+- **Research ve exact section:** [G0 Step 3-R](https://github.com/DenizOner/DogruAdres/issues/19) §4 F04; [A1](https://github.com/DenizOner/DogruAdres/issues/4) §8 financial privacy.
 - **Conversation provenance:** G0-S3-P §4 Payouts; S3-R §3.B; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı.
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -1446,7 +1446,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Representative financial-entitlement domain; Platform Loyalty shared eligibility consumer.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §8 net-product spend historical ifade; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §5/§12 senaryo10 historical read (earnings period kanıtı değil); [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F05.; [G0 Step 3-T](research/G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) §4 current decision vs former open parameter
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §8 net-product spend historical ifade; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §5/§12 senaryo10 historical read (earnings period kanıtı değil); [G0 Step 3-R](https://github.com/DenizOner/DogruAdres/issues/19) §4 F05.; [G0 Step 3-T](research/G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) §4 current decision vs former open parameter
 - **Conversation provenance:** G0-S3-P §4 Representative Compensation; S3-R §3.C; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı.; G0-S3-Q §4 Twelve-Month Period: discussed12months retained; explicit transfer cutoff approved, new period details require confirmation; G0-S3-S §4 C-02 explicit twelve-calendar-month first-day start/last-day end, ZERO-at-transfer turnover and no retroactive earnings; prior proposal/start uncertainty superseded; G0-S3-T §4 explicit full first partial-month target/no day proration; illustrativeTRY100000 not actual target approval
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -1464,7 +1464,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Representative financial-entitlement policy; authorized corrections.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F07; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §15 historical refund; [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §6 correction ayrımı.
+- **Research ve exact section:** [G0 Step 3-R](https://github.com/DenizOner/DogruAdres/issues/19) §4 F07; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §15 historical refund; [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §6 correction ayrımı.
 - **Conversation provenance:** G0-S3-P §4 Representative Compensation; S3-R §3.C; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı.
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -2065,7 +2065,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Each record domain; authorized lifecycle policy.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 lifecycle ve §8 cascade; [A2](https://github.com/DenizOner/DogruAdres/issues/5) §8 permanent deletion status/reason; [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F18.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 lifecycle ve §8 cascade; [A2](https://github.com/DenizOner/DogruAdres/issues/5) §8 permanent deletion status/reason; [G0 Step 3-R](https://github.com/DenizOner/DogruAdres/issues/19) §4 F18.
 - **Conversation provenance:** G0-S3-P §4 Audit, Search and Data Lifecycle; S3-R §3.F exact historical approval uncertainty; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı; G0-S4-C §6 latest explicit owner approval, historical uncertainty bu business scope için çözüldü.
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -2170,7 +2170,7 @@ Historical v1.0 whole-record distribution: **77 APPROVED,28 PROPOSED,3 OPEN,2 DE
 
 Bu altbölüm historical S3-P amendment durumunu kaydeder; Friday/C-04/Arabic variant ifadeleri o tarihteki scope’tur. Current G0-S3-Q §9.6 ve §7/11 bunların belirtilen kısımlarını supersede eder; archived reports değiştirilmez.
 
-Current owner task “Controlled Requirements Amendment” §4/5 kaynak alınarak [G0-S3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) findings uygulandı. Yazım yalnız bu dosyada; archived audit/specification değişmedi. Bu amendment belge acceptance’i veya new ADR/implementation authorization değildir.
+Current owner task “Controlled Requirements Amendment” §4/5 kaynak alınarak [G0-S3-R](https://github.com/DenizOner/DogruAdres/issues/19) findings uygulandı. Yazım yalnız bu dosyada; archived audit/specification değişmedi. Bu amendment belge acceptance’i veya new ADR/implementation authorization değildir.
 
 | Finding | Current documentation outcome | Record / remaining gate |
 |---|---|---|
@@ -2216,7 +2216,7 @@ Current owner §§3–6 kapsamında aşağıdaki corrections uygulandı; draft a
 | C-04 | APPROVED G0-S3-S§5 initialTurkeyscope mandatoryTRY checkout/cardcharge/settlement/payout; Offer source and user preferences preserved. Store threshold/conversion/persistence operational details O-06/07 OPEN | No foreign charge fromdisplay/source; finalTRY clearaccepted; historicaluncertainty superseded current scope |
 | MSA-only | DA-UX-001, O-18 | TR/EN/MSA +RTL, no separate Arabic dialect; historical S3-P variant ambiguity CLOSED/SUPERSEDED, locales/accessibility/translation tooling OPEN |
 
-Current distributions 75/29/4/1 total109; prior S3-P73/31/4/1. No original APPROVED downgrade, implementation statuses all NOT_ASSESSED. Calendar technical evidence, recommendations and current owner decisions are separated in [G0-S3-Q report](research/G0-step-3-Q-business-decisions-and-calendar-feasibility-2026-10-10.md) §§3–9. No acceptance dates/transcript permalinks invented.
+Current distributions 75/29/4/1 total109; prior S3-P73/31/4/1. No original APPROVED downgrade, implementation statuses all NOT_ASSESSED. Calendar technical evidence, recommendations and current owner decisions are separated in [G0-S3-Q report](https://github.com/DenizOner/DogruAdres/issues/20) §§3–9. No acceptance dates/transcript permalinks invented.
 
 ### 9.7. G0-S3-S explicit calendar/period/TRY policy decisions
 
@@ -2344,7 +2344,7 @@ Araştırma linkleri historical evidence’dır; bu liste onların recommendatio
 - [A7](https://github.com/DenizOner/DogruAdres/issues/11) — historical research; ilgili numbered section’lar §7’de.
 - [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) — historical research; ilgili numbered section’lar §7’de.
 - [G0 Step 2](https://github.com/DenizOner/DogruAdres/issues/13) — §2.2 briefing, §4 static evidence, §6 original 92 rows, §8 proposed P01–P09, §9 PoC boundaries, §10 open/deferred policies.
-- [G0 Step 3-Q](research/G0-step-3-Q-business-decisions-and-calendar-feasibility-2026-10-10.md) — current decisions/calendar feasibility, archived analysis; baseline acceptance değildir.
+- [G0 Step 3-Q](https://github.com/DenizOner/DogruAdres/issues/20) — current decisions/calendar feasibility, archived analysis; baseline acceptance değildir.
 - [G0 Step 3-S](research/G0-step-3-S-google-calendar-representative-and-try-settlement-2026-10-10.md) — currentcalendar/representative/TRY decisionevidence, archivedanalysis; baselineacceptance değil.
 - [G0 Step 3-T](research/G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) — current decisions/stale-register reconciliation, archived analysis; no baseline acceptance.
 - [Research router](research/README.md) — Authority and Approval Boundaries; Research Lifecycle.
