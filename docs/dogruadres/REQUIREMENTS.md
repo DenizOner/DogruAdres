@@ -12,7 +12,7 @@ Kaynak önceliği: güncel açık ürün sahibi kararı → [AGENTS.md](../../AG
 
 DoğruAdres, ortak yetkilendirilmiş domain data kullanan çok-uygulamalı bir business platform’dur; marketplace önemli uygulamalarından biridir. Products/Inventory/Vehicle/Quotations/Accounting ve gelecekteki integrations yalnız marketplace’in amacı için var sayılmaz. Shared data, private Organization records’ın global/public paylaşımı veya yetki mirası değildir. Mercur accepted marketplace engine olarak korunur; bu kapsam ifadesi ADR-0001/0002/0003 veya physical domain/database ownership boundaries değiştirmez (G0-S3-P §5 Platform Scope).
 
-Birincil hazırlık kaynağı [G0 Step 2 §6 tam matrisi](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) içindeki 92 kayıttır. [G0 Step 1 §4](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) ve A1–A7/A3-R tam rapor içerikleri, mevcut governance ve accepted ADR’ler ayrıca incelenmiştir. DESIGN yalnız proposed görsel referanstır. Araştırmaların tarihsel önerileri ve kanıt sınırlamaları değişmeden korunur.
+Birincil hazırlık kaynağı [G0 Step 2 §6 tam matrisi](https://github.com/DenizOner/DogruAdres/issues/13) içindeki 92 kayıttır. [G0 Step 1 §4](https://github.com/DenizOner/DogruAdres/issues/12) ve A1–A7/A3-R tam rapor içerikleri, mevcut governance ve accepted ADR’ler ayrıca incelenmiştir. DESIGN yalnız proposed görsel referanstır. Araştırmaların tarihsel önerileri ve kanıt sınırlamaları değişmeden korunur.
 
 Belge sınırları:
 
@@ -108,7 +108,7 @@ Her kayıt: normatif davranış, intended owner, bağımsız decision/evidence, 
 
 Provenance sözlüğü:
 
-- **G0-S2 / PO-***: [G0 Step 2 §2.2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) içindeki chat-provided owner briefing kodları. Original transcript/message permalink verilmemiştir; bağımsız original conversation quote/date uydurulmaz. APPROVED kayıtlar bu belgede kaydedilmiş briefing kanıtını taşır; review bu izi teyit eder.
+- **G0-S2 / PO-***: [G0 Step 2 §2.2](https://github.com/DenizOner/DogruAdres/issues/13) içindeki chat-provided owner briefing kodları. Original transcript/message permalink verilmemiştir; bağımsız original conversation quote/date uydurulmaz. APPROVED kayıtlar bu belgede kaydedilmiş briefing kanıtını taşır; review bu izi teyit eder.
 - **G0-S3**: bu görevin 'Create the Authoritative Product Requirements Draft' talimatı; §3.A–I açık correction/decision briefing’i; §6 coverage ve §1 dar write authorization. 2026-10-10 bu draft hazırlanma tarihidir; önceki onay tarihi değildir. Message ID/permalink sağlanmadı.
 - **G0-S3-R**: [coverage/approval audit](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md), özellikle §§4/7/8/9/10. Findings F01–F22 recommendation specification’dır; bu rapor requirements acceptance değildir.
 - **G0-S3-P**: current “Controlled Requirements Amendment” görevi §4 safe corrections, §5 cross-conversation briefing ve §1/6/7 dar amendment yetkisi. Explicit product-owner instruction current source’tur; historical approval dates/original messages verilmedi. Tarih2026-10-10 bu amendment’ın hazırlama tarihidir. Uncertain historical scope PROPOSED/OPEN annotation’da görünür kalır.
@@ -138,7 +138,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §4; [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4.
 - **Conversation provenance:** PO-ID.1.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.1, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.1, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Actor eşleme.
 - **ADR / architecture relation:** P02. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -154,9 +154,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres Identity / kişisel alan.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§4–5; [A6](research/A6-development-roadmap-and-release-sequencing.md) §4.
+- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§4–5; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §4.
 - **Conversation provenance:** PO-ID.4; PO-MEY.1.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.1, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.1, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-001.
 - **ADR / architecture relation:** P02. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -171,9 +171,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres Identity / kişisel alan.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §6; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §6; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** PO-ID.6; PO-VER.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.1, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.1, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Doğrulama state modeli.
 - **ADR / architecture relation:** P02/P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -189,9 +189,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres Identity / kişisel alan.
 - **Decision / evidence:** DEFERRED / VERIFIED.
-- **Research ve exact section:** [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §§6,10; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §15.
+- **Research ve exact section:** [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §§6,10; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §15.
 - **Conversation provenance:** PO-VER; G0-S3 §3.E.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.1, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.1, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DEFERRED / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-003.
 - **ADR / architecture relation:** P02/P03; sağlayıcı ADR’si sonra. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -206,9 +206,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres Identity / kişisel alan.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §15.
+- **Research ve exact section:** [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §15.
 - **Conversation provenance:** PO-BAD.1–2; G0-S3 §3.B/G.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.1, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.1, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-003; DA-LOY-001.
 - **ADR / architecture relation:** P02/P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -223,9 +223,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres Identity / kişisel alan.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4; [A6](research/A6-development-roadmap-and-release-sequencing.md) §3.
+- **Research ve exact section:** [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §3.
 - **Conversation provenance:** PO-BAD.3–4; G0-S3 §3.G.; G0-S3-P §4 Notifications and Session Lock; G0-S3-R F19.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.1, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.1, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-005; DA-APP-005.
 - **ADR / architecture relation:** P03/P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -244,7 +244,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§4–5; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§4–7.
 - **Conversation provenance:** PO-ID.2.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.2, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.2, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-001.
 - **ADR / architecture relation:** P02. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -262,7 +262,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§4–5; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §3.
 - **Conversation provenance:** PO-ID.3; PO-MKT.2.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.2, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.2, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Organization–Seller link.
 - **ADR / architecture relation:** P01/P02; ADR-0001. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -279,7 +279,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §6.
 - **Conversation provenance:** PO-ID.5.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.2, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.2, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-003.
 - **ADR / architecture relation:** P02/P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -297,7 +297,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§7,12,15.
 - **Conversation provenance:** PO-BAD.2 protected Owner kavramı; current explicit Product Owner instruction in G1 / Step 0B task resolves multiple-Owner and last-active-Owner role-management rules. No separate message permalink or approval timestamp was provided.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.2, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.2, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ORG-001.
 - **ADR / architecture relation:** P02/P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -314,7 +314,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§5,7–8.
 - **Conversation provenance:** PO-ID.4.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.2, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.2, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ORG-001–002.
 - **ADR / architecture relation:** P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -331,7 +331,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§4–5; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §5.
 - **Conversation provenance:** PO-ID.4 kapsam ayrımını onaylar.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.2, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.2, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ORG-005.
 - **ADR / architecture relation:** P01/P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -348,7 +348,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§4–5; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §4.
 - **Conversation provenance:** PO-ID.3,6; PO-VER.; G0-S3-P §5 Organization Verification; G0-S3-R additional reconciliation.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.2, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.2, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-003/004; DA-ORG-002; DA-MKT-009.
 - **ADR / architecture relation:** P02. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -363,7 +363,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres Organization / Membership; Store lifecycle Mercur adapter.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§5,7,12,15; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§5,7,12,15; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** PO-BAD.2; G0-S3 §3.G.
 - **Primary trace:** G0-S3 ek kayıt; §9.2 coverage/split gerekçesi.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -402,7 +402,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§5,8; yerel T02.
 - **Conversation provenance:** PO-ID.7.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.3, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.3, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** P01/P02.
 - **ADR / architecture relation:** P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -419,7 +419,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §8; SECURITY Mandatory rules.
 - **Conversation provenance:** PO-ID.8.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.3, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.3, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-SEC-001.
 - **ADR / architecture relation:** P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -436,7 +436,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§4–5,8.
 - **Conversation provenance:** PO-ID.4,7–8.; G0-S3-P §4 Other Mixed-Status Records; G0-S3-R F21/F22.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.3, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.3, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-001; DA-ORG-001.
 - **ADR / architecture relation:** P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -452,9 +452,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres authorization / session / security.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A6](research/A6-development-roadmap-and-release-sequencing.md) §3; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §§4,6.
+- **Research ve exact section:** [A6](https://github.com/DenizOner/DogruAdres/issues/10) §3; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §§4,6.
 - **Conversation provenance:** PO-ID.9–11.; G0-S3-P §4 Notifications and Session Lock; G0-S3-R F19.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.3, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.3, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Session state.
 - **ADR / architecture relation:** P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -469,9 +469,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres authorization / session / security.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§8,12; [A7](research/A7-ai-byok-and-future-oem-architecture.md) §8.
+- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§8,12; [A7](https://github.com/DenizOner/DogruAdres/issues/11) §8.
 - **Conversation provenance:** PO-ID.8,11.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.3, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.3, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-SEC-001–004.
 - **ADR / architecture relation:** P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -488,7 +488,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §8; [A1](https://github.com/DenizOner/DogruAdres/issues/4) §8.
 - **Conversation provenance:** PO-ID.8.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.3, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.3, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-SEC-002,005.
 - **ADR / architecture relation:** P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -505,7 +505,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
 - **Research ve exact section:** [A2](https://github.com/DenizOner/DogruAdres/issues/5) §8; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §8; SECURITY.
 - **Conversation provenance:** PO-ID.8; doğrudan ayrıntı onayı yok.; G0-S3-P §4 Audit, Search and Data Lifecycle; G0-S3-R F15.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.3, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.3, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Audit event modeli.
 - **ADR / architecture relation:** P03/P06. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -524,7 +524,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§5,8,15.
 - **Conversation provenance:** PO-ID.4.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.3, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.3, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ORG-005.
 - **ADR / architecture relation:** P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -562,7 +562,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§4,7; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §7.
 - **Conversation provenance:** PO-ID.4; PO-LOY.2.; G0-S3-P §4 Applications; G0-S3-R F14.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.4, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.4, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-SEC-001; P01.
 - **ADR / architecture relation:** P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -577,9 +577,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres application lifecycle / shell / notification; teslimat için ürün sahibi.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [A6](research/A6-development-roadmap-and-release-sequencing.md) §3.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §3.
 - **Conversation provenance:** ; G0-S3-P §4 Applications; G0-S3-R F14.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.4, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.4, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-APP-001.
 - **ADR / architecture relation:** P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -596,7 +596,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §7; [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §9.
 - **Conversation provenance:** PO-ACC.5 checkout bağımsızlığı.; G0-S3-P §4 Applications; G0-S3-R F14/F18.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.4, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.4, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-DATA-001; app lifecycle.
 - **ADR / architecture relation:** P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -611,9 +611,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres application lifecycle / shell / notification; teslimat için ürün sahibi.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A6](research/A6-development-roadmap-and-release-sequencing.md) §3.
+- **Research ve exact section:** [A6](https://github.com/DenizOner/DogruAdres/issues/10) §3.
 - **Conversation provenance:** PO-ID.9.; G0-S3-P §4 Notifications and Session Lock; G0-S3-R F19.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.4, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.4, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Notification kaynakları.
 - **ADR / architecture relation:** P04; UI için ayrı ADR gerekmez. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -628,9 +628,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres application lifecycle / shell / notification; teslimat için ürün sahibi.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A2](https://github.com/DenizOner/DogruAdres/issues/5) §§6–8; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A2](https://github.com/DenizOner/DogruAdres/issues/5) §§6–8; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** PO-BAD.4.; G0-S3-P §4 Notifications and Session Lock; G0-S3-R F19.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.4, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.4, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-006.
 - **ADR / architecture relation:** P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -646,9 +646,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres application lifecycle / shell / notification; teslimat için ürün sahibi.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A6](research/A6-development-roadmap-and-release-sequencing.md) §§10–11; [DESIGN](../../DESIGN.md) §§19–22.
+- **Research ve exact section:** [A6](https://github.com/DenizOner/DogruAdres/issues/10) §§10–11; [DESIGN](../../DESIGN.md) §§19–22.
 - **Conversation provenance:** PO-DOC.3.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.4, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.4, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-GOV / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Domain requirements/acceptance.
 - **ADR / architecture relation:** ADR gerekmez. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -663,9 +663,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres application lifecycle / shell / notification; teslimat için ürün sahibi.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A6](research/A6-development-roadmap-and-release-sequencing.md) §§7–10; plans/README When a plan is required.
+- **Research ve exact section:** [A6](https://github.com/DenizOner/DogruAdres/issues/10) §§7–10; plans/README When a plan is required.
 - **Conversation provenance:** PO-DOC.1–2.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.4, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.4, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-GOV / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Her dilimin scope/acceptance onayı.
 - **ADR / architecture relation:** ADR gerekmez; plans/TEMPLATE.md. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -680,7 +680,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres application lifecycle / shell / notification; teslimat için ürün sahibi.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 (App launcher kişisel düzeni); [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4 (Launcher sırası).
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 (App launcher kişisel düzeni); [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4 (Launcher sırası).
 - **Conversation provenance:** G0-S3 §6 kapsam kontrolü; bağımsız ayrıntılı approval izi yok.; G0-S3-P §4 Applications; G0-S3-R F14.
 - **Primary trace:** G0-S3 ek kayıt; §9.2 coverage/split gerekçesi.
 - **Delivery horizon / implementation:** H-FOUNDATION / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -697,7 +697,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres search application capability; each domain retains data authority.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 Notifications/audit/search row; [A6](research/A6-development-roadmap-and-release-sequencing.md) §3 advanced search ertelenebilir; [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F17.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 Notifications/audit/search row; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §3 advanced search ertelenebilir; [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F17.
 - **Conversation provenance:** G0-S3-P §4 Audit, Search and Data Lifecycle; S3-R §3.F coverage uncertainty; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı.
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -718,7 +718,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4,7; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §3.
 - **Conversation provenance:** PO-AI.5 bağımsızlık; ayrıntı onayı yok.; G0-S3-P §4 Other Mixed-Status Records; G0-S3-R F21/F22.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.5, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.5, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ORG-001; DA-SEC-006.
 - **ADR / architecture relation:** P01; ADR-0002. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -736,7 +736,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§4,7.
 - **Conversation provenance:** Yok.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.5, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.5, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-CAT-001; DA-DATA-002.
 - **ADR / architecture relation:** P01. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -753,7 +753,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4; [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §5.
 - **Conversation provenance:** Yok.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.5, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.5, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-SEC-002.
 - **ADR / architecture relation:** P01/P07. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -770,7 +770,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§4,6; yerel T04.
 - **Conversation provenance:** PO-AI.5 bağımsız uygulamalar.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.5, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.5, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Offer inventory; DA-ORG-006.
 - **ADR / architecture relation:** P01; ADR-0001/2. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -785,9 +785,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres private catalog / Contacts / Inventory; commerce catalog Mercur/Medusa.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A7](research/A7-ai-byok-and-future-oem-architecture.md) §§7,10.
+- **Research ve exact section:** [A7](https://github.com/DenizOner/DogruAdres/issues/11) §§7,10.
 - **Conversation provenance:** PO-AI.5.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.5, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.5, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Private ürün/stok modeli.
 - **ADR / architecture relation:** P08; ADR-0002. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -806,7 +806,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A4](https://github.com/DenizOner/DogruAdres/issues/8) §16; ADR-0001/3.
 - **Conversation provenance:** PO-MKT.1.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.6, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.6, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-GOV / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Framework extension ilkesi.
 - **ADR / architecture relation:** ADR-0001/3. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -823,7 +823,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A4](https://github.com/DenizOner/DogruAdres/issues/8) §§3,5–7.
 - **Conversation provenance:** PO-MKT.4–5.; G0-S3-Q §5 C-04 Offer/Product Pricing Authority; G0-S3-S §5 explicit source currencies vs mandatoryTRY scope
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.6, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.6, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ORG-002; price ownership.
 - **ADR / architecture relation:** P05. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -840,7 +840,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A4](https://github.com/DenizOner/DogruAdres/issues/8) §§6–7,12; yerel T03/04.
 - **Conversation provenance:** PO-MKT.6; G0-S3 §3.C.; G0-S3-Q §5 C-04 currency layers; approval sınırları korundu; G0-S3-S §5 seven-layer contract/consistency and existing TRY publication compatibility
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.6, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.6, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-MKT-002.; DA-MKT-013; DA-FIN-002. O-21 CLOSED: initial TRY payment/settlement currency için çözümlenmiş tarihsel karar referansıdır; açık karar bağımlılığı değildir.
 - **ADR / architecture relation:** P05. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -857,7 +857,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A4](https://github.com/DenizOner/DogruAdres/issues/8) §§8–10.
 - **Conversation provenance:** PO-MKT.8.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.6, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.6, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** FX provenance.
 - **ADR / architecture relation:** P05. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -874,7 +874,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
 - **Research ve exact section:** [A4](https://github.com/DenizOner/DogruAdres/issues/8) §§8–10.
 - **Conversation provenance:** PO-MKT.5.; G0-S3-P §4 Other Mixed-Status Records; G0-S3-R F21/F22.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.6, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.6, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-MKT-004.
 - **ADR / architecture relation:** P05. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -892,7 +892,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A4](https://github.com/DenizOner/DogruAdres/issues/8) §14.
 - **Conversation provenance:** PO-MKT.9.; G0-S3-Q §5 C-04 Presentation Example; G0-S3-S §5 display/publishedTRY history and consistency
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.6, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.6, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-MKT-002,005.
 - **ADR / architecture relation:** P05. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -909,7 +909,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A4](https://github.com/DenizOner/DogruAdres/issues/8) §13.
 - **Conversation provenance:** PO-MKT.10.; G0-S3-Q §5 C-04 limited currency-boundary clarification; G0-S3-S §5 mandatoryTRY final charge visibility/acceptance and currency consistency
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.6, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.6, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Quote/price version.
 - **ADR / architecture relation:** P05/P06. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -926,7 +926,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A4](https://github.com/DenizOner/DogruAdres/issues/8) §§13–15.
 - **Conversation provenance:** PO-MKT.11.; G0-S3-Q §5 C-04 Historical transaction currency layers; G0-S3-S §5 historical seven-layer price/rates/taxes/actualTRY contract
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.6, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.6, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-MKT-006–007.
 - **ADR / architecture relation:** P05/P06. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -943,7 +943,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §13.
 - **Conversation provenance:** PO-MKT.12.; G0-S3-P §4 Store Commercial Rules; §5 Organization Verification; G0-S3-R F10.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.6, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.6, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-SEC-002; DA-ORG-007; buyer context.
 - **ADR / architecture relation:** P03/P06. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -960,7 +960,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** OPEN / UNVERIFIED.
 - **Research ve exact section:** [A4](https://github.com/DenizOner/DogruAdres/issues/8) §11.
 - **Conversation provenance:** G0-S4-C §3 latest explicit Product Owner instruction; approved direction korunur, unresolved parameters OPEN/UNVERIFIED kalır; geçmiş approval date/permalink uydurulmaz.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.6, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.6, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-MKT-002/003/004/005/006/008/013; DA-FIN-002; O-06.
 - **ADR / architecture relation:** P05. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -975,7 +975,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres pricing / FX / publication; commerce Mercur/Medusa.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 (Customer segment pricing / buyer-store block), §10.5; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §11; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 (Customer segment pricing / buyer-store block), §10.5; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §11; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** G0-S3 §6 buyer eligibility kapsam kontrolü; minimum seçimin explicit approval izi eksik.; G0-S3-P §4 Store Commercial Rules; G0-S3-R F11.
 - **Primary trace:** G0-S3 ek kayıt; §9.2 coverage/split gerekçesi.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -1010,7 +1010,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Personal user preferences / shared UX; Offer pricing authority ve marketplace finance currency contracts ayrı. Intended ownership physical module/database boundary kararı değildir.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F13; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §3/§7 source vs settlement; [A6](research/A6-development-roadmap-and-release-sequencing.md) §3 localization hedefi.
+- **Research ve exact section:** [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F13; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §3/§7 source vs settlement; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §3 localization hedefi.
 - **Conversation provenance:** G0-S3-P §4 Store Commercial Rules; S3-R §3.D historical preference scope uncertainty; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı.; G0-S3-Q §5 C-04 current explicit User-Owned Preferences and currency boundaries; historical C-04 uncertainty bu kapsam için superseded; G0-S3-S §5 user ownership/TRY contract and display vs charge distinction
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -1032,7 +1032,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§4–5; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §15.
 - **Conversation provenance:** PO-MKT.3.; G0-S3-P §4 Payouts; G0-S3-R F02.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.7, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.7, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ORG-002.
 - **ADR / architecture relation:** P06. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1049,7 +1049,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A4](https://github.com/DenizOner/DogruAdres/issues/8) §§7,15.
 - **Conversation provenance:** PO-MKT.7; G0-S3 §3.C.; G0-S3-Q §5 C-04 Critical Currency Boundary; new charging interpretation OPEN; G0-S3-S §5 C-04 explicit Turkey-scoped mandatory TRY charge/settlement/payout contract; former O-21 initial interpretation resolved
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.7, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.7, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-MKT-003; provider policy.
 - **ADR / architecture relation:** P06. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1067,7 +1067,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §15; yerel T05.
 - **Conversation provenance:** PO-MKT.12.; G0-S3-P §4 Marketplace Commissions; G0-S3-R F01.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.7, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.7, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Rule provider; DA-MKT-008.
 - **ADR / architecture relation:** P06. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1084,7 +1084,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
 - **Research ve exact section:** [A4](https://github.com/DenizOner/DogruAdres/issues/8) §15; [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §9.
 - **Conversation provenance:** PO-MKT.11.; G0-S3-P §4 Other Mixed-Status Records; G0-S3-R F21/F22.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.7, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.7, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-FIN-001–003.
 - **ADR / architecture relation:** P06. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1102,7 +1102,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [A2](https://github.com/DenizOner/DogruAdres/issues/5) §7.
 - **Conversation provenance:** PO-LOY.9.; G0-S3-P §4 Representative Compensation; G0-S3-R F06.; G0-S3-Q §4 C-02 explicit historical/future attribution boundary; G0-S3-S §4 calendar-period start does not transfer earned rights/turnover; G0-S3-T §4 full target does not alter historical/future attribution boundaries
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.7, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.7, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-LOY-004; ledger.
 - **ADR / architecture relation:** P06/P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1119,7 +1119,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
 - **Research ve exact section:** [A2](https://github.com/DenizOner/DogruAdres/issues/5) §§6–8; [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §8.
 - **Conversation provenance:** PO-ACC.5; PO-LOY.9.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.7, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.7, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Idempotent event+reconciliation.
 - **ADR / architecture relation:** P06/P07. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1134,7 +1134,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Marketplace finance / Store payout policy.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A6](research/A6-development-roadmap-and-release-sequencing.md) §§6–9 payout request önerisi; [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F03/§7.2.; [G0 Step 3-Q](research/G0-step-3-Q-business-decisions-and-calendar-feasibility-2026-10-10.md) §§3–5 resmî calendar evidence/limitations; [G0 Step 3-S](research/G0-step-3-S-google-calendar-representative-and-try-settlement-2026-10-10.md) §§3–5 Google identifier/API/public-feed/official-calendar evidence and limitations; [G0 Step 3-T](research/G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) §§3/6 decision semantics and historical reconciliation
+- **Research ve exact section:** [A6](https://github.com/DenizOner/DogruAdres/issues/10) §§6–9 payout request önerisi; [G0 Step 3-R](research/G0-step-3-R-requirements-coverage-and-approval-audit-2026-10-10.md) §4 F03/§7.2.; [G0 Step 3-Q](research/G0-step-3-Q-business-decisions-and-calendar-feasibility-2026-10-10.md) §§3–5 resmî calendar evidence/limitations; [G0 Step 3-S](research/G0-step-3-S-google-calendar-representative-and-try-settlement-2026-10-10.md) §§3–5 Google identifier/API/public-feed/official-calendar evidence and limitations; [G0 Step 3-T](research/G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) §§3/6 decision semantics and historical reconciliation
 - **Conversation provenance:** G0-S3-P §4 Payouts; S3-R §3.B; G0-S3-P current briefing; original historical approval dates/message permalinks sağlanmadı.; G0-S3-Q §3 C-01 current explicit owner decision; önceki Friday/holiday confirmation scope bu karar kapsamında superseded; G0-S3-S §3 C-01 explicit preferred Google source/default Friday/next eligible day/default non-processing half-days/configurability decisions; G0-S3-T §3 current explicit owner approval: A/B/C adjustment choices, B initial default; existing Google/half-day/funds/slider safeguards retained
 - **Primary trace:** G0-S3-P ek kayıt; §9.5 amendment coverage ve audit ilişkisi.
 - **Delivery horizon / implementation:** H-MARKET / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -1173,7 +1173,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A3](https://github.com/DenizOner/DogruAdres/issues/6) §§1,6; [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §§13–14.
 - **Conversation provenance:** PO-ACC.1,6; G0-S3 §3.H.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.8, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.8, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** ADR-0001/3; kapsam kararı.
 - **ADR / architecture relation:** P07. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1190,7 +1190,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §§3,7.
 - **Conversation provenance:** PO-ACC.2; G0-S3 §3.H.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.8, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.8, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Medusa module boundary.
 - **ADR / architecture relation:** P07/P01. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1207,7 +1207,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §§5,12.
 - **Conversation provenance:** PO-ACC.3,8.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.8, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.8, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Functional app brief.
 - **ADR / architecture relation:** P07. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1224,7 +1224,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §6.
 - **Conversation provenance:** PO-ACC.4; G0-S3 §3.H.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.8, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.8, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Atomic posting; decimal amount.
 - **ADR / architecture relation:** P07. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1241,7 +1241,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A2](https://github.com/DenizOner/DogruAdres/issues/5) §7; [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §8.
 - **Conversation provenance:** PO-ACC.5.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.8, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.8, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-FIN-006.
 - **ADR / architecture relation:** P07/P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1258,7 +1258,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
 - **Research ve exact section:** [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §§5,9.
 - **Conversation provenance:** Yok.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.8, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.8, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ACC-003–004.
 - **ADR / architecture relation:** P07. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1275,7 +1275,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §12.
 - **Conversation provenance:** PO-ACC.7; G0-S3 §3.H.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.8, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.8, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Domain-specific research.
 - **ADR / architecture relation:** P07; plan gate. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1292,9 +1292,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Platform Loyalty Management; ayrı representative/Kumbara domain consumers.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** PO-LOY.1–2,4.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.9, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.9, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ORG-001; policy engine.
 - **ADR / architecture relation:** P01/P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1309,9 +1309,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Platform Loyalty Management; ayrı representative/Kumbara domain consumers.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4; [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7.
+- **Research ve exact section:** [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4; [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7.
 - **Conversation provenance:** PO-LOY.3; G0-S3 §3.A/B.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.9, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.9, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-LOY-001; DA-ID-005.
 - **ADR / architecture relation:** P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1328,7 +1328,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** Bu görev brifingi; [A1](https://github.com/DenizOner/DogruAdres/issues/4) §10 eşikleri çözmez.
 - **Conversation provenance:** PO-LOY.5; G0-S3 §3.A.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.9, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.9, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-LOY-001.
 - **ADR / architecture relation:** P04; eşikler requirements. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1343,9 +1343,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Platform Loyalty Management; ayrı representative/Kumbara domain consumers.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4; [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7.
+- **Research ve exact section:** [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4; [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7.
 - **Conversation provenance:** PO-LOY.6.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.9, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.9, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-LOY-001–003.
 - **ADR / architecture relation:** P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1362,7 +1362,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [A2](https://github.com/DenizOner/DogruAdres/issues/5) §7.
 - **Conversation provenance:** PO-LOY.7,9; G0-S3 §3.B.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.9, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.9, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-LOY-001; DA-FIN-005.
 - **ADR / architecture relation:** P04/P06. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1379,7 +1379,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [A2](https://github.com/DenizOner/DogruAdres/issues/5) §7.
 - **Conversation provenance:** PO-LOY.7 yalnız ayrımı onaylar.; G0-S3-P §4 Representative Compensation; G0-S3-R F08.; G0-S3-Q §4 C-02 explicit transfer cutoff ve Lost Customers kararı; original message permalink yok; G0-S3-S §4 effectiveT vs calendar period/zero turnover distinction; G0-S3-T §4 narrow target/actualT cross-reference; historical permissions unchanged
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.9, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.9, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-LOY-005; authorization.; DA-FIN-005; DA-LOY-010/011; DA-SEC-001/002/007
 - **ADR / architecture relation:** P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1397,7 +1397,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [A2](https://github.com/DenizOner/DogruAdres/issues/5) §§7–8.
 - **Conversation provenance:** PO-LOY.7,9 kapsam ayrımı.; G0-S3-P §4 Representative Compensation; G0-S3-R F09.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.9, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.9, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-FIN-005.
 - **ADR / architecture relation:** P04/P06. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1412,9 +1412,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Platform Loyalty Management; ayrı representative/Kumbara domain consumers.
 - **Decision / evidence:** OPEN / UNVERIFIED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§7,10; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§7,10; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** PO-BAD.5; PO-LOY.7; G0-S4-C §4 explicit owner reconciliation: approved eligibility invariants, separate unresolved Golden financial parameters.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.9, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.9, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-LOY-001/003/005/009; DA-ID-005; DA-ORG-008; O-10.
 - **ADR / architecture relation:** P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1429,7 +1429,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Platform Loyalty Management; ayrı representative/Kumbara domain consumers.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§7,10; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §§7,10; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** G0-S3 §3.B/G.
 - **Primary trace:** G0-S3 ek kayıt; §9.2 coverage/split gerekçesi.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -1483,9 +1483,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres kişisel Meydan / content moderation; review integration.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A6](research/A6-development-roadmap-and-release-sequencing.md) §4; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A6](https://github.com/DenizOner/DogruAdres/issues/10) §4; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** PO-MEY.1; G0-S3 §3.I.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.10, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.10, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-002.
 - **ADR / architecture relation:** P01/P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1500,9 +1500,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres kişisel Meydan / content moderation; review integration.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4; [A7](research/A7-ai-byok-and-future-oem-architecture.md) §9.
+- **Research ve exact section:** [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4; [A7](https://github.com/DenizOner/DogruAdres/issues/11) §9.
 - **Conversation provenance:** PO-MEY.2–3; G0-S3 §3.F.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.10, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.10, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-003; DA-SEC-006.
 - **ADR / architecture relation:** P03/P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1517,9 +1517,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres kişisel Meydan / content moderation; review integration.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4; [A6](research/A6-development-roadmap-and-release-sequencing.md) §4.
+- **Research ve exact section:** [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §4.
 - **Conversation provenance:** PO-MEY.4; G0-S3 §3.F.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.10, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.10, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-003.
 - **ADR / architecture relation:** P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1534,9 +1534,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres kişisel Meydan / content moderation; review integration.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** PO-MEY.5–6.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.10, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.10, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Review owner; DA-DATA-001.
 - **ADR / architecture relation:** P04; content lifecycle ADR gerekirse. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1551,9 +1551,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres kişisel Meydan / content moderation; review integration.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §8.
+- **Research ve exact section:** [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §8.
 - **Conversation provenance:** PO-MEY.7.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.10, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.10, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-SEC-006.
 - **ADR / architecture relation:** P03; content ADR koşullu. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1568,9 +1568,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres kişisel Meydan / content moderation; review integration.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** Brifing; [A6](research/A6-development-roadmap-and-release-sequencing.md) §13 açık ürün kararları.
+- **Research ve exact section:** Brifing; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §13 açık ürün kararları.
 - **Conversation provenance:** PO-MEY.8; G0-S3 §3.I.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.10, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.10, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Functional brief.
 - **ADR / architecture relation:** ADR gerekmez. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1587,9 +1587,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres Job Board; optional HR ayrı intended owner.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A6](research/A6-development-roadmap-and-release-sequencing.md) §4; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A6](https://github.com/DenizOner/DogruAdres/issues/10) §4; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** PO-JOB.1; G0-S3 §3.F.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.11, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.11, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ID-003.
 - **ADR / architecture relation:** P03/P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1604,9 +1604,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres Job Board; optional HR ayrı intended owner.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4; [A7](research/A7-ai-byok-and-future-oem-architecture.md) §9 genel kişisel erişim notu.
+- **Research ve exact section:** [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4; [A7](https://github.com/DenizOner/DogruAdres/issues/11) §9 genel kişisel erişim notu.
 - **Conversation provenance:** PO-JOB.2; G0-S3 §3.F.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.11, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.11, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-JOB-001; DA-SEC-006.
 - **ADR / architecture relation:** P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1621,9 +1621,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres Job Board; optional HR ayrı intended owner.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A6](research/A6-development-roadmap-and-release-sequencing.md) §§4–5; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A6](https://github.com/DenizOner/DogruAdres/issues/10) §§4–5; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** PO-JOB.3–4; G0-S3 §3.F.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.11, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.11, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ORG-001; DA-SEC-001.
 - **ADR / architecture relation:** P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1638,9 +1638,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres Job Board; optional HR ayrı intended owner.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4; [A6](research/A6-development-roadmap-and-release-sequencing.md) §5.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §5.
 - **Conversation provenance:** PO-JOB.4 bağımsızlık.; G0-S3-P §4 Other Mixed-Status Records; G0-S3-R F21/F22.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.11, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.11, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-SEC-006; DA-DATA-001.
 - **ADR / architecture relation:** P01/P04. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1658,9 +1658,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres automotive / Vehicle / Quotations; provider adapter.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [ADR-0002](adr/ADR-0002-automotive-domain-isolation.md); [A7](research/A7-ai-byok-and-future-oem-architecture.md) §10.
+- **Research ve exact section:** [ADR-0002](adr/ADR-0002-automotive-domain-isolation.md); [A7](https://github.com/DenizOner/DogruAdres/issues/11) §10.
 - **Conversation provenance:** PO-AI.5.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.12, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.12, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Manual vehicle model.
 - **ADR / architecture relation:** ADR-0002; P01. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1676,9 +1676,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres automotive / Vehicle / Quotations; provider adapter.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4; [A7](research/A7-ai-byok-and-future-oem-architecture.md) §7.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4; [A7](https://github.com/DenizOner/DogruAdres/issues/11) §7.
 - **Conversation provenance:** PO-AI.5.; G0-S3-P §4 Other Mixed-Status Records; G0-S3-R F21/F22.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.12, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.12, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-CAT-005; DA-SEC-002.
 - **ADR / architecture relation:** P01; ADR-0002. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1694,9 +1694,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres automotive / Vehicle / Quotations; provider adapter.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A7](research/A7-ai-byok-and-future-oem-architecture.md) §§10,12.
+- **Research ve exact section:** [A7](https://github.com/DenizOner/DogruAdres/issues/11) §§10,12.
 - **Conversation provenance:** PO-AI.6.; G0-S3-P §5 OEM and Fitment; G0-S3-R F21/F22; additional reconciliation.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.12, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.12, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FUTURE / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-AUTO-001; adapter boundary.
 - **ADR / architecture relation:** ADR-0002; P09 koşullu. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1711,9 +1711,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres automotive / Vehicle / Quotations; provider adapter.
 - **Decision / evidence:** DEFERRED / VERIFIED.
-- **Research ve exact section:** [A7](research/A7-ai-byok-and-future-oem-architecture.md) §§10,15.
+- **Research ve exact section:** [A7](https://github.com/DenizOner/DogruAdres/issues/11) §§10,15.
 - **Conversation provenance:** PO-AI.7–8; G0-S4-C §5 latest explicit Product Owner deferral. VERIFIED yalnız provider selection’ı erteleme kararının kanıtıdır; external agreement/access-right status verified değildir.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.12, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.12, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FUTURE / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Future separately authorized OEM integration decision gate; DA-AUTO-003/005; DA-CAT-005.
 - **ADR / architecture relation:** P09 yalnız anlaşma öncesi. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1728,7 +1728,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres automotive / Vehicle / Quotations; provider adapter.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [ADR-0002](adr/ADR-0002-automotive-domain-isolation.md) Decision; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §11; [A7](research/A7-ai-byok-and-future-oem-architecture.md) §10.
+- **Research ve exact section:** [ADR-0002](adr/ADR-0002-automotive-domain-isolation.md) Decision; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §11; [A7](https://github.com/DenizOner/DogruAdres/issues/11) §10.
 - **Conversation provenance:** G0-S3 §6 OEM fitment kapsam kontrolü; ayrıntılı matching approval yok.; G0-S3-P §5 OEM and Fitment; G0-S3-R F22; additional reconciliation.
 - **Primary trace:** G0-S3 ek kayıt; §9.2 coverage/split gerekçesi.
 - **Delivery horizon / implementation:** H-FUTURE / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -1765,9 +1765,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres AI application / integration; ilgili domain kendi verisinin sahibi.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A7](research/A7-ai-byok-and-future-oem-architecture.md) §§2,5,12.
+- **Research ve exact section:** [A7](https://github.com/DenizOner/DogruAdres/issues/11) §§2,5,12.
 - **Conversation provenance:** PO-AI.1.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.13, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.13, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FUTURE / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ORG-001; secret management.
 - **ADR / architecture relation:** P08. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1782,9 +1782,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres AI application / integration; ilgili domain kendi verisinin sahibi.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §10; [A7](research/A7-ai-byok-and-future-oem-architecture.md) §§6–7.
+- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §10; [A7](https://github.com/DenizOner/DogruAdres/issues/11) §§6–7.
 - **Conversation provenance:** PO-AI.2.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.13, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.13, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FUTURE / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-SEC-001,005.
 - **ADR / architecture relation:** P08/P03. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1799,9 +1799,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres AI application / integration; ilgili domain kendi verisinin sahibi.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [A7](research/A7-ai-byok-and-future-oem-architecture.md) §8.
+- **Research ve exact section:** [A7](https://github.com/DenizOner/DogruAdres/issues/11) §8.
 - **Conversation provenance:** PO-AI.3.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.13, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.13, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FUTURE / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-AI-002; optimistic version.
 - **ADR / architecture relation:** P08. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1816,9 +1816,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres AI application / integration; ilgili domain kendi verisinin sahibi.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A7](research/A7-ai-byok-and-future-oem-architecture.md) §§2–4,15.
+- **Research ve exact section:** [A7](https://github.com/DenizOner/DogruAdres/issues/11) §§2–4,15.
 - **Conversation provenance:** PO-AI.4.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.13, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.13, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FUTURE / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** P01; resource limit.
 - **ADR / architecture relation:** P08. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1833,9 +1833,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres AI application / integration; ilgili domain kendi verisinin sahibi.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A7](research/A7-ai-byok-and-future-oem-architecture.md) §§5,9,13.
+- **Research ve exact section:** [A7](https://github.com/DenizOner/DogruAdres/issues/11) §§5,9,13.
 - **Conversation provenance:** PO-AI.1–2; SECURITY.; G0-S3-P §4 Other Mixed-Status Records; G0-S3-R F21/F22.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.13, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.13, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FUTURE / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-SEC-007; secret custody.
 - **ADR / architecture relation:** P08. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1851,9 +1851,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres AI application / integration; ilgili domain kendi verisinin sahibi.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§9–10; [A7](research/A7-ai-byok-and-future-oem-architecture.md) §6.
+- **Research ve exact section:** [A5](https://github.com/DenizOner/DogruAdres/issues/9) §§9–10; [A7](https://github.com/DenizOner/DogruAdres/issues/11) §6.
 - **Conversation provenance:** PO-AI.2.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.13, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.13, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FUTURE / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-SEC-003.
 - **ADR / architecture relation:** P03/P08. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1868,9 +1868,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres AI application / integration; ilgili domain kendi verisinin sahibi.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A7](research/A7-ai-byok-and-future-oem-architecture.md) §9.
+- **Research ve exact section:** [A7](https://github.com/DenizOner/DogruAdres/issues/11) §9.
 - **Conversation provenance:** PO-AI.2–3.; G0-S3-P §4 Other Mixed-Status Records; G0-S3-R F21/F22.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.13, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.13, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-FUTURE / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-AI-002–003; DA-SEC-006.
 - **ADR / architecture relation:** P08. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1886,7 +1886,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres AI application / integration; ilgili domain kendi verisinin sahibi.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 (External accounting/inventory identities), §10.9; [A2](https://github.com/DenizOner/DogruAdres/issues/5) §§7,10; [A6](research/A6-development-roadmap-and-release-sequencing.md) §14.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §4 (External accounting/inventory identities), §10.9; [A2](https://github.com/DenizOner/DogruAdres/issues/5) §§7,10; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §14.
 - **Conversation provenance:** G0-S3 §6 kapsam kontrolü; ayrıntılı connector approval yok.; G0-S3-P §4 Other Mixed-Status Records; G0-S3-R F21/F22.
 - **Primary trace:** G0-S3 ek kayıt; §9.2 coverage/split gerekçesi.
 - **Delivery horizon / implementation:** H-FUTURE / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -1906,9 +1906,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres UX / localization.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [DESIGN](../../DESIGN.md) §16; [A6](research/A6-development-roadmap-and-release-sequencing.md) §§2,13.
+- **Research ve exact section:** [DESIGN](../../DESIGN.md) §16; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §§2,13.
 - **Conversation provenance:** G0-S3 §3.D approved target; G0-S3-P §5 historical variant question; G0-S3-Q §6 final explicit owner decision MSA-only, O-18 CLOSED/SUPERSEDED.; G0-S3-S §§5/6 currency communication cross-reference; soleMSA/RTL scope unchanged
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.14, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.14, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Functional briefs.
 - **ADR / architecture relation:** ADR gerekmez; library değişirse dependency ADR. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1924,9 +1924,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres UX / localization.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [DESIGN](../../DESIGN.md) §17; [A6](research/A6-development-roadmap-and-release-sequencing.md) §9.
+- **Research ve exact section:** [DESIGN](../../DESIGN.md) §17; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §9.
 - **Conversation provenance:** Yok.; G0-S3-T §5 visual access outcomes only; whole proposed accessibility standard unchanged
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.14, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.14, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** UX acceptance policy.; DA-UX-004; narrower approved visual access outcomes
 - **ADR / architecture relation:** ADR gerekmez. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1942,9 +1942,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** DoğruAdres UX / localization.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [DESIGN](../../DESIGN.md) §§7–22; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §5.
+- **Research ve exact section:** [DESIGN](../../DESIGN.md) §§7–22; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §5.
 - **Conversation provenance:** PO-DOC.3.; G0-S3-P §4 Other Mixed-Status Records; G0-S3-R F21/F22.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.14, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.14, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-GOV / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-APP-006.
 - **ADR / architecture relation:** ADR gerekmez. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1959,7 +1959,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** Cross-application UX / product domain owners; localization/security consumers. Logical accountability, final physical ownership decision değil.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0 Step 3-T](research/G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) §5 latest decision and existingUX overlap review; [A6](research/A6-development-roadmap-and-release-sequencing.md) §9 acceptance context, visual principle historical approval proof değil.
+- **Research ve exact section:** [G0 Step 3-T](research/G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) §5 latest decision and existingUX overlap review; [A6](https://github.com/DenizOner/DogruAdres/issues/10) §9 acceptance context, visual principle historical approval proof değil.
 - **Conversation provenance:** G0-S3-T §5 explicit product-owner Visual Communication decision; no historical date/message permalink supplied.
 - **Primary trace:** G0-S3-T new requirement; existingUX001 localization/002 accessibility candidate/003 proposeddesign do not capture independent approved comprehensibility outcome; §9.8.
 - **Delivery horizon / implementation:** H-DOMAIN / NOT_ASSESSED; cross-cutting future functional briefs, no dashboard delivered.
@@ -1980,7 +1980,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** OPEN / UNVERIFIED.
 - **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7; [A5](https://github.com/DenizOner/DogruAdres/issues/9) §15; AGENTS Approval gates.
 - **Conversation provenance:** PO-DOC.5–8; precise class-specific deletion policies unresolved.; G0-S3-P §4 Audit, Search and Data Lifecycle; G0-S3-R F18; G0-S4-C §6 explicit approved capabilities vs unresolved class policies.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.15, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.15, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-GOV / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Data classification.
 - **ADR / architecture relation:** P03/P06; retention ADR koşullu. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -1998,7 +1998,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §6; [A4](https://github.com/DenizOner/DogruAdres/issues/8) §§14–15.
 - **Conversation provenance:** PO-ACC.4; PO-MKT.11.; G0-S3-P §4 Audit, Search and Data Lifecycle; G0-S3-R F18.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.15, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.15, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-GOV / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** DA-ACC-004; DA-MKT-008.
 - **ADR / architecture relation:** P06/P07. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -2013,9 +2013,9 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** İlgili kayıt domain’i; cross-domain lifecycle ve documentation governance.
 - **Decision / evidence:** APPROVED / VERIFIED.
-- **Research ve exact section:** [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §§8–9; [Research index](research/README.md) Authority.
+- **Research ve exact section:** [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §§8–9; [Research index](research/README.md) Authority.
 - **Conversation provenance:** PO-DOC.4–8.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.15, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.15, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-GOV / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Approval provenance.
 - **ADR / architecture relation:** ADR-0003; governance update. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -2032,7 +2032,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 - **Decision / evidence:** APPROVED / VERIFIED.
 - **Research ve exact section:** [Research index](research/README.md) Research Lifecycle.
 - **Conversation provenance:** PO-DOC.4,8; görev §8.
-- **Primary trace:** [G0-S2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) §6.15, aynı ID satırı; original ID korundu.
+- **Primary trace:** [G0-S2](https://github.com/DenizOner/DogruAdres/issues/13) §6.15, aynı ID satırı; original ID korundu.
 - **Delivery horizon / implementation:** H-GOV / NOT_ASSESSED; §5’in sınırları geçerlidir.
 - **Dependencies:** Collision/hash preflight.
 - **ADR / architecture relation:** ADR gerekmez. P etiketleri proposed research topics; implementation yetkisi değildir.
@@ -2047,7 +2047,7 @@ Aşağıdaki owner’lar logical/intended accountability’dir; personel atamas�
 
 - **Owner / intended owner:** İlgili kayıt domain’i; cross-domain lifecycle ve documentation governance.
 - **Decision / evidence:** PROPOSED / RECOMMENDED.
-- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7 (senaryo 8); [A2](https://github.com/DenizOner/DogruAdres/issues/5) §7 (senaryo 9); [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §7; [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) §4.
+- **Research ve exact section:** [A1](https://github.com/DenizOner/DogruAdres/issues/4) §7 (senaryo 8); [A2](https://github.com/DenizOner/DogruAdres/issues/5) §7 (senaryo 9); [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) §7; [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) §4.
 - **Conversation provenance:** G0-S3 §6 archiving/deletion kapsam kontrolü; ayrıntılı retention approval yok.; G0-S3-P §4 Audit, Search and Data Lifecycle; G0-S3-R F18.
 - **Primary trace:** G0-S3 ek kayıt; §9.2 coverage/split gerekçesi.
 - **Delivery horizon / implementation:** H-GOV / NOT_ASSESSED; §5’in sınırları geçerlidir.
@@ -2340,10 +2340,10 @@ Araştırma linkleri historical evidence’dır; bu liste onların recommendatio
 - [A3-R](https://github.com/DenizOner/DogruAdres/issues/7) — historical research; ilgili numbered section’lar §7’de.
 - [A4](https://github.com/DenizOner/DogruAdres/issues/8) — historical research; ilgili numbered section’lar §7’de.
 - [A5](https://github.com/DenizOner/DogruAdres/issues/9) — historical research; ilgili numbered section’lar §7’de.
-- [A6](research/A6-development-roadmap-and-release-sequencing.md) — historical research; ilgili numbered section’lar §7’de.
-- [A7](research/A7-ai-byok-and-future-oem-architecture.md) — historical research; ilgili numbered section’lar §7’de.
-- [G0-1](research/G0-step-1-architecture-decisions-and-documentation-gap-audit.md) — historical research; ilgili numbered section’lar §7’de.
-- [G0 Step 2](research/G0-step-2-requirements-and-decision-traceability-2026-10-10.md) — §2.2 briefing, §4 static evidence, §6 original 92 rows, §8 proposed P01–P09, §9 PoC boundaries, §10 open/deferred policies.
+- [A6](https://github.com/DenizOner/DogruAdres/issues/10) — historical research; ilgili numbered section’lar §7’de.
+- [A7](https://github.com/DenizOner/DogruAdres/issues/11) — historical research; ilgili numbered section’lar §7’de.
+- [G0-1](https://github.com/DenizOner/DogruAdres/issues/12) — historical research; ilgili numbered section’lar §7’de.
+- [G0 Step 2](https://github.com/DenizOner/DogruAdres/issues/13) — §2.2 briefing, §4 static evidence, §6 original 92 rows, §8 proposed P01–P09, §9 PoC boundaries, §10 open/deferred policies.
 - [G0 Step 3-Q](research/G0-step-3-Q-business-decisions-and-calendar-feasibility-2026-10-10.md) — current decisions/calendar feasibility, archived analysis; baseline acceptance değildir.
 - [G0 Step 3-S](research/G0-step-3-S-google-calendar-representative-and-try-settlement-2026-10-10.md) — currentcalendar/representative/TRY decisionevidence, archivedanalysis; baselineacceptance değil.
 - [G0 Step 3-T](research/G0-step-3-T-payout-deferral-full-month-targets-and-visual-communication-2026-10-10.md) — current decisions/stale-register reconciliation, archived analysis; no baseline acceptance.
