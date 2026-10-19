@@ -357,6 +357,53 @@ DoğruAdres is the product and development target. Mercur, Medusa, Redis and Pos
 This policy follows the latest explicit Product Owner scope instruction. It preserves accepted product decisions and ADR history, grants no implementation or database permission, and does not authorize remote publication.
 
 
+## Active R0/M0 delivery and authorization policies — later accepted controls
+
+**Provenance and status:** The following binding sections were approved later than the archived `main` principles and are reconstructed from `feature/af-1-foundation-audit-outbox:docs/dogruadres/PRINCIPLES.md` (source blob `7dfa31e63787859aea2e475dd0364e84070f3d5e`) and its `SECURITY.md` (source blob `47dfef53731a650f0159c150eb5d7a500463ae9b`). [Accepted ADR-0007](https://github.com/DenizOner/DogruAdres/issues/35), [R0 complete evidence #206](https://github.com/DenizOner/DogruAdres/issues/206) and [M0 acceptance #147](https://github.com/DenizOner/DogruAdres/issues/147) preserve the decisions and their bounded evidence. The immutable source text is not modified. This active agent policy does **not** approve implementation or past test execution.
+
+## Binding Vehicle authorization Policy A
+
+Authority: Product Owner Architecture Consolidation R0; see ADR-0007. **L is the MVCC snapshot acquisition point of the final Foundation-owned coherent authorization SELECT, after the required Organization-scoped Vehicle lock/read and before the first Vehicle mutation.** For a successfully validated READ COMMITTED statement on the authoritative primary, revocation committed before L must be observed and deny access. Revocation committed after L may overlap the already-authorized operation and does not retroactively cancel it. This is snapshot-based ordering, not commit-time fencing.
+
+Each operation requires a fresh final decision. Cached decisions, the Q2 non-atomic observer, a prior request, workflow retry/replay or a serialized attribution object cannot substitute. The decision must coherently validate exactly one actor mapping, enabled Person, active Organization, exactly one active membership and the current action/role; no platform-operator bypass. Authoritative actor, Person and role attribution must come from this same decision.
+
+The trusted application/workflow sequence is: verified authentication → Vehicle-owned scoped lock/read → fresh Foundation coherent decision at L → resource-dependent evaluation → Vehicle mutation plus one canonical Vehicle audit and one durable outbox in one Vehicle transaction → commit/rollback → asynchronous derived Index delivery. Do not disclose resource-dependent missing/no-op/validation results before final authorization. No Foundation manager enters Vehicle; no Vehicle manager/context enters Foundation. No cross-module shared transaction or hidden module callback dependency.
+
+The existing Vehicle mutation gate remains closed until real framework, persistence and security tests pass independent review. Query caching, primary routing, ambient context separation, statement isolation, cancellation and request/replay boundaries require explicit evidence. Fail closed on uncertainty. Preserve existing Organization isolation, actor validation, role restrictions and source audit attribution. Never accept an HTTP-supplied authorization decision, manager or role as authority.
+
+## 12. Binding invariant-first delivery and evidence standards
+
+These permanent rules apply to Foundation, Vehicle, Audit Index and future modules under the Product Owner's Architecture Consolidation R0 decision (recorded in ADR-0007):
+
+1. Identify the approved business invariant and authoritative sources, including actual approval provenance.
+2. Verify the exact installed framework extension mechanism before relying on it.
+3. Implement the smallest end-to-end working contract within the authorized checkpoint.
+4. Execute focused tests at the earliest meaningful boundary; source-only completion is not runtime acceptance.
+5. Stop the affected behavior if it cannot be verified; do not add layers over an unproven assumption.
+6. Immediately investigate confirmed defects and repair them through an explicitly bounded change; report additional scope rather than hiding or indefinitely deferring a defect.
+7. Reuse verified evidence with its version, target and limitations; never generalize it beyond what was tested.
+8. Eliminate redundant temporary paths after the replacement works and cleanup is independently reviewed; preserve historical evidence until then.
+9. Verify source, framework runtime, persistence, concurrency and security boundaries independently.
+10. Require Technical Advisor acceptance before crossing major architecture or security gates; implementation/publication is not self-acceptance.
+
+Every acceptance claim uses one of: **SOURCE VERIFIED**, **TEST EXECUTED AND PASSED**, **TEST EXECUTED AND FAILED**, **NOT TESTED**, **ENVIRONMENT BLOCKED**, **ARCHITECTURE BLOCKED**. Record commands, exit codes, executed test counts and meaningful failures. A type-check or mock assertion cannot be called successful PostgreSQL, module initialization, rollback or concurrency verification. Bootstrap failures execute zero assertions unless evidence shows otherwise. No test assertion may be weakened to manufacture success.
+
+Preserve independent physical modules, module-owned canonical audit/outbox atomicity and the derived Audit Index. Authorization Policy A is binding; its implementation remains gated by real verification. Governance approval does not expand a checkpoint's resource, source or publication permissions.
+
+## 13. One complete functional module and agent-owned browser acceptance
+
+Binding Product Owner decision recorded by M0 on 2026-10-19: deliver one functional module at a time, including backend and frontend, rather than all backends followed by all frontends. Identity, User and Organization Management is active first, Vehicle second, then approved product priorities. Existing source-only work is preserved as evidence, not retroactively accepted. No different functional module may start implementation while the active module's mandatory acceptance remains open. Shared technical dependencies belong to its bounded plan and retain independent physical ownership.
+
+A module is complete only after its entire applicable APPROVED business scope, domain data/persistence, authentication/authorization, real HTTP/workflows, UI interactions, canonical audit/outbox/integration and applicable unit/integration/security/concurrency testing are implemented and verified, all required real-browser journeys are executed by the Local Engineering Agent, and the Technical Advisor independently accepts it. Backend-only and frontend-only slices are internal checkpoints. Demonstrate an actual browser-capable vertical path at the earliest meaningful slice; do not accumulate unverified layers or postpone UI until all backend work is finished.
+
+The Work Testing Agent must independently navigate the running application, authenticate synthetic users with relevant roles, execute real interactions, check visible success and rejection/validation/authorization/error/empty states, verify backend/persisted outcomes and refresh/reopen behavior, and retest after fixes. Cover cross-Organization isolation and role boundaries. Static renders, mock components, interaction-free screenshots, HTTP-only checks and simulated browser output are not browser acceptance. Technical invariants additionally need real API/database/security/concurrency evidence at the appropriate boundary.
+
+Maintain a traceable matrix: approved requirement → role → UI entry point → action → expected visible result → backend/persistence assertion → browser test → actual result → evidence. Every required row must have executed evidence before MODULE COMPLETE. Missing browser support is ENVIRONMENT BLOCKED/NOT TESTED. An incomplete row blocks acceptance; no approved function may be removed or silently reclassified as deferred. Open parameters and proposed scope stay explicit and must be resolved through the existing decision rights without inventing product behavior.
+
+Keep small reviewed checkpoints inside the active module, promptly fix confirmed defects within authorized scope and stop the affected feature on critical failure. Reuse valid historical evidence only within its original limits. Preserve module isolation, Policy A, canonical source-local audit/outbox atomicity and fail-closed gates. Major architecture/security transitions and module completion require Technical Advisor acceptance. M0 does not authorize UI implementation, public Vehicle CRUD, dependency/core changes, production/shared data operations or publication; each bounded checkpoint retains its explicit permissions.
+
+**Later approved testing ownership and separation:** In this project's active agent roles, the Codex Local Engineering Agent owns explicitly authorized implementation, focused tests, browser-capable engineering preflight and defect repair. The independent ChatGPT Work Testing Agent owns execution and evidence of real-browser end-to-end acceptance for every approved user-facing function. This is a later assignment of **who** performs independent acceptance and supersedes only the earlier reference in the AF-1 source that assigned all browser execution to the Local Engineering Agent; it does not relax any §13 browser, persistence, negative-case or module-completion requirements. The Technical Advisor independently reviews architecture/security and module acceptance; the Product Owner retains scope, decision and merge authority. If Work/browser capability is unavailable, report NOT TESTED or ENVIRONMENT BLOCKED and keep the module gate open.
+
 <!-- BEGIN:turborepo-agent-rules -->
 
 # This is NOT the Turborepo you know
