@@ -62,9 +62,9 @@ Before any non-trivial Mercur-related work:
 
 Never guess Mercur API behavior.
 
-## Project documentation rule
+## Canonical project decision lookup
 
-Before DoğruAdres architectural or domain work, read the relevant project documents under `docs/dogruadres/` and use `docs/dogruadres/README.md` as the router.
+Before DoğruAdres architectural or domain work, read this root `AGENTS.md`, relevant canonical `[DEC DA-*]` and `[DEC ADR-*]` GitHub Issue records, the [controlled decision source and cross-domain invariants](https://github.com/DenizOner/DogruAdres/issues/141), the active work/QA Issue, and current source/tests. Do **not** use removed project `docs/` files as a second operational authority. If GitHub is temporarily inaccessible, do not guess at business/security/financial policy; stop the affected decision or action and report the blocked evidence.
 
 ## Core modification rule
 
@@ -123,9 +123,9 @@ Never silently turn an upstream issue into project-owned maintenance work.
 
 This project is developed on a modest Windows laptop. Prefer targeted builds, targeted tests, minimal background services, Docker only when required, stopping project containers/processes after work, and one intentional installation per required development tool. Do not sacrifice correctness merely to save resources.
 
-## Documentation router
+## Documentation and evidence router
 
-Read the project docs before making architectural or domain decisions, but do not copy Mercur framework documentation into the project docs.
+Project-owned business and architecture decisions live in GitHub decision Issues, with scope/approval recorded there. Research, historical reports and test execution evidence live in their linked Issue discussions; implementation details live in code and PRs. Agent-executable policies belong here. Avoid duplicate project-specific `docs/` directories and never copy Mercur framework manuals into this repository.
 
 ## Authority / precedence model
 
@@ -133,7 +133,7 @@ When a decision is in doubt, use this order:
 
 1. explicit currently approved user or product decision
 2. repository constitution in root `AGENTS.md`
-3. applicable DoğruAdres authoritative docs and accepted ADRs
+3. canonical DoğruAdres approved decision Issues, accepted ADR Issues and approved product invariants (preserving their exact scope)
 4. installed version-matched Mercur docs for Mercur framework/API behavior
 5. current source, generated types, tests, and runtime behavior as implementation evidence
 6. official Mercur repository/release notes
@@ -207,6 +207,10 @@ The following is the **current agent-executable policy**, consolidated from prev
 - Preserve the original 2.3.7 historical upgrade classifications for re-checking, not unquestioned permanent exceptions: storefront production lint/parser issue was upstream/baseline; Redis `REDIS_URL` wiring and root exact `i18next@26.4.2` were temporary compatibility adjustments; `compose.dev.yml` is dev infrastructure rather than a Mercur compatibility patch. Reassess actual necessity on **every** version upgrade.
 - For a Mercur upgrade: create an isolated review branch; identify a stable target; inspect official release notes, breaking changes and migrations; update related Mercur dependencies coherently; read new bundled docs; compare scaffold, AGENTS guidance, APIs/types/workflows/SDK; evaluate each temporary deviation; run focused builds/contracts/integration/security checks; verify staging before production; document any new approval in canonical GitHub decision Issues. Do not combine upgrade work with unrelated features or assume staging/deployment permission.
 - The prior Mercur 2.3.7 / Medusa 2.21.2 dependency checkpoint and 122 reported assertions are **historical bounded evidence** in [#145](https://github.com/DenizOner/DogruAdres/issues/145). Storefront type/lint production failure, Jest full HTTP limitations and real-money payout idempotency/crash/reconciliation remained open. Passing a local dependency checkpoint does not establish production readiness.
+
+### Architecture decision records
+
+Record a material architecture, dependency, security/privacy, payment, schema/data ownership or Mercur integration decision in a **canonical decision Issue** with an explicit PROPOSED / ACCEPTED / SUPERSEDED / DEPRECATED state and provenance. Cover context, the exact decision, considered alternatives, consequences, trade-offs, Mercur upgrade impact and necessary follow-up. Only Product Owner approval changes policy; the status of an implementation or QA Issue is never interchangeable with architecture approval. Small formatting changes or bounded routine refactors do not require their own ADR. Existing ADR-0004 is SUPERSEDED by ADR-0005; no physical domain co-location exception remains approved.
 
 ### Planning, verification and approval artifacts
 
