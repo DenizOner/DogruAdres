@@ -116,3 +116,22 @@ DoğruAdres is the product and development target. Mercur, Medusa, Redis and Pos
 - Reproduce the project through versioned manifests, lockfiles, project-owned migrations, safe configuration templates and documentation. Store private backups outside the repository; never commit real environment credentials.
 
 This policy follows the latest explicit Product Owner scope instruction. It preserves accepted product decisions and ADR history, grants no implementation or database permission, and does not authorize remote publication.
+
+## 12. Binding invariant-first delivery and evidence standards
+
+These permanent rules apply to Foundation, Vehicle, Audit Index and future modules under the Product Owner's Architecture Consolidation R0 decision (recorded in ADR-0007):
+
+1. Identify the approved business invariant and authoritative sources, including actual approval provenance.
+2. Verify the exact installed framework extension mechanism before relying on it.
+3. Implement the smallest end-to-end working contract within the authorized checkpoint.
+4. Execute focused tests at the earliest meaningful boundary; source-only completion is not runtime acceptance.
+5. Stop the affected behavior if it cannot be verified; do not add layers over an unproven assumption.
+6. Immediately investigate confirmed defects and repair them through an explicitly bounded change; report additional scope rather than hiding or indefinitely deferring a defect.
+7. Reuse verified evidence with its version, target and limitations; never generalize it beyond what was tested.
+8. Eliminate redundant temporary paths after the replacement works and cleanup is independently reviewed; preserve historical evidence until then.
+9. Verify source, framework runtime, persistence, concurrency and security boundaries independently.
+10. Require Technical Advisor acceptance before crossing major architecture or security gates; implementation/publication is not self-acceptance.
+
+Every acceptance claim uses one of: **SOURCE VERIFIED**, **TEST EXECUTED AND PASSED**, **TEST EXECUTED AND FAILED**, **NOT TESTED**, **ENVIRONMENT BLOCKED**, **ARCHITECTURE BLOCKED**. Record commands, exit codes, executed test counts and meaningful failures. A type-check or mock assertion cannot be called successful PostgreSQL, module initialization, rollback or concurrency verification. Bootstrap failures execute zero assertions unless evidence shows otherwise. No test assertion may be weakened to manufacture success.
+
+Preserve independent physical modules, module-owned canonical audit/outbox atomicity and the derived Audit Index. Authorization Policy A is binding; its implementation remains gated by real verification. Governance approval does not expand a checkpoint's resource, source or publication permissions.

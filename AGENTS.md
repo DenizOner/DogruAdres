@@ -170,3 +170,11 @@ Read `docs/README.md` inside that installed package first, then read the relevan
 
 This block is written and re-added by `turbo` before repository-scoped commands when an AI agent is detected. In the Turborepo source repository, its template is defined in `crates/turborepo-cli/src/cli/agent_guidance.rs`. Removing the managed block while updates are enabled means a later qualifying invocation will add it again. Set `"agentGuidance": false` in the root `turbo.json` or `turbo.jsonc` to opt out; this does not remove an existing block. Keep the block committed with your work to avoid an uncommitted change on the next agent invocation.
 <!-- END:turborepo-agent-rules -->
+
+## Binding architecture consolidation and evidence gates
+
+Follow PRINCIPLES.md §12, SECURITY.md's Policy A and ADR-0007 for Foundation, Vehicle, Audit Index and future domains. Use one fresh Foundation-owned coherent authorization SELECT as the canonical final mechanism; the Q2 non-atomic observer is historical evidence, never mutation authority. Keep module managers separate and Vehicle mutations closed until the runtime/security gates pass.
+
+Implement the smallest approved end-to-end invariant, verify its exact framework extension point and execute focused tests at the earliest meaningful boundary. Stop the affected path when verification fails; do not accumulate layers on an unproven assumption. Investigate confirmed defects immediately and propose/perform a bounded repair within authorization. Reuse valid evidence, remove redundant temporary paths only after replacement verification and reviewed cleanup, and require Technical Advisor acceptance across major architecture/security gates.
+
+Report evidence as SOURCE VERIFIED, TEST EXECUTED AND PASSED, TEST EXECUTED AND FAILED, NOT TESTED, ENVIRONMENT BLOCKED or ARCHITECTURE BLOCKED. Source inspection, types and mocked tests never prove PostgreSQL, framework initialization or concurrency. Verify source, runtime, concurrency and security independently. Checkpoint authorization controls execution and publication; never infer staging/commit/push permission from the general delivery workflow.

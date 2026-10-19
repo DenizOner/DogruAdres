@@ -68,3 +68,9 @@ This document does not define final database schema design. That remains future 
 ## Architectural principle
 
 The long-term behavior should be: project-owned business logic, Mercur-owned framework logic, explicit integration boundaries, and no silent drift into Mercur internals.
+
+## Binding R0 consolidation (2026-10-19)
+
+[ADR-0007](adr/ADR-0007-coherent-authorization-and-runtime-evidence.md) records the current binding decisions and authentic ADR-0005/0006 provenance. Earlier implementation-status statements above are historical: Foundation, independent Audit Index and independent Vehicle source foundations now exist, but source publication is not runtime acceptance. Vehicle CRUD remains closed.
+
+The target is verified request → application/workflow → Vehicle-owned scoped lock/read → fresh Foundation coherent authorization at Policy A's L → resource-dependent evaluation → source-local Vehicle mutation/canonical audit/outbox → commit/rollback → asynchronous derived Index. Foundation and Vehicle managers never cross module boundaries. Current role checks have no platform bypass. R0 runtime evidence and Technical Advisor acceptance are required before further integration.

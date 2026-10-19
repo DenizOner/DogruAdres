@@ -43,3 +43,7 @@ Use one of the following statuses:
 - `ADR-0001-mercur-as-marketplace-engine.md`
 - `ADR-0002-automotive-domain-isolation.md`
 - `ADR-0003-mercur-core-modification-policy.md`
+
+## Consolidation and provenance
+
+- [ADR-0007: coherent authorization and runtime evidence](ADR-0007-coherent-authorization-and-runtime-evidence.md) — accepted R0 policy, with authentic Git provenance for ADR-0005/0006 absent from this branch. Historical ADR-0004 co-location is not the selected architecture. No historical ADR file has been fabricated or renumbered.

@@ -78,9 +78,18 @@ describe("Vehicle v2.21.2 application UOW compatibility boundary", () => {
 describe("Vehicle UOW Medusa context compatibility", () => {
   it("permits only expected forwarding writes on the sealed root", async () => {
     const f = fixture()
+    let retained: VehicleUowContext | undefined
     await withVehicleUnitOfWork(f.vehicle, async context => {
+      retained = context
       expect(Object.isSealed(context)).toBe(true)
-      expect(Object.isFrozen(context)).toBe(false)
+      // Accessor setters can work even when Object.isFrozen reports true.
+      for (const key of ["__type", "enableNestedTransactions", "transactionManager"]) {
+        expect(Object.getOwnPropertyDescriptor(context, key)).toMatchObject({ configurable: false, enumerable: true })
+        expect(Reflect.defineProperty(context, key, { get: () => "forged" })).toBe(false)
+      }
+      expect(Reflect.set(context, "injected", true)).toBe(false)
+      expect(context).not.toHaveProperty("injected")
+      expect(Object.getOwnPropertyDescriptor(context, "transactionManager")?.set).toBeUndefined()
       expect(Reflect.set(context, "__type", "MedusaContext")).toBe(true)
       expect(Reflect.set(context, "enableNestedTransactions", false)).toBe(true)
       expect(() => Reflect.set(context, "__type", "forged")).toThrow()
@@ -90,6 +99,8 @@ describe("Vehicle UOW Medusa context compatibility", () => {
       expect(() => Object.defineProperty(context, "transactionManager", { value: {} })).toThrow()
       expect(context.transactionManager).toBe(f.manager)
     })
+    expect(() => retained!.transactionManager).toThrow("VEHICLE_UOW_CONTEXT_CLOSED")
+    expect(() => Reflect.set(retained!, "__type", "MedusaContext")).toThrow("VEHICLE_UOW_CONTEXT_CLOSED")
   })
   it("uses actual InjectManager forwarding and InjectIntoContext augmentation", async () => {
     const f = fixture()
@@ -123,7 +134,7 @@ describe("Vehicle UOW Medusa context compatibility", () => {
     })
     Object.defineProperties(generated, {
       baseRepository_: { value: { getFreshManager: () => ({}), serialize: async (value: unknown) => value } },
-      __container__: { value: { vehicleService: { list } } },
+      __container__: { value: { daVehicleService: { list } } },
     })
     await withVehicleUnitOfWork(f.vehicle, async context => {
       expect(await generated.listVehicles({}, {}, context)).toEqual([])
