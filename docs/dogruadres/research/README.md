@@ -69,3 +69,15 @@ Task reports must not be written into `AGENTS.md` or `CODEBASE.md`. This index d
 The existing parent documentation router is `docs/dogruadres/README.md` ([parent router](../README.md)).
 
 Adding a research archive link from that router is a later, separately authorized governance change. The parent router was not edited during archive finalization. Requirements reconciliation, ADR writing, security PoCs and software implementation also require separate product-owner authorization.
+
+## GitHub Issue historical traceability
+
+The issue links below track the **completion of the research deliverables only**. Their closure does not approve proposals, authorize implementations, or supersede the original research evidence. The full archived reports above remain intact.
+
+| Inventory ID | Historical research | GitHub Issue | Issue outcome |
+| --- | --- | --- | --- |
+| HIST-A1 | A1 domain ownership / Mercur integration | [#14](https://github.com/DenizOner/DogruAdres/issues/14) | Closed / completed — research only |
+| HIST-A2 | A2 platform-core integration topology | [#15](https://github.com/DenizOner/DogruAdres/issues/15) | Closed / completed — research only |
+| HIST-A3 | A3 Bigcapital feasibility (historical, later reassessed in A3-R) | [#16](https://github.com/DenizOner/DogruAdres/issues/16) | Closed / completed — research only |
+
+This register is incrementally expanded when an independently verified inventory slice is published. Current product authority remains `../REQUIREMENTS.md` and accepted ADRs; no research file or historical evidence has been deleted or shortened.
