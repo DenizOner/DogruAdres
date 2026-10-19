@@ -154,6 +154,14 @@ The DoğruAdres-specific product and engineering collaboration records are manag
 - [Controlled requirements baseline and provenance — Issue #141](https://github.com/DenizOner/DogruAdres/issues/141)
 - [M0 Identity / User / Organization acceptance — Issue #147](https://github.com/DenizOner/DogruAdres/issues/147)
 - [Historical IR-0 review and 25 tracked findings — Issue #153](https://github.com/DenizOner/DogruAdres/issues/153)
+- [Current approved / unresolved requirement index — Issue #141](https://github.com/DenizOner/DogruAdres/issues/141#issuecomment-6275903823) (26 proposed, 3 open, 2 deferred; no inferred approvals)
+- [Active audit-first roadmap — Issue #152](https://github.com/DenizOner/DogruAdres/issues/152)
+- [SAFE-0A source evidence and UI strategy — Issue #156](https://github.com/DenizOner/DogruAdres/issues/156#issuecomment-6275864894)
+- [Vehicle-MVP approved scope and blocked design gate — Issue #158](https://github.com/DenizOner/DogruAdres/issues/158)
+- [Later Vehicle/Audit approved source deltas — DA-AUTO-006 #122](https://github.com/DenizOner/DogruAdres/issues/122) and [DA-SEC-007 #51](https://github.com/DenizOner/DogruAdres/issues/51) / [DA-SEC-009 #53](https://github.com/DenizOner/DogruAdres/issues/53)
+- [R0 architecture consolidation: full historical evidence and review gate — Issue #206](https://github.com/DenizOner/DogruAdres/issues/206)
+- [Retired historical planning router — Issue #146](https://github.com/DenizOner/DogruAdres/issues/146#issuecomment-6275919883)
+- [Draft GitHub-only docs cutover — PR #205](https://github.com/DenizOner/DogruAdres/pull/205) (requires separate Product Owner merge authorization)
 - [Root AGENTS.md](AGENTS.md) for permanent agent workflow, approval boundaries and official version-matched Mercur documentation lookup.
 
 Every approved decision, proposed requirement, test outcome and implementation is tracked separately. Historical issue closure does **not** assert feature delivery; an accepted product decision does **not** imply a test passed. The current governance cleanup lives on a review branch and must not be treated as merged until Product Owner approval. Unresolved product decisions remain explicitly open; Discussions are enabled but no Discussion publication is assumed without verified access.
