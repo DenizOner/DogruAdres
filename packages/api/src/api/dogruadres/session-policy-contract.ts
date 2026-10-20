@@ -6,7 +6,10 @@ import {
   type SessionPolicy,
 } from "../../modules/dogruadres-access/session-policy"
 
-/** Unregistered DTO contract. Not an authorization decision or an HTTP API. */
+/** Unregistered DTO contract. Not an authorization decision or an HTTP API.
+ * P2 inherits approved bounds/minute granularity from the single domain parser.
+ * Policy version is configuration concurrency metadata, never a logout epoch.
+ */
 export type SessionPolicyRequest = Readonly<{
   expected_version: number
   policy: SessionPolicy
