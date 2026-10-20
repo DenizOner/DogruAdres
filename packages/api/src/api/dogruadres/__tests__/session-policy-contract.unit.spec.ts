@@ -42,7 +42,7 @@ describe("unregistered session policy DTO contract", () => {
     const output = toSessionPolicyResponse(source)
     expect(Object.keys(output).sort()).toEqual(["policy", "version"])
     expect(JSON.parse(JSON.stringify(output))).toEqual({ version: 4, policy: DEFAULT_SESSION_POLICY })
-    source.policy.idle_timeout_seconds = 1900
+    source.policy.idle_timeout_seconds = 1860
     expect(output.policy.idle_timeout_seconds).toBe(1800)
     expect(Object.isFrozen(output)).toBe(true)
   })
@@ -66,5 +66,34 @@ describe("unregistered session policy DTO contract", () => {
     expect(parseSessionPolicyResponse(JSON.parse(JSON.stringify(output)))).toEqual(output)
     expect(() => parseSessionPolicyResponse({ ...output, actor_id: "forged" })).toThrow()
     expect(() => parseSessionPolicyResponse({ ...output, version: Infinity })).toThrow()
+  })
+
+  it("inherits inclusive D3 limits without a second DTO validation authority", () => {
+    for (const policy of [
+      { idle_timeout_seconds: 300, absolute_lifetime_seconds: 3600, recent_auth_seconds: 60 },
+      { idle_timeout_seconds: 3600, absolute_lifetime_seconds: 43200, recent_auth_seconds: 600 },
+    ]) {
+      expect(parseSessionPolicyRequest({ expected_version: 9, policy }).policy).toEqual(policy)
+      const response = toSessionPolicyResponse({ version: 10, policy })
+      expect(parseSessionPolicyResponse(JSON.parse(JSON.stringify(response))).policy).toEqual(policy)
+    }
+  })
+
+  it("rejects range, granularity, ordering and unlimited bypasses in both DTO directions", () => {
+    for (const policy of [
+      { ...DEFAULT_SESSION_POLICY, idle_timeout_seconds: 240 },
+      { ...DEFAULT_SESSION_POLICY, idle_timeout_seconds: 3660 },
+      { ...DEFAULT_SESSION_POLICY, absolute_lifetime_seconds: 3540 },
+      { ...DEFAULT_SESSION_POLICY, absolute_lifetime_seconds: 43260 },
+      { ...DEFAULT_SESSION_POLICY, recent_auth_seconds: 0 },
+      { ...DEFAULT_SESSION_POLICY, recent_auth_seconds: 660 },
+      { ...DEFAULT_SESSION_POLICY, recent_auth_seconds: 61 },
+      { ...DEFAULT_SESSION_POLICY, idle_timeout_seconds: 300, recent_auth_seconds: 600 },
+      { ...DEFAULT_SESSION_POLICY, absolute_lifetime_seconds: "unlimited" },
+    ]) {
+      expect(() => parseSessionPolicyRequest({ expected_version: 1, policy })).toThrow()
+      expect(() => parseSessionPolicyResponse({ version: 1, policy })).toThrow()
+      expect(() => toSessionPolicyResponse({ version: 1, policy })).toThrow()
+    }
   })
 })

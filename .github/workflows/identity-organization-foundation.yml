@@ -51,6 +51,10 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: bun test src/utils/__tests__/production-secrets.unit.test.ts
+      - name: Inactive session policy and DTO unit contracts
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: packages/api
+        run: bun test src/modules/dogruadres-access/__tests__/session-policy.unit.spec.ts src/api/dogruadres/__tests__/session-policy-contract.unit.spec.ts
       - name: API TypeScript check
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api

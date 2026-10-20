@@ -1,5 +1,6 @@
-/** Inactive P1 contracts only: no persistence, authentication or session effects.
- * Duration bounds and policy-change logout effects remain undecided (#217).
+/** Inactive P2 contracts only: no persistence, authentication or session effects.
+ * #217/6292478831 replaces P1's range-agnostic validation with approved limits.
+ * Policy revisions never imply global logout; eligibility is per session.
  */
 export type SessionPolicy = Readonly<{
   idle_timeout_seconds: number
@@ -14,6 +15,13 @@ export const DEFAULT_SESSION_POLICY: SessionPolicy = Object.freeze({
 })
 
 const policyFields = ["idle_timeout_seconds", "absolute_lifetime_seconds", "recent_auth_seconds"] as const
+
+/** Inclusive seconds, configurable in whole minutes; defaults remain unchanged. */
+export const SESSION_POLICY_LIMITS = Object.freeze({
+  idle_timeout_seconds: Object.freeze({ minimum: 300, maximum: 3600 }),
+  absolute_lifetime_seconds: Object.freeze({ minimum: 3600, maximum: 43200 }),
+  recent_auth_seconds: Object.freeze({ minimum: 60, maximum: 600 }),
+})
 
 export class SessionPolicyContractError extends Error {
   constructor() {
@@ -57,7 +65,9 @@ export function parseSessionPolicy(input: unknown): SessionPolicy {
     absolute_lifetime_seconds: parseCounter(value.absolute_lifetime_seconds),
     recent_auth_seconds: parseCounter(value.recent_auth_seconds),
   }
-  if (policyFields.some((field) => policy[field] === 0) ||
+  if (policyFields.some((field) => policy[field] % 60 !== 0 ||
+        policy[field] < SESSION_POLICY_LIMITS[field].minimum ||
+        policy[field] > SESSION_POLICY_LIMITS[field].maximum) ||
       policy.recent_auth_seconds > policy.idle_timeout_seconds ||
       policy.idle_timeout_seconds > policy.absolute_lifetime_seconds) {
     throw new SessionPolicyContractError()
@@ -104,5 +114,69 @@ export function assertSessionStateTransition(previous: unknown, next: unknown): 
       (changed && after.version === before.version) ||
       (before.status !== "active" && after.status !== before.status)) {
     throw new SessionPolicyContractError()
+  }
+}
+
+/** Trusted server facts, not client claims. Epoch milliseconds, never Date.now(). */
+export type SessionEligibilityFacts = Readonly<{
+  created_at_ms: number
+  last_activity_at_ms: number
+  last_strong_auth_at_ms: number
+  status: "active" | "revoked" | "expired"
+}>
+
+export type SessionEligibilityOutcome =
+  | "permitted"
+  | "expired_absolute"
+  | "expired_idle"
+  | "reauthentication_required"
+  | "already_revoked"
+  | "already_expired"
+  | "invalid_input"
+
+export type SessionEligibility = Readonly<{
+  outcome: SessionEligibilityOutcome
+  permitted: boolean
+  session_status: "active" | "revoked" | "expired" | "invalid"
+}>
+
+/**
+ * Duration eligibility only, NOT an authorization grant. Absolute expiry wins if
+ * multiple limits are reached. Recent-auth expiry denies only sensitive work.
+ *
+ * Eventual runtime MUST persist terminal expiry before allowing later work and
+ * atomically recheck session state/current policy version (CAS/retry) against
+ * concurrent policy, activity and revocation writes. A policy relaxation must
+ * not erase an expiry observed under a prior committed policy. An unobserved
+ * tightening followed by relaxation needs policy-history/ordering enforcement;
+ * this stateless helper cannot detect it. No cross-instance/CAS guarantee here.
+ */
+export function evaluateSessionEligibility(
+  facts: unknown, policyInput: unknown, evaluationTimeMs: unknown, sensitive: unknown
+): SessionEligibility {
+  const result = (outcome: SessionEligibilityOutcome, session_status: SessionEligibility["session_status"]): SessionEligibility =>
+    Object.freeze({ outcome, permitted: outcome === "permitted", session_status })
+  try {
+    const policy = parseSessionPolicy(policyInput)
+    const session = contractRecord(facts, ["created_at_ms", "last_activity_at_ms", "last_strong_auth_at_ms", "status"])
+    const now = parseCounter(evaluationTimeMs)
+    const created = parseCounter(session.created_at_ms)
+    const activity = parseCounter(session.last_activity_at_ms)
+    const strongAuth = parseCounter(session.last_strong_auth_at_ms)
+    if (typeof sensitive !== "boolean" || created > now || activity < created ||
+        strongAuth < created || activity > now || strongAuth > now ||
+        (session.status !== "active" && session.status !== "revoked" && session.status !== "expired")) {
+      return result("invalid_input", "invalid")
+    }
+    if (session.status === "revoked") return result("already_revoked", "revoked")
+    if (session.status === "expired") return result("already_expired", "expired")
+    if (now - created >= policy.absolute_lifetime_seconds * 1000) return result("expired_absolute", "expired")
+    if (now - activity >= policy.idle_timeout_seconds * 1000) return result("expired_idle", "expired")
+    if (sensitive && now - strongAuth >= policy.recent_auth_seconds * 1000) {
+      return result("reauthentication_required", "active")
+    }
+    return result("permitted", "active")
+  } catch {
+    return result("invalid_input", "invalid")
   }
 }
