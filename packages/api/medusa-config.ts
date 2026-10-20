@@ -2,8 +2,12 @@ import { loadEnv } from '@medusajs/framework/utils'
 import { withMercur } from '@mercurjs/core'
 import fs from 'fs'
 import path from 'path'
+import { resolveHttpSecrets } from './src/utils/production-secrets'
 
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
+
+// Fail closed even when Medusa evaluates configuration during a production build.
+const httpSecrets = resolveHttpSecrets(process.env)
 
 // Resolves where a dashboard app lives:
 // - in the source tree (development): ../../apps/<name>
@@ -25,8 +29,8 @@ module.exports = withMercur({
       adminCors: process.env.ADMIN_CORS!,
       vendorCors: process.env.VENDOR_CORS!,
       authCors: process.env.AUTH_CORS!,
-      jwtSecret: process.env.JWT_SECRET || "supersecret",
-      cookieSecret: process.env.COOKIE_SECRET || "supersecret",
+      jwtSecret: httpSecrets.jwtSecret,
+      cookieSecret: httpSecrets.cookieSecret,
     }
   },
   featureFlags: {
