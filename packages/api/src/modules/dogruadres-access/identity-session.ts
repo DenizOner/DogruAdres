@@ -1,0 +1,163 @@
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto"
+import { DEFAULT_SESSION_POLICY, evaluateSessionEligibility, parseSessionPolicy } from "./session-policy"
+
+export type SecuritySql = { execute(sql: string, parameters?: unknown[]): Promise<any[]> }
+export function securitySql(manager: unknown): SecuritySql {
+  if (!manager || typeof manager !== "object" || !("execute" in manager) || typeof manager.execute !== "function") throw new IdentityAccessDenied()
+  const execute = manager.execute.bind(manager)
+  return { execute: async (sql, parameters) => {
+    const rows = await execute(sql,parameters)
+    if (!Array.isArray(rows)) throw new IdentityAccessDenied()
+    return rows
+  } }
+}
+export const digest = (value: string) => createHash("sha256").update(value).digest("hex")
+export const opaque = () => randomBytes(32).toString("base64url")
+export function csrfToken(token: string): string {
+  const key = process.env.COOKIE_SECRET
+  if (!key || Buffer.byteLength(key)<32) throw new IdentityAccessDenied()
+  return createHmac("sha256",key).update("dogruadres-csrf:"+token).digest("base64url")
+}
+export class IdentityAccessDenied extends Error { constructor() { super("Access denied");this.name="IdentityAccessDenied" } }
+
+/** Foundation-owned tables only. Caller MUST supply this module's transaction manager.
+ * No email lookup, ambient browser identity, cross-module manager or cached grant.
+ */
+export class IdentitySessions {
+  constructor(private readonly db: SecuritySql) {}
+
+  private async audit(person: string, actorType: string, actorId: string, action: string, target: string) {
+    const id = `daaud_${randomUUID()}`
+    await this.db.execute(`insert into da_audit_event
+      (id,actor_person_id,actor_type,actor_id,action,module,resource,target_id,occurred_at,created_at,updated_at)
+      values (?,?,?,?,?,'dogruadres-access','identity-session',?,clock_timestamp(),now(),now())`,
+    [id, person, actorType, actorId, action, target])
+    await this.db.execute(`insert into da_security_outbox(id,audit_event_id,created_at) values (?,?,now())`, [randomUUID(), id])
+  }
+
+  async create(authIdentityId: string, strongAt: Date | null = null) {
+    const rows = await this.db.execute(`select b.*,p.disabled_at from da_login_binding b
+      join da_person p on p.id=b.person_id and p.deleted_at is null
+      join da_actor_mapping a on a.person_id=p.id and a.actor_type=b.actor_type and a.actor_id=b.actor_id and a.deleted_at is null
+      where b.auth_identity_id=? and b.revoked_at is null and b.verified_at is not null for update of b,p`, [authIdentityId])
+    if (rows.length !== 1 || rows[0].disabled_at) throw new IdentityAccessDenied()
+    const b = rows[0]
+    await this.db.execute(`insert into da_person_security(person_id,epoch) values (?,0) on conflict do nothing`, [b.person_id])
+    const [security] = await this.db.execute(`select epoch from da_person_security where person_id=? for update`, [b.person_id])
+    const token = opaque(), csrf = csrfToken(token)
+    await this.db.execute(`insert into da_browser_session
+      (id,person_id,auth_identity_id,actor_type,actor_id,epoch,csrf_hash,status,created_at,last_activity_at,last_strong_auth_at)
+      values (?,?,?,?,?,?,?,'active',?,?,?)`,
+    [digest(token), b.person_id, authIdentityId, b.actor_type, b.actor_id, security.epoch, digest(csrf),strongAt??new Date(),strongAt??new Date(),strongAt])
+    await this.audit(b.person_id,b.actor_type,b.actor_id,"session.created",digest(token))
+    return { token, csrf }
+  }
+
+  async current(token: string, sensitive = false, touch = true) {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new IdentityAccessDenied()
+    return this.currentHash(digest(token),sensitive,touch)
+  }
+  private async currentHash(hash:string,sensitive=false,touch=true) {
+    const rows = await this.db.execute(`select s.*, p.disabled_at, e.epoch as current_epoch,
+      extract(epoch from clock_timestamp())*1000 as now_ms
+      from da_browser_session s join da_person p on p.id=s.person_id and p.deleted_at is null
+      join da_person_security e on e.person_id=p.id
+      join da_login_binding b on b.auth_identity_id=s.auth_identity_id and b.person_id=s.person_id
+        and b.actor_type=s.actor_type and b.actor_id=s.actor_id and b.revoked_at is null and b.verified_at is not null
+      join da_actor_mapping a on a.person_id=s.person_id and a.actor_type=s.actor_type and a.actor_id=s.actor_id and a.deleted_at is null
+      where s.id=? for update of s,e`, [hash])
+    if (rows.length !== 1) throw new IdentityAccessDenied()
+    const s = rows[0]
+    const policies = await this.db.execute(`select idle_timeout_seconds,absolute_lifetime_seconds,recent_auth_seconds from da_session_policy where id='current' for share`)
+    if (policies.length !== 1) throw new IdentityAccessDenied()
+    const policy = parseSessionPolicy(policies[0])
+    const result = evaluateSessionEligibility({
+      created_at_ms: new Date(s.created_at).getTime(), last_activity_at_ms: new Date(s.last_activity_at).getTime(),
+      last_strong_auth_at_ms: s.last_strong_auth_at ? new Date(s.last_strong_auth_at).getTime() : null,
+      status: s.status,
+    }, policy, Math.floor(Number(s.now_ms)), sensitive)
+    if (s.disabled_at || String(s.epoch) !== String(s.current_epoch) || result.session_status === "expired") {
+      await this.db.execute(`update da_browser_session set status=case when status='active' then ? else status end where id=?`,
+        [result.session_status === "expired" ? "expired" : "revoked",s.id])
+      return null // Commit terminal state; throwing would roll it back.
+    }
+    if (!result.permitted) return null
+    if (touch) await this.db.execute(`update da_browser_session set last_activity_at=clock_timestamp() where id=? and status='active'`, [s.id])
+    return { id:s.id, person_id:s.person_id, auth_identity_id:s.auth_identity_id, actor_type:s.actor_type, actor_id:s.actor_id, csrf_hash:s.csrf_hash }
+  }
+
+  async logout(token: string, all: boolean) {
+    const s = await this.current(token, false, false)
+    if (!s) return
+    if (all) await this.db.execute(`update da_person_security set epoch=epoch+1 where person_id=?`,[s.person_id])
+    await this.db.execute(`update da_browser_session set status='revoked' where status='active' and ${all ? "person_id" : "id"}=?`,[all?s.person_id:s.id])
+    await this.audit(s.person_id,s.actor_type,s.actor_id,all?"session.all_revoked":"session.revoked",s.id)
+  }
+
+  async organizations(token: string, organizationId?: string) {
+    const s = await this.current(token)
+    if (!s) return null
+    // One statement is the observation point L for these Foundation-owned reads.
+    const rows = await this.db.execute(`select o.id,o.name,m.id as membership_id,m.role from da_organization o
+      join da_organization_membership m on m.organization_id=o.id
+      join da_person p on p.id=m.person_id
+      join da_browser_session s on s.person_id=p.id and s.id=? and s.status='active'
+      join da_person_security e on e.person_id=p.id and e.epoch=s.epoch
+      join da_login_binding b on b.auth_identity_id=s.auth_identity_id and b.person_id=p.id and b.actor_type=s.actor_type and b.actor_id=s.actor_id and b.revoked_at is null and b.verified_at is not null
+      join da_actor_mapping a on a.person_id=p.id and a.actor_type=s.actor_type and a.actor_id=s.actor_id and a.deleted_at is null
+      join da_session_policy q on q.id='current'
+      where p.id=? and p.disabled_at is null and p.deleted_at is null and o.status='active' and o.deleted_at is null
+      and statement_timestamp()<s.created_at+q.absolute_lifetime_seconds*interval '1 second'
+      and statement_timestamp()<s.last_activity_at+q.idle_timeout_seconds*interval '1 second'
+      and m.status='active' and m.deleted_at is null ${organizationId ? "and o.id=?" : ""} order by o.id`,
+    organizationId ? [s.id,s.person_id,organizationId] : [s.id,s.person_id])
+    if (new Set(rows.map(r=>r.id)).size !== rows.length || (organizationId && rows.length !== 1)) return null
+    return { person_id:s.person_id, organizations: rows }
+  }
+
+  async staff(token: string, task: string, resource: string) {
+    const s = await this.current(token, true)
+    if (!s) return null
+    const rows = await this.db.execute(`select g.id from da_platform_staff_grant g join da_person p on p.id=g.person_id
+      join da_browser_session s on s.person_id=p.id and s.id=? and s.status='active'
+      join da_person_security e on e.person_id=p.id and e.epoch=s.epoch
+      join da_login_binding b on b.auth_identity_id=s.auth_identity_id and b.person_id=p.id and b.actor_type=s.actor_type and b.actor_id=s.actor_id and b.revoked_at is null and b.verified_at is not null
+      join da_actor_mapping a on a.person_id=p.id and a.actor_type=s.actor_type and a.actor_id=s.actor_id and a.deleted_at is null
+      join da_session_policy q on q.id='current'
+      where g.person_id=? and g.task=? and g.resource=? and g.revoked_at is null
+      and statement_timestamp()<s.created_at+q.absolute_lifetime_seconds*interval '1 second'
+      and statement_timestamp()<s.last_activity_at+q.idle_timeout_seconds*interval '1 second'
+      and s.last_strong_auth_at is not null and statement_timestamp()<s.last_strong_auth_at+q.recent_auth_seconds*interval '1 second'
+      and p.disabled_at is null and p.deleted_at is null and (g.expires_at is null or g.expires_at>clock_timestamp())`,
+    [s.id,s.person_id,task,resource])
+    return rows.length === 1 ? {...s,grant_id:rows[0].id} : null
+  }
+
+  async pending(authIdentityId:string, challengeId:string) {
+    const token=opaque()
+    await this.db.execute(`insert into da_login_challenge(id,auth_identity_id,challenge_id,expires_at) values (?,?,?,clock_timestamp()+interval '5 minutes')`,[digest(token),authIdentityId,challengeId])
+    return {token,csrf:csrfToken(token)}
+  }
+  async bindNative(token:string,tokenHash:string,ciphertext:string) {
+    const s=await this.current(token,false,false)
+    if(!s || !/^[a-f0-9]{64}$/.test(tokenHash))throw new IdentityAccessDenied()
+    await this.db.execute(`insert into da_native_credential(token_hash,session_id,ciphertext) values (?,?,?)`,[tokenHash,s.id,ciphertext])
+  }
+  async native(tokenHash:string) {
+    if(!/^[a-f0-9]{64}$/.test(tokenHash))return null
+    const rows=await this.db.execute(`select session_id from da_native_credential where token_hash=?`,[tokenHash])
+    return rows.length===1?this.currentHash(rows[0].session_id):null
+  }
+  async challenge(token:string) {
+    if(!/^[A-Za-z0-9_-]{43}$/.test(token))return null
+    const rows=await this.db.execute(`select auth_identity_id,challenge_id from da_login_challenge where id=? and consumed_at is null and expires_at>clock_timestamp()`,[digest(token)])
+    return rows.length===1?rows[0]:null
+  }
+  async complete(token:string,completedAt:Date) {
+    const rows=await this.db.execute(`update da_login_challenge set consumed_at=clock_timestamp() where id=? and consumed_at is null and expires_at>clock_timestamp() returning auth_identity_id`,[digest(token)])
+    if(rows.length!==1 || !Number.isFinite(completedAt.getTime()) || completedAt.getTime()>Date.now())throw new IdentityAccessDenied()
+    return this.create(rows[0].auth_identity_id,completedAt)
+  }
+}
+
+export { DEFAULT_SESSION_POLICY }

@@ -8,7 +8,7 @@ export const POST = async (
   req: AuthenticatedMedusaRequest<ProvisionOrganizationBody>,
   res: MedusaResponse
 ) => {
-  const provisionedBy = requirePlatformAdministrator(req)
+  const provisionedBy = await requirePlatformAdministrator(req)
   const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
   for (const owner of req.validatedBody.initial_owners) {
     const { data } = await query.graph({

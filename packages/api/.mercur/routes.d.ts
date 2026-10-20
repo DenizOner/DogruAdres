@@ -510,6 +510,9 @@ export type Routes = {
             };
         };
         custom: typeof import("../src/api/admin/custom/route");
+        dogruadres: {
+            organizations: typeof import("../src/api/admin/dogruadres/organizations/route");
+        };
     };
     auth: {
         $actorType: {
@@ -925,5 +928,26 @@ export type Routes = {
         };
         stores: typeof import("@mercurjs/core/api/vendor/stores/route");
         uploads: typeof import("@mercurjs/core/api/vendor/uploads/route");
+    };
+    dogruadres: {
+        invitations: {
+            accept: typeof import("../src/api/dogruadres/invitations/accept/route");
+        };
+        organizations: {
+            $id: typeof import("../src/api/dogruadres/organizations/[id]/route") & {
+                invitations: typeof import("../src/api/dogruadres/organizations/[id]/invitations/route") & {
+                    $invitationId: typeof import("../src/api/dogruadres/organizations/[id]/invitations/[invitation_id]/route");
+                };
+                memberships: typeof import("../src/api/dogruadres/organizations/[id]/memberships/route") & {
+                    $membershipId: typeof import("../src/api/dogruadres/organizations/[id]/memberships/[membership_id]/route");
+                };
+            };
+        };
+    };
+    personal: typeof import("../src/api/personal/route") & {
+        challenge: typeof import("../src/api/personal/challenge/route");
+        organizations: typeof import("../src/api/personal/organizations/route");
+        platform: typeof import("../src/api/personal/platform/route");
+        session: typeof import("../src/api/personal/session/route");
     };
 };

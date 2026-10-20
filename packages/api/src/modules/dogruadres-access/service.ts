@@ -9,6 +9,7 @@ import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, has
 import { ActorMapping, AuditEvent, Invitation, Membership, Organization, Person } from "./models"
 import { randomBytes } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
+import { IdentitySessions, securitySql } from "./identity-session"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -16,6 +17,7 @@ type ProvisionOrganizationInput = Readonly<{
   name: string
   provisioned_by: ActorReference
   initial_owners: ActorReference[]
+  staff_grant_id?: string
 }>
 
 type ChangeMembershipInput = Readonly<{
@@ -44,6 +46,85 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   Invitation,
   AuditEvent,
 }) {
+  @InjectTransactionManager()
+  async personalMachineGrant(apiKeyId:string,method:string,resource:string,@MedusaContext() context:Context={}) {
+    const rows=await securitySql(context.transactionManager).execute(`select id from da_machine_grant where api_key_id=? and method=? and resource=? and revoked_at is null`,[apiKeyId,method,resource])
+    return rows.length===1
+  }
+  @InjectTransactionManager()
+  async bindPersonalNativeCredential(token:string,hash:string,ciphertext:string,@MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).bindNative(token,hash,ciphertext)
+  }
+  @InjectTransactionManager()
+  async personalNativeCredential(hash:string,@MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).native(hash)
+  }
+  @InjectTransactionManager()
+  async personalLoginAttempt(subjectHash:string, addressHash:string, @MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    // Fixed server-owned engineering abuse limits, never an authorization grant.
+    for(const [bucket,maximum] of [["subject:"+subjectHash,10],["address:"+addressHash,60]] as const){
+      const [row]=await sql.execute(`insert into da_login_attempt(bucket,minute,attempts)
+        values (?,floor(extract(epoch from clock_timestamp())/60),1)
+        on conflict(bucket,minute) do update set attempts=da_login_attempt.attempts+1 returning attempts`,[bucket])
+      if(!row || row.attempts>maximum)return false
+    }
+    return true
+  }
+  @InjectTransactionManager()
+  async pendingPersonalChallenge(authId:string, challengeId:string, @MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).pending(authId,challengeId)
+  }
+  @InjectTransactionManager()
+  async readPersonalChallenge(token:string, @MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).challenge(token)
+  }
+  @InjectTransactionManager()
+  async completePersonalChallenge(token:string, completedAt:Date, @MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).complete(token,completedAt)
+  }
+  @InjectTransactionManager()
+  async openPersonalSession(authIdentityId: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).create(authIdentityId)
+  }
+
+  @InjectTransactionManager()
+  async personalSession(token: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).current(token)
+  }
+
+  @InjectTransactionManager()
+  async closePersonalSession(token: string, all: boolean, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).logout(token, all)
+  }
+
+  @InjectTransactionManager()
+  async personalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId)
+  }
+
+  @InjectTransactionManager()
+  async personalStaff(token: string, task: string, resource: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).staff(token, task, resource)
+  }
+
+  @InjectTransactionManager()
+  async provisionPersonalOrganization(token: string, input: Omit<ProvisionOrganizationInput,"provisioned_by">, @MedusaContext() context:Context={}) {
+    const staff=await new IdentitySessions(securitySql(context.transactionManager)).staff(token,"organization.provision","platform")
+    if(!staff)throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
+    const result=await this.provisionOrganization({...input,staff_grant_id:staff.grant_id,provisioned_by:{actor_type:staff.actor_type,actor_id:staff.actor_id}},context)
+    // Generated MedusaService writes may still be pending in this transaction's
+    // identity map. Flush before the raw SELECT/FK insert; commit stays owned here.
+    const manager=context.transactionManager
+    if(!manager || typeof manager!=="object" || !("flush" in manager) || typeof manager.flush!=="function")throw new Error("Foundation transaction manager unavailable")
+    await manager.flush()
+    const sql=securitySql(context.transactionManager)
+    await sql.execute(`insert into da_security_outbox(id,audit_event_id,created_at)
+      select 'security_'||id,id,clock_timestamp() from da_audit_event where organization_id=?
+      and action in ('organization.provisioned','organization.owner_assigned') on conflict(audit_event_id) do nothing`,[result.organization.id])
+    return result
+  }
+
   private async ensureActorPerson_(
     actor: ActorReference,
     createdBy: ActorReference,
@@ -205,13 +286,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         actor_id: input.provisioned_by.actor_id,
         actor_type: input.provisioned_by.actor_type,
         actor_person_id: provisioner.id,
-        role_context: "platform_administrator",
+        role_context: input.staff_grant_id ? "platform_staff" : "platform_administrator",
         organization_id: organization.id,
         action: "organization.provisioned",
         module: DOGRUADRES_AUDIT_MODULE,
         resource: "organization",
         target_id: organization.id,
-        new_values: { name: organization.name, initial_owner_count: memberships.length },
+        new_values: { name: organization.name, initial_owner_count: memberships.length, ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id}:{}) },
         occurred_at: new Date(),
       },
       ...memberships.map((membership, index) => ({

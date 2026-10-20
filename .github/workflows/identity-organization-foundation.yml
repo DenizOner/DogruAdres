@@ -56,9 +56,16 @@ jobs:
         working-directory: packages/api
         run: bun test src/modules/dogruadres-access/__tests__/session-policy.unit.spec.ts src/api/dogruadres/__tests__/session-policy-contract.unit.spec.ts
       - name: API TypeScript check
+        # Runtime/PostgreSQL/browser evidence is collected separately; this is unit-only.
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json
+      - name: Personal session and ingress unit contracts
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: packages/api
+        env:
+          TEST_TYPE: unit
+        run: bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts src/api/personal/__tests__/ingress.unit.spec.ts
       - name: Native HTTP test syntax only
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
