@@ -106,3 +106,48 @@ jobs:
           export COOKIE_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
           export DOGRUADRES_INVITATION_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
           bun run build
+      - name: Production Medusa CLI rejects scaffold JWT and cookie secrets (no database)
+        working-directory: packages/api
+        timeout-minutes: 4
+        env:
+          NODE_ENV: production
+          DATABASE_URL: postgres://ci@127.0.0.1:1/safe0a_build_sentinel
+          REDIS_URL: redis://127.0.0.1:1
+          STORE_CORS: http://127.0.0.1:19040
+          ADMIN_CORS: http://127.0.0.1:19040
+          VENDOR_CORS: http://127.0.0.1:19040
+          AUTH_CORS: http://127.0.0.1:19040
+        shell: bash
+        run: |
+          set +e
+          output=$(JWT_SECRET=supersecret COOKIE_SECRET=supersecret timeout 120s bunx medusa build 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "UNSAFE: Medusa production build accepted scaffold auth secrets"
+            exit 1
+          fi
+          if ! printf '%s' "$output" | grep -q 'Production requires distinct'; then
+            echo "FAIL: Medusa CLI did not reject secrets through the expected validator"
+            exit 1
+          fi
+          echo "PASS: production Medusa CLI rejected scaffold secrets before server startup"
+      - name: Production Medusa build accepts unique synthetic secrets (no database)
+        working-directory: packages/api
+        timeout-minutes: 10
+        env:
+          NODE_ENV: production
+          DATABASE_URL: postgres://ci@127.0.0.1:1/safe0a_build_sentinel
+          REDIS_URL: redis://127.0.0.1:1
+          STORE_CORS: http://127.0.0.1:19040
+          ADMIN_CORS: http://127.0.0.1:19040
+          VENDOR_CORS: http://127.0.0.1:19040
+          AUTH_CORS: http://127.0.0.1:19040
+          FILE_BACKEND_URL: http://127.0.0.1:19040/static
+        shell: bash
+        run: |
+          export JWT_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
+          export COOKIE_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
+          export DOGRUADRES_INVITATION_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
+          # Compile only: never launch a server, create a database, migrate or deploy.
+          timeout 420s bunx medusa build
