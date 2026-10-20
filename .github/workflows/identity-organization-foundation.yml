@@ -47,6 +47,10 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: bun test src/modules/dogruadres-access/__tests__/security.unit.spec.ts src/utils/__tests__/organization-authorization.unit.spec.ts
+      - name: Production HTTP secret guard regressions
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: packages/api
+        run: bun test src/utils/__tests__/production-secrets.unit.test.ts
       - name: API TypeScript check
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
