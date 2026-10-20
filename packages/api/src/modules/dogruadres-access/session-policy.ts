@@ -121,7 +121,8 @@ export function assertSessionStateTransition(previous: unknown, next: unknown): 
 export type SessionEligibilityFacts = Readonly<{
   created_at_ms: number
   last_activity_at_ms: number
-  last_strong_auth_at_ms: number
+  /** Null means no completed, verified step-up exists for this session. */
+  last_strong_auth_at_ms: number | null
   status: "active" | "revoked" | "expired"
 }>
 
@@ -162,9 +163,11 @@ export function evaluateSessionEligibility(
     const now = parseCounter(evaluationTimeMs)
     const created = parseCounter(session.created_at_ms)
     const activity = parseCounter(session.last_activity_at_ms)
-    const strongAuth = parseCounter(session.last_strong_auth_at_ms)
+    const strongAuth = session.last_strong_auth_at_ms === null
+      ? null
+      : parseCounter(session.last_strong_auth_at_ms)
     if (typeof sensitive !== "boolean" || created > now || activity < created ||
-        strongAuth < created || activity > now || strongAuth > now ||
+        (strongAuth !== null && (strongAuth < created || strongAuth > now)) || activity > now ||
         (session.status !== "active" && session.status !== "revoked" && session.status !== "expired")) {
       return result("invalid_input", "invalid")
     }
@@ -172,7 +175,7 @@ export function evaluateSessionEligibility(
     if (session.status === "expired") return result("already_expired", "expired")
     if (now - created >= policy.absolute_lifetime_seconds * 1000) return result("expired_absolute", "expired")
     if (now - activity >= policy.idle_timeout_seconds * 1000) return result("expired_idle", "expired")
-    if (sensitive && now - strongAuth >= policy.recent_auth_seconds * 1000) {
+    if (sensitive && (strongAuth === null || now - strongAuth >= policy.recent_auth_seconds * 1000)) {
       return result("reauthentication_required", "active")
     }
     return result("permitted", "active")

@@ -173,6 +173,43 @@ describe("pure selective session eligibility", () => {
     expect(evaluate(session).outcome).toBe("permitted")
   })
 
+  it("allows ordinary work without completed step-up and requires it for sensitive work", () => {
+    const session = { ...facts(), last_strong_auth_at_ms: null }
+    expect(evaluate(session)).toEqual({ outcome: "permitted", permitted: true, session_status: "active" })
+    expect(evaluate(session, DEFAULT_SESSION_POLICY, true)).toEqual({
+      outcome: "reauthentication_required", permitted: false, session_status: "active",
+    })
+  })
+
+  it("accepts a recent verified step-up and rejects future or pre-session evidence", () => {
+    const recent = { ...facts(), last_strong_auth_at_ms: now - 60_000 }
+    expect(evaluate(recent, DEFAULT_SESSION_POLICY, true).outcome).toBe("permitted")
+    expect(evaluate({ ...recent, last_strong_auth_at_ms: now + 1 }, DEFAULT_SESSION_POLICY, true).outcome).toBe("invalid_input")
+    expect(evaluate({ ...recent, last_strong_auth_at_ms: recent.created_at_ms - 1 }, DEFAULT_SESSION_POLICY, true).outcome).toBe("invalid_input")
+  })
+
+  it.each(["revoked", "expired"])("denies terminal %s sessions regardless of step-up state", (status) => {
+    for (const last_strong_auth_at_ms of [null, now - 1000]) {
+      const result = evaluate({ ...facts(), status, last_strong_auth_at_ms }, DEFAULT_SESSION_POLICY, false)
+      expect(result.outcome).toBe(status === "revoked" ? "already_revoked" : "already_expired")
+      expect(result.permitted).toBe(false)
+    }
+  })
+
+  it("rejects missing, undefined and forged step-up values instead of treating them as null", () => {
+    const { last_strong_auth_at_ms: _omitted, ...missing } = facts()
+    expect(evaluate(missing).outcome).toBe("invalid_input")
+    for (const value of [undefined, "verified", false, Number.NaN, 0]) {
+      expect(evaluate({ ...facts(), last_strong_auth_at_ms: value }).outcome).toBe("invalid_input")
+    }
+  })
+
+  it("expires idle and absolute sessions even when no step-up has occurred", () => {
+    const session = { ...facts(), last_strong_auth_at_ms: null }
+    expect(evaluate({ ...session, created_at_ms: now - DEFAULT_SESSION_POLICY.absolute_lifetime_seconds * 1000 }).outcome).toBe("expired_absolute")
+    expect(evaluate({ ...session, last_activity_at_ms: now - DEFAULT_SESSION_POLICY.idle_timeout_seconds * 1000 }).outcome).toBe("expired_idle")
+  })
+
   it("uses the original creation time across policy changes, and absolute expiry wins", () => {
     const session = { ...facts(), created_at_ms: now - 9 * 3600_000, last_activity_at_ms: now - 3600_000 }
     expect(evaluate(session).outcome).toBe("expired_absolute")
@@ -218,18 +255,21 @@ describe("pure selective session eligibility", () => {
 
   it.each([NaN, Infinity, -Infinity, -1, -0, 1.5, Number.MAX_SAFE_INTEGER + 1, "100000000", null, new Date()])("rejects invalid timestamp %p", (value) => {
     expect(evaluate(facts(), DEFAULT_SESSION_POLICY, false, value).outcome).toBe("invalid_input")
-    for (const field of ["created_at_ms", "last_activity_at_ms", "last_strong_auth_at_ms"]) {
+    for (const field of ["created_at_ms", "last_activity_at_ms"]) {
       expect(evaluate({ ...facts(), [field]: value }).outcome).toBe("invalid_input")
     }
+    if (value !== null) expect(evaluate({ ...facts(), last_strong_auth_at_ms: value }).outcome).toBe("invalid_input")
   })
 
   it("rejects future timestamps and activity/auth before original creation", () => {
-    for (const field of ["created_at_ms", "last_activity_at_ms", "last_strong_auth_at_ms"]) {
+    for (const field of ["created_at_ms", "last_activity_at_ms"]) {
       expect(evaluate({ ...facts(), [field]: now + 1 }).outcome).toBe("invalid_input")
     }
-    for (const field of ["last_activity_at_ms", "last_strong_auth_at_ms"]) {
+    expect(evaluate({ ...facts(), last_strong_auth_at_ms: now + 1 }).outcome).toBe("invalid_input")
+    for (const field of ["last_activity_at_ms"]) {
       expect(evaluate({ ...facts(), [field]: facts().created_at_ms - 1 }).permitted).toBe(false)
     }
+    expect(evaluate({ ...facts(), last_strong_auth_at_ms: facts().created_at_ms - 1 }).outcome).toBe("invalid_input")
   })
 
   it("rejects malformed facts, policy and sensitive flag without exposing input", () => {
