@@ -200,3 +200,107 @@ HTTP suite. Each fixture file uses a unique name; existing private evidence and
 used tokens remain preserved. Its successful filename is the nonsecret value
 of M0_RESET_FIXTURE; never print its contents. Previous canonical data, audit
 history, volumes and protected worktrees remain untouched.
+
+## Public browser boundary and genuine actor contexts (2026-10-21)
+
+Continuation authority: #217/6302924586; #147/6302939622. Initial HEAD:
+e9d6db80f18e992671fd062f9e55c164831c0c85, same branch and draft PR #227.
+
+`node scripts/personal-frontdoor.mjs` binds only 127.0.0.1:19101. Both child
+processes use DOGRUADRES_PUBLIC_ORIGIN=http://127.0.0.1:19101 and
+DOGRUADRES_PRIVATE_API=http://127.0.0.1:19100. The explicit method/path relay
+never exposes native actor/actorless login or refresh, never rewrites auth bodies,
+and forwards Authorization only for purpose-bound password update or the exact
+Basic machine read. Unknown paths fail closed. Public Store catalog GET classes,
+anonymous verification and supported reset/update retain native validation.
+Checkout, payment hooks, OAuth callbacks, full native dashboards and broader
+machine workflows are not exposed here; their supported public contracts remain
+open. This task-only topology is not production network isolation: local clients
+can still reach the private loopback API. TLS/firewall/private-network acceptance
+is NOT TESTED, and this fixed-loopback launcher is not a production deployment.
+
+Migration20261021231000 adds Foundation-owned verified actor bindings and
+encrypted/expiring server credential ledgers. Explicit identity ownership,
+canonical mapping, live session/epoch and non-revoked binding are mandatory.
+Email equality grants nothing. Only server adapters retrieve AuthIdentity and
+sign 900-second native credentials; strong-auth age is never manufactured.
+Fresh Seller-module membership/member/status reads supplement native Mercur
+seller middleware. Medusa still verifies Customer actor/signature. No manager
+crosses module ownership. Cross-module commit-time revocation fencing is not
+claimed. Production linking/enrollment/recovery proof UX remains unimplemented;
+the explicit synthetic fixture helper is not that production authority.
+
+The actual personal UI now supports provisioning, scoped membership revocation,
+Seller and Customer contexts. Organization selection is page-URL scoped, not a
+shared session selector. Provisioning prevents repeat submission after success
+or ambiguous failure. Revocation rechecks and clears obsolete Organization detail.
+Existing protected-Owner checks remain. Newly created membership-change audits
+receive one transactional security-outbox pointer; old records are not rewritten.
+
+Executed from packages/api with private process-local environment, exits 0:
+
+```powershell
+bun run medusa db:migrate --skip-links --skip-search --skip-scripts --all-or-nothing
+bun run medusa exec ./integration-tests/session-vertical/contexts-fixture.ts
+bun run medusa exec ./integration-tests/session-vertical/unbound-fixture.ts
+bun run medusa exec ./integration-tests/session-vertical/recovery-fixture.ts
+bun run dev -- --host 127.0.0.1 --port 19100
+node scripts/personal-frontdoor.mjs
+bun test src/modules/dogruadres-access/__tests__/security.unit.spec.ts src/utils/__tests__/organization-authorization.unit.spec.ts src/utils/__tests__/production-secrets.unit.test.ts src/modules/dogruadres-access/__tests__/session-policy.unit.spec.ts src/api/dogruadres/__tests__/session-policy-contract.unit.spec.ts
+# TEST_TYPE=unit for this Jest command:
+bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts src/modules/dogruadres-access/__tests__/actor-delegation.unit.spec.ts src/api/personal/__tests__/ingress.unit.spec.ts
+node --test integration-tests/session-vertical/frontdoor.unit.test.mjs
+bun run tsc --noEmit --pretty false
+bun run build
+node --test integration-tests/session-vertical/http-security.test.mjs
+node --test integration-tests/session-vertical/contexts-http.test.mjs
+node --test integration-tests/session-vertical/frontdoor-http.test.mjs
+```
+
+Final units: Bun 124/5 files (includes six production-secret regressions), Jest
+63/3 suites, Node front-door 2. HTTP/PostgreSQL: existing 20, contexts 10 including
+aggregate, public-support 3. Native validator unit accepts iat+899 and rejects
+iat+900 for delegated Member credentials. Backend build passed, explicitly
+skipping absent prebuilt native Admin/Vendor panels. The tested UI is /personal.
+CI covers unit/type/build, not local HTTP/PostgreSQL/Chrome acceptance.
+
+HTTP harnesses require M0_TEST_ORIGIN=http://127.0.0.1:19100, private
+M0_TEST_EVIDENCE; existing suite also M0_REQUEST_ORIGIN=http://127.0.0.1:19101.
+Each recovery suite needs a fresh M0_RESET_FIXTURE filename from the supported
+workflow. Never display its contents. Fixture helpers refuse overwriting private
+manifests. The final M0_TEST_BINDING_REVOCATION=1 run permanently revoked only
+its synthetic Customer binding. Preserve this terminal state; do not restore it
+or rerun positive Customer assertions against it. A new explicit ownership proof
+and fresh binding/actor are required for another lifecycle run.
+
+Real Chrome: invalid login, genuine password/TOTP, Person, Member/Seller A allow,
+Seller B deny, Customer allow, two Organization tabs with refresh, revoked and
+foreign context checks, provisioning absent-grant/duplicate-Owner denial and one
+valid submission. PostgreSQL verified that submission as exactly 1 Organization,
+2 distinct active protected Owners, 3 correctly attributed audits and 3 linked
+outbox records. UI membership revocation persisted with audit/outbox; an already
+open self-revoked ABC tab denied on refresh, while XYZ remained authorized.
+An ordinary Person subsequently saw revoked XYZ denied and its ABC allowed.
+Independently isolated two-Person browser sessions, suspended-context cases and
+the complete B01-B21 matrix remain NOT TESTED/acceptance open. Logout/reopen and
+public native login rejection were executed. Restricted browser storage evaluation
+cannot inspect localStorage: do not claim that inspection passed. One full-page
+screenshot timed out; viewport screenshots succeeded and remain outside Git.
+
+Historical failures preserved: wrong-root tsc exposed unrelated workspace errors;
+fixture orgs inferred never[] then received an explicit type; Jest each-table
+empty row caused 10 pass/1 fail, fixed as named row data. Context HTTP initially
+expected 403 whereas native Mercur NOT_ALLOWED returns 400 (6 pass/2 fail incl.
+aggregate), then 8/8 and final expanded 10/10. The existing unbound-user test
+reused an actor now explicitly bound in this scope (18 pass/2 fail incl.
+aggregate); a fresh genuine unbound actor preserved the 401/no-Person assertion,
+then 20/20 passed. Public-support first run raced dev-watch restart (0 pass/3
+fail, 503), no fixture writes; verified readiness retry passed 3/3. Browser 503
+outcomes during watcher restarts were not counted as business acceptance.
+No security expectation was relaxed to permit access.
+
+D3/D4/D5 and delegated replay results are bounded isolated evidence. Distributed
+revocation, full Seller writer/cache races, legal Buyer checkout, production
+network/TLS and full browser coverage remain open. M0 is NOT COMPLETE. Rollback:
+stop front door/API, preserve binding/session/credential terminal history; no
+destructive down migration and no operational return to known native bypasses.

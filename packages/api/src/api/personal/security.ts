@@ -45,6 +45,8 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/session" && ["GET","POST","DELETE"].includes(req.method)) ||
       (path==="/personal/challenge" && req.method==="POST") ||
       (path==="/personal/organizations" && req.method==="GET") ||
+      (path==="/personal/contexts" && req.method==="GET") ||
+      (path==="/personal/memberships" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/platform" && ["GET","POST"].includes(req.method)) ||
       ((path==="/health" || path==="/cloud/auth") && req.method==="GET") ||
       (anonymous && publicAuth.test(path) && ["GET","POST"].includes(req.method)) ||
@@ -70,7 +72,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
     } catch { return res.status(503).json({message:"Service unavailable"}) }
     return res.status(403).json({message:"Machine scope denied"})
   }
-  if ((path==="/admin/users/me" && req.method==="GET" ||
+  if ((["/admin/users/me","/vendor/members/me","/store/customers/me"].includes(path) && req.method==="GET" ||
        ["/auth/token/refresh","/auth/verification/request","/auth/verification/confirm"].includes(path) && req.method==="POST") && /^Bearer /i.test(authorization)) {
     try {
       const session=await access(req).personalNativeCredential(digest(authorization.slice(7)))

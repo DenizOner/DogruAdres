@@ -167,6 +167,14 @@ export class IdentitySessions {
   async native(tokenHash:string) {
     if(!/^[a-f0-9]{64}$/.test(tokenHash))return null
     const rows=await this.db.execute(`select session_id from da_native_credential where token_hash=? and retired_at is null and expires_at>clock_timestamp()`,[tokenHash])
+    if(rows.length===0){
+      const delegated=await this.db.execute(`select c.session_id from da_actor_credential c where c.token_hash=? and c.retired_at is null and c.expires_at>clock_timestamp()`,[tokenHash])
+      if(delegated.length!==1)return null
+      const session=await this.currentHash(delegated[0].session_id)
+      if(!session)return null
+      const current=await this.db.execute(`select b.actor_type,b.actor_id from da_actor_credential c join da_verified_actor_binding b on b.id=c.binding_id and b.person_id=? and b.revoked_at is null join da_actor_mapping a on a.person_id=b.person_id and a.actor_type=b.actor_type and a.actor_id=b.actor_id and a.deleted_at is null where c.token_hash=? and c.session_id=? and c.retired_at is null and c.expires_at>clock_timestamp()`,[session.person_id,tokenHash,session.id])
+      return current.length===1?{...session,actor_type:current[0].actor_type,actor_id:current[0].actor_id}:null
+    }
     if(rows.length!==1)return null
     const session=await this.currentHash(rows[0].session_id)
     if(!session)return null

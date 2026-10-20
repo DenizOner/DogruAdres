@@ -11,6 +11,7 @@ import { randomBytes } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
 import { IdentitySessions, securitySql } from "./identity-session"
 import { generateJwtToken } from "@medusajs/framework/utils"
+import { ActorDelegation } from './actor-delegation'
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -47,6 +48,31 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   Invitation,
   AuditEvent,
 }) {
+  @InjectTransactionManager()
+  async personalActorBinding(token:string,type:string,@MedusaContext() context:Context={}) {
+    const result=await new ActorDelegation(securitySql(context.transactionManager)).binding(token,type)
+    return result?.binding??null
+  }
+  @InjectTransactionManager()
+  async personalActorCredential(token:string,type:string,identity:{id:string;app_metadata?:Record<string,unknown>},http:Parameters<typeof generateJwtToken>[1],@MedusaContext() context:Context={}) {
+    return new ActorDelegation(securitySql(context.transactionManager)).credential(token,type,identity,http)
+  }
+  @InjectTransactionManager()
+  async personalMemberships(token:string,org:string,@MedusaContext() context:Context={}) {
+    const decision=await new IdentitySessions(securitySql(context.transactionManager)).organizations(token,org)
+    if(!decision||!['owner','admin'].includes(decision.organizations[0].role))throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
+    return this.listMemberships({organization_id:org},{select:['id','person_id','role','status','protected_owner']},context)
+  }
+  @InjectTransactionManager()
+  async personalRevokeMembership(token:string,org:string,membership:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`,[org])
+    const sessions=new IdentitySessions(sql),identity=await sessions.current(token,true)
+    const decision=identity?await sessions.organizations(token,org):null
+    if(!identity||!decision||!['owner','admin'].includes(decision.organizations[0].role))throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
+    const result=await this.changeMembership({organization_id:org,membership_id:membership,actor_person_id:identity.person_id,actor_type:identity.actor_type,actor_id:identity.actor_id,status:'revoked'},context)
+    return {id:result.id,status:result.status}
+  }
   @InjectTransactionManager()
   async personalMachineGrant(apiKeyId:string,method:string,resource:string,@MedusaContext() context:Context={}) {
     const rows=await securitySql(context.transactionManager).execute(`select id from da_machine_grant where api_key_id=? and method=? and resource=? and revoked_at is null`,[apiKeyId,method,resource])
@@ -364,7 +390,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       protected_owner: nextRole === "owner" && nextStatus === "active",
       revoked_at: nextStatus === "revoked" ? new Date() : null,
     }, sharedContext)
-    await this.createAuditEvents([{
+    const [membershipAudit] = await this.createAuditEvents([{
       actor_id: input.actor_id,
       actor_type: input.actor_type,
       actor_person_id: input.actor_person_id,
@@ -378,6 +404,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       new_values: { role: nextRole, status: nextStatus, protected_owner: nextRole === "owner" && nextStatus === "active" },
       occurred_at: new Date(),
     }], sharedContext)
+    const auditManager=sharedContext.transactionManager as {flush():Promise<void>}
+    await auditManager.flush()
+    await securitySql(sharedContext.transactionManager).execute(`insert into da_security_outbox(id,audit_event_id,created_at) values(?,?,clock_timestamp())`,['security_'+membershipAudit.id,membershipAudit.id])
     return updated
   }
 

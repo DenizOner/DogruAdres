@@ -946,6 +946,8 @@ export type Routes = {
     };
     personal: typeof import("../src/api/personal/route") & {
         challenge: typeof import("../src/api/personal/challenge/route");
+        contexts: typeof import("../src/api/personal/contexts/route");
+        memberships: typeof import("../src/api/personal/memberships/route");
         organizations: typeof import("../src/api/personal/organizations/route");
         platform: typeof import("../src/api/personal/platform/route");
         session: typeof import("../src/api/personal/session/route");
