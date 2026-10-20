@@ -11,6 +11,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   res.setHeader("Cache-Control","no-store")
   if (!enabled()) return res.status(503).json({message:"Unavailable"})
   const s = await access(req).personalSession(sessionToken(req))
+  if(s && !await bindServerActor(req,sessionToken(req)))return res.status(401).json({message:"Access denied"})
   return s ? res.json({person_id:s.person_id,csrf_token:csrfToken(sessionToken(req))}) : res.status(401).json({message:"Access denied"})
 }
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
@@ -34,7 +35,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.status(202).json({challenge_required:true,csrf_token:pending.csrf})
   }
   const session = await access(req).openPersonalSession(result.authIdentity.id)
-  try { await bindServerActor(req,session.token,null) } catch { await access(req).closePersonalSession(session.token,false);return res.status(503).json({message:"Service unavailable"}) }
+  try { if(!await bindServerActor(req,session.token))throw new Error("Session unavailable") } catch { await access(req).closePersonalSession(session.token,false);return res.status(503).json({message:"Service unavailable"}) }
   // Rotate by revoking the previously presented session after successful login.
   if (sessionToken(req)) await access(req).closePersonalSession(sessionToken(req),false)
   res.cookie("da_session",session.token,{httpOnly:true,secure:process.env.NODE_ENV==="production"||req.protocol==="https",sameSite:"strict",path:"/",maxAge:43200000})

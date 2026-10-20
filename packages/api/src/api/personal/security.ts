@@ -36,14 +36,30 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
   let path:string
   try { path=decodeURIComponent(req.originalUrl.split("?")[0]).replace(/\/{2,}/g,"/").replace(/\/$/,"").toLowerCase() }
   catch { return res.status(400).json({message:"Invalid path"}) }
-  const publicAuth = /^\/auth\/(user|member|customer)\/emailpass(?:\/(register|reset-password|update|callback))?\/?$/
+  const authorization=req.headers.authorization??""
+  const nativeSession = "session" in req && !!(req.session as {auth_context?:unknown}|undefined)?.auth_context
+  const anonymous = !authorization && !nativeSession && !("auth_context" in req && req.auth_context)
+  const publicAuth = /^\/auth\/(user|member|customer)\/emailpass(?:\/callback)?$/
   const publicStore = /^\/store\/(regions|products|product-categories|collections|currencies|locales|offers|sellers|reviews|product-attributes|product-options|product-tags|product-types|product-variants|shipping-options|payment-providers|return-reasons)(?:\/[^/]+)?\/?$/
-  if (path.startsWith("/personal") || path === "/health" ||
-      (publicAuth.test(path) && ["GET","POST"].includes(req.method)) ||
-      (/^\/auth\/(user|member|customer)\/providers\/?$/.test(path) && req.method==="GET") ||
-      (/^\/auth\/verification\/(request|confirm)\/?$/.test(path) && req.method==="POST") ||
+  if ((path==="/personal" && req.method==="GET") ||
+      (path==="/personal/session" && ["GET","POST","DELETE"].includes(req.method)) ||
+      (path==="/personal/challenge" && req.method==="POST") ||
+      (path==="/personal/organizations" && req.method==="GET") ||
+      (path==="/personal/platform" && ["GET","POST"].includes(req.method)) ||
+      ((path==="/health" || path==="/cloud/auth") && req.method==="GET") ||
+      (anonymous && publicAuth.test(path) && ["GET","POST"].includes(req.method)) ||
+      (anonymous && /^\/auth\/(user|member|customer)\/emailpass\/(register|reset-password)$/.test(path) && req.method==="POST") ||
+      (anonymous && /^\/auth\/(user|member|customer)\/providers$/.test(path) && req.method==="GET") ||
+      // Confirm accepts an anonymous single-use verification code. Request does NOT.
+      (anonymous && path==="/auth/verification/confirm" && req.method==="POST") ||
+      // Medusa validateToken verifies signature, purpose=reset and atomically
+      // consumes the persisted jti. A session JWT cannot pass that middleware.
+      (!nativeSession && /^\/auth\/(user|member|customer)\/emailpass\/update$/.test(path) && req.method==="POST") ||
+      // Native payment hook validates provider payload downstream; no other
+      // /hooks operation is public. No bearer/session authority on this path.
+      (anonymous && /^\/hooks\/payment\/[^/]+$/.test(path) && req.method==="POST") ||
       (path==="/store/search" && req.method==="POST") ||
-      (publicStore.test(path) && req.method === "GET") || req.method === "OPTIONS") return next()
+      (publicStore.test(path) && req.method === "GET")) return next()
   // A machine key is still authenticated by the native framework. No staff or
   // Organization authority is inferred from it. Only this read-only operation.
   if (path === "/admin/api-keys" && req.method === "GET" && /^Basic /i.test(req.headers.authorization ?? "")) {
@@ -54,13 +70,15 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
     } catch { return res.status(503).json({message:"Service unavailable"}) }
     return res.status(403).json({message:"Machine scope denied"})
   }
-  const authorization=req.headers.authorization??""
-  if ((path==="/admin/users/me" && req.method==="GET" || path==="/auth/token/refresh" && req.method==="POST") && authorization.startsWith("Bearer ")) {
+  if ((path==="/admin/users/me" && req.method==="GET" ||
+       ["/auth/token/refresh","/auth/verification/request","/auth/verification/confirm"].includes(path) && req.method==="POST") && /^Bearer /i.test(authorization)) {
     try {
       const session=await access(req).personalNativeCredential(digest(authorization.slice(7)))
       if(session)return next() // Native framework still verifies JWT and actor type.
     } catch { return res.status(503).json({message:"Service unavailable"}) }
   }
-  if (/^\/(admin|vendor|store|auth|dogruadres)(\/|$)/.test(path)) return res.status(401).json({message:"Personal session ingress required"})
-  return next()
+  // Unknown plugin namespaces are closed too. Static dashboards/assets are
+  // served by their existing loaders outside this API route middleware; no
+  // wildcard namespace or OPTIONS exception can authorize a future handler.
+  return res.status(401).json({message:"Personal session ingress required"})
 }

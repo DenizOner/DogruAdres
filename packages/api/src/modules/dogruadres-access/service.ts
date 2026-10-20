@@ -10,6 +10,7 @@ import { ActorMapping, AuditEvent, Invitation, Membership, Organization, Person 
 import { randomBytes } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
 import { IdentitySessions, securitySql } from "./identity-session"
+import { generateJwtToken } from "@medusajs/framework/utils"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -52,8 +53,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return rows.length===1
   }
   @InjectTransactionManager()
-  async bindPersonalNativeCredential(token:string,hash:string,ciphertext:string,@MedusaContext() context:Context={}) {
-    return new IdentitySessions(securitySql(context.transactionManager)).bindNative(token,hash,ciphertext)
+  async renewPersonalNativeCredential(token:string,identity:{id:string;app_metadata?:Record<string,unknown>},http:Parameters<typeof generateJwtToken>[1],@MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).renewNative(token,identity,http)
   }
   @InjectTransactionManager()
   async personalNativeCredential(hash:string,@MedusaContext() context:Context={}) {
@@ -292,20 +293,21 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         module: DOGRUADRES_AUDIT_MODULE,
         resource: "organization",
         target_id: organization.id,
-        new_values: { name: organization.name, initial_owner_count: memberships.length, ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id}:{}) },
+        new_values: { name: organization.name, initial_owner_count: memberships.length, ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:"organization.provision",staff_resource:"platform"}:{}) },
         occurred_at: new Date(),
       },
       ...memberships.map((membership, index) => ({
         actor_id: input.provisioned_by.actor_id,
         actor_type: input.provisioned_by.actor_type,
         actor_person_id: provisioner.id,
-        role_context: "platform_administrator",
+        role_context: input.staff_grant_id ? "platform_staff" : "platform_administrator",
         organization_id: organization.id,
         action: "organization.owner_assigned",
         module: DOGRUADRES_AUDIT_MODULE,
         resource: "membership",
         target_id: membership.id,
-        new_values: { role: "owner", protected_owner: true, person_id: owners[index].id },
+        new_values: { role: "owner", protected_owner: true, person_id: owners[index].id,
+          ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:"organization.provision",staff_resource:"platform"}:{}) },
         occurred_at: new Date(),
       })),
     ], sharedContext)

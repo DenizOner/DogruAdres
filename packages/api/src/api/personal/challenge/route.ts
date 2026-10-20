@@ -22,7 +22,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   const challenge=await auth.verifyAuthMfaChallenge({id:pending.challenge_id,auth_identity_id:pending.auth_identity_id,method:"totp",code:parsed.data.code})
   if(!challenge.completed_at||challenge.auth_identity_id!==pending.auth_identity_id)return res.status(401).json({message:"Access denied"})
   const session=await access(req).completePersonalChallenge(token,new Date(challenge.completed_at))
-  try { await bindServerActor(req,session.token,new Date(challenge.completed_at)) } catch { await access(req).closePersonalSession(session.token,false);return res.status(503).json({message:"Service unavailable"}) }
+  try { if(!await bindServerActor(req,session.token))throw new Error("Session unavailable") } catch { await access(req).closePersonalSession(session.token,false);return res.status(503).json({message:"Service unavailable"}) }
   if(sessionToken(req))await access(req).closePersonalSession(sessionToken(req),false)
   res.clearCookie("da_challenge",{path:"/personal"})
   res.cookie("da_session",session.token,{httpOnly:true,secure:process.env.NODE_ENV==="production"||req.protocol==="https",sameSite:"strict",path:"/",maxAge:43200000})

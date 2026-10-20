@@ -28,11 +28,13 @@ module's manager. Medusa signing utilities issue server-only actor credentials
 after provider/MFA/actor ownership verification; AES-GCM ciphertext and a
 session-binding hash ledger persist them. Native signature/actor middleware is
 retained. The initial delegated personal native operation is GET /admin/users/me;
-refresh requires the same live ledger binding. Refreshed native JWTs are not
-automatically trusted by the ledger. Other protected native operations stay
+verification request/identity-bearing confirmation require the same live ledger
+binding. Anonymous code confirmation and single-use, purpose-bound password reset
+remain native flows. Refreshed native JWTs are not automatically trusted by the
+ledger. Other protected native operations stay
 closed pending scoped adapters; this is not full Admin/Vendor compatibility.
 
-Public emailpass/provider/verification/recovery and public Store catalog paths
+Public emailpass/provider/recovery, anonymous verification confirmation and public Store catalog paths
 retain native validation. Basic access is separate: the initial allowed machine
 operation GET /admin/api-keys requires a current persisted machine grant as well
 as a genuine framework key. No generic privileged proxy exists.
@@ -92,7 +94,7 @@ bun run dev -- --host 127.0.0.1 --port 19100
 # In another controlled process, only after actual readiness:
 $env:M0_TEST_ORIGIN='http://127.0.0.1:19100'
 $env:M0_TEST_EVIDENCE='<task-owned private evidence directory>'
-$env:M0_XYZ_ID='<fresh explicitly authorized synthetic Organization>'
+$env:M0_RESET_FIXTURE='<fresh workflow-issued private recovery fixture filename>'
 node --test integration-tests/session-vertical/http-security.test.mjs
 ```
 
@@ -118,3 +120,83 @@ Do not drop these tables or revert to the known replayable native boundary as an
 operational workaround. Migration down methods deliberately reject destructive
 rollback; data-retention/production rollback needs separate review. No merge,
 deployment or cleanup is performed by this checkpoint.
+
+## PR #227 independent-review repairs — 2026-10-21
+
+Starting review HEAD: e9df2ad2eab1b9e94544a4ef8316fa8a464580f1.
+Review 5591971865 / Issue #217 comment 6301917146; integrated repair authority
+remains 6299717461. Earlier results above are historical and are not overwritten.
+
+Before repair, a genuine previously session-bound credential after personal
+logout reached POST /auth/verification/request (201, a new verification row).
+The same credential reached confirm's native provider (400 invalid code, not
+ingress denial). This reproduced the P0 gap, not successful D4 enforcement.
+
+The method/path boundary now defaults to denial for every unknown namespace,
+including unknown plugin paths, /hooks and /cloud writers. Known personal
+handlers are exact paths. Public emailpass login/callback, registration/recovery,
+catalog reads, cloud capability metadata GET and the exact native payment
+callback remain enumerated. /auth/verification/request and credential-bearing
+confirm require a live server-bound ledger entry; truly anonymous single-use
+code confirmation remains available. Medusa's password-update middleware still
+verifies signature, purpose=reset and atomically consumes its jti; a normal or
+revoked session Bearer cannot become a reset credential. Static file serving is
+the framework Express loader's separate /static middleware, not a general API
+namespace exception. Unsupported protected plugin operations remain closed;
+this is not acceptance of all Admin/Vendor/plugin functionality.
+
+New migration Migration20261021230000 adds expiry/retirement metadata and one
+active credential per session. Old ledger entries are retained but retired
+because their exact expiry was not attested. A currently eligible personal
+session renews through GET /personal/session (also called by the UI on reload).
+The existing Auth service supplies current actor metadata; Foundation locks the
+session/Person epoch, rechecks binding and D3 policy, then keeps the credential
+or rotates within its last minute. JWT lifetime stays 900 seconds. Renewal never
+updates the strong-auth timestamp. Retired or expired hashes fail the ledger;
+native framework signature/actor/expiry validation remains in force. No token
+is returned from the personal API. This is server-only on-demand renewal, not a
+background timer or a generic proxy.
+
+All three newly grant-authorized Organization audit events now carry
+platform_staff plus grant ID, task and resource. The persistent test checks
+actor Person/type/ID, Organization, Owner target/Person, action and one-to-one
+outbox correspondence. Historical audits are neither rewritten nor deleted.
+
+Repair validation: 169 unit tests / 6 suites; 6 production-secret regressions;
+TypeScript and Medusa backend build exit 0. HTTP/PostgreSQL: 20/20, exit 0
+(19 child cases plus their aggregate). Includes genuine anonymous verification
+confirmation and replay denial, supported workflow-issued single-use reset,
+post-logout verification/MFA denial with unchanged verification-row count,
+renewal with concurrent requests, retired-token denial and all-device delegation
+revocation. Unit tests use the real installed JWT validator with a test-only
+clock: accepts at iat+899, rejects at iat+900. HTTP expires only a synthetic
+ledger row; it does not pretend that 15 wall-clock minutes elapsed.
+
+Chrome regression executed through the supported browser tool: invalid login,
+password+TOTP, canonical Person, ABC access, absent-staff-grant denial, reload,
+server-only credential renewal, logout and protected reopen. Database read-back
+after the browser renewal showed exactly one active and one retired credential
+for the uniquely scoped browser session. This is engineering verification;
+independent Work/Technical Advisor acceptance and the full M0 matrix remain open.
+
+Preserved repair failures: first expanded HTTP run had 18 passes / 2 failures
+(one child failure plus aggregate) because a test incorrectly expected the
+verification code in the HTTP response; native workflow intentionally redacts
+it. A supported Auth-module fixture now retains its code only in the private
+evidence directory. A later readiness race executed no business assertions
+(ECONNREFUSED); rerun after the socket was ready passed 20/20. One temporary
+fixture TypeScript error (optional identity ID) was fixed with an explicit
+presence check. No assertion was relaxed to accept a security bypass.
+
+Final source review also closed a renewal race: after acquiring the session and
+epoch locks, native ingress re-reads credential retirement/expiry so a pre-lock
+ledger observation cannot authorize a credential retired while waiting. The
+169-test unit set includes that ordering case. Its initial test-mock return type
+needed correction before the final TypeScript pass; no production policy changed.
+
+Use recovery-fixture.ts via the supported `medusa exec` only against the checked
+task database to create a fresh one-use reset/verification fixture before each
+HTTP suite. Each fixture file uses a unique name; existing private evidence and
+used tokens remain preserved. Its successful filename is the nonsecret value
+of M0_RESET_FIXTURE; never print its contents. Previous canonical data, audit
+history, volumes and protected worktrees remain untouched.

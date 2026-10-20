@@ -1,4 +1,5 @@
-import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto"
+import { createCipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto"
+import { generateJwtToken } from "@medusajs/framework/utils"
 import { DEFAULT_SESSION_POLICY, evaluateSessionEligibility, parseSessionPolicy } from "./session-policy"
 
 export type SecuritySql = { execute(sql: string, parameters?: unknown[]): Promise<any[]> }
@@ -83,7 +84,8 @@ export class IdentitySessions {
     }
     if (!result.permitted) return null
     if (touch) await this.db.execute(`update da_browser_session set last_activity_at=clock_timestamp() where id=? and status='active'`, [s.id])
-    return { id:s.id, person_id:s.person_id, auth_identity_id:s.auth_identity_id, actor_type:s.actor_type, actor_id:s.actor_id, csrf_hash:s.csrf_hash }
+    return { id:s.id, person_id:s.person_id, auth_identity_id:s.auth_identity_id, actor_type:s.actor_type, actor_id:s.actor_id, csrf_hash:s.csrf_hash,
+      last_strong_auth_at:s.last_strong_auth_at, now_ms:Math.floor(Number(s.now_ms)) }
   }
 
   async logout(token: string, all: boolean) {
@@ -138,15 +140,41 @@ export class IdentitySessions {
     await this.db.execute(`insert into da_login_challenge(id,auth_identity_id,challenge_id,expires_at) values (?,?,?,clock_timestamp()+interval '5 minutes')`,[digest(token),authIdentityId,challengeId])
     return {token,csrf:csrfToken(token)}
   }
-  async bindNative(token:string,tokenHash:string,ciphertext:string) {
+  async renewNative(token:string,identity:{id:string;app_metadata?:Record<string,unknown>},http:Parameters<typeof generateJwtToken>[1]) {
+    // current() locks the session and Person epoch for the entire module
+    // transaction. Concurrent renewal/logout cannot install an unbound token.
     const s=await this.current(token,false,false)
-    if(!s || !/^[a-f0-9]{64}$/.test(tokenHash))throw new IdentityAccessDenied()
-    await this.db.execute(`insert into da_native_credential(token_hash,session_id,ciphertext) values (?,?,?)`,[tokenHash,s.id,ciphertext])
+    if(!s)return null // Preserve any terminal expiry written by current().
+    if(identity.id!==s.auth_identity_id || identity.app_metadata?.[s.actor_type+"_id"]!==s.actor_id)throw new IdentityAccessDenied()
+    const rows=await this.db.execute(`select token_hash,expires_at from da_native_credential where session_id=? and retired_at is null`,[s.id])
+    if(rows.length>1)throw new IdentityAccessDenied()
+    if(rows.length===1 && new Date(rows[0].expires_at).getTime()>s.now_ms+60000)return {renewed:false}
+    const key=process.env.COOKIE_SECRET
+    if(!key || Buffer.byteLength(key)<32)throw new IdentityAccessDenied()
+    const issuedAt=Math.floor(s.now_ms/1000),expiresAt=issuedAt+900
+    // Never carry a caller-supplied duration, iat or strong-auth claim forward.
+    const jwt=generateJwtToken({jti:randomUUID(),iat:issuedAt,actor_id:s.actor_id,actor_type:s.actor_type,
+      auth_identity_id:s.auth_identity_id,auth_provider:"emailpass",app_metadata:identity.app_metadata,
+      mfa_enabled:!!s.last_strong_auth_at,mfa_challenge_completed_at:s.last_strong_auth_at?new Date(s.last_strong_auth_at).toISOString():null},
+      {...http,expiresIn:900,jwtOptions:{...http.jwtOptions,expiresIn:900}})
+    const iv=randomBytes(12),cipher=createCipheriv("aes-256-gcm",createHash("sha256").update("native-credential:"+key).digest(),iv)
+    const value=Buffer.concat([cipher.update(jwt,"utf8"),cipher.final()])
+    const ciphertext=[iv,cipher.getAuthTag(),value].map(b=>b.toString("base64url")).join(".")
+    await this.db.execute(`update da_native_credential set retired_at=clock_timestamp() where session_id=? and retired_at is null`,[s.id])
+    await this.db.execute(`insert into da_native_credential(token_hash,session_id,ciphertext,expires_at) values (?,?,?,?)`,[digest(jwt),s.id,ciphertext,new Date(expiresAt*1000)])
+    return {renewed:true} // No actor credential crosses the API response boundary.
   }
   async native(tokenHash:string) {
     if(!/^[a-f0-9]{64}$/.test(tokenHash))return null
-    const rows=await this.db.execute(`select session_id from da_native_credential where token_hash=?`,[tokenHash])
-    return rows.length===1?this.currentHash(rows[0].session_id):null
+    const rows=await this.db.execute(`select session_id from da_native_credential where token_hash=? and retired_at is null and expires_at>clock_timestamp()`,[tokenHash])
+    if(rows.length!==1)return null
+    const session=await this.currentHash(rows[0].session_id)
+    if(!session)return null
+    // currentHash may have waited behind renewal/logout. Re-read after its
+    // session/epoch lock; a retired credential cannot regain authority from the
+    // earlier unlocked ledger observation. Rotation takes this same lock.
+    const current=await this.db.execute(`select token_hash from da_native_credential where token_hash=? and session_id=? and retired_at is null and expires_at>clock_timestamp()`,[tokenHash,session.id])
+    return current.length===1?session:null
   }
   async challenge(token:string) {
     if(!/^[A-Za-z0-9_-]{43}$/.test(token))return null
