@@ -64,7 +64,7 @@ Never guess Mercur API behavior.
 
 ## Canonical project decision lookup
 
-Before DoğruAdres architectural or domain work, read this root `AGENTS.md`, relevant canonical `[DEC DA-*]` and `[DEC ADR-*]` GitHub Issue records, the [controlled decision source and cross-domain invariants](https://github.com/DenizOner/DogruAdres/issues/141), the active work/QA Issue, and current source/tests. Do **not** use removed project `docs/` files as a second operational authority. If GitHub is temporarily inaccessible, do not guess at business/security/financial policy; stop the affected decision or action and report the blocked evidence.
+Before DoğruAdres architectural or domain work, read this root `AGENTS.md`, the relevant current source/tests, and the **specific approved decisions necessary for the task**. Prefer a self-contained Agent handoff that embeds their full applicable scope, exact SHA, known limitations and accepted invariant text; a GitHub Issue link is a provenance/synchronization pointer, not by itself a requirement to reread entire historical threads. Consult the latest canonical `[DEC DA-*]`/`[DEC ADR-*]` Issues, the [decision index #141](https://github.com/DenizOner/DogruAdres/issues/141), or active work/QA Issue **only when** the instruction lacks a decision, evidence is stale or contradictory, the scope changes, or a final authorization is required. Do **not** use removed project `docs/` files as a second operational authority. If necessary authoritative material is unavailable, stop that affected decision rather than guessing at business/security/financial policy.
 
 ## Core modification rule
 
