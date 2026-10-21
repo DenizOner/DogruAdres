@@ -72,7 +72,7 @@ export class MfaEnrollmentTickets {
       returning id`,
       [digest(ticket),session.id,session.person_id,session.auth_identity_id,factorId])
     if(rows.length!==1)return null
-    const fresh=await sessions.create(session.auth_identity_id,verifiedAt)
+    const fresh=await sessions.create(session.auth_identity_id,verifiedAt,"full")
     await this.db.execute(`update da_browser_session set status='revoked'
       where person_id=? and id<>? and status='active'`,[session.person_id,digest(fresh.token)])
     await this.audit(session,"mfa.enrollment.completed",session.id)

@@ -58,7 +58,7 @@ describe("MFA purpose-bound enrollment tickets (source contract only)",()=>{
   it("consumes exact verified factor and rotates all older Person sessions",async()=>{
     const result=await sut().completeAfterNativeVerification(cookie,ticket,"mfa_pending",new Date(Date.now()-1000))
     expect(result?.token).toBe("N".repeat(43))
-    expect(create).toHaveBeenCalledWith("auth_self",expect.any(Date))
+    expect(create).toHaveBeenCalledWith("auth_self",expect.any(Date),"full")
     const consume=execute.mock.calls.find(x=>x[0].includes("set consumed_at=clock_timestamp()"))
     expect(consume?.[1]).toEqual([digest(ticket),session.id,session.person_id,session.auth_identity_id,"mfa_pending"])
     expect(execute.mock.calls.some(x=>x[0].includes("set status='revoked'"))).toBe(true)

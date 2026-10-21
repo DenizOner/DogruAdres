@@ -43,6 +43,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <h1>DoğruAdres</h1><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
   <form id="login"><label>E-posta<input name="email" type="email" autocomplete="username" required></label><label>Parola<input name="password" type="password" autocomplete="current-password" required></label><button>Giriş yap</button></form>
   <form id="challenge" hidden><label>Doğrulama kodu<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label><button>İkinci faktörü doğrula</button></form>
+  <section id="mfa-enrollment" hidden>
+    <h2>MFA ilk kurulumu</h2>
+    <p>Girişin devamı için ikinci faktör kurulumu zorunludur. Bu geçici oturumda kuruluş, üyelik veya platform yetkisi yoktur.</p>
+    <form id="mfa-enroll-start"><label>E-posta<input name="email" type="email" autocomplete="username" required></label>
+      <label>Parolanızı yeniden girin<input name="password" type="password" autocomplete="current-password" required></label>
+      <button>Kurulum kodu oluştur</button></form>
+    <p id="mfa-enroll-secret" role="status" aria-live="polite"></p>
+    <form id="mfa-enroll-verify" hidden><label>Kimlik doğrulama uygulamasındaki 6 haneli kod
+      <input name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required></label>
+      <button>Kurulumu doğrula ve oturumu aç</button></form>
+  </section>
   <section id="workspace" hidden><p id="person"></p>
   <h2>Güvenlik ve MFA ayarları</h2><p id="mfa-info" role="status" aria-live="polite">MFA ayarları henüz etkin değil.</p>
   <form id="mfa-person" hidden><label>Kişisel MFA tercihim
@@ -125,7 +136,46 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       expected_version:mfaState.platform.version,
     });
   };
-  el('login').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;try{const data=await api('session',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});csrf=data.csrf_token;e.target.reset();if(data.challenge_required){el('login').hidden=true;el('challenge').hidden=false;status('İkinci faktör gerekli')}else await load()}catch(e){status(e.message)}finally{button.disabled=false}};
+  el('mfa-enroll-start').onsubmit=async e=>{
+    e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;
+    try{
+      const data=await api('mfa/enroll',{method:'POST',body:JSON.stringify({
+        action:'start',...Object.fromEntries(new FormData(e.target)),
+      })});
+      e.target.reset();
+      el('mfa-enroll-secret').textContent='Doğrulama uygulamanıza bu tek seferlik anahtarı girin: '+data.secret;
+      el('mfa-enroll-verify').hidden=false;
+      status('TOTP kurulumu başladı. Anahtar yalnız bu ekranda gösterilir; doğrulama gereklidir.');
+    }catch(err){status(err.message);if(!err.uncertain)button.disabled=false}
+  };
+  el('mfa-enroll-verify').onsubmit=async e=>{
+    e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;
+    try{
+      const data=await api('mfa/enroll',{method:'POST',body:JSON.stringify({
+        action:'verify',...Object.fromEntries(new FormData(e.target)),
+      })});
+      csrf=data.csrf_token;
+      el('mfa-enroll-secret').textContent='';
+      el('mfa-enroll-verify').hidden=true;el('mfa-enrollment').hidden=true;
+      e.target.reset();await load();
+    }catch(err){status(err.message);if(!err.uncertain)button.disabled=false}
+  };
+  el('login').onsubmit=async e=>{
+    e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;
+    try{
+      const data=await api('session',{method:'POST',
+        body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});
+      csrf=data.csrf_token;e.target.reset();
+      if(data.challenge_required){
+        el('login').hidden=true;el('challenge').hidden=false;status('İkinci faktör gerekli');
+      }else if(data.enrollment_required){
+        el('login').hidden=true;el('mfa-enrollment').hidden=false;
+        el('mfa-enroll-start').hidden=false;el('mfa-enroll-verify').hidden=true;
+        el('mfa-enroll-secret').textContent='';
+        status('MFA kurulumuna devam etmek için parolanızı yeniden doğrulayın.');
+      }else await load();
+    }catch(e){status(e.message)}finally{button.disabled=false}
+  };
   el('challenge').onsubmit=async e=>{e.preventDefault();try{const data=await api('challenge',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});csrf=data.csrf_token;e.target.reset();el('challenge').hidden=true;await load()}catch(e){status(e.message)}};
   el('link-account').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button');b.disabled=true;try{const values=Object.fromEntries(new FormData(e.target));const result=await api('links',{method:'POST',body:JSON.stringify({action:'begin',...values})});linkIntent=result.intent;e.target.reset();el('link-confirm').reset();el('link-confirm').querySelector('button').disabled=false;el('link-confirm').hidden=false;el('link-confirm').elements.code.required=result.challenge_required;status(result.challenge_required?'İkincil hesap için MFA gerekli':'İkincil sahiplik doğrulandı; bağlantıyı tamamlayın')}catch(err){status(err.message)}finally{b.disabled=false}};
   el('link-confirm').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button');b.disabled=true;try{const code=new FormData(e.target).get('code');await api('links',{method:'POST',body:JSON.stringify({action:'complete',intent:linkIntent,...(code?{code}:{})})});linkIntent='';e.target.reset();e.target.hidden=true;await links();status('Hesap bağlantısı tamamlandı')}catch(err){status(err.message);if(!err.uncertain)b.disabled=false}};
