@@ -4,6 +4,7 @@ import { digest } from "../../modules/dogruadres-access/identity-session"
 import Access from "../../modules/dogruadres-access/service"
 
 export const enabled = () => process.env.DOGRUADRES_IDENTITY_ENABLED === "true"
+export const secureCookies = () => process.env.NODE_ENV==='production'||process.env.DOGRUADRES_PUBLIC_ORIGIN?.startsWith('https://')===true
 export const access = (req: MedusaRequest): Access => req.scope.resolve("dogruadresAccess")
 export function sessionToken(req: MedusaRequest): string {
   const entries = (req.headers.cookie ?? "").split(";").map(s=>s.trim()).filter(s=>s.startsWith("da_session="))
@@ -46,6 +47,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/challenge" && req.method==="POST") ||
       (path==="/personal/organizations" && req.method==="GET") ||
       (path==="/personal/contexts" && req.method==="GET") ||
+      (path==="/personal/links" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/memberships" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/platform" && ["GET","POST"].includes(req.method)) ||
       ((path==="/health" || path==="/cloud/auth") && req.method==="GET") ||

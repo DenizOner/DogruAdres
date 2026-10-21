@@ -1,7 +1,7 @@
 import type { MedusaRequest,MedusaResponse } from "@medusajs/framework/http"
 import type { IAuthModuleService } from "@medusajs/framework/types"
 import { timingSafeEqual } from "node:crypto"
-import { access,enabled,sessionToken,trustedOrigin } from "../security"
+import { access,enabled,sessionToken,trustedOrigin,secureCookies } from "../security"
 import { csrfToken } from "../../../modules/dogruadres-access/identity-session"
 import { z } from "@medusajs/framework/zod"
 import { bindServerActor } from "../server-actor"
@@ -25,6 +25,6 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   try { if(!await bindServerActor(req,session.token))throw new Error("Session unavailable") } catch { await access(req).closePersonalSession(session.token,false);return res.status(503).json({message:"Service unavailable"}) }
   if(sessionToken(req))await access(req).closePersonalSession(sessionToken(req),false)
   res.clearCookie("da_challenge",{path:"/personal"})
-  res.cookie("da_session",session.token,{httpOnly:true,secure:process.env.NODE_ENV==="production"||req.protocol==="https",sameSite:"strict",path:"/",maxAge:43200000})
+  res.cookie("da_session",session.token,{httpOnly:true,secure:secureCookies(),sameSite:"strict",path:"/",maxAge:43200000})
   return res.json({csrf_token:session.csrf})
 }

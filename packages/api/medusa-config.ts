@@ -3,12 +3,14 @@ import { withMercur } from '@mercurjs/core'
 import fs from 'fs'
 import path from 'path'
 import { resolveHttpSecrets } from './src/utils/production-secrets'
+import {ingressConfig} from './src/utils/ingress-config'
 
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
 
 // Fail closed even when Medusa evaluates configuration during a production build.
 const httpSecrets = resolveHttpSecrets(process.env)
 if (process.env.DOGRUADRES_IDENTITY_ENABLED === 'true') {
+  ingressConfig(process.env)
   const origin = new URL(process.env.DOGRUADRES_PUBLIC_ORIGIN || '')
   const local = process.env.NODE_ENV !== 'production' && origin.protocol === 'http:' && ['127.0.0.1','localhost','[::1]'].includes(origin.hostname)
   if ((!local && origin.protocol !== 'https:') || origin.origin !== process.env.DOGRUADRES_PUBLIC_ORIGIN ||

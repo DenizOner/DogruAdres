@@ -12,6 +12,7 @@ import { mayAcceptInvitation } from "./invitation-policy"
 import { IdentitySessions, securitySql } from "./identity-session"
 import { generateJwtToken } from "@medusajs/framework/utils"
 import { ActorDelegation } from './actor-delegation'
+import {AccountLinking,type VerifiedSecondary} from './account-linking'
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -48,6 +49,22 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   Invitation,
   AuditEvent,
 }) {
+  @InjectTransactionManager()
+  async personalLinkPrimary(token:string,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).primary(token)}
+  @InjectTransactionManager()
+  async beginActorLink(token:string,proof:VerifiedSecondary,challenge:string|null,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).begin(token,proof,challenge)}
+  @InjectTransactionManager()
+  async readActorLink(token:string,intent:string,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).read(token,intent)}
+  @InjectTransactionManager()
+  async completeActorLink(token:string,intent:string,proof:VerifiedSecondary,challenge:string|null,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).complete(token,intent,proof,challenge)}
+  @InjectTransactionManager()
+  async unlinkActor(token:string,id:string,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).unlink(token,id)}
+  @InjectTransactionManager()
+  async personalActorLinks(token:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager),s=await new IdentitySessions(sql).current(token)
+    if(!s)return null // Preserve terminal expiry when returning denial.
+    return sql.execute(`select id,actor_type,actor_id,revoked_at from da_verified_actor_binding where person_id=? order by verified_at`,[s.person_id])
+  }
   @InjectTransactionManager()
   async personalActorBinding(token:string,type:string,@MedusaContext() context:Context={}) {
     const result=await new ActorDelegation(securitySql(context.transactionManager)).binding(token,type)

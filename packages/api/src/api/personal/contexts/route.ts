@@ -1,6 +1,7 @@
 import type {MedusaRequest,MedusaResponse} from '@medusajs/framework/http'
 import type {IAuthModuleService} from '@medusajs/framework/types'
 import {access,enabled,sessionToken} from '../security'
+import {ingressConfig} from '../../../utils/ingress-config'
 export const AUTHENTICATE=false
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader('Cache-Control','no-store')
@@ -20,11 +21,11 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   const auth:IAuthModuleService=req.scope.resolve('auth'),identity=await auth.retrieveAuthIdentity(binding.auth_identity_id)
   const {projectConfig:{http}}=req.scope.resolve('configModule')
   const jwt=await service.personalActorCredential(token,type as string,identity,{secret:http.jwtSecret,jwtOptions:http.jwtOptions})
-  if(process.env.DOGRUADRES_PRIVATE_API!=='http://127.0.0.1:19100')return res.status(503).json({message:'Unavailable'})
+  const topology=ingressConfig(process.env)
   const headers:Record<string,string>={Authorization:'Bearer '+jwt}
   if(type==='member')headers['x-seller-id']=seller as string
   else {const key=process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY;if(!key)return res.status(503).json({message:'Unavailable'});headers['x-publishable-api-key']=key}
-  const response=await fetch(process.env.DOGRUADRES_PRIVATE_API+(type==='member'?'/vendor/members/me':'/store/customers/me'),{headers,redirect:'manual',signal:AbortSignal.timeout(10000)})
+  const response=await fetch(topology.privateOrigin+(type==='member'?'/vendor/members/me':'/store/customers/me'),{headers,redirect:'manual',signal:AbortSignal.timeout(10000)})
   if(!response.ok)return res.status([401,403,404].includes(response.status)?403:503).json({message:'Access denied'})
   const data=await response.json()
   if(type==='member'){

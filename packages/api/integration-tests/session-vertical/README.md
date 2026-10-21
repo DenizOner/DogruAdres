@@ -304,3 +304,107 @@ revocation, full Seller writer/cache races, legal Buyer checkout, production
 network/TLS and full browser coverage remain open. M0 is NOT COMPLETE. Rollback:
 stop front door/API, preserve binding/session/credential terminal history; no
 destructive down migration and no operational return to known native bypasses.
+
+## 2026-10-21 checkpoint: verified dual ownership and portable private ingress
+
+Authorization: Issue #217 comments 6290880062 / 6309141445; PR #227
+comment 6309190932; B02 crosswalk Issue #185 comment 6309180365.
+Starting feature HEAD: 2f493aa99fb0d53a526240404b25fbcca226cae7.
+Main/base remains d1ac132f41a15d2894d3bebae982f2eb2fc15ca3.
+
+Production implementation: current primary session and recent real TOTP precede
+independent native emailpass proof, exact AuthIdentity actor metadata/module
+existence and secondary native MFA when required. No email linking, Person
+creation/merge or production native Auth metadata write. A five-minute hashed
+pending intent is session/Person/proof-version bound. The supported Auth DTO has
+no updated_at: a purpose-separated COOKIE_SECRET HMAC fingerprints server-only
+provider state; provider metadata is never returned or persisted by linking.
+Foundation session/Person and actor locks, mapping, binding, intent consumption,
+canonical audit and durable security outbox share its transaction. Native Auth
+proof and Foundation are independent modules: no distributed atomic proof is
+claimed. Concurrent native identity changes after proof retrieval remain an
+independent security-review concern.
+
+Unlink protects sign-in bindings, retains immutable tombstones, and retires
+related native credentials. Fresh dual proof may create a NEW same-owner binding;
+no revoked binding is reopened and a different Person cannot transfer ownership.
+Migrations 20261021233000/233100 were applied only to task m0ssi_a7f1,
+PostgreSQL16.15 container dogruadres-m0ssi-20261020-a7f1-pg,
+127.0.0.1:55631. The active-actor unique index is installed before removing the
+old all-history binding uniqueness; canonical mapping remains the owner lock.
+No historical data deleted. Down migrations deliberately refuse deletion.
+
+Portable shared configuration validates private loopback origin, distinct public
+origin, listener and direct PEM TLS. Production requires explicit HTTPS/listener
+configuration; secrets/certificates are not committed. Node24.21.0 native type
+stripping was used for the launchers; Node20 compatibility is NOT TESTED. Real
+private19110/public19101 and private19100/publicHTTPS19102 ran successfully.
+Local listener/host-network checks are not production network isolation or TLS
+termination acceptance. TLS tests pin only a task certificate, with normal host
+verification. Chrome rejected its untrusted issuer; no trust/security bypass.
+
+Actual final commands (packages/api; task-only secrets supplied privately):
+- TEST_TYPE=unit bun run jest --runInBand --forceExit --runTestsByPath
+  src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts
+  src/modules/dogruadres-access/__tests__/actor-delegation.unit.spec.ts
+  src/modules/dogruadres-access/__tests__/account-linking.unit.spec.ts
+  src/utils/__tests__/ingress-config.unit.spec.ts
+  src/api/personal/__tests__/ingress.unit.spec.ts: 78/78, 5 suites, exit0.
+- bun test: security.unit, organization-authorization.unit,
+  production-secrets.unit.test, session-policy.unit, session-policy-contract.unit:
+  124/124 in 5 files (including 6 production-secret tests), exit0.
+- node --test integration-tests/session-vertical/frontdoor.unit.test.mjs:
+  2/2, exit0.
+- bun run tsc --noEmit: exit0. bun run build: exit0; native Admin/Vendor prebuilt
+  dashboards absent and explicitly skipped. Actual tested UI is /personal.
+- node --test integration-tests/session-vertical/linking-http.test.mjs:
+  fresh finalc2 private fixture, HTTPS pinned task CA, 13/13, exit0.
+- node --test integration-tests/session-vertical/terminal-expiry-http.test.mjs:
+  1/1, exit0, terminal SQL status survives policy relaxation.
+- node --test integration-tests/session-vertical/frontdoor-http.test.mjs:
+  HTTPS public catalog/recovery/scoped machine, 3/3, exit0.
+- node --test integration-tests/session-vertical/frontdoor-security-http.test.mjs:
+  malformed target/Host/duplicate headers/body bounds and TLS distrust, 3/3, exit0.
+- node --test integration-tests/session-vertical/http-security.test.mjs:
+  existing D3/D4/D5 real PostgreSQL/HTTP, 20/20, exit0.
+- git diff --check: exit0. No browser, database or production acceptance inferred
+  from Jest/TypeScript/build/CI.
+
+Real SQL/HTTP asserts two different Persons racing one unbound native Customer:
+exactly one binding/mapping/audit/outbox wins. Supported native password update
+invalidates a pending proof; incorrect MFA, other Person intent, replay, expired
+intent, foreign Seller/Organization and protected-login unlink deny. Customer
+unlink retires old credential; native replay and refresh401. No manufactured
+Person; no binding audit lacks its durable outbox.
+
+Chrome sequentially executed two distinct synthetic Persons: primary real TOTP,
+wrong secondary password, separate secondary TOTP, Member/Seller and Customer
+link/access, foreign Organization/Seller denial, wrong-Person transfer denial,
+Customer unlink/denial, reload, logout/reopen. UI confirmation-button state defect
+was fixed and retested. SQL confirmed browser binding/audit/outbox persistence.
+This is NOT simultaneous independent-context acceptance. Task-owned Chrome A/B
+profiles launched without personal profiles or insecure flags, but Computer Use
+stopped because it could not verify browser URL confidently enough to enforce
+policy. No further UI action was attempted; only those task process trees were
+stopped. Two-profile browser evidence is ENVIRONMENT BLOCKED. HTTPS Chrome is
+also blocked by certificate trust. Browser localStorage inspection NOT TESTED.
+Screenshot and restricted raw/private manifests remain outside Git.
+
+Failures preserved separately: initial route literal-newline syntax failure
+caused 0/12 HTTP failures (no linking writes); corrected source then passed.
+An initial HTTPS run had 9 pass/3 fail including aggregate: TLS correctly rejected
+Host mismatch before HTTP, then test preserved TLS servername while testing Host;
+Customer replay first lacked publishable key (400), then genuine key reached the
+expected401 gate. Unsupported DTO timestamp assumption failed TypeScript and was
+replaced by verified supported-state fingerprint. New GET /personal/links initially
+returned403 but rolled terminal expiry back (1 failed SQL assertion); nullable
+fail-closed service result now commits terminal expiry, then 1/1 passed. A unit
+nullable-fixture type error was corrected, final TypeScript0. No assertion was
+weakened to allow unauthorized access. Logs preserve prior failures and retries.
+
+CI covers unit/type/build only. Independent review, two-profile browser journey,
+production TLS/network isolation, distributed revocation, native Auth/Foundation
+cross-module races and full M0 matrix remain open. M0 is NOT COMPLETE. Rollback:
+stop front door/API and gate the feature; preserve all binding/session/credential
+terminal history and database volume. Do not run destructive down migrations,
+restore revoked fixtures or fall back to a known native Bearer bypass.
