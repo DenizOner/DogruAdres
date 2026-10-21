@@ -21,6 +21,20 @@ export function csrfToken(token: string): string {
 }
 export class IdentityAccessDenied extends Error { constructor() { super("Access denied");this.name="IdentityAccessDenied" } }
 
+export const mfaRuntimeEnforced = () =>
+  process.env.DOGRUADRES_IDENTITY_ENABLED === "true" &&
+  process.env.DOGRUADRES_MFA_SETTINGS_ENABLED === "true" &&
+  process.env.DOGRUADRES_MFA_ENROLLMENT_ENABLED === "true" &&
+  process.env.DOGRUADRES_MFA_RUNTIME_ENABLED === "true"
+export type BrowserMfaPurpose = "legacy" | "mfa_enroll" | "full"
+type MfaRevision = Readonly<{platform:number;person:number}>
+function revision(value:unknown):number {
+  if(!Number.isSafeInteger(value) || (value as number)<0 || (value as number)>2147483647)
+    throw new IdentityAccessDenied()
+  return value as number
+}
+
+
 /** Foundation-owned tables only. Caller MUST supply this module's transaction manager.
  * No email lookup, ambient browser identity, cross-module manager or cached grant.
  */
@@ -36,7 +50,15 @@ export class IdentitySessions {
     await this.db.execute(`insert into da_security_outbox(id,audit_event_id,created_at) values (?,?,now())`, [randomUUID(), id])
   }
 
-  async create(authIdentityId: string, strongAt: Date | null = null) {
+  async create(
+    authIdentityId: string,
+    strongAt: Date | null = null,
+    purpose: BrowserMfaPurpose = "legacy",
+    expectedRevision?: MfaRevision
+  ) {
+    if(!["legacy","mfa_enroll","full"].includes(purpose) ||
+       (purpose==="legacy" && expectedRevision) ||
+       (purpose==="mfa_enroll" && strongAt))throw new IdentityAccessDenied()
     const rows = await this.db.execute(`select b.*,p.disabled_at from da_login_binding b
       join da_person p on p.id=b.person_id and p.deleted_at is null
       join da_actor_mapping a on a.person_id=p.id and a.actor_type=b.actor_type and a.actor_id=b.actor_id and a.deleted_at is null
@@ -45,20 +67,40 @@ export class IdentitySessions {
     const b = rows[0]
     await this.db.execute(`insert into da_person_security(person_id,epoch) values (?,0) on conflict do nothing`, [b.person_id])
     const [security] = await this.db.execute(`select epoch from da_person_security where person_id=? for update`, [b.person_id])
+    let stamp:MfaRevision|null=null
+    if(purpose!=="legacy"){
+      stamp=await this.mfaRevision(b.person_id)
+      if(expectedRevision && (stamp.platform!==expectedRevision.platform ||
+         stamp.person!==expectedRevision.person))throw new IdentityAccessDenied()
+    }
     const token = opaque(), csrf = csrfToken(token)
     await this.db.execute(`insert into da_browser_session
-      (id,person_id,auth_identity_id,actor_type,actor_id,epoch,csrf_hash,status,created_at,last_activity_at,last_strong_auth_at)
-      values (?,?,?,?,?,?,?,'active',?,?,?)`,
-    [digest(token), b.person_id, authIdentityId, b.actor_type, b.actor_id, security.epoch, digest(csrf),strongAt??new Date(),strongAt??new Date(),strongAt])
+      (id,person_id,auth_identity_id,actor_type,actor_id,epoch,csrf_hash,status,created_at,last_activity_at,last_strong_auth_at,mfa_purpose,mfa_platform_version,mfa_person_version)
+      values (?,?,?,?,?,?,?,'active',?,?,?,?,?,?)`,
+    [digest(token), b.person_id, authIdentityId, b.actor_type, b.actor_id, security.epoch, digest(csrf),
+      strongAt??new Date(),strongAt??new Date(),strongAt,purpose,stamp?.platform??null,stamp?.person??null])
     await this.audit(b.person_id,b.actor_type,b.actor_id,"session.created",digest(token))
     return { token, csrf }
   }
 
+  private async mfaRevision(personId:string):Promise<MfaRevision>{
+    const rows=await this.db.execute(`select
+      coalesce((select version from da_mfa_policy where id='current'),0) as platform,
+      coalesce((select version from da_person_mfa_preference where person_id=?),0) as person`,
+      [personId])
+    if(rows.length!==1)throw new IdentityAccessDenied()
+    return {platform:revision(rows[0].platform),person:revision(rows[0].person)}
+  }
   async current(token: string, sensitive = false, touch = true) {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new IdentityAccessDenied()
     return this.currentHash(digest(token),sensitive,touch)
   }
-  private async currentHash(hash:string,sensitive=false,touch=true) {
+  async enrollment(token:string){
+    if(!mfaRuntimeEnforced())return null
+    if(!/^[A-Za-z0-9_-]{43}$/.test(token))throw new IdentityAccessDenied()
+    return this.currentHash(digest(token),false,false,true)
+  }
+  private async currentHash(hash:string,sensitive=false,touch=true,allowEnrollment=false) {
     const rows = await this.db.execute(`select s.*, p.disabled_at, e.epoch as current_epoch,
       extract(epoch from clock_timestamp())*1000 as now_ms
       from da_browser_session s join da_person p on p.id=s.person_id and p.deleted_at is null
@@ -83,13 +125,23 @@ export class IdentitySessions {
       return null // Commit terminal state; throwing would roll it back.
     }
     if (!result.permitted) return null
+    if(mfaRuntimeEnforced()){
+      if(s.mfa_purpose!=="full" && !(allowEnrollment && s.mfa_purpose==="mfa_enroll"))
+        return null
+      const now=await this.mfaRevision(s.person_id)
+      if(revision(s.mfa_platform_version)!==now.platform ||
+         revision(s.mfa_person_version)!==now.person)return null
+    }else if(allowEnrollment)return null
     if (touch) await this.db.execute(`update da_browser_session set last_activity_at=clock_timestamp() where id=? and status='active'`, [s.id])
     return { id:s.id, person_id:s.person_id, auth_identity_id:s.auth_identity_id, actor_type:s.actor_type, actor_id:s.actor_id, csrf_hash:s.csrf_hash,
-      last_strong_auth_at:s.last_strong_auth_at, now_ms:Math.floor(Number(s.now_ms)) }
+      last_strong_auth_at:s.last_strong_auth_at, now_ms:Math.floor(Number(s.now_ms)),
+      mfa_purpose:s.mfa_purpose }
   }
 
   async logout(token: string, all: boolean) {
-    const s = await this.current(token, false, false)
+    const s = mfaRuntimeEnforced()
+      ? (await this.current(token,false,false)) ?? (await this.enrollment(token))
+      : await this.current(token,false,false)
     if (!s) return
     if (all) await this.db.execute(`update da_person_security set epoch=epoch+1 where person_id=?`,[s.person_id])
     await this.db.execute(`update da_browser_session set status='revoked' where status='active' and ${all ? "person_id" : "id"}=?`,[all?s.person_id:s.id])
