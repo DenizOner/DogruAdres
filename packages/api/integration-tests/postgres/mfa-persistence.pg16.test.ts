@@ -3,8 +3,9 @@
  *
  * Uses Bun 1.4's built-in Postgres driver (no new packages or lockfile edit).
  * Runs the actual 20261017 Foundation + 20261021 MFA migration sources.
- * A minimal test-only da_security_outbox prerequisite is used; PR #222's
- * canonical da_audit_outbox and Medusa migrator ledger are NOT accepted here.
+ * PR #222 canonical da_audit_outbox migration and append-only audit guard
+ * are now tested alongside the security-outbox stub. Installed Medusa
+ * migrator history / snapshot upgrades are NOT proven here.
  *
  * Every operation is gated to the exact disposable mfa_ci_ephemeral service.
  * No production, preserved M0 task database, Docker volume or user fixture.
@@ -12,6 +13,7 @@
 import assert from "node:assert/strict"
 import { Migration20261017135550 } from "../../src/modules/dogruadres-access/migrations/Migration20261017135550"
 import { Migration20261017150237 } from "../../src/modules/dogruadres-access/migrations/Migration20261017150237"
+import { Migration20261018000000 } from "../../src/modules/dogruadres-access/migrations/Migration20261018000000"
 import { Migration20261021235000 } from "../../src/modules/dogruadres-access/migrations/Migration20261021235000"
 import {
   MfaPersistence, MfaConcurrentUpdateError, MfaOutboxFailure,
@@ -83,6 +85,15 @@ async function main() {
       created_at timestamptz not null default now()
     )`)
 
+    await check("canonical Foundation outbox and append-only audit migration applies", async () => {
+      await db.begin(tx => apply(tx, Migration20261018000000))
+      assert.ok((await db.unsafe("select to_regclass('da_audit_outbox') as tbl"))[0].tbl)
+      const triggers=await db.unsafe(`select tgname from pg_trigger
+        where tgrelid='da_audit_event'::regclass and not tgisinternal`)
+      assert.deepEqual(triggers.map(row=>row.tgname).sort(),[
+        "da_audit_event_append_only_rows","da_audit_event_append_only_truncate",
+      ])
+    })
     await check("DDL rollback leaves no MFA tables", async () => {
       await assert.rejects(db.begin(async tx => {
         await apply(tx, Migration20261021235000)
@@ -111,6 +122,30 @@ async function main() {
       await invalidInsert("insert into da_person_mfa_preference(person_id,user_enabled) values('missing',true)")
       await db.unsafe("insert into da_person(id) values($1)",[actor.person_id])
       await invalidInsert("insert into da_person_mfa_preference(person_id,user_enabled) values($1,null)",[actor.person_id])
+    })
+    await check("canonical audit is append-only; outbox has unique source and foreign key", async () => {
+      const sourceId="daaud_pg16_canonical_fixture"
+      await db.begin(async tx=>{
+        await tx.unsafe(`insert into da_audit_event
+          (id,actor_person_id,actor_type,actor_id,action,module,resource,target_id,occurred_at,created_at,updated_at)
+          values ($1,$2,$3,$4,'organization.membership_changed','dogruadres-access','membership',
+                  'damem_ephemeral',now(),now(),now())`,
+          [sourceId,actor.person_id,actor.actor_type,actor.actor_id])
+        await tx.unsafe(`insert into da_audit_outbox
+          (id,source_audit_event_id,source_module,envelope_version,envelope,status)
+          values ('daaob_ci_1',$1,'dogruadres-access',1,$2::jsonb,'pending')`,
+          [sourceId,JSON.stringify({version:1,source_module:"dogruadres-access",
+            source_audit_event_id:sourceId,action:"organization.membership_changed"})])
+      })
+      await invalidInsert("update da_audit_event set updated_at=now() where id=$1",[sourceId])
+      await invalidInsert("delete from da_audit_event where id=$1",[sourceId])
+      await invalidInsert("truncate da_audit_event")
+      await invalidInsert(`insert into da_audit_outbox
+        (id,source_audit_event_id,envelope) values ('daaob_ci_2',$1,'{}'::jsonb)`,[sourceId])
+      await invalidInsert(`insert into da_audit_outbox
+        (id,source_audit_event_id,envelope) values ('daaob_ci_orphan','absent','{}'::jsonb)`)
+      assert.equal((await db.unsafe("select count(*)::int as n from da_audit_outbox"))[0].n,1)
+      assert.equal((await db.unsafe("select count(*)::int as n from da_audit_event where id=$1",[sourceId]))[0].n,1)
     })
     await check("actual MfaPersistence writes default, policy, preference and attributable outbox", async () => {
       const p=new MfaPersistence(sqlAdapter(db))
