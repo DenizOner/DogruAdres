@@ -2,7 +2,7 @@ import { POST,enrollmentEnabled } from "../mfa/enroll/route"
 import { access,csrfEnrollment,enabled,sessionToken,secureCookies } from "../security"
 import { bindServerActor } from "../server-actor"
 jest.mock("../security",()=>({
-  access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn(),
+  access:jest.fn(),csrfEnrollment:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn(),
   secureCookies:jest.fn(()=>true),
 }))
 jest.mock("../server-actor",()=>({bindServerActor:jest.fn()}))
@@ -82,7 +82,7 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
     expect(auth.startAuthMfa).not.toHaveBeenCalled()
   })
   it("rejects disabled platform before password or native factor processing",async()=>{
-    service.personalMfaSettings.mockResolvedValue({
+    service.personalEnrollmentMfaSettings.mockResolvedValue({
       platform:{platform_mode:"disabled"},
       personal:{person_id:"daprs_self"},
     })

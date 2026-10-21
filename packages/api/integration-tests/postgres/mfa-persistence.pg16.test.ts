@@ -16,6 +16,7 @@ import { Migration20261017150237 } from "../../src/modules/dogruadres-access/mig
 import { Migration20261018000000 } from "../../src/modules/dogruadres-access/migrations/Migration20261018000000"
 import { Migration20261020230000 } from "../../src/modules/dogruadres-access/migrations/Migration20261020230000"
 import { Migration20261022010000 } from "../../src/modules/dogruadres-access/migrations/Migration20261022010000"
+import { Migration20261022011000 } from "../../src/modules/dogruadres-access/migrations/Migration20261022011000"
 import { Migration20261021235000 } from "../../src/modules/dogruadres-access/migrations/Migration20261021235000"
 import {
   MfaPersistence, MfaConcurrentUpdateError, MfaOutboxFailure,
@@ -120,6 +121,18 @@ async function main() {
       await db.unsafe("insert into da_person(id) values($1)",[actor.person_id])
       await invalidInsert("insert into da_person_mfa_preference(person_id,user_enabled) values($1,null)",[actor.person_id])
     })
+    await check("browser-scope migration applies and rejects old-session implicit promotion",async()=>{
+      await assert.rejects(db.begin(async tx=>{
+        await apply(tx,Migration20261022011000)
+        throw Error("ROLLBACK_MFA_SESSION_SCOPE_DDL")
+      }),/ROLLBACK_MFA_SESSION_SCOPE_DDL/)
+      const before=await db.unsafe(`select count(*)::int as n from information_schema.columns
+        where table_name='da_browser_session' and column_name='mfa_purpose'`)
+      assert.equal(before[0].n,0)
+      await db.begin(tx=>apply(tx,Migration20261022011000))
+      assert.equal((await db.unsafe(`select count(*)::int as n from information_schema.columns
+        where table_name='da_browser_session' and column_name='mfa_purpose'`))[0].n,1)
+    })
     await check("MFA enrollment intent DDL rolls back, then applies with exact FK/uniqueness",async()=>{
       await assert.rejects(db.begin(async tx=>{
         await apply(tx,Migration20261022010000)
@@ -141,6 +154,14 @@ async function main() {
         (id,person_id,auth_identity_id,actor_type,actor_id,epoch,csrf_hash,status,created_at,last_activity_at)
         values ($1,$2,$3,'user',$4,0,$5,'active',now(),now())`,
         [browserId,actor.person_id,authId,actor.actor_id,"placeholder_csrf"])
+      assert.equal((await db.unsafe("select mfa_purpose from da_browser_session where id=$1",[browserId]))[0].mfa_purpose,"legacy")
+      await invalidInsert("update da_browser_session set mfa_purpose='full' where id=$1",[browserId])
+      await invalidInsert("update da_browser_session set mfa_purpose='mfa_enroll',mfa_platform_version=0 where id=$1",[browserId])
+      await invalidInsert("update da_browser_session set mfa_purpose='UNKNOWN' where id=$1",[browserId])
+      await db.unsafe(`update da_browser_session set mfa_purpose='full',
+        mfa_platform_version=0,mfa_person_version=0 where id=$1`,[browserId])
+      assert.equal((await db.unsafe("select mfa_purpose from da_browser_session where id=$1",[browserId]))[0].mfa_purpose,"full")
+      await invalidInsert(`update da_browser_session set mfa_purpose='legacy' where id=$1`,[browserId])
       const ticketId="t".repeat(64)
       await db.unsafe(`insert into da_mfa_enrollment_intent
         (id,session_id,person_id,auth_identity_id,factor_id,expires_at)

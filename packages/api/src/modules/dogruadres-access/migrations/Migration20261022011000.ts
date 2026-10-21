@@ -11,6 +11,7 @@ export class Migration20261022011000 extends Migration {
         (mfa_purpose='legacy' and mfa_platform_version is null and mfa_person_version is null)
         or
         (mfa_purpose in ('mfa_enroll','full') and
+         mfa_platform_version is not null and mfa_person_version is not null and
          mfa_platform_version between 0 and 2147483647 and
          mfa_person_version between 0 and 2147483647)
       );`)
