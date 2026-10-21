@@ -23,6 +23,8 @@ const input=z.discriminatedUnion("action",[
   // client-supplied factor or Person identifier.
   z.object({action:z.literal("resume"),email:z.string().email().max(254),
     password:z.string().min(1).max(1024)}).strict(),
+  z.object({action:z.literal("reset_pending"),email:z.string().email().max(254),
+    password:z.string().min(1).max(1024)}).strict(),
 ])
 function setupCookie(req:MedusaRequest):string {
   const matches=(req.headers.cookie??"").split(";").map(s=>s.trim())
@@ -44,7 +46,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
      settings.platform.platform_mode==="disabled")
     return res.status(403).json({message:"Enrollment not permitted"})
   const auth:IAuthModuleService=req.scope.resolve("auth")
-  if(parsed.data.action==="start"||parsed.data.action==="resume"){
+  if(["start","resume","reset_pending"].includes(parsed.data.action)){
     const email=parsed.data.email.toLowerCase()
     if(!await service.personalLoginAttempt(digest(email),
       digest(req.socket?.remoteAddress??"unknown")))
@@ -55,6 +57,32 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     })
     if(!result.success || result.authIdentity?.id!==current.auth_identity_id)
       return res.status(403).json({message:"Access denied"})
+    if(parsed.data.action==="reset_pending"){
+      // Separately guarded destructive mutation: only a pending factor
+      // belonging to this exact password-verified AuthIdentity can be reset.
+      if(process.env.DOGRUADRES_MFA_PENDING_RESET_ENABLED!=="true")
+        return res.status(503).json({message:"Pending MFA reset unavailable"})
+      const pendingId=await findResumablePendingTotpId(auth,current.auth_identity_id)
+      if(!pendingId)return res.status(409).json({message:"No pending TOTP enrollment"})
+      const verified=await auth.retrieveAuthMfa({
+        id:pendingId,auth_identity_id:current.auth_identity_id,
+      })
+      if(verified.id!==pendingId||verified.auth_identity_id!==current.auth_identity_id||
+         verified.status!=="pending"||verified.provider!=="totp")
+        return res.status(409).json({message:"Pending factor changed"})
+      const revoked=await service.personalRevokePendingMfaEnrollment(token,pendingId)
+      if(!revoked)return res.status(403).json({message:"Enrollment not permitted"})
+      // Medusa v2.21.2 itself denies disabling an enabled factor without
+      // challenge. A concurrent activation therefore fails closed.
+      let disabled
+      try{disabled=await auth.disableAuthMfa({id:pendingId})}
+      catch{return res.status(409).json({message:"Pending factor changed; refresh state"})}
+      if(disabled.id!==pendingId || disabled.auth_identity_id!==current.auth_identity_id ||
+         disabled.status!=="disabled")
+        return res.status(503).json({message:"Native MFA reset could not be confirmed"})
+      res.clearCookie("da_mfa_setup",{path:"/personal/mfa/enroll"})
+      return res.json({reset:true})
+    }
     let factorId:string
     let secret:string|undefined,otpauth_url:string|undefined
     if(parsed.data.action==="resume"){

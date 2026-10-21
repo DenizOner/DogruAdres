@@ -49,6 +49,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <form id="mfa-enroll-start"><label>Kurulum işlemi<select name="setup_action">
       <option value="start">Yeni TOTP kurulumu</option>
       <option value="resume">Yarım kalan TOTP kurulumuna devam</option>
+      <option value="reset_pending">Eski kurulum anahtarımı kaybettim; yalnız bekleyen kurulumu sıfırla</option>
     </select></label><label>E-posta<input name="email" type="email" autocomplete="username" required></label>
       <label>Parolanızı yeniden girin<input name="password" type="password" autocomplete="current-password" required></label>
       <button>Kurulum kodu oluştur</button></form>
@@ -159,6 +160,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       delete values.setup_action;
       const data=await api('mfa/enroll',{method:'POST',body:JSON.stringify({action,...values})});
       e.target.reset();
+      if(data.reset){
+        el('mfa-enroll-secret').textContent='';
+        el('mfa-enroll-verify').hidden=true;
+        button.disabled=false;
+        status('Bekleyen TOTP kurulumu sıfırlandı. Yeni kurulum için parolanızı yeniden doğrulayın.');
+        return;
+      }
       el('mfa-enroll-secret').textContent=data.resumed
         ? 'Önceki kimlik doğrulama uygulamanızdaki kodu girin. Önceki kurulum anahtarı tekrar gösterilemez.'
         : 'Tek seferlik kurulum anahtarı veya bağlantısı: '+(data.secret||data.otpauth_url);

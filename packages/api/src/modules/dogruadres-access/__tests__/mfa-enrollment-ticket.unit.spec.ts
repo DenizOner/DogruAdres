@@ -40,6 +40,25 @@ describe("MFA purpose-bound enrollment tickets (source contract only)",()=>{
     await expect(sut().beginAfterPasswordProof(cookie,"auth_self","mfa_pending")).resolves.toBeNull()
     expect(execute).not.toHaveBeenCalled()
   })
+  it("revokes only exact Person/identity/factor tickets before pending-native reset",async()=>{
+    const result=await sut().revokePendingFactor(cookie,"mfa_pending")
+    expect(result).toEqual({revoked_tickets:0})
+    const stmt=execute.mock.calls.find(x=>x[0].includes("update da_mfa_enrollment_intent")&&
+      x[0].includes("factor_id=?"))
+    expect(stmt?.[1]).toEqual(["daprs_self","auth_self","mfa_pending"])
+    expect(stmt?.[0]).toContain("consumed_at is null and revoked_at is null")
+    expect(execute.mock.calls.some(x=>x[0].includes("mfa.enrollment.pending_reset_requested"))).toBe(false)
+    const evt=execute.mock.calls.find(x=>x[0].includes("insert into da_audit_event"))
+    expect(evt?.[1]).toContain("mfa.enrollment.pending_reset_requested")
+    expect(evt?.[1]).not.toContain("mfa_pending")
+    expect(execute.mock.calls.some(x=>x[0].includes("insert into da_security_outbox"))).toBe(true)
+  })
+  it("denies pending reset to non-current session or malformed factor",async()=>{
+    current.mockResolvedValue(null)
+    expect(await sut().revokePendingFactor(cookie,"mfa_pending")).toBeNull()
+    expect(execute).not.toHaveBeenCalled()
+    await expect(sut().revokePendingFactor(cookie,"")).rejects.toThrow("Access denied")
+  })
   it("requires exact browser session, Person and native identity for an attempt",async()=>{
     await expect(sut().claimVerificationAttempt(cookie,ticket)).resolves.toEqual({
       auth_identity_id:"auth_self",factor_id:"mfa_pending",

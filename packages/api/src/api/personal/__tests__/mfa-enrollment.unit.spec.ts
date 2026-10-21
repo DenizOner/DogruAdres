@@ -14,10 +14,11 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
     personalEnrollmentSession:jest.fn(),personalEnrollmentMfaSettings:jest.fn(),
     personalLoginAttempt:jest.fn(),personalBeginMfaEnrollment:jest.fn(),
     personalClaimMfaVerification:jest.fn(),personalCompleteMfaEnrollment:jest.fn(),
-    closePersonalSession:jest.fn(),
+    closePersonalSession:jest.fn(),personalRevokePendingMfaEnrollment:jest.fn(),
   }
   const auth={
     authenticate:jest.fn(),listAuthMfa:jest.fn(),startAuthMfa:jest.fn(),verifyAuthMfa:jest.fn(),
+    retrieveAuthMfa:jest.fn(),disableAuthMfa:jest.fn(),
   }
   beforeEach(()=>{
     jest.resetAllMocks()
@@ -47,11 +48,15 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
     auth.startAuthMfa.mockResolvedValue({mfa:{id:"mfa_pending",auth_identity_id:"auth_self",status:"pending"},
       secret:"synthetic-test-secret",otpauth_url:"otpauth://local-only-test"})
     auth.verifyAuthMfa.mockResolvedValue({id:"mfa_pending",auth_identity_id:"auth_self",status:"enabled"})
+    auth.retrieveAuthMfa.mockResolvedValue({id:"mfa_pending",auth_identity_id:"auth_self",provider:"totp",status:"pending"})
+    auth.disableAuthMfa.mockResolvedValue({id:"mfa_pending",auth_identity_id:"auth_self",provider:"totp",status:"disabled"})
+    service.personalRevokePendingMfaEnrollment.mockResolvedValue({revoked_tickets:1})
   })
   afterEach(()=>{
     delete process.env.DOGRUADRES_MFA_ENROLLMENT_ENABLED
     delete process.env.DOGRUADRES_MFA_SETTINGS_ENABLED
     delete process.env.DOGRUADRES_MFA_RUNTIME_ENABLED
+    delete process.env.DOGRUADRES_MFA_PENDING_RESET_ENABLED
     delete process.env.DOGRUADRES_IDENTITY_ENABLED
   })
   const call=async(body:unknown,cookie="da_mfa_setup="+ticket)=>{
@@ -138,6 +143,44 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
     const bad=await call({action:"resume",email:"self@example.invalid",password:"pw",factor_id:"p"})
     expect(bad.status).toHaveBeenCalledWith(400)
     expect(service.personalBeginMfaEnrollment).not.toHaveBeenCalled()
+  })
+  it("never resets a pending factor without the separate reset feature gate",async()=>{
+    auth.listAuthMfa.mockResolvedValue([{id:"mfa_pending",auth_identity_id:"auth_self",provider:"totp",status:"pending"}])
+    const r=await call({action:"reset_pending",email:"self@example.invalid",password:"pw"})
+    expect(r.status).toHaveBeenCalledWith(503)
+    expect(service.personalRevokePendingMfaEnrollment).not.toHaveBeenCalled()
+    expect(auth.disableAuthMfa).not.toHaveBeenCalled()
+  })
+  it("requires current identity, fresh password and exact pending factor before reset",async()=>{
+    process.env.DOGRUADRES_MFA_PENDING_RESET_ENABLED="true"
+    auth.listAuthMfa.mockResolvedValue([{id:"mfa_pending",auth_identity_id:"auth_self",provider:"totp",status:"pending"}])
+    auth.retrieveAuthMfa.mockResolvedValue({id:"mfa_pending",auth_identity_id:"auth_other",provider:"totp",status:"pending"})
+    const denied=await call({action:"reset_pending",email:"self@example.invalid",password:"pw"})
+    expect(denied.status).toHaveBeenCalledWith(409)
+    expect(service.personalRevokePendingMfaEnrollment).not.toHaveBeenCalled()
+    auth.retrieveAuthMfa.mockResolvedValue({id:"mfa_pending",auth_identity_id:"auth_self",provider:"totp",status:"pending"})
+    const r=await call({action:"reset_pending",email:"self@example.invalid",password:"pw"})
+    expect(service.personalRevokePendingMfaEnrollment).toHaveBeenCalledWith(token,"mfa_pending")
+    expect(auth.retrieveAuthMfa).toHaveBeenCalledWith({id:"mfa_pending",auth_identity_id:"auth_self"})
+    expect(auth.disableAuthMfa).toHaveBeenCalledWith({id:"mfa_pending"})
+    expect(r.json).toHaveBeenCalledWith({reset:true})
+    expect(r.clearCookie).toHaveBeenCalledWith("da_mfa_setup",{path:"/personal/mfa/enroll"})
+  })
+  it("does not disable native factor when Foundation revocation fails",async()=>{
+    process.env.DOGRUADRES_MFA_PENDING_RESET_ENABLED="true"
+    auth.listAuthMfa.mockResolvedValue([{id:"mfa_pending",auth_identity_id:"auth_self",provider:"totp",status:"pending"}])
+    service.personalRevokePendingMfaEnrollment.mockResolvedValue(null)
+    const r=await call({action:"reset_pending",email:"self@example.invalid",password:"pw"})
+    expect(r.status).toHaveBeenCalledWith(403)
+    expect(auth.disableAuthMfa).not.toHaveBeenCalled()
+  })
+  it("fails closed if factor becomes enabled before native disable",async()=>{
+    process.env.DOGRUADRES_MFA_PENDING_RESET_ENABLED="true"
+    auth.listAuthMfa.mockResolvedValue([{id:"mfa_pending",auth_identity_id:"auth_self",provider:"totp",status:"pending"}])
+    auth.disableAuthMfa.mockRejectedValue(Error("fresh challenge required"))
+    const r=await call({action:"reset_pending",email:"self@example.invalid",password:"pw"})
+    expect(r.status).toHaveBeenCalledWith(409)
+    expect(r.json).not.toHaveBeenCalledWith({reset:true})
   })
   it("charges a ticket attempt and rejects wrong native TOTP",async()=>{
     auth.verifyAuthMfa.mockRejectedValue(Error("bad totp"))

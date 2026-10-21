@@ -43,6 +43,28 @@ export class MfaEnrollmentTickets {
     return {ticket}
   }
 
+  /**
+   * Revoke every live ticket for an explicitly owner-verified pending native
+   * factor. This method performs NO native mutation; the caller must recheck
+   * exact pending/owner state and fresh password proof before native disable.
+   * The DB revocation commits first, so even downstream native failures
+   * cannot re-enable an obsolete enrollment ticket.
+   */
+  async revokePendingFactor(browserToken:string,factorId:string) {
+    if(typeof factorId!=="string"||!factorId||factorId.length>128)
+      throw new IdentityAccessDenied()
+    const session=await new IdentitySessions(this.db).enrollment(browserToken)
+    if(!session)return null
+    const affected=await this.db.execute(`update da_mfa_enrollment_intent
+      set revoked_at=clock_timestamp()
+      where person_id=? and auth_identity_id=? and factor_id=?
+      and consumed_at is null and revoked_at is null
+      returning id`,[session.person_id,session.auth_identity_id,factorId])
+    // Do not emit factor ID or TOTP secret as an audit target or payload.
+    await this.audit(session,"mfa.enrollment.pending_reset_requested",session.id)
+    return {revoked_tickets:affected.length}
+  }
+
   /** One attempt is charged even when the native TOTP verification fails. */
   async claimVerificationAttempt(browserToken:string, ticket:string) {
     if(!/^[A-Za-z0-9_-]{43}$/.test(ticket))return null

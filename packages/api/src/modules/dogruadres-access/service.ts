@@ -293,6 +293,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   }
 
   @InjectTransactionManager()
+  async personalRevokePendingMfaEnrollment(token:string,factorId:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    if(!await new IdentitySessions(sql).enrollment(token))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).revokePendingFactor(token,factorId)
+  }
+
+  @InjectTransactionManager()
   async personalClaimMfaVerification(token:string,ticket:string,@MedusaContext() context:Context={}) {
     const sql=securitySql(context.transactionManager)
     // Session/Person lock comes FIRST, matching staff policy-change lock order.
