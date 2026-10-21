@@ -28,7 +28,7 @@ export class MfaEnrollmentTickets {
   async beginAfterPasswordProof(browserToken:string, authIdentityId:string, factorId:string) {
     if(typeof factorId!=="string"||factorId.length<1||factorId.length>128||
        typeof authIdentityId!=="string"||!authIdentityId)throw new IdentityAccessDenied()
-    const session=await new IdentitySessions(this.db).current(browserToken,false,false)
+    const session=await new IdentitySessions(this.db).enrollment(browserToken)
     if(!session||session.auth_identity_id!==authIdentityId)return null
     // current() locked this browser session and Person epoch for the transaction.
     // Replacement is atomic; at most one unconsumed intent per browser session.
@@ -46,7 +46,7 @@ export class MfaEnrollmentTickets {
   /** One attempt is charged even when the native TOTP verification fails. */
   async claimVerificationAttempt(browserToken:string, ticket:string) {
     if(!/^[A-Za-z0-9_-]{43}$/.test(ticket))return null
-    const session=await new IdentitySessions(this.db).current(browserToken,false,false)
+    const session=await new IdentitySessions(this.db).enrollment(browserToken)
     if(!session)return null
     const rows=await this.db.execute(`update da_mfa_enrollment_intent
       set attempts=attempts+1 where id=? and session_id=? and person_id=?
@@ -63,7 +63,7 @@ export class MfaEnrollmentTickets {
        !(verifiedAt instanceof Date)||!Number.isFinite(verifiedAt.getTime())||
        verifiedAt.getTime()>Date.now())return null
     const sessions=new IdentitySessions(this.db)
-    const session=await sessions.current(browserToken,false,false)
+    const session=await sessions.enrollment(browserToken)
     if(!session)return null
     const rows=await this.db.execute(`update da_mfa_enrollment_intent
       set consumed_at=clock_timestamp() where id=? and session_id=? and person_id=?

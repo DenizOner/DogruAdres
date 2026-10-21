@@ -1,7 +1,8 @@
 import type { MedusaRequest,MedusaResponse } from "@medusajs/framework/http"
 import type { IAuthModuleService } from "@medusajs/framework/types"
 import { z } from "@medusajs/framework/zod"
-import { access,csrf,enabled,sessionToken,secureCookies } from "../../security"
+import { access,csrfEnrollment,enabled,sessionToken,secureCookies } from "../../security"
+import { mfaRuntimeEnforced } from "../../../../modules/dogruadres-access/identity-session"
 import { bindServerActor } from "../../server-actor"
 import { digest } from "../../../../modules/dogruadres-access/identity-session"
 import { readNativeMfaSummary } from "../../../../modules/dogruadres-access/native-mfa-summary"
@@ -11,7 +12,8 @@ import { readNativeMfaSummary } from "../../../../modules/dogruadres-access/nati
 export const AUTHENTICATE=false
 export const enrollmentEnabled=()=>enabled() &&
   process.env.DOGRUADRES_MFA_SETTINGS_ENABLED==="true" &&
-  process.env.DOGRUADRES_MFA_ENROLLMENT_ENABLED==="true"
+  process.env.DOGRUADRES_MFA_ENROLLMENT_ENABLED==="true" &&
+  mfaRuntimeEnforced()
 
 const input=z.discriminatedUnion("action",[
   z.object({action:z.literal("start"),email:z.string().email().max(254),
@@ -27,13 +29,13 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Cache-Control","no-store")
   res.setHeader("Referrer-Policy","no-referrer")
   if(!enrollmentEnabled())return res.status(503).json({message:"MFA enrollment unavailable"})
-  if(!await csrf(req))return res.status(403).json({message:"Access denied"})
+  if(!await csrfEnrollment(req))return res.status(403).json({message:"Access denied"})
   const parsed=input.safeParse(req.body)
   if(!parsed.success)return res.status(400).json({message:"Invalid input"})
   const token=sessionToken(req),service=access(req)
-  const current=await service.personalSession(token)
+  const current=await service.personalEnrollmentSession(token)
   if(!current)return res.status(403).json({message:"Access denied"})
-  const settings=await service.personalMfaSettings(token)
+  const settings=await service.personalEnrollmentMfaSettings(token)
   if(!settings || settings.personal.person_id!==current.person_id ||
      settings.platform.platform_mode==="disabled")
     return res.status(403).json({message:"Enrollment not permitted"})

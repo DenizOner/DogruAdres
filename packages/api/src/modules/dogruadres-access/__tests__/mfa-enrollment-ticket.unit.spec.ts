@@ -9,7 +9,7 @@ describe("MFA purpose-bound enrollment tickets (source contract only)",()=>{
     if(sql.includes("returning id"))return [{id:digest(ticket)}]
     return []
   })
-  const current=jest.spyOn(IdentitySessions.prototype,"current")
+  const current=jest.spyOn(IdentitySessions.prototype,"enrollment")
   const create=jest.spyOn(IdentitySessions.prototype,"create")
   beforeEach(()=>{
     execute.mockClear()

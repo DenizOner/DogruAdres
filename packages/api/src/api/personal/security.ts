@@ -28,6 +28,19 @@ export async function csrf(req: MedusaRequest): Promise<boolean> {
   return timingSafeEqual(Buffer.from(digest(header)),Buffer.from(s.csrf_hash))
 }
 
+/**
+ * Only purpose-limited setup and already-authorized full sessions can submit
+ * enrollment, using the same exact-origin CSRF requirements.
+ */
+export async function csrfEnrollment(req:MedusaRequest):Promise<boolean>{
+  if(!trustedOrigin(req))return false
+  const header=req.headers["x-csrf-token"]
+  if(typeof header!=="string"||header.length!==43)return false
+  const session=await access(req).personalEnrollmentSession(sessionToken(req))
+  if(!session)return false
+  return timingSafeEqual(Buffer.from(digest(header)),Buffer.from(session.csrf_hash))
+}
+
 /** Explicit native ingress. Public catalog/auth remain available; unsupported
  * native actor delegation is CLOSED until a verified credential-binding adapter
  * is implemented. This is NOT a claim of full D9/machine compatibility.

@@ -1,5 +1,5 @@
 import { POST,enrollmentEnabled } from "../mfa/enroll/route"
-import { access,csrf,enabled,sessionToken,secureCookies } from "../security"
+import { access,csrfEnrollment,enabled,sessionToken,secureCookies } from "../security"
 import { bindServerActor } from "../server-actor"
 jest.mock("../security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn(),
@@ -11,7 +11,7 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
   const token="S".repeat(43),ticket="T".repeat(43)
   const session={person_id:"daprs_self",auth_identity_id:"auth_self"}
   const service={
-    personalSession:jest.fn(),personalMfaSettings:jest.fn(),
+    personalEnrollmentSession:jest.fn(),personalEnrollmentMfaSettings:jest.fn(),
     personalLoginAttempt:jest.fn(),personalBeginMfaEnrollment:jest.fn(),
     personalClaimMfaVerification:jest.fn(),personalCompleteMfaEnrollment:jest.fn(),
     closePersonalSession:jest.fn(),
@@ -23,14 +23,16 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
     jest.resetAllMocks()
     process.env.DOGRUADRES_MFA_SETTINGS_ENABLED="true"
     process.env.DOGRUADRES_MFA_ENROLLMENT_ENABLED="true"
+    process.env.DOGRUADRES_MFA_RUNTIME_ENABLED="true"
+    process.env.DOGRUADRES_IDENTITY_ENABLED="true"
     ;(enabled as jest.Mock).mockReturnValue(true)
     ;(secureCookies as jest.Mock).mockReturnValue(true)
-    ;(csrf as jest.Mock).mockResolvedValue(true)
+    ;(csrfEnrollment as jest.Mock).mockResolvedValue(true)
     ;(sessionToken as jest.Mock).mockReturnValue(token)
     ;(access as jest.Mock).mockReturnValue(service)
     ;(bindServerActor as jest.Mock).mockResolvedValue(true)
-    service.personalSession.mockResolvedValue(session)
-    service.personalMfaSettings.mockResolvedValue({
+    service.personalEnrollmentSession.mockResolvedValue(session)
+    service.personalEnrollmentMfaSettings.mockResolvedValue({
       platform:{platform_mode:"required",version:0},
       personal:{person_id:"daprs_self",user_enabled:false,version:0},
     })
@@ -49,6 +51,8 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
   afterEach(()=>{
     delete process.env.DOGRUADRES_MFA_ENROLLMENT_ENABLED
     delete process.env.DOGRUADRES_MFA_SETTINGS_ENABLED
+    delete process.env.DOGRUADRES_MFA_RUNTIME_ENABLED
+    delete process.env.DOGRUADRES_IDENTITY_ENABLED
   })
   const call=async(body:unknown,cookie="da_mfa_setup="+ticket)=>{
     const res:any={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),
@@ -67,7 +71,7 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
     expect(auth.authenticate).not.toHaveBeenCalled()
   })
   it("requires live session and browser origin/CSRF",async()=>{
-    ;(csrf as jest.Mock).mockResolvedValue(false)
+    ;(csrfEnrollment as jest.Mock).mockResolvedValue(false)
     expect((await call({action:"verify",code:"123456"})).status).toHaveBeenCalledWith(403)
     expect(service.personalClaimMfaVerification).not.toHaveBeenCalled()
   })

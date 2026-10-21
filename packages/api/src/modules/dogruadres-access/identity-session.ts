@@ -56,6 +56,7 @@ export class IdentitySessions {
     purpose: BrowserMfaPurpose = "legacy",
     expectedRevision?: MfaRevision
   ) {
+    if(mfaRuntimeEnforced() && purpose==="legacy")throw new IdentityAccessDenied()
     if(!["legacy","mfa_enroll","full"].includes(purpose) ||
        (purpose==="legacy" && expectedRevision) ||
        (purpose==="mfa_enroll" && strongAt))throw new IdentityAccessDenied()
@@ -244,7 +245,8 @@ export class IdentitySessions {
   async complete(token:string,completedAt:Date) {
     const rows=await this.db.execute(`update da_login_challenge set consumed_at=clock_timestamp() where id=? and consumed_at is null and expires_at>clock_timestamp() returning auth_identity_id`,[digest(token)])
     if(rows.length!==1 || !Number.isFinite(completedAt.getTime()) || completedAt.getTime()>Date.now())throw new IdentityAccessDenied()
-    return this.create(rows[0].auth_identity_id,completedAt)
+    return this.create(rows[0].auth_identity_id,completedAt,
+      mfaRuntimeEnforced()?"full":"legacy")
   }
 }
 

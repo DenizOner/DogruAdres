@@ -9,10 +9,10 @@ import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, has
 import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
 import { randomBytes } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
-import { IdentitySessions, securitySql } from "./identity-session"
+import { IdentitySessions, securitySql, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced } from "./identity-session"
 import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
 import { MfaEnrollmentTickets } from "./mfa-enrollment-ticket"
-import type { MfaPlatformMode } from "./mfa-policy"
+import { resolveMfaPolicy, type MfaPlatformMode } from "./mfa-policy"
 import { generateJwtToken } from "@medusajs/framework/utils"
 import { ActorDelegation } from './actor-delegation'
 import {AccountLinking,type VerifiedSecondary} from './account-linking'
@@ -195,8 +195,53 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return new IdentitySessions(securitySql(context.transactionManager)).complete(token,completedAt)
   }
   @InjectTransactionManager()
-  async openPersonalSession(authIdentityId: string, @MedusaContext() context: Context = {}) {
-    return new IdentitySessions(securitySql(context.transactionManager)).create(authIdentityId)
+  async openPersonalSession(
+    authIdentityId: string,
+    purpose:BrowserMfaPurpose="legacy",
+    expectedRevision?:Readonly<{platform:number;person:number}>,
+    @MedusaContext() context: Context = {}
+  ) {
+    return new IdentitySessions(securitySql(context.transactionManager))
+      .create(authIdentityId,null,purpose,expectedRevision)
+  }
+  @InjectTransactionManager()
+  async personalLoginMfaDecision(authIdentityId:string,nativeEnabled:boolean,
+    @MedusaContext() context: Context = {}) {
+    if(!mfaRuntimeEnforced())throw new IdentityAccessDenied()
+    const sql=securitySql(context.transactionManager)
+    const bindings=await sql.execute(`select b.person_id from da_login_binding b
+      join da_person p on p.id=b.person_id and p.disabled_at is null and p.deleted_at is null
+      join da_actor_mapping a on a.person_id=p.id and a.actor_type=b.actor_type
+        and a.actor_id=b.actor_id and a.deleted_at is null
+      where b.auth_identity_id=? and b.revoked_at is null and b.verified_at is not null`,
+      [authIdentityId])
+    if(bindings.length!==1)throw new IdentityAccessDenied()
+    const persistence=new MfaPersistence(sql)
+    const [policy,personal]=await Promise.all([
+      persistence.readPlatformPolicy(),persistence.readPersonPreference(bindings[0].person_id),
+    ])
+    const decision=resolveMfaPolicy(policy.platform_mode,personal.user_enabled,nativeEnabled)
+    // A native-enabled factor ALWAYS requires its Medusa challenge first.
+    if(nativeEnabled)throw new IdentityAccessDenied()
+    return {
+      purpose:(decision.required?"mfa_enroll":"full") as BrowserMfaPurpose,
+      expectedRevision:{platform:policy.version,person:personal.version},
+    }
+  }
+  @InjectTransactionManager()
+  async personalEnrollmentSession(token:string,@MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).enrollment(token)
+  }
+  @InjectTransactionManager()
+  async personalEnrollmentMfaSettings(token:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    const s=await new IdentitySessions(sql).enrollment(token)
+    if(!s)return null
+    const store=new MfaPersistence(sql)
+    return {
+      platform:await store.readPlatformPolicy(),
+      personal:await store.readPersonPreference(s.person_id),
+    }
   }
 
   @InjectTransactionManager()
@@ -231,7 +276,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Session/Person lock comes FIRST, matching staff policy-change lock order.
     // Taking the platform advisory lock first could deadlock against a staff
     // update that already holds this same browser session lock.
-    if(!await new IdentitySessions(sql).current(token,false,false))return null
+    if(!await new IdentitySessions(sql).enrollment(token))return null
     await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
     if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
     return new MfaEnrollmentTickets(sql).beginAfterPasswordProof(token,authIdentityId,factorId)
@@ -243,7 +288,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Session/Person lock comes FIRST, matching staff policy-change lock order.
     // Taking the platform advisory lock first could deadlock against a staff
     // update that already holds this same browser session lock.
-    if(!await new IdentitySessions(sql).current(token,false,false))return null
+    if(!await new IdentitySessions(sql).enrollment(token))return null
     await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
     if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
     return new MfaEnrollmentTickets(sql).claimVerificationAttempt(token,ticket)
@@ -255,7 +300,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Session/Person lock comes FIRST, matching staff policy-change lock order.
     // Taking the platform advisory lock first could deadlock against a staff
     // update that already holds this same browser session lock.
-    if(!await new IdentitySessions(sql).current(token,false,false))return null
+    if(!await new IdentitySessions(sql).enrollment(token))return null
     await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
     if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
     return new MfaEnrollmentTickets(sql).completeAfterNativeVerification(token,ticket,factorId,new Date())

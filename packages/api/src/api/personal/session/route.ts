@@ -1,7 +1,8 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import type { IAuthModuleService } from "@medusajs/framework/types"
-import { access, csrf, enabled, sessionToken, trustedOrigin, secureCookies } from "../security"
-import { csrfToken, digest } from "../../../modules/dogruadres-access/identity-session"
+import { access, csrf, csrfEnrollment, enabled, sessionToken, trustedOrigin, secureCookies } from "../security"
+import { csrfToken, digest, mfaRuntimeEnforced } from "../../../modules/dogruadres-access/identity-session"
+import { readNativeMfaSummary } from "../../../modules/dogruadres-access/native-mfa-summary"
 import { z } from "@medusajs/framework/zod"
 import { bindServerActor } from "../server-actor"
 const credentials = z.object({email:z.string().email().max(254),password:z.string().min(1).max(1024)}).strict()
@@ -34,16 +35,37 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     res.cookie("da_challenge",pending.token,{httpOnly:true,secure:secureCookies(),sameSite:"strict",path:"/personal",maxAge:300000})
     return res.status(202).json({challenge_required:true,csrf_token:pending.csrf})
   }
-  const session = await access(req).openPersonalSession(result.authIdentity.id)
-  try { if(!await bindServerActor(req,session.token))throw new Error("Session unavailable") } catch { await access(req).closePersonalSession(session.token,false);return res.status(503).json({message:"Service unavailable"}) }
+  let purpose:"legacy"|"mfa_enroll"|"full"="legacy"
+  let expectedRevision:Readonly<{platform:number;person:number}>|undefined
+  if(mfaRuntimeEnforced()){
+    let native
+    try{native=await readNativeMfaSummary(auth,result.authIdentity.id)}
+    catch{return res.status(503).json({message:"Native MFA state unavailable"})}
+    // A pending or enabled native factor cannot be promoted without a
+    // completed native challenge; recovery is a distinct, audited flow.
+    if(native.state!=="not_enrolled")
+      return res.status(401).json({message:"Additional verification required"})
+    try{
+      const decision=await access(req).personalLoginMfaDecision(result.authIdentity.id,native.enabled)
+      purpose=decision.purpose
+      expectedRevision=decision.expectedRevision
+    }catch{return res.status(403).json({message:"Access denied"})}
+  }
+  const session = await access(req).openPersonalSession(result.authIdentity.id,purpose,expectedRevision)
+  if(purpose!=="mfa_enroll"){
+    try { if(!await bindServerActor(req,session.token))throw new Error("Session unavailable") }
+    catch { await access(req).closePersonalSession(session.token,false);return res.status(503).json({message:"Service unavailable"}) }
+  }
   // Rotate by revoking the previously presented session after successful login.
   if (sessionToken(req)) await access(req).closePersonalSession(sessionToken(req),false)
   res.cookie("da_session",session.token,{httpOnly:true,secure:secureCookies(),sameSite:"strict",path:"/",maxAge:43200000})
-  return res.json({csrf_token:session.csrf})
+  return purpose==="mfa_enroll"
+    ? res.status(202).json({enrollment_required:true,csrf_token:session.csrf})
+    : res.json({csrf_token:session.csrf})
 }
 export const DELETE = async (req: MedusaRequest, res: MedusaResponse) => {
   res.setHeader("Cache-Control","no-store")
-  if (!enabled() || !await csrf(req)) return res.status(403).json({message:"Access denied"})
+  if (!enabled() || !(await csrf(req) || await csrfEnrollment(req))) return res.status(403).json({message:"Access denied"})
   if (req.query.all !== undefined && req.query.all !== "true") return res.status(400).json({message:"Invalid input"})
   await access(req).closePersonalSession(sessionToken(req),req.query.all==="true")
   res.clearCookie("da_session",{httpOnly:true,secure:secureCookies(),sameSite:"strict",path:"/"})
