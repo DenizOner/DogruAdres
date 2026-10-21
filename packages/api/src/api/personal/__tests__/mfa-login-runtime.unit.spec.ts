@@ -32,6 +32,7 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
     ;(sessionToken as jest.Mock).mockReturnValue("")
     ;(bindServerActor as jest.Mock).mockResolvedValue(true)
     service.personalLoginAttempt.mockResolvedValue(true)
+    service.pendingPersonalChallenge.mockResolvedValue({token:"T".repeat(43),csrf:"Z".repeat(43)})
     service.personalLoginMfaDecision.mockResolvedValue({
       purpose:"mfa_enroll",expectedRevision:{platform:0,person:0},
     })
