@@ -127,7 +127,13 @@ export class IdentitySessions {
       coalesce(to_jsonb(q)->>'mfa_activated','false') as mfa_activated
       from da_session_policy q where q.id='current' for share`)
     if (policies.length !== 1) throw new IdentityAccessDenied()
-    const policy = parseSessionPolicy(policies[0])
+    // Session-policy parser has an intentionally exact three-field contract.
+    // The independent, irreversible MFA latch must NEVER be fed into it.
+    const policy = parseSessionPolicy({
+      idle_timeout_seconds:policies[0].idle_timeout_seconds,
+      absolute_lifetime_seconds:policies[0].absolute_lifetime_seconds,
+      recent_auth_seconds:policies[0].recent_auth_seconds,
+    })
     const result = evaluateSessionEligibility({
       created_at_ms: new Date(s.created_at).getTime(), last_activity_at_ms: new Date(s.last_activity_at).getTime(),
       last_strong_auth_at_ms: s.last_strong_auth_at ? new Date(s.last_strong_auth_at).getTime() : null,
