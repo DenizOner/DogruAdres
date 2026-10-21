@@ -1,4 +1,5 @@
 import { nativeIngress, trustedOrigin } from "../security"
+import { GET as organizationsGet } from "../organizations/route"
 describe("personal ingress (unit contract only)",()=>{
   beforeEach(()=>{process.env.DOGRUADRES_IDENTITY_ENABLED="true";process.env.DOGRUADRES_PUBLIC_ORIGIN="https://example.invalid"})
   afterEach(()=>{delete process.env.DOGRUADRES_IDENTITY_ENABLED;delete process.env.DOGRUADRES_PUBLIC_ORIGIN})
@@ -35,5 +36,30 @@ describe("personal ingress (unit contract only)",()=>{
     expect((await probe("/hooks/payment/pp_system","POST")).next).toHaveBeenCalled()
     expect((await probe("/hooks/payment/pp_system","POST","Bearer stolen")).res.status).toHaveBeenCalledWith(401)
     expect((await probe("/cloud/auth")).next).toHaveBeenCalled()
+  })
+
+  it.each([
+    {id:"daorg_test",role:"owner"},
+    {id:"daorg_test",actor_id:"user_other"},
+    {id:"daorg_test",cache:"true"},
+    {organization:"daorg_test"},
+    {id:["daorg_test"]},
+    {id:"daorg_test",fields:"*"},
+  ])("rejects injected Organization query fields before resolving Foundation: %p",async query=>{
+    const personalOrganizations=jest.fn()
+    const res:any={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),json:jest.fn()}
+    await organizationsGet({query,headers:{cookie:"da_session=synthetic"},scope:{resolve:()=>({personalOrganizations})}} as any,res)
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(personalOrganizations).not.toHaveBeenCalled()
+  })
+  it("keeps exact-id and current-session Organization reads available",async()=>{
+    const result={organizations:[{id:"daorg_allowed"}]}
+    const personalOrganizations=jest.fn().mockResolvedValue(result)
+    const res:any={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),json:jest.fn()}
+    const req:any={query:{id:"daorg_allowed"},headers:{cookie:"da_session=synthetic"},scope:{resolve:()=>({personalOrganizations})}}
+    await organizationsGet(req,res)
+    expect(personalOrganizations).toHaveBeenCalledWith("synthetic","daorg_allowed")
+    expect(res.json).toHaveBeenCalledWith(result)
+    expect(res.status).not.toHaveBeenCalled()
   })
 })
