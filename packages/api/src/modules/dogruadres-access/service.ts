@@ -11,6 +11,7 @@ import { randomBytes } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
 import { IdentitySessions, securitySql } from "./identity-session"
 import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
+import { MfaEnrollmentTickets } from "./mfa-enrollment-ticket"
 import type { MfaPlatformMode } from "./mfa-policy"
 import { generateJwtToken } from "@medusajs/framework/utils"
 import { ActorDelegation } from './actor-delegation'
@@ -223,6 +224,31 @@ export default class DogruAdresAccessModuleService extends MedusaService({
    * native actor selector is accepted from the client.
    * This source path remains unreachable until MFA settings ingress is enabled.
    */
+  /** These internal helpers never accept client Person or actor selectors. */
+  @InjectTransactionManager()
+  async personalBeginMfaEnrollment(token:string,authIdentityId:string,factorId:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).beginAfterPasswordProof(token,authIdentityId,factorId)
+  }
+
+  @InjectTransactionManager()
+  async personalClaimMfaVerification(token:string,ticket:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).claimVerificationAttempt(token,ticket)
+  }
+
+  @InjectTransactionManager()
+  async personalCompleteMfaEnrollment(token:string,ticket:string,factorId:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).completeAfterNativeVerification(token,ticket,factorId,new Date())
+  }
+
   @InjectTransactionManager()
   async personalMfaSettings(token: string, @MedusaContext() context: Context = {}) {
     const sql = securitySql(context.transactionManager)

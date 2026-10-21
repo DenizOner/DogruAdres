@@ -29,6 +29,13 @@ test('MFA settings has exact GET/POST relay only',()=>{
   for(const path of ['/personal/mfa/','/personal/mfa/admin','/dogruadres/mfa','/admin/mfa'])
     assert.equal(allowedPublicRequest('POST',path),false)
 })
+test('MFA enrollment is POST-only and never a native MFA wildcard',()=>{
+  assert.equal(allowedPublicRequest('POST','/personal/mfa/enroll'),true)
+  for(const method of ['GET','HEAD','OPTIONS','PUT','DELETE'])
+    assert.equal(allowedPublicRequest(method,'/personal/mfa/enroll'),false)
+  for(const path of ['/personal/mfa/enroll/extra','/auth/mfa/start','/auth/mfa/disable'])
+    assert.equal(allowedPublicRequest('POST',path),false)
+})
 test('personal, public catalog and purpose-bound recovery are explicit exceptions',()=>{
   for(const path of ['/personal','/personal/contexts','/personal/memberships','/store/regions','/store/products','/store/products/prod_test','/store/sellers','/store/product-categories'])assert.equal(allowedPublicRequest('GET',path),true)
   for(const path of ['/auth/user/emailpass/reset-password','/auth/customer/emailpass/update','/auth/verification/confirm'])assert.equal(allowedPublicRequest('POST',path),true)

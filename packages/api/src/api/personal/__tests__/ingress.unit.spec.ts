@@ -14,6 +14,14 @@ describe("personal ingress (unit contract only)",()=>{
       expect(res.status).toHaveBeenCalledWith(401)
     }
   })
+  it("allows exact POST-only MFA enrollment, not native factor endpoints",async()=>{
+    expect((await probe("/personal/mfa/enroll","POST")).next).toHaveBeenCalled()
+    for(const path of ["/personal/mfa/enroll/extra","/auth/mfa","/auth/mfa/start"]){
+      const {next,res}=await probe(path,"POST")
+      expect(next).not.toHaveBeenCalled()
+      expect(res.status).toHaveBeenCalledWith(401)
+    }
+  })
   it("does not deny every public authentication operation",async()=>expect((await probe("/auth/customer/emailpass","POST")).next).toHaveBeenCalled())
   it("preserves an explicit native machine read, not arbitrary Basic mutations",async()=>{expect((await probe("/admin/api-keys","GET","Basic valid")).next).toHaveBeenCalled();expect((await probe("/admin/api-keys","POST","Basic valid")).res.status).toHaveBeenCalledWith(401)})
   it("permits only the purpose-built personal invitation POST with its own CSRF guard",async()=>{

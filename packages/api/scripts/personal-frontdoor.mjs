@@ -11,7 +11,7 @@ export function allowedPublicRequest(method,path){
     '/personal':['GET'], '/personal/session':['GET','POST','DELETE'],
     '/personal/challenge':['POST'], '/personal/organizations':['GET'],
     '/personal/platform':['GET','POST'], '/personal/memberships':['GET','POST'],
-    '/personal/invitations':['POST'], '/personal/mfa':['GET','POST'],
+    '/personal/invitations':['POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'],
     '/personal/contexts':['GET'],
     '/personal/links':['GET','POST'],
   }
