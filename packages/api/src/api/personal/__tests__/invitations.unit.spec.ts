@@ -50,8 +50,8 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
       person_id: principal.person_id,
       organizations: [{ id: "daorg_allowed", role: "owner" }],
     })
-    ;(createInvitationWorkflow as jest.Mock).mockReturnValue({ run: mockCreateRun })
-    ;(acceptInvitationWorkflow as jest.Mock).mockReturnValue({ run: mockAcceptRun })
+    ;(createInvitationWorkflow as unknown as jest.Mock).mockReturnValue({ run: mockCreateRun })
+    ;(acceptInvitationWorkflow as unknown as jest.Mock).mockReturnValue({ run: mockAcceptRun })
     mockCreateRun.mockResolvedValue({
       result: { id: "dainv_new", role: "member", status: "pending", expires_at: new Date("2026-11-01T00:00:00Z") },
     })
