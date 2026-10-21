@@ -42,7 +42,7 @@ describe("MFA purpose-bound enrollment tickets (source contract only)",()=>{
   })
   it("revokes only exact Person/identity/factor tickets before pending-native reset",async()=>{
     const result=await sut().revokePendingFactor(cookie,"mfa_pending")
-    expect(result).toEqual({revoked_tickets:0})
+    expect(result).toEqual({revoked_tickets:1})
     const stmt=execute.mock.calls.find(x=>x[0].includes("update da_mfa_enrollment_intent")&&
       x[0].includes("factor_id=?"))
     expect(stmt?.[1]).toEqual(["daprs_self","auth_self","mfa_pending"])

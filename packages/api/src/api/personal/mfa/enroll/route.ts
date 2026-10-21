@@ -46,7 +46,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
      settings.platform.platform_mode==="disabled")
     return res.status(403).json({message:"Enrollment not permitted"})
   const auth:IAuthModuleService=req.scope.resolve("auth")
-  if(["start","resume","reset_pending"].includes(parsed.data.action)){
+  if(parsed.data.action!=="verify"){
     const email=parsed.data.email.toLowerCase()
     if(!await service.personalLoginAttempt(digest(email),
       digest(req.socket?.remoteAddress??"unknown")))

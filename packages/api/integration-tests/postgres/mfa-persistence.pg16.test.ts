@@ -197,6 +197,31 @@ async function main() {
       assert.equal((await db.unsafe(`select count(*)::int as n from da_mfa_enrollment_intent
         where session_id=$1 and consumed_at is null and revoked_at is null`,[browserId]))[0].n,1)
     })
+    await check("pending-factor reset revokes tickets across two independent browser sessions",async()=>{
+      const authId="auth_ci_1",secondBrowserId="z".repeat(64)
+      const secondTicketId="w".repeat(64),firstTicketId="u".repeat(64)
+      await db.unsafe(`insert into da_browser_session
+        (id,person_id,auth_identity_id,actor_type,actor_id,epoch,csrf_hash,status,
+          created_at,last_activity_at,mfa_purpose,mfa_platform_version,mfa_person_version)
+        values ($1,$2,$3,'user',$4,0,$5,'active',now(),now(),'mfa_enroll',0,0)`,
+        [secondBrowserId,actor.person_id,authId,actor.actor_id,"placeholder_csrf_2"])
+      await db.unsafe(`insert into da_mfa_enrollment_intent
+        (id,session_id,person_id,auth_identity_id,factor_id,expires_at)
+        values ($1,$2,$3,$4,'mfa_next',clock_timestamp()+interval '5 minutes')`,
+        [secondTicketId,secondBrowserId,actor.person_id,authId])
+      const revocations=await db.unsafe(`update da_mfa_enrollment_intent set
+        revoked_at=clock_timestamp() where person_id=$1 and auth_identity_id=$2
+        and factor_id='mfa_next' and consumed_at is null and revoked_at is null
+        returning id`,[actor.person_id,authId])
+      assert.equal(revocations.length,2)
+      assert.deepEqual(revocations.map(r=>r.id).sort(),[firstTicketId,secondTicketId].sort())
+      const revoked=await db.unsafe(`update da_mfa_enrollment_intent
+        set consumed_at=clock_timestamp() where id=$1 and revoked_at is null
+        returning id`,[secondTicketId])
+      assert.equal(revoked.length,0,"Revoked recovery ticket must not be reused")
+      assert.equal((await db.unsafe(`select count(*)::int as n from da_mfa_enrollment_intent
+        where factor_id='mfa_next' and revoked_at is null`))[0].n,0)
+    })
     await check("canonical audit is append-only; outbox has unique source and foreign key", async () => {
       const sourceId="daaud_pg16_canonical_fixture"
       await db.begin(async tx=>{
