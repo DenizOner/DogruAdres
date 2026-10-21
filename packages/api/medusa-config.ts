@@ -54,7 +54,12 @@ module.exports = withMercur({
       resolve: '@medusajs/medusa/auth',
       options: {
         providers: [{ resolve: '@medusajs/medusa/auth-emailpass', id: 'emailpass' }],
-        mfa: { encryption_key: process.env.DOGRUADRES_MFA_ENCRYPTION_KEY },
+        // Medusa v2.21.2 defaults to "session", which lets a stolen session
+        // disable TOTP without verifying a second factor. Never rely on that.
+        mfa: {
+          encryption_key: process.env.DOGRUADRES_MFA_ENCRYPTION_KEY,
+          disable_policy: 'challenge',
+        },
       },
     }] : []),
     {
