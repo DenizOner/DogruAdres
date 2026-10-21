@@ -43,10 +43,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     catch{return res.status(503).json({message:"Native MFA state unavailable"})}
     // A pending or enabled native factor cannot be promoted without a
     // completed native challenge; recovery is a distinct, audited flow.
-    if(native.state!=="not_enrolled")
+    if(native.state==="enabled")
       return res.status(401).json({message:"Additional verification required"})
     try{
-      const decision=await access(req).personalLoginMfaDecision(result.authIdentity.id,native.enabled)
+      const decision=await access(req).personalLoginMfaDecision(result.authIdentity.id,native.state)
       purpose=decision.purpose
       expectedRevision=decision.expectedRevision
     }catch{return res.status(403).json({message:"Access denied"})}

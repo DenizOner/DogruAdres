@@ -55,7 +55,7 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
   }
   it("creates enrollment-only cookie but never binds native bearer/organization authority",async()=>{
     const r=await call()
-    expect(service.personalLoginMfaDecision).toHaveBeenCalledWith("auth_self",false)
+    expect(service.personalLoginMfaDecision).toHaveBeenCalledWith("auth_self","not_enrolled")
     expect(service.openPersonalSession).toHaveBeenCalledWith("auth_self","mfa_enroll",{platform:0,person:0})
     expect(bindServerActor).not.toHaveBeenCalled()
     expect(r.status).toHaveBeenCalledWith(202)
@@ -78,10 +78,14 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
     expect(r.status).toHaveBeenCalledWith(401)
     expect(service.openPersonalSession).not.toHaveBeenCalled()
   })
-  it("refuses pending native factor without re-enrollment authorization",async()=>{
+  it("issues setup-only session for an unfinished pending TOTP after password proof",async()=>{
     ;(readNativeMfaSummary as jest.Mock).mockResolvedValue({enabled:false,state:"pending"})
-    expect((await call()).status).toHaveBeenCalledWith(401)
-    expect(service.openPersonalSession).not.toHaveBeenCalled()
+    const res=await call()
+    expect(res.status).toHaveBeenCalledWith(202)
+    expect(service.personalLoginMfaDecision).toHaveBeenCalledWith("auth_self","pending")
+    expect(service.openPersonalSession).toHaveBeenCalledWith(
+      "auth_self","mfa_enroll",{platform:0,person:0})
+    expect(bindServerActor).not.toHaveBeenCalled()
   })
   it("honors real Medusa MFA challenge instead of creating a password-only session",async()=>{
     auth.validateAuthIdentity.mockResolvedValue({authIdentity:identity,mfaChallenge:{id:"native_challenge"}})

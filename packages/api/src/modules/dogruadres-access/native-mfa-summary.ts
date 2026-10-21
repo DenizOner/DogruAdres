@@ -26,10 +26,16 @@ export type NativeMfaSummary = Readonly<{
 type NativeFactorReader = Pick<IAuthModuleService,"listAuthMfa">
 const LIMIT = 101 // reject overflow instead of potentially hiding an enabled factor
 
-export async function readNativeMfaSummary(
+type InternalNativeFactorState = Readonly<{
+  summary: NativeMfaSummary
+  pendingTotpIds: readonly string[]
+}>
+
+/** Internal-only projection; factor identifiers must never be returned via HTTP. */
+async function readVerifiedNativeFactors(
   native: NativeFactorReader,
   authIdentityId: string
-): Promise<NativeMfaSummary> {
+): Promise<InternalNativeFactorState> {
   if (typeof authIdentityId !== "string" || !authIdentityId) {
     throw new NativeMfaStateUnavailable()
   }
@@ -42,6 +48,7 @@ export async function readNativeMfaSummary(
   }
   const ids = new Set<string>()
   let enabled = false, pending = false
+  const pendingTotpIds: string[] = []
   for (const factor of factors) {
     if (!factor || typeof factor.id !== "string" || !factor.id ||
         ids.has(factor.id) || factor.auth_identity_id !== authIdentityId ||
@@ -51,10 +58,40 @@ export async function readNativeMfaSummary(
     }
     ids.add(factor.id)
     if (factor.status === "enabled") enabled = true
-    if (factor.status === "pending") pending = true
+    if (factor.status === "pending") {
+      pending = true
+      if(factor.provider==="totp")pendingTotpIds.push(factor.id)
+    }
   }
   return Object.freeze({
-    enabled,
-    state: enabled ? "enabled" : pending ? "pending" : "not_enrolled",
+    summary: Object.freeze({
+      enabled,
+      state: enabled ? "enabled" as const : pending ? "pending" as const : "not_enrolled" as const,
+    }),
+    pendingTotpIds: Object.freeze(pendingTotpIds),
   })
+}
+
+export async function readNativeMfaSummary(
+  native: NativeFactorReader,
+  authIdentityId: string
+): Promise<NativeMfaSummary> {
+  return (await readVerifiedNativeFactors(native,authIdentityId)).summary
+}
+
+/**
+ * Recover a prior *pending* TOTP without silently creating another factor.
+ * Fail-closed on enabled factor, multiple pending, unsupported pending provider,
+ * malformed identity or truncation. Never return factor metadata or secrets.
+ */
+export async function findResumablePendingTotpId(
+  native: NativeFactorReader,
+  authIdentityId: string
+): Promise<string | null> {
+  const snapshot=await readVerifiedNativeFactors(native,authIdentityId)
+  if(snapshot.summary.enabled)throw new NativeMfaStateUnavailable()
+  if(snapshot.summary.state==="not_enrolled")return null
+  if(snapshot.pendingTotpIds.length!==1)
+    throw new NativeMfaStateUnavailable()
+  return snapshot.pendingTotpIds[0]
 }

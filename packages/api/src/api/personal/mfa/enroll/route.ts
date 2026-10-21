@@ -5,7 +5,7 @@ import { access,csrfEnrollment,enabled,sessionToken,secureCookies } from "../../
 import { mfaRuntimeEnforced } from "../../../../modules/dogruadres-access/identity-session"
 import { bindServerActor } from "../../server-actor"
 import { digest } from "../../../../modules/dogruadres-access/identity-session"
-import { readNativeMfaSummary } from "../../../../modules/dogruadres-access/native-mfa-summary"
+import { readNativeMfaSummary, findResumablePendingTotpId } from "../../../../modules/dogruadres-access/native-mfa-summary"
 
 // CLOSED by default. Separate rollout review MUST precede enabling both gates.
 // This is an enrollment-only capability, never a Person/Organization grant.
@@ -19,6 +19,10 @@ const input=z.discriminatedUnion("action",[
   z.object({action:z.literal("start"),email:z.string().email().max(254),
     password:z.string().min(1).max(1024)}).strict(),
   z.object({action:z.literal("verify"),code:z.string().regex(/^\d{6}$/)}).strict(),
+  // Resume requires the same fresh password proof as start; never accepts a
+  // client-supplied factor or Person identifier.
+  z.object({action:z.literal("resume"),email:z.string().email().max(254),
+    password:z.string().min(1).max(1024)}).strict(),
 ])
 function setupCookie(req:MedusaRequest):string {
   const matches=(req.headers.cookie??"").split(";").map(s=>s.trim())
@@ -40,7 +44,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
      settings.platform.platform_mode==="disabled")
     return res.status(403).json({message:"Enrollment not permitted"})
   const auth:IAuthModuleService=req.scope.resolve("auth")
-  if(parsed.data.action==="start"){
+  if(parsed.data.action==="start"||parsed.data.action==="resume"){
     const email=parsed.data.email.toLowerCase()
     if(!await service.personalLoginAttempt(digest(email),
       digest(req.socket?.remoteAddress??"unknown")))
@@ -51,20 +55,32 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     })
     if(!result.success || result.authIdentity?.id!==current.auth_identity_id)
       return res.status(403).json({message:"Access denied"})
-    // A previous pending setup is not silently replaced with another secret.
-    // Native lifecycle recovery must be reviewed separately.
-    const native=await readNativeMfaSummary(auth,current.auth_identity_id)
-    if(native.state!=="not_enrolled")
-      return res.status(409).json({message:"Existing MFA factor needs verification or recovery"})
-    const setup=await auth.startAuthMfa({
-      auth_identity_id:current.auth_identity_id,provider:"totp",
-      label:"DoğruAdres",issuer:"DoğruAdres",
-    })
-    if(setup.mfa.status!=="pending" ||
-       setup.mfa.auth_identity_id!==current.auth_identity_id ||
-       !setup.mfa.id || (!setup.secret&&!setup.otpauth_url))
-      return res.status(503).json({message:"MFA setup unavailable"})
-    const ticket=await service.personalBeginMfaEnrollment(token,current.auth_identity_id,setup.mfa.id)
+    let factorId:string
+    let secret:string|undefined,otpauth_url:string|undefined
+    if(parsed.data.action==="resume"){
+      // Recovery uses the *existing* pending factor with no metadata/secret
+      // disclosed. A user who lost the old authenticator secret must instead
+      // use a separately authorized pending-reset workflow.
+      const pendingId=await findResumablePendingTotpId(auth,current.auth_identity_id)
+      if(!pendingId)return res.status(409).json({message:"No pending TOTP enrollment to resume"})
+      factorId=pendingId
+    }else{
+      const native=await readNativeMfaSummary(auth,current.auth_identity_id)
+      if(native.state!=="not_enrolled")
+        return res.status(409).json({message:"Existing MFA factor needs verification or recovery"})
+      const setup=await auth.startAuthMfa({
+        auth_identity_id:current.auth_identity_id,provider:"totp",
+        label:"DoğruAdres",issuer:"DoğruAdres",
+      })
+      if(setup.mfa.status!=="pending" ||
+         setup.mfa.auth_identity_id!==current.auth_identity_id ||
+         !setup.mfa.id || (!setup.secret&&!setup.otpauth_url))
+        return res.status(503).json({message:"MFA setup unavailable"})
+      factorId=setup.mfa.id
+      secret=setup.secret
+      otpauth_url=setup.otpauth_url
+    }
+    const ticket=await service.personalBeginMfaEnrollment(token,current.auth_identity_id,factorId)
     if(!ticket)return res.status(403).json({message:"Enrollment not permitted"})
     res.cookie("da_mfa_setup",ticket.ticket,{
       httpOnly:true,secure:secureCookies(),sameSite:"strict",
@@ -72,7 +88,9 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     })
     // The one-time TOTP setup material must be displayed locally once and
     // never logged, cached, persisted in DoğruAdres tables, or sent as telemetry.
-    return res.json({setup_required:true,secret:setup.secret,otpauth_url:setup.otpauth_url})
+    return parsed.data.action==="resume"
+      ? res.json({setup_required:true,resumed:true})
+      : res.json({setup_required:true,secret,otpauth_url})
   }
   const ticket=setupCookie(req)
   const intent=await service.personalClaimMfaVerification(token,ticket)

@@ -1,4 +1,4 @@
-import { NativeMfaStateUnavailable, readNativeMfaSummary } from "../native-mfa-summary"
+import { NativeMfaStateUnavailable, readNativeMfaSummary, findResumablePendingTotpId } from "../native-mfa-summary"
 
 describe("Medusa v2.21.2 native MFA read-only factor state", () => {
   const identity="auth_identity_self"
@@ -15,6 +15,21 @@ describe("Medusa v2.21.2 native MFA read-only factor state", () => {
     expect(native.listAuthMfa).toHaveBeenCalledWith(
       {auth_identity_id:identity},{take:101,skip:0}
     )
+  })
+  it("selects only one pending, owned TOTP factor for password-proof resume",async()=>{
+    expect(await findResumablePendingTotpId(service([factor("pending_old","pending")]),identity))
+      .toBe("pending_old")
+    expect(await findResumablePendingTotpId(service([factor("old","disabled")]),identity))
+      .toBeNull()
+  })
+  it.each([
+    [factor("p1","pending"),factor("p2","pending")],
+    [factor("p1","pending"),factor("live","enabled")],
+    [factor("p1","pending","not_me")],
+    [factor("p1","pending")].map(f=>({...f,provider:"unknown_provider"})),
+  ])("rejects unsafe existing MFA factors during resumption: %p",async(...factors)=>{
+    await expect(findResumablePendingTotpId(service(factors),identity))
+      .rejects.toBeInstanceOf(NativeMfaStateUnavailable)
   })
   it("does not treat pending enrollment as verified",async()=>{
     expect(await readNativeMfaSummary(service([factor("mfa_pending","pending")]),identity))

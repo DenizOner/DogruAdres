@@ -110,6 +110,35 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
     expect((await call({action:"start",email:"self@example.invalid",password:"pw"})).status).toHaveBeenCalledWith(409)
     expect(auth.startAuthMfa).not.toHaveBeenCalled()
   })
+  it("resumes only exact owned pending factor after a fresh password proof; never discloses old secret",async()=>{
+    auth.listAuthMfa.mockResolvedValue([{
+      id:"pending_old",auth_identity_id:"auth_self",provider:"totp",status:"pending",
+      metadata:{secret:"old-seed-private"},
+    }])
+    const r=await call({action:"resume",email:"self@example.invalid",password:"pw"})
+    expect(service.personalBeginMfaEnrollment).toHaveBeenCalledWith(token,"auth_self","pending_old")
+    expect(auth.startAuthMfa).not.toHaveBeenCalled()
+    const body=r.json.mock.calls[0][0]
+    expect(body).toEqual({setup_required:true,resumed:true})
+    expect(JSON.stringify(body)).not.toContain("old-seed-private")
+    expect(JSON.stringify(body)).not.toContain("pending_old")
+    expect(r.cookie).toHaveBeenCalledWith("da_mfa_setup",ticket,expect.anything())
+  })
+  it("cannot resume a factor belonging to another AuthIdentity",async()=>{
+    auth.listAuthMfa.mockResolvedValue([{
+      id:"pending_other",auth_identity_id:"auth_other",provider:"totp",status:"pending",
+    }])
+    await expect(call({action:"resume",email:"self@example.invalid",password:"pw"}))
+      .rejects.toThrow("Native MFA factor state unavailable")
+    expect(service.personalBeginMfaEnrollment).not.toHaveBeenCalled()
+  })
+  it("cannot resume without pending factor or use invalid actor/factor selector",async()=>{
+    const r=await call({action:"resume",email:"self@example.invalid",password:"pw"})
+    expect(r.status).toHaveBeenCalledWith(409)
+    const bad=await call({action:"resume",email:"self@example.invalid",password:"pw",factor_id:"p"})
+    expect(bad.status).toHaveBeenCalledWith(400)
+    expect(service.personalBeginMfaEnrollment).not.toHaveBeenCalled()
+  })
   it("charges a ticket attempt and rejects wrong native TOTP",async()=>{
     auth.verifyAuthMfa.mockRejectedValue(Error("bad totp"))
     expect((await call({action:"verify",code:"123456"})).status).toHaveBeenCalledWith(403)

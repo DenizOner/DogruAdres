@@ -96,6 +96,11 @@ export class IdentitySessions {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new IdentityAccessDenied()
     return this.currentHash(digest(token),sensitive,touch)
   }
+  /**
+   * Strict setup-only accessor: never grants Person/Organization/Staff access
+   * to mfa_enroll. A normal full session may also enroll another factor
+   * after fresh password proof and exact CSRF, without downgrading scope.
+   */
   async enrollment(token:string){
     if(!mfaRuntimeEnforced())return null
     if(!/^[A-Za-z0-9_-]{43}$/.test(token))throw new IdentityAccessDenied()

@@ -37,6 +37,13 @@ describe("MFA version-bound session scope",()=>{
     await expect(session({...record,mfa_purpose:scope}).current(token)).resolves.toBeNull()
     expect(queries.some(q=>q.includes("last_activity_at=clock_timestamp()"))).toBe(false)
   })
+  it("full sessions may enter setup path with fresh password proof, without downgrading Person/Org authority",async()=>{
+    const s=session({...record,mfa_purpose:"full"})
+    await expect(s.enrollment(token)).resolves.toMatchObject({
+      person_id:"daprs_1",mfa_purpose:"full",
+    })
+    await expect(s.current(token)).resolves.toMatchObject({mfa_purpose:"full"})
+  })
   it("enrollment-only scope is permitted solely in setup path",async()=>{
     const s=session()
     expect(await s.current(token)).toBeNull()

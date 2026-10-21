@@ -205,7 +205,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       .create(authIdentityId,null,purpose,expectedRevision)
   }
   @InjectTransactionManager()
-  async personalLoginMfaDecision(authIdentityId:string,nativeEnabled:boolean,
+  async personalLoginMfaDecision(
+    authIdentityId:string,
+    nativeFactorState:"enabled"|"pending"|"not_enrolled",
     @MedusaContext() context: Context = {}) {
     if(!mfaRuntimeEnforced())throw new IdentityAccessDenied()
     const sql=securitySql(context.transactionManager)
@@ -220,11 +222,19 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const [policy,personal]=await Promise.all([
       persistence.readPlatformPolicy(),persistence.readPersonPreference(bindings[0].person_id),
     ])
-    const decision=resolveMfaPolicy(policy.platform_mode,personal.user_enabled,nativeEnabled)
-    // A native-enabled factor ALWAYS requires its Medusa challenge first.
-    if(nativeEnabled)throw new IdentityAccessDenied()
+    if(!["enabled","pending","not_enrolled"].includes(nativeFactorState))
+      throw new IdentityAccessDenied()
+    const decision=resolveMfaPolicy(policy.platform_mode,personal.user_enabled,
+      nativeFactorState==="enabled")
+    // Enabled always needs a completed native challenge, never password-only.
+    if(nativeFactorState==="enabled")throw new IdentityAccessDenied()
+    // Pending factors are not usable for authentication. Give only setup access
+    // so the owner can resume with fresh password proof and existing secret.
+    // Never treat "pending" as a completed, full-strength MFA factor.
+    if(nativeFactorState==="pending" && policy.platform_mode==="disabled")
+      throw new IdentityAccessDenied()
     return {
-      purpose:(decision.required?"mfa_enroll":"full") as BrowserMfaPurpose,
+      purpose:(nativeFactorState==="pending"||decision.required?"mfa_enroll":"full") as BrowserMfaPurpose,
       expectedRevision:{platform:policy.version,person:personal.version},
     }
   }
