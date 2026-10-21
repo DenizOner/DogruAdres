@@ -2,7 +2,7 @@ import { NativeMfaStateUnavailable, readNativeMfaSummary } from "../native-mfa-s
 
 describe("Medusa v2.21.2 native MFA read-only factor state", () => {
   const identity="auth_identity_self"
-  const factor=(id:string,status:string,owner=identity):any=>({
+  const factor=(id:string,status:unknown,owner=identity):any=>({
     id, status, auth_identity_id:owner, provider:"totp",
     metadata:{secret:"NEVER_EXPOSE",otpauth_url:"otpauth://private"},
   })
