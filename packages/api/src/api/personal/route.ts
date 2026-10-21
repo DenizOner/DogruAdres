@@ -42,7 +42,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   </style>
   <h1>DoğruAdres</h1><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
   <form id="login"><label>E-posta<input name="email" type="email" autocomplete="username" required></label><label>Parola<input name="password" type="password" autocomplete="current-password" required></label><button>Giriş yap</button></form>
-  <form id="challenge" hidden><label>Doğrulama kodu<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label><button>İkinci faktörü doğrula</button></form>
+  <form id="challenge" hidden><label>İkinci faktör yöntemi<select name="method">
+      <option value="totp">Kimlik doğrulama uygulaması</option>
+      <option value="recovery_code">Tek kullanımlık kurtarma kodu</option>
+    </select></label><label>Doğrulama veya kurtarma kodu<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="128" required></label>
+    <button>İkinci faktörü doğrula</button></form>
   <section id="mfa-enrollment" hidden>
     <h2>MFA ilk kurulumu</h2>
     <p>Kurulum için mevcut hesabınızın parolasını yeniden doğrulayın. Daha önce başlanmış kurulum, aynı kimlik doğrulama uygulamasındaki kodla sürdürülebilir.</p>
@@ -202,6 +206,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         status('MFA kurulumuna başlamak veya yarım kalan kuruluma devam etmek için parolanızı yeniden doğrulayın.');
       }else await load();
     }catch(e){status(e.message)}finally{button.disabled=false}
+  };
+  el('challenge').elements.method.onchange=()=>{
+    const recovery=el('challenge').elements.method.value==='recovery_code';
+    const field=el('challenge').elements.code;
+    field.value='';field.inputMode=recovery?'text':'numeric';
+    field.pattern=recovery?'[A-Za-z0-9-]{8,128}':'[0-9]{6}';
+    field.autocomplete=recovery?'off':'one-time-code';
   };
   el('challenge').onsubmit=async e=>{e.preventDefault();try{const data=await api('challenge',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});csrf=data.csrf_token;e.target.reset();el('challenge').hidden=true;await load()}catch(e){status(e.message)}};
   el('link-account').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button');b.disabled=true;try{const values=Object.fromEntries(new FormData(e.target));const result=await api('links',{method:'POST',body:JSON.stringify({action:'begin',...values})});linkIntent=result.intent;e.target.reset();el('link-confirm').reset();el('link-confirm').querySelector('button').disabled=false;el('link-confirm').hidden=false;el('link-confirm').elements.code.required=result.challenge_required;status(result.challenge_required?'İkincil hesap için MFA gerekli':'İkincil sahiplik doğrulandı; bağlantıyı tamamlayın')}catch(err){status(err.message)}finally{b.disabled=false}};
