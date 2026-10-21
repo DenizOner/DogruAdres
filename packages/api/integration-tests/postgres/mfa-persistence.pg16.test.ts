@@ -17,6 +17,7 @@ import { Migration20261018000000 } from "../../src/modules/dogruadres-access/mig
 import { Migration20261020230000 } from "../../src/modules/dogruadres-access/migrations/Migration20261020230000"
 import { Migration20261022010000 } from "../../src/modules/dogruadres-access/migrations/Migration20261022010000"
 import { Migration20261022011000 } from "../../src/modules/dogruadres-access/migrations/Migration20261022011000"
+import { Migration20261022012000 } from "../../src/modules/dogruadres-access/migrations/Migration20261022012000"
 import { Migration20261021235000 } from "../../src/modules/dogruadres-access/migrations/Migration20261021235000"
 import {
   MfaPersistence, MfaConcurrentUpdateError, MfaOutboxFailure,
@@ -132,6 +133,24 @@ async function main() {
       await db.begin(tx=>apply(tx,Migration20261022011000))
       assert.equal((await db.unsafe(`select count(*)::int as n from information_schema.columns
         where table_name='da_browser_session' and column_name='mfa_purpose'`))[0].n,1)
+    })
+    await check("MFA rollout latch migration defaults off, cannot be reversed or truncated",async()=>{
+      await assert.rejects(db.begin(async tx=>{
+        await apply(tx,Migration20261022012000)
+        throw Error("ROLLBACK_ACTIVATION_DDL")
+      }),/ROLLBACK_ACTIVATION_DDL/)
+      assert.equal((await db.unsafe(`select to_jsonb(q)->>'mfa_activated' as activated
+        from da_session_policy q where q.id='current'`))[0].activated,null)
+      await db.begin(tx=>apply(tx,Migration20261022012000))
+      assert.equal((await db.unsafe(`select mfa_activated as armed
+        from da_session_policy where id='current'`))[0].armed,false)
+      // Explicit one-time activation occurs ONLY on this disposable PG16.
+      await db.unsafe("update da_session_policy set mfa_activated=true where id='current'")
+      await invalidInsert("update da_session_policy set mfa_activated=false where id='current'")
+      await invalidInsert("delete from da_session_policy where id='current'")
+      await invalidInsert("truncate da_session_policy")
+      assert.equal((await db.unsafe(`select mfa_activated as armed
+        from da_session_policy where id='current'`))[0].armed,true)
     })
     await check("MFA enrollment intent DDL rolls back, then applies with exact FK/uniqueness",async()=>{
       await assert.rejects(db.begin(async tx=>{

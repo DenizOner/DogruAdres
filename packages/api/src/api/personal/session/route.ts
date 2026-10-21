@@ -19,6 +19,14 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   res.setHeader("Cache-Control","no-store")
   if (!enabled()) return res.status(503).json({message:"Unavailable"})
   if (!trustedOrigin(req)) return res.status(403).json({message:"Access denied"})
+  // On first rollout, the immutable DB latch must be explicitly armed.
+  // If environment flags and persisted activation disagree, deny password
+  // login BEFORE issuing a legacy cookie or native actor binding.
+  let activated:boolean
+  try{activated=await access(req).personalMfaRuntimeActivation()}
+  catch{return res.status(503).json({message:"Authentication temporarily unavailable"})}
+  if(activated!==mfaRuntimeEnforced())
+    return res.status(503).json({message:"Authentication temporarily unavailable"})
   const parsed = credentials.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({message:"Invalid input"})
   const body = parsed.data

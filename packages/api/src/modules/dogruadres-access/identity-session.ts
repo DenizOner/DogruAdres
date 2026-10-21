@@ -87,9 +87,12 @@ export class IdentitySessions {
   private async mfaRevision(personId:string):Promise<MfaRevision>{
     const rows=await this.db.execute(`select
       coalesce((select version from da_mfa_policy where id='current'),0) as platform,
-      coalesce((select version from da_person_mfa_preference where person_id=?),0) as person`,
+      coalesce((select version from da_person_mfa_preference where person_id=?),0) as person,
+      coalesce((select to_jsonb(q)->>'mfa_activated' from da_session_policy q where q.id='current'),'false') as mfa_activated`,
       [personId])
-    if(rows.length!==1)throw new IdentityAccessDenied()
+    // No full / enrollment-only sessions before the DBA-owned immutable
+    // activation latch has been explicitly armed in a reviewed rollout.
+    if(rows.length!==1 || rows[0].mfa_activated!=="true")throw new IdentityAccessDenied()
     return {platform:revision(rows[0].platform),person:revision(rows[0].person)}
   }
   async current(token: string, sensitive = false, touch = true) {
@@ -117,7 +120,12 @@ export class IdentitySessions {
       where s.id=? for update of s,e`, [hash])
     if (rows.length !== 1) throw new IdentityAccessDenied()
     const s = rows[0]
-    const policies = await this.db.execute(`select idle_timeout_seconds,absolute_lifetime_seconds,recent_auth_seconds from da_session_policy where id='current' for share`)
+    // to_jsonb(q) permits existing protected M0 databases to keep working
+    // BEFORE Migration20261022012000 is applied. Once activated, a flag
+    // rollback cannot bypass MFA; instead no browser scope is authorized.
+    const policies = await this.db.execute(`select q.idle_timeout_seconds,q.absolute_lifetime_seconds,q.recent_auth_seconds,
+      coalesce(to_jsonb(q)->>'mfa_activated','false') as mfa_activated
+      from da_session_policy q where q.id='current' for share`)
     if (policies.length !== 1) throw new IdentityAccessDenied()
     const policy = parseSessionPolicy(policies[0])
     const result = evaluateSessionEligibility({
@@ -131,7 +139,13 @@ export class IdentitySessions {
       return null // Commit terminal state; throwing would roll it back.
     }
     if (!result.permitted) return null
-    if(mfaRuntimeEnforced()){
+    const marker=policies[0].mfa_activated
+    if(marker!=="true" && marker!=="false")throw new IdentityAccessDenied()
+    const activated=marker==="true"
+    // Irreversible DB latch and process rollout config must agree. Any
+    // downgrade, partial rollout or missing migration DENIES access.
+    if(mfaRuntimeEnforced()!==activated)return null
+    if(activated){
       if(s.mfa_purpose!=="full" && !(allowEnrollment && s.mfa_purpose==="mfa_enroll"))
         return null
       const now=await this.mfaRevision(s.person_id)

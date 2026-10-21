@@ -10,10 +10,12 @@ describe("MFA version-bound session scope",()=>{
     async execute(sql:string,_params?:unknown[]):Promise<any[]>{
       queries.push(sql)
       if(sql.includes("from da_browser_session s join da_person"))return [row]
+      if(sql.includes("as platform,")&&sql.includes("as person"))
+        return [{...versions,mfa_activated:"true"}]
       if(sql.includes("from da_session_policy"))return [{
         idle_timeout_seconds:1800,absolute_lifetime_seconds:28800,recent_auth_seconds:300,
+        mfa_activated:"true",
       }]
-      if(sql.includes("as platform,")&&sql.includes("as person"))return [versions]
       return []
     },
   })
@@ -68,8 +70,18 @@ describe("MFA version-bound session scope",()=>{
     await expect(session({...record,mfa_purpose:"full",mfa_platform_version:null}).current(token))
       .rejects.toThrow("Access denied")
   })
-  it("enrollment path cannot bypass a disabled runtime gate",async()=>{
+  it("a once-armed persisted rollout DENIES legacy or full session on env rollback",async()=>{
     delete process.env.DOGRUADRES_MFA_RUNTIME_ENABLED
+    await expect(session({...record,mfa_purpose:"full"}).current(token)).resolves.toBeNull()
     await expect(session().enrollment(token)).resolves.toBeNull()
+  })
+  it("refuses session promotion when runtime flag is true but the database latch is not armed",async()=>{
+    const s=new IdentitySessions({
+      execute:jest.fn(async(sql:string):Promise<any[]>=>{
+        if(sql.includes("as mfa_activated"))return [{platform:0,person:0,mfa_activated:"false"}]
+        return []
+      }),
+    })
+    await expect(s.create("auth_1",new Date(),"full")).rejects.toThrow("Access denied")
   })
 })

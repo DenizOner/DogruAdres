@@ -16,6 +16,7 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
   const identity={id:"auth_self"}
   const service={
     personalLoginAttempt:jest.fn(),pendingPersonalChallenge:jest.fn(),
+    personalMfaRuntimeActivation:jest.fn(),
     personalLoginMfaDecision:jest.fn(),openPersonalSession:jest.fn(),
     closePersonalSession:jest.fn(),
   }
@@ -32,6 +33,7 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
     ;(sessionToken as jest.Mock).mockReturnValue("")
     ;(bindServerActor as jest.Mock).mockResolvedValue(true)
     service.personalLoginAttempt.mockResolvedValue(true)
+    service.personalMfaRuntimeActivation.mockResolvedValue(true)
     service.pendingPersonalChallenge.mockResolvedValue({token:"T".repeat(43),csrf:"Z".repeat(43)})
     service.personalLoginMfaDecision.mockResolvedValue({
       purpose:"mfa_enroll",expectedRevision:{platform:0,person:0},
@@ -96,9 +98,23 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
   })
   it("preserves legacy sessions only while all runtime flags are not enabled",async()=>{
     delete process.env.DOGRUADRES_MFA_RUNTIME_ENABLED
+    service.personalMfaRuntimeActivation.mockResolvedValue(false)
     await call()
     expect(service.openPersonalSession).toHaveBeenCalledWith("auth_self","legacy",undefined)
     expect(service.personalLoginMfaDecision).not.toHaveBeenCalled()
+  })
+  it("refuses login when rollout flags are enabled before DB activation",async()=>{
+    service.personalMfaRuntimeActivation.mockResolvedValue(false)
+    const r=await call()
+    expect(r.status).toHaveBeenCalledWith(503)
+    expect(auth.authenticate).not.toHaveBeenCalled()
+    expect(service.openPersonalSession).not.toHaveBeenCalled()
+  })
+  it("refuses legacy login if persisted activation remains true after flag rollback",async()=>{
+    delete process.env.DOGRUADRES_MFA_RUNTIME_ENABLED
+    const r=await call()
+    expect(r.status).toHaveBeenCalledWith(503)
+    expect(auth.authenticate).not.toHaveBeenCalled()
   })
   it("denies login when native factor source is unavailable",async()=>{
     ;(readNativeMfaSummary as jest.Mock).mockRejectedValue(Error("Medusa offline"))

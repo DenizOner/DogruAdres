@@ -205,6 +205,17 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       .create(authIdentityId,null,purpose,expectedRevision)
   }
   @InjectTransactionManager()
+  async personalMfaRuntimeActivation(@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    const rows=await sql.execute(`select
+      coalesce(to_jsonb(q)->>'mfa_activated','false') as mfa_activated
+      from da_session_policy q where q.id='current' for share`)
+    if(rows.length!==1||!["true","false"].includes(rows[0].mfa_activated))
+      throw new IdentityAccessDenied()
+    return rows[0].mfa_activated==="true"
+  }
+
+  @InjectTransactionManager()
   async personalLoginMfaDecision(
     authIdentityId:string,
     nativeFactorState:"enabled"|"pending"|"not_enrolled",
