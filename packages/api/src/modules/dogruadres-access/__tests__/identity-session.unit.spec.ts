@@ -49,6 +49,55 @@ describe("persistent identity/session boundaries (SQL mocks, not PostgreSQL evid
   })
   it.each(["revoked","expired"])("never renews a %s session",async status=>{const {service,identity,execute}=renewal(0,status);expect(await service.renewNative(opaque(),identity,{secret:"test-key"})).toBeNull();expect(execute.mock.calls.some(([q])=>q.startsWith("insert into da_native"))).toBe(false)})
   it("rejects changed actor ownership before credential issuance",async()=>{const {service,identity}=renewal(0);await expect(service.renewNative(opaque(),{...identity,app_metadata:{customer_id:"attacker"}},{secret:"test-key"})).rejects.toThrow("Access denied")})
+  // SQL-mock contract: assert the source owns all scope predicates. These tests
+  // do not replace B04 browser roles or real PostgreSQL acceptance evidence.
+  function organizationsWithRows(rows: Record<string,unknown>[],overrides:Record<string,unknown>={}) {
+    const {execute,service}=setup(overrides)
+    const original=execute.getMockImplementation()!
+    execute.mockImplementation(async (sql:string) =>
+      sql.startsWith("select o.id,o.name,m.id as membership_id,m.role") ? rows : original(sql))
+    return {execute,service}
+  }
+  it.each(["owner","admin","member"])("B04: active %s reads only the requested Organization",async role=>{
+    const row={id:"daorg_allowed",name:"Allowed",membership_id:"damem_1",role}
+    const {execute,service}=organizationsWithRows([row])
+    await expect(service.organizations(opaque(),"daorg_allowed")).resolves.toEqual({
+      person_id:"person",organizations:[row],
+    })
+    const read=execute.mock.calls.find(([sql])=>sql.startsWith("select o.id,o.name,m.id as membership_id,m.role"))
+    expect(read).toBeDefined()
+    expect(read![1]).toEqual(["hash","person","daorg_allowed"])
+    for(const predicate of [
+      "o.status='active'","o.deleted_at is null","m.status='active'",
+      "m.deleted_at is null","p.disabled_at is null","p.deleted_at is null",
+      "s.status='active'","e.epoch=s.epoch","b.revoked_at is null",
+      "a.deleted_at is null","and o.id=?",
+    ])expect(read![0]).toContain(predicate)
+  })
+  it.each(["foreign","suspended","revoked membership","platform-only"])(
+    "B04: %s has no Organization read scope without an active membership",async _case=>{
+      const {execute,service}=organizationsWithRows([])
+      await expect(service.organizations(opaque(),"daorg_denied")).resolves.toBeNull()
+      const read=execute.mock.calls.find(([sql])=>sql.startsWith("select o.id,o.name,m.id as membership_id,m.role"))
+      expect(read![1]).toEqual(["hash","person","daorg_denied"])
+    })
+  it("B04: unscoped chooser never invents an Organization for platform-only access",async()=>{
+    const {execute,service}=organizationsWithRows([])
+    await expect(service.organizations(opaque())).resolves.toEqual({person_id:"person",organizations:[]})
+    const read=execute.mock.calls.find(([sql])=>sql.startsWith("select o.id,o.name,m.id as membership_id,m.role"))
+    expect(read![1]).toEqual(["hash","person"])
+    expect(read![0]).not.toContain("and o.id=?")
+  })
+  it("B04: duplicate Organization scope is denied, not first-match selected",async()=>{
+    const row={id:"daorg_allowed",name:"Allowed",membership_id:"damem_1",role:"owner"}
+    const {service}=organizationsWithRows([row,{...row,membership_id:"damem_2"}])
+    await expect(service.organizations(opaque(),"daorg_allowed")).resolves.toBeNull()
+  })
+  it("B04/B08: revoked session cannot even issue an Organization read",async()=>{
+    const {execute,service}=organizationsWithRows([{id:"daorg_allowed",role:"owner"}],{status:"revoked"})
+    await expect(service.organizations(opaque(),"daorg_allowed")).resolves.toBeNull()
+    expect(execute.mock.calls.some(([sql])=>sql.startsWith("select o.id,o.name,m.id as membership_id,m.role"))).toBe(false)
+  })
   it("rechecks retirement after waiting for the session lock",async()=>{
     const original=setup().execute.getMockImplementation()!
     const execute=jest.fn(async(sql:string):Promise<any[]>=>sql.startsWith("select session_id")?[{session_id:"hash"}]:sql.startsWith("select token_hash")?[]:original(sql))
