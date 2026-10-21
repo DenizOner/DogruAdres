@@ -8,9 +8,11 @@ jest.mock("../security", () => ({
 describe("M0 MFA platform and personal settings ingress", () => {
   const store = {
     personalMfaSettings: jest.fn(),
+    personalSession: jest.fn(),
     personalSetMfaPreference: jest.fn(),
     personalSetPlatformMfaMode: jest.fn(),
   }
+  const nativeAuth = { listAuthMfa: jest.fn() }
   const platform = { platform_mode:"optional",version:4 }
   const personal = { person_id:"daprs_1",user_enabled:false,version:2 }
   beforeEach(()=>{
@@ -20,6 +22,11 @@ describe("M0 MFA platform and personal settings ingress", () => {
     ;(csrf as jest.Mock).mockResolvedValue(true)
     ;(sessionToken as jest.Mock).mockReturnValue("server-cookie-session")
     ;(access as jest.Mock).mockReturnValue(store)
+    store.personalSession.mockResolvedValue({ person_id:"daprs_1", auth_identity_id:"auth_self" })
+    nativeAuth.listAuthMfa.mockResolvedValue([{
+      id:"authmfa_self",auth_identity_id:"auth_self",provider:"totp",
+      status:"enabled",metadata:{secret:"never-return-this"},
+    }])
     store.personalMfaSettings.mockResolvedValue({
       platform,personal,can_manage_platform:false,native_factor_state:"unverified",
     })
@@ -29,7 +36,8 @@ describe("M0 MFA platform and personal settings ingress", () => {
   afterEach(()=>{delete process.env.DOGRUADRES_MFA_SETTINGS_ENABLED})
   const invoke=async(method:"GET"|"POST",body?:unknown,query={})=>{
     const res:any={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),json:jest.fn().mockReturnThis()}
-    const req:any={body,query,headers:{cookie:"da_session=server-cookie-session"}}
+    const req:any={body,query,headers:{cookie:"da_session=server-cookie-session"},
+      scope:{resolve:jest.fn().mockReturnValue(nativeAuth)}}
     if(method==="GET")await GET(req,res);else await POST(req,res)
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","no-store")
     return res
@@ -44,7 +52,17 @@ describe("M0 MFA platform and personal settings ingress", () => {
   it("reads only current server session without user id query",async()=>{
     const r=await invoke("GET")
     expect(store.personalMfaSettings).toHaveBeenCalledWith("server-cookie-session")
-    expect(r.json).toHaveBeenCalledWith(expect.objectContaining({platform,personal}))
+    expect(nativeAuth.listAuthMfa).toHaveBeenCalledWith(
+      {auth_identity_id:"auth_self"},{take:101,skip:0}
+    )
+    expect(r.json).toHaveBeenCalledWith(expect.objectContaining({
+      platform,personal,native_factor_state:"enabled",
+      effective_mfa_target:{required:true,next_step:"verify_mfa",user_control_allowed:true},
+      runtime_enforcement:"not_yet_enabled",
+    }))
+    const payload=JSON.stringify(r.json.mock.calls[0][0])
+    expect(payload).not.toContain("authmfa_self")
+    expect(payload).not.toContain("never-return-this")
   })
   it("rejects current session absence, never discloses platform or Person",async()=>{
     store.personalMfaSettings.mockResolvedValue(null)
@@ -70,6 +88,47 @@ describe("M0 MFA platform and personal settings ingress", () => {
     expect(r.status).toHaveBeenCalledWith(400)
     expect(store.personalSetMfaPreference).not.toHaveBeenCalled()
     expect(store.personalSetPlatformMfaMode).not.toHaveBeenCalled()
+  })
+  it("denies missing session before querying native factor state",async()=>{
+    store.personalSession.mockResolvedValue(null)
+    const r=await invoke("GET")
+    expect(r.status).toHaveBeenCalledWith(403)
+    expect(nativeAuth.listAuthMfa).not.toHaveBeenCalled()
+  })
+  it("rejects mismatch between Person session and persisted MFA settings",async()=>{
+    store.personalMfaSettings.mockResolvedValue({
+      platform,personal:{...personal,person_id:"daprs_other"},
+      can_manage_platform:false,native_factor_state:"unverified",
+    })
+    const r=await invoke("GET")
+    expect(r.status).toHaveBeenCalledWith(403)
+    expect(nativeAuth.listAuthMfa).not.toHaveBeenCalled()
+  })
+  it("fails closed when Medusa MFA factor listing is unavailable",async()=>{
+    nativeAuth.listAuthMfa.mockRejectedValue(Error("offline"))
+    const get=await invoke("GET")
+    expect(get.status).toHaveBeenCalledWith(503)
+    const post=await invoke("POST",{action:"personal",user_enabled:true,expected_version:2})
+    expect(post.status).toHaveBeenCalledWith(503)
+    expect(store.personalSetMfaPreference).not.toHaveBeenCalled()
+  })
+  it("cannot set personal MFA enabled before native factor verification",async()=>{
+    nativeAuth.listAuthMfa.mockResolvedValue([])
+    const r=await invoke("POST",{action:"personal",user_enabled:true,expected_version:2})
+    expect(r.status).toHaveBeenCalledWith(409)
+    expect(store.personalSetMfaPreference).not.toHaveBeenCalled()
+  })
+  it("cannot claim personal MFA off while native factor is enabled",async()=>{
+    const r=await invoke("POST",{action:"personal",user_enabled:false,expected_version:2})
+    expect(r.status).toHaveBeenCalledWith(409)
+    expect(store.personalSetMfaPreference).not.toHaveBeenCalled()
+  })
+  it("rejects cross-identity native factor results",async()=>{
+    nativeAuth.listAuthMfa.mockResolvedValue([{
+      id:"other",auth_identity_id:"auth_other",provider:"totp",status:"enabled",
+    }])
+    const r=await invoke("GET")
+    expect(r.status).toHaveBeenCalledWith(503)
   })
   it("requires browser origin + CSRF before invoking any write",async()=>{
     ;(csrf as jest.Mock).mockResolvedValue(false)
