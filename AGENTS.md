@@ -171,6 +171,18 @@ If project policy conflicts with a real Mercur framework/API constraint, do not 
 - At each checkpoint, report active branches, their purpose, base, current SHA, and cleanup candidates. Do not clean up branches automatically.
 - Never push to `main`, merge, force-push, deploy, or change repository settings without separate explicit authorization.
 
+### Risk-based worktree, resource and agent handoff rules (2026-10-21)
+
+The binding, evidence-based lifecycle decision is [Issue #216](https://github.com/DenizOner/DogruAdres/issues/216#issuecomment-6325812774), based on actual [Issue #229](https://github.com/DenizOner/DogruAdres/issues/229) incidents. **One mutable integration worktree is the default, NOT an unconditional maximum of one branch/worktree.** Open another only for a demonstrably independent PR, hotfix, separately isolated test/migration or blocked dependency that cannot safely run in the current tree. Do not create worktrees for each agent, command, SHA or checkpoint. Read-only GitHub review and CI can run in parallel.
+
+**One writer per worktree and one mutating owner per task database.** Concurrent writers must not share `service.ts`, migrations/snapshots, `bun.lock`, tracked generated declarations, Docker volumes, ports, or mutable credentials. If code or resources overlap, serialize writes or make one agent read-only. A new branch/worktree/resource never grants its own approval for fixtures, migrations, destructive changes or main merge.
+
+Before first mutation or new task-owned worktree, verify the *actual* filesystem root, Git common-dir, branch, upstream and exact SHA; `git worktree list --porcelain -z`; dirty/index/untracked/ignored state; task-specific PID/port, Docker labels and **real Mounts/volume**, DB identity, private evidence and owner. Record a small task-private manifest with those identities, reason for isolation, stop/cleanup condition and protected inputs. Never infer target from folder names. Preserve original bytes and SHA of local dirty/generated files; no force/reset/clean/stash-pop to "fix" mismatches. GitHub/source tests against a different SHA/DB are NOT acceptance.
+
+At completion, close clean, reproducible worktrees individually with `git worktree remove <exact path>` *without force* only after checking every unpushed commit, tracked/untracked/ignored file, local-only evidence, active consumer and Docker/DB owner. Dirty worktrees, unknown backups, database volumes and shared Git roots remain KEEP. Remote branch deletion follows separate Issue #216 and final-HEAD merge/supersession verification.
+
+**Token-efficient agent handoffs:** Every executable task message embeds the approved behavior, latest exact root/branch/SHA, relevant changed paths, concise failure history, permissions/nonpermissions, targeted tests and explicit stop/deliverable gates. Link to a GitHub Issue for provenance/updates, **not as a routine fetch-and-reread instruction**; fetch the Issue only if these embedded facts conflict or newer authority is needed. Read only the relevant installed, version-matched Mercur/Medusa reference section. Reuse exact-SHA valid evidence where unaffected, but never skip fresh root/DB safety checks for new mutations.
+
 ## Cross-branch documentation cutover and safe integration
 
 When a feature branch predates the GitHub-only governance cutover, its `docs/dogruadres/**` source files may still exist and may contain newer product approvals or unique engineering evidence. **Do not blindly merge them back into `main`, delete them in-place, rewrite their history, or treat their presence as a second canonical rulebook.**
