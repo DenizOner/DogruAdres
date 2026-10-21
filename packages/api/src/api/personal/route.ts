@@ -22,7 +22,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   #workspace{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;align-items:start}
   #workspace>h2{grid-column:1/-1;margin:1.5rem 0 0;font-size:1.4rem}
   #workspace>h2+p{grid-column:1/-1;margin:0;color:var(--muted)}
-  #workspace>p:first-child,#workspace>#organizations,#workspace>#memberships,#workspace>#bindings{grid-column:1/-1}
+  #workspace>p:first-child,#workspace>#organizations,#workspace>#memberships,#workspace>#bindings,#workspace>#mfa-info{grid-column:1/-1}
   #workspace>:not(h2):not(h2+p){min-width:0}
   #workspace>form,#workspace>div,#workspace>pre,#workspace>p,#workspace>button{margin:0;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
   form{display:grid;gap:.8rem}
@@ -43,7 +43,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <h1>DoğruAdres</h1><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
   <form id="login"><label>E-posta<input name="email" type="email" autocomplete="username" required></label><label>Parola<input name="password" type="password" autocomplete="current-password" required></label><button>Giriş yap</button></form>
   <form id="challenge" hidden><label>Doğrulama kodu<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label><button>İkinci faktörü doğrula</button></form>
-  <section id="workspace" hidden><p id="person"></p><h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre><div id="memberships"></div><button id="staff">Platform yetkisini kontrol et</button>
+  <section id="workspace" hidden><p id="person"></p>
+  <h2>Güvenlik ve MFA ayarları</h2><p id="mfa-info" role="status" aria-live="polite">MFA ayarları henüz etkin değil.</p>
+  <form id="mfa-person" hidden><label>Kişisel MFA tercihim
+    <select name="user_enabled"><option value="false">Kapalı</option><option value="true">Açık</option></select>
+  </label><p>Yalnız platformun “Seçime bağlı” modunda değiştirilebilir. Tercih, TOTP faktörünü tek başına kurmaz veya devre dışı bırakmaz.</p><button>Tercihimi kaydet</button></form>
+  <form id="mfa-platform" hidden><label>Platform için MFA
+    <select name="platform_mode"><option value="required">Herkes için zorunlu</option><option value="optional">Seçime bağlı</option><option value="disabled">Devre dışı</option></select>
+  </label><p>Bu işlem yalnız özel platform güvenlik yetkisi ve güncel güçlü doğrulamayla yapılır. Mevcut faktörleri kapatmak ayrıca güvenli geçiş gerektirir.</p><button>Platform politikasını kaydet</button></form>
+  <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre><div id="memberships"></div><button id="staff">Platform yetkisini kontrol et</button>
   <h2>Kuruluş oluşturma</h2><p>Bu işlem açık platform görevi ve güncel güçlü doğrulama gerektirir. İlk iki Owner sunucuda doğrulanır.</p>
   <form id="provision"><label>Yeni kuruluş adı<input name="name" maxlength="200" required></label><label>Birinci Owner türü<select name="type1"><option>user</option><option>member</option><option>customer</option></select></label><label>Birinci Owner kimliği<input name="owner1" required></label><label>İkinci Owner türü<select name="type2"><option>user</option><option>member</option><option>customer</option></select></label><label>İkinci Owner kimliği<input name="owner2" required></label><button>Kuruluş oluştur</button></form><pre id="provision-result"></pre>
   <h2>Satıcı ve müşteri çalışma bağlamı</h2><form id="seller"><label>Satıcı kimliği<input name="seller" required></label><button>Satıcı erişimini doğrula</button></form><button id="customer">Müşteri bağlamımı aç</button><pre id="actor-result"></pre>
@@ -54,7 +62,22 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <script nonce="${nonce}">
   let csrf=''; const el=id=>document.getElementById(id); const status=t=>el('status').textContent=t;
   async function api(path,options={}){let r;try{r=await fetch('/personal/'+path,{credentials:'same-origin',...options,headers:{'Content-Type':'application/json','x-csrf-token':csrf,...options.headers}})}catch{const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');e.uncertain=true;throw e}const data=await r.json();if(!r.ok){const e=new Error(data.message||'İşlem reddedildi');e.uncertain=r.status>=500;throw e}return data}
-  let currentOrg='',linkIntent='',organizationRequest=0;
+  let currentOrg='',linkIntent='',organizationRequest=0,mfaState=null;
+  async function refreshMfa(){
+    try{
+      const data=await api('mfa');mfaState=data;
+      el('mfa-person').hidden=false;el('mfa-platform').hidden=!data.can_manage_platform;
+      el('mfa-person').elements.user_enabled.value=String(data.personal.user_enabled);
+      el('mfa-platform').elements.platform_mode.value=data.platform.platform_mode;
+      el('mfa-person').elements.user_enabled.disabled=data.platform.platform_mode!=='optional';
+      el('mfa-person').querySelector('button').disabled=data.platform.platform_mode!=='optional';
+      const names={required:'Herkes için zorunlu',optional:'Seçime bağlı',disabled:'Devre dışı'};
+      el('mfa-info').textContent='Platform: '+names[data.platform.platform_mode]+'. Yerel faktör durumu henüz doğrulanmadı. Gerçek TOTP etkinleştirme/kapatma ayrı adım gerektirir.';
+    }catch{
+      mfaState=null;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;
+      el('mfa-info').textContent='MFA ayarları henüz hizmete açılmadı.';
+    }
+  }
   async function links(){el('bindings').replaceChildren();const data=await api('links');for(const item of data.bindings){const p=document.createElement('p');p.textContent=item.actor_type+' '+item.actor_id+' — '+(item.revoked_at?'revoked':'active');el('bindings').append(p);if(!item.revoked_at){const b=document.createElement('button');b.textContent='Bağı kaldır '+item.id;b.onclick=async()=>{b.disabled=true;try{await api('links',{method:'POST',body:JSON.stringify({action:'unlink',binding_id:item.id})});await links();el('actor-result').textContent='';status('Hesap bağı kaldırıldı')}catch(e){status(e.message);if(!e.uncertain)b.disabled=false}};el('bindings').append(b)}}}
   async function selectOrg(id){
     const request=++organizationRequest;currentOrg='';el('detail').textContent='';el('memberships').replaceChildren();history.replaceState(null,'','/personal');
@@ -75,7 +98,31 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
     }catch{}
   }
-  async function load(){try{const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
+  async function load(){try{const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;mfaState=null;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
+  async function updateMfaForm(form,body){
+    const button=form.querySelector('button');button.disabled=true;
+    try{
+      await api('mfa',{method:'POST',body:JSON.stringify(body)});
+      await refreshMfa();status('MFA ayarı kaydedildi. Native faktör ve oturum geçişi ayrıca doğrulanmalıdır.');
+    }catch(e){
+      status(e.message);await refreshMfa();
+      if(e.uncertain){button.disabled=true;status('İşlemin sonucu belirsiz. Yeniden göndermeden önce kayıt kontrolü gerekli.');}
+    }
+  }
+  el('mfa-person').onsubmit=async e=>{
+    e.preventDefault();if(!mfaState||mfaState.platform.platform_mode!=='optional')return;
+    await updateMfaForm(e.target,{
+      action:'personal',user_enabled:new FormData(e.target).get('user_enabled')==='true',
+      expected_version:mfaState.personal.version,
+    });
+  };
+  el('mfa-platform').onsubmit=async e=>{
+    e.preventDefault();if(!mfaState||!mfaState.can_manage_platform)return;
+    await updateMfaForm(e.target,{
+      action:'platform',platform_mode:new FormData(e.target).get('platform_mode'),
+      expected_version:mfaState.platform.version,
+    });
+  };
   el('login').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;try{const data=await api('session',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});csrf=data.csrf_token;e.target.reset();if(data.challenge_required){el('login').hidden=true;el('challenge').hidden=false;status('İkinci faktör gerekli')}else await load()}catch(e){status(e.message)}finally{button.disabled=false}};
   el('challenge').onsubmit=async e=>{e.preventDefault();try{const data=await api('challenge',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});csrf=data.csrf_token;e.target.reset();el('challenge').hidden=true;await load()}catch(e){status(e.message)}};
   el('link-account').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button');b.disabled=true;try{const values=Object.fromEntries(new FormData(e.target));const result=await api('links',{method:'POST',body:JSON.stringify({action:'begin',...values})});linkIntent=result.intent;e.target.reset();el('link-confirm').reset();el('link-confirm').querySelector('button').disabled=false;el('link-confirm').hidden=false;el('link-confirm').elements.code.required=result.challenge_required;status(result.challenge_required?'İkincil hesap için MFA gerekli':'İkincil sahiplik doğrulandı; bağlantıyı tamamlayın')}catch(err){status(err.message)}finally{b.disabled=false}};
