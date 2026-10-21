@@ -72,7 +72,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('mfa-person').elements.user_enabled.disabled=data.platform.platform_mode!=='optional';
       el('mfa-person').querySelector('button').disabled=data.platform.platform_mode!=='optional';
       const names={required:'Herkes için zorunlu',optional:'Seçime bağlı',disabled:'Devre dışı'};
-      el('mfa-info').textContent='Platform: '+names[data.platform.platform_mode]+'. Yerel faktör durumu henüz doğrulanmadı. Gerçek TOTP etkinleştirme/kapatma ayrı adım gerektirir.';
+      const states={enabled:'Etkin native TOTP faktörü var',pending:'TOTP kurulumu doğrulanmamış',not_enrolled:'Etkin TOTP faktörü bulunmuyor'};
+      const progress={enroll_mfa:'TOTP kurulumu gerekiyor',verify_mfa:'Native doğrulama gerekli',reconcile_native_factor:'Mevcut TOTP faktörü güvenli biçimde kapatılmadan MFA devre dışı sayılamaz',allow_primary:'İkinci faktör hedef politikada zorunlu değil'};
+      el('mfa-info').textContent='Platform: '+names[data.platform.platform_mode]+'. '+states[data.native_factor_state]+'. Hedef durum: '+progress[data.effective_mfa_target.next_step]+'. MFA politikası oturum akışına henüz uygulanmıyor.';
     }catch{
       mfaState=null;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;
       el('mfa-info').textContent='MFA ayarları henüz hizmete açılmadı.';
