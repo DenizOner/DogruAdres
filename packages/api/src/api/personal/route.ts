@@ -9,7 +9,37 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   res.setHeader("X-Content-Type-Options","nosniff")
   res.setHeader("Content-Security-Policy",`default-src 'none'; script-src 'nonce-${nonce}'; connect-src 'self'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`)
   res.type("html").send(`<!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>DoğruAdres kişisel çalışma alanı</title>
-  <style nonce="${nonce}">body{font:18px system-ui;max-width:48rem;margin:4rem auto;padding:1rem}label,input,button{display:block;margin:.7rem 0}button{padding:.6rem}#status{min-height:2rem}</style>
+  <style nonce="${nonce}">
+  :root{color-scheme:light;--ink:#243247;--muted:#506079;--line:#d6dfea;--accent:#1453a3}
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  body{margin:0;padding:0 1rem 3rem;background:#f6f8fb;color:var(--ink);font:16px/1.5 system-ui,-apple-system,sans-serif}
+  body>h1,body>p,body>#status,body>form,body>#workspace{max-width:60rem;margin-left:auto;margin-right:auto}
+  body>h1{margin-top:2.5rem;margin-bottom:.1rem;font-size:clamp(1.8rem,4vw,2.5rem)}
+  body>p{margin-top:.15rem;color:var(--muted)}
+  #status{min-height:2.5rem;margin-top:1rem;margin-bottom:1rem;padding:.65rem 1rem;border-left:3px solid var(--accent);background:#eaf1fa;border-radius:.35rem}
+  #login,#challenge{max-width:30rem;margin-top:1.25rem;padding:1.25rem;border:1px solid var(--line);border-radius:1rem;background:white}
+  #workspace{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;align-items:start}
+  #workspace>h2{grid-column:1/-1;margin:1.5rem 0 0;font-size:1.4rem}
+  #workspace>h2+p{grid-column:1/-1;margin:0;color:var(--muted)}
+  #workspace>p:first-child,#workspace>#organizations,#workspace>#memberships,#workspace>#bindings{grid-column:1/-1}
+  #workspace>:not(h2):not(h2+p){min-width:0}
+  #workspace>form,#workspace>div,#workspace>pre,#workspace>p,#workspace>button{margin:0;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
+  form{display:grid;gap:.8rem}
+  label{display:grid;gap:.3rem;font-size:.95rem;font-weight:600}
+  input,select,button{font:inherit;max-width:100%;border-radius:.5rem}
+  input,select{width:100%;min-height:2.75rem;padding:.55rem .7rem;border:1px solid #9aa9bd;background:white;color:var(--ink)}
+  button{min-height:2.75rem;padding:.55rem .9rem;border:1px solid #b1c2d8;background:#edf3fb;color:#153f77;cursor:pointer;overflow-wrap:anywhere}
+  button:hover:not(:disabled){background:#dfeafa}
+  button:disabled{opacity:.58;cursor:not-allowed}
+  button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #4c91e5;outline-offset:2px}
+  #organizations button,#memberships button,#bindings button{margin:.35rem .4rem .35rem 0}
+  #bindings p,#memberships p{overflow-wrap:anywhere;padding:.4rem 0;margin:.3rem 0;border-bottom:1px solid var(--line)}
+  pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}
+  #workspace>pre{background:#f0f4fa}
+  @media(max-width:700px){body{padding:0 .75rem 2rem}body>h1{margin-top:1.5rem}#workspace{grid-template-columns:minmax(0,1fr)}}
+  @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+  </style>
   <h1>DoğruAdres</h1><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
   <form id="login"><label>E-posta<input name="email" type="email" autocomplete="username" required></label><label>Parola<input name="password" type="password" autocomplete="current-password" required></label><button>Giriş yap</button></form>
   <form id="challenge" hidden><label>Doğrulama kodu<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label><button>İkinci faktörü doğrula</button></form>
