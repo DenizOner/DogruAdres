@@ -8,6 +8,20 @@ describe("personal ingress (unit contract only)",()=>{
   it.each(["/store/regions","/store/products","/personal","/personal/session"])("preserves allowed surface %s",async path=>expect((await probe(path)).next).toHaveBeenCalled())
   it("does not deny every public authentication operation",async()=>expect((await probe("/auth/customer/emailpass","POST")).next).toHaveBeenCalled())
   it("preserves an explicit native machine read, not arbitrary Basic mutations",async()=>{expect((await probe("/admin/api-keys","GET","Basic valid")).next).toHaveBeenCalled();expect((await probe("/admin/api-keys","POST","Basic valid")).res.status).toHaveBeenCalledWith(401)})
+  it("permits only the purpose-built personal invitation POST with its own CSRF guard",async()=>{
+    expect((await probe("/personal/invitations","POST")).next).toHaveBeenCalled()
+    expect((await probe("/personal/invitations","GET")).res.status).toHaveBeenCalledWith(401)
+    expect((await probe("/personal/invitations/accept","POST")).res.status).toHaveBeenCalledWith(401)
+    expect((await probe("/personal/invitations","OPTIONS")).res.status).toHaveBeenCalledWith(401)
+  })
+  it.each(["/dogruadres/organizations/daorg_test/invitations","/dogruadres/invitations/accept"])(
+    "keeps native invitation mutations closed even for live ledger credentials: %s",async path=>{
+      for(const authorization of [undefined,"Bearer leaked","Bearer ledger-bound"]){
+        const {next,res}=await probe(path,"POST",authorization,authorization==="Bearer ledger-bound")
+        expect(next).not.toHaveBeenCalled()
+        expect(res.status).toHaveBeenCalledWith(401)
+      }
+    })
   it("rejects forged origin and absent deployment origin",()=>{expect(trustedOrigin({headers:{origin:"https://attacker.invalid"}} as any)).toBe(false);delete process.env.DOGRUADRES_PUBLIC_ORIGIN;expect(trustedOrigin({headers:{origin:"https://example.invalid"}} as any)).toBe(false)})
   it.each(["/ADMIN/users/me","/%61dmin/users/me","//admin/users/me/"])("normalizes native aliases before the gate: %s",async path=>expect((await probe(path,"GET","Bearer stolen")).res.status).toHaveBeenCalledWith(401))
   it("turning off UI never reopens the native bearer boundary",async()=>{process.env.DOGRUADRES_IDENTITY_ENABLED="false";expect((await probe("/admin/users/me","GET","Bearer stolen")).res.status).toHaveBeenCalledWith(401)})
