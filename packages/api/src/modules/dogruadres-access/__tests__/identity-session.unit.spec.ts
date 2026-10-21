@@ -11,7 +11,7 @@ describe("persistent identity/session boundaries (SQL mocks, not PostgreSQL evid
   function setup(overrides: Record<string,unknown> = {}) {
     const row = {id:"hash",person_id:"person",actor_type:"customer",actor_id:"customer",csrf_hash:"hash",epoch:0,current_epoch:0,
       created_at:new Date(now-1000),last_activity_at:new Date(now-1000),last_strong_auth_at:null,status:"active",now_ms:now,...overrides}
-    const execute = jest.fn(async (sql:string)=>sql.startsWith("select s.")?[row]:sql.startsWith("select idle_")?[DEFAULT_SESSION_POLICY]:[])
+    const execute = jest.fn(async (sql:string)=>sql.startsWith("select s.")?[row]:sql.includes("from da_session_policy q where q.id='current'")?[{...DEFAULT_SESSION_POLICY,mfa_activated:"false"}]:[])
     return {execute,service:new IdentitySessions({execute})}
   }
   it("generates 256-bit opaque values and hashes at rest",()=>{const a=opaque(),b=opaque();expect(a).toHaveLength(43);expect(a).not.toBe(b);expect(digest(a)).toHaveLength(64);expect(digest(a)).not.toContain(a)})
@@ -27,7 +27,7 @@ describe("persistent identity/session boundaries (SQL mocks, not PostgreSQL evid
     const identity={id:"identity",app_metadata:{customer_id:"customer"}}
     const row={id:"hash",person_id:"person",auth_identity_id:identity.id,actor_type:"customer",actor_id:"customer",csrf_hash:"hash",epoch:0,current_epoch:0,
       created_at:new Date(now-1000),last_activity_at:new Date(now-1000),last_strong_auth_at:null,status,now_ms:now}
-    const execute=jest.fn(async(sql:string,_parameters?:unknown[])=>sql.startsWith("select s.")?[row]:sql.startsWith("select idle_")?[DEFAULT_SESSION_POLICY]:sql.startsWith("select token_hash")?[{token_hash:"old",expires_at:new Date(now+expiresIn)}]:[])
+    const execute=jest.fn(async(sql:string,_parameters?:unknown[])=>sql.startsWith("select s.")?[row]:sql.includes("from da_session_policy q where q.id='current'")?[{...DEFAULT_SESSION_POLICY,mfa_activated:"false"}]:sql.startsWith("select token_hash")?[{token_hash:"old",expires_at:new Date(now+expiresIn)}]:[])
     return {identity,execute,service:new IdentitySessions({execute})}
   }
   it("does not rotate a credential outside the renewal window",async()=>{const {service,identity,execute}=renewal(900000);expect(await service.renewNative(opaque(),identity,{secret:"test-key"})).toEqual({renewed:false});expect(execute.mock.calls.some(([q])=>q.startsWith("insert into da_native"))).toBe(false)})
