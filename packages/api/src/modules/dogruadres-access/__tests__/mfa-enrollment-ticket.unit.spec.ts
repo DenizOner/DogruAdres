@@ -4,7 +4,7 @@ import { IdentitySessions, digest } from "../identity-session"
 describe("MFA purpose-bound enrollment tickets (source contract only)",()=>{
   const cookie="S".repeat(43), ticket="T".repeat(43)
   const session={id:digest(cookie),person_id:"daprs_self",auth_identity_id:"auth_self",actor_type:"user",actor_id:"user_self"}
-  const execute=jest.fn(async(sql:string):Promise<any[]>=>{
+  const execute=jest.fn(async(sql:string,_parameters?:unknown[]):Promise<any[]>=>{
     if(sql.includes("returning auth_identity_id,factor_id,attempts"))return [{auth_identity_id:"auth_self",factor_id:"mfa_pending",attempts:1}]
     if(sql.includes("returning id"))return [{id:digest(ticket)}]
     return []

@@ -4,7 +4,7 @@
  * Uses Bun 1.4's built-in Postgres driver (no new packages or lockfile edit).
  * Runs the actual 20261017 Foundation + 20261021 MFA migration sources.
  * PR #222 canonical da_audit_outbox migration and append-only audit guard
- * are now tested alongside the security-outbox stub. Installed Medusa
+ * are tested alongside actual M0 session/outbox DDL. Installed Medusa
  * migrator history / snapshot upgrades are NOT proven here.
  *
  * Every operation is gated to the exact disposable mfa_ci_ephemeral service.
@@ -14,6 +14,8 @@ import assert from "node:assert/strict"
 import { Migration20261017135550 } from "../../src/modules/dogruadres-access/migrations/Migration20261017135550"
 import { Migration20261017150237 } from "../../src/modules/dogruadres-access/migrations/Migration20261017150237"
 import { Migration20261018000000 } from "../../src/modules/dogruadres-access/migrations/Migration20261018000000"
+import { Migration20261020230000 } from "../../src/modules/dogruadres-access/migrations/Migration20261020230000"
+import { Migration20261022010000 } from "../../src/modules/dogruadres-access/migrations/Migration20261022010000"
 import { Migration20261021235000 } from "../../src/modules/dogruadres-access/migrations/Migration20261021235000"
 import {
   MfaPersistence, MfaConcurrentUpdateError, MfaOutboxFailure,
@@ -76,14 +78,9 @@ async function main() {
     await db.begin(async tx => {
       await apply(tx, Migration20261017135550)
       await apply(tx, Migration20261017150237)
+      // Use the ACTUAL security-state DDL, no fabricated outbox table.
+      await apply(tx, Migration20261020230000)
     })
-    // Explicit disposable-only security outbox prerequisite. No claim of
-    // production Foundation #222 schema or exactly-once relay integration.
-    await db.unsafe(`create table da_security_outbox (
-      id text primary key,
-      audit_event_id text not null unique references da_audit_event(id),
-      created_at timestamptz not null default now()
-    )`)
 
     await check("canonical Foundation outbox and append-only audit migration applies", async () => {
       await db.begin(tx => apply(tx, Migration20261018000000))
@@ -122,6 +119,62 @@ async function main() {
       await invalidInsert("insert into da_person_mfa_preference(person_id,user_enabled) values('missing',true)")
       await db.unsafe("insert into da_person(id) values($1)",[actor.person_id])
       await invalidInsert("insert into da_person_mfa_preference(person_id,user_enabled) values($1,null)",[actor.person_id])
+    })
+    await check("MFA enrollment intent DDL rolls back, then applies with exact FK/uniqueness",async()=>{
+      await assert.rejects(db.begin(async tx=>{
+        await apply(tx,Migration20261022010000)
+        throw Error("ROLLBACK_MFA_ENROLLMENT_DDL")
+      }),/ROLLBACK_MFA_ENROLLMENT_DDL/)
+      assert.equal((await db.unsafe("select to_regclass('da_mfa_enrollment_intent') as tbl"))[0].tbl,null)
+      await db.begin(tx=>apply(tx,Migration20261022010000))
+      assert.ok((await db.unsafe("select to_regclass('da_mfa_enrollment_intent') as tbl"))[0].tbl)
+      await invalidInsert(`insert into da_mfa_enrollment_intent
+        (id,session_id,person_id,auth_identity_id,factor_id,expires_at)
+        values ($1,'missing','missing','missing','mfa_1',now()+interval '5 minutes')`,["x".repeat(64)])
+    })
+    await check("enrollment ticket single-active, five attempts, expiry and atomic replay rejection",async()=>{
+      const browserId="s".repeat(64), authId="auth_ci_1"
+      await db.unsafe(`insert into da_login_binding
+        (auth_identity_id,person_id,actor_type,actor_id,verified_at)
+        values ($1,$2,'user',$3,now())`,[authId,actor.person_id,actor.actor_id])
+      await db.unsafe(`insert into da_browser_session
+        (id,person_id,auth_identity_id,actor_type,actor_id,epoch,csrf_hash,status,created_at,last_activity_at)
+        values ($1,$2,$3,'user',$4,0,$5,'active',now(),now())`,
+        [browserId,actor.person_id,authId,"placeholder_csrf"])
+      const ticketId="t".repeat(64)
+      await db.unsafe(`insert into da_mfa_enrollment_intent
+        (id,session_id,person_id,auth_identity_id,factor_id,expires_at)
+        values ($1,$2,$3,$4,'mfa_ci_pending',clock_timestamp()+interval '5 minutes')`,
+        [ticketId,browserId,actor.person_id,authId])
+      await invalidInsert(`insert into da_mfa_enrollment_intent
+        (id,session_id,person_id,auth_identity_id,factor_id,expires_at)
+        values ($1,$2,$3,$4,'mfa_second',clock_timestamp()+interval '5 minutes')`,
+        ["u".repeat(64),browserId,actor.person_id,authId])
+      for(let n=1;n<=5;n++){
+        const rows=await db.unsafe(`update da_mfa_enrollment_intent set attempts=attempts+1
+          where id=$1 and attempts<5 and expires_at>clock_timestamp()
+          and consumed_at is null and revoked_at is null returning attempts`,[ticketId])
+        assert.equal(rows.length,1)
+        assert.equal(rows[0].attempts,n)
+      }
+      assert.equal((await db.unsafe(`update da_mfa_enrollment_intent set attempts=attempts+1
+        where id=$1 and attempts<5 returning id`,[ticketId])).length,0)
+      const once=await db.unsafe(`update da_mfa_enrollment_intent
+        set consumed_at=clock_timestamp()
+        where id=$1 and factor_id='mfa_ci_pending' and attempts between 1 and 5
+        and consumed_at is null and revoked_at is null
+        and expires_at>clock_timestamp() returning id`,[ticketId])
+      assert.equal(once.length,1)
+      const replay=await db.unsafe(`update da_mfa_enrollment_intent
+        set consumed_at=clock_timestamp() where id=$1 and consumed_at is null
+        returning id`,[ticketId])
+      assert.equal(replay.length,0)
+      await db.unsafe(`insert into da_mfa_enrollment_intent
+        (id,session_id,person_id,auth_identity_id,factor_id,expires_at)
+        values ($1,$2,$3,$4,'mfa_next',clock_timestamp()+interval '5 minutes')`,
+        ["u".repeat(64),browserId,actor.person_id,authId])
+      assert.equal((await db.unsafe(`select count(*)::int as n from da_mfa_enrollment_intent
+        where session_id=$1 and consumed_at is null and revoked_at is null`,[browserId]))[0].n,1)
     })
     await check("canonical audit is append-only; outbox has unique source and foreign key", async () => {
       const sourceId="daaud_pg16_canonical_fixture"
