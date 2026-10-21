@@ -18,6 +18,12 @@ jest.mock("../../dogruadres/invitations/accept/route", () => ({
 }))
 
 describe("session-bound personal invitations (no native bearer delegation)", () => {
+  const originalInvitationSecret = process.env.DOGRUADRES_INVITATION_SECRET
+  beforeAll(() => { process.env.DOGRUADRES_INVITATION_SECRET = "unit-only-" + "x".repeat(48) })
+  afterAll(() => {
+    if (originalInvitationSecret === undefined) delete process.env.DOGRUADRES_INVITATION_SECRET
+    else process.env.DOGRUADRES_INVITATION_SECRET = originalInvitationSecret
+  })
   const principal = {
     person_id: "person_owner", actor_type: "user", actor_id: "user_owner",
     auth_identity_id: "auth_owner", last_strong_auth_at: new Date(),
