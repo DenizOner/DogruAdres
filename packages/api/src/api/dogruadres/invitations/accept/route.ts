@@ -5,7 +5,7 @@ import type { AcceptInvitationBody } from "../../validators"
 import { acceptInvitationWorkflow } from "../../../../workflows/dogruadres-access/accept-invitation"
 import { normalizeEmail, verifiedEmailForActor } from "../../../../modules/dogruadres-access/security"
 
-const verifiedEmailFor = async (req: AuthenticatedMedusaRequest) => {
+export const verifiedEmailFor = async (req: AuthenticatedMedusaRequest) => {
   const claimedEmail = req.auth_context.user_metadata?.email
   const identityId = req.auth_context.auth_identity_id
   const authProvider = req.auth_context.auth_provider
