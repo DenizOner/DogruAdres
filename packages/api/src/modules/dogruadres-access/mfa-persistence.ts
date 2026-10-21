@@ -36,6 +36,13 @@ export type PersonMfaPreference = Readonly<{
   version: number
 }>
 
+/** Derived only from the current server-verified native actor/Person binding. */
+export type MfaAuditActor = Readonly<{
+  person_id: string
+  actor_type: "user" | "member" | "customer"
+  actor_id: string
+}>
+
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
@@ -63,11 +70,29 @@ export class MfaOutboxFailure extends Error {
 
 const OUTBOX_MODULE = "dogruadres-access"
 const OUTBOX_RESOURCE = "mfa-policy"
+const MAX_DB_VERSION = 2147483647 // PostgreSQL integer
+
+function assertVersion(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0 ||
+      (value as number) > MAX_DB_VERSION) throw new InvalidMfaPolicyState()
+  return value as number
+}
+
+function assertActor(actor: MfaAuditActor): MfaAuditActor {
+  if (!actor || typeof actor.person_id !== "string" || !actor.person_id ||
+      typeof actor.actor_id !== "string" || !actor.actor_id ||
+      !["user", "member", "customer"].includes(actor.actor_type)) {
+    throw new InvalidMfaPolicyState()
+  }
+  // The server-side caller must still enforce the actor's current grant,
+  // Person/identity mapping and transaction-bound authorization.
+  return actor
+}
 
 async function writeOutbox(
   db: SecuritySql,
   action: string,
-  actorPersonId: string,
+  actor: MfaAuditActor,
   targetId: string,
   previousValues: Record<string, unknown> | null,
   newValues: Record<string, unknown> | null
@@ -78,10 +103,12 @@ async function writeOutbox(
       `insert into da_audit_event
         (id,actor_person_id,actor_type,actor_id,action,module,resource,target_id,
          previous_values,new_values,occurred_at,created_at,updated_at)
-       values (?,?,'system','mfa-persistence',?,?,?,?,?,clock_timestamp(),now(),now())`,
+       values (?,?,?,?,?,?,?,?,?,?,clock_timestamp(),now(),now())`,
       [
         auditId,
-        actorPersonId,
+        actor.person_id,
+        actor.actor_type,
+        actor.actor_id,
         action,
         OUTBOX_MODULE,
         OUTBOX_RESOURCE,
@@ -139,14 +166,14 @@ export class MfaPersistence {
     const row = rows[0]
     return {
       platform_mode: assertValidMode(row.platform_mode),
-      version: Number(row.version),
+      version: assertVersion(row.version),
     }
   }
 
   /**
    * Upserts the singleton platform policy.
    *
-   * - actorPersonId: the platform administrator performing the change.
+   * - actor: server-verified Person and native actor performing the change.
    * - expectedVersion: 0 for initial creation, otherwise the version the
    *   caller last read. A mismatch throws MfaConcurrentUpdateError.
    * - Emits a da_security_outbox event. If that write fails the whole
@@ -155,9 +182,12 @@ export class MfaPersistence {
   async setPlatformPolicy(
     newMode: MfaPlatformMode,
     expectedVersion: number,
-    actorPersonId: string
+    actor: MfaAuditActor
   ): Promise<PlatformMfaPolicy> {
     assertValidMode(newMode)
+    assertActor(actor)
+    assertVersion(expectedVersion)
+    if (expectedVersion === MAX_DB_VERSION) throw new MfaConcurrentUpdateError()
 
     // Optimistic concurrency: advisory lock serialises concurrent writers.
     await this.db.execute(
@@ -188,7 +218,7 @@ export class MfaPersistence {
       if (affected.length !== 1) throw new MfaConcurrentUpdateError()
     }
 
-    await writeOutbox(this.db, "mfa.platform_policy.set", actorPersonId, "current", previous, next)
+    await writeOutbox(this.db, "mfa.platform_policy.set", actor, "current", previous, next)
     return { platform_mode: newMode, version: nextVersion }
   }
 
@@ -213,7 +243,7 @@ export class MfaPersistence {
     return {
       person_id: personId,
       user_enabled: assertValidBool(row.user_enabled),
-      version: Number(row.version),
+      version: assertVersion(row.version),
     }
   }
 
@@ -228,9 +258,12 @@ export class MfaPersistence {
     personId: string,
     newUserEnabled: boolean,
     expectedVersion: number,
-    actorPersonId: string
+    actor: MfaAuditActor
   ): Promise<PersonMfaPreference> {
     assertValidBool(newUserEnabled)
+    assertActor(actor)
+    assertVersion(expectedVersion)
+    if (expectedVersion === MAX_DB_VERSION) throw new MfaConcurrentUpdateError()
 
     await this.db.execute(
       `select pg_advisory_xact_lock(hashtext('dogruadres-mfa-person'),hashtext(?))`,
@@ -260,7 +293,7 @@ export class MfaPersistence {
       if (affected.length !== 1) throw new MfaConcurrentUpdateError()
     }
 
-    await writeOutbox(this.db, "mfa.person_preference.set", actorPersonId, personId, previous, next)
+    await writeOutbox(this.db, "mfa.person_preference.set", actor, personId, previous, next)
     return { person_id: personId, user_enabled: newUserEnabled, version: nextVersion }
   }
 
