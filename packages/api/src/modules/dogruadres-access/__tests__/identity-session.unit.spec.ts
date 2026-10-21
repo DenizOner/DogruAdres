@@ -99,6 +99,29 @@ describe("persistent identity/session boundaries (SQL mocks, not PostgreSQL evid
     await expect(service.organizations(opaque(),"daorg_allowed")).resolves.toBeNull()
     expect(execute.mock.calls.some(([sql])=>sql.startsWith("select o.id,o.name,m.id as membership_id,m.role"))).toBe(false)
   })
+  it("B08: another still-open browser session re-reads membership after revocation",async()=>{
+    const source=setup()
+    const organization={id:"daorg_allowed",name:"Allowed",membership_id:"damem_1",role:"member"}
+    let membershipActive=true
+    const execute=jest.fn(async(sql:string,_parameters?:unknown[]):Promise<any[]> =>
+      sql.startsWith("select o.id,o.name,m.id as membership_id,m.role")
+        ? (membershipActive?[organization]:[]) : source.execute(sql))
+    const sessions=new IdentitySessions({execute})
+    const earlierBrowserToken=opaque(),otherBrowserToken=opaque()
+    await expect(sessions.organizations(earlierBrowserToken,"daorg_allowed")).resolves.toEqual({
+      person_id:"person",organizations:[organization],
+    })
+    // Test-only database-state simulation: the membership has been revoked by
+    // a separately authorized transaction. The second browser token is still
+    // a syntactically valid session, but must gain no Organization grant.
+    membershipActive=false
+    await expect(sessions.organizations(otherBrowserToken,"daorg_allowed")).resolves.toBeNull()
+    const reads=execute.mock.calls.filter(([sql])=>sql.startsWith("select o.id,o.name,m.id as membership_id,m.role"))
+    expect(reads).toHaveLength(2)
+    expect(reads[0][1]).toEqual(["hash","person","daorg_allowed"])
+    expect(reads[1][1]).toEqual(["hash","person","daorg_allowed"])
+    expect(reads[1][0]).toContain("m.status='active'")
+  })
   it("rechecks retirement after waiting for the session lock",async()=>{
     const original=setup().execute.getMockImplementation()!
     const execute=jest.fn(async(sql:string):Promise<any[]>=>sql.startsWith("select session_id")?[{session_id:"hash"}]:sql.startsWith("select token_hash")?[]:original(sql))
