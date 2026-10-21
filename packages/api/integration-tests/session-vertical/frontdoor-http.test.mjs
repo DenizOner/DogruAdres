@@ -13,7 +13,7 @@ assert.equal(sql('select current_database()'),'m0ssi_a7f1')
 async function call(path,{method='GET',body,headers={}}={}){
   const options={method,headers:{...(body?{'Content-Type':'application/json'}:{}),...headers}}
   if(!base.startsWith('https:'))return fetch(base+path,{...options,...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(20000)})
-  return new Promise((resolve,reject)=>{const req=request(base+path,{...options,ca:readFileSync(dir+'/dual-proof-tls/cert.pem'),servername:'localhost',timeout:20000},r=>{const chunks=[];r.on('data',v=>chunks.push(v));r.on('end',()=>resolve({status:r.statusCode,json:()=>JSON.parse(Buffer.concat(chunks).toString())}))});req.on('error',reject);req.on('timeout',()=>req.destroy(Error('Task timeout')));if(body)req.write(JSON.stringify(body));req.end()})
+  return new Promise((resolve,reject)=>{const req=request(base+path,{...options,ca:readFileSync(process.env.M0_TEST_CA_CERT??(dir+'/dual-proof-tls/cert.pem')),servername:'localhost',timeout:20000},r=>{const chunks=[];r.on('data',v=>chunks.push(v));r.on('end',()=>resolve({status:r.statusCode,json:()=>JSON.parse(Buffer.concat(chunks).toString())}))});req.on('error',reject);req.on('timeout',()=>req.destroy(Error('Task timeout')));if(body)req.write(JSON.stringify(body));req.end()})
 }
 test('public Store catalog retains genuine publishable-key behavior',async()=>{
   assert.equal((await call('/store/regions')).status,400)

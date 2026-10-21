@@ -408,3 +408,85 @@ cross-module races and full M0 matrix remain open. M0 is NOT COMPLETE. Rollback:
 stop front door/API and gate the feature; preserve all binding/session/credential
 terminal history and database volume. Do not run destructive down migrations,
 restore revoked fixtures or fall back to a known native Bearer bypass.
+
+## 2026-10-21 Chrome recovery — canonical troubleshooting Issue #228
+
+Read https://github.com/DenizOner/DogruAdres/issues/228 before repeating this setup.
+Keep error classes separate: missing profile extension; closed/disconnected profile;
+changed runtime browser ID/plugin installation path; URL-policy guard; TLS trust or
+expiry; upstream readiness/timeout; private fixture ACL. Never bypass a denial,
+HTTPS interstitial, sandbox, or native-host setup. The installed Browser plugin
+changed from26.1013.40934 to26.1016.51333 during this run; resolve its CURRENT root.
+Use supported inventory and correlate profile metadata after reconnect. Two tabs
+share cookies; two different Persons need two connected task profiles. The user
+installed the official extension in each. Launch visible task windows with Normal
+style; do not close or copy a personal profile.
+
+Run the read-only gate (Windows; no installation/trust/config writes):
+
+```powershell
+pwsh -NoProfile -File scripts/Test-BrowserPrerequisites.ps1 `
+  -ProfileUserDataDirectory $TaskProfileRoot `
+  -BrowserDiagnosticsRoot $CurrentInstalledBrowserPluginRoot `
+  -CertificatePath $TaskCertificateCer -Origin https://127.0.0.1:19102
+```
+
+It checks profile extension, CurrentUser trust, cert dates/seven-day renewal gate,
+normal TLS chain/hostname, exact peer SHA256 and /personal HTTP readiness. Supported
+browser inventory and actual journeys remain separate gates. Five checks passed:
+A/B ready exit0; renewal threshold/non-loopback/plainHTTP expected exit1. Parser0.
+The separately approved CA=false serverAuth localhost cert expires20 November2026
+07:25:30Z; only CurrentUser trust changed, never LocalMachine. Renew deliberately,
+without silently extending trust. HTTP harnesses accept M0_TEST_CA_CERT and retain
+the old default certificate/evidence. Private keys never enter Git.
+
+The updated browser kernel runs as a different Windows sandbox principal. User-only
+fixture ACL correctly denied it. User explicitly approved temporary Read on one
+synthetic fixture and Read/Traverse on its ignored task-cache directory. No general
+Users/Everyone or write access; the grant was removed and verified after tests.
+Never transfer credentials through chat/logs or broaden permissions as a workaround.
+
+An observed 15s upstream timeout left one pending intent (no binding); the UI
+correctly refused automatic resubmission. Preserve it. Development-only explicit
+DOGRUADRES_DEV_UPSTREAM_TIMEOUT_MS allows1000..60000ms; default15000 remains,
+production rejects overrides, no retries or session/MFA grace changes. Task used
+60000. Twelve new negative/boundary config tests passed (Jest90/5 suites, exit0).
+A separate launcher mistake used wrong manifest/env names: the actual contract is
+contexts.private.json.publishableKey -> DOGRUADRES_STORE_PUBLISHABLE_KEY. Correct
+the child environment, never relax Customer auth. API restart preserved sessions.
+
+Real HTTPS Chrome, two simultaneous task profiles/different Persons: genuine
+password+TOTP, independent Member/Customer linking, own Organization/Seller allow,
+foreign deny, wrong-Person transfer denied despite genuine secondary proof,
+A Customer unlink then deny, B Member unlink then Seller deny while A works;
+refresh/reopen, logout isolated across profiles and denial in another open tab.
+Public native login/refresh GET navigation denied. No Org provisioning repeated.
+Some CDP input/wait deadlines expired; reobserve outcome before retry. Two selector
+synchronization mistakes were corrected from current DOM, not weakened assertions.
+
+SQL:4 bindings,6 attributed audits/6 linked outbox; no foreign ownership transfer.
+Unlink retains tombstones. Six before-logout plus four after-logout HTTP assertions
+used genuine still-unexpired actor credentials: active read200; revoked/logout
+read+refresh401. After logout effective authorization JOIN count0; historical
+unretired credential rows alone are NOT live authority (session/binding/expiry
+also required). Final session states:4 revoked,1 expired.
+Additional runtime: TLS/path/header/body negatives3/3; public HTTP11 assertions
+(catalog400/200, anonymous recovery201, absent machine grant403, writer401, native
+user/member/customer login+refresh401), exit0. Full purpose-bound reset and spent
+13-test linking/terminal fixtures were NOT rerun; earlier evidence retains scope.
+New cert-path overrides receive syntax checks. No production network/distributed
+acceptance or M0 COMPLETE claim. Preserve profiles/DB/volume/terminal evidence;
+stop only task-owned processes. Turkish findings and exact publication SHAs: #228.
+
+Final integration provenance: while this checkpoint was running, remote feature
+advanced by c96ae6a/2455643 (strict Organization query guard and7 unit cases), and
+main advanced independently to f1d6bde906a3d658a2e73244d8108ce656583b00. Preserve
+those commits; the local dirty non-overlapping repair was fast-forwarded, never
+reset/stashed/rebased. Full linking/browser/SQL evidence above ran on c06e77a plus
+this repair. On the integrated2455643 candidate, both Chrome profiles repeated
+fresh genuine password/TOTP, own/foreign Organization, authorized Seller/Customer
+and logout. Six authenticated browser query-injection navigations produced400
+(role/actor/cache/fields/Organization override/duplicate-id), while valid own200
+and foreign403 remained. Final Jest97/5 suites and TypeScript0. A final full-page
+screenshot hit the tool's5s CDP deadline; viewport capture passed. Old screenshots
+and failed intermediate results are retained. No browser state was fabricated.

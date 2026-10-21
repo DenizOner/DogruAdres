@@ -45,7 +45,7 @@ export function startFrontdoor(env=process.env){
       if(mode==='machine'||url.pathname.endsWith('/emailpass/update'))headers.authorization=req.headers.authorization??''
       const chunks=[];let size=0
       for await(const chunk of req){size+=chunk.length;if(size>65536){res.writeHead(413).end();return}chunks.push(chunk)}
-      const response=await fetch(upstream+url.pathname+url.search,{method:req.method,headers,redirect:'manual',signal:AbortSignal.timeout(15000),...(size?{body:Buffer.concat(chunks)}:{})})
+      const response=await fetch(upstream+url.pathname+url.search,{method:req.method,headers,redirect:'manual',signal:AbortSignal.timeout(config.upstreamTimeoutMs),...(size?{body:Buffer.concat(chunks)}:{})})
       // Do not rewrite auth payloads to hide tokens. Only routes whose native
       // contracts are safe are reachable at all; redirects fail closed.
       if(response.status>=300&&response.status<400){res.writeHead(502).end();return}

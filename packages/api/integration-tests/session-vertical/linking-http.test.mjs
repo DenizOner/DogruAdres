@@ -8,7 +8,7 @@ const dir=process.env.M0_TEST_EVIDENCE,origin=process.env.M0_LINK_ORIGIN
 if(!dir||origin!=='https://127.0.0.1:19102')throw Error('Explicit isolated HTTPS target required')
 const fixtureFile=process.env.M0_DUAL_FIXTURE_FILE??'dual-proof.private.json'
 if(!/^dual-proof(?:-[a-z0-9]+)?\.private\.json$/.test(fixtureFile))throw Error('Invalid fixture file')
-const {fixtures:[a,b],race}=JSON.parse(readFileSync(dir+'/'+fixtureFile,'utf8')),ca=readFileSync(dir+'/dual-proof-tls/cert.pem')
+const {fixtures:[a,b],race}=JSON.parse(readFileSync(dir+'/'+fixtureFile,'utf8')),ca=readFileSync(process.env.M0_TEST_CA_CERT??(dir+'/dual-proof-tls/cert.pem'))
 const publishable=JSON.parse(readFileSync(dir+'/contexts.private.json','utf8')).publishableKey
 function sql(q){const r=spawnSync('docker',['exec','dogruadres-m0ssi-20261020-a7f1-pg','psql','-U','m0ssi_user','-d','m0ssi_a7f1','-X','-At','-v','ON_ERROR_STOP=1','-c',q],{encoding:'utf8'});assert.equal(r.status,0);return r.stdout.trim()}
 assert.equal(sql('select current_database()'),'m0ssi_a7f1')
