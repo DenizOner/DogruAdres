@@ -6,7 +6,7 @@ import {
 } from "@medusajs/framework/utils"
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
-import { ActorMapping, AuditEvent, Invitation, Membership, Organization, Person } from "./models"
+import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
 import { randomBytes } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
 import { IdentitySessions, securitySql } from "./identity-session"
@@ -33,13 +33,28 @@ type ChangeMembershipInput = Readonly<{
   actor_id: string
 }>
 
+type FoundationAuditInput = {
+  actor_person_id: string
+  actor_type: string
+  actor_id: string
+  role_context?: string | null
+  organization_id?: string | null
+  action: string
+  module: string
+  resource: string
+  target_id?: string | null
+  previous_values?: Record<string, unknown> | null
+  new_values?: Record<string, unknown> | null
+  occurred_at: Date
+}
+
 type AdvisoryLockManager = Readonly<{
   execute: (query: string, parameters: string[]) => Promise<unknown>
 }>
 
 const activeStatus = "active"
 const supportedActorTypes = new Set(["user", "member", "customer"])
-export const DOGRUADRES_AUDIT_MODULE = "dogruadres-access"
+export const DOGRUADRES_AUDIT_MODULE: "dogruadres-access" = "dogruadres-access"
 
 export default class DogruAdresAccessModuleService extends MedusaService({
   Person,
@@ -48,7 +63,56 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   Membership,
   Invitation,
   AuditEvent,
+  AuditOutbox,
 }) {
+  private async persistAuditEventsWithOutbox_(input: FoundationAuditInput[], sharedContext: Context) {
+    // No decorator here: the five mutation entrypoints already own the physical
+    // module transaction. Refuse accidental use without that active manager.
+    if (!sharedContext.transactionManager || !input.length || input.some(event => event.module !== DOGRUADRES_AUDIT_MODULE)) {
+      throw new Error("Foundation audit/outbox persistence requires an active transaction and Foundation events")
+    }
+    const events = await this.createAuditEvents(input, sharedContext)
+    if (events.length !== input.length || new Set(events.map(event => event.id)).size !== input.length) {
+      throw new Error("Canonical audit cardinality mismatch")
+    }
+    const outbox = await this.createAuditOutboxes(events.map(event => {
+      if (!event.id || event.module !== DOGRUADRES_AUDIT_MODULE) throw new Error("Invalid canonical Foundation audit identity")
+      return {
+        source_audit_event_id: event.id,
+        source_module: DOGRUADRES_AUDIT_MODULE,
+        envelope_version: 1,
+        status: "pending" as const,
+        // Explicit allowlist. No before/after payload, recipient email, token or
+        // credentials; use only the actual persisted canonical audit identifiers.
+        envelope: {
+          version: 1,
+          source_module: DOGRUADRES_AUDIT_MODULE,
+          source_audit_event_id: event.id,
+          organization_id: event.organization_id ?? null,
+          actor: {
+            person_id: event.actor_person_id,
+            type: event.actor_type,
+            id: event.actor_id,
+            role_context: event.role_context ?? null,
+          },
+          action: event.action,
+          resource: event.resource,
+          target_id: event.target_id ?? null,
+          occurred_at: new Date(event.occurred_at).toISOString(),
+        },
+      }
+    }), sharedContext)
+    const sourceIds = new Set(events.map(event => event.id))
+    if (outbox.length !== events.length || new Set(outbox.map(row => row.source_audit_event_id)).size !== events.length ||
+        outbox.some(row => row.source_module !== DOGRUADRES_AUDIT_MODULE || !sourceIds.has(row.source_audit_event_id))) {
+      throw new Error("Foundation audit/outbox cardinality mismatch")
+    }
+    // All errors escape the enclosing transaction; no network publish, independent
+    // transaction or workflow compensation substitutes for rollback here.
+    return events
+  }
+
+
   @InjectTransactionManager()
   async personalLinkPrimary(token:string,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).primary(token)}
   @InjectTransactionManager()
@@ -325,7 +389,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       })),
       sharedContext
     )
-    await this.createAuditEvents([
+    await this.persistAuditEventsWithOutbox_([
       {
         actor_id: input.provisioned_by.actor_id,
         actor_type: input.provisioned_by.actor_type,
@@ -407,7 +471,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       protected_owner: nextRole === "owner" && nextStatus === "active",
       revoked_at: nextStatus === "revoked" ? new Date() : null,
     }, sharedContext)
-    const [membershipAudit] = await this.createAuditEvents([{
+    const [membershipAudit] = await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor_id,
       actor_type: input.actor_type,
       actor_person_id: input.actor_person_id,
@@ -455,7 +519,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }], sharedContext)
     const token = deriveInvitationToken(invitation.id)
     const updated = await this.updateInvitations({ id: invitation.id, token_hash: hashInvitationToken(token) }, sharedContext)
-    await this.createAuditEvents([{
+    await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor_id,
       actor_type: input.actor_type,
       actor_person_id: input.actor_person_id,
@@ -484,7 +548,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const current = await this.getInvitationInOrganization(invitation.id, input.organization_id, sharedContext)
     if (!current || current.status !== "pending" || current.expires_at.getTime() <= Date.now()) throw new MedusaError(MedusaError.Types.NOT_FOUND, "Pending invitation not found")
     const updated = await this.updateInvitations({ id: current.id, status: "revoked", revoked_at: new Date() }, sharedContext)
-    await this.createAuditEvents([{
+    await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor_id,
       actor_type: input.actor_type,
       actor_person_id: input.actor_person_id,
@@ -554,7 +618,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       accepted_at: new Date(),
       accepted_by_person_id: person.id,
     }, sharedContext)
-    await this.createAuditEvents([{
+    await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor.actor_id,
       actor_type: input.actor.actor_type,
       actor_person_id: person.id,
