@@ -1,5 +1,5 @@
 import { POST,enrollmentEnabled } from "../mfa/enroll/route"
-import { access,csrf,enabled,sessionToken } from "../security"
+import { access,csrf,enabled,sessionToken,secureCookies } from "../security"
 import { bindServerActor } from "../server-actor"
 jest.mock("../security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn(),
@@ -24,6 +24,7 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
     process.env.DOGRUADRES_MFA_SETTINGS_ENABLED="true"
     process.env.DOGRUADRES_MFA_ENROLLMENT_ENABLED="true"
     ;(enabled as jest.Mock).mockReturnValue(true)
+    ;(secureCookies as jest.Mock).mockReturnValue(true)
     ;(csrf as jest.Mock).mockResolvedValue(true)
     ;(sessionToken as jest.Mock).mockReturnValue(token)
     ;(access as jest.Mock).mockReturnValue(service)

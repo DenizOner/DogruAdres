@@ -228,6 +228,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalBeginMfaEnrollment(token:string,authIdentityId:string,factorId:string,@MedusaContext() context:Context={}) {
     const sql=securitySql(context.transactionManager)
+    // Session/Person lock comes FIRST, matching staff policy-change lock order.
+    // Taking the platform advisory lock first could deadlock against a staff
+    // update that already holds this same browser session lock.
+    if(!await new IdentitySessions(sql).current(token,false,false))return null
     await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
     if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
     return new MfaEnrollmentTickets(sql).beginAfterPasswordProof(token,authIdentityId,factorId)
@@ -236,6 +240,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalClaimMfaVerification(token:string,ticket:string,@MedusaContext() context:Context={}) {
     const sql=securitySql(context.transactionManager)
+    // Session/Person lock comes FIRST, matching staff policy-change lock order.
+    // Taking the platform advisory lock first could deadlock against a staff
+    // update that already holds this same browser session lock.
+    if(!await new IdentitySessions(sql).current(token,false,false))return null
     await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
     if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
     return new MfaEnrollmentTickets(sql).claimVerificationAttempt(token,ticket)
@@ -244,6 +252,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalCompleteMfaEnrollment(token:string,ticket:string,factorId:string,@MedusaContext() context:Context={}) {
     const sql=securitySql(context.transactionManager)
+    // Session/Person lock comes FIRST, matching staff policy-change lock order.
+    // Taking the platform advisory lock first could deadlock against a staff
+    // update that already holds this same browser session lock.
+    if(!await new IdentitySessions(sql).current(token,false,false))return null
     await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
     if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
     return new MfaEnrollmentTickets(sql).completeAfterNativeVerification(token,ticket,factorId,new Date())
