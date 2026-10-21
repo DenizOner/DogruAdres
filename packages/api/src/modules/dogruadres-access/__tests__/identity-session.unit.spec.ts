@@ -52,11 +52,12 @@ describe("persistent identity/session boundaries (SQL mocks, not PostgreSQL evid
   // SQL-mock contract: assert the source owns all scope predicates. These tests
   // do not replace B04 browser roles or real PostgreSQL acceptance evidence.
   function organizationsWithRows(rows: Record<string,unknown>[],overrides:Record<string,unknown>={}) {
-    const {execute,service}=setup(overrides)
-    const original=execute.getMockImplementation()!
-    execute.mockImplementation(async (sql:string) =>
-      sql.startsWith("select o.id,o.name,m.id as membership_id,m.role") ? rows : original(sql))
-    return {execute,service}
+    const source=setup(overrides)
+    // Keep the source mock's narrow implementation but allow typed SQL parameters
+    // and heterogeneous result rows for this scoped read contract.
+    const execute=jest.fn(async(sql:string,_parameters?:unknown[]):Promise<any[]> =>
+      sql.startsWith("select o.id,o.name,m.id as membership_id,m.role") ? rows : source.execute(sql))
+    return {execute,service:new IdentitySessions({execute})}
   }
   it.each(["owner","admin","member"])("B04: active %s reads only the requested Organization",async role=>{
     const row={id:"daorg_allowed",name:"Allowed",membership_id:"damem_1",role}
