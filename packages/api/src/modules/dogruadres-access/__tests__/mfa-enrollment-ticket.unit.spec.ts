@@ -13,6 +13,8 @@ describe("MFA purpose-bound enrollment tickets (source contract only)",()=>{
   const create=jest.spyOn(IdentitySessions.prototype,"create")
   beforeEach(()=>{
     execute.mockClear()
+    create.mockClear()
+    current.mockClear()
     current.mockResolvedValue(session as any)
     create.mockResolvedValue({token:"N".repeat(43),csrf:"C".repeat(43)})
   })
