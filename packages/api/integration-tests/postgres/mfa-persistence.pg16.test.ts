@@ -140,7 +140,7 @@ async function main() {
       await db.unsafe(`insert into da_browser_session
         (id,person_id,auth_identity_id,actor_type,actor_id,epoch,csrf_hash,status,created_at,last_activity_at)
         values ($1,$2,$3,'user',$4,0,$5,'active',now(),now())`,
-        [browserId,actor.person_id,authId,"placeholder_csrf"])
+        [browserId,actor.person_id,authId,actor.actor_id,"placeholder_csrf"])
       const ticketId="t".repeat(64)
       await db.unsafe(`insert into da_mfa_enrollment_intent
         (id,session_id,person_id,auth_identity_id,factor_id,expires_at)
