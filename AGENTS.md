@@ -1,50 +1,12 @@
-# Mercur Marketplace Project
+# DoğruAdres — engineering and agent execution policy
 
-**This is a Mercur marketplace project — an open-source AI-native multi-vendor marketplace built on MedusaJS v2.**
+This repository implements DoğruAdres on the open-source Mercur marketplace stack (MedusaJS v2). The product and project-owned integrations are the development target; Mercur/Medusa core remains an upstream dependency.
 
-## Read the docs first
+**How to use this file:** apply only the sections relevant to the task, plus mandatory security/authorization/approval gates. For current product scope and decision provenance, consult canonical GitHub Issues; for implementation facts, inspect actual source and executable evidence. Historical snapshots are not current instructions. Routine task notes and changing PR/CI status belong in their linked GitHub records, not this policy.
 
-Before any non-trivial change, read the **bundled documentation** — it ships as a dependency, so it is offline and version-matched to this project's packages:
+**Project entry points:** `packages/api/` (API, modules, workflows, links, subscribers); `apps/admin/` (operator UI); `apps/vendor/` (seller UI); `blocks.json` (Mercur block aliases); `packages/api/medusa-config.ts` (backend configuration). Operational setup belongs in [README.md](README.md), not here.
 
-1. Index: `node_modules/@mercurjs/docs/llms.txt`
-2. Full pages: `node_modules/@mercurjs/docs/content/**/*.mdx`
-
-It covers the domain model (sellers, products, offers, attributes, commissions, payouts, order groups), the CLI, the typed API client, the dashboard SDK, and module references. Don't guess at an API or data model the docs already describe.
-
-### Project Structure
-
-```
-├── packages/api/         # Backend API — modules, workflows, links, subscribers
-├── apps/admin/           # Admin dashboard — operator panel
-├── apps/vendor/          # Vendor portal — seller dashboard
-└── blocks.json           # Block configuration and registry aliases
-```
-
-## Documentation
-
-- **Bundled docs (read first)**: `node_modules/@mercurjs/docs/llms.txt` → `content/**/*.mdx`
-- **Online docs**: https://docs.mercurjs.com
-- **MCP Server**: https://docs.mercurjs.com/mcp — connect your AI agent for documentation search
-- **llms.txt (online)**: https://docs.mercurjs.com/llms.txt
-
-## Configuration Files
-
-- `blocks.json` — block configuration and registry path aliases
-- `packages/api/medusa-config.ts` — MedusaJS configuration
-- `apps/admin/vite.config.ts` — admin dashboard build config
-- `apps/vendor/vite.config.ts` — vendor portal build config
-
-## Getting Started
-
-```bash
-bun run dev
-```
-
-This starts:
-
-- Backend API at `http://localhost:9000`
-- Admin Panel at `http://localhost:9000/dashboard`
-- Vendor Panel at `http://localhost:9000/seller`
+**Installed documentation:** when available, start at `node_modules/@mercurjs/docs/llms.txt`, then read only relevant version-matched `node_modules/@mercurjs/docs/content/**/*.mdx` pages. Consult official Mercur and Medusa documentation for corresponding installed versions when needed. Do not infer behavior from memory alone.
 
 # DoğruAdres project constitution
 
@@ -54,13 +16,19 @@ Follow [DoğruAdres engineering principles §11](#11-product-scope-and-dependenc
 
 ## Required Mercur workflow
 
-Before any non-trivial Mercur-related work:
+Before nontrivial framework-facing changes, verify the actual installed package versions, relevant bundled Mercur docs, project code and generated types. Use matching official Medusa docs for Medusa-specific behavior. If the installed sources are unavailable to the reviewer, identify what could and could not be verified; never invent an API contract or assume a feature is missing.
 
-1. read `node_modules/@mercurjs/docs/llms.txt`
-2. read the relevant installed version-matched Mercur docs pages
-3. inspect current source and generated types where needed
+## Mandatory challenge and reuse-before-build gate
 
-Never guess Mercur API behavior.
+**Applies to the Technical Advisor and every engineering/AI agent before proposing or implementing a new feature or architectural component.** A Product Owner request describes a desired outcome; it does **not** establish that the requested implementation is necessary, that an equivalent capability is missing, or that a new architecture has been approved.
+
+1. **Validate the goal, not the proposed implementation.** Compare the request with approved DoğruAdres requirements and security/domain boundaries. Identify incorrect premises, needless duplication, hidden tradeoffs and simpler or safer alternatives. Respectfully explain a better approach with evidence; ask the Product Owner only for genuine unresolved product decisions or new permissions.
+2. **Inspect the installed platform and existing project first.** Check relevant actual package versions, enabled Medusa commerce modules, Mercur modules/plugins/blocks, built-in APIs, workflows and hooks, providers, auth/authorization behavior, dashboard/SDK components, configuration, generated types, and existing DoğruAdres source/tests. A request to "build" something is never proof that Medusa, Mercur or the project lacks it. Search only task-relevant surfaces, without exhaustive repository inventories by default.
+3. **Verify the supported way to reuse it.** Start with installed, version-matched Mercur docs under `node_modules/@mercurjs/docs`; consult matching official Medusa docs and relevant upstream source/release notes when necessary. Check real integration and permission boundaries before assuming a built-in feature is suitable. Distinguish AVAILABLE, REQUIRES CONFIGURATION/EXTENSION, GAP CONFIRMED and UNVERIFIED; never claim absence solely from an unsuccessful search.
+4. **Prefer the least custom solution.** Reuse/configure an existing supported capability first; otherwise extend it through documented public APIs, workflow hooks, modules, links, subscribers, providers, or small project-owned adapters. Design new project-owned functionality only for a verified unmet approved requirement. Do not recreate existing identity, commerce, marketplace, or platform primitives; do not modify upstream internals or bypass security to avoid integration work.
+5. **Record a concise decision before implementation.** State the desired user outcome, discovered existing capability and evidence, actual remaining gap, recommended reuse/extension/build option, important tradeoffs and authorization boundaries, and the smallest decisive acceptance/negative check. When reuse fully meets the goal, do not write new code. Keep this preflight proportional: reuse valid earlier findings and stop researching when more inspection would not change the decision.
+
+This gate supplements existing approval, source, version-matched documentation, end-to-end acceptance and evidence requirements. It does not authorize implementation, dependency changes, database writes, core patches, publication or a merge.
 
 ## Canonical project decision lookup
 
@@ -82,14 +50,12 @@ Steps 3-5 require explicit external/user approval before implementation.
 
 ## Permanent cost and GitHub Issue language policy
 
-**Binding, irreversible Product Owner decision dated 2026-10-20:** [GÜV-ÜCRETSİZ-001 — canonical GitHub decision #211](https://github.com/DenizOner/DogruAdres/issues/211). This instruction applies to all DoğruAdres work, including architecture, planning, coding, testing, integrations, collaboration, and deployment preparation.
+**Binding Product Owner decision: [#211 — GÜV-ÜCRETSİZ-001](https://github.com/DenizOner/DogruAdres/issues/211) (2026-10-20), final and non-negotiable.** No paid plan, trial that can convert to paid, subscription, SaaS capability, license, add-on or software may be proposed, used or planned for DoğruAdres. This explicitly includes GitHub Pro/Team/Enterprise. Do not offer an upgrade to solve a technical blocker.
 
-1. **Never use, purchase, trial with paid conversion, suggest, recommend, or plan a paid service, subscription, license, hosted capability, add-on or software for DoğruAdres.** This explicitly includes GitHub Pro, GitHub Team, GitHub Enterprise, and all other paid products. The Product Owner has declared this choice final, non-negotiable and unchangeable. Do not reopen it as a decision option or propose an account upgrade to solve a blocker.
-2. Use only cost-free options that actually meet the project's security, license and authorization boundaries. A free tier does not imply blanket approval to connect external accounts, disclose data, change hosting, run migrations, or deploy. When a required capability is unavailable without payment, report **FREE-PLAN CAPABILITY BLOCKED** and use only truthful, separately authorized cost-free workarounds; never fake enforcement or test evidence.
-3. This personally owned private repository currently does **not** enforce protected-branch / required CI rules through GitHub. Until a genuinely free enforcement mechanism is independently verified and explicitly authorized, apply a **process-only gate**: independent source review; exact PR HEAD SHA, base SHA and actual scoped CI rechecks; and a separate explicit Product Owner authorization for that exact PR/HEAD before merging. Do not call this GitHub-enforced protection. Preserve the sole-owner recovery path and the prohibition on unauthorized pushes/force-pushes.
-4. **Write new GitHub Issue titles, user-facing summaries, scope statements, acceptance checklists and progress reports in Turkish.** Translate previously authored English or heavily mixed-language Issue-facing content when encountered. Do not alter exact canonical IDs, source code identifiers, technical paths, immutable evidence quotations, original decision statuses, approvals, or full historical source archives. Put clear Turkish reader-facing material before the untouched historical text whenever faithful replacement could compromise provenance. GitHub PR descriptions and other user-facing governance records should also favor Turkish.
-5. **Write executable instructions for engineering/AI agents in English**, consistent with the project language convention. This does not excuse English GitHub Issue prose addressed to the Product Owner.
-6. [Issue #212](https://github.com/DenizOner/DogruAdres/issues/212) tracks the legacy Issue localization without creating new product approvals. [Issue #208](https://github.com/DenizOner/DogruAdres/issues/208) records the current cost-free repository security procedure. A Project board Status field never overrides a canonical decision Issue or independent test evidence.
+- If an essential capability is unavailable for free, report **FREE-PLAN CAPABILITY BLOCKED** and propose only genuinely free alternatives; never misrepresent a process check as enforced platform security. Free access alone does not authorize private data transfers, provider connections, new closed-source dependencies, production access or architecture changes.
+- On the current personal private GitHub repository, mandatory protected-branch/required-CI enforcement must **not** be assumed. Until a demonstrably free alternative is verified and separately approved, enforce a **process-only gate**: independent source review, exact PR HEAD/base and relevant scoped CI evidence, followed by separate explicit Product Owner authorization to merge that exact revision. See [#208](https://github.com/DenizOner/DogruAdres/issues/208).
+- Write new GitHub Issue titles, user-facing descriptions, acceptance criteria and progress reports in **Turkish**. Prefer Turkish in PR summaries. Engineering/AI Agent executable instructions are in **English**. When translating old Issues ([#212](https://github.com/DenizOner/DogruAdres/issues/212)), keep immutable historic evidence, original statuses, source code symbols and IDs intact.
+- GitHub Project status, a completed research issue or a successful CI run is never Product Owner approval or completed feature acceptance.
 
 ## Permanent roles and decision rights
 
@@ -99,7 +65,7 @@ Before performing project work, read and follow [DoğruAdres engineering princip
 
 The coding agent does not independently decide product behavior, business rules, architecture boundaries, payment policy, security policy, dependency strategy, or destructive data behavior.
 
-When a decision is not already documented or approved, stop and report the decision needed.
+When an action depends on a genuinely unresolved product or high-risk policy decision, stop **only that affected action**, report the decision needed and continue independently authorized work. Do not transform missing optional details into artificial project-wide blockers.
 
 ## Approval gates
 
@@ -118,7 +84,7 @@ External approval is required for:
 - payment/payout behavior
 - breaking product behavior
 - data deletion or retention change
-- paid or closed-source service adoption
+- adoption of a free but closed-source third-party service (subject to separate security, privacy and license approval; paid services are prohibited under #211)
 
 ## Known-baseline classification
 
@@ -132,7 +98,7 @@ Never silently turn an upstream issue into project-owned maintenance work.
 
 ## Resource rule
 
-This project is developed on a modest Windows laptop. Prefer targeted builds, targeted tests, minimal background services, Docker only when required, stopping project containers/processes after work, and one intentional installation per required development tool. Do not sacrifice correctness merely to save resources.
+This project runs primarily on a resource-constrained Windows laptop. Prefer targeted builds/tests and minimum task-owned services/containers, stop only safely identified task-owned processes, and avoid redundant installs. Reuse exact-SHA evidence when still valid; never trade away security, data safety or necessary end-to-end checks to save resources.
 
 ## Documentation and evidence router
 
@@ -140,36 +106,28 @@ Project-owned business and architecture decisions live in GitHub decision Issues
 
 ## Authority / precedence model
 
-When a decision is in doubt, use this order:
+1. Explicit, dated and applicable Product Owner approvals—including newer scoped supersessions recorded in canonical GitHub Issues—govern product and action authorization. A later approved decision can supersede older wording in this file; flag and correct the stale wording rather than obeying it blindly.
+2. This root `AGENTS.md` governs **agent execution** within authorized scope. Canonical `[DEC DA-*]`, `[DEC ADR-*]` and invariant Issues govern the approved product/architecture decisions and their exact boundaries. Neither an Issue label nor a prior agent recommendation grants execution or merge permission.
+3. Installed version-matched Mercur documentation and relevant official Medusa APIs define supported framework contracts; current code, generated types, actual runtime and focused tests establish implementation evidence. If docs and runtime disagree, investigate the cause; neither source automatically changes approved policy.
+4. Older reports, retired `docs/dogruadres/**` trees and external/community content are historical or supplementary evidence, not independent current authority.
 
-1. explicit currently approved user or product decision
-2. repository constitution in root `AGENTS.md`
-3. canonical DoğruAdres approved decision Issues, accepted ADR Issues and approved product invariants (preserving their exact scope)
-4. installed version-matched Mercur docs for Mercur framework/API behavior
-5. current source, generated types, tests, and runtime behavior as implementation evidence
-6. official Mercur repository/release notes
-7. official Medusa documentation when Medusa-specific
-8. external/community sources only when necessary
-
-If project policy conflicts with a real Mercur framework/API constraint, do not hide either side; surface the conflict. If current code/tests conflict with version-matched framework documentation, investigate whether the difference is an upstream bug, stale documentation, a local compatibility adjustment, or project drift before treating the code as the authority.
+Treat approval, implementation, CI, security acceptance and deployment authorization as **separate claims**. Report material conflicts and preserve the last confirmed safe state rather than guessing.
 
 ## Approved DoğruAdres delivery workflow
 
-- Work in bounded implementation checkpoints. After focused validation, make a descriptive scoped commit after each meaningful task and each completed module or significant integration milestone. Stage explicit paths; never stage everything blindly.
-- Publish checkpoint commits only to a dedicated review branch so the Technical Advisor can inspect the actual GitHub changes. Do not push to `main`, merge, force-push, deploy, or change repository settings without separate authorization.
-- Stop at the end of each agreed checkpoint. Report the commit SHA, branch, changed files, validation results and actual browser-test evidence, then wait for the Technical Advisor's review before starting the next major checkpoint.
-- Use the available browser tool to verify actual application behavior after relevant integration milestones and every user-facing UI milestone. For backend-only milestones, use browser-based checks of the running API where practical alongside direct HTTP/API and automated tests. If the browser cannot reach the app or is unavailable, state that limitation; never claim an unrun browser test passed.
-- Unrelated baseline Storefront lint/type-check, Storybook or Jest bootstrap failures do not derail a focused feature unless they prevent meaningful validation of the changed code. Never conceal failures, weaken security checks or claim unexecuted tests passed.
+- Work in reviewable, bounded checkpoints on an authorized branch; stage exact intended files and commit cohesive changes after focused validation. Reuse the active initiative branch unless an independently justified separation is needed.
+- Use the smallest sufficient automated/HTTP/DB/browser checks for the **changed behavior and risk**; reuse previous evidence only within its exact version, SHA, target and security boundary. Significant user-facing flows require independent real-browser E2E acceptance, not screenshot- or mock-only claims.
+- Publish scoped commits to the authorized review branch for independent review. Report commit/PR HEAD and base, changed files, actual test outcomes, security gaps and blockers. Pause at a genuine review or permission boundary; do not require repeated micro-approvals for actions already authorized.
+- Never push to `main`, merge, force-push, deploy or alter repository settings without the separately required Product Owner authorization; final merge needs review and permission for the **exact PR HEAD/base**, not a general plan approval.
+- Baseline test failures unrelated to the change should be recorded, not hidden or falsely counted as passing; do not weaken tests to make a build green.
 
 ## Branch lifecycle
 
-- A branch represents a coherent initiative and reviewable deliverable, not an individual task, commit, or checkpoint.
-- Reuse the active initiative branch for sequential checkpoints in the same scope. Create a branch only for genuinely independent work needing separate review/rollback or for parallel work with a clear reason.
-- Before creating a branch, inspect existing local and remote branches and identify whether an appropriate active branch already exists.
-- If a continuing initiative expands and its name becomes misleading, prefer a controlled rename of the existing branch over a parallel duplicate. Do not rename a branch while its checkpoint is under review.
-- After a user-authorized merge is confirmed, delete the merged feature branch only if no further work depends on it. Never delete an unmerged, unreviewed, or potentially unique-work branch because it looks stale.
-- At each checkpoint, report active branches, their purpose, base, current SHA, and cleanup candidates. Do not clean up branches automatically.
-- Never push to `main`, merge, force-push, deploy, or change repository settings without separate explicit authorization.
+- A branch represents a coherent reviewable initiative, not each task/commit/checkpoint. Reuse the existing task branch when possible; check existing branches and worktrees before creating another.
+- Default to serial work, but allow justified parallel work only under the newer [#216 isolation/ownership policy](https://github.com/DenizOner/DogruAdres/issues/216#issuecomment-6325812774). Parallel read-only GitHub/source review ordinarily needs no new branch.
+- A new worktree/branch requires an actual independent review or isolation need, a distinct owner, known base and expected retirement criteria; it never implies extra database, fixture, deployment or merge permission.
+- Report only task-relevant branch/HEAD/dependency changes and cleanup candidates; perform no automatic branch or worktree deletion. Before removing any ref, reconcile local dirty/untracked/ignored work, unique commits, dependent PRs, runtime/DB owners and preserved recovery evidence.
+- Never push directly to `main`, merge, force-push, deploy or change repository settings without separate explicit approval.
 
 ## Cross-branch documentation cutover and safe integration
 
@@ -183,28 +141,20 @@ When a feature branch predates the GitHub-only governance cutover, its `docs/dog
 
 ## GitHub-centered decision, task, evidence and migration workflow
 
-**Ownership:** GitHub is the project's single collaboration platform; different GitHub record types have non-overlapping responsibilities. This is an organizational change, not authorization to build features, modify database state, merge, deploy, or bypass security gates.
+GitHub is the single canonical collaboration platform, with **separate responsibilities**:
 
-- **Discussions:** preliminary research, alternatives, product questions and unresolved decisions. The Product Owner approves the final decision in an explicit dated message. When resolved, close the discussion with a final decision statement and link resulting implementation or decision-record issues. Never interpret "answered" or "closed" alone as Product Owner approval. GitHub Discussions is enabled as of the 2026-10-19 repository settings checkpoint, but the connected GitHub integration does not expose Discussion creation/editing; do not claim any Discussion was published until a supported authenticated workflow verifies it. Do not silently create policies on its behalf.
-- **Decision-record Issues:** authoritative stable records of Product Owner-approved behavior and accepted architectural decisions *after verified migration*. Preserve each DA-* ID, prior status, changed clauses, approval provenance, superseded decisions, boundaries and acceptance invariants. A closed implementation issue does not override a decision record.
-- **Implementation and QA Issues:** executable scope, preconditions, negative cases, owner, dependencies, reproducible results and pass/fail/blocked status. Close as Completed only with the appropriate independently reviewed evidence. Store test execution, risks and error investigation in issues; code changes belong to reviewable PRs.
-- **Projects:** optional overview and prioritization only; do not duplicate requirements or use board state as proof of authorization, approval or acceptance.
-- **AGENTS.md:** permanent agent policy and the authoritative workflow guide. Keep full historical deliberation and long task reports out of AGENTS.md.
+- **Discussions:** exploration, competing proposals and unresolved questions where authenticated support exists. Neither closing nor an answered badge grants approval; verify publication before reporting it.
+- **Decision Issues (`[DEC DA-*]` / `[DEC ADR-*]`):** approved business/architecture decisions, exact scope, Product Owner/date provenance, status and supersession. Proposed/open/deferred parameters are **not** approved.
+- **Work/QA Issues:** authorized work boundaries, dependencies, affected user journeys, negative/security criteria, actual tests, blocked items and results; **PRs** carry and review code changes. Completion of one research/test checkpoint does not close dependent work or prove runtime acceptance.
+- **Projects:** optional triage/status overview, never authorization. **AGENTS.md:** concise enduring agent-execution rules, not a historical log or a second product requirements database.
 
-**Agent collaboration:** Product Owner decides policy and grants explicit action-level permissions. ChatGPT Technical Advisor / Project Director prepares evidence-based recommendations, decision packages and independent review. Codex Local Engineering Agent changes source and runs focused tests only within authorized scope. ChatGPT Work Agent owns independent browser/E2E verification. Agent instructions are written in English; Product Owner-facing responses are in Turkish. An issue's existence, assignment, label or project status alone does not grant execution permission.
+**Ownership:** The Product Owner decides business/security/architecture policies and action-specific permissions; the Technical Advisor independently investigates, recommends, reviews and handles its own accessible GitHub/evidence work. The authorized Local Engineering Agent implements and runs focused checks within scope; the independent Work Testing Agent executes real-browser acceptance when available. Agent instructions are English; Product Owner-facing explanations and Issues are Turkish. A work Issue, label, assignment or broad approval never grants new implementation, source-write, database, merge or deployment authority.
 
-**Status distinctions:** APPROVED product rule ≠ implemented feature ≠ passed test. Preserve APPROVED / PROPOSED / OPEN / DEFERRED / SUPERSEDED, and SOURCE VERIFIED / TEST PASSED / NOT TESTED / BLOCKED separately. Research or a test report marked Completed closes only that bounded deliverable, not every dependent task. Use distinct IDs for decision, feature, research and verification work; detect existing issues before creating new ones. Never reuse a completed research issue as proof that its recommendation became policy.
+**Status and evidence:** Distinguish APPROVED / PROPOSED / OPEN / DEFERRED / SUPERSEDED decisions; SOURCE VERIFIED / TEST EXECUTED PASSED or FAILED / AGENT-REPORTED / NOT TESTED / BLOCKED execution; and individually accepted functionality. Never infer the next state from the previous one. Search existing Issue/PR records before opening duplicates; store new conclusions once in their canonical record.
 
-**Incremental migration safeguards:**
-1. Read all repository branches, the currently applicable requirements, accepted ADRs and historic record before moving a document; feature branches may carry approved scope not yet in main.
-2. Preserve the *complete* historical content and decision qualifiers in its new canonical GitHub record, without exposing real secrets. Re-read and verify source equivalence and links; record exact previous path and immutable Git object provenance.
-3. Change referencing links to valid canonical issue/discussion locations; verify that navigation survives cleanup.
-4. Delete a redundant tracked document only on the dedicated documentation review branch, after the new canonical record is verified. No silent deletion of an accepted requirement, policy, ADR or unique evidence. Never delete only because an Issue heading exists.
-5. Do not merge into main without the Product Owner's separate approval. Continue to honor present docs as authoritative **until** their full approved policy and decision content has been migrated and accepted. A private immutable git history pointer is provenance, not a parallel active document.
-6. Keep task records and daily progress out of the remaining docs. Remove the docs directory only at the final gate: all approved decisions and active technical rules canonicalized, links verified, independent review passed, no required file left, and Product Owner explicitly authorizes the merge.
+**Historical documentation migration and branch integration:** For legacy branches containing `docs/dogruadres/**`, read the **relevant** immutable source, approved later changes and current Issues before deletion/merge. Preserve all unique approved clauses, original statuses and full provenance; verify blob equivalence and updated links. Remove duplicates only in a scoped reviewed cleanup change after migration verification, retaining the original immutable history. Do not resurrect retired governance docs through a feature merge, blindly merge mixed AF-1/Vehicle code, overwrite dirty checkout evidence, or infer that a documentation decision authorizes production functionality. Source or documentation approval does **not** authorize implementation or merge. See [#18](https://github.com/DenizOner/DogruAdres/issues/18), [#141](https://github.com/DenizOner/DogruAdres/issues/141), [#210](https://github.com/DenizOner/DogruAdres/issues/210).
 
-**Decision record template:** ID, question, alternatives, original source/decision authority, exact decision text, scope, explicit approval status, affected DA-* and ADR IDs, security/financial constraints, tests and negative cases, supersession relationships, linked work Issues and evidence. Never invent decision timestamps, approved providers, prices or missing policy parameters.
-
+**Significant decision Issue minimum:** stable ID, question, approved/proposed wording, decision maker/date and scope, alternatives, impact/trade-offs, source/provenance, superseded clauses, safety/financial limits, acceptance/negative tests, dependencies and links. Do not invent approval, timestamps, vendor choices or unresolved parameters.
 
 ## Canonical security, Mercur integration and upgrade guardrails
 
@@ -246,7 +196,7 @@ GitHub Issues now hold the complete canonical requirements/decision records; the
 
 Accepted architectural decision Issues (original source and dates retained): [ADR-0001](https://github.com/DenizOner/DogruAdres/issues/29), [ADR-0002](https://github.com/DenizOner/DogruAdres/issues/30), [ADR-0003](https://github.com/DenizOner/DogruAdres/issues/31), [ADR-0005](https://github.com/DenizOner/DogruAdres/issues/33), [ADR-0006](https://github.com/DenizOner/DogruAdres/issues/34), and [ADR-0007](https://github.com/DenizOner/DogruAdres/issues/35). [ADR-0004](https://github.com/DenizOner/DogruAdres/issues/32) is historically preserved but **SUPERSEDED** by ADR-0005 and must never be treated as current authorization. ADR-0005/0006 original approved source comes from the Vehicle feature branch and ADR-0007 from the Foundation feature branch; do not infer the main branch contains these original docs.
 
-When sources conflict: latest explicitly approved Product Owner decision → root AGENTS.md → current canonical decision Issues and accepted ADRs (scope-specific) → remaining project-specific evergreen guidance → installed Mercur/Medusa documentation matching the dependency version → executed implementation evidence; outdated archived research and source commit history are provenance, never automatic current decisions. Do not silently interpret a superseded proposal as binding or close an implementation/QA task merely because its source decision record is completed.
+When sources conflict, apply the [authority / precedence model](#authority--precedence-model), check the exact approval and supersession scope, and distinguish historical evidence from current permissions. Never silently treat an archived proposal as binding or close implementation/QA work because its decision record is complete.
 
 ## DoğruAdres engineering principles — migrated authoritative text
 
@@ -256,15 +206,7 @@ This repository is a Mercur marketplace baseline with a DoğruAdres product/doma
 
 Use Mercur's public extension points before inventing custom workarounds.
 
-Preferred order:
-
-1. official Mercur extension point
-2. project-owned module, provider, workflow hook, subscriber, adapter, or link
-3. upstream contribution
-4. minimal isolated compatibility patch
-5. fork
-
-The first principle is not to bend Mercur to fit a local shortcut. The first principle is to fit the project into the intended extension model.
+First reuse built-in supported functionality; then use official extension points and the smallest project-owned adapter/module/workflow. Any upstream contribution, compatibility patch or fork remains exceptional and needs separate approval; no dependency-core edit is authorized by this list. See the [reuse-before-build gate](#mandatory-challenge-and-reuse-before-build-gate).
 
 ### 2. Domain ownership
 
@@ -282,13 +224,13 @@ If an implementation requires a private or internal Mercur detail, stop and re-e
 
 Project-local development infrastructure, such as `compose.dev.yml`, is infrastructure rather than a framework compatibility workaround or Mercur defect. It may still be reviewed during upgrades when local development requirements change, but it is not a temporary compatibility patch.
 
-Temporary compatibility adjustments are allowed only when they are explicitly classified as temporary. The current Redis configuration wiring and exact root dependency compatibility constraint must be re-evaluated on every Mercur upgrade and must not silently become permanent architecture.
+Temporary compatibility adjustments must be labeled, sourced and re-evaluated at each relevant Mercur upgrade. Check the current dependency and configuration state before assuming the historical Redis or root dependency exceptions still apply.
 
 ### 5. Product and architecture choices require approval
 
 The coding agent does not independently decide product behavior, business rules, architecture boundaries, dependency strategy, security boundaries, payment policy, or destructive data behavior.
 
-When a decision is not already documented and accepted, the agent must stop and report the missing decision.
+Stop the **affected** action when it needs a missing approval, present a supported recommendation, and continue independent work within existing authorization.
 
 ### 6. Minimal dependency policy
 
@@ -323,7 +265,7 @@ This project is developed on a modest Windows laptop.
 
 Testing is required at the right layer, not by blanket rule.
 
-The future project should use layered testing that includes:
+Apply risk-appropriate testing at the relevant layer, including as applicable:
 
 - unit/domain tests
 - adapter/contract tests
@@ -334,7 +276,7 @@ The future project should use layered testing that includes:
 
 The project should focus on high-value rules such as seller isolation, offer ownership, price integrity, order behavior, commission boundaries, payment/payout boundaries, and automotive fitment correctness.
 
-This document intentionally does not define a full testing strategy yet. That is a later, project-level artifact when the first real DoğruAdres implementation test stack exists.
+The active M0/Vehicle acceptance and evidence requirements in §§12–13 remain binding. This paragraph is a layer-selection guide, not a separate test strategy or a reason to postpone existing required checks.
 
 ### 10. Roles and decision rights
 
@@ -403,50 +345,43 @@ Preserve independent physical modules, module-owned canonical audit/outbox atomi
 
 ## 12A. Permanent evidence-first and anti-repetition delivery discipline (D9 retrospective)
 
-**Authority:** Product Owner approval on 2026-10-20, [M0/D9 Issue #217](https://github.com/DenizOner/DogruAdres/issues/217#issuecomment-6299069205); applies to Technical Advisor, local engineering agents, and independent testing work. This sharpens §§11–13; it never lowers a previously accepted security requirement, expands resource/write authorization, or overrides PO approval gates.
+**Authority:** accepted [#217 retrospective](https://github.com/DenizOner/DogruAdres/issues/217#issuecomment-6299069205). Applies to Technical Advisor, engineering and independent testing; it does not relax security/approval constraints.
 
-1. **Ask the decision-changing question first.** Before research or engineering, identify the exact approved user journey/invariant, the uncertain compatibility or security boundary, the smallest *end-to-end* decisive test, its pass/fail evidence, and the alternative if it fails. Prove the highest-risk framework/UI/auth/ingress integration before writing expansive specifications or building policy layers over it.
-2. **Reuse prior evidence and its boundaries.** First consult canonical Issues, ADRs, accepted PoCs, exact framework versions and test state. Carry validated fixture/bootstrap/generated-file expectations forward in one reusable task preflight. Do not rediscover known Medusa link setup, Mercur `.mercur/routes.d.ts` generation or native bearer replay as new blockers. Never mistake PoC feasibility or an old assertion for production acceptance.
-3. **Avoid investigation loops.** Continue inspection only while an answer can change an architectural choice, exploit mitigation, or acceptance decision. If one bounded probe reaches an observability limitation, record UNKNOWN/BLOCKED with concrete consequences and switch to a better targeted test or alternative. Do not automatically escalate from source inventory to logging to hooks to monkeypatching to deeper inspection. Investigate a collision's exact source only when it materially affects an auth or mutation boundary; keep broad route coverage obligations in force.
-4. **Batch safely; stop at real scope boundaries.** Group non-destructive, task-owned steps with a clear shared data/resource envelope in one justified checkpoint instead of serial artificial approvals. Seek fresh Product Owner authorization when crossing an actual security/architecture, source-write, schema, fixture, deployment, or cleanup boundary. Preserve other worktrees, secrets, generated evidence and DB volumes; never infer permission from research.
-5. **Deliver the smallest vertical user value early.** Demonstrate login → canonical Person → authorized Organization/role context → real backend permission check → logout/revocation with negative direct-native bypass evidence at the earliest viable slice. Extend to UI/browser, machine identities, MFA/D3, Seller/Buyer and concurrent authorization in the required acceptance order. A passing compiler, route count or debug event is never an authenticated browser/security PASS.
-6. **Act within your own capabilities.** Technical Advisor performs GitHub decisions, source/documentation review, technical synthesis and issue/PR tracking directly; delegate to local agents only actions requiring the user's actual local runtime or an explicitly separated independent test. Prefer a concrete decision/recommendation and completed work over draft commands and repeated handoffs.
-7. **Protect approved architecture and failed security gates.** Keep Mercur as marketplace engine and the approved Person/Organization/Option A objectives unless the PO changes them. Native old-Bearer replay and missing PlatformStaffGrant enforcement remain FAILED until independently proven fixed; private ingress or CORS alone is not revocation. Treat upstream Admin browser bearer/localStorage transport compatibility as UNVERIFIED until demonstrated with version-matched evidence.
+1. **Start with the decisive unknown:** state the approved user outcome/invariant, current framework/auth/security uncertainty, smallest decisive real end-to-end or contract check, expected pass/fail evidence, and fallback. Prove dangerous integration assumptions before implementing broad new layers.
+2. **Reuse known proof:** consult only relevant current Issues, ADRs, exact framework version/checkout, accepted PoCs and test baselines. A previously proven bootstrap/generated-route rule is not a fresh discovery; PoC feasibility is not production acceptance.
+3. **Bound investigations:** continue only while new evidence could alter architecture, safety or acceptance. When probing cannot prove a behavior, record UNKNOWN/BLOCKED and choose a more decisive approach; no recursive logging/hook/monkeypatch exploration without a demonstrated need.
+4. **Batch authorized steps intelligently:** group non-destructive, task-owned work within one scope; stop at a *real* security, code-write, schema, shared-data, cleanup, deploy or merge boundary. Do not seek multiple approvals for what was already approved, and do not infer new permission from adjacent work.
+5. **Demonstrate vertical value early:** for M0, prove login, canonical Person, authorized Organization context, true server-side enforcement, logout/revocation, native-bypass negatives and ultimately real UI/browser flows in the approved sequence. Compilation, route enumeration or mocks do not prove those outcomes.
+6. **Do the work within your own tools:** Technical Advisor directly handles available GitHub/source/evidence/research tasks. Delegate only inaccessible local runtime actions or independent testing. No redundant tasks or agents for already actionable work.
+7. **Protect actual security gates:** Mercur remains the engine and accepted Person/Organization/Option A boundaries remain. For changing native bearer replay, PlatformStaffGrant, ingress and token-transport findings consult the **current exact-SHA** status in [#217](https://github.com/DenizOner/DogruAdres/issues/217) and active PR. No CORS/private-ingress claim substitutes for real revocation; maintain blocked status where runtime proof is missing.
+8. **Hand off efficiently:** self-contained English Agent command with accepted behavior, relevant invariants, exact target root/branch/HEAD (or safe preflight), authorized file/data scope, relevant installed-doc paths, smallest acceptance/negative checks, stopping conditions and expected concise evidence. GitHub links are traceability, not default full-history reading assignments.
 
-8. **Maintain forward momentum without unnecessary handoffs.** Complete every independently authorized research, GitHub, evidence-reconciliation, review, documentation and planning action within the same work cycle. Do not pause after each sub-result, ask for approval already granted, or substitute a new draft command for work you can do directly. Escalate only when essential information is genuinely missing, when another party must perform an unavailable local or independent action, or when an explicit Product Owner decision is required for a real new permission boundary. At such a boundary, consolidate the decision and resource scope once; do not create a series of artificial micro-approvals. Never silently cross security, source-write, database, destructive or merge boundaries.
-
-**Evidence language:** distinguish SOURCE VERIFIED, AGENT-REPORTED execution, independently observed HTTP/SQL/browser evidence, SECURITY FAILED, NOT TESTED and BLOCKED. Every completed checkpoint must state what actually changed the product/architecture decision and what remains unknown. Historical records remain intact; this rule does not authorize D9-B2, any BFF implementation, core edits, migration, cleanup or a merge.
+**Report evidence precisely:** distinguish SOURCE VERIFIED, AGENT-REPORTED, independently reproduced HTTP/SQL/browser results, SECURITY FAILED, NOT TESTED and BLOCKED. Only actual commands, exit codes, test counts and exact target prove execution. Historical test and incident details belong to linked Issues, not permanent policy. No BFF/core implementation, database mutation, risky cleanup or merge authority is implied.
 
 ## 12B. Local resource custody and exact-target preflight (P0 workspace discipline)
 
-**Authority:** Product Owner instruction on 2026-10-21; canonical [P0 Issue #229](https://github.com/DenizOner/DogruAdres/issues/229). This is a mandatory local engineering preflight and retention rule, **not blanket permission to delete resources**.
+**Authority:** [P0 custody/recovery #229](https://github.com/DenizOner/DogruAdres/issues/229) as refined by the **later** [risk-based parallel workspace decision #216](https://github.com/DenizOner/DogruAdres/issues/216#issuecomment-6325812774). Default to an existing authorized workspace; a blanket single-worktree ban is **superseded**, but isolation, accurate evidence, data preservation and separate permissions remain mandatory.
 
-1. **Use one existing authorized worktree per active feature.** Before any code or test action, record and verify the canonical absolute filesystem path, `git rev-parse --show-toplevel`, exact full HEAD SHA, branch, common Git dir, remote repository and expected PR head, plus Docker container ID/database/volume and service PID/listener. Bind every HTTP/browser observation to the process's actual executable path and source checkout. Never report acceptance on a merely similarly named checkout, port or database.
-2. **A mismatched target is BLOCKED, not a repair instruction.** Do not switch branch, force fetch/pull, reset, restore, wipe untracked/ignored files, stop unrelated processes, or silently create another clone/worktree when preflight fails. Distinguish independent clone, main checkout, linked worktree, junction/reparse point, ordinary evidence directory and Docker mount before taking any action.
-3. **Default to reusing existing capacity.** No new local DogruAdres worktree, node_modules copy, container, volume or task-specific port without demonstrating why an existing *clean, correctly owned* environment is unsuitable, the expected size/resource cost, and an explicit scope authorization. Do not co-run independent Codex, Gemini or Claude agents against the same mutable worktree/DB without isolation and lock ownership.
-4. **Evidence before cleanup.** Keep a redacted inventory of all task-owned worktrees, branch/shas, ignored/untracked/unique artifacts, GitHub remote reachability, stashes/unpushed commits, active process/mount owners, DB/volumes and private proof/fixtures. GitHub stores tracked code but not necessarily ignored secrets, test DBs, local evidence or unpublished commits. A green `git status` alone is **insufficient** proof of reproducibility.
-5. **Two-phase, candidate-by-candidate retirement.** First read-only inventory/classification KEEP / ARCHIVE-REVIEW / SAFE CANDIDATE / UNKNOWN under Issue #229. Then delete **only** individually revalidated, reproducible, inactive, clean linked worktrees containing no unique ignored/untracked evidence, via normal `git worktree remove <exact-path>` without force, recording bytes recovered. Never delete a main worktree or an independent clone by automatic pattern. Risk, backup/restore uncertainty, inaccessible paths, unknown remote or active tasks mean KEEP. No global `git clean`, `reset --hard`, forced worktree removal, wildcard filesystem deletion or worktree prune as a shortcut.
-6. **Docker state has separate custody.** A source-tree removal **never** implies deleting containers, volumes, images or databases. Preserve all named PostgreSQL volumes by default; consider them only through an explicitly authorized, independently verified backup **and restore** pathway. No `docker system/volume prune`, `compose down -v` or broad cleanup.
-7. **Return resources promptly after accepted checkpoints.** Record the GitHub branch and private evidence manifest, stop only task-owned services when safe, and evaluate disposable code/dependency cache retirement against resource cost. No short-lived investigation can create a permanent 20+-checkout burden. Maintain one clearly designated active worktree and documented KEEP list.
+1. **Verify the real target before mutation.** For code operations check canonical absolute path, Git root/common-dir, branch, upstream/remote, full HEAD and dirty/index/untracked state. Before HTTP/browser/DB/migration work also verify the service PID/port, running checkout, database/container and real mounted volume. Only inspect resources relevant to the operation; documentation-only work does not require an artificial Docker survey. If anything conflicts, **STOP / WRONG TARGET**—never repair by guessing or silently switching branches.
+2. **Justify new resources.** Reuse existing branches/worktrees and capacity. New branch, linked worktree, dependency copy, container, database/volume or port needs a concrete review/isolation benefit, explicit authorized scope, named writer/owner and expiry/retirement plan. Extra agents or a new SHA alone are insufficient.
+3. **Enforce true parallel isolation.** One writing Agent per mutable worktree; one mutating owner per task database. Parallel mutating tasks need disjoint code ownership, no concurrent writes to shared generated/types, migrations, lockfiles or Git metadata, and separate task DB/volume/PID/ports. In conflict, serialize or make one reviewer read-only; never treat a common `.git` directory as physically independent.
+4. **Maintain a private redacted manifest** per active mutable task with realpath, Git common-dir/HEAD/upstream, owner, purpose, expected end, dirty/untracked/ignored scope, ports/PIDs, Docker Mounts/volume/database, secrets/fixtures classification and evidence/backup locations. Put no real secrets in GitHub. Recheck changed or high-risk boundaries, not every unchanged observation.
+5. **Preserve unknown and unique data.** Dirty files, ignored files, stashes, unique commits, archives, active process bindings, unknown Docker volumes, unreliable backup/restore evidence and user-owned data remain **KEEP** until individually verified. A clean `git status` or SQL dump existence does not prove recoverability. Database volume deletion requires separately authorized, verified backup **and restoration**.
+6. **Retire resources individually, never broadly.** Classify KEEP / REVIEW / SAFE CANDIDATE first. For fully verified clean inactive linked worktrees, use normal exact-path `git worktree remove` without force and record actual outcome; then separately review branch deletion. Never automate removal of main checkout, independent clone, shared Git metadata, unique evidence or Docker volumes. No broad `git clean`, hard reset, wildcard recursive deletion, `docker volume/system prune`, or `compose down -v`.
+7. **A failed removal is NOT success.** Check actual exit status/stderr and residual filesystem/Git entries; pause the cleanup batch on locked files, path, ownership or metadata mismatches. Reconcile actual root/worktree counts and disk bytes; don't retry with force/prune or infer removal from a smaller listing. Use [#229](https://github.com/DenizOner/DogruAdres/issues/229) for incident-specific Windows repair rules and unresolved recovery.
+8. **Return only task-owned resources** safely after accepted checkpoints; track remaining KEEP items and disposal eligibility. An unexpected checkout, API port, anon 401, SQL count or screenshot cannot prove acceptance against another exact PR SHA. Keep the #229 unresolved data-loss/recovery risk visible, rather than declaring the disk cleanup fully safe.
 
-8. **A failed removal is a partial mutation, never success.** Treat the actual final process exit status and complete stderr as authoritative; an intermediate zero, a smaller worktree list, or a `prunable` entry does not mean files were deleted. On `Directory not empty`, long-path warnings, registry/directory disagreement, or orphaned worktrees, freeze all further deletions in that batch, record the full residual directory contents and Git admin refs read-only, and reconcile against the previous manifest. Never automatically retry with `--force`, `prune`, `repair`, `robocopy /MIR`, broad `rd /s`, PowerShell recursive deletion, or OS-wide long-path settings. Escalate only an explicitly verified exact-path recovery procedure. Measure physically available disk bytes before and after, not apparent Bun hard-link sizes.
-9. **Reconcile inventory counts before retirement.** A top-level `Get-ChildItem D:\\ -Filter DogruAdres*` is not a recursive census, and `tree D:\\DogruAdres /A` does not include its sibling `D:\\DogruAdres-*` folders. Enumerate canonical absolute paths, distinguish top-level, nested, package-generated, junction and historical-only names, and reconcile any user-reported count discrepancy before further cleanup. Use directory-only tree output; do not write enormous all-files tree logs.
+These are operational precautions, **not** new permission to create fixtures, migrate data, delete storage, approve a PR or merge.
 
-**Safety distinction:** A read-only SQL count, anonymous 401, compiled module or UI screenshot from an unexpected checkout is not evidence for a different PR SHA. A revoked actor-binding may already be denied by a live binding gate even if an older credential row remains; classify observed outcomes separately from inferred security failure. This P0 resource policy takes precedence over new feature-worktree creation until the existing D: inventory is reconciled.
+## 13. One complete functional module and independent browser acceptance
 
-## 13. One complete functional module and agent-owned browser acceptance
+**Binding delivery order:** Identity / User / Organization (M0) first; Vehicle only after the required M0 acceptance, then approved next priorities. Deliver one **fully functional backend + frontend module** at a time, not disconnected backend and frontend batches. Source-only checkpoints are not finished product; separate foundational dependencies may progress only within their approved module scope.
 
-Binding Product Owner decision recorded by M0 on 2026-10-19: deliver one functional module at a time, including backend and frontend, rather than all backends followed by all frontends. Identity, User and Organization Management is active first, Vehicle second, then approved product priorities. Existing source-only work is preserved as evidence, not retroactively accepted. No different functional module may start implementation while the active module's mandatory acceptance remains open. Shared technical dependencies belong to its bounded plan and retain independent physical ownership.
+**Completion gate:** all applicable APPROVED functionality must work with real persistence, auth/authorization, HTTP/workflows, UI interactions, local atomic audit/outbox and related integrations, with necessary focused unit/integration/security/concurrency checks. A meaningful vertical browser-capable flow must be proved early, not postponed behind unverified backend layers. The full applicable requirement/role/UI/negative-case/browser/persistence matrix must have executed evidence and independent Technical Advisor acceptance before **MODULE COMPLETE**. An unimplemented or untested approved journey remains open; never silently drop or relabel it as deferred.
 
-A module is complete only after its entire applicable APPROVED business scope, domain data/persistence, authentication/authorization, real HTTP/workflows, UI interactions, canonical audit/outbox/integration and applicable unit/integration/security/concurrency testing are implemented and verified, all required real-browser journeys are executed by the Local Engineering Agent, and the Technical Advisor independently accepts it. Backend-only and frontend-only slices are internal checkpoints. Demonstrate an actual browser-capable vertical path at the earliest meaningful slice; do not accumulate unverified layers or postpone UI until all backend work is finished.
+**Independent E2E ownership:** Local Engineering Agent implements, verifies engineering preflight and repairs defects within authorized scope. ChatGPT Work Testing Agent (or another explicitly authorized independent tester) performs real-browser acceptance: authenticates synthetic users of each role, performs interactions, validates success and denial/empty/error states, refresh/reopen and backend persisted outcomes; verifies Organization isolation and revocation. Screenshots, mocks, static rendering, HTTP-only checks and invented browser outcomes are **not** browser acceptance. Real API/DB/security/concurrency evidence is still required at its own boundary. Without a supported independent browser environment mark **NOT TESTED / ENVIRONMENT BLOCKED**, never PASS.
 
-The Work Testing Agent must independently navigate the running application, authenticate synthetic users with relevant roles, execute real interactions, check visible success and rejection/validation/authorization/error/empty states, verify backend/persisted outcomes and refresh/reopen behavior, and retest after fixes. Cover cross-Organization isolation and role boundaries. Static renders, mock components, interaction-free screenshots, HTTP-only checks and simulated browser output are not browser acceptance. Technical invariants additionally need real API/database/security/concurrency evidence at the appropriate boundary.
-
-Maintain a traceable matrix: approved requirement → role → UI entry point → action → expected visible result → backend/persistence assertion → browser test → actual result → evidence. Every required row must have executed evidence before MODULE COMPLETE. Missing browser support is ENVIRONMENT BLOCKED/NOT TESTED. An incomplete row blocks acceptance; no approved function may be removed or silently reclassified as deferred. Open parameters and proposed scope stay explicit and must be resolved through the existing decision rights without inventing product behavior.
-
-Keep small reviewed checkpoints inside the active module, promptly fix confirmed defects within authorized scope and stop the affected feature on critical failure. Reuse valid historical evidence only within its original limits. Preserve module isolation, Policy A, canonical source-local audit/outbox atomicity and fail-closed gates. Major architecture/security transitions and module completion require Technical Advisor acceptance. M0 does not authorize UI implementation, public Vehicle CRUD, dependency/core changes, production/shared data operations or publication; each bounded checkpoint retains its explicit permissions.
-
-**Later approved testing ownership and separation:** In this project's active agent roles, the Codex Local Engineering Agent owns explicitly authorized implementation, focused tests, browser-capable engineering preflight and defect repair. The independent ChatGPT Work Testing Agent owns execution and evidence of real-browser end-to-end acceptance for every approved user-facing function. This is a later assignment of **who** performs independent acceptance and supersedes only the earlier reference in the AF-1 source that assigned all browser execution to the Local Engineering Agent; it does not relax any §13 browser, persistence, negative-case or module-completion requirements. The Technical Advisor independently reviews architecture/security and module acceptance; the Product Owner retains scope, decision and merge authority. If Work/browser capability is unavailable, report NOT TESTED or ENVIRONMENT BLOCKED and keep the module gate open.
+Keep small reviewable checkpoints and fix confirmed in-scope defects promptly. Respect separate physical modules, Policy A, atomic source-local audit/outbox and fail-closed authorization. M0 approval is **not blanket permission** for unrelated UI features, public Vehicle CRUD, framework/core changes, shared/production data changes or deployment; UI work expressly approved for a bounded M0 checkpoint remains permissible within that approval. Major security/architecture transition and final completion require independent review and actual Product Owner authorization where specified.
 
 <!-- BEGIN:turborepo-agent-rules -->
 
