@@ -1,70 +1,85 @@
 import {
   DEFAULT_MFA_PREFERENCES,
+  MFA_PLATFORM_MODES,
   InvalidMfaPolicyState,
   resolveMfaPolicy,
 } from "../mfa-policy"
 
-describe("M0 MFA platform and user preference precedence (#230)", () => {
-  it("defaults to platform ON and personal OFF without changing native factor state", () => {
-    expect(DEFAULT_MFA_PREFERENCES).toEqual({ platform_required: true, user_enabled: false })
+describe("M0 MFA three-mode platform and personal policy (#230)", () => {
+  it("defaults to required for everyone, personal opt-in off, without changing native state", () => {
+    expect(DEFAULT_MFA_PREFERENCES).toEqual({ platform_mode: "required", user_enabled: false })
+    expect(MFA_PLATFORM_MODES).toEqual(["required", "optional", "disabled"])
     expect(Object.isFrozen(DEFAULT_MFA_PREFERENCES)).toBe(true)
     expect(resolveMfaPolicy(undefined, undefined, false)).toEqual({
-      platform_required: true,
+      platform_mode: "required",
       user_enabled: false,
       native_factor_enabled: false,
       required: true,
+      user_control_allowed: false,
       next_step: "enroll_mfa",
       enforced_by: ["platform"],
     })
   })
 
-  it.each([
-    { platform: true, user: false, required: true, step: "enroll_mfa", enforced: ["platform"] },
-    { platform: true, user: true, required: true, step: "enroll_mfa", enforced: ["platform", "user"] },
-    { platform: false, user: true, required: true, step: "enroll_mfa", enforced: ["user"] },
-    { platform: false, user: false, required: false, step: "allow_primary", enforced: [] },
-  ] as const)("honors the four product preference cases: %p", ({platform, user, required, step, enforced}) => {
-    const decision = resolveMfaPolicy(platform, user, false)
-    expect(decision.required).toBe(required)
-    expect(decision.next_step).toBe(step)
-    expect(decision.enforced_by).toEqual(enforced)
+  // The full platform (3) × personal choice (2) × real native-factor state (2)
+  // matrix. The native challenge is not bypassed by a preference write.
+  const matrix = [
+    { mode: "required", user: false, native: false, required: true, control: false, step: "enroll_mfa", by: ["platform"] },
+    { mode: "required", user: true, native: false, required: true, control: false, step: "enroll_mfa", by: ["platform"] },
+    { mode: "required", user: false, native: true, required: true, control: false, step: "verify_mfa", by: ["platform", "native_factor"] },
+    { mode: "required", user: true, native: true, required: true, control: false, step: "verify_mfa", by: ["platform", "native_factor"] },
+    { mode: "optional", user: false, native: false, required: false, control: true, step: "allow_primary", by: [] },
+    { mode: "optional", user: true, native: false, required: true, control: true, step: "enroll_mfa", by: ["user"] },
+    { mode: "optional", user: false, native: true, required: true, control: true, step: "verify_mfa", by: ["native_factor"] },
+    { mode: "optional", user: true, native: true, required: true, control: true, step: "verify_mfa", by: ["user", "native_factor"] },
+    { mode: "disabled", user: false, native: false, required: false, control: false, step: "allow_primary", by: [] },
+    { mode: "disabled", user: true, native: false, required: false, control: false, step: "allow_primary", by: [] },
+    { mode: "disabled", user: false, native: true, required: true, control: false, step: "reconcile_native_factor", by: ["native_factor"] },
+    { mode: "disabled", user: true, native: true, required: true, control: false, step: "reconcile_native_factor", by: ["native_factor"] },
+  ] as const
+
+  it.each(matrix)("enforces $mode user=$user native=$native without implicit bypass", ({mode,user,native,required,control,step,by}) => {
+    const decision = resolveMfaPolicy(mode,user,native)
+    expect(decision).toEqual({
+      platform_mode: mode,
+      user_enabled: user,
+      native_factor_enabled: native,
+      required,
+      user_control_allowed: control,
+      next_step: step,
+      enforced_by: [...by],
+    })
+  })
+
+  it("does not let users disable mandatory MFA or enable platform-disabled MFA", () => {
+    expect(resolveMfaPolicy("required",false,false).next_step).toBe("enroll_mfa")
+    expect(resolveMfaPolicy("required",false,false).user_control_allowed).toBe(false)
+    expect(resolveMfaPolicy("disabled",true,false).required).toBe(false)
+    expect(resolveMfaPolicy("disabled",true,false).user_control_allowed).toBe(false)
+  })
+
+  it("requires secure native factor reconciliation before a disabled platform stops a live challenge", () => {
+    const pending = resolveMfaPolicy("disabled",false,true)
+    expect(pending.required).toBe(true)
+    expect(pending.next_step).toBe("reconcile_native_factor")
+    // Safely retiring a factor is a separate Medusa operation; only then can
+    // the platform be considered disabled with no effective MFA.
+    expect(resolveMfaPolicy("disabled",false,false).next_step).toBe("allow_primary")
   })
 
   it.each([
-    { platform: true, user: false },
-    { platform: true, user: true },
-    { platform: false, user: true },
-    { platform: false, user: false },
-  ])("cannot bypass a currently enabled native factor by disabling preferences: %p", ({platform,user}) => {
-    const result = resolveMfaPolicy(platform, user, true)
-    expect(result.required).toBe(true)
-    expect(result.next_step).toBe("verify_mfa")
-    expect(result.enforced_by).toContain("native_factor")
-    expect(result.native_factor_enabled).toBe(true)
+    ["true",false,false], [true,false,false], [false,false,false],
+    [null,false,false], [0,false,false], [{},false,false],
+    ["REQUIRED",false,false], ["unknown",false,false],
+    ["required","false",false], ["optional",1,false], ["disabled",null,false],
+    ["required",false,undefined], ["optional",false,null],
+    ["disabled",true,"false"], ["required",false,0],
+  ])("rejects invalid or corrupt setting / unknown native factor: %p", (mode,user,native) => {
+    expect(() => resolveMfaPolicy(mode,user,native)).toThrow(InvalidMfaPolicyState)
   })
 
-  it("never allows user opt-out to defeat platform enforcement", () => {
-    expect(resolveMfaPolicy(true, false, false).next_step).toBe("enroll_mfa")
-    expect(resolveMfaPolicy(true, false, true).next_step).toBe("verify_mfa")
-  })
-
-  it.each([
-    ["false", false, false],
-    [0, false, false],
-    [null, false, false],
-    [false, "true", false],
-    [false, {}, false],
-    [false, null, false],
-    [false, false, undefined],
-    [false, false, null],
-    [false, false, "false"],
-    [false, false, 0],
-  ])("fails closed instead of coercing corrupt or untrusted settings: %p", (platform,user,native) => {
-    expect(() => resolveMfaPolicy(platform,user,native)).toThrow(InvalidMfaPolicyState)
-  })
-
-  it("returns immutable evaluation results; no mutation is permitted", () => {
-    const result = resolveMfaPolicy(false,true,true)
+  it("returns an immutable, authorization-neutral policy decision", () => {
+    const result = resolveMfaPolicy("optional",true,true)
     expect(Object.isFrozen(result)).toBe(true)
     expect(Object.isFrozen(result.enforced_by)).toBe(true)
   })
