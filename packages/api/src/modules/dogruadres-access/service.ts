@@ -10,6 +10,8 @@ import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organiza
 import { randomBytes } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
 import { IdentitySessions, securitySql } from "./identity-session"
+import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
+import type { MfaPlatformMode } from "./mfa-policy"
 import { generateJwtToken } from "@medusajs/framework/utils"
 import { ActorDelegation } from './actor-delegation'
 import {AccountLinking,type VerifiedSecondary} from './account-linking'
@@ -214,6 +216,59 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalStaff(token: string, task: string, resource: string, @MedusaContext() context: Context = {}) {
     return new IdentitySessions(securitySql(context.transactionManager)).staff(token, task, resource)
+  }
+
+  /**
+   * Settings are always scoped to the current canonical Person. No Person or
+   * native actor selector is accepted from the client.
+   * This source path remains unreachable until MFA settings ingress is enabled.
+   */
+  @InjectTransactionManager()
+  async personalMfaSettings(token: string, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const session = await sessions.current(token)
+    if (!session) return null
+    const store = new MfaPersistence(sql)
+    const platform = await store.readPlatformPolicy()
+    const personal = await store.readPersonPreference(session.person_id)
+    const platformGrant = await sessions.staff(token, "security.mfa.manage", "platform")
+    return {
+      platform, personal,
+      can_manage_platform: !!platformGrant,
+      // Exact AuthIdentity native factor status is NOT inferred from preference.
+      native_factor_state: "unverified" as const,
+    }
+  }
+
+  @InjectTransactionManager()
+  async personalSetMfaPreference(token: string, enabled: boolean, expectedVersion: number, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const session = await sessions.current(token, true)
+    if (!session) return null
+    const store = new MfaPersistence(sql)
+    const policy = await store.readPlatformPolicy()
+    if (policy.platform_mode !== "optional") return null
+    const actor: MfaAuditActor = {
+      person_id: session.person_id,
+      actor_type: session.actor_type as MfaAuditActor["actor_type"],
+      actor_id: session.actor_id,
+    }
+    return store.setPersonPreference(session.person_id, enabled, expectedVersion, actor)
+  }
+
+  @InjectTransactionManager()
+  async personalSetPlatformMfaMode(token: string, mode: MfaPlatformMode, expectedVersion: number, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const staff = await new IdentitySessions(sql).staff(token, "security.mfa.manage", "platform")
+    if (!staff) return null
+    const actor: MfaAuditActor = {
+      person_id: staff.person_id,
+      actor_type: staff.actor_type as MfaAuditActor["actor_type"],
+      actor_id: staff.actor_id,
+    }
+    return new MfaPersistence(sql).setPlatformPolicy(mode, expectedVersion, actor)
   }
 
   @InjectTransactionManager()
