@@ -6,7 +6,7 @@ import { hashInvitationToken } from "../security"
 // Isolated method doubles test context/cardinality/error propagation, NOT SQL
 // rollback or the trigger. No module/container/bootstrap/database is initialized.
 function fixture() {
-  const context = { transactionManager: { execute: jest.fn(async () => []) } } as unknown as Context
+  const context = { transactionManager: { execute: jest.fn(async () => []), flush: jest.fn(async () => undefined) } } as unknown as Context
   const service = Object.create(AccessService.prototype) as AccessService
   const audits = jest.fn(async (data: Record<string, unknown>[], _context?: Context) => data.map((event, index) => ({ ...event, id: `audit_${index}` })))
   const outbox = jest.fn(async (data: Record<string, unknown>[], _context?: Context) => data.map((event, index) => ({ ...event, id: `outbox_${index}` })))
