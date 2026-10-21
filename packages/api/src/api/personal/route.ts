@@ -45,8 +45,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <form id="challenge" hidden><label>Doğrulama kodu<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label><button>İkinci faktörü doğrula</button></form>
   <section id="mfa-enrollment" hidden>
     <h2>MFA ilk kurulumu</h2>
-    <p>Girişin devamı için ikinci faktör kurulumu zorunludur. Bu geçici oturumda kuruluş, üyelik veya platform yetkisi yoktur.</p>
-    <form id="mfa-enroll-start"><label>E-posta<input name="email" type="email" autocomplete="username" required></label>
+    <p>Kurulum için mevcut hesabınızın parolasını yeniden doğrulayın. Daha önce başlanmış kurulum, aynı kimlik doğrulama uygulamasındaki kodla sürdürülebilir.</p>
+    <form id="mfa-enroll-start"><label>Kurulum işlemi<select name="setup_action">
+      <option value="start">Yeni TOTP kurulumu</option>
+      <option value="resume">Yarım kalan TOTP kurulumuna devam</option>
+    </select></label><label>E-posta<input name="email" type="email" autocomplete="username" required></label>
       <label>Parolanızı yeniden girin<input name="password" type="password" autocomplete="current-password" required></label>
       <button>Kurulum kodu oluştur</button></form>
     <p id="mfa-enroll-secret" role="status" aria-live="polite"></p>
@@ -56,6 +59,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   </section>
   <section id="workspace" hidden><p id="person"></p>
   <h2>Güvenlik ve MFA ayarları</h2><p id="mfa-info" role="status" aria-live="polite">MFA ayarları henüz etkin değil.</p>
+  <button id="mfa-enroll-launch" hidden type="button">TOTP doğrulama uygulamasını kur</button>
   <form id="mfa-person" hidden><label>Kişisel MFA tercihim
     <select name="user_enabled"><option value="false">Kapalı</option><option value="true">Açık</option></select>
   </label><p>Yalnız platformun “Seçime bağlı” modunda değiştirilebilir. Tercih, TOTP faktörünü tek başına kurmaz veya devre dışı bırakmaz.</p><button>Tercihimi kaydet</button></form>
@@ -78,6 +82,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     try{
       const data=await api('mfa');mfaState=data;
       el('mfa-person').hidden=false;el('mfa-platform').hidden=!data.can_manage_platform;
+      el('mfa-enroll-launch').hidden=data.platform.platform_mode==='disabled'||data.native_factor_state==='enabled';
       el('mfa-person').elements.user_enabled.value=String(data.personal.user_enabled);
       el('mfa-platform').elements.platform_mode.value=data.platform.platform_mode;
       el('mfa-person').elements.user_enabled.disabled=data.platform.platform_mode!=='optional';
@@ -88,6 +93,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('mfa-info').textContent='Platform: '+names[data.platform.platform_mode]+'. '+states[data.native_factor_state]+'. Hedef durum: '+progress[data.effective_mfa_target.next_step]+'. MFA politikası oturum akışına henüz uygulanmıyor.';
     }catch{
       mfaState=null;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;
+      el('mfa-enroll-launch').hidden=true;
       el('mfa-info').textContent='MFA ayarları henüz hizmete açılmadı.';
     }
   }
@@ -111,7 +117,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
     }catch{}
   }
-  async function load(){try{const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;mfaState=null;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
+  async function load(){try{const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';mfaState=null;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
   async function updateMfaForm(form,body){
     const button=form.querySelector('button');button.disabled=true;
     try{
@@ -136,16 +142,28 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       expected_version:mfaState.platform.version,
     });
   };
+  el('mfa-enroll-launch').onclick=()=>{
+    if(!mfaState||mfaState.platform.platform_mode==='disabled'||mfaState.native_factor_state==='enabled')return;
+    el('workspace').hidden=true;el('mfa-enrollment').hidden=false;
+    el('mfa-enroll-start').hidden=false;el('mfa-enroll-verify').hidden=true;
+    el('mfa-enroll-start').reset();el('mfa-enroll-start').querySelector('button').disabled=false;
+    el('mfa-enroll-secret').textContent='';
+    el('mfa-enroll-start').elements.setup_action.value=mfaState.native_factor_state==='pending'?'resume':'start';
+    status('Kuruluma başlamak veya devam etmek için parolanızı yeniden girin.');
+  };
   el('mfa-enroll-start').onsubmit=async e=>{
     e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;
     try{
-      const data=await api('mfa/enroll',{method:'POST',body:JSON.stringify({
-        action:'start',...Object.fromEntries(new FormData(e.target)),
-      })});
+      const values=Object.fromEntries(new FormData(e.target));
+      const action=values.setup_action;
+      delete values.setup_action;
+      const data=await api('mfa/enroll',{method:'POST',body:JSON.stringify({action,...values})});
       e.target.reset();
-      el('mfa-enroll-secret').textContent='Doğrulama uygulamanıza bu tek seferlik anahtarı girin: '+data.secret;
+      el('mfa-enroll-secret').textContent=data.resumed
+        ? 'Önceki kimlik doğrulama uygulamanızdaki kodu girin. Önceki kurulum anahtarı tekrar gösterilemez.'
+        : 'Tek seferlik kurulum anahtarı veya bağlantısı: '+(data.secret||data.otpauth_url);
       el('mfa-enroll-verify').hidden=false;
-      status('TOTP kurulumu başladı. Anahtar yalnız bu ekranda gösterilir; doğrulama gereklidir.');
+      status('TOTP doğrulaması gerekiyor. İşlemi tamamlamadan yeni yetki verilmez.');
     }catch(err){status(err.message);if(!err.uncertain)button.disabled=false}
   };
   el('mfa-enroll-verify').onsubmit=async e=>{
@@ -172,7 +190,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         el('login').hidden=true;el('mfa-enrollment').hidden=false;
         el('mfa-enroll-start').hidden=false;el('mfa-enroll-verify').hidden=true;
         el('mfa-enroll-secret').textContent='';
-        status('MFA kurulumuna devam etmek için parolanızı yeniden doğrulayın.');
+        el('mfa-enroll-start').reset();el('mfa-enroll-start').querySelector('button').disabled=false;
+        status('MFA kurulumuna başlamak veya yarım kalan kuruluma devam etmek için parolanızı yeniden doğrulayın.');
       }else await load();
     }catch(e){status(e.message)}finally{button.disabled=false}
   };
