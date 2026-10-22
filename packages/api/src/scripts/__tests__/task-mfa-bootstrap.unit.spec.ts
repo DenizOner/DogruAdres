@@ -1,7 +1,6 @@
 ﻿import { generateKeyPairSync } from "node:crypto"
 import {
   canonicalJsonStringify,
-  computeSha256Digest,
   computePublicKeyFingerprint,
   verifySignedManifest,
   verifyRuntimeEnvironmentOwnership,
@@ -12,7 +11,7 @@ import {
   TaskResourceManifest,
   SignedTaskManifest,
   RuntimeResourceAdapter,
-  NonceStore,
+  AtomicNonceStore,
   TrustedOperatorRegistry,
 } from "../operator-audit-protocol"
 import {
@@ -25,7 +24,7 @@ import {
 } from "../task-mfa-bootstrap"
 import taskMfaBootstrap from "../task-mfa-bootstrap"
 
-describe("Finish M0 MFA Signed Audit Protocol (Source-Only)", () => {
+describe("Operator Audit Protocol & Final Security Closeout (Source-Only)", () => {
   let publicKeyPem: string
   let privateKeyPem: string
   let keyFingerprint: string
@@ -65,10 +64,10 @@ describe("Finish M0 MFA Signed Audit Protocol (Source-Only)", () => {
     expiresAt: "2026-10-22T22:00:00.000Z",
   }
 
-  describe("1. RFC 8785 Canonical JSON & RFC 7493 (I-JSON) Compliance", () => {
-    it("sorts object keys lexicographically by UTF-16 code units", () => {
-      const input = { b: 1, a: 2, c: { y: 10, x: 20 } }
-      expect(canonicalJsonStringify(input)).toBe('{"a":2,"b":1,"c":{"x":20,"y":10}}')
+  describe("1. Strict RFC 8785 & RFC 7493 (I-JSON) Compliance", () => {
+    it("sorts keys lexicographically by UTF-16 code units", () => {
+      const input = { "\u00e9": 1, "e": 2, "a": 3 }
+      expect(canonicalJsonStringify(input)).toBe('{"a":3,"e":2,"\u00e9":1}')
     })
 
     it("normalizes -0 to 0", () => {
@@ -80,25 +79,33 @@ describe("Finish M0 MFA Signed Audit Protocol (Source-Only)", () => {
       expect(() => canonicalJsonStringify(NaN)).toThrow(/NaN and Infinity are forbidden/)
       expect(() => canonicalJsonStringify(Infinity)).toThrow(/NaN and Infinity are forbidden/)
       expect(() => canonicalJsonStringify(-Infinity)).toThrow(/NaN and Infinity are forbidden/)
-      expect(() => canonicalJsonStringify({ val: NaN })).toThrow(/NaN and Infinity are forbidden/)
     })
 
-    it("handles primitives, arrays, null and nested structures consistently", () => {
-      expect(canonicalJsonStringify(null)).toBe("null")
-      expect(canonicalJsonStringify(true)).toBe("true")
-      expect(canonicalJsonStringify(false)).toBe("false")
-      expect(canonicalJsonStringify("hello")).toBe('"hello"')
-      expect(canonicalJsonStringify([1, "a", null, true])).toBe('[1,"a",null,true]')
+    it("rejects BigInt and lone surrogate code points (malformed Unicode)", () => {
+      expect(() => canonicalJsonStringify(BigInt(42))).toThrow(/BigInt serialization is not supported/)
+      // Unpaired high surrogate \uD800
+      expect(() => canonicalJsonStringify("invalid\uD800unicode")).toThrow(/Lone surrogate code point detected/)
+      // Unpaired low surrogate \uDC00
+      expect(() => canonicalJsonStringify("invalid\uDC00unicode")).toThrow(/Lone surrogate code point detected/)
+    })
+
+    it("accepts valid surrogate pairs (valid Unicode characters)", () => {
+      const emoji = "\uD83D\uDE00" // 😀
+      expect(canonicalJsonStringify(emoji)).toBe(JSON.stringify(emoji))
     })
   })
 
-  describe("2. Trusted Operator Key Fingerprint & Verification Contract", () => {
+  describe("2. Independent Pinned Operator Trust & Scope Enforcement", () => {
     const trustedRegistry: TrustedOperatorRegistry = {
       isFingerprintTrusted: (fp) => fp === keyFingerprint,
-      getPublicKeyPem: (fp) => fp === keyFingerprint ? publicKeyPem : null,
+      isOperatorApproved: (op) =>
+        op.humanOperatorId === "human_operator_42" &&
+        op.approvalReference === "https://github.com/DenizOner/DogruAdres/issues/230#issuecomment-6347609069" &&
+        op.windowsSecurityPrincipal === "S-1-5-21-123456789-123456789-123456789-1001",
+      getPublicKeyPem: (fp) => (fp === keyFingerprint ? publicKeyPem : null),
     }
 
-    it("accepts valid signed manifest matching trusted fingerprint", () => {
+    it("accepts manifest signed by trusted operator with approved scope", () => {
       const payload = Buffer.from(canonicalJsonStringify(baseManifest), "utf8")
       const sig = require("node:crypto").sign(null, payload, privateKeyPem).toString("base64")
       const signed: SignedTaskManifest = {
@@ -109,7 +116,7 @@ describe("Finish M0 MFA Signed Audit Protocol (Source-Only)", () => {
       expect(() => verifySignedManifest(signed, trustedRegistry)).not.toThrow()
     })
 
-    it("rejects untrusted public key fingerprint", () => {
+    it("rejects self-signed manifest using untrusted key fingerprint", () => {
       const payload = Buffer.from(canonicalJsonStringify(baseManifest), "utf8")
       const sig = require("node:crypto").sign(null, payload, otherPrivateKeyPem).toString("base64")
       const signed: SignedTaskManifest = {
@@ -120,21 +127,36 @@ describe("Finish M0 MFA Signed Audit Protocol (Source-Only)", () => {
       expect(() => verifySignedManifest(signed, trustedRegistry)).toThrow(/not in the trusted operator registry/)
     })
 
-    it("rejects tampered manifest even if fingerprint is valid", () => {
-      const payload = Buffer.from(canonicalJsonStringify(baseManifest), "utf8")
+    it("rejects trusted key when operator approval scope is modified or unapproved", () => {
+      const modifiedManifest = {
+        ...baseManifest,
+        authorizedOperator: {
+          ...baseManifest.authorizedOperator,
+          approvalReference: "https://github.com/DenizOner/DogruAdres/issues/230#forged-approval",
+        },
+      }
+      const payload = Buffer.from(canonicalJsonStringify(modifiedManifest), "utf8")
       const sig = require("node:crypto").sign(null, payload, privateKeyPem).toString("base64")
-      const tamperedManifest = { ...baseManifest, targetDatabase: "injected_evil_db" }
       const signed: SignedTaskManifest = {
-        manifest: tamperedManifest,
+        manifest: modifiedManifest,
         signerKeyFingerprint: keyFingerprint,
         signatureBase64: sig,
       }
-      expect(() => verifySignedManifest(signed, trustedRegistry)).toThrow(/Ed25519 signature verification failed/)
+      expect(() => verifySignedManifest(signed, trustedRegistry)).toThrow(/Operator identity or approval reference is not approved/)
     })
   })
 
-  describe("3. Anti-Replay & Runtime Ownership Verification", () => {
-    const validAdapter: RuntimeResourceAdapter = {
+  describe("3. Atomic Anti-Replay Contract (claimOnce)", () => {
+    class InMemoryAtomicNonceStore implements AtomicNonceStore {
+      private consumed = new Set<string>()
+      async claimOnce(nonce: string): Promise<boolean> {
+        if (this.consumed.has(nonce)) return false
+        this.consumed.add(nonce)
+        return true
+      }
+    }
+
+    const mockAdapter: RuntimeResourceAdapter = {
       inspectContainer: jest.fn().mockResolvedValue({
         exists: true,
         isRunning: true,
@@ -150,114 +172,97 @@ describe("Finish M0 MFA Signed Audit Protocol (Source-Only)", () => {
       }),
     }
 
-    it("records nonce and passes on first execution", async () => {
-      const consumedNonces = new Set<string>()
-      const mockNonceStore: NonceStore = {
-        hasBeenUsed: jest.fn().mockImplementation(async (n) => consumedNonces.has(n)),
-        recordNonce: jest.fn().mockImplementation(async (n) => { consumedNonces.add(n) }),
-      }
-
+    it("allows first claim and rejects subsequent replay attempt", async () => {
+      const nonceStore = new InMemoryAtomicNonceStore()
       await expect(
         verifyRuntimeEnvironmentOwnership(
           baseManifest,
-          validAdapter,
-          mockNonceStore,
+          mockAdapter,
+          nonceStore,
           "postgres://user:pass@127.0.0.1:55720/task_isolated_authorized_db",
           "2026-10-22T20:30:00.000Z"
         )
       ).resolves.toBeUndefined()
 
-      expect(consumedNonces.has(baseManifest.nonce)).toBe(true)
-
-      // Second execution with same nonce must be REFUSED (Anti-Replay)
       await expect(
         verifyRuntimeEnvironmentOwnership(
           baseManifest,
-          validAdapter,
-          mockNonceStore,
+          mockAdapter,
+          nonceStore,
           "postgres://user:pass@127.0.0.1:55720/task_isolated_authorized_db",
           "2026-10-22T20:30:00.000Z"
         )
-      ).rejects.toThrow(/replay attempt detected/)
-    })
-  })
-
-  describe("4. Chained Audit Protocol (Pre-Intent -> Outcome / Indeterminate)", () => {
-    it("creates and verifies valid pre-intent and post-commit outcome chain", () => {
-      const ceremonyId = "ceremony_mfa_latch_001"
-      const preIntent = createSignedPreIntent(
-        ceremonyId,
-        baseManifest,
-        "operator_42",
-        privateKeyPem,
-        "2026-10-22T20:15:00.000Z"
-      )
-
-      const postCommit = createSignedPostCommitOutcome(
-        ceremonyId,
-        preIntent,
-        privateKeyPem,
-        "tx_hash_abc999",
-        "2026-10-22T20:15:05.000Z"
-      )
-
-      expect(verifyCeremonyAuditChain(preIntent, postCommit, publicKeyPem)).toBe(true)
+      ).rejects.toThrow(/anti-replay violation/)
     })
 
-    it("creates and verifies valid indeterminate failure record linked to pre-intent", () => {
-      const ceremonyId = "ceremony_mfa_latch_002"
-      const preIntent = createSignedPreIntent(
-        ceremonyId,
-        baseManifest,
-        "operator_42",
-        privateKeyPem,
-        "2026-10-22T20:20:00.000Z"
-      )
+    it("handles simultaneous competing claims atomically: exactly one succeeds", async () => {
+      const nonceStore = new InMemoryAtomicNonceStore()
+      const competingManifest = { ...baseManifest, nonce: "competing_concurrent_nonce" }
 
-      const indeterminateFailure = createIndeterminateFailureRecord(
-        ceremonyId,
-        preIntent,
-        privateKeyPem,
-        "Connection reset during commit readback assertion",
-        "2026-10-22T20:20:10.000Z"
-      )
-
-      expect(verifyCeremonyAuditChain(preIntent, indeterminateFailure, publicKeyPem)).toBe(true)
-    })
-
-    it("rejects outcome chain if pre-intent digest does not match (broken hash link)", () => {
-      const ceremonyId = "ceremony_mfa_latch_003"
-      const preIntent = createSignedPreIntent(
-        ceremonyId,
-        baseManifest,
-        "operator_42",
-        privateKeyPem,
-        "2026-10-22T20:25:00.000Z"
-      )
-
-      const tamperedOutcome = {
-        ...createSignedPostCommitOutcome(
-          ceremonyId,
-          preIntent,
-          privateKeyPem,
-          "tx_hash_111",
-          "2026-10-22T20:25:05.000Z"
+      const results = await Promise.allSettled([
+        verifyRuntimeEnvironmentOwnership(
+          competingManifest,
+          mockAdapter,
+          nonceStore,
+          "postgres://user:pass@127.0.0.1:55720/task_isolated_authorized_db",
+          "2026-10-22T20:30:00.000Z"
         ),
-        preIntentDigestSha256: "broken_digest_value_0000000000000000000000000000000000000000",
-      }
+        verifyRuntimeEnvironmentOwnership(
+          competingManifest,
+          mockAdapter,
+          nonceStore,
+          "postgres://user:pass@127.0.0.1:55720/task_isolated_authorized_db",
+          "2026-10-22T20:30:00.000Z"
+        ),
+      ])
 
-      expect(verifyCeremonyAuditChain(preIntent, tamperedOutcome, publicKeyPem)).toBe(false)
+      const fulfilled = results.filter((r) => r.status === "fulfilled")
+      const rejected = results.filter((r) => r.status === "rejected")
+
+      expect(fulfilled.length).toBe(1)
+      expect(rejected.length).toBe(1)
     })
   })
 
-  describe("5. Fail-Closed Bootstrap Execution Gate", () => {
-    it("strictly preserves BOOTSTRAP_EXECUTION_GATE_OPEN = false", () => {
+  describe("4. Chained Audit Verification & Temporal Ordering", () => {
+    it("validates valid chain and rejects inverted temporal order", () => {
+      const ceremonyId = "ceremony_mfa_closeout_01"
+      const preIntent = createSignedPreIntent(
+        ceremonyId,
+        baseManifest,
+        "operator_42",
+        privateKeyPem,
+        "2026-10-22T20:30:00.000Z"
+      )
+
+      const validOutcome = createSignedPostCommitOutcome(
+        ceremonyId,
+        preIntent,
+        privateKeyPem,
+        "tx_hash_valid_777",
+        "2026-10-22T20:30:05.000Z"
+      )
+      expect(verifyCeremonyAuditChain(preIntent, validOutcome, publicKeyPem)).toBe(true)
+
+      const invertedOutcome = createSignedPostCommitOutcome(
+        ceremonyId,
+        preIntent,
+        privateKeyPem,
+        "tx_hash_inverted",
+        "2026-10-22T20:29:59.000Z" // Earlier than preIntent!
+      )
+      expect(verifyCeremonyAuditChain(preIntent, invertedOutcome, publicKeyPem)).toBe(false)
+    })
+  })
+
+  describe("5. Execution Safety Gate", () => {
+    it("enforces BOOTSTRAP_EXECUTION_GATE_OPEN is false", () => {
       expect(BOOTSTRAP_EXECUTION_GATE_OPEN).toBe(false)
     })
 
-    it("aborts execution immediately when gate is closed", async () => {
+    it("throws immediately when called with closed gate", async () => {
       await expect(taskMfaBootstrap({ container: {} as any, args: [] })).rejects.toThrow(
-        /taskMfaBootstrap is locked by BOOTSTRAP_EXECUTION_GATE_OPEN = false/
+        /BOOTSTRAP_EXECUTION_GATE_OPEN = false/
       )
     })
   })

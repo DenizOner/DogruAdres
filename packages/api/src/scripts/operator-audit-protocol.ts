@@ -6,8 +6,10 @@
  *
  * Rules:
  * - Reject NaN, Infinity, -Infinity.
+ * - Reject lone surrogate code points in strings (malformed UTF-16 Unicode).
  * - Reject numbers outside the IEEE 754 safe integer range if non-integers, or numbers that lose precision.
- * - Reject undefined, symbols, functions in structures where values are expected.
+ * - Reject unsupported types (BigInt, symbols, functions).
+ * - Normalize -0 to 0.
  * - Sort object keys lexicographically by UTF-16 code units.
  */
 export function canonicalJsonStringify(val: unknown): string {
@@ -15,14 +17,20 @@ export function canonicalJsonStringify(val: unknown): string {
   if (typeof val === "boolean") return val ? "true" : "false"
   if (typeof val === "number") {
     if (!Number.isFinite(val)) {
-      throw new Error("RFC 8785 / I-JSON: NaN and Infinity are forbidden in canonical JSON")
+      throw new Error("RFC 8785: NaN and Infinity are forbidden in canonical JSON")
     }
-    // Check -0 normalization to 0
     if (Object.is(val, -0)) return "0"
     return String(val)
   }
   if (typeof val === "string") {
+    // Check for lone surrogate code points (unpaired surrogates)
+    if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(val)) {
+      throw new Error("RFC 8785: Lone surrogate code point detected in string (invalid Unicode)")
+    }
     return JSON.stringify(val)
+  }
+  if (typeof val === "bigint") {
+    throw new Error("RFC 8785: BigInt serialization is not supported in canonical JSON")
   }
   if (Array.isArray(val)) {
     const elements = val.map((item) => {
@@ -39,7 +47,6 @@ export function canonicalJsonStringify(val: unknown): string {
     }
     const record = val as Record<string, unknown>
     const keys = Object.keys(record).sort((a, b) => {
-      // Lexicographical UTF-16 code unit comparison
       const len = Math.min(a.length, b.length)
       for (let i = 0; i < len; i++) {
         const codeA = a.charCodeAt(i)
@@ -53,9 +60,9 @@ export function canonicalJsonStringify(val: unknown): string {
     for (const key of keys) {
       const v = record[key]
       if (v === undefined || typeof v === "symbol" || typeof v === "function") {
-        continue // RFC 8785 ignores keys with undefined/symbol values
+        continue
       }
-      entries.push(JSON.stringify(key) + ":" + canonicalJsonStringify(v))
+      entries.push(canonicalJsonStringify(key) + ":" + canonicalJsonStringify(v))
     }
     return "{" + entries.join(",") + "}"
   }
@@ -67,7 +74,6 @@ export function computeSha256Digest(data: string | Buffer): string {
 }
 
 export function computePublicKeyFingerprint(publicKeyPem: string): string {
-  // Normalize PEM string
   const cleanPem = publicKeyPem.trim().replace(/\r\n/g, "\n")
   return computeSha256Digest(cleanPem)
 }
@@ -80,8 +86,8 @@ export interface OperatorIdentity {
 
 export interface TaskResourceManifest {
   readonly manifestVersion: string
-  readonly runId: string // Unique identifier for the specific execution run
-  readonly nonce: string // Anti-replay nonce
+  readonly runId: string
+  readonly nonce: string
   readonly taskEnvironmentId: string
   readonly targetDatabase: string
   readonly targetHost: string
@@ -96,7 +102,7 @@ export interface TaskResourceManifest {
 
 export interface SignedTaskManifest {
   readonly manifest: TaskResourceManifest
-  readonly signerKeyFingerprint: string // SHA-256 fingerprint of the authorized public key
+  readonly signerKeyFingerprint: string
   readonly signatureBase64: string
 }
 
@@ -107,18 +113,22 @@ export interface RuntimeResourceAdapter {
   getOperatorPrincipal(): Promise<{ windowsPrincipal: string }>
 }
 
-export interface NonceStore {
-  hasBeenUsed(nonce: string): Promise<boolean>
-  recordNonce(nonce: string, runId: string, expiresAt: string): Promise<void>
+/**
+ * Atomic anti-replay contract.
+ * Replaces separate hasBeenUsed + recordNonce checks to prevent race conditions.
+ */
+export interface AtomicNonceStore {
+  claimOnce(nonce: string, runId: string, expiresAt: string): Promise<boolean>
 }
 
 export interface TrustedOperatorRegistry {
   isFingerprintTrusted(fingerprint: string): boolean
+  isOperatorApproved(operator: OperatorIdentity): boolean
   getPublicKeyPem(fingerprint: string): string | null
 }
 
 /**
- * Verifies Ed25519 signature and pinned operator public-key fingerprint.
+ * Verifies Ed25519 signature and pinned operator public-key fingerprint and authorization scope.
  */
 export function verifySignedManifest(
   signedManifest: SignedTaskManifest,
@@ -126,10 +136,19 @@ export function verifySignedManifest(
 ): void {
   const { manifest, signerKeyFingerprint, signatureBase64 } = signedManifest
 
+  // 1. Verify fingerprint trust
   if (!trustedRegistry.isFingerprintTrusted(signerKeyFingerprint)) {
     throw new Error(`REFUSED: Signer key fingerprint "${signerKeyFingerprint}" is not in the trusted operator registry`)
   }
 
+  // 2. Verify operator authorization scope
+  if (!trustedRegistry.isOperatorApproved(manifest.authorizedOperator)) {
+    throw new Error(
+      `REFUSED: Operator identity or approval reference is not approved in trusted registry: ${manifest.authorizedOperator.humanOperatorId} (${manifest.authorizedOperator.approvalReference})`
+    )
+  }
+
+  // 3. Retrieve pinned public key
   const publicKeyPem = trustedRegistry.getPublicKeyPem(signerKeyFingerprint)
   if (!publicKeyPem) {
     throw new Error(`REFUSED: Public key for fingerprint "${signerKeyFingerprint}" could not be retrieved`)
@@ -140,6 +159,7 @@ export function verifySignedManifest(
     throw new Error("REFUSED: Public key does not match claimed fingerprint")
   }
 
+  // 4. Canonical serialization & signature verification
   let canonicalPayload: Buffer
   try {
     canonicalPayload = Buffer.from(canonicalJsonStringify(manifest), "utf8")
@@ -155,12 +175,12 @@ export function verifySignedManifest(
 }
 
 /**
- * Verifies runtime target alignment and enforces anti-replay.
+ * Verifies runtime target alignment and enforces atomic anti-replay.
  */
 export async function verifyRuntimeEnvironmentOwnership(
   manifest: TaskResourceManifest,
   adapter: RuntimeResourceAdapter,
-  nonceStore: NonceStore,
+  nonceStore: AtomicNonceStore,
   connectionString: string,
   nowIso: string = new Date().toISOString()
 ): Promise<void> {
@@ -172,10 +192,10 @@ export async function verifyRuntimeEnvironmentOwnership(
     throw new Error(`REFUSED: Manifest is expired or not yet valid (now: ${nowIso}, valid: ${manifest.issuedAt} to ${manifest.expiresAt})`)
   }
 
-  // Anti-replay check
-  const alreadyUsed = await nonceStore.hasBeenUsed(manifest.nonce)
-  if (alreadyUsed) {
-    throw new Error(`REFUSED: Nonce "${manifest.nonce}" has already been consumed (replay attempt detected)`)
+  // Atomic claim check
+  const claimed = await nonceStore.claimOnce(manifest.nonce, manifest.runId, manifest.expiresAt)
+  if (!claimed) {
+    throw new Error(`REFUSED: Nonce "${manifest.nonce}" has already been consumed or claim conflicted (anti-replay violation)`)
   }
 
   // Git SHA verification
@@ -215,16 +235,11 @@ export async function verifyRuntimeEnvironmentOwnership(
   if (!dbInfo.isExclusive) {
     throw new Error(`REFUSED: Target database "${dbInfo.dbName}" has active concurrent client sessions`)
   }
-
-  // Record nonce usage
-  await nonceStore.recordNonce(manifest.nonce, manifest.runId, manifest.expiresAt)
 }
 
 // ---------------------------------------------------------------------------
 // Audit Trail Protocol (Pre-transaction Intent -> Post-commit / Indeterminate)
 // ---------------------------------------------------------------------------
-
-export type CeremonyPhase = "PRE_INTENT" | "POST_COMMIT" | "INDETERMINATE"
 
 export interface SignedPreIntent {
   readonly recordVersion: "1.0.0"
@@ -329,11 +344,19 @@ export function verifyCeremonyAuditChain(
   const isPreValid = verify(null, Buffer.from(canonicalJsonStringify(preBody), "utf8"), publicKeyPem, Buffer.from(preSig, "base64"))
   if (!isPreValid) return false
 
-  // 2. Verify SHA-256 link
+  // 2. Verify ceremonyId match
+  if (preIntent.ceremonyId !== outcome.ceremonyId) return false
+
+  // 3. Verify temporal order: outcome must not precede preIntent
+  const preTime = new Date(preIntent.plannedTimestamp).getTime()
+  const outTime = new Date("verifiedAt" in outcome ? outcome.verifiedAt : outcome.failedAt).getTime()
+  if (isNaN(preTime) || isNaN(outTime) || outTime < preTime) return false
+
+  // 4. Verify SHA-256 cryptographic link
   const expectedDigest = computeSha256Digest(canonicalJsonStringify(preIntent))
   if (outcome.preIntentDigestSha256 !== expectedDigest) return false
 
-  // 3. Verify outcome signature
+  // 5. Verify outcome signature
   const { signatureBase64: outSig, ...outBody } = outcome
   return verify(null, Buffer.from(canonicalJsonStringify(outBody), "utf8"), publicKeyPem, Buffer.from(outSig, "base64"))
 }

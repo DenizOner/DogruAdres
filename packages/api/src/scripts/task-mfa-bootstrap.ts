@@ -14,8 +14,8 @@ import {
 
 /**
  * Execution gate switch.
- * The task bootstrap runner is DELIBERATELY DISABLED until an authorized,
- * independently audited environment and signed manifest are formally commissioned.
+ * The task bootstrap runner is DELIBERATELY DISABLED (BLOCKED) until an authorized,
+ * independently audited environment and pinned operator manifest are formally commissioned.
  */
 export const BOOTSTRAP_EXECUTION_GATE_OPEN = false
 
@@ -197,10 +197,10 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
   const manifestPath = process.env.M0_RESOURCE_MANIFEST_PATH
   const evidenceDir = process.env.M0_FIXTURE_EVIDENCE_DIR
   const outputFilenameRaw = process.env.M0_BOOTSTRAP_OUTPUT_FILE || "task-mfa-users.private.json"
-  const trustedPublicKeyPath = process.env.M0_OPERATOR_PUBLIC_KEY_PATH
+  const trustedRegistryPath = process.env.M0_TRUSTED_REGISTRY_PATH
 
-  if (!manifestPath || !evidenceDir || !trustedPublicKeyPath) {
-    throw new Error("REFUSED: Missing M0_RESOURCE_MANIFEST_PATH, M0_FIXTURE_EVIDENCE_DIR, or M0_OPERATOR_PUBLIC_KEY_PATH")
+  if (!manifestPath || !evidenceDir || !trustedRegistryPath) {
+    throw new Error("REFUSED: Missing M0_RESOURCE_MANIFEST_PATH, M0_FIXTURE_EVIDENCE_DIR, or M0_TRUSTED_REGISTRY_PATH")
   }
 
   const safeOutputFilename = validateSafeBasename(outputFilenameRaw)
@@ -214,16 +214,12 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     throw new Error(`REFUSED: Cannot read or parse resource manifest from ${manifestPath}: ${String(err)}`)
   }
 
-  let trustedPublicKeyPem: string
+  let trustedRegistry: TrustedOperatorRegistry
   try {
-    trustedPublicKeyPem = await (await import("node:fs/promises")).readFile(trustedPublicKeyPath, "utf8")
+    const registryRaw = await (await import("node:fs/promises")).readFile(trustedRegistryPath, "utf8")
+    trustedRegistry = JSON.parse(registryRaw) as TrustedOperatorRegistry
   } catch (err: unknown) {
-    throw new Error(`REFUSED: Cannot read trusted operator public key from ${trustedPublicKeyPath}: ${String(err)}`)
-  }
-
-  const trustedRegistry: TrustedOperatorRegistry = {
-    isFingerprintTrusted: (fp: string) => fp === signedManifest.signerKeyFingerprint,
-    getPublicKeyPem: (fp: string) => fp === signedManifest.signerKeyFingerprint ? trustedPublicKeyPem : null,
+    throw new Error(`REFUSED: Cannot read trusted operator registry from ${trustedRegistryPath}: ${String(err)}`)
   }
 
   validateTargetAgainstManifest(targetUrl, signedManifest.manifest, trustedRegistry, signedManifest)
