@@ -101,8 +101,11 @@ async function run(){
         "PASS Medusa native MFA: synthetic password proof, TOTP start and verify",
         "PASS Medusa native MFA: recovery code consumed exactly once",
         "PASS Medusa native MFA: enabled factor cannot be disabled without fresh challenge",
+        "PASS Medusa native MFA challenge: TOTP, owner separation and completed-challenge replay rejection",
+        "PASS Medusa native MFA challenge: recovery code consumed and denied on a fresh challenge",
+        "PASS Medusa native MFA challenge: five failed attempts lock the challenge",
       ])assert.ok(passed.includes(evidence),"Missing real native MFA acceptance evidence")
-      process.stdout.write("PASS exact-DB Medusa native MFA: TOTP, recovery replay and disable challenge\n")
+      process.stdout.write("PASS exact-DB Medusa native MFA: TOTP, recovery, native challenges and attempt cap\n")
     }finally{
       await target.close()
     }
