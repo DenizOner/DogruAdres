@@ -23,7 +23,9 @@ const dbName="mfa_cli_ci_"+randomBytes(8).toString("hex")
 const dbUrl=new URL(adminUrl)
 dbUrl.pathname="/"+dbName
 const secrets=[0,1,2].map(()=>randomBytes(48).toString("hex"))
-const flags=["db:migrate","--skip-links","--skip-scripts","--skip-search"]
+// Native medusa exec initializes core defaults requiring its built-in link tables.
+// Execute only non-destructive link sync in this fresh, random task DB.
+const flags=["db:migrate","--execute-safe-links","--skip-scripts","--skip-search"]
 const sanitized=(value:string)=>value
   .replace(/postgres(?:ql)?:\/\/[^\s"']+/gi,"postgres://[redacted]")
   .replaceAll(adminUrl.password,"[redacted]")
