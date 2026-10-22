@@ -1,4 +1,5 @@
 import { GET, POST } from "../mfa/route"
+import { GET as PersonalPageGET } from "../route"
 import { access, csrf, enabled, sessionToken } from "../security"
 
 jest.mock("../security", () => ({
@@ -82,6 +83,16 @@ describe("M0 MFA platform and personal settings ingress", () => {
     expect(inactive.json).toHaveBeenCalledWith(expect.objectContaining({
       runtime_enforcement:"not_yet_enabled",
     }))
+  })
+  it("personal HTML consumes validated runtime status instead of claiming MFA is always inactive",async()=>{
+    const res:any={status:jest.fn().mockReturnThis(),setHeader:jest.fn(),
+      type:jest.fn().mockReturnThis(),send:jest.fn().mockReturnThis()}
+    await PersonalPageGET({} as any,res)
+    const html=String(res.send.mock.calls[0][0])
+    expect(html).toContain("data.runtime_enforcement!=='enforced'")
+    expect(html).toContain("data.runtime_enforcement==='enforced'")
+    expect(html).toContain("MFA oturum kapsamı denetimi etkin.")
+    expect(html).toContain("MFA politikası oturum akışına henüz uygulanmıyor.")
   })
   it("rejects current session absence, never discloses platform or Person",async()=>{
     store.personalMfaSettings.mockResolvedValue(null)
