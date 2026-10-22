@@ -1,0 +1,52 @@
+name: "Ürün / mimari karar önerisi"
+description: "Onay gerektiren kararı, kanıtı ve seçenekleri tek kanonik Issue'da değerlendirin."
+title: "[KARAR ÖNERİSİ] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Bu form yeni bir kararı otomatik onaylamaz. Mevcut DA-*/ADR-* kayıtlarıyla çakışma ve geçersiz kalma ilişkilerini belirtin.
+        Kalıcı karar yalnız Ürün Sahibinin açık onayı ve kapsamı kaydedilince ACCEPTED olur.
+  - type: input
+    id: code
+    attributes:
+      label: "Karar kimliği (varsa)"
+      placeholder: "Örn. DA-... veya ADR-...; bilinmiyorsa boş bırakın"
+    validations:
+      required: false
+  - type: dropdown
+    id: status
+    attributes:
+      label: "Karar durumu"
+      options:
+        - "PROPOSED — onay bekliyor"
+        - "OPEN — araştırma sürüyor"
+        - "DEFERRED — ertelendi"
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: "Sorun, bağlam ve doğrulanmış kanıtlar"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Seçenekler, hazır platform çözümü ve öneri"
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: "Güvenlik, veri, maliyet, sürüm yükseltme etkisi"
+      description: "Ücretli hizmet yasaktır; karar başka kayıtları geçersiz kılıyorsa açıkça yazın."
+    validations:
+      required: true
+  - type: textarea
+    id: approval
+    attributes:
+      label: "Onay yetkisi, bağımlılıklar ve kabul/ret kriterleri"
+      description: "Kim karar verecek, hangi kanıt beklenecek ve hangi işler yetki dışı?"
+    validations:
+      required: true
