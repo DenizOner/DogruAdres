@@ -10,6 +10,7 @@ import {
   TaskResourceManifest,
   verifySignedManifest,
   createTrustedOperatorRegistry,
+  PinnedOperatorApproval,
   TrustedOperatorRegistry,
 } from "./operator-audit-protocol"
 
@@ -19,6 +20,13 @@ import {
  * independently audited environment and pinned operator manifest are formally commissioned.
  */
 export const BOOTSTRAP_EXECUTION_GATE_OPEN = false
+
+/**
+ * No operator key, identity or execution target has been independently
+ * commissioned. Do not initialize this from a manifest, path or environment
+ * variable. It requires a separately approved, source-reviewed runtime controller.
+ */
+export const INDEPENDENT_PINNED_OPERATOR_APPROVAL: PinnedOperatorApproval | null = null
 
 export const FORBIDDEN_DATABASE_PATTERNS: ReadonlyArray<RegExp> = [
   /^m0ssi_a7f1$/i,
@@ -219,7 +227,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
   try {
     const registryRaw = await (await import("node:fs/promises")).readFile(trustedRegistryPath, "utf8")
     const parsedRegistry = JSON.parse(registryRaw)
-    trustedRegistry = createTrustedOperatorRegistry(parsedRegistry)
+    trustedRegistry = createTrustedOperatorRegistry(parsedRegistry, INDEPENDENT_PINNED_OPERATOR_APPROVAL)
   } catch (err: unknown) {
     throw new Error(`REFUSED: Cannot construct validated operator registry from ${trustedRegistryPath}: ${String(err)}`)
   }

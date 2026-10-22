@@ -142,7 +142,29 @@ export interface TrustedRegistryData {
   readonly operators: TrustedOperatorEntry[]
 }
 
+/**
+ * Scope-specific approval supplied by an independently authorized controller.
+ * This object must never be derived from the candidate registry, manifest,
+ * operator-controlled environment variables or an unverified local file.
+ */
+export interface PinnedOperatorApproval {
+  readonly trustDomain: "dogruadres-m0-mfa"
+  readonly operatorId: string
+  readonly windowsPrincipal: string
+  readonly approvalReference: string
+  readonly keyFingerprint: string
+  readonly taskEnvironmentId: string
+  readonly targetDatabase: string
+  readonly targetCommitSha: string
+  readonly validFrom: string
+  readonly validUntil: string
+}
+
 export interface TrustedOperatorRegistry {
+  getApprovedSignerPublicKey(
+    signerKeyFingerprint: string,
+    manifest: TaskResourceManifest
+  ): string | null
   isFingerprintTrusted(fingerprint: string): boolean
   isOperatorApproved(operator: OperatorIdentity): boolean
   getPublicKeyPem(fingerprint: string): string | null
@@ -154,8 +176,22 @@ export interface TrustedOperatorRegistry {
  */
 export function createTrustedOperatorRegistry(
   data: unknown,
-  expectedTrustDomain: string = "dogruadres-m0-mfa"
+  independentlyPinned: PinnedOperatorApproval | null,
+  nowIso: string = new Date().toISOString()
 ): TrustedOperatorRegistry {
+  if (!independentlyPinned) {
+    throw new Error("REFUSED: No independently pinned operator authorization is available")
+  }
+  if (independentlyPinned.trustDomain !== "dogruadres-m0-mfa") {
+    throw new Error("REFUSED: Pinned approval trust domain is invalid")
+  }
+  const now = Date.parse(nowIso)
+  const validFrom = Date.parse(independentlyPinned.validFrom)
+  const validUntil = Date.parse(independentlyPinned.validUntil)
+  if (!Number.isFinite(now) || !Number.isFinite(validFrom) || !Number.isFinite(validUntil) ||
+      validFrom >= validUntil || now < validFrom || now > validUntil) {
+    throw new Error("REFUSED: Independently pinned operator authorization is invalid or expired")
+  }
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error("REFUSED: Trusted registry data must be a non-null object")
   }
@@ -163,11 +199,11 @@ export function createTrustedOperatorRegistry(
   if (reg.registrySchemaVersion !== "1.0.0") {
     throw new Error(`REFUSED: Unsupported registry schema version: ${reg.registrySchemaVersion}`)
   }
-  if (reg.trustDomain !== expectedTrustDomain) {
-    throw new Error(`REFUSED: Trust domain mismatch: expected "${expectedTrustDomain}", got "${reg.trustDomain}"`)
+  if (reg.trustDomain !== independentlyPinned.trustDomain) {
+    throw new Error("REFUSED: Trust domain mismatch with independent approval")
   }
-  if (!Array.isArray(reg.operators) || reg.operators.length === 0) {
-    throw new Error("REFUSED: Trusted registry contains no approved operator entries")
+  if (!Array.isArray(reg.operators) || reg.operators.length !== 1) {
+    throw new Error("REFUSED: Exactly one independently approved operator entry is required")
   }
 
   const operatorMap = new Map<string, TrustedOperatorEntry>()
@@ -181,7 +217,14 @@ export function createTrustedOperatorRegistry(
       !op.windowsPrincipal ||
       !op.approvalReference ||
       !op.publicKeyPem ||
-      !op.keyFingerprint
+      !op.keyFingerprint ||
+      typeof op.operatorId !== "string" ||
+      typeof op.windowsPrincipal !== "string" ||
+      typeof op.approvalReference !== "string" ||
+      typeof op.publicKeyPem !== "string" ||
+      typeof op.keyFingerprint !== "string" ||
+      typeof op.validFrom !== "string" ||
+      typeof op.validUntil !== "string"
     ) {
       throw new Error("REFUSED: Malformed operator entry in trusted registry")
     }
@@ -191,11 +234,42 @@ export function createTrustedOperatorRegistry(
       throw new Error(`REFUSED: Key fingerprint mismatch for operator "${op.operatorId}"`)
     }
 
+    const entryFrom = Date.parse(op.validFrom)
+    const entryUntil = Date.parse(op.validUntil)
+    if (!Number.isFinite(entryFrom) || !Number.isFinite(entryUntil) || entryFrom >= entryUntil ||
+        now < entryFrom || now > entryUntil) {
+      throw new Error("REFUSED: Operator entry has invalid or expired validity interval")
+    }
+    if (
+      op.operatorId !== independentlyPinned.operatorId ||
+      op.windowsPrincipal.toLowerCase() !== independentlyPinned.windowsPrincipal.toLowerCase() ||
+      op.approvalReference !== independentlyPinned.approvalReference ||
+      op.keyFingerprint.toLowerCase() !== independentlyPinned.keyFingerprint.toLowerCase() ||
+      op.validFrom !== independentlyPinned.validFrom ||
+      op.validUntil !== independentlyPinned.validUntil
+    ) {
+      throw new Error("REFUSED: Operator registry is not bound to the independent approval")
+    }
     operatorMap.set(op.operatorId, op)
     fingerprintMap.set(op.keyFingerprint.toLowerCase(), op)
   }
 
   return {
+    getApprovedSignerPublicKey(signerKeyFingerprint: string, manifest: TaskResourceManifest): string | null {
+      const approvedOperator = manifest.authorizedOperator
+      if (
+        signerKeyFingerprint.toLowerCase() !== independentlyPinned.keyFingerprint.toLowerCase() ||
+        approvedOperator.humanOperatorId !== independentlyPinned.operatorId ||
+        approvedOperator.windowsSecurityPrincipal.toLowerCase() !== independentlyPinned.windowsPrincipal.toLowerCase() ||
+        approvedOperator.approvalReference !== independentlyPinned.approvalReference ||
+        manifest.taskEnvironmentId !== independentlyPinned.taskEnvironmentId ||
+        manifest.targetDatabase !== independentlyPinned.targetDatabase ||
+        manifest.targetCommitSha.toLowerCase() !== independentlyPinned.targetCommitSha.toLowerCase()
+      ) {
+        return null
+      }
+      return fingerprintMap.get(signerKeyFingerprint.toLowerCase())?.publicKeyPem ?? null
+    },
     isFingerprintTrusted(fingerprint: string): boolean {
       return fingerprintMap.has(fingerprint.toLowerCase())
     },
@@ -237,19 +311,11 @@ export function verifySignedManifest(
 ): void {
   const { manifest, signerKeyFingerprint, signatureBase64 } = signedManifest
 
-  if (!trustedRegistry.isFingerprintTrusted(signerKeyFingerprint)) {
-    throw new Error(`REFUSED: Signer key fingerprint "${signerKeyFingerprint}" is not in the trusted operator registry`)
-  }
-
-  if (!trustedRegistry.isOperatorApproved(manifest.authorizedOperator)) {
-    throw new Error(
-      `REFUSED: Operator identity or approval reference is not approved in trusted registry: ${manifest.authorizedOperator.humanOperatorId} (${manifest.authorizedOperator.approvalReference})`
-    )
-  }
-
-  const publicKeyPem = trustedRegistry.getPublicKeyPem(signerKeyFingerprint)
+  // Signature key and asserted operator must belong to ONE independently
+  // approved entry, including the exact authorized task and commit scope.
+  const publicKeyPem = trustedRegistry.getApprovedSignerPublicKey(signerKeyFingerprint, manifest)
   if (!publicKeyPem) {
-    throw new Error(`REFUSED: Public key for fingerprint "${signerKeyFingerprint}" could not be retrieved`)
+    throw new Error("REFUSED: Signer key and operator do not match independently pinned authorization scope")
   }
 
   const calculatedFingerprint = computePublicKeyFingerprint(publicKeyPem)

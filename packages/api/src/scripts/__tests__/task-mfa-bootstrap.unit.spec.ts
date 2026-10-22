@@ -14,6 +14,7 @@ import {
   RuntimeResourceAdapter,
   AtomicNonceStore,
   TrustedRegistryData,
+  PinnedOperatorApproval,
 } from "../operator-audit-protocol"
 import {
   validateSafeBasename,
@@ -118,6 +119,19 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
   })
 
   describe("2. Pure TrustedOperatorRegistry Factory & Data Validation", () => {
+    const pinnedApproval = (): PinnedOperatorApproval => ({
+      trustDomain: "dogruadres-m0-mfa",
+      operatorId: "human_operator_42",
+      windowsPrincipal: "S-1-5-21-123456789-123456789-123456789-1001",
+      approvalReference: "https://github.com/DenizOner/DogruAdres/issues/230#issuecomment-6347609069",
+      keyFingerprint,
+      taskEnvironmentId: "task_env_20261022_clean",
+      targetDatabase: "task_isolated_authorized_db",
+      targetCommitSha: "dd22989ab67b590a5cbb00a26cfc7c7393f6b5ba",
+      validFrom: "2026-10-22T00:00:00Z",
+      validUntil: "2026-10-23T00:00:00Z",
+    })
+    const testNow = "2026-10-22T20:30:00Z"
     const validRegistryData: TrustedRegistryData = {
       registrySchemaVersion: "1.0.0",
       trustDomain: "dogruadres-m0-mfa",
@@ -147,7 +161,7 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       }
       const rawJsonBytes = Buffer.from(JSON.stringify(concreteRegistryData), "utf8")
       const parsed = JSON.parse(rawJsonBytes.toString("utf8"))
-      const registry = createTrustedOperatorRegistry(parsed)
+      const registry = createTrustedOperatorRegistry(parsed, pinnedApproval(), testNow)
 
       expect(registry.isFingerprintTrusted(keyFingerprint)).toBe(true)
       expect(registry.isOperatorApproved(baseManifest.authorizedOperator)).toBe(true)
@@ -162,14 +176,73 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       expect(() => verifySignedManifest(signed, registry)).not.toThrow()
     })
 
+    it("refuses candidate JSON without an independently pinned authorization", () => {
+      const candidate = {
+        ...validRegistryData,
+        operators: [{
+          ...validRegistryData.operators[0],
+          publicKeyPem,
+          keyFingerprint,
+        }],
+      }
+      expect(() => createTrustedOperatorRegistry(candidate, null, testNow)).toThrow(/No independently pinned/)
+    })
+
+    it("refuses a self-signed but unauthorized registry and cross-operator claims", () => {
+      const candidate = {
+        ...validRegistryData,
+        operators: [{
+          ...validRegistryData.operators[0],
+          publicKeyPem,
+          keyFingerprint,
+        }],
+      }
+      const swapped = {
+        ...candidate,
+        operators: [{ ...candidate.operators[0], publicKeyPem: otherPublicKeyPem, keyFingerprint: otherKeyFingerprint }],
+      }
+      expect(() => createTrustedOperatorRegistry(swapped, pinnedApproval(), testNow)).toThrow(/independent approval/)
+      const registry = createTrustedOperatorRegistry(candidate, pinnedApproval(), testNow)
+      const wrongOperator = {
+        ...baseManifest,
+        authorizedOperator: { ...baseManifest.authorizedOperator, humanOperatorId: "other_approved_operator" },
+      }
+      const signature = require("node:crypto").sign(
+        null, Buffer.from(canonicalJsonStringify(wrongOperator), "utf8"), privateKeyPem
+      ).toString("base64")
+      expect(() => verifySignedManifest({
+        manifest: wrongOperator, signerKeyFingerprint: keyFingerprint, signatureBase64: signature,
+      }, registry)).toThrow(/Signer key and operator do not match/)
+    })
+
+    it("rejects expired and altered approval scope, extra operator entries", () => {
+      const candidate = {
+        ...validRegistryData,
+        operators: [{
+          ...validRegistryData.operators[0],
+          publicKeyPem,
+          keyFingerprint,
+        }],
+      }
+      expect(() => createTrustedOperatorRegistry(candidate, pinnedApproval(), "2026-10-24T20:30:00Z"))
+        .toThrow(/invalid or expired/)
+      expect(() => createTrustedOperatorRegistry(candidate, {
+        ...pinnedApproval(), approvalReference: "https://github.com/unauthorized"
+      }, testNow)).toThrow(/independent approval/)
+      expect(() => createTrustedOperatorRegistry({
+        ...candidate,
+        operators: [...candidate.operators, { ...candidate.operators[0], operatorId: "another_operator" }],
+      }, pinnedApproval(), testNow)).toThrow(/Exactly one/)
+    })
+
     it("rejects registry with wrong trust domain or schema version", () => {
-      expect(() => createTrustedOperatorRegistry({ registrySchemaVersion: "2.0.0" })).toThrow(/Unsupported registry schema version/)
+      expect(() => createTrustedOperatorRegistry({ registrySchemaVersion: "2.0.0" }, pinnedApproval(), testNow)).toThrow(/Unsupported registry schema version/)
       expect(() =>
         createTrustedOperatorRegistry({
           registrySchemaVersion: "1.0.0",
           trustDomain: "wrong-domain",
           operators: [],
-        })
+        }, pinnedApproval(), testNow)
       ).toThrow(/Trust domain mismatch/)
     })
 
@@ -189,7 +262,7 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
           },
         ],
       }
-      expect(() => createTrustedOperatorRegistry(corruptData)).toThrow(/Key fingerprint mismatch for operator/)
+      expect(() => createTrustedOperatorRegistry(corruptData, pinnedApproval(), testNow)).toThrow(/Key fingerprint mismatch for operator/)
     })
   })
 
