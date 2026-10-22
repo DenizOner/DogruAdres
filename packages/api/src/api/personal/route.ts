@@ -202,7 +202,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});
       csrf=data.csrf_token;e.target.reset();
       if(data.challenge_required){
-        el('login').hidden=true;el('challenge').hidden=false;status('İkinci faktör gerekli');
+        el('login').hidden=true;el('challenge').hidden=false;
+        // Form reset does not fire change; sync the TOTP/recovery validator on every new challenge.
+        el('challenge').elements.method.onchange();status('İkinci faktör gerekli');
       }else if(data.enrollment_required){
         el('login').hidden=true;el('mfa-enrollment').hidden=false;
         el('mfa-enroll-start').hidden=false;el('mfa-enroll-verify').hidden=true;
