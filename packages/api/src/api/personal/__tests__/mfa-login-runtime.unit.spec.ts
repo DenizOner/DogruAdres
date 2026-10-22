@@ -171,6 +171,16 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
     expect(r.status).toHaveBeenCalledWith(401)
     expect(service.openPersonalSession).not.toHaveBeenCalled()
   })
+  it("does not mint any session if pending native factor meets disabled platform policy",async()=>{
+    ;(readNativeMfaSummary as jest.Mock).mockResolvedValue({enabled:false,state:"pending"})
+    service.personalLoginMfaDecision.mockRejectedValue(Error("Access denied"))
+    const res=await call()
+    expect(service.personalLoginMfaDecision).toHaveBeenCalledWith("auth_self","pending")
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(service.openPersonalSession).not.toHaveBeenCalled()
+    expect(bindServerActor).not.toHaveBeenCalled()
+    expect(res.cookie).not.toHaveBeenCalled()
+  })
   it("issues setup-only session for an unfinished pending TOTP after password proof",async()=>{
     ;(readNativeMfaSummary as jest.Mock).mockResolvedValue({enabled:false,state:"pending"})
     const res=await call()
