@@ -1,4 +1,5 @@
 import { POST } from "../challenge/route"
+import { GET as PersonalPageGET } from "../route"
 import { access,enabled,sessionToken,trustedOrigin,secureCookies } from "../security"
 import { bindServerActor } from "../server-actor"
 import { csrfToken } from "../../../modules/dogruadres-access/identity-session"
@@ -40,6 +41,14 @@ describe("M0 native MFA challenge and single-use recovery method",()=>{
     await POST(req,res)
     return res
   }
+  it("resynchronizes browser TOTP/recovery code input rules after a previous form reset",async()=>{
+    const res:any={setHeader:jest.fn(),type:jest.fn().mockReturnThis(),
+      status:jest.fn().mockReturnThis(),send:jest.fn().mockReturnThis()}
+    await PersonalPageGET({} as any,res)
+    const html=String(res.send.mock.calls[0][0])
+    expect(html).toContain("el('challenge').elements.method.onchange();")
+    expect(html).toContain("field.pattern=recovery?'[A-Za-z0-9-]{8,128}':'[0-9]{6}'")
+  })
   it("accepts existing six digit TOTP input without a method (backwards compatible)",async()=>{
     const r=await call({code:"123456"})
     expect(native.verifyAuthMfaChallenge).toHaveBeenCalledWith({
