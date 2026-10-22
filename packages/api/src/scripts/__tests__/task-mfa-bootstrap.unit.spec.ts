@@ -1,107 +1,152 @@
 ﻿import {
-  validateEnvironmentSafety,
-  verifyPreconditions,
-  PROTECTED_ENVIRONMENTS,
-  TaskBootstrapManifest,
+  validateSafeBasename,
+  validatePathSecurity,
+  validateTargetAgainstManifest,
+  verifyCleanPreconditions,
+  FORBIDDEN_DATABASE_NAMES,
+  TaskResourceManifest,
 } from "../task-mfa-bootstrap"
 
-describe("task-mfa-bootstrap safety guards", () => {
-  const validManifest: TaskBootstrapManifest = {
-    allowedHost: "127.0.0.1",
-    allowedPort: "55720",
-    allowedDatabase: "mfa_e2e_isolated_authorized",
-    evidenceDir: "C:\\Users\\Deniz\\.mfa-e2e-evidence-authorized",
-    outputSecretFilename: "bootstrap.private.json",
+describe("task-mfa-bootstrap hardened security guards", () => {
+  const validManifest: TaskResourceManifest = {
+    manifestVersion: "1.0.0",
+    taskEnvironmentId: "task_env_20261022_clean",
+    targetDatabase: "mfa_e2e_isolated_authorized",
+    targetHost: "127.0.0.1",
+    targetPort: "55720",
+    targetContainerName: "dogruadres-mfa-e2e-isolated-pg",
+    targetVolumeName: "dogruadres-mfa-e2e-isolated-data",
+    authorizedOperator: "task_agent",
   }
 
-  const cwd = "D:\\DogruAdres-m0-session-vertical-20261020"
+  describe("validateSafeBasename", () => {
+    it("accepts valid alphanumeric basenames", () => {
+      expect(validateSafeBasename("valid-file.json")).toBe("valid-file.json")
+      expect(validateSafeBasename("output_123.private.json")).toBe("output_123.private.json")
+    })
 
-  it("accepts a fully authorized, matching target URL", () => {
-    const url = new URL("postgres://user:pass@127.0.0.1:55720/mfa_e2e_isolated_authorized")
-    expect(() => validateEnvironmentSafety(url, validManifest, cwd)).not.toThrow()
+    it("rejects traversal patterns and path separators", () => {
+      expect(() => validateSafeBasename("../evil.json")).toThrow(/not a strict safe basename/)
+      expect(() => validateSafeBasename("foo/bar.json")).toThrow(/not a strict safe basename/)
+      expect(() => validateSafeBasename("foo\\bar.json")).toThrow(/not a strict safe basename/)
+      expect(() => validateSafeBasename("..")).toThrow(/not a strict safe basename/)
+      expect(() => validateSafeBasename("")).toThrow(/non-empty string/)
+    })
   })
 
-  it.each(PROTECTED_ENVIRONMENTS)(
-    "strictly refuses protected environment %s:%s/%s",
-    (env) => {
-      const url = new URL(`postgres://user:pass@${env.hostname}:${env.port}/${env.database}`)
-      const manifest: TaskBootstrapManifest = {
+  describe("validateTargetAgainstManifest", () => {
+    it("accepts a fully authorized matching target", () => {
+      const url = new URL("postgres://user:pass@127.0.0.1:55720/mfa_e2e_isolated_authorized")
+      expect(() => validateTargetAgainstManifest(url, validManifest)).not.toThrow()
+    })
+
+    it.each([...FORBIDDEN_DATABASE_NAMES])(
+      "strictly refuses forbidden database name: %s regardless of host and port",
+      (forbiddenDb) => {
+        const url = new URL(`postgres://user:pass@127.0.0.1:55799/${forbiddenDb}`)
+        const manifest: TaskResourceManifest = {
+          ...validManifest,
+          targetDatabase: forbiddenDb,
+          targetPort: "55799",
+        }
+        expect(() => validateTargetAgainstManifest(url, manifest)).toThrow(
+          /is on the prohibited\/protected list/
+        )
+      }
+    )
+
+    it("refuses non-loopback endpoints", () => {
+      const url = new URL("postgres://user:pass@192.168.1.50:55720/mfa_e2e_isolated_authorized")
+      const manifest: TaskResourceManifest = {
         ...validManifest,
-        allowedHost: env.hostname,
-        allowedPort: env.port,
-        allowedDatabase: env.database,
+        targetHost: "192.168.1.50",
       }
-      expect(() => validateEnvironmentSafety(url, manifest, cwd)).toThrow(
-        /REFUSED: Target matches protected environment/
-      )
-    }
-  )
-
-  it("refuses when database name does not match manifest", () => {
-    const url = new URL("postgres://user:pass@127.0.0.1:55720/wrong_database")
-    expect(() => validateEnvironmentSafety(url, validManifest, cwd)).toThrow(
-      /does not match authorized manifest/
-    )
-  })
-
-  it("refuses when port does not match manifest", () => {
-    const url = new URL("postgres://user:pass@127.0.0.1:55799/mfa_e2e_isolated_authorized")
-    expect(() => validateEnvironmentSafety(url, validManifest, cwd)).toThrow(
-      /does not match authorized manifest/
-    )
-  })
-
-  it("refuses when evidence dir is inside workspace", () => {
-    const url = new URL("postgres://user:pass@127.0.0.1:55720/mfa_e2e_isolated_authorized")
-    const manifestInside: TaskBootstrapManifest = {
-      ...validManifest,
-      evidenceDir: "D:\\DogruAdres-m0-session-vertical-20261020\\.evidence",
-    }
-    expect(() => validateEnvironmentSafety(url, manifestInside, cwd)).toThrow(
-      /Evidence directory must reside outside repository worktree/
-    )
-  })
-
-  describe("preconditions verification", () => {
-    it("refuses if database already has users", async () => {
-      const mockDb: any = {
-        query: jest.fn().mockResolvedValueOnce({ rows: [{ cnt: 1 }] }),
-      }
-      await expect(verifyPreconditions(mockDb)).rejects.toThrow(
-        /already contains 1 User records/
+      expect(() => validateTargetAgainstManifest(url, manifest)).toThrow(
+        /not an allowed local loopback endpoint/
       )
     })
 
-    it("refuses if database already has auth identities", async () => {
-      const mockDb: any = {
+    it("refuses when database does not match manifest", () => {
+      const url = new URL("postgres://user:pass@127.0.0.1:55720/other_db")
+      expect(() => validateTargetAgainstManifest(url, validManifest)).toThrow(/Database mismatch/)
+    })
+
+    it("refuses when host does not match manifest", () => {
+      const url = new URL("postgres://user:pass@localhost:55720/mfa_e2e_isolated_authorized")
+      expect(() => validateTargetAgainstManifest(url, validManifest)).toThrow(/Host mismatch/)
+    })
+
+    it("refuses when port does not match manifest", () => {
+      const url = new URL("postgres://user:pass@127.0.0.1:55721/mfa_e2e_isolated_authorized")
+      expect(() => validateTargetAgainstManifest(url, validManifest)).toThrow(/Port mismatch/)
+    })
+  })
+
+  describe("validatePathSecurity", () => {
+    it("refuses when evidence dir is inside workspace", async () => {
+      const cwd = "D:\\DogruAdres-m0-session-vertical-20261020"
+      const insideDir = "D:\\DogruAdres-m0-session-vertical-20261020\\packages"
+      await expect(validatePathSecurity(insideDir, cwd)).rejects.toThrow(
+        /resides inside worktree/
+      )
+    })
+
+    it("refuses non-existent evidence directory", async () => {
+      const cwd = "D:\\DogruAdres-m0-session-vertical-20261020"
+      await expect(
+        validatePathSecurity("C:\\nonexistent_dir_20261022_9999", cwd)
+      ).rejects.toThrow(/does not exist or cannot be accessed/)
+    })
+  })
+
+  describe("verifyCleanPreconditions", () => {
+    it("refuses when any target table already has records", async () => {
+      const mockDbUsers: any = {
+        query: jest.fn().mockResolvedValueOnce({ rows: [{ cnt: 1 }] }),
+      }
+      await expect(verifyCleanPreconditions(mockDbUsers)).rejects.toThrow(
+        /already contains 1 User records/
+      )
+
+      const mockDbAuth: any = {
         query: jest
           .fn()
           .mockResolvedValueOnce({ rows: [{ cnt: 0 }] })
           .mockResolvedValueOnce({ rows: [{ cnt: 2 }] }),
       }
-      await expect(verifyPreconditions(mockDb)).rejects.toThrow(
+      await expect(verifyCleanPreconditions(mockDbAuth)).rejects.toThrow(
         /already contains 2 AuthIdentity records/
       )
-    })
 
-    it("refuses if database already has login bindings", async () => {
-      const mockDb: any = {
+      const mockDbBindings: any = {
         query: jest
           .fn()
           .mockResolvedValueOnce({ rows: [{ cnt: 0 }] })
           .mockResolvedValueOnce({ rows: [{ cnt: 0 }] })
           .mockResolvedValueOnce({ rows: [{ cnt: 1 }] }),
       }
-      await expect(verifyPreconditions(mockDb)).rejects.toThrow(
+      await expect(verifyCleanPreconditions(mockDbBindings)).rejects.toThrow(
         /already contains 1 da_login_binding records/
+      )
+
+      const mockDbPerson: any = {
+        query: jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ cnt: 0 }] })
+          .mockResolvedValueOnce({ rows: [{ cnt: 0 }] })
+          .mockResolvedValueOnce({ rows: [{ cnt: 0 }] })
+          .mockResolvedValueOnce({ rows: [{ cnt: 1 }] }),
+      }
+      await expect(verifyCleanPreconditions(mockDbPerson)).rejects.toThrow(
+        /already contains 1 da_person records/
       )
     })
 
     it("passes when all tables are empty", async () => {
-      const mockDb: any = {
+      const mockDbEmpty: any = {
         query: jest.fn().mockResolvedValue({ rows: [{ cnt: 0 }] }),
       }
-      await expect(verifyPreconditions(mockDb)).resolves.toBeUndefined()
+      await expect(verifyCleanPreconditions(mockDbEmpty)).resolves.toBeUndefined()
     })
   })
 })

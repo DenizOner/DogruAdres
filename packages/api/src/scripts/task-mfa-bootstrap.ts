@@ -1,63 +1,128 @@
 ﻿import type { ExecArgs, IAuthModuleService, IUserModuleService } from "@medusajs/framework/types"
 import { Client } from "@medusajs/framework/pg"
 import { randomBytes } from "node:crypto"
-import { writeFile, access } from "node:fs/promises"
+import { writeFile, access, stat, realpath } from "node:fs/promises"
 import path from "node:path"
 import DogruAdresAccessModuleService from "../modules/dogruadres-access/service"
 
+export interface TaskResourceManifest {
+  readonly manifestVersion: string
+  readonly taskEnvironmentId: string
+  readonly targetDatabase: string
+  readonly targetHost: string
+  readonly targetPort: string
+  readonly targetContainerName: string
+  readonly targetVolumeName: string
+  readonly authorizedOperator: string
+}
+
 export interface TaskBootstrapManifest {
-  readonly allowedHost: string
-  readonly allowedPort: string
-  readonly allowedDatabase: string
+  readonly resourceManifestPath: string
   readonly evidenceDir: string
   readonly outputSecretFilename: string
 }
 
-export const PROTECTED_ENVIRONMENTS: ReadonlyArray<{ hostname: string; port: string; database: string }> = [
-  { hostname: "127.0.0.1", port: "55700", database: "mfa_e2e_fresh" },
-  { hostname: "127.0.0.1", port: "55710", database: "mfa_e2e_fresh" },
-  { hostname: "127.0.0.1", port: "55631", database: "m0ssi_a7f1" },
-  { hostname: "127.0.0.1", port: "9000", database: "medusa" },
-  { hostname: "localhost", port: "5432", database: "medusa-docker" },
-]
+export const FORBIDDEN_DATABASE_NAMES: ReadonlySet<string> = new Set([
+  "m0ssi_a7f1",
+  "mfa_e2e",
+  "mfa_e2e_fresh",
+  "medusa",
+  "medusa-docker",
+  "postgres",
+  "template1",
+  "template0",
+])
 
-export function validateEnvironmentSafety(
-  targetUrl: URL,
-  manifest: TaskBootstrapManifest,
-  cwd: string = process.cwd()
-): void {
-  const normHost = targetUrl.hostname.toLowerCase()
-  const normPort = targetUrl.port || "5432"
-  const normDb = targetUrl.pathname.replace(/^\//, "").toLowerCase()
+export const ALLOWED_LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
+  "127.0.0.1",
+  "localhost",
+  "::1",
+])
 
-  for (const protectedEnv of PROTECTED_ENVIRONMENTS) {
-    if (
-      normHost === protectedEnv.hostname.toLowerCase() &&
-      normPort === protectedEnv.port &&
-      normDb === protectedEnv.database.toLowerCase()
-    ) {
-      throw new Error(`REFUSED: Target matches protected environment (${protectedEnv.hostname}:${protectedEnv.port}/${protectedEnv.database})`)
-    }
+export function validateSafeBasename(filename: string): string {
+  if (!filename || typeof filename !== "string") {
+    throw new Error("REFUSED: Output filename must be a non-empty string")
+  }
+  const trimmed = filename.trim()
+  if (
+    trimmed !== filename ||
+    path.basename(trimmed) !== trimmed ||
+    trimmed.includes("/") ||
+    trimmed.includes("\\") ||
+    trimmed.includes("..") ||
+    !/^[a-zA-Z0-9_\-\.]+$/.test(trimmed)
+  ) {
+    throw new Error(`REFUSED: Output filename "${filename}" is not a strict safe basename`)
+  }
+  return trimmed
+}
+
+export async function validatePathSecurity(evidenceDir: string, cwd: string = process.cwd()): Promise<{
+  realEvidenceDir: string
+}> {
+  const resolvedEvidence = path.resolve(evidenceDir)
+  const resolvedCwd = path.resolve(cwd)
+
+  let evidenceStat
+  try {
+    evidenceStat = await stat(resolvedEvidence)
+  } catch (err: unknown) {
+    throw new Error(`REFUSED: Evidence directory does not exist or cannot be accessed: ${resolvedEvidence}`)
   }
 
-  if (
-    normHost !== manifest.allowedHost.toLowerCase() ||
-    normPort !== manifest.allowedPort ||
-    normDb !== manifest.allowedDatabase.toLowerCase()
-  ) {
+  if (!evidenceStat.isDirectory()) {
+    throw new Error(`REFUSED: Evidence path is not a directory: ${resolvedEvidence}`)
+  }
+
+  const realEvidenceDir = await realpath(resolvedEvidence)
+  const realCwd = await realpath(resolvedCwd)
+
+  const lowerEvidence = realEvidenceDir.toLowerCase()
+  const lowerCwd = realCwd.toLowerCase()
+
+  if (lowerEvidence === lowerCwd || lowerEvidence.startsWith(lowerCwd + path.sep)) {
+    throw new Error(`REFUSED: Evidence directory (${realEvidenceDir}) resides inside worktree (${realCwd})`)
+  }
+
+  return { realEvidenceDir }
+}
+
+export function validateTargetAgainstManifest(
+  targetUrl: URL,
+  resourceManifest: TaskResourceManifest
+): void {
+  const rawDbName = targetUrl.pathname.replace(/^\//, "").toLowerCase().trim()
+  if (!rawDbName || FORBIDDEN_DATABASE_NAMES.has(rawDbName)) {
+    throw new Error(`REFUSED: Target database "${rawDbName}" is on the prohibited/protected list`)
+  }
+
+  const rawHost = targetUrl.hostname.toLowerCase().trim()
+  if (!ALLOWED_LOOPBACK_HOSTS.has(rawHost)) {
+    throw new Error(`REFUSED: Target host "${rawHost}" is not an allowed local loopback endpoint`)
+  }
+
+  const rawPort = targetUrl.port || "5432"
+
+  if (rawDbName !== resourceManifest.targetDatabase.toLowerCase().trim()) {
     throw new Error(
-      `REFUSED: Target (${normHost}:${normPort}/${normDb}) does not match authorized manifest (${manifest.allowedHost}:${manifest.allowedPort}/${manifest.allowedDatabase})`
+      `REFUSED: Database mismatch: actual "${rawDbName}" != manifest "${resourceManifest.targetDatabase}"`
     )
   }
 
-  const resolvedEvidence = path.resolve(manifest.evidenceDir).toLowerCase()
-  const resolvedCwd = path.resolve(cwd).toLowerCase()
-  if (resolvedEvidence.startsWith(resolvedCwd)) {
-    throw new Error("REFUSED: Evidence directory must reside outside repository worktree")
+  if (rawHost !== resourceManifest.targetHost.toLowerCase().trim()) {
+    throw new Error(
+      `REFUSED: Host mismatch: actual "${rawHost}" != manifest "${resourceManifest.targetHost}"`
+    )
+  }
+
+  if (rawPort !== resourceManifest.targetPort.trim()) {
+    throw new Error(
+      `REFUSED: Port mismatch: actual "${rawPort}" != manifest "${resourceManifest.targetPort}"`
+    )
   }
 }
 
-export async function verifyPreconditions(db: Client): Promise<void> {
+export async function verifyCleanPreconditions(db: Client): Promise<void> {
   const userCountRes = await db.query('SELECT count(*)::int as cnt FROM "user"')
   if (userCountRes.rows[0].cnt > 0) {
     throw new Error(`REFUSED: Target database already contains ${userCountRes.rows[0].cnt} User records`)
@@ -79,57 +144,107 @@ export async function verifyPreconditions(db: Client): Promise<void> {
   }
 }
 
+export interface PartialRecoveryCheckpoint {
+  readonly checkpointVersion: string
+  readonly startedAt: string
+  readonly targetDatabase: string
+  status: "in_progress" | "failed" | "completed"
+  completedSteps: string[]
+  error?: string
+  principals: Array<{
+    label: "A" | "B"
+    userId: string
+    authIdentityId: string
+    personId?: string
+    bindingCreated: boolean
+  }>
+}
+
 export default async function taskMfaBootstrap({ container }: ExecArgs): Promise<void> {
   const dbUrl = process.env.DATABASE_URL
   if (!dbUrl) throw new Error("DATABASE_URL is missing")
   const targetUrl = new URL(dbUrl)
 
-  const allowedHost = process.env.M0_BOOTSTRAP_ALLOWED_HOST
-  const allowedPort = process.env.M0_BOOTSTRAP_ALLOWED_PORT
-  const allowedDatabase = process.env.M0_BOOTSTRAP_ALLOWED_DB
+  const manifestPath = process.env.M0_RESOURCE_MANIFEST_PATH
   const evidenceDir = process.env.M0_FIXTURE_EVIDENCE_DIR
-  const outputSecretFilename = process.env.M0_BOOTSTRAP_OUTPUT_FILE || "task-mfa-users.private.json"
+  const outputFilenameRaw = process.env.M0_BOOTSTRAP_OUTPUT_FILE || "task-mfa-users.private.json"
 
-  if (!allowedHost || !allowedPort || !allowedDatabase || !evidenceDir) {
-    throw new Error("REFUSED: Missing required task authorization manifest environment variables")
+  if (!manifestPath || !evidenceDir) {
+    throw new Error("REFUSED: Missing M0_RESOURCE_MANIFEST_PATH or M0_FIXTURE_EVIDENCE_DIR environment variables")
   }
 
-  const manifest: TaskBootstrapManifest = {
-    allowedHost,
-    allowedPort,
-    allowedDatabase,
-    evidenceDir,
-    outputSecretFilename,
+  const safeOutputFilename = validateSafeBasename(outputFilenameRaw)
+  const { realEvidenceDir } = await validatePathSecurity(evidenceDir)
+
+  let resourceManifest: TaskResourceManifest
+  try {
+    const rawContent = await (await import("node:fs/promises")).readFile(manifestPath, "utf8")
+    resourceManifest = JSON.parse(rawContent) as TaskResourceManifest
+  } catch (err: unknown) {
+    throw new Error(`REFUSED: Cannot read or parse resource manifest from ${manifestPath}: ${String(err)}`)
   }
 
-  validateEnvironmentSafety(targetUrl, manifest)
+  if (
+    !resourceManifest.manifestVersion ||
+    !resourceManifest.taskEnvironmentId ||
+    !resourceManifest.targetDatabase ||
+    !resourceManifest.targetHost ||
+    !resourceManifest.targetPort ||
+    !resourceManifest.authorizedOperator
+  ) {
+    throw new Error("REFUSED: Invalid resource manifest structure or missing mandatory attributes")
+  }
 
-  const targetOutputFile = path.join(manifest.evidenceDir, manifest.outputSecretFilename)
+  validateTargetAgainstManifest(targetUrl, resourceManifest)
+
+  const targetOutputFile = path.join(realEvidenceDir, safeOutputFilename)
+  const checkpointFile = path.join(realEvidenceDir, `${safeOutputFilename}.checkpoint.json`)
+
   try {
     await access(targetOutputFile)
-    throw new Error(`REFUSED: Output file ${manifest.outputSecretFilename} already exists in evidence dir`)
+    throw new Error(`REFUSED: Final output file ${safeOutputFilename} already exists in evidence dir`)
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err
   }
 
+  try {
+    await access(checkpointFile)
+    throw new Error(`REFUSED: Previous incomplete checkpoint ${path.basename(checkpointFile)} exists. Manual forensic review required`)
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err
+  }
+
+  const recoveryState: PartialRecoveryCheckpoint = {
+    checkpointVersion: "1.0.0",
+    startedAt: new Date().toISOString(),
+    targetDatabase: resourceManifest.targetDatabase,
+    status: "in_progress",
+    completedSteps: [],
+    principals: [],
+  }
+
+  await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600, flag: "wx" })
+
   const db = new Client({ connectionString: dbUrl })
   await db.connect()
 
+  const finalSecrets: Array<{
+    label: "A" | "B"
+    email: string
+    password: string
+    userId: string
+    authIdentityId: string
+    personId: string
+  }> = []
+
   try {
-    await verifyPreconditions(db)
+    await verifyCleanPreconditions(db)
+    recoveryState.completedSteps.push("preconditions_verified")
+    await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
 
     const auth: IAuthModuleService = container.resolve("auth")
     const users: IUserModuleService = container.resolve("user")
     const foundation: DogruAdresAccessModuleService = container.resolve("dogruadresAccess")
-
-    const principals: Array<{
-      label: "A" | "B"
-      email: string
-      password: string
-      userId: string
-      authIdentityId: string
-      personId: string
-    }> = []
 
     for (const label of ["A", "B"] as const) {
       const entropy = randomBytes(16).toString("hex")
@@ -137,12 +252,14 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
       const password = randomBytes(32).toString("base64url")
 
       const user = await users.createUsers({ email })
+      recoveryState.completedSteps.push(`user_created_${label}`)
 
       const reg = await auth.register("emailpass", { body: { email, password } })
       if (!reg.success || !reg.authIdentity) {
         throw new Error(`Failed native registration for Person ${label}`)
       }
       const authIdentityId = reg.authIdentity.id
+      recoveryState.completedSteps.push(`auth_registered_${label}`)
 
       await auth.updateAuthIdentities({
         id: authIdentityId,
@@ -153,6 +270,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
       if (!verify.success || verify.authIdentity?.app_metadata?.user_id !== user.id) {
         throw new Error(`Server-side native User ownership verification failed for Person ${label}`)
       }
+      recoveryState.completedSteps.push(`ownership_verified_${label}`)
 
       const factors = await auth.listAuthMfa({ auth_identity_id: authIdentityId })
       if (factors.length > 0) {
@@ -162,6 +280,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
       const [person] = await foundation.createPeople([
         { display_name: `Task Person ${label}` },
       ])
+      recoveryState.completedSteps.push(`person_created_${label}`)
 
       await foundation.createActorMappings([
         {
@@ -172,14 +291,25 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
           created_by_actor_id: user.id,
         },
       ])
+      recoveryState.completedSteps.push(`actor_mapped_${label}`)
 
       await db.query(
         `INSERT INTO da_login_binding (auth_identity_id, person_id, actor_type, actor_id, verified_at)
          VALUES ($1, $2, 'user', $3, now())`,
         [authIdentityId, person.id, user.id]
       )
+      recoveryState.completedSteps.push(`binding_inserted_${label}`)
 
-      principals.push({
+      recoveryState.principals.push({
+        label,
+        userId: user.id,
+        authIdentityId,
+        personId: person.id,
+        bindingCreated: true,
+      })
+      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
+
+      finalSecrets.push({
         label,
         email,
         password,
@@ -192,15 +322,27 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     const payload = JSON.stringify(
       {
         created_at: new Date().toISOString(),
-        target_database: manifest.allowedDatabase,
-        principals,
+        manifest: resourceManifest,
+        principals: finalSecrets,
       },
       null,
       2
     )
 
     await writeFile(targetOutputFile, payload, { mode: 0o600, flag: "wx" })
-    console.log(`[task-mfa-bootstrap] Successfully prepared 2 canonical Persons and verified login bindings in ${manifest.allowedDatabase}`)
+    recoveryState.status = "completed"
+    await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
+
+    console.log(`[task-mfa-bootstrap] Prepared 2 canonical Persons and verified login bindings in ${resourceManifest.targetDatabase}`)
+  } catch (err: unknown) {
+    recoveryState.status = "failed"
+    recoveryState.error = String(err)
+    try {
+      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
+    } catch {
+      // Best-effort write of failure state
+    }
+    throw err
   } finally {
     await db.end()
   }
