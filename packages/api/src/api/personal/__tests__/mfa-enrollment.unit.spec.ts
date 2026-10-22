@@ -204,6 +204,24 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
       expect.objectContaining({httpOnly:true,secure:true,sameSite:"strict"}))
     expect(r.clearCookie).toHaveBeenCalledWith("da_mfa_setup",{path:"/personal/mfa/enroll"})
   })
+  it("never binds or issues a full session if native factor was enabled but Foundation ticket completion fails",async()=>{
+    service.personalCompleteMfaEnrollment.mockResolvedValue(null)
+    const r=await call({action:"verify",code:"123456"})
+    expect(auth.verifyAuthMfa).toHaveBeenCalledWith({
+      id:"mfa_pending",auth_identity_id:"auth_self",code:"123456",
+    })
+    expect(service.personalCompleteMfaEnrollment).toHaveBeenCalledWith(token,ticket,"mfa_pending")
+    expect(r.status).toHaveBeenCalledWith(403)
+    expect(bindServerActor).not.toHaveBeenCalled()
+    expect(r.cookie).not.toHaveBeenCalledWith("da_session",expect.anything(),expect.anything())
+  })
+  it("revokes minted session even if downstream native actor binding throws",async()=>{
+    ;(bindServerActor as jest.Mock).mockRejectedValue(Error("synthetic binding fault"))
+    const r=await call({action:"verify",code:"123456"})
+    expect(r.status).toHaveBeenCalledWith(503)
+    expect(service.closePersonalSession).toHaveBeenCalledWith("N".repeat(43),false)
+    expect(r.cookie).not.toHaveBeenCalledWith("da_session",expect.anything(),expect.anything())
+  })
   it("revokes the new session if downstream native credential binding fails",async()=>{
     ;(bindServerActor as jest.Mock).mockResolvedValue(false)
     const r=await call({action:"verify",code:"123456"})
