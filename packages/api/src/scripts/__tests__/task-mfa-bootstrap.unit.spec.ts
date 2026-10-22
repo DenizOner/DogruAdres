@@ -15,6 +15,19 @@ import {
   AtomicNonceStore,
   TrustedRegistryData,
   PinnedOperatorApproval,
+  createVerifiedCommittedStateEvidence,
+  computeCommittedStateDigest,
+  CommittedStateEvidence,
+  verifyPathEffectiveSecurity,
+  PathSecurityInspection,
+  redactSensitiveData,
+  DurableCheckpointManager,
+  CheckpointStorageAdapter,
+  DurableAtomicNonceStore,
+  NonceStorageAdapter,
+  verifyBootstrapExecutionPrerequisites,
+  executeBootstrapController,
+  ExecutionControllerContext,
 } from "../operator-audit-protocol"
 import {
   validateSafeBasename,
@@ -365,8 +378,8 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
     })
   })
 
-  describe("4. Chained Audit Verification & Temporal Ordering", () => {
-    it("validates valid chain and rejects inverted temporal order", () => {
+  describe("4. Chained Audit Verification & Verifiable Committed State", () => {
+    it("validates valid chain and rejects inverted temporal order or unverified transaction hash", () => {
       const ceremonyId = "ceremony_mfa_closeout_01"
       const preIntent = createSignedPreIntent(
         ceremonyId,
@@ -376,23 +389,372 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         "2026-10-22T20:30:00.000Z"
       )
 
+      const validEvidence = createVerifiedCommittedStateEvidence(
+        ceremonyId,
+        baseManifest.targetDatabase,
+        "tx_hash_valid_777",
+        [
+          { entityType: "user", entityId: "usr_01", digestSha256: "digest_u1" },
+          { entityType: "person", entityId: "per_01", digestSha256: "digest_p1" },
+        ],
+        "2026-10-22T20:30:04.000Z"
+      )
+
       const validOutcome = createSignedPostCommitOutcome(
         ceremonyId,
         preIntent,
+        validEvidence,
         privateKeyPem,
-        "tx_hash_valid_777",
         "2026-10-22T20:30:05.000Z"
       )
-      expect(verifyCeremonyAuditChain(preIntent, validOutcome, publicKeyPem)).toBe(true)
+      expect(verifyCeremonyAuditChain(preIntent, validOutcome, publicKeyPem, validEvidence)).toBe(true)
 
+      // Inverted temporal order
       const invertedOutcome = createSignedPostCommitOutcome(
         ceremonyId,
         preIntent,
+        validEvidence,
         privateKeyPem,
-        "tx_hash_inverted",
         "2026-10-22T20:29:59.000Z"
       )
-      expect(verifyCeremonyAuditChain(preIntent, invertedOutcome, publicKeyPem)).toBe(false)
+      expect(verifyCeremonyAuditChain(preIntent, invertedOutcome, publicKeyPem, validEvidence)).toBe(false)
+
+      // Rejects arbitrary caller-provided outcome without verified evidence
+      expect(() =>
+        createSignedPostCommitOutcome(
+          ceremonyId,
+          preIntent,
+          null as unknown as CommittedStateEvidence,
+          privateKeyPem
+        )
+      ).toThrow(/createSignedPostCommitOutcome requires verified CommittedStateEvidence/)
+
+      // Rejects forged / mismatched evidence in verifyCeremonyAuditChain
+      const forgedEvidence = createVerifiedCommittedStateEvidence(
+        ceremonyId,
+        baseManifest.targetDatabase,
+        "tx_hash_forged_999",
+        [{ entityType: "user", entityId: "usr_forged", digestSha256: "forged" }],
+        "2026-10-22T20:30:04.000Z"
+      )
+      expect(verifyCeremonyAuditChain(preIntent, validOutcome, publicKeyPem, forgedEvidence)).toBe(false)
+    })
+  })
+
+  describe("5. Windows Effective-Access Security Verification", () => {
+    const authorizedPrincipal = "ASUS-X512JF-BQ1\\Deniz"
+
+    it("accepts valid security inspection restricted to authorized principal and system", () => {
+      const validInspection: PathSecurityInspection = {
+        path: "C:\\Users\\Deniz\\.dogruadres_mfa_task_private\\key.pem",
+        owner: authorizedPrincipal,
+        isReparsePoint: false,
+        entries: [
+          { principal: authorizedPrincipal, rights: ["FullControl"], accessType: "Allow", isInherited: false },
+          { principal: "NT AUTHORITY\\SYSTEM", rights: ["FullControl"], accessType: "Allow", isInherited: false },
+          { principal: "BUILTIN\\Administrators", rights: ["FullControl"], accessType: "Allow", isInherited: false },
+        ],
+      }
+      expect(() => verifyPathEffectiveSecurity(validInspection, authorizedPrincipal)).not.toThrow()
+    })
+
+    it("rejects path that is a reparse point (symlink or junction)", () => {
+      const reparseInspection: PathSecurityInspection = {
+        path: "C:\\Users\\Deniz\\symlink_dir\\key.pem",
+        owner: authorizedPrincipal,
+        isReparsePoint: true,
+        entries: [
+          { principal: authorizedPrincipal, rights: ["FullControl"], accessType: "Allow", isInherited: false },
+        ],
+      }
+      expect(() => verifyPathEffectiveSecurity(reparseInspection, authorizedPrincipal)).toThrow(
+        /is a reparse point/
+      )
+    })
+
+    it("rejects path with mismatched owner", () => {
+      const wrongOwnerInspection: PathSecurityInspection = {
+        path: "C:\\Users\\Deniz\\key.pem",
+        owner: "ASUS-X512JF-BQ1\\OtherUser",
+        isReparsePoint: false,
+        entries: [
+          { principal: authorizedPrincipal, rights: ["FullControl"], accessType: "Allow", isInherited: false },
+        ],
+      }
+      expect(() => verifyPathEffectiveSecurity(wrongOwnerInspection, authorizedPrincipal)).toThrow(
+        /owner mismatch/
+      )
+    })
+
+    it("rejects unexpected readable principal (e.g. CodexSandboxUsers or Everyone)", () => {
+      const sandboxInspection: PathSecurityInspection = {
+        path: "C:\\Users\\Deniz\\key.pem",
+        owner: authorizedPrincipal,
+        isReparsePoint: false,
+        entries: [
+          { principal: authorizedPrincipal, rights: ["FullControl"], accessType: "Allow", isInherited: false },
+          { principal: "NT AUTHORITY\\SYSTEM", rights: ["FullControl"], accessType: "Allow", isInherited: false },
+          { principal: "ASUS-X512JF-BQ1\\CodexSandboxUsers", rights: ["ReadAndExecute"], accessType: "Allow", isInherited: true },
+        ],
+      }
+      expect(() => verifyPathEffectiveSecurity(sandboxInspection, authorizedPrincipal)).toThrow(
+        /Unexpected readable\/authorized principal "ASUS-X512JF-BQ1\\CodexSandboxUsers"/
+      )
+
+      const everyoneInspection: PathSecurityInspection = {
+        path: "C:\\Users\\Deniz\\key.pem",
+        owner: authorizedPrincipal,
+        isReparsePoint: false,
+        entries: [
+          { principal: authorizedPrincipal, rights: ["FullControl"], accessType: "Allow", isInherited: false },
+          { principal: "Everyone", rights: ["Read"], accessType: "Allow", isInherited: false },
+        ],
+      }
+      expect(() => verifyPathEffectiveSecurity(everyoneInspection, authorizedPrincipal)).toThrow(
+        /Unexpected readable\/authorized principal "Everyone"/
+      )
+    })
+  })
+
+  describe("6. Task-Private Durable Checkpoints & Sensitive Error Redaction", () => {
+    it("redacts database connection passwords, bearer tokens, and private keys from errors", () => {
+      const sensitiveMsg = "Error connecting to postgresql://postgres:superSecretPass123@127.0.0.1:5432/mfa_db with Bearer eyJhbGciOiJIUzI1NiJ9.secret and key -----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg\n-----END PRIVATE KEY-----"
+      const redacted = redactSensitiveData(sensitiveMsg)
+      expect(redacted).not.toContain("superSecretPass123")
+      expect(redacted).not.toContain("eyJhbGciOiJIUzI1NiJ9.secret")
+      expect(redacted).not.toContain("MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg")
+      expect(redacted).toContain("[REDACTED_PASSWORD]")
+      expect(redacted).toContain("[REDACTED_TOKEN]")
+      expect(redacted).toContain("[REDACTED_PRIVATE_KEY]")
+    })
+
+    it("initializes checkpoint and prevents unsafe retries on existing incomplete/completed checkpoint", async () => {
+      const storage = new Map<string, string>()
+      const mockStorageAdapter: CheckpointStorageAdapter = {
+        exists: async (fp) => storage.has(fp),
+        read: async (fp) => {
+          const val = storage.get(fp)
+          if (!val) throw new Error("File not found")
+          return val
+        },
+        atomicWrite: async (fp, content) => {
+          storage.set(fp, content)
+        },
+      }
+
+      const manager = new DurableCheckpointManager(mockStorageAdapter)
+      const cpPath = "C:\\evidence\\task.checkpoint.json"
+
+      // Initialize brand new checkpoint
+      const state = await manager.initializeCheckpoint(cpPath, "task_isolated_db")
+      expect(state.status).toBe("in_progress")
+      expect(state.completedSteps.length).toBe(0)
+
+      // Second initialization while in_progress MUST fail closed
+      await expect(manager.initializeCheckpoint(cpPath, "task_isolated_db")).rejects.toThrow(
+        /Checkpoint already exists with status "in_progress". Unsafe retry prevented/
+      )
+
+      // Record steps
+      await manager.recordStep(cpPath, state, "step_auth_registered_A", {
+        label: "A",
+        userId: "usr_1",
+        authIdentityId: "aid_1",
+        personId: "per_1",
+        bindingCreated: true,
+      })
+      expect(state.completedSteps).toContain("step_auth_registered_A")
+      expect(state.principals.length).toBe(1)
+
+      // Record failure with sensitive error
+      await manager.recordFailure(cpPath, state, new Error("Failed at postgresql://user:myPass@127.0.0.1/db"))
+      expect(state.status).toBe("failed")
+      expect(state.error).toContain("[REDACTED_PASSWORD]")
+      expect(state.error).not.toContain("myPass")
+
+      // Subsequent initialization on failed checkpoint still fails closed
+      await expect(manager.initializeCheckpoint(cpPath, "task_isolated_db")).rejects.toThrow(
+        /Checkpoint already exists with status "failed". Unsafe retry prevented/
+      )
+    })
+  })
+
+  describe("7. Durable Atomic Nonce Store (Restart-Safe)", () => {
+    it("persists claimed nonces and rejects replay across process restarts", async () => {
+      const persistedRecords: Array<{ nonce: string; runId: string; expiresAt: string }> = []
+      const mockNonceAdapter: NonceStorageAdapter = {
+        loadExistingNonces: async () => [...persistedRecords],
+        persistNonce: async (entry) => {
+          persistedRecords.push(entry)
+        },
+      }
+
+      // First process session
+      const session1Store = new DurableAtomicNonceStore(mockNonceAdapter)
+      const claimed1 = await session1Store.claimOnce("nonce_unique_101", "run_01", "2026-10-22T21:00:00.000Z")
+      expect(claimed1).toBe(true)
+
+      const duplicateClaim = await session1Store.claimOnce("nonce_unique_101", "run_01", "2026-10-22T21:00:00.000Z")
+      expect(duplicateClaim).toBe(false)
+
+      // Simulated process restart: new instance reading persisted records
+      const session2Store = new DurableAtomicNonceStore(mockNonceAdapter)
+      const replayClaim = await session2Store.claimOnce("nonce_unique_101", "run_02", "2026-10-22T21:00:00.000Z")
+      expect(replayClaim).toBe(false)
+
+      // Fresh nonce succeeds
+      const freshClaim = await session2Store.claimOnce("nonce_unique_102", "run_02", "2026-10-22T21:00:00.000Z")
+      expect(freshClaim).toBe(true)
+    })
+  })
+
+  describe("8. Fail-Closed Bootstrap Execution Controller Boundary", () => {
+    const operatorPrincipal = baseManifest.authorizedOperator.windowsSecurityPrincipal
+    const validInspection: PathSecurityInspection = {
+      path: "C:\\evidence\\key.pem",
+      owner: operatorPrincipal,
+      isReparsePoint: false,
+      entries: [
+        { principal: operatorPrincipal, rights: ["FullControl"], accessType: "Allow", isInherited: false },
+        { principal: "NT AUTHORITY\\SYSTEM", rights: ["FullControl"], accessType: "Allow", isInherited: false },
+        { principal: "BUILTIN\\Administrators", rights: ["FullControl"], accessType: "Allow", isInherited: false },
+      ],
+    }
+
+    const mockResourceAdapter: RuntimeResourceAdapter = {
+      inspectContainer: async () => ({
+        exists: true,
+        isRunning: true,
+        volumeNames: [baseManifest.targetVolumeName],
+      }),
+      inspectDatabase: async () => ({
+        dbName: baseManifest.targetDatabase,
+        isExclusive: true,
+      }),
+      getCurrentGitSha: async () => baseManifest.targetCommitSha,
+      getOperatorPrincipal: async () => ({
+        windowsPrincipal: baseManifest.authorizedOperator.windowsSecurityPrincipal,
+      }),
+    }
+
+    const makePinnedApproval = (): PinnedOperatorApproval => ({
+      trustDomain: "dogruadres-m0-mfa",
+      executorType: "automation_agent",
+      runId: baseManifest.runId,
+      operatorId: baseManifest.authorizedOperator.operatorId,
+      windowsPrincipal: baseManifest.authorizedOperator.windowsSecurityPrincipal,
+      approvalReference: baseManifest.authorizedOperator.approvalReference,
+      keyFingerprint,
+      taskEnvironmentId: baseManifest.taskEnvironmentId,
+      targetDatabase: baseManifest.targetDatabase,
+      targetCommitSha: baseManifest.targetCommitSha,
+      validFrom: "2026-10-22T00:00:00Z",
+      validUntil: "2026-10-23T00:00:00Z",
+    })
+
+    const makeRegistryData = (): TrustedRegistryData => ({
+      registrySchemaVersion: "1.1.0",
+      trustDomain: "dogruadres-m0-mfa",
+      operators: [
+        {
+          executorType: "automation_agent",
+          operatorId: baseManifest.authorizedOperator.operatorId,
+          windowsPrincipal: baseManifest.authorizedOperator.windowsSecurityPrincipal,
+          approvalReference: baseManifest.authorizedOperator.approvalReference,
+          publicKeyPem,
+          keyFingerprint,
+          validFrom: "2026-10-22T00:00:00Z",
+          validUntil: "2026-10-23T00:00:00Z",
+        },
+      ],
+    })
+
+    const makeSignedManifest = (): SignedTaskManifest => {
+      const payload = Buffer.from(canonicalJsonStringify(baseManifest), "utf8")
+      const sig = require("node:crypto").sign(null, payload, privateKeyPem).toString("base64")
+      return {
+        manifest: baseManifest,
+        signerKeyFingerprint: keyFingerprint,
+        signatureBase64: sig,
+      }
+    }
+
+    it("fails closed when execution gate is false", () => {
+      const ctx: ExecutionControllerContext = {
+        executionGateOpen: false,
+        pinnedApproval: makePinnedApproval(),
+        registryData: makeRegistryData(),
+        signedManifest: makeSignedManifest(),
+        resourceAdapter: mockResourceAdapter,
+        nonceStore: { claimOnce: async () => true },
+        pathSecurityInspection: validInspection,
+        connectionString: "postgres://127.0.0.1:55720/task_isolated_authorized_db",
+        nowIso: "2026-10-22T20:30:00Z",
+      }
+      expect(() => verifyBootstrapExecutionPrerequisites(ctx)).toThrow(
+        /BOOTSTRAP_EXECUTION_GATE_OPEN is false/
+      )
+    })
+
+    it("fails closed when INDEPENDENT_PINNED_OPERATOR_APPROVAL is null", () => {
+      const ctx: ExecutionControllerContext = {
+        executionGateOpen: true,
+        pinnedApproval: null,
+        registryData: makeRegistryData(),
+        signedManifest: makeSignedManifest(),
+        resourceAdapter: mockResourceAdapter,
+        nonceStore: { claimOnce: async () => true },
+        pathSecurityInspection: validInspection,
+        connectionString: "postgres://127.0.0.1:55720/task_isolated_authorized_db",
+        nowIso: "2026-10-22T20:30:00Z",
+      }
+      expect(() => verifyBootstrapExecutionPrerequisites(ctx)).toThrow(
+        /INDEPENDENT_PINNED_OPERATOR_APPROVAL is null/
+      )
+    })
+
+    it("fails closed when path security has unexpected readable principal", () => {
+      const badInspection: PathSecurityInspection = {
+        ...validInspection,
+        entries: [
+          ...validInspection.entries,
+          { principal: "ASUS-X512JF-BQ1\\CodexSandboxUsers", rights: ["Read"], accessType: "Allow", isInherited: true },
+        ],
+      }
+      const ctx: ExecutionControllerContext = {
+        executionGateOpen: true,
+        pinnedApproval: makePinnedApproval(),
+        registryData: makeRegistryData(),
+        signedManifest: makeSignedManifest(),
+        resourceAdapter: mockResourceAdapter,
+        nonceStore: { claimOnce: async () => true },
+        pathSecurityInspection: badInspection,
+        connectionString: "postgres://127.0.0.1:55720/task_isolated_authorized_db",
+        nowIso: "2026-10-22T20:30:00Z",
+      }
+      expect(() => verifyBootstrapExecutionPrerequisites(ctx)).toThrow(
+        /Unexpected readable\/authorized principal/
+      )
+    })
+
+    it("executes controlled effect when all prerequisites and ownership checks pass", async () => {
+      let effectExecuted = false
+      const ctx: ExecutionControllerContext = {
+        executionGateOpen: true,
+        pinnedApproval: makePinnedApproval(),
+        registryData: makeRegistryData(),
+        signedManifest: makeSignedManifest(),
+        resourceAdapter: mockResourceAdapter,
+        nonceStore: { claimOnce: async () => true },
+        pathSecurityInspection: validInspection,
+        connectionString: "postgres://127.0.0.1:55720/task_isolated_authorized_db",
+        nowIso: "2026-10-22T20:30:00Z",
+      }
+
+      await executeBootstrapController(ctx, async () => {
+        effectExecuted = true
+      })
+      expect(effectExecuted).toBe(true)
     })
   })
 

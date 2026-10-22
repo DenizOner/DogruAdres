@@ -10,6 +10,7 @@ import {
   TaskResourceManifest,
   verifySignedManifest,
   createTrustedOperatorRegistry,
+  redactSensitiveData,
   PinnedOperatorApproval,
   TrustedOperatorRegistry,
 } from "./operator-audit-protocol"
@@ -381,7 +382,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     console.log(`[task-mfa-bootstrap] Prepared 2 canonical Persons and verified login bindings in ${signedManifest.manifest.targetDatabase}`)
   } catch (err: unknown) {
     recoveryState.status = "failed"
-    recoveryState.error = err instanceof Error ? err.message : "Bootstrap operation failed"
+    recoveryState.error = redactSensitiveData(err instanceof Error ? err.message : "Bootstrap operation failed")
     try {
       await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
     } catch {

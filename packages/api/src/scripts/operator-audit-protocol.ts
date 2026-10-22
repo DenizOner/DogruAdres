@@ -414,6 +414,53 @@ export async function verifyRuntimeEnvironmentOwnership(
 // Audit Trail Protocol (Pre-transaction Intent -> Post-commit / Indeterminate)
 // ---------------------------------------------------------------------------
 
+export interface CommittedEntityDigest {
+  readonly entityType: "user" | "person" | "actor_mapping" | "login_binding"
+  readonly entityId: string
+  readonly digestSha256: string
+}
+
+export interface CommittedStateEvidence {
+  readonly ceremonyId: string
+  readonly targetDatabase: string
+  readonly transactionHash: string
+  readonly committedEntities: CommittedEntityDigest[]
+  readonly committedAt: string
+  readonly stateDigestSha256: string
+}
+
+export function computeCommittedStateDigest(entities: CommittedEntityDigest[]): string {
+  const sorted = [...entities].sort((a, b) => {
+    const typeCmp = a.entityType.localeCompare(b.entityType)
+    return typeCmp !== 0 ? typeCmp : a.entityId.localeCompare(b.entityId)
+  })
+  return computeSha256Digest(canonicalJsonStringify(sorted))
+}
+
+export function createVerifiedCommittedStateEvidence(
+  ceremonyId: string,
+  targetDatabase: string,
+  transactionHash: string,
+  committedEntities: CommittedEntityDigest[],
+  committedAt: string = new Date().toISOString()
+): CommittedStateEvidence {
+  if (!transactionHash || typeof transactionHash !== "string" || transactionHash.trim() === "") {
+    throw new Error("REFUSED: Invalid or missing transaction hash for committed state evidence")
+  }
+  if (!Array.isArray(committedEntities) || committedEntities.length === 0) {
+    throw new Error("REFUSED: Committed entities list cannot be empty")
+  }
+  const stateDigestSha256 = computeCommittedStateDigest(committedEntities)
+  return {
+    ceremonyId,
+    targetDatabase,
+    transactionHash,
+    committedEntities,
+    committedAt,
+    stateDigestSha256,
+  }
+}
+
 export interface SignedPreIntent {
   readonly recordVersion: "1.0.0"
   readonly ceremonyId: string
@@ -430,7 +477,9 @@ export interface SignedPostCommitOutcome {
   readonly recordVersion: "1.0.0"
   readonly ceremonyId: string
   readonly preIntentDigestSha256: string
-  readonly transactionHash?: string
+  readonly transactionHash: string
+  readonly stateDigestSha256: string
+  readonly committedEntitiesCount: number
   readonly status: "ARMED"
   readonly verifiedAt: string
   readonly signatureBase64: string
@@ -476,16 +525,29 @@ export function createSignedPreIntent(
 export function createSignedPostCommitOutcome(
   ceremonyId: string,
   preIntent: SignedPreIntent,
+  evidence: CommittedStateEvidence,
   privateKeyPem: string,
-  transactionHash: string,
   verifiedAt: string = new Date().toISOString()
 ): SignedPostCommitOutcome {
+  if (!evidence || typeof evidence !== "object" || !evidence.transactionHash) {
+    throw new Error("REFUSED: createSignedPostCommitOutcome requires verified CommittedStateEvidence")
+  }
+  if (evidence.ceremonyId !== ceremonyId || evidence.ceremonyId !== preIntent.ceremonyId) {
+    throw new Error("REFUSED: Committed state evidence ceremonyId mismatch with preIntent")
+  }
+  const expectedDigest = computeCommittedStateDigest(evidence.committedEntities)
+  if (evidence.stateDigestSha256 !== expectedDigest) {
+    throw new Error("REFUSED: Committed state evidence digest verification failed")
+  }
+
   const preIntentDigest = computeSha256Digest(canonicalJsonStringify(preIntent))
   const unsigned = {
     recordVersion: "1.0.0" as const,
     ceremonyId,
     preIntentDigestSha256: preIntentDigest,
-    transactionHash,
+    transactionHash: evidence.transactionHash,
+    stateDigestSha256: evidence.stateDigestSha256,
+    committedEntitiesCount: evidence.committedEntities.length,
     status: "ARMED" as const,
     verifiedAt,
   }
@@ -518,7 +580,8 @@ export function createIndeterminateFailureRecord(
 export function verifyCeremonyAuditChain(
   preIntent: SignedPreIntent,
   outcome: SignedPostCommitOutcome | IndeterminateFailureRecord,
-  publicKeyPem: string
+  publicKeyPem: string,
+  committedStateEvidence?: CommittedStateEvidence
 ): boolean {
   const { signatureBase64: preSig, ...preBody } = preIntent
   const isPreValid = verify(null, Buffer.from(canonicalJsonStringify(preBody), "utf8"), publicKeyPem, Buffer.from(preSig, "base64"))
@@ -533,6 +596,278 @@ export function verifyCeremonyAuditChain(
   const expectedDigest = computeSha256Digest(canonicalJsonStringify(preIntent))
   if (outcome.preIntentDigestSha256 !== expectedDigest) return false
 
+  if (outcome.status === "ARMED") {
+    if (
+      !outcome.stateDigestSha256 ||
+      !outcome.transactionHash ||
+      typeof outcome.committedEntitiesCount !== "number" ||
+      outcome.committedEntitiesCount <= 0
+    ) {
+      return false
+    }
+    if (committedStateEvidence) {
+      if (
+        committedStateEvidence.ceremonyId !== outcome.ceremonyId ||
+        committedStateEvidence.transactionHash !== outcome.transactionHash ||
+        committedStateEvidence.stateDigestSha256 !== outcome.stateDigestSha256 ||
+        committedStateEvidence.committedEntities.length !== outcome.committedEntitiesCount
+      ) {
+        return false
+      }
+    }
+  }
+
   const { signatureBase64: outSig, ...outBody } = outcome
   return verify(null, Buffer.from(canonicalJsonStringify(outBody), "utf8"), publicKeyPem, Buffer.from(outSig, "base64"))
+}
+
+// ---------------------------------------------------------------------------
+// Windows Effective Access Security
+// ---------------------------------------------------------------------------
+
+export interface AccessControlEntry {
+  readonly principal: string
+  readonly rights: string[]
+  readonly accessType: "Allow" | "Deny"
+  readonly isInherited: boolean
+}
+
+export interface PathSecurityInspection {
+  readonly path: string
+  readonly owner: string
+  readonly isReparsePoint: boolean
+  readonly entries: AccessControlEntry[]
+}
+
+export function verifyPathEffectiveSecurity(
+  inspection: PathSecurityInspection,
+  authorizedPrincipal: string,
+  allowedSystemPrincipals: string[] = ["nt authority\\system", "builtin\\administrators"]
+): void {
+  if (inspection.isReparsePoint) {
+    throw new Error(`REFUSED: Path "${inspection.path}" is a reparse point (symlink/junction)`)
+  }
+
+  if (inspection.owner.toLowerCase() !== authorizedPrincipal.toLowerCase()) {
+    throw new Error(
+      `REFUSED: Path "${inspection.path}" owner mismatch: expected "${authorizedPrincipal}", got "${inspection.owner}"`
+    )
+  }
+
+  const allowedSet = new Set([
+    authorizedPrincipal.toLowerCase(),
+    ...allowedSystemPrincipals.map((p) => p.toLowerCase()),
+  ])
+
+  for (const entry of inspection.entries) {
+    if (entry.accessType === "Allow") {
+      const p = entry.principal.toLowerCase()
+      if (!allowedSet.has(p)) {
+        throw new Error(
+          `REFUSED: Unexpected readable/authorized principal "${entry.principal}" detected on protected path "${inspection.path}"`
+        )
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Task-Private Durable Checkpoints & Sensitive Error Redaction
+// ---------------------------------------------------------------------------
+
+export function redactSensitiveData(text: string): string {
+  return text
+    .replace(/(postgres(?:ql)?:\/\/[^:]+:)[^@]+(@)/gi, "$1[REDACTED_PASSWORD]$2")
+    .replace(/(password["':\s]+)[^\s,"'}]+/gi, '$1"[REDACTED]"')
+    .replace(/(bearer\s+)[a-zA-Z0-9_\-\.]+/gi, "$1[REDACTED_TOKEN]")
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]")
+}
+
+export interface CheckpointPrincipal {
+  readonly label: "A" | "B"
+  readonly userId?: string
+  readonly authIdentityId?: string
+  readonly personId?: string
+  readonly bindingCreated: boolean
+}
+
+export interface PartialRecoveryCheckpoint {
+  readonly checkpointVersion: string
+  readonly startedAt: string
+  readonly targetDatabase: string
+  status: "in_progress" | "failed" | "completed"
+  completedSteps: string[]
+  error?: string
+  principals: CheckpointPrincipal[]
+}
+
+export interface CheckpointStorageAdapter {
+  exists(filepath: string): Promise<boolean>
+  read(filepath: string): Promise<string>
+  atomicWrite(filepath: string, content: string): Promise<void>
+}
+
+export class DurableCheckpointManager {
+  constructor(private adapter: CheckpointStorageAdapter) {}
+
+  async initializeCheckpoint(
+    checkpointFile: string,
+    targetDatabase: string
+  ): Promise<PartialRecoveryCheckpoint> {
+    const exists = await this.adapter.exists(checkpointFile)
+    if (exists) {
+      const raw = await this.adapter.read(checkpointFile)
+      let prev: PartialRecoveryCheckpoint
+      try {
+        prev = JSON.parse(raw) as PartialRecoveryCheckpoint
+      } catch {
+        throw new Error(`REFUSED: Corrupted checkpoint exists at ${checkpointFile}. Manual forensic review required`)
+      }
+      throw new Error(`REFUSED: Checkpoint already exists with status "${prev.status}". Unsafe retry prevented`)
+    }
+
+    const state: PartialRecoveryCheckpoint = {
+      checkpointVersion: "1.0.0",
+      startedAt: new Date().toISOString(),
+      targetDatabase,
+      status: "in_progress",
+      completedSteps: [],
+      principals: [],
+    }
+    await this.adapter.atomicWrite(checkpointFile, JSON.stringify(state, null, 2))
+    return state
+  }
+
+  async recordStep(
+    checkpointFile: string,
+    state: PartialRecoveryCheckpoint,
+    step: string,
+    principal?: CheckpointPrincipal
+  ): Promise<void> {
+    state.completedSteps.push(step)
+    if (principal) {
+      state.principals.push(principal)
+    }
+    await this.adapter.atomicWrite(checkpointFile, JSON.stringify(state, null, 2))
+  }
+
+  async recordFailure(
+    checkpointFile: string,
+    state: PartialRecoveryCheckpoint,
+    error: unknown
+  ): Promise<void> {
+    state.status = "failed"
+    const rawError = error instanceof Error ? error.message : String(error)
+    state.error = redactSensitiveData(rawError)
+    try {
+      await this.adapter.atomicWrite(checkpointFile, JSON.stringify(state, null, 2))
+    } catch {
+      // Best-effort
+    }
+  }
+
+  async markCompleted(
+    checkpointFile: string,
+    state: PartialRecoveryCheckpoint
+  ): Promise<void> {
+    state.status = "completed"
+    await this.adapter.atomicWrite(checkpointFile, JSON.stringify(state, null, 2))
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Durable Atomic Nonce Store (Restart-Safe)
+// ---------------------------------------------------------------------------
+
+export interface NonceStorageAdapter {
+  loadExistingNonces(): Promise<Array<{ nonce: string; runId: string; expiresAt: string }>>
+  persistNonce(entry: { nonce: string; runId: string; expiresAt: string }): Promise<void>
+}
+
+export class DurableAtomicNonceStore implements AtomicNonceStore {
+  private inMemory = new Map<string, { runId: string; expiresAt: string }>()
+  private initialized = false
+
+  constructor(private adapter: NonceStorageAdapter) {}
+
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      const records = await this.adapter.loadExistingNonces()
+      for (const r of records) {
+        this.inMemory.set(r.nonce, { runId: r.runId, expiresAt: r.expiresAt })
+      }
+      this.initialized = true
+    }
+  }
+
+  async claimOnce(nonce: string, runId: string, expiresAt: string): Promise<boolean> {
+    await this.ensureInitialized()
+    if (this.inMemory.has(nonce)) {
+      return false
+    }
+    const record = { nonce, runId, expiresAt }
+    await this.adapter.persistNonce(record)
+    this.inMemory.set(nonce, { runId, expiresAt })
+    return true
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fail-Closed Bootstrap Execution Controller Boundary
+// ---------------------------------------------------------------------------
+
+export interface ExecutionControllerContext {
+  readonly executionGateOpen: boolean
+  readonly pinnedApproval: PinnedOperatorApproval | null
+  readonly registryData: unknown
+  readonly signedManifest: SignedTaskManifest
+  readonly resourceAdapter: RuntimeResourceAdapter
+  readonly nonceStore: AtomicNonceStore
+  readonly pathSecurityInspection: PathSecurityInspection
+  readonly connectionString: string
+  readonly nowIso?: string
+}
+
+export function verifyBootstrapExecutionPrerequisites(
+  ctx: ExecutionControllerContext
+): { trustedRegistry: TrustedOperatorRegistry } {
+  if (!ctx.executionGateOpen) {
+    throw new Error("REFUSED: BOOTSTRAP_EXECUTION_GATE_OPEN is false. Execution is prohibited")
+  }
+
+  if (!ctx.pinnedApproval) {
+    throw new Error("REFUSED: INDEPENDENT_PINNED_OPERATOR_APPROVAL is null. Execution is prohibited")
+  }
+
+  const trustedRegistry = createTrustedOperatorRegistry(
+    ctx.registryData,
+    ctx.pinnedApproval,
+    ctx.nowIso
+  )
+
+  verifySignedManifest(ctx.signedManifest, trustedRegistry)
+
+  verifyPathEffectiveSecurity(
+    ctx.pathSecurityInspection,
+    ctx.pinnedApproval.windowsPrincipal
+  )
+
+  return { trustedRegistry }
+}
+
+export async function executeBootstrapController(
+  ctx: ExecutionControllerContext,
+  executeBootstrapEffect: () => Promise<void>
+): Promise<void> {
+  const { trustedRegistry } = verifyBootstrapExecutionPrerequisites(ctx)
+
+  await verifyRuntimeEnvironmentOwnership(
+    ctx.signedManifest.manifest,
+    ctx.resourceAdapter,
+    ctx.nonceStore,
+    ctx.connectionString,
+    ctx.nowIso
+  )
+
+  await executeBootstrapEffect()
 }
