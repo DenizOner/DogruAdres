@@ -84,7 +84,7 @@ moduleIntegrationTestRunner<AccessService>({
     it("commits real ORM membership and both outbox pointers, then rolls back a security-outbox fault",async()=>{
       // Install the actual committed security-state migration on this fresh,
       // runner-generated module schema; no mock outbox or extra infrastructure.
-      const migration=new Migration20261020230000()
+      const migration=Reflect.construct(Migration20261020230000,[]) as Migration20261020230000
       const statements:string[]=[]
       migration.addSql=(sql:string)=>statements.push(sql)
       await migration.up()
