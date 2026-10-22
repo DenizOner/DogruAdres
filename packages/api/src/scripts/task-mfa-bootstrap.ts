@@ -5,6 +5,13 @@ import { writeFile, access, stat, realpath } from "node:fs/promises"
 import path from "node:path"
 import DogruAdresAccessModuleService from "../modules/dogruadres-access/service"
 import { createUserAccountWorkflow } from "@medusajs/core-flows"
+import {
+  SignedTaskManifest,
+  TaskResourceManifest,
+  verifyManifestSignature,
+  verifyRuntimeEnvironmentOwnership,
+  RuntimeResourceAdapter,
+} from "./operator-audit-protocol"
 
 /**
  * Execution gate switch.
@@ -12,18 +19,6 @@ import { createUserAccountWorkflow } from "@medusajs/core-flows"
  * independently audited environment and signed manifest are formally commissioned.
  */
 export const BOOTSTRAP_EXECUTION_GATE_OPEN = false
-
-export interface TaskResourceManifest {
-  readonly manifestVersion: string
-  readonly taskEnvironmentId: string
-  readonly targetDatabase: string
-  readonly targetHost: string
-  readonly targetPort: string
-  readonly targetContainerName: string
-  readonly targetVolumeName: string
-  readonly authorizedOperator: string
-  readonly signatureProof?: string
-}
 
 export const FORBIDDEN_DATABASE_PATTERNS: ReadonlyArray<RegExp> = [
   /^m0ssi_a7f1$/i,
@@ -104,7 +99,9 @@ export async function validatePathSecurity(evidenceDir: string, cwd: string = pr
 
 export function validateTargetAgainstManifest(
   targetUrl: URL,
-  resourceManifest: TaskResourceManifest
+  resourceManifest: TaskResourceManifest,
+  trustedPublicKeyPem: string,
+  signedManifest?: SignedTaskManifest
 ): void {
   const normDbName = sanitizeAndDecodeDatabaseName(targetUrl.pathname)
   if (!normDbName) {
@@ -142,8 +139,13 @@ export function validateTargetAgainstManifest(
     )
   }
 
-  if (!resourceManifest.signatureProof || resourceManifest.signatureProof.length < 32) {
-    throw new Error("REFUSED: Resource manifest lacks verified signature/authorization proof")
+  if (!signedManifest) {
+    throw new Error("REFUSED: Signed manifest payload is missing")
+  }
+
+  const isSigValid = verifyManifestSignature(signedManifest, trustedPublicKeyPem)
+  if (!isSigValid) {
+    throw new Error("REFUSED: Ed25519 signature verification failed for resource manifest")
   }
 }
 
@@ -199,34 +201,31 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
   const manifestPath = process.env.M0_RESOURCE_MANIFEST_PATH
   const evidenceDir = process.env.M0_FIXTURE_EVIDENCE_DIR
   const outputFilenameRaw = process.env.M0_BOOTSTRAP_OUTPUT_FILE || "task-mfa-users.private.json"
+  const trustedPublicKeyPath = process.env.M0_OPERATOR_PUBLIC_KEY_PATH
 
-  if (!manifestPath || !evidenceDir) {
-    throw new Error("REFUSED: Missing M0_RESOURCE_MANIFEST_PATH or M0_FIXTURE_EVIDENCE_DIR environment variables")
+  if (!manifestPath || !evidenceDir || !trustedPublicKeyPath) {
+    throw new Error("REFUSED: Missing M0_RESOURCE_MANIFEST_PATH, M0_FIXTURE_EVIDENCE_DIR, or M0_OPERATOR_PUBLIC_KEY_PATH")
   }
 
   const safeOutputFilename = validateSafeBasename(outputFilenameRaw)
   const { realEvidenceDir } = await validatePathSecurity(evidenceDir)
 
-  let resourceManifest: TaskResourceManifest
+  let signedManifest: SignedTaskManifest
   try {
     const rawContent = await (await import("node:fs/promises")).readFile(manifestPath, "utf8")
-    resourceManifest = JSON.parse(rawContent) as TaskResourceManifest
+    signedManifest = JSON.parse(rawContent) as SignedTaskManifest
   } catch (err: unknown) {
     throw new Error(`REFUSED: Cannot read or parse resource manifest from ${manifestPath}: ${String(err)}`)
   }
 
-  if (
-    !resourceManifest.manifestVersion ||
-    !resourceManifest.taskEnvironmentId ||
-    !resourceManifest.targetDatabase ||
-    !resourceManifest.targetHost ||
-    !resourceManifest.targetPort ||
-    !resourceManifest.authorizedOperator
-  ) {
-    throw new Error("REFUSED: Invalid resource manifest structure or missing mandatory attributes")
+  let trustedPublicKeyPem: string
+  try {
+    trustedPublicKeyPem = await (await import("node:fs/promises")).readFile(trustedPublicKeyPath, "utf8")
+  } catch (err: unknown) {
+    throw new Error(`REFUSED: Cannot read trusted operator public key from ${trustedPublicKeyPath}: ${String(err)}`)
   }
 
-  validateTargetAgainstManifest(targetUrl, resourceManifest)
+  validateTargetAgainstManifest(targetUrl, signedManifest.manifest, trustedPublicKeyPem, signedManifest)
 
   const targetOutputFile = path.join(realEvidenceDir, safeOutputFilename)
   const checkpointFile = path.join(realEvidenceDir, `${safeOutputFilename}.checkpoint.json`)
@@ -248,7 +247,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
   const recoveryState: PartialRecoveryCheckpoint = {
     checkpointVersion: "1.0.0",
     startedAt: new Date().toISOString(),
-    targetDatabase: resourceManifest.targetDatabase,
+    targetDatabase: signedManifest.manifest.targetDatabase,
     status: "in_progress",
     completedSteps: [],
     principals: [],
@@ -361,7 +360,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     const payload = JSON.stringify(
       {
         created_at: new Date().toISOString(),
-        manifest: resourceManifest,
+        manifest: signedManifest.manifest,
         principals: finalSecrets,
       },
       null,
@@ -372,7 +371,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     recoveryState.status = "completed"
     await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
 
-    console.log(`[task-mfa-bootstrap] Prepared 2 canonical Persons and verified login bindings in ${resourceManifest.targetDatabase}`)
+    console.log(`[task-mfa-bootstrap] Prepared 2 canonical Persons and verified login bindings in ${signedManifest.manifest.targetDatabase}`)
   } catch (err: unknown) {
     recoveryState.status = "failed"
     recoveryState.error = err instanceof Error ? err.message : "Bootstrap operation failed"
