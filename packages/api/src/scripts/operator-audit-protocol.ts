@@ -420,45 +420,114 @@ export interface CommittedEntityDigest {
   readonly digestSha256: string
 }
 
+export interface ReadbackProvenance {
+  readonly verifierIdentity: "independent_database_readback_adapter"
+  readonly readbackTimestamp: string
+  readonly querySnapshotSha256: string
+}
+
 export interface CommittedStateEvidence {
   readonly ceremonyId: string
   readonly targetDatabase: string
   readonly transactionHash: string
+  readonly mfaLatchValue: "ARMED"
+  readonly provenance: ReadbackProvenance
   readonly committedEntities: CommittedEntityDigest[]
   readonly committedAt: string
   readonly stateDigestSha256: string
 }
 
-export function computeCommittedStateDigest(entities: CommittedEntityDigest[]): string {
+export interface DatabaseReadbackAdapter {
+  queryCommittedState(
+    targetDatabase: string,
+    transactionHash: string,
+    ceremonyId: string
+  ): Promise<CommittedStateEvidence>
+}
+
+export function computeCommittedStateDigest(
+  entities: CommittedEntityDigest[],
+  targetDatabase: string,
+  mfaLatchValue: "ARMED",
+  provenance: ReadbackProvenance
+): string {
   const sorted = [...entities].sort((a, b) => {
     const typeCmp = a.entityType.localeCompare(b.entityType)
     return typeCmp !== 0 ? typeCmp : a.entityId.localeCompare(b.entityId)
   })
-  return computeSha256Digest(canonicalJsonStringify(sorted))
+  const statePayload = {
+    targetDatabase,
+    mfaLatchValue,
+    provenance,
+    entities: sorted,
+  }
+  return computeSha256Digest(canonicalJsonStringify(statePayload))
 }
 
 export function createVerifiedCommittedStateEvidence(
   ceremonyId: string,
   targetDatabase: string,
   transactionHash: string,
+  mfaLatchValue: "ARMED",
+  provenance: ReadbackProvenance,
   committedEntities: CommittedEntityDigest[],
   committedAt: string = new Date().toISOString()
 ): CommittedStateEvidence {
   if (!transactionHash || typeof transactionHash !== "string" || transactionHash.trim() === "") {
     throw new Error("REFUSED: Invalid or missing transaction hash for committed state evidence")
   }
+  if (mfaLatchValue !== "ARMED") {
+    throw new Error(`REFUSED: Invalid MFA latch value for committed state evidence: expected "ARMED", got "${mfaLatchValue}"`)
+  }
+  if (!provenance || provenance.verifierIdentity !== "independent_database_readback_adapter" || !provenance.querySnapshotSha256) {
+    throw new Error("REFUSED: Invalid or unverified readback provenance")
+  }
   if (!Array.isArray(committedEntities) || committedEntities.length === 0) {
     throw new Error("REFUSED: Committed entities list cannot be empty")
   }
-  const stateDigestSha256 = computeCommittedStateDigest(committedEntities)
+  const stateDigestSha256 = computeCommittedStateDigest(committedEntities, targetDatabase, mfaLatchValue, provenance)
   return {
     ceremonyId,
     targetDatabase,
     transactionHash,
+    mfaLatchValue,
+    provenance,
     committedEntities,
     committedAt,
     stateDigestSha256,
   }
+}
+
+export async function verifyCommittedStateViaAdapter(
+  readbackAdapter: DatabaseReadbackAdapter | null,
+  targetDatabase: string,
+  transactionHash: string,
+  ceremonyId: string
+): Promise<CommittedStateEvidence> {
+  if (!readbackAdapter) {
+    throw new Error("BLOCKED: No trusted independent database readback adapter is commissioned")
+  }
+  const evidence = await readbackAdapter.queryCommittedState(targetDatabase, transactionHash, ceremonyId)
+  if (
+    !evidence ||
+    evidence.ceremonyId !== ceremonyId ||
+    evidence.targetDatabase !== targetDatabase ||
+    evidence.transactionHash !== transactionHash ||
+    evidence.mfaLatchValue !== "ARMED" ||
+    evidence.provenance?.verifierIdentity !== "independent_database_readback_adapter"
+  ) {
+    throw new Error("REFUSED: Database readback evidence failed integrity or provenance verification")
+  }
+  const expectedDigest = computeCommittedStateDigest(
+    evidence.committedEntities,
+    evidence.targetDatabase,
+    evidence.mfaLatchValue,
+    evidence.provenance
+  )
+  if (evidence.stateDigestSha256 !== expectedDigest) {
+    throw new Error("REFUSED: Database readback state digest mismatch")
+  }
+  return evidence
 }
 
 export interface SignedPreIntent {
@@ -535,7 +604,18 @@ export function createSignedPostCommitOutcome(
   if (evidence.ceremonyId !== ceremonyId || evidence.ceremonyId !== preIntent.ceremonyId) {
     throw new Error("REFUSED: Committed state evidence ceremonyId mismatch with preIntent")
   }
-  const expectedDigest = computeCommittedStateDigest(evidence.committedEntities)
+  if (evidence.mfaLatchValue !== "ARMED") {
+    throw new Error(`REFUSED: Committed state evidence MFA latch is not ARMED: "${evidence.mfaLatchValue}"`)
+  }
+  if (evidence.provenance?.verifierIdentity !== "independent_database_readback_adapter") {
+    throw new Error("REFUSED: Committed state evidence lacks independent readback provenance")
+  }
+  const expectedDigest = computeCommittedStateDigest(
+    evidence.committedEntities,
+    evidence.targetDatabase,
+    evidence.mfaLatchValue,
+    evidence.provenance
+  )
   if (evidence.stateDigestSha256 !== expectedDigest) {
     throw new Error("REFUSED: Committed state evidence digest verification failed")
   }
@@ -605,15 +685,27 @@ export function verifyCeremonyAuditChain(
     ) {
       return false
     }
-    if (committedStateEvidence) {
-      if (
-        committedStateEvidence.ceremonyId !== outcome.ceremonyId ||
-        committedStateEvidence.transactionHash !== outcome.transactionHash ||
-        committedStateEvidence.stateDigestSha256 !== outcome.stateDigestSha256 ||
-        committedStateEvidence.committedEntities.length !== outcome.committedEntitiesCount
-      ) {
-        return false
-      }
+    if (!committedStateEvidence) {
+      return false
+    }
+    if (
+      committedStateEvidence.ceremonyId !== outcome.ceremonyId ||
+      committedStateEvidence.transactionHash !== outcome.transactionHash ||
+      committedStateEvidence.stateDigestSha256 !== outcome.stateDigestSha256 ||
+      committedStateEvidence.committedEntities.length !== outcome.committedEntitiesCount ||
+      committedStateEvidence.mfaLatchValue !== "ARMED" ||
+      committedStateEvidence.provenance?.verifierIdentity !== "independent_database_readback_adapter"
+    ) {
+      return false
+    }
+    const expectedDigest = computeCommittedStateDigest(
+      committedStateEvidence.committedEntities,
+      committedStateEvidence.targetDatabase,
+      committedStateEvidence.mfaLatchValue,
+      committedStateEvidence.provenance
+    )
+    if (committedStateEvidence.stateDigestSha256 !== expectedDigest) {
+      return false
     }
   }
 
@@ -637,6 +729,10 @@ export interface PathSecurityInspection {
   readonly owner: string
   readonly isReparsePoint: boolean
   readonly entries: AccessControlEntry[]
+}
+
+export interface SecurityEnvironmentAdapter {
+  inspectPathSecurity(targetPath: string): Promise<PathSecurityInspection>
 }
 
 export function verifyPathEffectiveSecurity(
@@ -705,6 +801,52 @@ export interface CheckpointStorageAdapter {
   exists(filepath: string): Promise<boolean>
   read(filepath: string): Promise<string>
   atomicWrite(filepath: string, content: string): Promise<void>
+}
+
+/**
+ * Real durable filesystem checkpoint adapter:
+ * - Uses exclusive flag 'wx' with restricted mode 0o600 on temp file.
+ * - Flushes file to disk with fsync (fileHandle.sync()) before rename.
+ * - Atomically renames over destination.
+ */
+export class FilesystemDurableCheckpointAdapter implements CheckpointStorageAdapter {
+  async exists(filepath: string): Promise<boolean> {
+    try {
+      const { access } = await import("node:fs/promises")
+      await access(filepath)
+      return true
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return false
+      throw err
+    }
+  }
+
+  async read(filepath: string): Promise<string> {
+    const { readFile } = await import("node:fs/promises")
+    return readFile(filepath, "utf8")
+  }
+
+  async atomicWrite(filepath: string, content: string): Promise<void> {
+    const path = await import("node:path")
+    const { open, rename, unlink } = await import("node:fs/promises")
+    const dir = path.dirname(filepath)
+    const tmpFile = path.join(dir, `${path.basename(filepath)}.tmp.${process.pid}.${Date.now()}`)
+    const handle = await open(tmpFile, "wx", 0o600)
+    try {
+      await handle.writeFile(content, "utf8")
+      await handle.sync()
+    } catch (err) {
+      try {
+        await unlink(tmpFile)
+      } catch {
+        // ignore cleanup error
+      }
+      throw err
+    } finally {
+      await handle.close()
+    }
+    await rename(tmpFile, filepath)
+  }
 }
 
 export class DurableCheckpointManager {
@@ -776,39 +918,21 @@ export class DurableCheckpointManager {
 }
 
 // ---------------------------------------------------------------------------
-// Durable Atomic Nonce Store (Restart-Safe)
+// Atomic Nonce Store with Claim-If-Absent Semantics (Race-Free)
 // ---------------------------------------------------------------------------
 
-export interface NonceStorageAdapter {
-  loadExistingNonces(): Promise<Array<{ nonce: string; runId: string; expiresAt: string }>>
-  persistNonce(entry: { nonce: string; runId: string; expiresAt: string }): Promise<void>
+export interface AtomicNonceStorageAdapter {
+  claimIfAbsent(entry: { nonce: string; runId: string; expiresAt: string }): Promise<boolean>
 }
 
 export class DurableAtomicNonceStore implements AtomicNonceStore {
-  private inMemory = new Map<string, { runId: string; expiresAt: string }>()
-  private initialized = false
-
-  constructor(private adapter: NonceStorageAdapter) {}
-
-  private async ensureInitialized(): Promise<void> {
-    if (!this.initialized) {
-      const records = await this.adapter.loadExistingNonces()
-      for (const r of records) {
-        this.inMemory.set(r.nonce, { runId: r.runId, expiresAt: r.expiresAt })
-      }
-      this.initialized = true
-    }
-  }
+  constructor(private adapter: AtomicNonceStorageAdapter) {}
 
   async claimOnce(nonce: string, runId: string, expiresAt: string): Promise<boolean> {
-    await this.ensureInitialized()
-    if (this.inMemory.has(nonce)) {
-      return false
+    if (!nonce || typeof nonce !== "string" || nonce.trim() === "") {
+      throw new Error("REFUSED: Invalid nonce for atomic claim")
     }
-    const record = { nonce, runId, expiresAt }
-    await this.adapter.persistNonce(record)
-    this.inMemory.set(nonce, { runId, expiresAt })
-    return true
+    return this.adapter.claimIfAbsent({ nonce, runId, expiresAt })
   }
 }
 

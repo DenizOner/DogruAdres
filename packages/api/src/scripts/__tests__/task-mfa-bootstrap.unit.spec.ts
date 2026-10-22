@@ -17,14 +17,18 @@ import {
   PinnedOperatorApproval,
   createVerifiedCommittedStateEvidence,
   computeCommittedStateDigest,
+  verifyCommittedStateViaAdapter,
   CommittedStateEvidence,
+  ReadbackProvenance,
+  DatabaseReadbackAdapter,
   verifyPathEffectiveSecurity,
   PathSecurityInspection,
   redactSensitiveData,
   DurableCheckpointManager,
   CheckpointStorageAdapter,
+  FilesystemDurableCheckpointAdapter,
   DurableAtomicNonceStore,
-  NonceStorageAdapter,
+  AtomicNonceStorageAdapter,
   verifyBootstrapExecutionPrerequisites,
   executeBootstrapController,
   ExecutionControllerContext,
@@ -379,6 +383,12 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
   })
 
   describe("4. Chained Audit Verification & Verifiable Committed State", () => {
+    const validProvenance: ReadbackProvenance = {
+      verifierIdentity: "independent_database_readback_adapter",
+      readbackTimestamp: "2026-10-22T20:30:04.000Z",
+      querySnapshotSha256: "snapshot_hash_abc_123",
+    }
+
     it("validates valid chain and rejects inverted temporal order or unverified transaction hash", () => {
       const ceremonyId = "ceremony_mfa_closeout_01"
       const preIntent = createSignedPreIntent(
@@ -393,6 +403,8 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         ceremonyId,
         baseManifest.targetDatabase,
         "tx_hash_valid_777",
+        "ARMED",
+        validProvenance,
         [
           { entityType: "user", entityId: "usr_01", digestSha256: "digest_u1" },
           { entityType: "person", entityId: "per_01", digestSha256: "digest_p1" },
@@ -429,15 +441,51 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         )
       ).toThrow(/createSignedPostCommitOutcome requires verified CommittedStateEvidence/)
 
+      // Rejects unverified / missing evidence in verifyCeremonyAuditChain
+      expect(verifyCeremonyAuditChain(preIntent, validOutcome, publicKeyPem)).toBe(false)
+
       // Rejects forged / mismatched evidence in verifyCeremonyAuditChain
-      const forgedEvidence = createVerifiedCommittedStateEvidence(
-        ceremonyId,
-        baseManifest.targetDatabase,
-        "tx_hash_forged_999",
-        [{ entityType: "user", entityId: "usr_forged", digestSha256: "forged" }],
-        "2026-10-22T20:30:04.000Z"
-      )
+      const forgedEvidence: CommittedStateEvidence = {
+        ...validEvidence,
+        transactionHash: "tx_hash_forged_999",
+      }
       expect(verifyCeremonyAuditChain(preIntent, validOutcome, publicKeyPem, forgedEvidence)).toBe(false)
+    })
+
+    it("rejects invalid MFA latch value or missing independent provenance", () => {
+      const ceremonyId = "ceremony_mfa_closeout_02"
+      expect(() =>
+        createVerifiedCommittedStateEvidence(
+          ceremonyId,
+          baseManifest.targetDatabase,
+          "tx_hash_test",
+          "UNARMED" as any,
+          validProvenance,
+          [{ entityType: "user", entityId: "usr_01", digestSha256: "digest_u1" }]
+        )
+      ).toThrow(/Invalid MFA latch value for committed state evidence/)
+
+      const badProvenance = {
+        verifierIdentity: "untrusted_caller" as any,
+        readbackTimestamp: "2026-10-22T20:30:00.000Z",
+        querySnapshotSha256: "fake",
+      }
+      expect(() =>
+        createVerifiedCommittedStateEvidence(
+          ceremonyId,
+          baseManifest.targetDatabase,
+          "tx_hash_test",
+          "ARMED",
+          badProvenance,
+          [{ entityType: "user", entityId: "usr_01", digestSha256: "digest_u1" }]
+        )
+      ).toThrow(/Invalid or unverified readback provenance/)
+    })
+
+    it("explicitly remains BLOCKED when no trusted database readback adapter is commissioned", async () => {
+      await expect(
+        verifyCommittedStateViaAdapter(null, "target_db", "tx_hash", "ceremony_01")
+      ).rejects.toThrow(/BLOCKED: No trusted independent database readback adapter is commissioned/)
     })
   })
 
@@ -577,34 +625,54 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         /Checkpoint already exists with status "failed". Unsafe retry prevented/
       )
     })
-  })
 
-  describe("7. Durable Atomic Nonce Store (Restart-Safe)", () => {
-    it("persists claimed nonces and rejects replay across process restarts", async () => {
-      const persistedRecords: Array<{ nonce: string; runId: string; expiresAt: string }> = []
-      const mockNonceAdapter: NonceStorageAdapter = {
-        loadExistingNonces: async () => [...persistedRecords],
-        persistNonce: async (entry) => {
-          persistedRecords.push(entry)
+    it("rejects corrupted or interrupted checkpoint files with manual forensic review error", async () => {
+      const storage = new Map<string, string>()
+      storage.set("C:\\evidence\\corrupt.checkpoint.json", "{ malformed_json: true, unterminated")
+
+      const mockStorageAdapter: CheckpointStorageAdapter = {
+        exists: async (fp) => storage.has(fp),
+        read: async (fp) => storage.get(fp)!,
+        atomicWrite: async (fp, content) => {
+          storage.set(fp, content)
         },
       }
 
-      // First process session
-      const session1Store = new DurableAtomicNonceStore(mockNonceAdapter)
-      const claimed1 = await session1Store.claimOnce("nonce_unique_101", "run_01", "2026-10-22T21:00:00.000Z")
-      expect(claimed1).toBe(true)
+      const manager = new DurableCheckpointManager(mockStorageAdapter)
+      await expect(
+        manager.initializeCheckpoint("C:\\evidence\\corrupt.checkpoint.json", "target_db")
+      ).rejects.toThrow(/Corrupted checkpoint exists.*Manual forensic review required/)
+    })
+  })
 
-      const duplicateClaim = await session1Store.claimOnce("nonce_unique_101", "run_01", "2026-10-22T21:00:00.000Z")
-      expect(duplicateClaim).toBe(false)
+  describe("7. Durable Atomic Nonce Store & Cross-Instance Race Safety", () => {
+    it("guarantees atomic claim-if-absent across competing store instances and rejects replays", async () => {
+      const persistedClaims = new Map<string, { runId: string; expiresAt: string }>()
+      const sharedAdapter: AtomicNonceStorageAdapter = {
+        claimIfAbsent: async (entry) => {
+          if (persistedClaims.has(entry.nonce)) {
+            return false
+          }
+          persistedClaims.set(entry.nonce, { runId: entry.runId, expiresAt: entry.expiresAt })
+          return true
+        },
+      }
 
-      // Simulated process restart: new instance reading persisted records
-      const session2Store = new DurableAtomicNonceStore(mockNonceAdapter)
-      const replayClaim = await session2Store.claimOnce("nonce_unique_101", "run_02", "2026-10-22T21:00:00.000Z")
-      expect(replayClaim).toBe(false)
+      const instanceA = new DurableAtomicNonceStore(sharedAdapter)
+      const instanceB = new DurableAtomicNonceStore(sharedAdapter)
 
-      // Fresh nonce succeeds
-      const freshClaim = await session2Store.claimOnce("nonce_unique_102", "run_02", "2026-10-22T21:00:00.000Z")
-      expect(freshClaim).toBe(true)
+      // Concurrent race between two distinct instances for the exact same nonce
+      const [claimA, claimB] = await Promise.all([
+        instanceA.claimOnce("nonce_race_999", "run_A", "2026-10-22T22:00:00Z"),
+        instanceB.claimOnce("nonce_race_999", "run_B", "2026-10-22T22:00:00Z"),
+      ])
+
+      // Exactly one must succeed, the other must fail closed
+      expect((claimA && !claimB) || (!claimA && claimB)).toBe(true)
+
+      // Both instances now see the nonce as consumed
+      expect(await instanceA.claimOnce("nonce_race_999", "run_A2", "2026-10-22T22:00:00Z")).toBe(false)
+      expect(await instanceB.claimOnce("nonce_race_999", "run_B2", "2026-10-22T22:00:00Z")).toBe(false)
     })
   })
 
@@ -758,12 +826,12 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
     })
   })
 
-  describe("5. Execution Safety Gate", () => {
+  describe("9. Real Bootstrap Entry Point Fail-Closed & Controller Enforcement", () => {
     it("enforces BOOTSTRAP_EXECUTION_GATE_OPEN is false", () => {
       expect(BOOTSTRAP_EXECUTION_GATE_OPEN).toBe(false)
     })
 
-    it("throws immediately when called with closed gate", async () => {
+    it("throws immediately when called with closed gate and redacts sensitive info", async () => {
       await expect(taskMfaBootstrap({ container: {} as any, args: [] })).rejects.toThrow(
         /BOOTSTRAP_EXECUTION_GATE_OPEN = false/
       )

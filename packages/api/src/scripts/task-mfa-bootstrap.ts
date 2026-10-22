@@ -13,6 +13,15 @@ import {
   redactSensitiveData,
   PinnedOperatorApproval,
   TrustedOperatorRegistry,
+  RuntimeResourceAdapter,
+  AtomicNonceStorageAdapter,
+  SecurityEnvironmentAdapter,
+  DatabaseReadbackAdapter,
+  DurableAtomicNonceStore,
+  FilesystemDurableCheckpointAdapter,
+  DurableCheckpointManager,
+  PartialRecoveryCheckpoint,
+  executeBootstrapController,
 } from "./operator-audit-protocol"
 
 /**
@@ -28,6 +37,15 @@ export const BOOTSTRAP_EXECUTION_GATE_OPEN = false
  * variable. It requires a separately approved, source-reviewed runtime controller.
  */
 export const INDEPENDENT_PINNED_OPERATOR_APPROVAL: PinnedOperatorApproval | null = null
+
+/**
+ * In this source-only checkpoint, no real Docker daemon, persistent database
+ * or independent readback adapter has been commissioned.
+ */
+export const NATIVE_RESOURCE_ADAPTER: RuntimeResourceAdapter | null = null
+export const NATIVE_NONCE_STORAGE_ADAPTER: AtomicNonceStorageAdapter | null = null
+export const NATIVE_SECURITY_ADAPTER: SecurityEnvironmentAdapter | null = null
+export const NATIVE_READBACK_ADAPTER: DatabaseReadbackAdapter | null = null
 
 export const FORBIDDEN_DATABASE_PATTERNS: ReadonlyArray<RegExp> = [
   /^m0ssi_a7f1$/i,
@@ -177,219 +195,222 @@ export async function verifyCleanPreconditions(db: Client): Promise<void> {
   }
 }
 
-export interface PartialRecoveryCheckpoint {
-  readonly checkpointVersion: string
-  readonly startedAt: string
-  readonly targetDatabase: string
-  status: "in_progress" | "failed" | "completed"
-  completedSteps: string[]
-  error?: string
-  principals: Array<{
-    label: "A" | "B"
-    userId?: string
-    authIdentityId?: string
-    personId?: string
-    bindingCreated: boolean
-  }>
-}
+export { PartialRecoveryCheckpoint }
 
 export default async function taskMfaBootstrap({ container }: ExecArgs): Promise<void> {
-  if (!BOOTSTRAP_EXECUTION_GATE_OPEN) {
-    throw new Error(
-      "REFUSED: taskMfaBootstrap is locked by BOOTSTRAP_EXECUTION_GATE_OPEN = false. Execution is prohibited until an independently authorized clean environment is commissioned."
-    )
-  }
-
-  const dbUrl = process.env.DATABASE_URL
-  if (!dbUrl) throw new Error("DATABASE_URL is missing")
-  const targetUrl = new URL(dbUrl)
-
-  const manifestPath = process.env.M0_RESOURCE_MANIFEST_PATH
-  const evidenceDir = process.env.M0_FIXTURE_EVIDENCE_DIR
-  const outputFilenameRaw = process.env.M0_BOOTSTRAP_OUTPUT_FILE || "task-mfa-users.private.json"
-  const trustedRegistryPath = process.env.M0_TRUSTED_REGISTRY_PATH
-
-  if (!manifestPath || !evidenceDir || !trustedRegistryPath) {
-    throw new Error("REFUSED: Missing M0_RESOURCE_MANIFEST_PATH, M0_FIXTURE_EVIDENCE_DIR, or M0_TRUSTED_REGISTRY_PATH")
-  }
-
-  const safeOutputFilename = validateSafeBasename(outputFilenameRaw)
-  const { realEvidenceDir } = await validatePathSecurity(evidenceDir)
-
-  let signedManifest: SignedTaskManifest
   try {
-    const rawContent = await (await import("node:fs/promises")).readFile(manifestPath, "utf8")
-    signedManifest = JSON.parse(rawContent) as SignedTaskManifest
-  } catch (err: unknown) {
-    throw new Error(`REFUSED: Cannot read or parse resource manifest from ${manifestPath}: ${String(err)}`)
-  }
-
-  let trustedRegistry: TrustedOperatorRegistry
-  try {
-    const registryRaw = await (await import("node:fs/promises")).readFile(trustedRegistryPath, "utf8")
-    const parsedRegistry = JSON.parse(registryRaw)
-    trustedRegistry = createTrustedOperatorRegistry(parsedRegistry, INDEPENDENT_PINNED_OPERATOR_APPROVAL)
-  } catch (err: unknown) {
-    throw new Error(`REFUSED: Cannot construct validated operator registry from ${trustedRegistryPath}: ${String(err)}`)
-  }
-
-  validateTargetAgainstManifest(targetUrl, signedManifest.manifest, trustedRegistry, signedManifest)
-
-  const targetOutputFile = path.join(realEvidenceDir, safeOutputFilename)
-  const checkpointFile = path.join(realEvidenceDir, `${safeOutputFilename}.checkpoint.json`)
-
-  try {
-    await access(targetOutputFile)
-    throw new Error(`REFUSED: Final output file ${safeOutputFilename} already exists in evidence dir`)
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err
-  }
-
-  try {
-    await access(checkpointFile)
-    throw new Error(`REFUSED: Previous incomplete checkpoint ${path.basename(checkpointFile)} exists. Manual forensic review required`)
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err
-  }
-
-  const recoveryState: PartialRecoveryCheckpoint = {
-    checkpointVersion: "1.0.0",
-    startedAt: new Date().toISOString(),
-    targetDatabase: signedManifest.manifest.targetDatabase,
-    status: "in_progress",
-    completedSteps: [],
-    principals: [],
-  }
-
-  await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600, flag: "wx" })
-
-  const db = new Client({ connectionString: dbUrl })
-  await db.connect()
-
-  const finalSecrets: Array<{
-    label: "A" | "B"
-    email: string
-    password: string
-    userId: string
-    authIdentityId: string
-    personId: string
-  }> = []
-
-  try {
-    await verifyCleanPreconditions(db)
-    recoveryState.completedSteps.push("preconditions_verified")
-    await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
-
-    const auth: IAuthModuleService = container.resolve("auth")
-    const foundation: DogruAdresAccessModuleService = container.resolve("dogruadresAccess")
-
-    for (const label of ["A", "B"] as const) {
-      const entropy = randomBytes(16).toString("hex")
-      const email = `task-mfa-person-${label.toLowerCase()}-${entropy}@task.invalid`
-      const password = randomBytes(32).toString("base64url")
-
-      const reg = await auth.register("emailpass", { body: { email, password } })
-      if (!reg.success || !reg.authIdentity) {
-        throw new Error(`Failed native registration for Person ${label}`)
-      }
-      const authIdentityId = reg.authIdentity.id
-      recoveryState.completedSteps.push(`auth_registered_${label}`)
-      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
-
-      const workflowResult = await createUserAccountWorkflow(container).run({
-        input: {
-          authIdentityId,
-          userData: { email },
-        },
-      })
-      const user = workflowResult.result
-      if (!user || !user.id) {
-        throw new Error(`Failed official createUserAccountWorkflow for Person ${label}`)
-      }
-      recoveryState.completedSteps.push(`user_account_workflow_completed_${label}`)
-      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
-
-      const verify = await auth.authenticate("emailpass", { body: { email, password } })
-      if (!verify.success || verify.authIdentity?.app_metadata?.user_id !== user.id) {
-        throw new Error(`Server-side native User ownership verification failed for Person ${label}`)
-      }
-      recoveryState.completedSteps.push(`ownership_verified_${label}`)
-      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
-
-      const factors = await auth.listAuthMfa({ auth_identity_id: authIdentityId })
-      if (factors.length > 0) {
-        throw new Error(`Integrity violation: Pre-existing MFA factor on fresh Person ${label}`)
-      }
-
-      const [person] = await foundation.createPeople([
-        { display_name: `Task Person ${label}` },
-      ])
-      recoveryState.completedSteps.push(`person_created_${label}`)
-      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
-
-      await foundation.createActorMappings([
-        {
-          actor_type: "user",
-          actor_id: user.id,
-          person_id: person.id,
-          created_by_actor_type: "user",
-          created_by_actor_id: user.id,
-        },
-      ])
-      recoveryState.completedSteps.push(`actor_mapped_${label}`)
-      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
-
-      await db.query(
-        `INSERT INTO da_login_binding (auth_identity_id, person_id, actor_type, actor_id, verified_at)
-         VALUES ($1, $2, 'user', $3, now())`,
-        [authIdentityId, person.id, user.id]
+    if (!BOOTSTRAP_EXECUTION_GATE_OPEN) {
+      throw new Error(
+        "REFUSED: taskMfaBootstrap is locked by BOOTSTRAP_EXECUTION_GATE_OPEN = false. Execution is prohibited until an independently authorized clean environment is commissioned."
       )
-      recoveryState.completedSteps.push(`binding_inserted_${label}`)
-
-      recoveryState.principals.push({
-        label,
-        userId: user.id,
-        authIdentityId,
-        personId: person.id,
-        bindingCreated: true,
-      })
-      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
-
-      finalSecrets.push({
-        label,
-        email,
-        password,
-        userId: user.id,
-        authIdentityId,
-        personId: person.id,
-      })
     }
 
-    const payload = JSON.stringify(
-      {
-        created_at: new Date().toISOString(),
-        manifest: signedManifest.manifest,
-        principals: finalSecrets,
-      },
-      null,
-      2
+    if (!INDEPENDENT_PINNED_OPERATOR_APPROVAL) {
+      throw new Error(
+        "REFUSED: taskMfaBootstrap is locked by INDEPENDENT_PINNED_OPERATOR_APPROVAL = null. Execution requires an independently approved and source-pinned authorization."
+      )
+    }
+
+    if (
+      !NATIVE_RESOURCE_ADAPTER ||
+      !NATIVE_NONCE_STORAGE_ADAPTER ||
+      !NATIVE_SECURITY_ADAPTER ||
+      !NATIVE_READBACK_ADAPTER
+    ) {
+      throw new Error(
+        "REFUSED: Required native runtime adapters (Resource, NonceStorage, Security, Readback) are not commissioned. Execution remains strictly fail-closed."
+      )
+    }
+
+    const dbUrl = process.env.DATABASE_URL
+    if (!dbUrl) throw new Error("DATABASE_URL is missing")
+    const targetUrl = new URL(dbUrl)
+
+    const manifestPath = process.env.M0_RESOURCE_MANIFEST_PATH
+    const evidenceDir = process.env.M0_FIXTURE_EVIDENCE_DIR
+    const outputFilenameRaw = process.env.M0_BOOTSTRAP_OUTPUT_FILE || "task-mfa-users.private.json"
+    const trustedRegistryPath = process.env.M0_TRUSTED_REGISTRY_PATH
+
+    if (!manifestPath || !evidenceDir || !trustedRegistryPath) {
+      throw new Error("REFUSED: Missing M0_RESOURCE_MANIFEST_PATH, M0_FIXTURE_EVIDENCE_DIR, or M0_TRUSTED_REGISTRY_PATH")
+    }
+
+    const safeOutputFilename = validateSafeBasename(outputFilenameRaw)
+    const { realEvidenceDir } = await validatePathSecurity(evidenceDir)
+
+    let signedManifest: SignedTaskManifest
+    try {
+      const rawContent = await (await import("node:fs/promises")).readFile(manifestPath, "utf8")
+      signedManifest = JSON.parse(rawContent) as SignedTaskManifest
+    } catch (err: unknown) {
+      throw new Error(`REFUSED: Cannot read or parse resource manifest from ${manifestPath}: ${String(err)}`)
+    }
+
+    let trustedRegistry: TrustedOperatorRegistry
+    try {
+      const registryRaw = await (await import("node:fs/promises")).readFile(trustedRegistryPath, "utf8")
+      const parsedRegistry = JSON.parse(registryRaw)
+      trustedRegistry = createTrustedOperatorRegistry(parsedRegistry, INDEPENDENT_PINNED_OPERATOR_APPROVAL)
+    } catch (err: unknown) {
+      throw new Error(`REFUSED: Cannot construct validated operator registry from ${trustedRegistryPath}: ${String(err)}`)
+    }
+
+    validateTargetAgainstManifest(targetUrl, signedManifest.manifest, trustedRegistry, signedManifest)
+
+    const targetOutputFile = path.join(realEvidenceDir, safeOutputFilename)
+    const checkpointFile = path.join(realEvidenceDir, `${safeOutputFilename}.checkpoint.json`)
+
+    try {
+      await access(targetOutputFile)
+      throw new Error(`REFUSED: Final output file ${safeOutputFilename} already exists in evidence dir`)
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err
+    }
+
+    const checkpointAdapter = new FilesystemDurableCheckpointAdapter()
+    const checkpointManager = new DurableCheckpointManager(checkpointAdapter)
+
+    const recoveryState = await checkpointManager.initializeCheckpoint(
+      checkpointFile,
+      signedManifest.manifest.targetDatabase
     )
 
-    await writeFile(targetOutputFile, payload, { mode: 0o600, flag: "wx" })
-    recoveryState.status = "completed"
-    await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
+    const nonceStore = new DurableAtomicNonceStore(NATIVE_NONCE_STORAGE_ADAPTER)
+    const pathInspection = await NATIVE_SECURITY_ADAPTER.inspectPathSecurity(checkpointFile)
 
-    console.log(`[task-mfa-bootstrap] Prepared 2 canonical Persons and verified login bindings in ${signedManifest.manifest.targetDatabase}`)
-  } catch (err: unknown) {
-    recoveryState.status = "failed"
-    recoveryState.error = redactSensitiveData(err instanceof Error ? err.message : "Bootstrap operation failed")
-    try {
-      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
-    } catch {
-      // Best-effort write of failure state
+    const executionCtx = {
+      executionGateOpen: BOOTSTRAP_EXECUTION_GATE_OPEN,
+      pinnedApproval: INDEPENDENT_PINNED_OPERATOR_APPROVAL,
+      registryData: JSON.parse(await (await import("node:fs/promises")).readFile(trustedRegistryPath, "utf8")),
+      signedManifest,
+      resourceAdapter: NATIVE_RESOURCE_ADAPTER,
+      nonceStore,
+      pathSecurityInspection: pathInspection,
+      connectionString: dbUrl,
     }
-    throw err
-  } finally {
-    await db.end()
+
+    await executeBootstrapController(executionCtx, async () => {
+      const db = new Client({ connectionString: dbUrl })
+      await db.connect()
+
+      const finalSecrets: Array<{
+        label: "A" | "B"
+        email: string
+        password: string
+        userId: string
+        authIdentityId: string
+        personId: string
+      }> = []
+
+      try {
+        await verifyCleanPreconditions(db)
+        await checkpointManager.recordStep(checkpointFile, recoveryState, "preconditions_verified")
+
+        const auth: IAuthModuleService = container.resolve("auth")
+        const foundation: DogruAdresAccessModuleService = container.resolve("dogruadresAccess")
+
+        for (const label of ["A", "B"] as const) {
+          const entropy = randomBytes(16).toString("hex")
+          const email = `task-mfa-person-${label.toLowerCase()}-${entropy}@task.invalid`
+          const password = randomBytes(32).toString("base64url")
+
+          const reg = await auth.register("emailpass", { body: { email, password } })
+          if (!reg.success || !reg.authIdentity) {
+            throw new Error(`Failed native registration for Person ${label}`)
+          }
+          const authIdentityId = reg.authIdentity.id
+          await checkpointManager.recordStep(checkpointFile, recoveryState, `auth_registered_${label}`)
+
+          const workflowResult = await createUserAccountWorkflow(container).run({
+            input: {
+              authIdentityId,
+              userData: { email },
+            },
+          })
+          const user = workflowResult.result
+          if (!user || !user.id) {
+            throw new Error(`Failed official createUserAccountWorkflow for Person ${label}`)
+          }
+          await checkpointManager.recordStep(checkpointFile, recoveryState, `user_account_workflow_completed_${label}`)
+
+          const verify = await auth.authenticate("emailpass", { body: { email, password } })
+          if (!verify.success || verify.authIdentity?.app_metadata?.user_id !== user.id) {
+            throw new Error(`Server-side native User ownership verification failed for Person ${label}`)
+          }
+          await checkpointManager.recordStep(checkpointFile, recoveryState, `ownership_verified_${label}`)
+
+          const factors = await auth.listAuthMfa({ auth_identity_id: authIdentityId })
+          if (factors.length > 0) {
+            throw new Error(`Integrity violation: Pre-existing MFA factor on fresh Person ${label}`)
+          }
+
+          const [person] = await foundation.createPeople([
+            { display_name: `Task Person ${label}` },
+          ])
+          await checkpointManager.recordStep(checkpointFile, recoveryState, `person_created_${label}`)
+
+          await foundation.createActorMappings([
+            {
+              actor_type: "user",
+              actor_id: user.id,
+              person_id: person.id,
+              created_by_actor_type: "user",
+              created_by_actor_id: user.id,
+            },
+          ])
+          await checkpointManager.recordStep(checkpointFile, recoveryState, `actor_mapped_${label}`)
+
+          await db.query(
+            `INSERT INTO da_login_binding (auth_identity_id, person_id, actor_type, actor_id, verified_at)
+             VALUES ($1, $2, 'user', $3, now())`,
+            [authIdentityId, person.id, user.id]
+          )
+          await checkpointManager.recordStep(
+            checkpointFile,
+            recoveryState,
+            `binding_inserted_${label}`,
+            {
+              label,
+              userId: user.id,
+              authIdentityId,
+              personId: person.id,
+              bindingCreated: true,
+            }
+          )
+
+          finalSecrets.push({
+            label,
+            email,
+            password,
+            userId: user.id,
+            authIdentityId,
+            personId: person.id,
+          })
+        }
+
+        const payload = JSON.stringify(
+          {
+            created_at: new Date().toISOString(),
+            manifest: signedManifest.manifest,
+            principals: finalSecrets,
+          },
+          null,
+          2
+        )
+
+        await writeFile(targetOutputFile, payload, { mode: 0o600, flag: "wx" })
+        await checkpointManager.markCompleted(checkpointFile, recoveryState)
+
+        console.log(`[task-mfa-bootstrap] Prepared 2 canonical Persons and verified login bindings in ${signedManifest.manifest.targetDatabase}`)
+      } catch (err: unknown) {
+        await checkpointManager.recordFailure(checkpointFile, recoveryState, err)
+        throw err
+      } finally {
+        await db.end()
+      }
+    })
+  } catch (err: unknown) {
+    const sanitizedMsg = redactSensitiveData(err instanceof Error ? err.message : String(err))
+    throw new Error(sanitizedMsg)
   }
 }
