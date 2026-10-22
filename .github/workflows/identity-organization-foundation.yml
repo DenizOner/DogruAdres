@@ -211,6 +211,7 @@ jobs:
         run: |
           bun integration-tests/postgres/mfa-persistence.pg16.test.ts
           bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
+          bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
       # The test erases its own schema in finally. GitHub Actions terminates and
       # removes this ephemeral PostgreSQL service on job exit/cancel. There is
       # no repository volume, persistent fixture or access to the M0 task DB.
