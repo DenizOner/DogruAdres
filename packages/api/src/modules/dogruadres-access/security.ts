@@ -47,6 +47,8 @@ export const hashInvitationToken = (token: string) =>
   createHash("sha256").update(token, "utf8").digest("hex")
 
 export const invitationTokenMatches = (token: string, expectedHash: string) => {
+  // An empty/whitespace token or malformed persisted digest cannot authorize.
+  if (!token.trim() || !/^[a-f0-9]{64}$/i.test(expectedHash)) return false
   const actual = Buffer.from(hashInvitationToken(token), "hex")
   const expected = Buffer.from(expectedHash, "hex")
   return actual.length === expected.length && timingSafeEqual(actual, expected)

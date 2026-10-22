@@ -8,9 +8,12 @@ export type InvitationAcceptanceInput = Readonly<{
 }>
 
 export function mayAcceptInvitation(input: InvitationAcceptanceInput) {
+  const recipient = input.recipientEmail.trim().toLowerCase()
+  const verified = input.verifiedEmail?.trim().toLowerCase()
   return input.status === "pending" &&
     input.expiresAt.getTime() > input.now.getTime() &&
-    input.verifiedEmail !== null &&
-    input.recipientEmail.trim().toLowerCase() === input.verifiedEmail.trim().toLowerCase() &&
+    Boolean(recipient) &&
+    Boolean(verified) &&
+    recipient === verified &&
     input.tokenMatches
 }

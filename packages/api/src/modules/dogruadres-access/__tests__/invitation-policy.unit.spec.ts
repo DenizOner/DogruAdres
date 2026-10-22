@@ -58,6 +58,14 @@ describe("mayAcceptInvitation", () => {
     expect(mayAcceptInvitation({ ...valid, verifiedEmail: "" })).toBe(false)
   })
 
+  it("rejects when both recipient and verified emails are empty", () => {
+    expect(mayAcceptInvitation({ ...valid, recipientEmail: "", verifiedEmail: "" })).toBe(false)
+  })
+
+  it("rejects when both emails normalize to whitespace-only empty strings", () => {
+    expect(mayAcceptInvitation({ ...valid, recipientEmail: "  ", verifiedEmail: "\t " })).toBe(false)
+  })
+
   // -- Email matching gate
   it("rejects a mismatched verified email", () => {
     expect(mayAcceptInvitation({ ...valid, verifiedEmail: "other@example.test" })).toBe(false)

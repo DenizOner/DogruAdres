@@ -117,10 +117,21 @@ describe("invitationTokenMatches", () => {
     expect(invitationTokenMatches("Token", hash)).toBe(false)
   })
 
-  it("handles an empty token without throwing", () => {
+  it("rejects an empty token even against its own digest", () => {
     const hash = hashInvitationToken("")
-    expect(invitationTokenMatches("", hash)).toBe(true)
+    expect(invitationTokenMatches("", hash)).toBe(false)
   })
+
+  it("rejects whitespace-only tokens even against their own digest", () => {
+    expect(invitationTokenMatches("   ", hashInvitationToken("   "))).toBe(false)
+  })
+
+  it.each(["", "123", "z".repeat(64), "a".repeat(63)])(
+    "rejects malformed stored invitation digests",
+    (digest) => {
+      expect(invitationTokenMatches("valid-test-token", digest)).toBe(false)
+    }
+  )
 })
 
 describe("deriveInvitationToken (secret validation)", () => {
