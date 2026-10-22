@@ -191,5 +191,55 @@ moduleIntegrationTestRunner<AccessService>({
       const replayAudit=await q("select count(*)::int as n from da_audit_event where action='organization.invitation_accepted' and target_id=?",[created.id])
       expect(Number(replayAudit[0].n)).toBe(1)
     })
+    it("serializes two concurrent invitation revocations with exactly one audit/outbox",async()=>{
+      const provisioned=await service.provisionOrganization(operation)
+      const person=await service.resolvePersonForActor(actor)
+      expect(person?.id).toBeTruthy()
+      const scope={
+        organization_id:provisioned.organization.id,actor_person_id:person!.id,
+        actor_type:"user",actor_id:actor.actor_id,
+      }
+      const invite=await service.createOrganizationInvitation({
+        ...scope,email:"race-revoke@example.invalid",role:"member",
+      })
+      const request={...scope,invitation_id:invite.id}
+      const outcomes=await Promise.allSettled([
+        service.revokeOrganizationInvitation(request),
+        service.revokeOrganizationInvitation(request),
+      ])
+      expect(outcomes.filter(r=>r.status==="fulfilled")).toHaveLength(1)
+      expect(outcomes.filter(r=>r.status==="rejected")).toHaveLength(1)
+      const after=await q("select status from da_organization_invitation where id=?",[invite.id])
+      expect(after[0].status).toBe("revoked")
+      const audits=await q("select id from da_audit_event where target_id=? and action='organization.invitation_revoked'",[invite.id])
+      expect(audits).toHaveLength(1)
+      expect(await q("select source_audit_event_id from da_audit_outbox where source_audit_event_id=?",[audits[0].id])).toHaveLength(1)
+    })
+    it("serializes duplicate concurrent invitation acceptance into one membership and audit",async()=>{
+      const provisioned=await service.provisionOrganization(operation)
+      const person=await service.resolvePersonForActor(actor)
+      expect(person?.id).toBeTruthy()
+      const email="race-accept@example.invalid"
+      const invite=await service.createOrganizationInvitation({
+        organization_id:provisioned.organization.id,actor_person_id:person!.id,
+        actor_type:"user",actor_id:actor.actor_id,email,role:"member",
+      })
+      const acceptedActor={actor_type:"user",actor_id:"synthetic_race_invitee_foundation_220"}
+      const request={token:deriveInvitationToken(invite.id),email,email_verified:true,actor:acceptedActor}
+      // Caller-asserted proof only. #191 still blocks actual email ownership acceptance.
+      const outcomes=await Promise.allSettled([
+        service.acceptOrganizationInvitation(request),
+        service.acceptOrganizationInvitation(request),
+      ])
+      expect(outcomes.filter(r=>r.status==="fulfilled")).toHaveLength(1)
+      expect(outcomes.filter(r=>r.status==="rejected")).toHaveLength(1)
+      const memberships=await q("select id,role from da_organization_membership where organization_id=? and role='member'",[provisioned.organization.id])
+      expect(memberships).toHaveLength(1)
+      const status=await q("select status from da_organization_invitation where id=?",[invite.id])
+      expect(status[0].status).toBe("accepted")
+      const audits=await q("select id from da_audit_event where target_id=? and action='organization.invitation_accepted'",[invite.id])
+      expect(audits).toHaveLength(1)
+      expect(await q("select source_audit_event_id from da_audit_outbox where source_audit_event_id=?",[audits[0].id])).toHaveLength(1)
+    })
   },
 })
