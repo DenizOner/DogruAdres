@@ -947,8 +947,12 @@ export type Routes = {
     personal: typeof import("../src/api/personal/route") & {
         challenge: typeof import("../src/api/personal/challenge/route");
         contexts: typeof import("../src/api/personal/contexts/route");
+        invitations: typeof import("../src/api/personal/invitations/route");
         links: typeof import("../src/api/personal/links/route");
         memberships: typeof import("../src/api/personal/memberships/route");
+        mfa: typeof import("../src/api/personal/mfa/route") & {
+            enroll: typeof import("../src/api/personal/mfa/enroll/route");
+        };
         organizations: typeof import("../src/api/personal/organizations/route");
         platform: typeof import("../src/api/personal/platform/route");
         session: typeof import("../src/api/personal/session/route");
