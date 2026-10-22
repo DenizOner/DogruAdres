@@ -33,7 +33,12 @@ describe("M0 MFA platform and personal settings ingress", () => {
     store.personalSetMfaPreference.mockResolvedValue({...personal,user_enabled:true,version:3})
     store.personalSetPlatformMfaMode.mockResolvedValue({...platform,platform_mode:"required",version:5})
   })
-  afterEach(()=>{delete process.env.DOGRUADRES_MFA_SETTINGS_ENABLED})
+  afterEach(()=>{
+    delete process.env.DOGRUADRES_MFA_SETTINGS_ENABLED
+    delete process.env.DOGRUADRES_IDENTITY_ENABLED
+    delete process.env.DOGRUADRES_MFA_ENROLLMENT_ENABLED
+    delete process.env.DOGRUADRES_MFA_RUNTIME_ENABLED
+  })
   const invoke=async(method:"GET"|"POST",body?:unknown,query={})=>{
     const res:any={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),json:jest.fn().mockReturnThis()}
     const req:any={body,query,headers:{cookie:"da_session=server-cookie-session"},
@@ -63,6 +68,20 @@ describe("M0 MFA platform and personal settings ingress", () => {
     const payload=JSON.stringify(r.json.mock.calls[0][0])
     expect(payload).not.toContain("authmfa_self")
     expect(payload).not.toContain("never-return-this")
+  })
+  it("reports enforced only when all four rollout flags are active on an authorized session",async()=>{
+    process.env.DOGRUADRES_IDENTITY_ENABLED="true"
+    process.env.DOGRUADRES_MFA_ENROLLMENT_ENABLED="true"
+    process.env.DOGRUADRES_MFA_RUNTIME_ENABLED="true"
+    const active=await invoke("GET")
+    expect(active.json).toHaveBeenCalledWith(expect.objectContaining({
+      runtime_enforcement:"enforced",
+    }))
+    delete process.env.DOGRUADRES_MFA_RUNTIME_ENABLED
+    const inactive=await invoke("GET")
+    expect(inactive.json).toHaveBeenCalledWith(expect.objectContaining({
+      runtime_enforcement:"not_yet_enabled",
+    }))
   })
   it("rejects current session absence, never discloses platform or Person",async()=>{
     store.personalMfaSettings.mockResolvedValue(null)
