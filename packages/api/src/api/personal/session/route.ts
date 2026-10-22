@@ -11,9 +11,20 @@ export const AUTHENTICATE = false
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   res.setHeader("Cache-Control","no-store")
   if (!enabled()) return res.status(503).json({message:"Unavailable"})
-  const s = await access(req).personalSession(sessionToken(req))
-  if(s && !await bindServerActor(req,sessionToken(req)))return res.status(401).json({message:"Access denied"})
-  return s ? res.json({person_id:s.person_id,csrf_token:csrfToken(sessionToken(req))}) : res.status(401).json({message:"Access denied"})
+  const token=sessionToken(req)
+  // An absent or malformed credential is an ordinary unauthenticated request,
+  // not a database-level exception or an unexpected HTTP 500.
+  if(!/^[A-Za-z0-9_-]{43}$/.test(token))
+    return res.status(401).json({message:"Access denied"})
+  let s
+  try{s=await access(req).personalSession(token)}
+  catch{return res.status(503).json({message:"Service unavailable"})}
+  if(!s)return res.status(401).json({message:"Access denied"})
+  try{
+    if(!await bindServerActor(req,token))
+      return res.status(401).json({message:"Access denied"})
+  }catch{return res.status(503).json({message:"Service unavailable"})}
+  return res.json({person_id:s.person_id,csrf_token:csrfToken(token)})
 }
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   res.setHeader("Cache-Control","no-store")
@@ -86,9 +97,17 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 }
 export const DELETE = async (req: MedusaRequest, res: MedusaResponse) => {
   res.setHeader("Cache-Control","no-store")
-  if (!enabled() || !(await csrf(req) || await csrfEnrollment(req))) return res.status(403).json({message:"Access denied"})
-  if (req.query.all !== undefined && req.query.all !== "true") return res.status(400).json({message:"Invalid input"})
-  await access(req).closePersonalSession(sessionToken(req),req.query.all==="true")
+  const token=sessionToken(req)
+  if(!enabled() || !/^[A-Za-z0-9_-]{43}$/.test(token))
+    return res.status(403).json({message:"Access denied"})
+  let authorized=false
+  try{authorized=await csrf(req) || await csrfEnrollment(req)}
+  catch{return res.status(503).json({message:"Service unavailable"})}
+  if(!authorized)return res.status(403).json({message:"Access denied"})
+  if(req.query.all!==undefined && req.query.all!=="true")
+    return res.status(400).json({message:"Invalid input"})
+  try{await access(req).closePersonalSession(token,req.query.all==="true")}
+  catch{return res.status(503).json({message:"Service unavailable"})}
   res.clearCookie("da_session",{httpOnly:true,secure:secureCookies(),sameSite:"strict",path:"/"})
   return res.json({success:true})
 }

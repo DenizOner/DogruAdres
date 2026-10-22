@@ -1,11 +1,11 @@
-import { POST } from "../session/route"
-import { access,enabled,sessionToken,trustedOrigin,secureCookies } from "../security"
+import { POST,GET,DELETE } from "../session/route"
+import { access,enabled,sessionToken,trustedOrigin,secureCookies,csrf,csrfEnrollment } from "../security"
 import { bindServerActor } from "../server-actor"
 import { readNativeMfaSummary } from "../../../modules/dogruadres-access/native-mfa-summary"
 
 jest.mock("../security",()=>({
   access:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn(),trustedOrigin:jest.fn(),
-  secureCookies:jest.fn(()=>true),csrf:jest.fn(),
+  secureCookies:jest.fn(()=>true),csrf:jest.fn(),csrfEnrollment:jest.fn(),
 }))
 jest.mock("../server-actor",()=>({bindServerActor:jest.fn()}))
 jest.mock("../../../modules/dogruadres-access/native-mfa-summary",()=>({
@@ -18,7 +18,7 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
     personalLoginAttempt:jest.fn(),pendingPersonalChallenge:jest.fn(),
     personalMfaRuntimeActivation:jest.fn(),
     personalLoginMfaDecision:jest.fn(),openPersonalSession:jest.fn(),
-    closePersonalSession:jest.fn(),
+    closePersonalSession:jest.fn(),personalSession:jest.fn(),
   }
   const auth={authenticate:jest.fn(),validateAuthIdentity:jest.fn(),listAuthMfa:jest.fn()}
   beforeEach(()=>{
@@ -32,6 +32,7 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
     ;(access as jest.Mock).mockReturnValue(service)
     ;(sessionToken as jest.Mock).mockReturnValue("")
     ;(bindServerActor as jest.Mock).mockResolvedValue(true)
+    service.personalSession.mockResolvedValue(null)
     service.personalLoginAttempt.mockResolvedValue(true)
     service.personalMfaRuntimeActivation.mockResolvedValue(true)
     service.pendingPersonalChallenge.mockResolvedValue({token:"T".repeat(43),csrf:"Z".repeat(43)})
@@ -55,6 +56,50 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
     await POST(req,res)
     return res
   }
+  const callRead=async(kind:"GET"|"DELETE")=>{
+    const req:any={headers:{},query:{},scope:{resolve:jest.fn().mockReturnValue(auth)}}
+    const res:any={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),
+      json:jest.fn().mockReturnThis(),clearCookie:jest.fn(),cookie:jest.fn()}
+    await (kind==="GET"?GET:DELETE)(req,res)
+    return res
+  }
+  it("returns HTTP 401 for missing GET cookie without touching the database",async()=>{
+    const result=await callRead("GET")
+    expect(result.status).toHaveBeenCalledWith(401)
+    expect(service.personalSession).not.toHaveBeenCalled()
+    expect(bindServerActor).not.toHaveBeenCalled()
+  })
+  it("returns controlled HTTP 503 if session lookup fails for a valid cookie",async()=>{
+    ;(sessionToken as jest.Mock).mockReturnValue("S".repeat(43))
+    service.personalSession.mockRejectedValue(Error("synthetic PG outage"))
+    const result=await callRead("GET")
+    expect(result.status).toHaveBeenCalledWith(503)
+    expect(bindServerActor).not.toHaveBeenCalled()
+  })
+  it("denies unauthenticated logout without a database call",async()=>{
+    const result=await callRead("DELETE")
+    expect(result.status).toHaveBeenCalledWith(403)
+    expect(csrf).not.toHaveBeenCalled()
+    expect(service.closePersonalSession).not.toHaveBeenCalled()
+  })
+  it("denies logout during CSRF datasource failure without claiming success",async()=>{
+    ;(sessionToken as jest.Mock).mockReturnValue("S".repeat(43))
+    ;(csrf as jest.Mock).mockRejectedValue(Error("synthetic PG outage"))
+    const result=await callRead("DELETE")
+    expect(result.status).toHaveBeenCalledWith(503)
+    expect(service.closePersonalSession).not.toHaveBeenCalled()
+    expect(result.clearCookie).not.toHaveBeenCalled()
+  })
+  it("does not report successful logout if persistent session revoke fails",async()=>{
+    ;(sessionToken as jest.Mock).mockReturnValue("S".repeat(43))
+    ;(csrf as jest.Mock).mockResolvedValue(true)
+    service.closePersonalSession.mockRejectedValue(Error("synthetic revoke fault"))
+    const result=await callRead("DELETE")
+    expect(service.closePersonalSession).toHaveBeenCalledWith("S".repeat(43),false)
+    expect(result.status).toHaveBeenCalledWith(503)
+    expect(result.clearCookie).not.toHaveBeenCalled()
+    expect(result.json).not.toHaveBeenCalledWith({success:true})
+  })
   it("creates enrollment-only cookie but never binds native bearer/organization authority",async()=>{
     const r=await call()
     expect(service.personalLoginMfaDecision).toHaveBeenCalledWith("auth_self","not_enrolled")
