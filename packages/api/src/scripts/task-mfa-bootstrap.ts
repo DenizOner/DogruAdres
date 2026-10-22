@@ -1,9 +1,17 @@
-﻿import type { ExecArgs, IAuthModuleService, IUserModuleService } from "@medusajs/framework/types"
+﻿import type { ExecArgs, IAuthModuleService } from "@medusajs/framework/types"
 import { Client } from "@medusajs/framework/pg"
 import { randomBytes } from "node:crypto"
 import { writeFile, access, stat, realpath } from "node:fs/promises"
 import path from "node:path"
 import DogruAdresAccessModuleService from "../modules/dogruadres-access/service"
+import { createUserAccountWorkflow } from "@medusajs/core-flows"
+
+/**
+ * Execution gate switch.
+ * The task bootstrap runner is DELIBERATELY DISABLED until an authorized,
+ * independently audited environment and signed manifest are formally commissioned.
+ */
+export const BOOTSTRAP_EXECUTION_GATE_OPEN = false
 
 export interface TaskResourceManifest {
   readonly manifestVersion: string
@@ -14,30 +22,37 @@ export interface TaskResourceManifest {
   readonly targetContainerName: string
   readonly targetVolumeName: string
   readonly authorizedOperator: string
+  readonly signatureProof?: string
 }
 
-export interface TaskBootstrapManifest {
-  readonly resourceManifestPath: string
-  readonly evidenceDir: string
-  readonly outputSecretFilename: string
-}
-
-export const FORBIDDEN_DATABASE_NAMES: ReadonlySet<string> = new Set([
-  "m0ssi_a7f1",
-  "mfa_e2e",
-  "mfa_e2e_fresh",
-  "medusa",
-  "medusa-docker",
-  "postgres",
-  "template1",
-  "template0",
-])
+export const FORBIDDEN_DATABASE_PATTERNS: ReadonlyArray<RegExp> = [
+  /^m0ssi_a7f1$/i,
+  /^mfa_e2e.*$/i,
+  /^medusa.*$/i,
+  /^postgres$/i,
+  /^template[01]$/i,
+]
 
 export const ALLOWED_LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
   "127.0.0.1",
   "localhost",
   "::1",
 ])
+
+export function sanitizeAndDecodeDatabaseName(rawPathname: string): string {
+  if (!rawPathname) return ""
+  let decoded = rawPathname.replace(/^\//, "").trim()
+  try {
+    while (decoded.includes("%")) {
+      const next = decodeURIComponent(decoded)
+      if (next === decoded) break
+      decoded = next
+    }
+  } catch {
+    throw new Error("REFUSED: Malformed percent-encoded database name in connection string")
+  }
+  return decoded.toLowerCase().trim()
+}
 
 export function validateSafeBasename(filename: string): string {
   if (!filename || typeof filename !== "string") {
@@ -66,7 +81,7 @@ export async function validatePathSecurity(evidenceDir: string, cwd: string = pr
   let evidenceStat
   try {
     evidenceStat = await stat(resolvedEvidence)
-  } catch (err: unknown) {
+  } catch {
     throw new Error(`REFUSED: Evidence directory does not exist or cannot be accessed: ${resolvedEvidence}`)
   }
 
@@ -91,9 +106,15 @@ export function validateTargetAgainstManifest(
   targetUrl: URL,
   resourceManifest: TaskResourceManifest
 ): void {
-  const rawDbName = targetUrl.pathname.replace(/^\//, "").toLowerCase().trim()
-  if (!rawDbName || FORBIDDEN_DATABASE_NAMES.has(rawDbName)) {
-    throw new Error(`REFUSED: Target database "${rawDbName}" is on the prohibited/protected list`)
+  const normDbName = sanitizeAndDecodeDatabaseName(targetUrl.pathname)
+  if (!normDbName) {
+    throw new Error("REFUSED: Target database name is empty")
+  }
+
+  for (const pattern of FORBIDDEN_DATABASE_PATTERNS) {
+    if (pattern.test(normDbName)) {
+      throw new Error(`REFUSED: Target database "${normDbName}" matches protected/prohibited pattern ${pattern}`)
+    }
   }
 
   const rawHost = targetUrl.hostname.toLowerCase().trim()
@@ -103,9 +124,9 @@ export function validateTargetAgainstManifest(
 
   const rawPort = targetUrl.port || "5432"
 
-  if (rawDbName !== resourceManifest.targetDatabase.toLowerCase().trim()) {
+  if (normDbName !== resourceManifest.targetDatabase.toLowerCase().trim()) {
     throw new Error(
-      `REFUSED: Database mismatch: actual "${rawDbName}" != manifest "${resourceManifest.targetDatabase}"`
+      `REFUSED: Database mismatch: actual "${normDbName}" != manifest "${resourceManifest.targetDatabase}"`
     )
   }
 
@@ -119,6 +140,10 @@ export function validateTargetAgainstManifest(
     throw new Error(
       `REFUSED: Port mismatch: actual "${rawPort}" != manifest "${resourceManifest.targetPort}"`
     )
+  }
+
+  if (!resourceManifest.signatureProof || resourceManifest.signatureProof.length < 32) {
+    throw new Error("REFUSED: Resource manifest lacks verified signature/authorization proof")
   }
 }
 
@@ -153,14 +178,20 @@ export interface PartialRecoveryCheckpoint {
   error?: string
   principals: Array<{
     label: "A" | "B"
-    userId: string
-    authIdentityId: string
+    userId?: string
+    authIdentityId?: string
     personId?: string
     bindingCreated: boolean
   }>
 }
 
 export default async function taskMfaBootstrap({ container }: ExecArgs): Promise<void> {
+  if (!BOOTSTRAP_EXECUTION_GATE_OPEN) {
+    throw new Error(
+      "REFUSED: taskMfaBootstrap is locked by BOOTSTRAP_EXECUTION_GATE_OPEN = false. Execution is prohibited until an independently authorized clean environment is commissioned."
+    )
+  }
+
   const dbUrl = process.env.DATABASE_URL
   if (!dbUrl) throw new Error("DATABASE_URL is missing")
   const targetUrl = new URL(dbUrl)
@@ -243,7 +274,6 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
 
     const auth: IAuthModuleService = container.resolve("auth")
-    const users: IUserModuleService = container.resolve("user")
     const foundation: DogruAdresAccessModuleService = container.resolve("dogruadresAccess")
 
     for (const label of ["A", "B"] as const) {
@@ -251,26 +281,33 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
       const email = `task-mfa-person-${label.toLowerCase()}-${entropy}@task.invalid`
       const password = randomBytes(32).toString("base64url")
 
-      const user = await users.createUsers({ email })
-      recoveryState.completedSteps.push(`user_created_${label}`)
-
       const reg = await auth.register("emailpass", { body: { email, password } })
       if (!reg.success || !reg.authIdentity) {
         throw new Error(`Failed native registration for Person ${label}`)
       }
       const authIdentityId = reg.authIdentity.id
       recoveryState.completedSteps.push(`auth_registered_${label}`)
+      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
 
-      await auth.updateAuthIdentities({
-        id: authIdentityId,
-        app_metadata: { user_id: user.id },
+      const workflowResult = await createUserAccountWorkflow(container).run({
+        input: {
+          authIdentityId,
+          userData: { email },
+        },
       })
+      const user = workflowResult.result
+      if (!user || !user.id) {
+        throw new Error(`Failed official createUserAccountWorkflow for Person ${label}`)
+      }
+      recoveryState.completedSteps.push(`user_account_workflow_completed_${label}`)
+      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
 
       const verify = await auth.authenticate("emailpass", { body: { email, password } })
       if (!verify.success || verify.authIdentity?.app_metadata?.user_id !== user.id) {
         throw new Error(`Server-side native User ownership verification failed for Person ${label}`)
       }
       recoveryState.completedSteps.push(`ownership_verified_${label}`)
+      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
 
       const factors = await auth.listAuthMfa({ auth_identity_id: authIdentityId })
       if (factors.length > 0) {
@@ -281,6 +318,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
         { display_name: `Task Person ${label}` },
       ])
       recoveryState.completedSteps.push(`person_created_${label}`)
+      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
 
       await foundation.createActorMappings([
         {
@@ -292,6 +330,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
         },
       ])
       recoveryState.completedSteps.push(`actor_mapped_${label}`)
+      await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
 
       await db.query(
         `INSERT INTO da_login_binding (auth_identity_id, person_id, actor_type, actor_id, verified_at)
@@ -336,7 +375,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     console.log(`[task-mfa-bootstrap] Prepared 2 canonical Persons and verified login bindings in ${resourceManifest.targetDatabase}`)
   } catch (err: unknown) {
     recoveryState.status = "failed"
-    recoveryState.error = String(err)
+    recoveryState.error = err instanceof Error ? err.message : "Bootstrap operation failed"
     try {
       await writeFile(checkpointFile, JSON.stringify(recoveryState, null, 2), { mode: 0o600 })
     } catch {
