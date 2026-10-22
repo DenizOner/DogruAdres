@@ -1,14 +1,12 @@
 /**
  * Issue #230 — supported Medusa 2.21.2 Auth Module API, REAL native MFA
  * on a random CI-only database created by foundation-medusa-cli.pg16.test.ts.
- * Creates only synthetic Person/session rows in the random test DB; no protected DB.
+ * No project Person, Organization, session or protected task DB is created.
  * Secrets, TOTP seeds and recovery codes must never be logged or persisted.
  */
 import type { ExecArgs, IAuthModuleService } from "@medusajs/framework/types"
 import { randomBytes, createHmac } from "node:crypto"
 import assert from "node:assert/strict"
-import { Client } from "@medusajs/framework/pg"
-import type AccessService from "../../src/modules/dogruadres-access/service"
 
 function verifyDisposableEnvironment(){
   const target=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
@@ -128,78 +126,4 @@ export default async function({container}:ExecArgs){
   }))
   process.stdout.write("PASS Medusa native MFA challenge: five failed attempts lock the challenge\n")
 
-  // A separate, synthetic AuthIdentity with an actual Medusa user and real
-  // Foundation service. This test never uses any protected Person or actor.
-  const foundation:AccessService=container.resolve("dogruadresAccess")
-  const users:any=container.resolve("user")
-  const email2="mfa-bound-"+randomBytes(8).toString("hex")+"@example.invalid"
-  const pass2=randomBytes(32).toString("base64url")
-  const r2=await auth.register("emailpass",{body:{email:email2,password:pass2}})
-  assert.ok(r2.success&&r2.authIdentity?.id)
-  const identity2=r2.authIdentity!.id
-  const nativeUser=await users.createUsers({email:email2,first_name:"Isolated"})
-  await auth.updateAuthIdentities({id:identity2,app_metadata:{user_id:nativeUser.id}})
-  const proof=await auth.authenticate("emailpass",{body:{email:email2,password:pass2}})
-  assert.ok(proof.success&&proof.authIdentity?.id===identity2)
-  const [person]=await foundation.createPeople([{}])
-  await foundation.createActorMappings({
-    person_id:person.id,actor_type:"user",actor_id:nativeUser.id,
-    created_by_actor_type:"user",created_by_actor_id:nativeUser.id,
-  })
-  const db=new Client({connectionString:process.env.DATABASE_URL})
-  await db.connect()
-  try{
-    await db.query("insert into da_login_binding(auth_identity_id,person_id,actor_type,actor_id,verified_at) values($1,$2,'user',$3,now())",
-      [identity2,person.id,nativeUser.id])
-    // This irreversible latch is written ONLY inside the exact random CI DB.
-    const armed=await db.query("update da_session_policy set mfa_activated=true where id='current' and mfa_activated=false returning id")
-    assert.equal(armed.rowCount,1)
-    const decision=await foundation.personalLoginMfaDecision(identity2,"not_enrolled")
-    assert.equal(decision.purpose,"mfa_enroll")
-    const oldA=await foundation.openPersonalSession(identity2,decision.purpose,decision.expectedRevision)
-    const oldB=await foundation.openPersonalSession(identity2,decision.purpose,decision.expectedRevision)
-    assert.ok(await foundation.personalEnrollmentSession(oldA.token))
-    assert.ok(await foundation.personalEnrollmentSession(oldB.token))
-    assert.equal(await foundation.personalSession(oldA.token),null)
-
-    const pending=await auth.startAuthMfa({auth_identity_id:identity2,provider:"totp",issuer:"DogruAdres isolated CI"})
-    assert.equal(pending.mfa.status,"pending")
-    assert.ok(pending.secret)
-    const started=await foundation.personalBeginMfaEnrollment(oldA.token,identity2,pending.mfa.id)
-    assert.ok(started?.ticket)
-    const ticket=started!.ticket
-    assert.equal((await foundation.personalClaimMfaVerification(oldA.token,ticket))?.factor_id,pending.mfa.id)
-    const activated=await auth.verifyAuthMfa({
-      id:pending.mfa.id,auth_identity_id:identity2,code:totp(pending.secret!),
-    })
-    assert.equal(activated.status,"enabled")
-    const before=await db.query("select count(*)::int as n from da_browser_session where person_id=$1 and status='active'",[person.id])
-    assert.equal(before.rows[0].n,2)
-
-    // The native MFA factor is enabled BEFORE Foundation completion; fail
-    // the latter and require its DB transaction to roll back in full.
-    await db.query("create function da_ci_reject_enroll_outbox() returns trigger language plpgsql as $ begin raise exception 'CI_ENROLLMENT_ROLLBACK'; end; $")
-    await db.query("create trigger da_ci_reject_enroll_outbox before insert on da_security_outbox for each row execute function da_ci_reject_enroll_outbox()")
-    try{
-      await assert.rejects(
-        foundation.personalCompleteMfaEnrollment(oldA.token,ticket,pending.mfa.id),
-        /CI_ENROLLMENT_ROLLBACK/,
-      )
-    }finally{
-      await db.query("drop trigger if exists da_ci_reject_enroll_outbox on da_security_outbox")
-      await db.query("drop function if exists da_ci_reject_enroll_outbox()")
-    }
-    const after=await db.query("select count(*)::int as n from da_browser_session where person_id=$1 and status='active'",[person.id])
-    assert.equal(after.rows[0].n,2,"Failed completion changed session count")
-    assert.equal((await foundation.personalClaimMfaVerification(oldA.token,ticket))?.factor_id,pending.mfa.id)
-    const fresh=await foundation.personalCompleteMfaEnrollment(oldA.token,ticket,pending.mfa.id)
-    assert.ok(fresh?.token)
-    assert.ok(await foundation.personalSession(fresh!.token))
-    assert.equal(await foundation.personalEnrollmentSession(oldA.token),null)
-    assert.equal(await foundation.personalEnrollmentSession(oldB.token),null)
-    assert.equal(await foundation.personalCompleteMfaEnrollment(oldA.token,ticket,pending.mfa.id),null)
-    process.stdout.write("PASS DoğruAdres native enrollment: ticket, native TOTP, injected Foundation rollback, retry, fresh full session and old-session denial\n")
-  }finally{
-    await db.end()
-  }
 }
