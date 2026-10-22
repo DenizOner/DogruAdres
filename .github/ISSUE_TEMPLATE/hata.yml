@@ -1,10 +1,12 @@
-name: "Hata / güvenlik bulgusu"
-description: "Doğrulanabilir bir hatayı veya güvenli ret davranışındaki sorunu bildirin."
+name: "Hata / kalite problemi"
+description: "Doğrulanabilir ve gizli ayrıntı içermeyen hata/kalite bildirimleri."
 title: "[HATA] "
 body:
   - type: markdown
     attributes:
       value: |
+        Bu kayıt HERKESE AÇIKTIR. Güvenlik açığının teknik ayrıntılarını veya PoC'yi buraya yazmayın.
+        Önce https://github.com/DenizOner/DogruAdres/security bölümünü ve SECURITY.md politikasını inceleyin.
         Gerçek kişisel verileri, parolaları, tokenları, anahtarları ve özel ortam dosyalarını buraya yazmayın.
         Mevcut bir Issue varsa tekrar açmayın; aynı kayıtta devam edin.
   - type: textarea
