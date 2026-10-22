@@ -74,4 +74,56 @@ export default async function({container}:ExecArgs){
   const stillEnabled=await auth.retrieveAuthMfa({id:setup.mfa.id,auth_identity_id:id})
   assert.equal(stillEnabled.status,"enabled")
   process.stdout.write("PASS Medusa native MFA: enabled factor cannot be disabled without fresh challenge\n")
+  // Medusa's native Cache module must persist a challenge; do not replace
+  // it with DoğruAdres-local OTP state or accept a synthetic success.
+  const challenge=await auth.createAuthMfaChallenge({auth_identity_id:id})
+  assert.equal(challenge.auth_identity_id,id)
+  assert.ok(challenge.methods.includes("totp"),"Native TOTP method unavailable")
+  assert.ok(challenge.methods.includes("recovery_code"),"Native recovery challenge method unavailable")
+  assert.equal(challenge.completed_at,null)
+  assert.equal(challenge.attempts,0)
+  assert.equal(challenge.max_attempts,5)
+  await assert.rejects(auth.verifyAuthMfaChallenge({
+    id:challenge.id,auth_identity_id:"other_auth_identity",method:"totp",
+    code:totp(setup.secret!),
+  }))
+  const completed=await auth.verifyAuthMfaChallenge({
+    id:challenge.id,auth_identity_id:id,method:"totp",
+    code:totp(setup.secret!),
+  })
+  assert.equal(completed.auth_identity_id,id)
+  assert.ok(completed.completed_at,"Verified TOTP challenge missing completion time")
+  await assert.rejects(auth.verifyAuthMfaChallenge({
+    id:challenge.id,auth_identity_id:id,method:"totp",
+    code:totp(setup.secret!),
+  }))
+  process.stdout.write("PASS Medusa native MFA challenge: TOTP, owner separation and completed-challenge replay rejection\n")
+
+  const recoveryChallenge=await auth.createAuthMfaChallenge({auth_identity_id:id})
+  const recoveryDone=await auth.verifyAuthMfaChallenge({
+    id:recoveryChallenge.id,auth_identity_id:id,
+    method:"recovery_code",code:issued.codes[1],
+  })
+  assert.ok(recoveryDone.completed_at)
+  const recoveryReplay=await auth.createAuthMfaChallenge({auth_identity_id:id})
+  await assert.rejects(auth.verifyAuthMfaChallenge({
+    id:recoveryReplay.id,auth_identity_id:id,
+    method:"recovery_code",code:issued.codes[1],
+  }))
+  process.stdout.write("PASS Medusa native MFA challenge: recovery code consumed and denied on a fresh challenge\n")
+
+  const throttled=await auth.createAuthMfaChallenge({auth_identity_id:id})
+  const current=totp(setup.secret!)
+  const invalid=((Number(current)+500000)%1000000).toString().padStart(6,"0")
+  for(let attempt=0;attempt<throttled.max_attempts;attempt++){
+    await assert.rejects(auth.verifyAuthMfaChallenge({
+      id:throttled.id,auth_identity_id:id,method:"totp",code:invalid,
+    }))
+  }
+  await assert.rejects(auth.verifyAuthMfaChallenge({
+    id:throttled.id,auth_identity_id:id,method:"totp",
+    code:totp(setup.secret!),
+  }))
+  process.stdout.write("PASS Medusa native MFA challenge: five failed attempts lock the challenge\n")
+
 }
