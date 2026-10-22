@@ -1,0 +1,42 @@
+name: "Geliştirme / teknik görev"
+description: "Yeni veya açık bir teknik işi kanonik GitHub Issue olarak planlayın."
+title: "[GÖREV] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Önce mevcut Issue'yu, DoğruAdres kodunu, kurulu Mercur/Medusa işlevlerini ve onaylı kararları kontrol edin.
+        Issue oluşturmak geliştirme veya merge onayı değildir. Sırlar ve gerçek kullanıcı bilgileri paylaşılmamalı.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: "Hedef ve kullanıcıya etkisi"
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: "Mevcut kod, kanonik karar ve bağımlılıklar"
+      description: "Issue/ADR bağlantıları, kurulu hazır mekanizma ve neden yeniden geliştirilmediği."
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: "Kapsam, kapsam dışı işler ve yetki sınırı"
+      description: "Etki alanı; güvenlik, veri, migration, dependency ve merge izinleri."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: "Kabul ölçütleri ve negatif testler"
+      placeholder: "Somut başarı/ret koşulları, exact commit/CI veya test ortamı"
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: "Riskler ve geri alma planı"
+    validations:
+      required: false
