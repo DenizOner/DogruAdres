@@ -85,7 +85,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   let currentOrg='',linkIntent='',organizationRequest=0,mfaState=null;
   async function refreshMfa(){
     try{
-      const data=await api('mfa');mfaState=data;
+      const data=await api('mfa');
+      if(data.runtime_enforcement!=='enforced'&&data.runtime_enforcement!=='not_yet_enabled')throw new Error('MFA çalışma zamanı durumu doğrulanamadı');
+      mfaState=data;
       el('mfa-person').hidden=false;el('mfa-platform').hidden=!data.can_manage_platform;
       el('mfa-enroll-launch').hidden=data.platform.platform_mode==='disabled'||data.native_factor_state==='enabled';
       el('mfa-person').elements.user_enabled.value=String(data.personal.user_enabled);
@@ -95,7 +97,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const names={required:'Herkes için zorunlu',optional:'Seçime bağlı',disabled:'Devre dışı'};
       const states={enabled:'Etkin native TOTP faktörü var',pending:'TOTP kurulumu doğrulanmamış',not_enrolled:'Etkin TOTP faktörü bulunmuyor'};
       const progress={enroll_mfa:'TOTP kurulumu gerekiyor',verify_mfa:'Native doğrulama gerekli',reconcile_native_factor:'Mevcut TOTP faktörü güvenli biçimde kapatılmadan MFA devre dışı sayılamaz',allow_primary:'İkinci faktör hedef politikada zorunlu değil'};
-      el('mfa-info').textContent='Platform: '+names[data.platform.platform_mode]+'. '+states[data.native_factor_state]+'. Hedef durum: '+progress[data.effective_mfa_target.next_step]+'. MFA politikası oturum akışına henüz uygulanmıyor.';
+      const enforcement=data.runtime_enforcement==='enforced'
+        ? 'MFA oturum kapsamı denetimi etkin.'
+        : 'MFA politikası oturum akışına henüz uygulanmıyor.';
+      el('mfa-info').textContent='Platform: '+names[data.platform.platform_mode]+'. '+states[data.native_factor_state]+'. Hedef durum: '+progress[data.effective_mfa_target.next_step]+'. '+enforcement;
     }catch{
       mfaState=null;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;
       el('mfa-enroll-launch').hidden=true;
