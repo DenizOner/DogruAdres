@@ -1,0 +1,51 @@
+name: "Test / bağımsız kabul"
+description: "Bir geliştirmeyi gerçek kaynak ve negatif test kanıtlarıyla inceleyin."
+title: "[KABUL] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Başarılı CI, merge izni veya üretim kabulü demek değildir. Gerçekleşen / yalnız raporlanan / test edilmemiş alanları ayırın.
+        Korunan gerçek veri yerine izinli izole sentetik ortam kullanın.
+  - type: input
+    id: target
+    attributes:
+      label: "PR, exact HEAD SHA ve base SHA"
+      placeholder: "PR #..., head ..., base ..."
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: "İncelenen kapsam ve kaynak sürümü"
+    validations:
+      required: true
+  - type: textarea
+    id: passed
+    attributes:
+      label: "Yürütülen olumlu/olumsuz testler ve kanıt URL'leri"
+    validations:
+      required: true
+  - type: textarea
+    id: gaps
+    attributes:
+      label: "Başarısızlıklar, belirsizlikler ve henüz test edilmeyenler"
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: "Denetim sonucu"
+      options:
+        - "İnceleme sürüyor"
+        - "Düzeltme gerekli"
+        - "Dar kapsam PASS; genel kabul açık"
+        - "Exact SHA için kabul öneriliyor (merge onayı değil)"
+    validations:
+      required: true
+  - type: textarea
+    id: next
+    attributes:
+      label: "Sonraki adım ve yetki/merge sınırı"
+    validations:
+      required: true

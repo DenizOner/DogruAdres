@@ -1,0 +1,6 @@
+blank_issues_enabled: true
+# Kanonik kararlar GitHub Issues üzerinde kalır; tartışma ayrı yürütülür.
+contact_links:
+  - name: "Özel güvenlik bildirimi yönergeleri"
+    url: "https://github.com/DenizOner/DogruAdres/security"
+    about: "Güvenlik açığı ayrıntılarını herkese açık Issue içinde paylaşmayın; önce özel bildirim seçeneklerini inceleyin."
