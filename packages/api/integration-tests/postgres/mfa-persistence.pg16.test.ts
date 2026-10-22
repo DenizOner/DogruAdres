@@ -258,6 +258,13 @@ async function main() {
       await invalidInsert("update da_audit_event set updated_at=now() where id=$1",[sourceId])
       await invalidInsert("delete from da_audit_event where id=$1",[sourceId])
       await invalidInsert("truncate da_audit_event")
+      // The plain TRUNCATE can fail on FK references before the trigger runs.
+      // CASCADE removes that ambiguity. Explicit throw forces a rollback even
+      // if the append-only statement trigger is accidentally absent.
+      await assert.rejects(db.begin(async tx => {
+        await tx.unsafe("truncate da_audit_event cascade")
+        throw Error("UNSAFE_AUDIT_TRUNCATE_SUCCEEDED")
+      }),/Foundation canonical audit is append-only/)
       await invalidInsert(`insert into da_audit_outbox
         (id,source_audit_event_id,envelope) values ('daaob_ci_2',$1,'{}'::jsonb)`,[sourceId])
       await invalidInsert(`insert into da_audit_outbox
