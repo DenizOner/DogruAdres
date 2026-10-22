@@ -212,6 +212,17 @@ jobs:
           bun integration-tests/postgres/mfa-persistence.pg16.test.ts
           bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
           bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
+      - name: Foundation native Medusa module / ORM transaction on disposable PG16
+        working-directory: packages/api
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          DB_HOST: 127.0.0.1
+          DB_PORT: '5432'
+          DB_USERNAME: mfa_test
+          DB_PASSWORD: ci-disposable-only-not-a-real-secret
+          TEST_TYPE: integration:modules
+        run: bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/foundation-native.integration.spec.ts
       # The test erases its own schema in finally. GitHub Actions terminates and
       # removes this ephemeral PostgreSQL service on job exit/cancel. There is
       # no repository volume, persistent fixture or access to the M0 task DB.
