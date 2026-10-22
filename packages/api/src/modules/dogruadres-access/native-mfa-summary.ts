@@ -29,6 +29,7 @@ const LIMIT = 101 // reject overflow instead of potentially hiding an enabled fa
 type InternalNativeFactorState = Readonly<{
   summary: NativeMfaSummary
   pendingTotpIds: readonly string[]
+  pendingCount: number
 }>
 
 /** Internal-only projection; factor identifiers must never be returned via HTTP. */
@@ -47,7 +48,7 @@ async function readVerifiedNativeFactors(
     throw new NativeMfaStateUnavailable()
   }
   const ids = new Set<string>()
-  let enabled = false, pending = false
+  let enabled = false, pending = false, pendingCount = 0
   const pendingTotpIds: string[] = []
   for (const factor of factors) {
     if (!factor || typeof factor.id !== "string" || !factor.id ||
@@ -60,6 +61,7 @@ async function readVerifiedNativeFactors(
     if (factor.status === "enabled") enabled = true
     if (factor.status === "pending") {
       pending = true
+      pendingCount++
       if(factor.provider==="totp")pendingTotpIds.push(factor.id)
     }
   }
@@ -69,6 +71,7 @@ async function readVerifiedNativeFactors(
       state: enabled ? "enabled" as const : pending ? "pending" as const : "not_enrolled" as const,
     }),
     pendingTotpIds: Object.freeze(pendingTotpIds),
+    pendingCount,
   })
 }
 
@@ -91,7 +94,9 @@ export async function findResumablePendingTotpId(
   const snapshot=await readVerifiedNativeFactors(native,authIdentityId)
   if(snapshot.summary.enabled)throw new NativeMfaStateUnavailable()
   if(snapshot.summary.state==="not_enrolled")return null
-  if(snapshot.pendingTotpIds.length!==1)
+  // Do not silently select a TOTP factor when another provider also has
+  // a pending challenge. That ambiguity makes reset/resume unsafe.
+  if(snapshot.pendingCount!==1 || snapshot.pendingTotpIds.length!==1)
     throw new NativeMfaStateUnavailable()
   return snapshot.pendingTotpIds[0]
 }

@@ -24,6 +24,8 @@ describe("Medusa v2.21.2 native MFA read-only factor state", () => {
   })
   it.each([
     [factor("p1","pending"),factor("p2","pending")],
+    [factor("p1","pending"),{...factor("other","pending"),provider:"other"}],
+    [{...factor("other","pending"),provider:"other"},factor("p1","pending")],
     [factor("p1","pending"),factor("live","enabled")],
     [factor("p1","pending","not_me")],
     [factor("p1","pending")].map(f=>({...f,provider:"unknown_provider"})),
