@@ -95,7 +95,8 @@ export function computePublicKeyFingerprint(publicKeyPem: string): string {
 }
 
 export interface OperatorIdentity {
-  readonly humanOperatorId: string
+  readonly executorType: "automation_agent"
+  readonly operatorId: string
   readonly windowsSecurityPrincipal: string // SID or Domain\Username
   readonly approvalReference: string // e.g. GitHub Issue approval URL
 }
@@ -127,6 +128,7 @@ export interface SignedTaskManifest {
 // ---------------------------------------------------------------------------
 
 export interface TrustedOperatorEntry {
+  readonly executorType: "automation_agent"
   readonly operatorId: string
   readonly windowsPrincipal: string
   readonly approvalReference: string
@@ -137,7 +139,7 @@ export interface TrustedOperatorEntry {
 }
 
 export interface TrustedRegistryData {
-  readonly registrySchemaVersion: "1.0.0"
+  readonly registrySchemaVersion: "1.1.0"
   readonly trustDomain: string
   readonly operators: TrustedOperatorEntry[]
 }
@@ -149,7 +151,9 @@ export interface TrustedRegistryData {
  */
 export interface PinnedOperatorApproval {
   readonly trustDomain: "dogruadres-m0-mfa"
+  readonly executorType: "automation_agent"
   readonly operatorId: string
+  readonly runId: string
   readonly windowsPrincipal: string
   readonly approvalReference: string
   readonly keyFingerprint: string
@@ -182,7 +186,8 @@ export function createTrustedOperatorRegistry(
   if (!independentlyPinned) {
     throw new Error("REFUSED: No independently pinned operator authorization is available")
   }
-  if (independentlyPinned.trustDomain !== "dogruadres-m0-mfa") {
+  if (independentlyPinned.trustDomain !== "dogruadres-m0-mfa" ||
+      independentlyPinned.executorType !== "automation_agent" || !independentlyPinned.runId) {
     throw new Error("REFUSED: Pinned approval trust domain is invalid")
   }
   const now = Date.parse(nowIso)
@@ -196,7 +201,7 @@ export function createTrustedOperatorRegistry(
     throw new Error("REFUSED: Trusted registry data must be a non-null object")
   }
   const reg = data as Record<string, unknown>
-  if (reg.registrySchemaVersion !== "1.0.0") {
+  if (reg.registrySchemaVersion !== "1.1.0") {
     throw new Error(`REFUSED: Unsupported registry schema version: ${reg.registrySchemaVersion}`)
   }
   if (reg.trustDomain !== independentlyPinned.trustDomain) {
@@ -213,6 +218,7 @@ export function createTrustedOperatorRegistry(
     if (
       !op ||
       typeof op !== "object" ||
+      op.executorType !== "automation_agent" ||
       !op.operatorId ||
       !op.windowsPrincipal ||
       !op.approvalReference ||
@@ -241,6 +247,7 @@ export function createTrustedOperatorRegistry(
       throw new Error("REFUSED: Operator entry has invalid or expired validity interval")
     }
     if (
+      op.executorType !== independentlyPinned.executorType ||
       op.operatorId !== independentlyPinned.operatorId ||
       op.windowsPrincipal.toLowerCase() !== independentlyPinned.windowsPrincipal.toLowerCase() ||
       op.approvalReference !== independentlyPinned.approvalReference ||
@@ -259,7 +266,9 @@ export function createTrustedOperatorRegistry(
       const approvedOperator = manifest.authorizedOperator
       if (
         signerKeyFingerprint.toLowerCase() !== independentlyPinned.keyFingerprint.toLowerCase() ||
-        approvedOperator.humanOperatorId !== independentlyPinned.operatorId ||
+        approvedOperator.executorType !== independentlyPinned.executorType ||
+        approvedOperator.operatorId !== independentlyPinned.operatorId ||
+        manifest.runId !== independentlyPinned.runId ||
         approvedOperator.windowsSecurityPrincipal.toLowerCase() !== independentlyPinned.windowsPrincipal.toLowerCase() ||
         approvedOperator.approvalReference !== independentlyPinned.approvalReference ||
         manifest.taskEnvironmentId !== independentlyPinned.taskEnvironmentId ||
@@ -274,9 +283,11 @@ export function createTrustedOperatorRegistry(
       return fingerprintMap.has(fingerprint.toLowerCase())
     },
     isOperatorApproved(operator: OperatorIdentity): boolean {
-      const entry = operatorMap.get(operator.humanOperatorId)
+      if (operator.executorType !== "automation_agent") return false
+      const entry = operatorMap.get(operator.operatorId)
       if (!entry) return false
       return (
+        entry.executorType === operator.executorType &&
         entry.windowsPrincipal.toLowerCase() === operator.windowsSecurityPrincipal.toLowerCase() &&
         entry.approvalReference === operator.approvalReference
       )
@@ -310,6 +321,10 @@ export function verifySignedManifest(
   trustedRegistry: TrustedOperatorRegistry
 ): void {
   const { manifest, signerKeyFingerprint, signatureBase64 } = signedManifest
+  if (manifest?.authorizedOperator?.executorType !== "automation_agent" ||
+      manifest?.manifestVersion !== "1.1.0") {
+    throw new Error("REFUSED: Expected explicit non-human executor and current manifest version")
+  }
 
   // Signature key and asserted operator must belong to ONE independently
   // approved entry, including the exact authorized task and commit scope.
@@ -402,6 +417,8 @@ export async function verifyRuntimeEnvironmentOwnership(
 export interface SignedPreIntent {
   readonly recordVersion: "1.0.0"
   readonly ceremonyId: string
+  readonly executorType: "automation_agent"
+  readonly runId: string
   readonly manifestDigestSha256: string
   readonly operatorId: string
   readonly proposedAction: "ACTIVATE_MFA_DEPLOYMENT_LATCH"
@@ -436,10 +453,16 @@ export function createSignedPreIntent(
   privateKeyPem: string,
   timestamp: string = new Date().toISOString()
 ): SignedPreIntent {
+  if (manifest.authorizedOperator.executorType !== "automation_agent" ||
+      operatorId !== manifest.authorizedOperator.operatorId) {
+    throw new Error("REFUSED: Intent signer is not the delegated Local Agent executor")
+  }
   const manifestDigest = computeSha256Digest(canonicalJsonStringify(manifest))
   const unsigned = {
     recordVersion: "1.0.0" as const,
     ceremonyId,
+    executorType: "automation_agent" as const,
+    runId: manifest.runId,
     manifestDigestSha256: manifestDigest,
     operatorId,
     proposedAction: "ACTIVATE_MFA_DEPLOYMENT_LATCH" as const,

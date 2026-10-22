@@ -47,7 +47,7 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
   })
 
   const baseManifest: TaskResourceManifest = {
-    manifestVersion: "1.0.0",
+    manifestVersion: "1.1.0",
     runId: "run_20261022_001",
     nonce: "nonce_unique_random_bytes_abc123",
     taskEnvironmentId: "task_env_20261022_clean",
@@ -57,7 +57,8 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
     targetContainerName: "dogruadres-mfa-e2e-isolated-pg",
     targetVolumeName: "dogruadres-mfa-e2e-isolated-data",
     authorizedOperator: {
-      humanOperatorId: "human_operator_42",
+      executorType: "automation_agent",
+      operatorId: "agent_executor_test_42",
       windowsSecurityPrincipal: "S-1-5-21-123456789-123456789-123456789-1001",
       approvalReference: "https://github.com/DenizOner/DogruAdres/issues/230#issuecomment-6347609069",
     },
@@ -121,7 +122,9 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
   describe("2. Pure TrustedOperatorRegistry Factory & Data Validation", () => {
     const pinnedApproval = (): PinnedOperatorApproval => ({
       trustDomain: "dogruadres-m0-mfa",
-      operatorId: "human_operator_42",
+      executorType: "automation_agent",
+      runId: "run_20261022_001",
+      operatorId: "agent_executor_test_42",
       windowsPrincipal: "S-1-5-21-123456789-123456789-123456789-1001",
       approvalReference: "https://github.com/DenizOner/DogruAdres/issues/230#issuecomment-6347609069",
       keyFingerprint,
@@ -133,11 +136,12 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
     })
     const testNow = "2026-10-22T20:30:00Z"
     const validRegistryData: TrustedRegistryData = {
-      registrySchemaVersion: "1.0.0",
+      registrySchemaVersion: "1.1.0",
       trustDomain: "dogruadres-m0-mfa",
       operators: [
         {
-          operatorId: "human_operator_42",
+          executorType: "automation_agent",
+          operatorId: "agent_executor_test_42",
           windowsPrincipal: "S-1-5-21-123456789-123456789-123456789-1001",
           approvalReference: "https://github.com/DenizOner/DogruAdres/issues/230#issuecomment-6347609069",
           publicKeyPem: "", // filled in test
@@ -176,6 +180,22 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       expect(() => verifySignedManifest(signed, registry)).not.toThrow()
     })
 
+    it("rejects an agent impersonating a human and a mismatched execution run", () => {
+      const candidate = {...validRegistryData, operators: [{...validRegistryData.operators[0], publicKeyPem, keyFingerprint}]}
+      const registry = createTrustedOperatorRegistry(candidate, pinnedApproval(), testNow)
+      const assertedHuman = { ...baseManifest,
+        authorizedOperator: { operatorId: "fictional_human", windowsSecurityPrincipal: baseManifest.authorizedOperator.windowsSecurityPrincipal, approvalReference: baseManifest.authorizedOperator.approvalReference },
+      } as unknown as TaskResourceManifest
+      expect(() => verifySignedManifest({manifest: assertedHuman, signerKeyFingerprint: keyFingerprint, signatureBase64: "invalid"}, registry))
+        .toThrow(/explicit non-human executor/)
+      const wrongRun = {...baseManifest, runId: "different_execution"}
+      const signed = require("node:crypto").sign(
+        null, Buffer.from(canonicalJsonStringify(wrongRun), "utf8"), privateKeyPem
+      ).toString("base64")
+      expect(() => verifySignedManifest({manifest: wrongRun, signerKeyFingerprint: keyFingerprint, signatureBase64: signed}, registry))
+        .toThrow(/Signer key and operator do not match/)
+    })
+
     it("refuses candidate JSON without an independently pinned authorization", () => {
       const candidate = {
         ...validRegistryData,
@@ -205,7 +225,7 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       const registry = createTrustedOperatorRegistry(candidate, pinnedApproval(), testNow)
       const wrongOperator = {
         ...baseManifest,
-        authorizedOperator: { ...baseManifest.authorizedOperator, humanOperatorId: "other_approved_operator" },
+        authorizedOperator: { ...baseManifest.authorizedOperator, operatorId: "other_approved_operator" },
       }
       const signature = require("node:crypto").sign(
         null, Buffer.from(canonicalJsonStringify(wrongOperator), "utf8"), privateKeyPem
@@ -239,7 +259,7 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       expect(() => createTrustedOperatorRegistry({ registrySchemaVersion: "2.0.0" }, pinnedApproval(), testNow)).toThrow(/Unsupported registry schema version/)
       expect(() =>
         createTrustedOperatorRegistry({
-          registrySchemaVersion: "1.0.0",
+          registrySchemaVersion: "1.1.0",
           trustDomain: "wrong-domain",
           operators: [],
         }, pinnedApproval(), testNow)
@@ -248,11 +268,12 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
 
     it("rejects registry with corrupted key fingerprint (mismatch with PEM)", () => {
       const corruptData = {
-        registrySchemaVersion: "1.0.0",
+        registrySchemaVersion: "1.1.0",
         trustDomain: "dogruadres-m0-mfa",
         operators: [
           {
-            operatorId: "human_operator_42",
+            executorType: "automation_agent",
+            operatorId: "agent_executor_test_42",
             windowsPrincipal: "S-1-5-21-123456789-123456789-123456789-1001",
             approvalReference: "https://github.com/DenizOner/DogruAdres/issues/230#issuecomment-6347609069",
             publicKeyPem,
@@ -350,7 +371,7 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       const preIntent = createSignedPreIntent(
         ceremonyId,
         baseManifest,
-        "operator_42",
+        "agent_executor_test_42",
         privateKeyPem,
         "2026-10-22T20:30:00.000Z"
       )
