@@ -222,7 +222,7 @@ jobs:
           DB_USERNAME: mfa_test
           DB_PASSWORD: ci-disposable-only-not-a-real-secret
           TEST_TYPE: integration:modules
-        run: bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/foundation-native.integration.spec.ts
+        run: bun run test:integration:modules --runTestsByPath src/modules/dogruadres-access/__tests__/foundation-native.integration.spec.ts
       # The test erases its own schema in finally. GitHub Actions terminates and
       # removes this ephemeral PostgreSQL service on job exit/cancel. There is
       # no repository volume, persistent fixture or access to the M0 task DB.
