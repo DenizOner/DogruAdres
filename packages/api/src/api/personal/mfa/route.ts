@@ -5,6 +5,7 @@ import { access, csrf, enabled, sessionToken } from "../security"
 import { MfaConcurrentUpdateError, MfaOutboxFailure } from "../../../modules/dogruadres-access/mfa-persistence"
 import { resolveMfaPolicy } from "../../../modules/dogruadres-access/mfa-policy"
 import { readNativeMfaSummary } from "../../../modules/dogruadres-access/native-mfa-summary"
+import { mfaRuntimeEnforced } from "../../../modules/dogruadres-access/identity-session"
 
 // Explicit rollout gate. No runtime read/write before the canonical migration,
 // current-actor authorization and native MFA enrollment/disable reconciliation
@@ -56,7 +57,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         next_step: decision.next_step,
         user_control_allowed: decision.user_control_allowed,
       },
-      runtime_enforcement: "not_yet_enabled",
+      // personalSession has already checked the DB activation latch against
+      // all rollout flags; a mismatched/invalid latch denies this read.
+      runtime_enforcement: mfaRuntimeEnforced() ? "enforced" : "not_yet_enabled",
     })
   } catch {
     // A missing, malformed, cross-identity or truncated native factor result
