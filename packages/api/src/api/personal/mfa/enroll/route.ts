@@ -35,13 +35,20 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Cache-Control","no-store")
   res.setHeader("Referrer-Policy","no-referrer")
   if(!enrollmentEnabled())return res.status(503).json({message:"MFA enrollment unavailable"})
-  if(!await csrfEnrollment(req))return res.status(403).json({message:"Access denied"})
+  let authorized=false
+  try{authorized=await csrfEnrollment(req)}
+  catch{return res.status(503).json({message:"Service unavailable"})}
+  if(!authorized)return res.status(403).json({message:"Access denied"})
   const parsed=input.safeParse(req.body)
   if(!parsed.success)return res.status(400).json({message:"Invalid input"})
   const token=sessionToken(req),service=access(req)
-  const current=await service.personalEnrollmentSession(token)
+  let current
+  try{current=await service.personalEnrollmentSession(token)}
+  catch{return res.status(503).json({message:"Service unavailable"})}
   if(!current)return res.status(403).json({message:"Access denied"})
-  const settings=await service.personalEnrollmentMfaSettings(token)
+  let settings
+  try{settings=await service.personalEnrollmentMfaSettings(token)}
+  catch{return res.status(503).json({message:"Service unavailable"})}
   if(!settings || settings.personal.person_id!==current.person_id ||
      settings.platform.platform_mode==="disabled")
     return res.status(403).json({message:"Enrollment not permitted"})
@@ -108,7 +115,9 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
       secret=setup.secret
       otpauth_url=setup.otpauth_url
     }
-    const ticket=await service.personalBeginMfaEnrollment(token,current.auth_identity_id,factorId)
+    let ticket
+    try{ticket=await service.personalBeginMfaEnrollment(token,current.auth_identity_id,factorId)}
+    catch{return res.status(503).json({message:"Service unavailable"})}
     if(!ticket)return res.status(403).json({message:"Enrollment not permitted"})
     res.cookie("da_mfa_setup",ticket.ticket,{
       httpOnly:true,secure:secureCookies(),sameSite:"strict",
@@ -121,7 +130,9 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
       : res.json({setup_required:true,secret,otpauth_url})
   }
   const ticket=setupCookie(req)
-  const intent=await service.personalClaimMfaVerification(token,ticket)
+  let intent
+  try{intent=await service.personalClaimMfaVerification(token,ticket)}
+  catch{return res.status(503).json({message:"Service unavailable"})}
   if(!intent || intent.auth_identity_id!==current.auth_identity_id)
     return res.status(403).json({message:"Enrollment ticket unavailable"})
   let factor
@@ -135,7 +146,9 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   if(factor.id!==intent.factor_id ||
      factor.auth_identity_id!==current.auth_identity_id || factor.status!=="enabled")
     return res.status(403).json({message:"MFA verification failed"})
-  const fresh=await service.personalCompleteMfaEnrollment(token,ticket,intent.factor_id)
+  let fresh
+  try{fresh=await service.personalCompleteMfaEnrollment(token,ticket,intent.factor_id)}
+  catch{return res.status(503).json({message:"Service unavailable"})}
   if(!fresh)return res.status(403).json({message:"Enrollment ticket expired or already used"})
   try{
     if(!await bindServerActor(req,fresh.token))throw Error("Native binding unavailable")

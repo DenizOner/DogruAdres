@@ -23,7 +23,9 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   if(!/^[A-Za-z0-9_-]{43}$/.test(token)||typeof csrf!=="string"||csrf.length!==43||!timingSafeEqual(Buffer.from(csrf),Buffer.from(csrfToken(token))))return res.status(403).json({message:"Access denied"})
   const parsed=input.safeParse(req.body)
   if(!parsed.success)return res.status(400).json({message:"Invalid input"})
-  const pending=await access(req).readPersonalChallenge(token)
+  let pending
+  try{pending=await access(req).readPersonalChallenge(token)}
+  catch{return res.status(503).json({message:"Service unavailable"})}
   if(!pending)return res.status(401).json({message:"Access denied"})
   const auth:IAuthModuleService=req.scope.resolve("auth")
   // Medusa validates that the selected method belongs to the challenge,

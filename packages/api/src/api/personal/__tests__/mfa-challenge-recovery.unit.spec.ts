@@ -86,6 +86,14 @@ describe("M0 native MFA challenge and single-use recovery method",()=>{
     expect((await call({code:"123456"},"","invalid")).status).toHaveBeenCalledWith(403)
     expect(native.verifyAuthMfaChallenge).not.toHaveBeenCalled()
   })
+  it("does not invoke native MFA or mint a cookie when Foundation challenge lookup fails",async()=>{
+    service.readPersonalChallenge.mockRejectedValue(Error("synthetic database outage"))
+    const r=await call({code:"123456"})
+    expect(r.status).toHaveBeenCalledWith(503)
+    expect(native.verifyAuthMfaChallenge).not.toHaveBeenCalled()
+    expect(service.completePersonalChallenge).not.toHaveBeenCalled()
+    expect(r.cookie).not.toHaveBeenCalled()
+  })
   it("rejects replayed or expired DoğruAdres challenge tickets",async()=>{
     service.readPersonalChallenge.mockResolvedValue(null)
     expect((await call({method:"recovery_code",code:"ABCD-EFGH"})).status)
