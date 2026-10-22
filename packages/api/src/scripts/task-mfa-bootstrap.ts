@@ -8,9 +8,8 @@ import { createUserAccountWorkflow } from "@medusajs/core-flows"
 import {
   SignedTaskManifest,
   TaskResourceManifest,
-  verifyManifestSignature,
-  verifyRuntimeEnvironmentOwnership,
-  RuntimeResourceAdapter,
+  verifySignedManifest,
+  TrustedOperatorRegistry,
 } from "./operator-audit-protocol"
 
 /**
@@ -100,7 +99,7 @@ export async function validatePathSecurity(evidenceDir: string, cwd: string = pr
 export function validateTargetAgainstManifest(
   targetUrl: URL,
   resourceManifest: TaskResourceManifest,
-  trustedPublicKeyPem: string,
+  trustedRegistry: TrustedOperatorRegistry,
   signedManifest?: SignedTaskManifest
 ): void {
   const normDbName = sanitizeAndDecodeDatabaseName(targetUrl.pathname)
@@ -143,10 +142,7 @@ export function validateTargetAgainstManifest(
     throw new Error("REFUSED: Signed manifest payload is missing")
   }
 
-  const isSigValid = verifyManifestSignature(signedManifest, trustedPublicKeyPem)
-  if (!isSigValid) {
-    throw new Error("REFUSED: Ed25519 signature verification failed for resource manifest")
-  }
+  verifySignedManifest(signedManifest, trustedRegistry)
 }
 
 export async function verifyCleanPreconditions(db: Client): Promise<void> {
@@ -225,7 +221,12 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     throw new Error(`REFUSED: Cannot read trusted operator public key from ${trustedPublicKeyPath}: ${String(err)}`)
   }
 
-  validateTargetAgainstManifest(targetUrl, signedManifest.manifest, trustedPublicKeyPem, signedManifest)
+  const trustedRegistry: TrustedOperatorRegistry = {
+    isFingerprintTrusted: (fp: string) => fp === signedManifest.signerKeyFingerprint,
+    getPublicKeyPem: (fp: string) => fp === signedManifest.signerKeyFingerprint ? trustedPublicKeyPem : null,
+  }
+
+  validateTargetAgainstManifest(targetUrl, signedManifest.manifest, trustedRegistry, signedManifest)
 
   const targetOutputFile = path.join(realEvidenceDir, safeOutputFilename)
   const checkpointFile = path.join(realEvidenceDir, `${safeOutputFilename}.checkpoint.json`)
