@@ -94,6 +94,44 @@ describe("M0 MFA platform and personal settings ingress", () => {
     expect(html).toContain("MFA oturum kapsamı denetimi etkin.")
     expect(html).toContain("MFA politikası oturum akışına henüz uygulanmıyor.")
   })
+  it("personal MFA save form recovers after success or rejected change, but never retries ambiguous writes",async()=>{
+    const res:any={status:jest.fn().mockReturnThis(),setHeader:jest.fn(),
+      type:jest.fn().mockReturnThis(),send:jest.fn().mockReturnThis()}
+    await PersonalPageGET({} as any,res)
+    const html=String(res.send.mock.calls[0][0])
+    const isolated=html.match(/  async function updateMfaForm\(form,body\)\{[\s\S]*?\n  \}/)
+    expect(isolated).not.toBeNull()
+    // Execute exactly the rendered browser function against a minimal fake DOM.
+    // No real network, global DOM, or browser acceptance is implied.
+    const personalButton={disabled:false},platformButton={disabled:false}
+    const personalForm={querySelector:()=>personalButton}
+    const platformForm={querySelector:()=>platformButton}
+    const el=(id:string)=>id==="mfa-platform"?platformForm:personalForm
+    const send=jest.fn(),refresh=jest.fn().mockResolvedValue(undefined),status=jest.fn()
+    const build=new Function("api","refreshMfa","status","el","state",
+      "let mfaState=state;"+isolated![0]+";return updateMfaForm") as
+      (api:any,refresh:any,status:any,el:any,state:any)=>(form:any,body:any)=>Promise<void>
+    const state={platform:{platform_mode:"optional"},can_manage_platform:true}
+    const update=build(send,refresh,status,el,state)
+    send.mockResolvedValueOnce({})
+    await update(personalForm,{action:"personal",user_enabled:true})
+    expect(personalButton.disabled).toBe(false)
+    send.mockRejectedValueOnce(Object.assign(new Error("Version conflict"),{uncertain:false}))
+    await update(personalForm,{action:"personal",user_enabled:false})
+    expect(personalButton.disabled).toBe(false)
+    send.mockRejectedValueOnce(Object.assign(new Error("Network status unknown"),{uncertain:true}))
+    await update(personalForm,{action:"personal",user_enabled:false})
+    expect(personalButton.disabled).toBe(true)
+    send.mockResolvedValueOnce({})
+    await update(platformForm,{action:"platform",platform_mode:"required"})
+    expect(platformButton.disabled).toBe(false)
+    const forbidden=build(send,refresh,status,el,{platform:{platform_mode:"required"},can_manage_platform:false})
+    send.mockResolvedValueOnce({})
+    await forbidden(personalForm,{action:"personal",user_enabled:true})
+    expect(personalButton.disabled).toBe(true)
+    await forbidden(platformForm,{action:"platform",platform_mode:"disabled"})
+    expect(platformButton.disabled).toBe(true)
+  })
   it("rejects current session absence, never discloses platform or Person",async()=>{
     store.personalMfaSettings.mockResolvedValue(null)
     const r=await invoke("GET")

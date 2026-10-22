@@ -130,12 +130,20 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   async function load(){try{const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';mfaState=null;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
   async function updateMfaForm(form,body){
     const button=form.querySelector('button');button.disabled=true;
+    let uncertain=false;
     try{
       await api('mfa',{method:'POST',body:JSON.stringify(body)});
       await refreshMfa();status('MFA ayarı kaydedildi. Native faktör ve oturum geçişi ayrıca doğrulanmalıdır.');
     }catch(e){
       status(e.message);await refreshMfa();
-      if(e.uncertain){button.disabled=true;status('İşlemin sonucu belirsiz. Yeniden göndermeden önce kayıt kontrolü gerekli.');}
+      if(e.uncertain){uncertain=true;status('İşlemin sonucu belirsiz. Yeniden göndermeden önce kayıt kontrolü gerekli.');}
+    }finally{
+      // Re-enable only when fresh server policy still authorizes this control.
+      // Ambiguous writes stay locked until their persisted result is reviewed.
+      button.disabled=uncertain||!mfaState||
+        (form===el('mfa-platform')
+          ? !mfaState.can_manage_platform
+          : mfaState.platform.platform_mode!=='optional');
     }
   }
   el('mfa-person').onsubmit=async e=>{
