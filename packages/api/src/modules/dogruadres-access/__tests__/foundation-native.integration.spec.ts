@@ -11,6 +11,7 @@
 import { moduleIntegrationTestRunner } from "@medusajs/test-utils"
 import { DOGRUADRES_ACCESS_MODULE } from "../index"
 import AccessService from "../service"
+import { Migration20261020230000 } from "../migrations/Migration20261020230000"
 import {
   ActorMapping, AuditEvent, AuditOutbox, Invitation,
   Membership, Organization, Person,
@@ -79,6 +80,47 @@ moduleIntegrationTestRunner<AccessService>({
         "da_organization_membership","da_audit_event","da_audit_outbox"].map(
           table=>q("select count(*)::int as n from "+table).then((rows:any[])=>Number(rows[0].n))))
       expect(after).toEqual(before)
+    })
+    it("commits real ORM membership and both outbox pointers, then rolls back a security-outbox fault",async()=>{
+      // Install the actual committed security-state migration on this fresh,
+      // runner-generated module schema; no mock outbox or extra infrastructure.
+      const migration=new Migration20261020230000()
+      const statements:string[]=[]
+      migration.addSql=(sql:string)=>statements.push(sql)
+      await migration.up()
+      for(const statement of statements)await q(statement)
+
+      const organization=await service.provisionOrganization(operation)
+      const admin=await service.resolvePersonForActor(actor)
+      expect(admin?.id).toBeTruthy()
+      const [ordinary]=await service.createPeople([{}])
+      const [membership]=await service.createMemberships([{
+        organization_id:organization.organization.id,person_id:ordinary.id,
+        role:"member",status:"active",protected_owner:false,
+      }])
+      const input={
+        organization_id:organization.organization.id,membership_id:membership.id,
+        actor_person_id:admin!.id,actor_type:"user",actor_id:actor.actor_id,
+      }
+      const changed=await service.changeMembership({...input,role:"admin"})
+      expect(changed.role).toBe("admin")
+      const audits=await q("select id from da_audit_event where action='organization.membership_changed' and target_id=?",[membership.id])
+      expect(audits).toHaveLength(1)
+      const canon=await q("select source_audit_event_id from da_audit_outbox where source_audit_event_id=?",[audits[0].id])
+      const security=await q("select audit_event_id from da_security_outbox where audit_event_id=?",[audits[0].id])
+      expect(canon).toHaveLength(1)
+      expect(security).toHaveLength(1)
+      const beforeRows=await Promise.all(["da_audit_event","da_audit_outbox","da_security_outbox"].map(
+        table=>q("select count(*)::int as n from "+table).then((rows:any[])=>Number(rows[0].n))))
+      await q("create function da_test_reject_security() returns trigger language plpgsql as $$ begin raise exception 'CI_INJECTED_SECURITY_OUTBOX_FAULT'; end; $$")
+      await q("create trigger da_test_reject_security before insert on da_security_outbox for each row execute function da_test_reject_security()")
+      await expect(service.changeMembership({...input,role:"member"}))
+        .rejects.toThrow(/CI_INJECTED_SECURITY_OUTBOX_FAULT/)
+      const afterRole=await q("select role from da_organization_membership where id=?",[membership.id])
+      expect(afterRole[0].role).toBe("admin")
+      const afterRows=await Promise.all(["da_audit_event","da_audit_outbox","da_security_outbox"].map(
+        table=>q("select count(*)::int as n from "+table).then((rows:any[])=>Number(rows[0].n))))
+      expect(afterRows).toEqual(beforeRows)
     })
   },
 })
