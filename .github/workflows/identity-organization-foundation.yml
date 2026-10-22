@@ -202,13 +202,15 @@ jobs:
           no-cache: true
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
-      - name: Exercise actual MFA migration, CAS and rollback on disposable PG16
+      - name: Exercise MFA transactions and real migration ledger on same disposable PG16
         working-directory: packages/api
         env:
           CI: 'true'
           PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
           PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
-        run: bun integration-tests/postgres/mfa-persistence.pg16.test.ts
+        run: |
+          bun integration-tests/postgres/mfa-persistence.pg16.test.ts
+          bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
       # The test erases its own schema in finally. GitHub Actions terminates and
       # removes this ephemeral PostgreSQL service on job exit/cancel. There is
       # no repository volume, persistent fixture or access to the M0 task DB.
