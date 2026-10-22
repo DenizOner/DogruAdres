@@ -67,7 +67,7 @@ async function migrate(classes:typeof all) {
 }
 async function ledger() {
   const rows=await db.unsafe("select name from mikro_orm_migrations order by name")
-  const names=rows.map((r:any)=>String(r.name).replace(/\\.(?:js|ts)$/,""))
+  const names=rows.map((r:any)=>String(r.name).replace(/\.(?:js|ts)$/,""))
   assert.equal(names.length,new Set(names).size,"Duplicate ledger migration")
   return names
 }
@@ -78,7 +78,7 @@ async function resetDisposableSchema() {
 try{
   const identity=(await db.unsafe("select current_database() as name, current_setting('server_version_num') as ver"))[0]
   assert.equal(identity.name,"mfa_ci_ephemeral")
-  assert.match(identity.ver,/^16\\d{4}$/)
+  assert.match(identity.ver,/^16\d{4}$/)
   assert.equal((await db.unsafe("select to_regclass('mikro_orm_migrations') as t"))[0].t,null)
 
   // Simulate a prior deployed M0 security schema, BEFORE Foundation's
