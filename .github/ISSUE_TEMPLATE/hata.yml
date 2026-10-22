@@ -1,0 +1,50 @@
+name: "Hata / güvenlik bulgusu"
+description: "Doğrulanabilir bir hatayı veya güvenli ret davranışındaki sorunu bildirin."
+title: "[HATA] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gerçek kişisel verileri, parolaları, tokenları, anahtarları ve özel ortam dosyalarını buraya yazmayın.
+        Mevcut bir Issue varsa tekrar açmayın; aynı kayıtta devam edin.
+  - type: textarea
+    id: observed
+    attributes:
+      label: "Gözlenen davranış"
+      description: "Somut belirtiyi, etkilenen sürüm/dal/commit bilgisini açıklayın."
+      placeholder: "Hangi işlem, hangi sonuç, hangi ortam?"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Beklenen davranış ve etkisi"
+      placeholder: "Beklenen sonuç ve kullanıcı/güvenlik etkisi"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: "Tekrarlama adımları / kanıt"
+      description: "Yalnız sentetik, sır içermeyen adımlar ve ilgili CI/commit linkleri."
+    validations:
+      required: false
+  - type: dropdown
+    id: severity
+    attributes:
+      label: "Önerilen önem düzeyi (triage ile doğrulanır)"
+      options:
+        - "P0 — veri kaybı / kritik güvenlik"
+        - "P1 — ana işlev engeli"
+        - "P2 — sınırlı etki"
+        - "P3 — iyileştirme"
+        - "Henüz bilinmiyor"
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: "Risk, mevcut iş ve güvenli geri alma"
+      description: "İlgili Issue/PR, korunacak veri, doğrulanmamış varsayımlar."
+    validations:
+      required: false
