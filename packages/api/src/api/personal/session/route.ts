@@ -62,10 +62,23 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const session = await access(req).openPersonalSession(result.authIdentity.id,purpose,expectedRevision)
   if(purpose!=="mfa_enroll"){
     try { if(!await bindServerActor(req,session.token))throw new Error("Session unavailable") }
-    catch { await access(req).closePersonalSession(session.token,false);return res.status(503).json({message:"Service unavailable"}) }
+    catch {
+      // Do not return the newly minted credential even if compensation fails.
+      try{await access(req).closePersonalSession(session.token,false)}catch{}
+      return res.status(503).json({message:"Service unavailable"})
+    }
   }
-  // Rotate by revoking the previously presented session after successful login.
-  if (sessionToken(req)) await access(req).closePersonalSession(sessionToken(req),false)
+  // Never return a new full or setup-only cookie when retiring the prior
+  // browser session failed. Rollback is best effort, not a cross-DB guarantee.
+  const previous=sessionToken(req)
+  if(previous && previous!==session.token){
+    try{
+      await access(req).closePersonalSession(previous,false)
+    }catch{
+      try{await access(req).closePersonalSession(session.token,false)}catch{}
+      return res.status(503).json({message:"Service unavailable"})
+    }
+  }
   res.cookie("da_session",session.token,{httpOnly:true,secure:secureCookies(),sameSite:"strict",path:"/",maxAge:43200000})
   return purpose==="mfa_enroll"
     ? res.status(202).json({enrollment_required:true,csrf_token:session.csrf})

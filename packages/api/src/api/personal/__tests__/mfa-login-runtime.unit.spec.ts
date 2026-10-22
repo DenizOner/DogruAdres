@@ -74,6 +74,52 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
     expect(bindServerActor).toHaveBeenCalledWith(expect.anything(),"S".repeat(43))
     expect(r.json).toHaveBeenCalledWith({csrf_token:"C".repeat(43)})
   })
+  it.each(["full","mfa_enroll"] as const)(
+    "revokes the previous browser session before issuing %s cookie",async(purpose)=>{
+      const old="O".repeat(43)
+      ;(sessionToken as jest.Mock).mockReturnValue(old)
+      service.personalLoginMfaDecision.mockResolvedValue({
+        purpose,expectedRevision:{platform:0,person:0},
+      })
+      const r=await call()
+      expect(service.closePersonalSession).toHaveBeenCalledWith(old,false)
+      expect(service.closePersonalSession).not.toHaveBeenCalledWith("S".repeat(43),false)
+      expect(r.cookie).toHaveBeenCalledWith("da_session","S".repeat(43),expect.anything())
+    })
+  it.each(["full","mfa_enroll"] as const)(
+    "fails closed and revokes newly minted %s session if prior-session retirement fails",async(purpose)=>{
+      const old="O".repeat(43)
+      ;(sessionToken as jest.Mock).mockReturnValue(old)
+      service.personalLoginMfaDecision.mockResolvedValue({
+        purpose,expectedRevision:{platform:0,person:0},
+      })
+      service.closePersonalSession.mockRejectedValueOnce(Error("synthetic stale-session outage"))
+        .mockResolvedValueOnce(undefined)
+      const r=await call()
+      expect(service.closePersonalSession).toHaveBeenNthCalledWith(1,old,false)
+      expect(service.closePersonalSession).toHaveBeenNthCalledWith(2,"S".repeat(43),false)
+      expect(r.status).toHaveBeenCalledWith(503)
+      expect(r.cookie).not.toHaveBeenCalled()
+    })
+  it("does not return a new login cookie if both stale-session retirement and cleanup fail",async()=>{
+    ;(sessionToken as jest.Mock).mockReturnValue("O".repeat(43))
+    service.closePersonalSession.mockRejectedValue(Error("synthetic DB outage"))
+    const r=await call()
+    expect(service.closePersonalSession).toHaveBeenCalledTimes(2)
+    expect(r.status).toHaveBeenCalledWith(503)
+    expect(r.cookie).not.toHaveBeenCalled()
+  })
+  it("returns a controlled 503 and no cookie if full-session actor binding and compensation fail",async()=>{
+    service.personalLoginMfaDecision.mockResolvedValue({
+      purpose:"full",expectedRevision:{platform:0,person:0},
+    })
+    ;(bindServerActor as jest.Mock).mockRejectedValue(Error("synthetic actor-binding fault"))
+    service.closePersonalSession.mockRejectedValue(Error("synthetic cleanup fault"))
+    const r=await call()
+    expect(service.closePersonalSession).toHaveBeenCalledWith("S".repeat(43),false)
+    expect(r.status).toHaveBeenCalledWith(503)
+    expect(r.cookie).not.toHaveBeenCalled()
+  })
   it("refuses enabled native factor without Medusa challenge",async()=>{
     ;(readNativeMfaSummary as jest.Mock).mockResolvedValue({enabled:true,state:"enabled"})
     const r=await call()
