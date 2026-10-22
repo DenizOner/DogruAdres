@@ -42,7 +42,17 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   try{session=await access(req).completePersonalChallenge(token,new Date(challenge.completed_at))}
   catch{return res.status(401).json({message:"Access denied"})}
   try { if(!await bindServerActor(req,session.token))throw new Error("Session unavailable") } catch { await access(req).closePersonalSession(session.token,false);return res.status(503).json({message:"Service unavailable"}) }
-  if(sessionToken(req))await access(req).closePersonalSession(sessionToken(req),false)
+  const previous=sessionToken(req)
+  if(previous && previous!==session.token){
+    try{
+      await access(req).closePersonalSession(previous,false)
+    }catch{
+      // Do not expose a newly created full session if retiring the old
+      // session failed. Cleanup is best effort; the token is never returned.
+      try{await access(req).closePersonalSession(session.token,false)}catch{}
+      return res.status(503).json({message:"Service unavailable"})
+    }
+  }
   res.clearCookie("da_challenge",{path:"/personal"})
   res.cookie("da_session",session.token,{httpOnly:true,secure:secureCookies(),sameSite:"strict",path:"/",maxAge:43200000})
   return res.json({csrf_token:session.csrf})
