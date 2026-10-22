@@ -100,7 +100,11 @@ async function observed(){
     db.unsafe("select source_audit_event_id,envelope from da_audit_outbox order by created_at"),
     db.unsafe("select audit_event_id from da_security_outbox order by created_at"),
   ])
-  return {member:members[0],audits,canonical,security}
+  // Bun SQL may return jsonb as its encoded string; normalize for observer checks.
+  return {member:members[0],audits,
+    canonical:canonical.map((row:any)=>({
+      ...row,envelope:typeof row.envelope==="string"?JSON.parse(row.envelope):row.envelope,
+    })),security}
 }
 const change=(svc:any,ctx:any,role:"admin"|"member")=>
   svc.changeMembership({organization_id:org,membership_id:targetId,actor_person_id:owner,actor_type:"user",actor_id:"user_tx_owner",role},ctx)
