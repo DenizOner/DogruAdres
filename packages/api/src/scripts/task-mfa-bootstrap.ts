@@ -9,6 +9,7 @@ import {
   SignedTaskManifest,
   TaskResourceManifest,
   verifySignedManifest,
+  createTrustedOperatorRegistry,
   TrustedOperatorRegistry,
 } from "./operator-audit-protocol"
 
@@ -217,9 +218,10 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
   let trustedRegistry: TrustedOperatorRegistry
   try {
     const registryRaw = await (await import("node:fs/promises")).readFile(trustedRegistryPath, "utf8")
-    trustedRegistry = JSON.parse(registryRaw) as TrustedOperatorRegistry
+    const parsedRegistry = JSON.parse(registryRaw)
+    trustedRegistry = createTrustedOperatorRegistry(parsedRegistry)
   } catch (err: unknown) {
-    throw new Error(`REFUSED: Cannot read trusted operator registry from ${trustedRegistryPath}: ${String(err)}`)
+    throw new Error(`REFUSED: Cannot construct validated operator registry from ${trustedRegistryPath}: ${String(err)}`)
   }
 
   validateTargetAgainstManifest(targetUrl, signedManifest.manifest, trustedRegistry, signedManifest)

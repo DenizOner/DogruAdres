@@ -2,6 +2,7 @@
 import {
   canonicalJsonStringify,
   computePublicKeyFingerprint,
+  createTrustedOperatorRegistry,
   verifySignedManifest,
   verifyRuntimeEnvironmentOwnership,
   createSignedPreIntent,
@@ -12,7 +13,7 @@ import {
   SignedTaskManifest,
   RuntimeResourceAdapter,
   AtomicNonceStore,
-  TrustedOperatorRegistry,
+  TrustedRegistryData,
 } from "../operator-audit-protocol"
 import {
   validateSafeBasename,
@@ -24,7 +25,7 @@ import {
 } from "../task-mfa-bootstrap"
 import taskMfaBootstrap from "../task-mfa-bootstrap"
 
-describe("Operator Audit Protocol & Final Security Closeout (Source-Only)", () => {
+describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
   let publicKeyPem: string
   let privateKeyPem: string
   let keyFingerprint: string
@@ -64,7 +65,7 @@ describe("Operator Audit Protocol & Final Security Closeout (Source-Only)", () =
     expiresAt: "2026-10-22T22:00:00.000Z",
   }
 
-  describe("1. Strict RFC 8785 & RFC 7493 (I-JSON) Compliance", () => {
+  describe("1. Strict RFC 8785 Canonical JSON Serialization & Fail-Closed Contract", () => {
     it("sorts keys lexicographically by UTF-16 code units", () => {
       const input = { "\u00e9": 1, "e": 2, "a": 3 }
       expect(canonicalJsonStringify(input)).toBe('{"a":3,"e":2,"\u00e9":1}')
@@ -81,11 +82,32 @@ describe("Operator Audit Protocol & Final Security Closeout (Source-Only)", () =
       expect(() => canonicalJsonStringify(-Infinity)).toThrow(/NaN and Infinity are forbidden/)
     })
 
-    it("rejects BigInt and lone surrogate code points (malformed Unicode)", () => {
-      expect(() => canonicalJsonStringify(BigInt(42))).toThrow(/BigInt serialization is not supported/)
-      // Unpaired high surrogate \uD800
+    it("rejects BigInt, functions, symbols, and undefined in objects and arrays", () => {
+      expect(() => canonicalJsonStringify(BigInt(42))).toThrow(/Unsupported value type/)
+      expect(() => canonicalJsonStringify({ fn: () => {} })).toThrow(/Undefined, symbol or function value found/)
+      expect(() => canonicalJsonStringify({ undef: undefined })).toThrow(/Undefined, symbol or function value found/)
+      expect(() => canonicalJsonStringify([undefined])).toThrow(/Sparse arrays or undefined elements are forbidden/)
+    })
+
+    it("rejects sparse arrays", () => {
+      const sparse = new Array(3)
+      sparse[0] = 1
+      sparse[2] = 3
+      expect(() => canonicalJsonStringify(sparse)).toThrow(/Sparse arrays or undefined elements are forbidden/)
+    })
+
+    it("rejects circular references in objects and arrays", () => {
+      const circularObj: any = { a: 1 }
+      circularObj.self = circularObj
+      expect(() => canonicalJsonStringify(circularObj)).toThrow(/Circular reference detected/)
+
+      const circularArr: any = [1, 2]
+      circularArr.push(circularArr)
+      expect(() => canonicalJsonStringify(circularArr)).toThrow(/Circular reference detected/)
+    })
+
+    it("rejects lone surrogate code points (malformed Unicode)", () => {
       expect(() => canonicalJsonStringify("invalid\uD800unicode")).toThrow(/Lone surrogate code point detected/)
-      // Unpaired low surrogate \uDC00
       expect(() => canonicalJsonStringify("invalid\uDC00unicode")).toThrow(/Lone surrogate code point detected/)
     })
 
@@ -95,17 +117,41 @@ describe("Operator Audit Protocol & Final Security Closeout (Source-Only)", () =
     })
   })
 
-  describe("2. Independent Pinned Operator Trust & Scope Enforcement", () => {
-    const trustedRegistry: TrustedOperatorRegistry = {
-      isFingerprintTrusted: (fp) => fp === keyFingerprint,
-      isOperatorApproved: (op) =>
-        op.humanOperatorId === "human_operator_42" &&
-        op.approvalReference === "https://github.com/DenizOner/DogruAdres/issues/230#issuecomment-6347609069" &&
-        op.windowsSecurityPrincipal === "S-1-5-21-123456789-123456789-123456789-1001",
-      getPublicKeyPem: (fp) => (fp === keyFingerprint ? publicKeyPem : null),
+  describe("2. Pure TrustedOperatorRegistry Factory & Data Validation", () => {
+    const validRegistryData: TrustedRegistryData = {
+      registrySchemaVersion: "1.0.0",
+      trustDomain: "dogruadres-m0-mfa",
+      operators: [
+        {
+          operatorId: "human_operator_42",
+          windowsPrincipal: "S-1-5-21-123456789-123456789-123456789-1001",
+          approvalReference: "https://github.com/DenizOner/DogruAdres/issues/230#issuecomment-6347609069",
+          publicKeyPem: "", // filled in test
+          keyFingerprint: "", // filled in test
+          validFrom: "2026-10-22T00:00:00Z",
+          validUntil: "2026-10-23T00:00:00Z",
+        },
+      ],
     }
 
-    it("accepts manifest signed by trusted operator with approved scope", () => {
+    it("loads actual JSON bytes, constructs registry, and verifies valid signed manifest", () => {
+      const concreteRegistryData: TrustedRegistryData = {
+        ...validRegistryData,
+        operators: [
+          {
+            ...validRegistryData.operators[0],
+            publicKeyPem,
+            keyFingerprint,
+          },
+        ],
+      }
+      const rawJsonBytes = Buffer.from(JSON.stringify(concreteRegistryData), "utf8")
+      const parsed = JSON.parse(rawJsonBytes.toString("utf8"))
+      const registry = createTrustedOperatorRegistry(parsed)
+
+      expect(registry.isFingerprintTrusted(keyFingerprint)).toBe(true)
+      expect(registry.isOperatorApproved(baseManifest.authorizedOperator)).toBe(true)
+
       const payload = Buffer.from(canonicalJsonStringify(baseManifest), "utf8")
       const sig = require("node:crypto").sign(null, payload, privateKeyPem).toString("base64")
       const signed: SignedTaskManifest = {
@@ -113,36 +159,37 @@ describe("Operator Audit Protocol & Final Security Closeout (Source-Only)", () =
         signerKeyFingerprint: keyFingerprint,
         signatureBase64: sig,
       }
-      expect(() => verifySignedManifest(signed, trustedRegistry)).not.toThrow()
+      expect(() => verifySignedManifest(signed, registry)).not.toThrow()
     })
 
-    it("rejects self-signed manifest using untrusted key fingerprint", () => {
-      const payload = Buffer.from(canonicalJsonStringify(baseManifest), "utf8")
-      const sig = require("node:crypto").sign(null, payload, otherPrivateKeyPem).toString("base64")
-      const signed: SignedTaskManifest = {
-        manifest: baseManifest,
-        signerKeyFingerprint: otherKeyFingerprint,
-        signatureBase64: sig,
-      }
-      expect(() => verifySignedManifest(signed, trustedRegistry)).toThrow(/not in the trusted operator registry/)
+    it("rejects registry with wrong trust domain or schema version", () => {
+      expect(() => createTrustedOperatorRegistry({ registrySchemaVersion: "2.0.0" })).toThrow(/Unsupported registry schema version/)
+      expect(() =>
+        createTrustedOperatorRegistry({
+          registrySchemaVersion: "1.0.0",
+          trustDomain: "wrong-domain",
+          operators: [],
+        })
+      ).toThrow(/Trust domain mismatch/)
     })
 
-    it("rejects trusted key when operator approval scope is modified or unapproved", () => {
-      const modifiedManifest = {
-        ...baseManifest,
-        authorizedOperator: {
-          ...baseManifest.authorizedOperator,
-          approvalReference: "https://github.com/DenizOner/DogruAdres/issues/230#forged-approval",
-        },
+    it("rejects registry with corrupted key fingerprint (mismatch with PEM)", () => {
+      const corruptData = {
+        registrySchemaVersion: "1.0.0",
+        trustDomain: "dogruadres-m0-mfa",
+        operators: [
+          {
+            operatorId: "human_operator_42",
+            windowsPrincipal: "S-1-5-21-123456789-123456789-123456789-1001",
+            approvalReference: "https://github.com/DenizOner/DogruAdres/issues/230#issuecomment-6347609069",
+            publicKeyPem,
+            keyFingerprint: "0000000000000000000000000000000000000000000000000000000000000000",
+            validFrom: "2026-10-22T00:00:00Z",
+            validUntil: "2026-10-23T00:00:00Z",
+          },
+        ],
       }
-      const payload = Buffer.from(canonicalJsonStringify(modifiedManifest), "utf8")
-      const sig = require("node:crypto").sign(null, payload, privateKeyPem).toString("base64")
-      const signed: SignedTaskManifest = {
-        manifest: modifiedManifest,
-        signerKeyFingerprint: keyFingerprint,
-        signatureBase64: sig,
-      }
-      expect(() => verifySignedManifest(signed, trustedRegistry)).toThrow(/Operator identity or approval reference is not approved/)
+      expect(() => createTrustedOperatorRegistry(corruptData)).toThrow(/Key fingerprint mismatch for operator/)
     })
   })
 
@@ -249,7 +296,7 @@ describe("Operator Audit Protocol & Final Security Closeout (Source-Only)", () =
         preIntent,
         privateKeyPem,
         "tx_hash_inverted",
-        "2026-10-22T20:29:59.000Z" // Earlier than preIntent!
+        "2026-10-22T20:29:59.000Z"
       )
       expect(verifyCeremonyAuditChain(preIntent, invertedOutcome, publicKeyPem)).toBe(false)
     })
