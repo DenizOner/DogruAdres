@@ -212,6 +212,14 @@ jobs:
           bun integration-tests/postgres/mfa-persistence.pg16.test.ts
           bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
           bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
+      - name: Full Medusa CLI module migration on disposable PG16
+        working-directory: packages/api
+        timeout-minutes: 5
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+        run: bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts
       - name: Foundation native Medusa module / ORM transaction on disposable PG16
         working-directory: packages/api
         env:
