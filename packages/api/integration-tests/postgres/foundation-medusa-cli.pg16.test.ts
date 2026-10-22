@@ -73,6 +73,34 @@ async function run(){
       const ledger=await target.unsafe("select count(*)::int as n from mikro_orm_migrations where name like 'Migration2026102%'")
       assert.ok(Number(ledger[0].n)>=1,"No Foundation migration history from Medusa CLI")
       process.stdout.write("PASS Medusa 2.21.2 CLI db:migrate: Foundation discovered and ledger recorded on disposable PG16\n")
+      // Execute native AuthIdentity TOTP/recovery with this exact disposable
+      // database. Only this child enables the local Auth module MFA options;
+      // it cannot enable Foundation's persistent rollout latch.
+      const nativeEnv:NodeJS.ProcessEnv={
+        ...env,
+        PG_MFA_NATIVE_TEST_DATABASE:dbName,
+        DOGRUADRES_IDENTITY_ENABLED:"true",
+        DOGRUADRES_MFA_ENCRYPTION_KEY:randomBytes(48).toString("hex"),
+        DOGRUADRES_PUBLIC_ORIGIN:"http://127.0.0.1:19041",
+        DOGRUADRES_PRIVATE_API:"http://127.0.0.1:19042",
+        DOGRUADRES_FRONTDOOR_HOST:"127.0.0.1",
+        DOGRUADRES_FRONTDOOR_PORT:"19041",
+      }
+      const native=spawnSync(process.execPath,["run","medusa","exec",
+        "./integration-tests/postgres/native-mfa-lifecycle.exec.ts"],{
+        cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
+      })
+      if(native.error||native.status!==0)
+        throw Error("Native Medusa MFA integration not accepted: "+
+          String(native.error??("exit "+native.status))+"; "+
+          sanitized(String(native.stderr??"")+"\n"+String(native.stdout??"")))
+      const passed=String(native.stdout??"")
+      for(const evidence of [
+        "PASS Medusa native MFA: synthetic password proof, TOTP start and verify",
+        "PASS Medusa native MFA: recovery code consumed exactly once",
+        "PASS Medusa native MFA: enabled factor cannot be disabled without fresh challenge",
+      ])assert.ok(passed.includes(evidence),"Missing real native MFA acceptance evidence")
+      process.stdout.write("PASS exact-DB Medusa native MFA: TOTP, recovery replay and disable challenge\n")
     }finally{
       await target.close()
     }
