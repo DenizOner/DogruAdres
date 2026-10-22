@@ -75,7 +75,8 @@ async function resetDisposableSchema() {
   await db.unsafe("drop schema if exists public cascade")
   await db.unsafe("create schema public")
 }
-try{
+async function main() {
+  try{
   const identity=(await db.unsafe("select current_database() as name, current_setting('server_version_num') as ver"))[0]
   assert.equal(identity.name,"mfa_ci_ephemeral")
   assert.match(identity.ver,/^16\d{4}$/)
@@ -114,4 +115,9 @@ try{
     process.exitCode=1
   }
   await db.close()
+  }
 }
+main().catch(error=>{
+  process.stderr.write("MFA migrator ledger PG16 FAILED: "+String(error)+"\n")
+  process.exitCode=1
+})
