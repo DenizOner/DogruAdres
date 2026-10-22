@@ -9,6 +9,8 @@
  * legacy upgrade are verified in separate real migrator/PG16 acceptance tests.
  */
 import { moduleIntegrationTestRunner } from "@medusajs/test-utils"
+import { randomBytes } from "node:crypto"
+import { deriveInvitationToken } from "../security"
 import { DOGRUADRES_ACCESS_MODULE } from "../index"
 import AccessService from "../service"
 import { Migration20261020230000 } from "../migrations/Migration20261020230000"
@@ -41,6 +43,15 @@ moduleIntegrationTestRunner<AccessService>({
   dbName:testDbName,
   testSuite:({service,MikroOrmWrapper,dbConfig})=>{
     const q=(sql:string,params:unknown[]=[])=>MikroOrmWrapper.forkManager().execute(sql,params)
+    let originalInvitationSecret: string | undefined
+    beforeEach(()=>{
+      originalInvitationSecret=process.env.DOGRUADRES_INVITATION_SECRET
+      process.env.DOGRUADRES_INVITATION_SECRET=randomBytes(48).toString("hex")
+    })
+    afterEach(()=>{
+      if(originalInvitationSecret===undefined)delete process.env.DOGRUADRES_INVITATION_SECRET
+      else process.env.DOGRUADRES_INVITATION_SECRET=originalInvitationSecret
+    })
     it("commits real ORM Organization, two protected Owners, 3 audit and 3 unique canonical outboxes",async()=>{
       expect(dbConfig.clientUrl).toContain("/"+testDbName)
       const result=await service.provisionOrganization(operation)
@@ -121,6 +132,64 @@ moduleIntegrationTestRunner<AccessService>({
       const afterRows=await Promise.all(["da_audit_event","da_audit_outbox","da_security_outbox"].map(
         table=>q("select count(*)::int as n from "+table).then((rows:any[])=>Number(rows[0].n))))
       expect(afterRows).toEqual(beforeRows)
+    })
+    it("persists native invitation creation and revocation with distinct canonical audit/outbox entries",async()=>{
+      const provisioned=await service.provisionOrganization(operation)
+      const current=await service.resolvePersonForActor(actor)
+      expect(current?.id).toBeTruthy()
+      const context={
+        organization_id:provisioned.organization.id,actor_person_id:current!.id,
+        actor_type:"user",actor_id:actor.actor_id,
+      }
+      const invitation=await service.createOrganizationInvitation({
+        ...context,email:"invitee@example.invalid",role:"member",
+      })
+      expect(invitation.status).toBe("pending")
+      const revoked=await service.revokeOrganizationInvitation({
+        ...context,invitation_id:invitation.id,
+      })
+      expect(revoked.status).toBe("revoked")
+      const stored=await q("select status from da_organization_invitation where id=?",[invitation.id])
+      expect(stored[0].status).toBe("revoked")
+      const audits=await q("select id,action from da_audit_event where target_id=? and action in ('organization.invitation_created','organization.invitation_revoked') order by action",[invitation.id])
+      expect(audits.map((x:any)=>x.action)).toEqual([
+        "organization.invitation_created","organization.invitation_revoked"])
+      const sourceIds=audits.map((x:any)=>x.id)
+      const outbox=await q("select source_audit_event_id from da_audit_outbox where source_audit_event_id in (?,?)",[sourceIds[0],sourceIds[1]])
+      expect(outbox.map((x:any)=>x.source_audit_event_id).sort()).toEqual(sourceIds.sort())
+      await expect(service.revokeOrganizationInvitation({...context,invitation_id:invitation.id})).rejects.toThrow()
+      const unchanged=await q("select count(*)::int as n from da_audit_event where target_id=? and action='organization.invitation_revoked'",[invitation.id])
+      expect(Number(unchanged[0].n)).toBe(1)
+    })
+    it("accepts one invited membership only with caller-asserted email proof, denies mismatch and replay",async()=>{
+      const provisioned=await service.provisionOrganization(operation)
+      const current=await service.resolvePersonForActor(actor)
+      expect(current?.id).toBeTruthy()
+      const email="recipient@example.invalid"
+      const created=await service.createOrganizationInvitation({
+        organization_id:provisioned.organization.id,actor_person_id:current!.id,
+        actor_type:"user",actor_id:actor.actor_id,email,role:"member",
+      })
+      // Derived only within isolated test; token and secret are never logged.
+      const token=deriveInvitationToken(created.id)
+      const invitedActor={actor_type:"user",actor_id:"synthetic_invitee_foundation_220"}
+      const base={token,email,actor:invitedActor}
+      await expect(service.acceptOrganizationInvitation({...base,email_verified:false})).rejects.toThrow()
+      await expect(service.acceptOrganizationInvitation({...base,email:"other@example.invalid",email_verified:true})).rejects.toThrow()
+      expect(await q("select id from da_organization_membership where organization_id=? and role='member'",[provisioned.organization.id])).toHaveLength(0)
+
+      // This proves service-side constraints with a synthetic trusted flag;
+      // actual ownership verification upstream remains blocked by #191.
+      const accepted=await service.acceptOrganizationInvitation({...base,email_verified:true})
+      expect(accepted.invitation.status).toBe("accepted")
+      expect(accepted.membership.role).toBe("member")
+      expect(accepted.membership.protected_owner).toBe(false)
+      const audits=await q("select id from da_audit_event where action='organization.invitation_accepted' and target_id=?",[created.id])
+      expect(audits).toHaveLength(1)
+      expect(await q("select source_audit_event_id from da_audit_outbox where source_audit_event_id=?",[audits[0].id])).toHaveLength(1)
+      await expect(service.acceptOrganizationInvitation({...base,email_verified:true})).rejects.toThrow()
+      const replayAudit=await q("select count(*)::int as n from da_audit_event where action='organization.invitation_accepted' and target_id=?",[created.id])
+      expect(Number(replayAudit[0].n)).toBe(1)
     })
   },
 })
