@@ -36,9 +36,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const token = sessionToken(req)
   // Factor listing is tied ONLY to the exact AuthIdentity from the live
   // server-side browser session, never an ID supplied by the caller.
-  const session = await service.personalSession(token)
+  let session
+  try { session = await service.personalSession(token) }
+  catch { return res.status(503).json({message:"Service unavailable"}) }
   if (!session) return res.status(403).json({message:"Access denied"})
-  const value = await service.personalMfaSettings(token)
+  let value
+  try { value = await service.personalMfaSettings(token) }
+  catch { return res.status(503).json({message:"Service unavailable"}) }
   if (!value || value.personal.person_id !== session.person_id)
     return res.status(403).json({message:"Access denied"})
   try {
@@ -82,7 +86,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   // Factor lifecycle still requires native enrollment/recovery and session
   // invalidation. Never write a preference that falsely claims a native
   // factor was enrolled or safely disabled.
-  const session = await service.personalSession(token)
+  let session
+  try { session = await service.personalSession(token) }
+  catch { return res.status(503).json({message:"Service unavailable"}) }
   if (!session) return res.status(403).json({message:"Access denied"})
   let native
   try {
