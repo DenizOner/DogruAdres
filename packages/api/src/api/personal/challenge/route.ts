@@ -41,7 +41,13 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   let session
   try{session=await access(req).completePersonalChallenge(token,new Date(challenge.completed_at))}
   catch{return res.status(401).json({message:"Access denied"})}
-  try { if(!await bindServerActor(req,session.token))throw new Error("Session unavailable") } catch { await access(req).closePersonalSession(session.token,false);return res.status(503).json({message:"Service unavailable"}) }
+  try{
+    if(!await bindServerActor(req,session.token))throw new Error("Session unavailable")
+  }catch{
+    // The credential must never be returned if compensating revocation fails.
+    try{await access(req).closePersonalSession(session.token,false)}catch{}
+    return res.status(503).json({message:"Service unavailable"})
+  }
   const previous=sessionToken(req)
   if(previous && previous!==session.token){
     try{

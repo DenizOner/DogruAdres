@@ -142,6 +142,14 @@ describe("M0 native MFA challenge and single-use recovery method",()=>{
     expect(r.status).toHaveBeenCalledWith(503)
     expect(r.cookie).not.toHaveBeenCalled()
   })
+  it("returns controlled 503 without exposing a cookie when actor binding and cleanup both fail",async()=>{
+    ;(bindServerActor as jest.Mock).mockRejectedValue(Error("synthetic binding fault"))
+    service.closePersonalSession.mockRejectedValue(Error("synthetic cleanup fault"))
+    const r=await call({method:"totp",code:"123456"})
+    expect(service.closePersonalSession).toHaveBeenCalledWith(session,false)
+    expect(r.status).toHaveBeenCalledWith(503)
+    expect(r.cookie).not.toHaveBeenCalled()
+  })
   it("revokes newly created session if the native actor binding cannot be established",async()=>{
     ;(bindServerActor as jest.Mock).mockResolvedValue(false)
     const r=await call({method:"recovery_code",code:"ABCD-EFGH"})

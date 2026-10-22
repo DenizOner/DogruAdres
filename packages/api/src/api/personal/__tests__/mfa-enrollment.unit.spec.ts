@@ -222,6 +222,14 @@ describe("server-only MFA enrollment (default-closed and purpose bound)",()=>{
     expect(service.closePersonalSession).toHaveBeenCalledWith("N".repeat(43),false)
     expect(r.cookie).not.toHaveBeenCalledWith("da_session",expect.anything(),expect.anything())
   })
+  it("returns controlled 503 and no full cookie if native binding and cleanup both throw",async()=>{
+    ;(bindServerActor as jest.Mock).mockRejectedValue(Error("synthetic binding fault"))
+    service.closePersonalSession.mockRejectedValue(Error("synthetic cleanup fault"))
+    const r=await call({action:"verify",code:"123456"})
+    expect(service.closePersonalSession).toHaveBeenCalledWith("N".repeat(43),false)
+    expect(r.status).toHaveBeenCalledWith(503)
+    expect(r.cookie).not.toHaveBeenCalled()
+  })
   it("revokes the new session if downstream native credential binding fails",async()=>{
     ;(bindServerActor as jest.Mock).mockResolvedValue(false)
     const r=await call({action:"verify",code:"123456"})

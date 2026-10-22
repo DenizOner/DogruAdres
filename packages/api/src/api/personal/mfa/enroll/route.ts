@@ -140,7 +140,8 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   try{
     if(!await bindServerActor(req,fresh.token))throw Error("Native binding unavailable")
   }catch{
-    await service.closePersonalSession(fresh.token,false)
+    // A failed revocation is not permission to return the newly minted token.
+    try{await service.closePersonalSession(fresh.token,false)}catch{}
     return res.status(503).json({message:"Service unavailable"})
   }
   res.clearCookie("da_mfa_setup",{path:"/personal/mfa/enroll"})
