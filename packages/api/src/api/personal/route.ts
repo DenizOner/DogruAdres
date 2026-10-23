@@ -132,11 +132,23 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(request!==organizationRequest)return;el('memberships').replaceChildren();
     try{const data=await api('memberships?organization='+encodeURIComponent(org));if(request!==organizationRequest||currentOrg!==org)return;
       for(const m of data.memberships){const p=document.createElement('p');p.textContent=m.person_id+' — '+m.role+' — '+m.status;el('memberships').append(p);
-        if(m.status==='active'){const b=document.createElement('button');b.textContent='Üyeliği iptal et '+m.id;b.onclick=async()=>{
-          if(request!==organizationRequest||currentOrg!==org)return;b.disabled=true;
-          try{await api('memberships',{method:'POST',body:JSON.stringify({organization_id:org,membership_id:m.id})});if(request!==organizationRequest)return;await selectOrg(org)}
-          catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)b.disabled=false}
-        };el('memberships').append(b)}
+        if(m.status==='active'){
+          if(!m.protected_owner&&m.role!=='owner'){
+            const sel=document.createElement('select');
+            for(const r of ['member','admin']){const o=document.createElement('option');o.value=r;o.textContent=r;if(r===m.role)o.selected=true;sel.append(o)}
+            const rb=document.createElement('button');rb.textContent='Rolü kaydet '+m.id;
+            rb.onclick=async()=>{
+              if(request!==organizationRequest||currentOrg!==org)return;rb.disabled=true;
+              try{await api('memberships',{method:'POST',body:JSON.stringify({organization_id:org,membership_id:m.id,role:sel.value})});if(request!==organizationRequest)return;await selectOrg(org);status('Rol güncellendi')}
+              catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)rb.disabled=false}
+            };
+            el('memberships').append(sel,rb);
+          }
+          const b=document.createElement('button');b.textContent='Üyeliği iptal et '+m.id;b.onclick=async()=>{
+            if(request!==organizationRequest||currentOrg!==org)return;b.disabled=true;
+            try{await api('memberships',{method:'POST',body:JSON.stringify({organization_id:org,membership_id:m.id})});if(request!==organizationRequest)return;await selectOrg(org)}
+            catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)b.disabled=false}
+          };el('memberships').append(b)}
       }
     }catch{}
   }

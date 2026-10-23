@@ -159,6 +159,27 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {id:result.id,status:result.status}
   }
   @InjectTransactionManager()
+  async personalChangeMembershipRole(token:string,org:string,membership:string,role:'member'|'admin',@MedusaContext() context:Context={}) {
+    if(role!=='member'&&role!=='admin')throw new MedusaError(MedusaError.Types.INVALID_DATA,'Invalid role')
+    const sql=securitySql(context.transactionManager)
+    await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`,[org])
+    const sessions=new IdentitySessions(sql),identity=await sessions.current(token,true)
+    const decision=identity?await sessions.organizations(token,org):null
+    if(!identity||!decision||!['owner','admin'].includes(decision.organizations[0].role))throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
+    const target=await this.getMembershipInOrganization(membership,org,context)
+    if(!target)throw new MedusaError(MedusaError.Types.NOT_FOUND,'Membership not found in the selected Organization')
+    if(target.protected_owner||target.role==='owner')throw new MedusaError(MedusaError.Types.FORBIDDEN,'Protected Owner cannot be changed through ordinary role controls')
+    const result=await this.changeMembership({
+      organization_id:org,
+      membership_id:membership,
+      actor_person_id:identity.person_id,
+      actor_type:identity.actor_type,
+      actor_id:identity.actor_id,
+      role
+    },context)
+    return {id:result.id,role:result.role,status:result.status}
+  }
+  @InjectTransactionManager()
   async personalMachineGrant(apiKeyId:string,method:string,resource:string,@MedusaContext() context:Context={}) {
     const rows=await securitySql(context.transactionManager).execute(`select id from da_machine_grant where api_key_id=? and method=? and resource=? and revoked_at is null`,[apiKeyId,method,resource])
     return rows.length===1
