@@ -180,12 +180,13 @@ export class NativeDockerResourceAdapter implements RuntimeResourceAdapter {
     dbName: string
     isExclusive: boolean
   }> {
+    // Reject an uncommissioned adapter BEFORE opening any database connection.
+    if (!this.approvedBinding) {
+      throw new Error("BLOCKED: Independent PostgreSQL instance binding has not been commissioned")
+    }
     const client = new Client({ connectionString })
     await client.connect()
     try {
-      if (!this.approvedBinding) {
-        throw new Error("BLOCKED: Independent PostgreSQL instance binding has not been commissioned")
-      }
       const dbRes = await client.query("SELECT current_database() as name")
       const dbName = dbRes.rows[0]?.name || ""
       // Cluster system identifier defeats substitution of a different PG
