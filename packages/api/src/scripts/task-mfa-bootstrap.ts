@@ -232,11 +232,10 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     if (
       !NATIVE_RESOURCE_ADAPTER ||
       !NATIVE_NONCE_STORAGE_ADAPTER ||
-      !NATIVE_SECURITY_ADAPTER ||
-      !NATIVE_READBACK_ADAPTER
+      !NATIVE_SECURITY_ADAPTER
     ) {
       throw new Error(
-        "REFUSED: Required native runtime adapters (Resource, NonceStorage, Security, Readback) are not commissioned. Execution remains strictly fail-closed."
+        "REFUSED: Required R0-D native runtime adapters (Resource, NonceStorage, Security) are not commissioned. Execution remains strictly fail-closed."
       )
     }
 

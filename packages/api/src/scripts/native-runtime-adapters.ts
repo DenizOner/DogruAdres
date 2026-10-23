@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
+import path from "node:path"
 import { promisify } from "node:util"
 import { realpath, lstat, open } from "node:fs/promises"
 import { Client } from "@medusajs/framework/pg"
@@ -28,25 +30,23 @@ const execFileAsync = promisify(execFile)
  */
 export class NativeWindowsSecurityAdapter implements SecurityEnvironmentAdapter {
   async inspectPathSecurity(targetPath: string): Promise<PathSecurityInspection> {
-    const realTarget = await realpath(targetPath)
-    const stat = await lstat(targetPath)
-    const isReparsePoint = stat.isSymbolicLink()
-
+    // Real Windows ACL verification must never silently degrade to fabricated
+    // POSIX results in Linux CI or other unsupported environments.
     if (process.platform !== "win32") {
-      const user = process.env.USER || "root"
-      return {
-        path: realTarget,
-        owner: user,
-        isReparsePoint,
-        entries: [
-          {
-            principal: user,
-            rights: ["FullControl"],
-            accessType: "Allow",
-            isInherited: false,
-          },
-        ],
-      }
+      throw new Error("BLOCKED: Native Windows NTFS ACL inspection requires win32")
+    }
+    const rawTarget = path.resolve(targetPath)
+    let cursor = rawTarget
+    let isReparsePoint = false
+    while (true) {
+      if ((await lstat(cursor)).isSymbolicLink()) isReparsePoint = true
+      const parent = path.dirname(cursor)
+      if (parent === cursor) break
+      cursor = parent
+    }
+    const realTarget = await realpath(rawTarget)
+    if (path.normalize(realTarget).toLowerCase() !== path.normalize(rawTarget).toLowerCase()) {
+      isReparsePoint = true
     }
 
     const psScript = `
@@ -101,10 +101,60 @@ export class NativeWindowsSecurityAdapter implements SecurityEnvironmentAdapter 
  * - getCurrentGitSha: resolves HEAD SHA from Git worktree.
  * - getOperatorPrincipal: queries current operating system security principal (whoami).
  */
+/**
+ * Expected identity MUST come from a separately approved, signed and pinned
+ * task manifest; it must never be inferred from Docker names or local env.
+ */
+export interface ApprovedRuntimeResourceBinding {
+  readonly containerId: string
+  readonly imageId: string
+  readonly composeProject: string
+  readonly volumeName: string
+  readonly volumeMountSource: string
+  readonly volumeMountDestination: string
+  readonly loopbackHostPort: string
+  readonly postgresSystemIdentifier: string
+}
+
+export function assertDockerResourceMatchesBinding(
+  actual: any,
+  expected: ApprovedRuntimeResourceBinding
+): void {
+  if (!/^[a-f0-9]{64}$/i.test(expected.containerId) ||
+      !/^sha256:[a-f0-9]{64}$/i.test(expected.imageId) ||
+      !expected.composeProject || !expected.volumeName ||
+      !expected.volumeMountSource || !expected.volumeMountDestination ||
+      !/^\\d+$/.test(expected.loopbackHostPort) ||
+      !/^\\d{10,25}$/.test(expected.postgresSystemIdentifier)) {
+    throw new Error("REFUSED: Immutable resource binding is incomplete or malformed")
+  }
+  const pgBindings = actual?.HostConfig?.PortBindings?.["5432/tcp"]
+  const volumeMounts = actual?.Mounts ?? []
+  const approvedMount = Array.isArray(volumeMounts) && volumeMounts.some((m: any) =>
+    m.Type === "volume" &&
+    m.Name === expected.volumeName &&
+    m.Source === expected.volumeMountSource &&
+    m.Destination === expected.volumeMountDestination
+  )
+  if (actual?.Id !== expected.containerId ||
+      actual?.Image !== expected.imageId ||
+      actual?.State?.Running !== true ||
+      actual?.Config?.Labels?.["com.docker.compose.project"] !== expected.composeProject ||
+      !approvedMount ||
+      !Array.isArray(pgBindings) || pgBindings.length !== 1 ||
+      pgBindings[0]?.HostIp !== "127.0.0.1" ||
+      pgBindings[0]?.HostPort !== expected.loopbackHostPort) {
+    throw new Error("REFUSED: Actual immutable Docker identity, volume mount or loopback binding differs from independently approved target")
+  }
+}
+
 export class NativeDockerResourceAdapter implements RuntimeResourceAdapter {
   private workspaceDir: string
 
-  constructor(workspaceDir: string = process.cwd()) {
+  constructor(
+    workspaceDir: string = process.cwd(),
+    private readonly approvedBinding: ApprovedRuntimeResourceBinding | null = null
+  ) {
     this.workspaceDir = workspaceDir
   }
 
@@ -113,32 +163,22 @@ export class NativeDockerResourceAdapter implements RuntimeResourceAdapter {
     isRunning: boolean
     volumeNames: string[]
   }> {
+    let stdout: string
     try {
-      const { stdout } = await execFileAsync("docker", [
-        "inspect",
-        "--format",
-        '{{json .}}',
-        containerNameOrId,
+      const result = await execFileAsync("docker", [
+        "inspect", "--type", "container", "--format", "{{json .}}", containerNameOrId,
       ])
-      const data = JSON.parse(stdout.trim())
-      const isRunning = Boolean(data.State && data.State.Running)
-      const mounts = Array.isArray(data.Mounts) ? data.Mounts : []
-      const volumeNames = mounts
-        .map((m: any) => m.Name || m.Source)
-        .filter(Boolean)
-
-      return {
-        exists: true,
-        isRunning,
-        volumeNames,
-      }
+      stdout = result.stdout
     } catch {
-      return {
-        exists: false,
-        isRunning: false,
-        volumeNames: [],
-      }
+      return { exists: false, isRunning: false, volumeNames: [] }
     }
+    // A found container is never accepted from its mutable name alone.
+    if (!this.approvedBinding) {
+      throw new Error("BLOCKED: Independent immutable Docker binding has not been commissioned")
+    }
+    const data = JSON.parse(stdout.trim())
+    assertDockerResourceMatchesBinding(data, this.approvedBinding)
+    return { exists: true, isRunning: true, volumeNames: [this.approvedBinding.volumeName] }
   }
 
   async inspectDatabase(connectionString: string): Promise<{
@@ -148,8 +188,18 @@ export class NativeDockerResourceAdapter implements RuntimeResourceAdapter {
     const client = new Client({ connectionString })
     await client.connect()
     try {
+      if (!this.approvedBinding) {
+        throw new Error("BLOCKED: Independent PostgreSQL instance binding has not been commissioned")
+      }
       const dbRes = await client.query("SELECT current_database() as name")
       const dbName = dbRes.rows[0]?.name || ""
+      // Cluster system identifier defeats substitution of a different PG
+      // server answering at the same name/port. The caller must be allowed
+      // to read pg_control_system(); lack of permission fails closed.
+      const serverRes = await client.query("SELECT system_identifier::text AS id FROM pg_control_system()")
+      if (String(serverRes.rows[0]?.id ?? "") !== this.approvedBinding.postgresSystemIdentifier) {
+        throw new Error("REFUSED: Actual PostgreSQL cluster identifier differs from pinned target")
+      }
 
       const connRes = await client.query(
         "SELECT count(*)::int as cnt FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()"
@@ -174,8 +224,10 @@ export class NativeDockerResourceAdapter implements RuntimeResourceAdapter {
 
   async getOperatorPrincipal(): Promise<{ windowsPrincipal: string }> {
     if (process.platform === "win32") {
-      const { stdout } = await execFileAsync("whoami")
-      return { windowsPrincipal: stdout.trim().toLowerCase() }
+      const { stdout } = await execFileAsync("whoami", ["/user", "/fo", "csv", "/nh"])
+      const sid = stdout.match(/S-1-\\d+(?:-\\d+)+/i)?.[0]
+      if (!sid) throw new Error("REFUSED: Cannot verify the real Windows security SID")
+      return { windowsPrincipal: sid.toLowerCase() }
     }
     const user = process.env.USER || "unknown"
     return { windowsPrincipal: user.toLowerCase() }
@@ -188,40 +240,22 @@ export class NativeDockerResourceAdapter implements RuntimeResourceAdapter {
  * - Guarantees atomic, crash-safe, race-free single claim.
  */
 export class NativePostgresAtomicNonceAdapter implements AtomicNonceStorageAdapter {
-  private client: Client
-  private initialized = false
-
-  constructor(private connectionString: string) {
-    this.client = new Client({ connectionString: this.connectionString })
-  }
-
-  private async ensureInitialized(): Promise<void> {
-    if (this.initialized) return
-    await this.client.connect()
-    await this.client.query(`
-      CREATE TABLE IF NOT EXISTS da_task_nonce_claim (
-        nonce text PRIMARY KEY,
-        run_id text NOT NULL,
-        expires_at timestamptz NOT NULL,
-        claimed_at timestamptz NOT NULL DEFAULT clock_timestamp()
-      );
-    `)
-    this.initialized = true
-  }
+  constructor(private readonly connectionString: string) {}
 
   async claimIfAbsent(entry: { nonce: string; runId: string; expiresAt: string }): Promise<boolean> {
-    await this.ensureInitialized()
-    const res = await this.client.query(
-      `INSERT INTO da_task_nonce_claim (nonce, run_id, expires_at) VALUES ($1, $2, $3) ON CONFLICT (nonce) DO NOTHING RETURNING nonce`,
-      [entry.nonce, entry.runId, entry.expiresAt]
-    )
-    return res.rowCount !== null && res.rowCount > 0
-  }
-
-  async close(): Promise<void> {
-    if (this.initialized) {
-      await this.client.end()
-      this.initialized = false
+    // Schema provisioning is a distinct migration, NEVER a hidden side effect
+    // of an anti-replay claim. Missing table must fail closed.
+    const client = new Client({ connectionString: this.connectionString })
+    await client.connect()
+    try {
+      const result = await client.query(
+        `INSERT INTO da_task_nonce_claim (nonce, run_id, expires_at)
+         VALUES ($1, $2, $3) ON CONFLICT (nonce) DO NOTHING RETURNING nonce`,
+        [entry.nonce, entry.runId, entry.expiresAt]
+      )
+      return (result.rowCount ?? 0) === 1
+    } finally {
+      await client.end()
     }
   }
 }
@@ -235,20 +269,30 @@ export class NativeFileAtomicNonceAdapter implements AtomicNonceStorageAdapter {
   constructor(private storageDir: string) {}
 
   async claimIfAbsent(entry: { nonce: string; runId: string; expiresAt: string }): Promise<boolean> {
-    const safeNonce = entry.nonce.replace(/[^a-zA-Z0-9_-]/g, "_")
-    const nonceFile = `${this.storageDir}/nonce_${safeNonce}.claim`
+    if (!entry.nonce || !entry.runId || !Number.isFinite(Date.parse(entry.expiresAt))) {
+      throw new Error("REFUSED: Invalid persistent nonce claim data")
+    }
+    // A hash avoids collisions for distinct nonces such as "a/b" and "a?b".
+    const nonceDigest = createHash("sha256").update(entry.nonce, "utf8").digest("hex")
+    const nonceFile = path.join(this.storageDir, `nonce_${nonceDigest}.claim`)
     try {
       const handle = await open(nonceFile, "wx", 0o600)
-      await handle.writeFile(
-        JSON.stringify({
-          nonce: entry.nonce,
-          runId: entry.runId,
-          expiresAt: entry.expiresAt,
-          claimedAt: new Date().toISOString(),
-          pid: process.pid,
-        })
-      )
-      await handle.close()
+      try {
+        await handle.writeFile(
+          JSON.stringify({
+            nonce: entry.nonce,
+            runId: entry.runId,
+            expiresAt: entry.expiresAt,
+            claimedAt: new Date().toISOString(),
+            pid: process.pid,
+          })
+        )
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      // Even with file fsync, directory-entry durability and Windows ACLs
+      // require separate native evidence. No automatic retry after a crash.
       return true
     } catch (err: any) {
       if (err.code === "EEXIST") {
@@ -273,74 +317,10 @@ export class NativePostgresReadbackAdapter implements DatabaseReadbackAdapter {
     transactionHash: string,
     ceremonyId: string
   ): Promise<CommittedStateEvidence> {
-    const client = new Client({ connectionString: this.connectionString })
-    await client.connect()
-    try {
-      const dbRes = await client.query("SELECT current_database() as db")
-      const currentDb = dbRes.rows[0]?.db
-      if (currentDb !== targetDatabase) {
-        throw new Error(
-          `Readback provenance failure: expected target database ${targetDatabase}, connected to ${currentDb}`
-        )
-      }
-
-      // Read real da_session_policy
-      const policyRes = await client.query(
-        "SELECT id, mfa_activated, updated_at FROM da_session_policy WHERE id = 'current'"
-      )
-      if (policyRes.rows.length === 0) {
-        throw new Error("Readback failure: da_session_policy record 'current' not found")
-      }
-      const policyRow = policyRes.rows[0]
-      if (!policyRow.mfa_activated) {
-        throw new Error("Readback failure: MFA latch is not ARMED (mfa_activated is false)")
-      }
-
-      // Query identities created
-      const userRes = await client.query(
-        'SELECT id, email FROM "user" ORDER BY id'
-      )
-      const personRes = await client.query(
-        'SELECT id, user_id, email FROM da_person ORDER BY id'
-      )
-
-      const entities: CommittedEntityDigest[] = [
-        ...userRes.rows.map((u: any) => ({
-          entityType: "user" as const,
-          entityId: u.id,
-          digestSha256: computeSha256Digest(canonicalJsonStringify({ email: u.email })),
-        })),
-        ...personRes.rows.map((p: any) => ({
-          entityType: "person" as const,
-          entityId: p.id,
-          digestSha256: computeSha256Digest(canonicalJsonStringify({ email: p.email, userId: p.user_id })),
-        })),
-      ]
-
-      const querySnapshotSha256 = computeSha256Digest(
-        canonicalJsonStringify({
-          users: userRes.rows,
-          persons: personRes.rows,
-          policy: policyRow,
-        })
-      )
-
-      const provenance: ReadbackProvenance = {
-        verifierIdentity: "independent_database_readback_adapter",
-        readbackTimestamp: new Date().toISOString(),
-        querySnapshotSha256,
-      }
-
-      return createVerifiedCommittedStateEvidence(
-        ceremonyId,
-        currentDb,
-        transactionHash,
-        "ARMED",
-        provenance,
-        entities
-      )
-    } finally {
-      await client.end()
-    }
+    // R1 activation is NOT authorized here. A string transactionHash is
+    // caller-controlled; querying the latch cannot prove which COMMIT changed
+    // it or that the verifier is independently commissioned. Refuse to issue
+    // a signed ARMED receipt until the separate R1 attestation protocol exists.
+    throw new Error("BLOCKED: R1 commit-bound independent readback attestation is not commissioned")
   }
 }

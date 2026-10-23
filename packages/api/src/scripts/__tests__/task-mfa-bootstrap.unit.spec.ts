@@ -48,6 +48,9 @@ import {
   NativeWindowsSecurityAdapter,
   NativeDockerResourceAdapter,
   NativeFileAtomicNonceAdapter,
+  NativePostgresReadbackAdapter,
+  assertDockerResourceMatchesBinding,
+  type ApprovedRuntimeResourceBinding,
 } from "../native-runtime-adapters"
 
 describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
@@ -1090,8 +1093,62 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
     })
   })
   describe("10. Real Native Runtime Security Adapters", () => {
+    it("rejects swapped Docker IDs, images, mounts, labels and host ports before trusted execution", () => {
+      const expected: ApprovedRuntimeResourceBinding = {
+        containerId: "a".repeat(64),
+        imageId: "sha256:" + "b".repeat(64),
+        composeProject: "isolated-r0d",
+        volumeName: "isolated-data",
+        volumeMountSource: "/var/lib/docker/volumes/isolated-data/_data",
+        volumeMountDestination: "/var/lib/postgresql/data",
+        loopbackHostPort: "55732",
+        postgresSystemIdentifier: "1234567890123456789",
+      }
+      const actual = {
+        Id: expected.containerId,
+        Image: expected.imageId,
+        State: { Running: true },
+        Config: { Labels: { "com.docker.compose.project": expected.composeProject } },
+        HostConfig: { PortBindings: { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: expected.loopbackHostPort }] } },
+        Mounts: [{ Type: "volume", Name: expected.volumeName, Source: expected.volumeMountSource, Destination: expected.volumeMountDestination }],
+      }
+      expect(() => assertDockerResourceMatchesBinding(actual, expected)).not.toThrow()
+      for (const changed of [
+        { ...actual, Id: "c".repeat(64) },
+        { ...actual, Image: "sha256:" + "c".repeat(64) },
+        { ...actual, Config: { Labels: { "com.docker.compose.project": "other" } } },
+        { ...actual, Mounts: [{ ...actual.Mounts[0], Name: "other" }] },
+        { ...actual, HostConfig: { PortBindings: { "5432/tcp": [{ HostIp: "0.0.0.0", HostPort: "55732" }] } } },
+      ]) expect(() => assertDockerResourceMatchesBinding(changed, expected)).toThrow(/immutable Docker identity/)
+    })
+
+    it("keeps R1 independent readback disabled without commit-bound attestation", async () => {
+      const r1 = new NativePostgresReadbackAdapter("postgres://unused@127.0.0.1:1/unused")
+      await expect(r1.queryCommittedState("unused", "fake-commit", "ceremony")).rejects.toThrow(/BLOCKED: R1/)
+    })
+
+    it("distinguishes otherwise-colliding nonce names on disk", async () => {
+      const fs = await import("node:fs/promises")
+      const os = await import("node:os")
+      const path = await import("node:path")
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "da-nonce-collision-"))
+      try {
+        const adapter = new NativeFileAtomicNonceAdapter(root)
+        const e = { runId: "run", expiresAt: new Date(Date.now() + 60000).toISOString() }
+        expect(await adapter.claimIfAbsent({ ...e, nonce: "a/b" })).toBe(true)
+        expect(await adapter.claimIfAbsent({ ...e, nonce: "a?b" })).toBe(true)
+        expect(await adapter.claimIfAbsent({ ...e, nonce: "a/b" })).toBe(false)
+      } finally {
+        await fs.rm(root, { recursive: true, force: true })
+      }
+    })
+
     it("NativeWindowsSecurityAdapter inspects real filesystem path and returns valid ownership & ACEs", async () => {
       const adapter = new NativeWindowsSecurityAdapter()
+      if (process.platform !== "win32") {
+        await expect(adapter.inspectPathSecurity(process.cwd())).rejects.toThrow(/requires win32/)
+        return
+      }
       const inspection = await adapter.inspectPathSecurity(process.cwd())
       expect(inspection.path).toBeDefined()
       expect(typeof inspection.owner).toBe("string")
