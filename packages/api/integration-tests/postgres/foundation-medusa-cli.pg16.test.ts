@@ -88,6 +88,14 @@ async function run(){
         DOGRUADRES_FRONTDOOR_HOST:"127.0.0.1",
         DOGRUADRES_FRONTDOOR_PORT:"19041",
       }
+      // Reuse this already migrated disposable CI database; no additional DB/resource.
+      const fixture=spawnSync("node",["-r","ts-node/register","./integration-tests/postgres/native-fixture-entry.pg16.ts"],{
+        cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
+      })
+      if(fixture.error||fixture.status!==0)throw Error("R0-D native entry CI failed: "+
+        sanitized(String(fixture.error??"")+String(fixture.stderr??"")+String(fixture.stdout??"")))
+      assert.ok(String(fixture.stdout).includes("PASS R0-D native entry"))
+      process.stdout.write(String(fixture.stdout))
       const native=spawnSync(process.execPath,["run","medusa","exec",
         "./integration-tests/postgres/native-mfa-lifecycle.exec.ts"],{
         cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,

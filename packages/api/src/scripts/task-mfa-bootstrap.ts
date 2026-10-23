@@ -1,4 +1,4 @@
-﻿import type { ExecArgs, IAuthModuleService } from "@medusajs/framework/types"
+import type { ExecArgs, IAuthModuleService } from "@medusajs/framework/types"
 import { Client } from "@medusajs/framework/pg"
 import { randomBytes } from "node:crypto"
 import { writeFile, access, stat, realpath } from "node:fs/promises"
@@ -201,7 +201,7 @@ export function mustClassifyBootstrapFailureAsIndeterminate(
   )
 }
 
-export default async function taskMfaBootstrap({ container }: ExecArgs): Promise<void> {
+export default async function taskMfaBootstrap({ container }: ExecArgs, initializeNative?: NativeFixtureInitializer): Promise<void> {
   try {
     if (!INDEPENDENT_REVIEWER_TRUST_ROOT) {
       throw new Error("REFUSED: Reviewer grant trust root is not commissioned")
@@ -296,117 +296,22 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
       }> = []
 
       let mutationAttempted = false
+      let nativeRuntime: NativeFixtureRuntime | undefined
 
       try {
         await verifyCleanPreconditions(db)
         await checkpointManager.recordStep(checkpointFile, recoveryState, "preconditions_verified")
 
-        // Load native workflow code only after the trust controller and clean-state checks.
-        const { createUserAccountWorkflow } = await import("@medusajs/core-flows")
-        const auth: IAuthModuleService = container.resolve("auth")
-        const foundation: DogruAdresAccessModuleService = container.resolve("dogruadresAccess")
-
-        for (const label of ["A", "B"] as const) {
+        nativeRuntime = initializeNative ? await initializeNative(db) : undefined
+        if (nativeRuntime) await checkpointManager.recordStep(checkpointFile, recoveryState, "native_initialized_read_only", nativeRuntime.initializationProof as any)
+        const assertBeforeWrite = async () => {
           await commissioned.assertCurrentGrant()
-          const entropy = randomBytes(16).toString("hex")
-          const email = `task-mfa-person-${label.toLowerCase()}-${entropy}@task.invalid`
-          const password = randomBytes(32).toString("base64url")
-
-          // A native call may persist its result before throwing. Treat all
-          // failures from this point as indeterminate, including before an
-          // identity ID becomes available for checkpoint recording.
-          mutationAttempted = true
-          const reg = await auth.register("emailpass", { body: { email, password } })
-          if (!reg.success || !reg.authIdentity) {
-            throw new Error(`Failed native registration for Person ${label}`)
-          }
-          const authIdentityId = reg.authIdentity.id
-          // Record authIdentityId immediately at the earliest safe point
-          await checkpointManager.recordStep(
-            checkpointFile,
-            recoveryState,
-            `auth_registered_${label}`,
-            { label, authIdentityId }
-          )
-
-          await commissioned.assertCurrentGrant()
-          const workflowResult = await createUserAccountWorkflow(container).run({
-            input: {
-              authIdentityId,
-              userData: { email },
-            },
-          })
-          const user = workflowResult.result
-          if (!user || !user.id) {
-            throw new Error(`Failed official createUserAccountWorkflow for Person ${label}`)
-          }
-          // Record userId immediately at the earliest safe point
-          await checkpointManager.recordStep(
-            checkpointFile,
-            recoveryState,
-            `user_account_workflow_completed_${label}`,
-            { label, userId: user.id }
-          )
-
-          const verify = await auth.authenticate("emailpass", { body: { email, password } })
-          if (!verify.success || verify.authIdentity?.app_metadata?.user_id !== user.id) {
-            throw new Error(`Server-side native User ownership verification failed for Person ${label}`)
-          }
-          await checkpointManager.recordStep(checkpointFile, recoveryState, `ownership_verified_${label}`)
-
-          const factors = await auth.listAuthMfa({ auth_identity_id: authIdentityId })
-          if (factors.length > 0) {
-            throw new Error(`Integrity violation: Pre-existing MFA factor on fresh Person ${label}`)
-          }
-
-          await commissioned.assertCurrentGrant()
-          const [person] = await foundation.createPeople([
-            { display_name: `Task Person ${label}` },
-          ])
-          // Record personId immediately at the earliest safe point
-          await checkpointManager.recordStep(
-            checkpointFile,
-            recoveryState,
-            `person_created_${label}`,
-            { label, personId: person.id }
-          )
-
-          await commissioned.assertCurrentGrant()
-          await foundation.createActorMappings([
-            {
-              actor_type: "user",
-              actor_id: user.id,
-              person_id: person.id,
-              created_by_actor_type: "user",
-              created_by_actor_id: user.id,
-            },
-          ])
-          await checkpointManager.recordStep(checkpointFile, recoveryState, `actor_mapped_${label}`)
-
-          await commissioned.assertCurrentGrant()
-          await db.query(
-            `INSERT INTO da_login_binding (auth_identity_id, person_id, actor_type, actor_id, verified_at)
-             VALUES ($1, $2, 'user', $3, now())`,
-            [authIdentityId, person.id, user.id]
-          )
-          // Record login binding immediately at the earliest safe point
-          await checkpointManager.recordStep(
-            checkpointFile,
-            recoveryState,
-            `binding_inserted_${label}`,
-            { label, bindingCreated: true }
-          )
-
-          finalSecrets.push({
-            label,
-            email,
-            password,
-            userId: user.id,
-            authIdentityId,
-            personId: person.id,
-          })
+          if (nativeRuntime) await nativeRuntime.assertNoForeignConsumers()
         }
-
+        finalSecrets.push(...await createTwoNativeFixtures(
+          db, nativeRuntime?.container ?? container, checkpointManager, checkpointFile, recoveryState,
+          assertBeforeWrite, () => { mutationAttempted = true }
+        ))
         const payload = JSON.stringify(
           {
             created_at: new Date().toISOString(),
@@ -423,18 +328,140 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
         console.log(`[task-mfa-bootstrap] Prepared 2 canonical Persons and verified login bindings in ${signedManifest.manifest.targetDatabase}`)
       } catch (err: unknown) {
         // Handle crash windows as indeterminate when mutations have begun
-        const indeterminate = mustClassifyBootstrapFailureAsIndeterminate(
+        const indeterminate = (err instanceof Error && err.message.startsWith("INDETERMINATE:")) || mustClassifyBootstrapFailureAsIndeterminate(
           mutationAttempted,
           recoveryState.completedSteps
         )
         await checkpointManager.recordFailure(checkpointFile, recoveryState, err, indeterminate)
         throw err
       } finally {
-        await db.end()
+        try { await nativeRuntime?.close() } finally { await db.end() }
       }
     })
   } catch (err: unknown) {
     const sanitizedMsg = redactSensitiveData(err instanceof Error ? err.message : String(err))
     throw new Error(sanitizedMsg)
   }
+}
+export type NativeFixtureRuntime = {
+  container: ExecArgs["container"]
+  assertNoForeignConsumers(): Promise<void>
+  close(): Promise<void>
+  initializationProof: unknown
+}
+export type NativeFixtureInitializer = (control: Client) => Promise<NativeFixtureRuntime>
+
+/** Shared by the protected entry and disposable native CI; no alternate identity implementation. */
+export async function createTwoNativeFixtures(
+  db: Client, container: ExecArgs["container"], checkpointManager: DurableCheckpointManager,
+  checkpointFile: string, recoveryState: PartialRecoveryCheckpoint,
+  assertBeforeWrite: () => Promise<void>, onMutationAttempt: () => void
+) {
+  const finalSecrets: Array<{label:"A"|"B";email:string;password:string;userId:string;authIdentityId:string;personId:string}> = []
+  // Load native workflow code only after the trust controller and clean-state checks.
+  const { createUserAccountWorkflow } = await import("@medusajs/core-flows")
+  const auth: IAuthModuleService = container.resolve("auth")
+  const foundation: DogruAdresAccessModuleService = container.resolve("dogruadresAccess")
+
+  for (const label of ["A", "B"] as const) {
+    await assertBeforeWrite()
+    const entropy = randomBytes(16).toString("hex")
+    const email = `task-mfa-person-${label.toLowerCase()}-${entropy}@task.invalid`
+    const password = randomBytes(32).toString("base64url")
+
+    // A native call may persist its result before throwing. Treat all
+    // failures from this point as indeterminate, including before an
+    // identity ID becomes available for checkpoint recording.
+    onMutationAttempt()
+    const reg = await auth.register("emailpass", { body: { email, password } })
+    if (!reg.success || !reg.authIdentity) {
+      throw new Error(`Failed native registration for Person ${label}`)
+    }
+    const authIdentityId = reg.authIdentity.id
+    // Record authIdentityId immediately at the earliest safe point
+    await checkpointManager.recordStep(
+      checkpointFile,
+      recoveryState,
+      `auth_registered_${label}`,
+      { label, authIdentityId }
+    )
+
+    await assertBeforeWrite()
+    const workflowResult = await createUserAccountWorkflow(container).run({
+      input: {
+        authIdentityId,
+        userData: { email },
+      },
+    })
+    const user = workflowResult.result
+    if (!user || !user.id) {
+      throw new Error(`Failed official createUserAccountWorkflow for Person ${label}`)
+    }
+    // Record userId immediately at the earliest safe point
+    await checkpointManager.recordStep(
+      checkpointFile,
+      recoveryState,
+      `user_account_workflow_completed_${label}`,
+      { label, userId: user.id }
+    )
+
+    const verify = await auth.authenticate("emailpass", { body: { email, password } })
+    if (!verify.success || verify.authIdentity?.app_metadata?.user_id !== user.id) {
+      throw new Error(`Server-side native User ownership verification failed for Person ${label}`)
+    }
+    await checkpointManager.recordStep(checkpointFile, recoveryState, `ownership_verified_${label}`)
+
+    const factors = await auth.listAuthMfa({ auth_identity_id: authIdentityId })
+    if (factors.length > 0) {
+      throw new Error(`Integrity violation: Pre-existing MFA factor on fresh Person ${label}`)
+    }
+
+    await assertBeforeWrite()
+    const [person] = await foundation.createPeople([
+      { display_name: `Task Person ${label}` },
+    ])
+    // Record personId immediately at the earliest safe point
+    await checkpointManager.recordStep(
+      checkpointFile,
+      recoveryState,
+      `person_created_${label}`,
+      { label, personId: person.id }
+    )
+
+    await assertBeforeWrite()
+    await foundation.createActorMappings([
+      {
+        actor_type: "user",
+        actor_id: user.id,
+        person_id: person.id,
+        created_by_actor_type: "user",
+        created_by_actor_id: user.id,
+      },
+    ])
+    await checkpointManager.recordStep(checkpointFile, recoveryState, `actor_mapped_${label}`)
+
+    await assertBeforeWrite()
+    await db.query(
+      `INSERT INTO da_login_binding (auth_identity_id, person_id, actor_type, actor_id, verified_at)
+       VALUES ($1, $2, 'user', $3, now())`,
+      [authIdentityId, person.id, user.id]
+    )
+    // Record login binding immediately at the earliest safe point
+    await checkpointManager.recordStep(
+      checkpointFile,
+      recoveryState,
+      `binding_inserted_${label}`,
+      { label, bindingCreated: true }
+    )
+
+    finalSecrets.push({
+      label,
+      email,
+      password,
+      userId: user.id,
+      authIdentityId,
+      personId: person.id,
+    })
+  }
+  return finalSecrets
 }
