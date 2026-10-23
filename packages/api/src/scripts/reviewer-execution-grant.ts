@@ -154,6 +154,90 @@ export function verifyReviewerExecutionGrant(
   return { pin, registryData, registry, manifest: m }
 }
 
+
+/** Product Owner's explicit Issue #239 process authorization for the isolated
+ * R0-D TWO-fixture test only. This is NOT a cryptographic reviewer signature.
+ * Agent-controlled registry/env/candidate values cannot alter this source pin.
+ * Preserve the separately verified reviewer-signed grant path for other uses.
+ */
+export const R0D_PO_FIXTURE_APPROVAL = Object.freeze({
+  decisionReference: "https://github.com/DenizOner/DogruAdres/issues/239#issuecomment-6363469498",
+  delegatedExecutionReference: "https://github.com/DenizOner/DogruAdres/issues/239#issuecomment-6361512580",
+  operatorId: "dogruadres-m0-r0d-automation-agent",
+  operatorFingerprint: "5830f54b1acb838f06a63314865f3c5c10afd306cc6dad63d16ca68ae7c8a72a",
+  operatorPublicKeyPem: [
+    "-----BEGIN PUBLIC KEY-----",
+    "MCowBQYDK2VwAyEAFpxVrvEDW20MYCcu6eLtKS6gXh2m7iAMpgQYE5N+UrI=",
+    "-----END PUBLIC KEY-----",
+    "",
+  ].join("\n"),
+  immutableResourcesDigest: "0974c6a810bd939d93377a3ad91ac70dc796af288bb843d3a25673006d93360f",
+  targetDatabase: "da_r0b_e7a1_db",
+  taskEnvironmentId: "da-r0b-e7a1-env",
+  validUntil: "2026-10-30T20:59:59.000Z",
+})
+
+/** One narrowly scoped PO authorization, never represented as a reviewer grant. */
+export function verifyProductOwnerFixtureAuthorization(
+  operatorManifest: SignedTaskManifest,
+  actual: {sourceSha:string; windowsSid:string},
+  nowIso = new Date().toISOString()
+) {
+  const a = R0D_PO_FIXTURE_APPROVAL
+  const m = operatorManifest.manifest as ExecutionManifest
+  if (!m || !m.authorizedOperator || !m.runtimeResourceBinding ||
+      !m.redisResourceBinding || !m.actionScope || !m.runId || !m.nonce)
+    refuse("PO fixture manifest incomplete")
+  if (computePublicKeyFingerprint(a.operatorPublicKeyPem) !== a.operatorFingerprint ||
+      operatorManifest.signerKeyFingerprint !== a.operatorFingerprint ||
+      m.authorizedOperator.executorType !== "automation_agent" ||
+      m.authorizedOperator.operatorId !== a.operatorId ||
+      m.authorizedOperator.approvalReference !== a.delegatedExecutionReference)
+    refuse("PO approved operator mismatch")
+  if (!/^[a-f0-9]{40}$/.test(actual.sourceSha) ||
+      m.targetCommitSha !== actual.sourceSha ||
+      !/^S-1-\d+(?:-\d+)+$/i.test(actual.windowsSid) ||
+      m.authorizedOperator.windowsSecurityPrincipal.toLowerCase() !== actual.windowsSid.toLowerCase())
+    refuse("PO actual source SHA or Windows SID mismatch")
+  const now = Date.parse(nowIso), issued = Date.parse(m.issuedAt), until = Date.parse(m.expiresAt)
+  const cutoff = Date.parse(a.validUntil)
+  if (![now,issued,until,cutoff].every(Number.isFinite) ||
+      now < issued || now >= until || now >= cutoff ||
+      until <= issued || until - issued > 4 * 60 * 60 * 1000)
+    refuse("PO fixture authorization time invalid or expired")
+  if (!/^[a-f0-9]{64}$/.test(m.nonce) ||
+      !/^r0d-[a-zA-Z0-9_-]+$/.test(m.runId) ||
+      m.targetDatabase !== a.targetDatabase ||
+      m.taskEnvironmentId !== a.taskEnvironmentId ||
+      m.targetHost !== "127.0.0.1" ||
+      m.targetPort !== m.runtimeResourceBinding.loopbackHostPort ||
+      m.targetContainerName !== "da-r0b-e7a1-pg" ||
+      m.targetVolumeName !== m.runtimeResourceBinding.volumeName ||
+      m.runtimeResourceBinding.composeProject !== a.taskEnvironmentId ||
+      m.redisResourceBinding.project !== a.taskEnvironmentId ||
+      canonicalJsonStringify(m.actionScope) !== canonicalJsonStringify(R0D_ACTION_SCOPE) ||
+      executionResourcesDigest(m) !== a.immutableResourcesDigest)
+    refuse("PO isolated fixture resource/action scope mismatch")
+  if (![m.worktree,m.commonGitDirectory,m.evidenceDirectory].every(p =>
+      typeof p === "string" && /^[a-z]:[\\/]/i.test(p)))
+    refuse("PO Windows worktree/nonce/evidence paths invalid")
+  const pin: PinnedOperatorApproval = {
+    trustDomain: "dogruadres-m0-mfa", executorType: "automation_agent",
+    operatorId: a.operatorId, runId: m.runId, windowsPrincipal: actual.windowsSid,
+    approvalReference: a.delegatedExecutionReference, keyFingerprint: a.operatorFingerprint,
+    taskEnvironmentId: a.taskEnvironmentId, targetDatabase: a.targetDatabase,
+    targetCommitSha: actual.sourceSha, validFrom: m.issuedAt, validUntil: m.expiresAt,
+  }
+  const registryData = {registrySchemaVersion:"1.1.0",trustDomain:pin.trustDomain,operators:[{
+    executorType:pin.executorType,operatorId:pin.operatorId,windowsPrincipal:pin.windowsPrincipal,
+    approvalReference:pin.approvalReference,publicKeyPem:a.operatorPublicKeyPem,
+    keyFingerprint:pin.keyFingerprint,validFrom:pin.validFrom,validUntil:pin.validUntil,
+  }]}
+  const registry = createTrustedOperatorRegistry(registryData,pin,nowIso)
+  verifySignedManifest(operatorManifest,registry)
+  return {pin,registryData,registry,manifest:m}
+}
+
 export function assertRedisResourceMatchesGrant(actual: any, expected: RedisResourceBinding) {
   if (!/^[a-f0-9]{64}$/.test(expected.id) || !/^sha256:[a-f0-9]{64}$/.test(expected.imageId) ||
       !expected.project || !expected.name || !Array.isArray(expected.mounts) || !expected.mounts.length ||
@@ -212,4 +296,43 @@ export async function commissionReviewedRuntime(
   return { ...verified, inspection, security, assertCurrentGrant,
     resources: new ReviewedResourceAdapter(verified.manifest.worktree, verified.manifest.runtimeResourceBinding,
       verified.manifest.redisResourceBinding), nonce: new NativeFileAtomicNonceAdapter(nonceDir) }
+}
+/**
+ * Product Owner approved test-only commissioning: no reviewer signature is
+ * claimed. Native ACL, immutable Docker and PG server, nonce, checkout and
+ * checkpoint checks remain mandatory and fail closed.
+ */
+export async function commissionProductOwnerApprovedRuntime(
+  signedManifest: SignedTaskManifest, evidenceDir: string
+) {
+  const git = async (...args:string[]) => (await exec("git",args)).stdout.trim()
+  const sha = await git("rev-parse","HEAD")
+  if (await git("status","--porcelain=v2","--untracked-files=no"))
+    refuse("PO working tree/index is dirty")
+  const probe = new NativeDockerResourceAdapter()
+  const {windowsPrincipal} = await probe.getOperatorPrincipal()
+  const verified = verifyProductOwnerFixtureAuthorization(signedManifest,{sourceSha:sha,windowsSid:windowsPrincipal})
+  const normalized = (p:string) => path.resolve(p).toLowerCase()
+  if (normalized(await git("rev-parse","--show-toplevel")) !== normalized(verified.manifest.worktree) ||
+      normalized(await git("rev-parse","--path-format=absolute","--git-common-dir")) !== normalized(verified.manifest.commonGitDirectory))
+    refuse("PO worktree/common Git mismatch")
+  if (normalized(evidenceDir) !== normalized(verified.manifest.evidenceDirectory))
+    refuse("PO evidence/nonce directory mismatch")
+  const security = new NativeWindowsSecurityAdapter()
+  const inspection = await security.inspectPathSecurity(evidenceDir)
+  verifyPathEffectiveSecurity(inspection,windowsPrincipal)
+  const nonceDir = path.join(evidenceDir,"nonce-claims")
+  verifyPathEffectiveSecurity(await security.inspectPathSecurity(nonceDir),windowsPrincipal)
+  const assertCurrentGrant = async () => {
+    const newSha = await git("rev-parse","HEAD")
+    if (await git("status","--porcelain=v2","--untracked-files=no"))
+      refuse("PO working tree/index changed")
+    verifyProductOwnerFixtureAuthorization(signedManifest,{
+      sourceSha:newSha,windowsSid:(await probe.getOperatorPrincipal()).windowsPrincipal,
+    })
+  }
+  return {...verified,inspection,security,assertCurrentGrant,
+    resources:new ReviewedResourceAdapter(verified.manifest.worktree,verified.manifest.runtimeResourceBinding,
+      verified.manifest.redisResourceBinding),
+    nonce:new NativeFileAtomicNonceAdapter(nonceDir)}
 }

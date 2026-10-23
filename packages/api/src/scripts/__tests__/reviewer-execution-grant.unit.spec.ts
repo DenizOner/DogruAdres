@@ -2,7 +2,8 @@ import { generateKeyPairSync, sign } from "node:crypto"
 import { canonicalJsonStringify, computeSha256Digest, computePublicKeyFingerprint } from "../operator-audit-protocol"
 import { verifyCleanPreconditions } from "../task-mfa-bootstrap"
 import {
-  verifyReviewerExecutionGrant, INDEPENDENT_REVIEWER_TRUST_ROOT, commissionReviewedRuntime,
+  verifyReviewerExecutionGrant, verifyProductOwnerFixtureAuthorization, R0D_PO_FIXTURE_APPROVAL,
+  INDEPENDENT_REVIEWER_TRUST_ROOT, commissionReviewedRuntime,
   R0D_ACTION_SCOPE, executionResourcesDigest, assertRedisResourceMatchesGrant,
   type ExecutionManifest, type ReviewerGrantBody,
 } from "../reviewer-execution-grant"
@@ -48,6 +49,18 @@ describe("Independent reviewer execution grant", () => {
     const result = verifyReviewerExecutionGrant(root,grant(),op(),actual,now)
     expect(result.pin.targetCommitSha).toBe(sha)
     expect(result.pin.runId).toBe(manifest.runId)
+  })
+
+  it("rejects fake PO approval using the existing test operator key and pins exactly one signed R0-D operator", () => {
+    expect(R0D_PO_FIXTURE_APPROVAL.decisionReference)
+      .toBe("https://github.com/DenizOner/DogruAdres/issues/239#issuecomment-6363469498")
+    expect(computePublicKeyFingerprint(R0D_PO_FIXTURE_APPROVAL.operatorPublicKeyPem))
+      .toBe(R0D_PO_FIXTURE_APPROVAL.operatorFingerprint)
+    expect(() => verifyProductOwnerFixtureAuthorization(op(),actual,now))
+      .toThrow(/PO approved operator mismatch/)
+    expect(() => verifyProductOwnerFixtureAuthorization(
+      {...op(),signerKeyFingerprint:R0D_PO_FIXTURE_APPROVAL.operatorFingerprint},actual,now
+    )).toThrow()
   })
   it("pins an independent source reviewer key and refuses operator-controlled substitution", async () => {
     expect(INDEPENDENT_REVIEWER_TRUST_ROOT).not.toBeNull()

@@ -17,7 +17,7 @@ import {
   executeBootstrapController,
 } from "./operator-audit-protocol"
 
-import { INDEPENDENT_REVIEWER_TRUST_ROOT, commissionReviewedRuntime, type SignedReviewerGrant } from "./reviewer-execution-grant"
+import { INDEPENDENT_REVIEWER_TRUST_ROOT, commissionReviewedRuntime, commissionProductOwnerApprovedRuntime, type SignedReviewerGrant } from "./reviewer-execution-grant"
 
 export const FORBIDDEN_DATABASE_PATTERNS: ReadonlyArray<RegExp> = [
   /^m0ssi_a7f1$/i,
@@ -216,8 +216,8 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     const outputFilenameRaw = process.env.M0_BOOTSTRAP_OUTPUT_FILE || "task-mfa-users.private.json"
     const grantPath = process.env.M0_REVIEWER_GRANT_PATH
 
-    if (!manifestPath || !evidenceDir || !grantPath) {
-      throw new Error("REFUSED: Missing M0_RESOURCE_MANIFEST_PATH, M0_FIXTURE_EVIDENCE_DIR, or M0_REVIEWER_GRANT_PATH")
+    if (!manifestPath || !evidenceDir) {
+      throw new Error("REFUSED: Missing M0_RESOURCE_MANIFEST_PATH or M0_FIXTURE_EVIDENCE_DIR")
     }
 
     const safeOutputFilename = validateSafeBasename(outputFilenameRaw)
@@ -231,9 +231,16 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
       throw new Error(`REFUSED: Cannot read or parse resource manifest from ${manifestPath}: ${String(err)}`)
     }
 
-    // Input paths are untrusted transport. Only the source-root reviewer signature grants authority.
-    const signedGrant = JSON.parse(await (await import("node:fs/promises")).readFile(grantPath, "utf8")) as SignedReviewerGrant
-    const commissioned = await commissionReviewedRuntime(signedManifest, signedGrant, realEvidenceDir)
+    // Two distinct, source-reviewed authorizers: cryptographic reviewer grant,
+    // or the Product Owner's explicitly approved test-only R0-D fixture scope.
+    // Missing grant is never re-labelled as a reviewer signature or self-approval.
+    const commissioned = grantPath
+      ? await commissionReviewedRuntime(
+          signedManifest,
+          JSON.parse(await (await import("node:fs/promises")).readFile(grantPath,"utf8")) as SignedReviewerGrant,
+          realEvidenceDir
+        )
+      : await commissionProductOwnerApprovedRuntime(signedManifest,realEvidenceDir)
     const trustedRegistry = commissioned.registry
 
     validateTargetAgainstManifest(targetUrl, signedManifest.manifest, trustedRegistry, signedManifest)
