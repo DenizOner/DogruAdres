@@ -1,4 +1,4 @@
-﻿import { INDEPENDENT_REVIEWER_TRUST_ROOT } from "../reviewer-execution-grant"
+import { INDEPENDENT_REVIEWER_TRUST_ROOT } from "../reviewer-execution-grant"
 import { generateKeyPairSync } from "node:crypto"
 import {
   canonicalJsonStringify,
@@ -1126,9 +1126,17 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
     })
 
     it("rejects bootstrap without required connection and reviewer grant inputs", async () => {
-      await expect(taskMfaBootstrap({ container: {} as any, args: [] })).rejects.toThrow(
-        /DATABASE_URL is missing/
-      )
+      // This negative case owns its missing-input condition, independent of .env.test.
+      const saved = process.env.DATABASE_URL
+      delete process.env.DATABASE_URL
+      try {
+        await expect(taskMfaBootstrap({ container: {} as any, args: [] })).rejects.toThrow(
+          /DATABASE_URL is missing/
+        )
+      } finally {
+        if (saved === undefined) delete process.env.DATABASE_URL
+        else process.env.DATABASE_URL = saved
+      }
     })
   })
   describe("10. Real Native Runtime Security Adapters", () => {

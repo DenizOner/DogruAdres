@@ -48,3 +48,36 @@ Ready URL remains https://127.0.0.1:19102/personal, with existing task-only A/B
 Chrome profiles and trusted non-CA certificate. No personal Chrome/profile/trust
 change. Until actual R1/runtime prerequisites pass, G1-G4 and all relevant
 browser journeys are NOT TESTED / ENVIRONMENT BLOCKED, regardless of HTTP/CI.
+## R1 transaction integration after independent scope review #238/6366377036
+
+The existing operator key may be reused for a FRESH R1 manifest/intent. The old
+1.0.0 cryptographic candidate is not executable: the established runtime protocol
+requires manifestVersion 1.1.0, exact four process flag values and flat readiness
+facts. Do not extend or execute the old candidate.
+
+`r1-activation.ts` now coordinates signed-intent validation, actual flags, exclusive
+singleton FOR UPDATE/platform advisory lock, clean facts and genuine relationships,
+atomic nonce, exclusive fsynced checkpoint, one false/version1 -> true/version2 CAS,
+real xid8, signed receipt and TWO separate committed-state reads before signed ARMED.
+No application initialization, migration, fake Person/audit, retry or compensating
+rollback is introduced. Any possible UPDATE/COMMIT/readback ambiguity is INDETERMINATE;
+the durable checkpoint/nonce remains, and another execution is refused.
+
+`r1-native-entry.ts` checks the independent source scope BEFORE private key/DB access,
+then verifies checkout, actual SID, protected paths, immutable PG/Redis resources and
+signature/flags. It does not invoke Medusa loaders. The source-review record currently
+names 96bba32e4a1b347012a7c73032603977cd9c5860, whose executor was absent. This NEW
+implementation cannot silently inherit that old source approval. The final-SHA
+commissioning decision must use the existing canonical #238 process; no new signer,
+reviewer, registry-file authority or environment Boolean can supply it. The historical
+record also explicitly says actual SQL is not authorized by that review alone.
+
+The previously rejected test was not rerun in disguise. Its concrete authority issue
+was addressed under the NEW explicit test authorization: `r1-activation.pg16.ts` is
+TEST_FIXTURE / NOT_AUTHORITY, requires GitHub Actions + existing sentinel + exact random
+mfa_cli_ci_<16hex> DB, loopback:5432 and mfa_test. Key generation follows those checks,
+stays in memory, and never touches operator custody or runtime approval. The real
+source scope rejects this synthetic signer/source. It reuses the already migrated
+CI DB and existing cleanup, creates no additional service/database, and exercises
+foreign-consumer/nonce/flags/tamper/expiry/checkpoint rejection and a genuine positive
+commit/readback. CI evidence is not protected-runtime activation evidence.

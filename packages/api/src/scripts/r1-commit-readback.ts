@@ -62,7 +62,7 @@ export async function readR1CommittedState(connectionString:string,binding:R1Rea
     (SELECT system_identifier::text FROM pg_control_system()) AS cluster,
     (SELECT count(*)::int FROM da_session_policy) AS policies,
     (SELECT mfa_activated FROM da_session_policy WHERE id='current') AS latch,
-    (SELECT version FROM da_session_policy WHERE id='current') AS version,
+    (SELECT version::int FROM da_session_policy WHERE id='current') AS version,
     (SELECT xmin::text FROM da_session_policy WHERE id='current') AS "rowXmin",
     pg_xact_status($1::xid8) AS "transactionStatus",
     (SELECT count(*)::int FROM pg_trigger WHERE tgrelid='da_session_policy'::regclass AND NOT tgisinternal AND tgenabled='O'

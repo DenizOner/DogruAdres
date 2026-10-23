@@ -98,6 +98,13 @@ async function run(){
         sanitized(String(fixture.error??"")+String(fixture.stderr??"")+String(fixture.stdout??"")))
       assert.ok(String(fixture.stdout).includes("PASS R0-D native entry"))
       process.stdout.write(String(fixture.stdout))
+      // TEST_FIXTURE / NOT_AUTHORITY: same existing disposable DB, no operator custody.
+      const r1=spawnSync("node",["-r","ts-node/register","./integration-tests/postgres/r1-activation.pg16.ts"],{
+        cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
+      })
+      if(r1.error||r1.status!==0)throw Error("R1 TEST_FIXTURE failed: "+sanitized(String(r1.error??"")+String(r1.stderr??"")+String(r1.stdout??"")))
+      assert.ok(String(r1.stdout).includes('PASS R1 TEST_FIXTURE / NOT_AUTHORITY'))
+      process.stdout.write(String(r1.stdout))
       const native=spawnSync(process.execPath,["run","medusa","exec",
         "./integration-tests/postgres/native-mfa-lifecycle.exec.ts"],{
         cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
