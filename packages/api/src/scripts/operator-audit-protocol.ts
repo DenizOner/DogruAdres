@@ -370,11 +370,6 @@ export async function verifyRuntimeEnvironmentOwnership(
     throw new Error(`REFUSED: Manifest is expired or not yet valid (now: ${nowIso}, valid: ${manifest.issuedAt} to ${manifest.expiresAt})`)
   }
 
-  const claimed = await nonceStore.claimOnce(manifest.nonce, manifest.runId, manifest.expiresAt)
-  if (!claimed) {
-    throw new Error(`REFUSED: Nonce "${manifest.nonce}" has already been consumed or claim conflicted (anti-replay violation)`)
-  }
-
   const actualSha = await adapter.getCurrentGitSha()
   if (actualSha.toLowerCase() !== manifest.targetCommitSha.toLowerCase()) {
     throw new Error(`REFUSED: Git commit mismatch (actual: ${actualSha}, manifest: ${manifest.targetCommitSha})`)
@@ -407,6 +402,14 @@ export async function verifyRuntimeEnvironmentOwnership(
   }
   if (!dbInfo.isExclusive) {
     throw new Error(`REFUSED: Target database "${dbInfo.dbName}" has active concurrent client sessions`)
+  }
+
+  // Claim the nonce only after all read-only resource and identity checks.
+  // The claim itself is a persistent side effect and must not be spent on
+  // a wrong commit, principal, container, volume or database.
+  const claimed = await nonceStore.claimOnce(manifest.nonce, manifest.runId, manifest.expiresAt)
+  if (!claimed) {
+  throw new Error(`REFUSED: Nonce "${manifest.nonce}" has already been consumed or claim conflicted (anti-replay violation)`)
   }
 }
 

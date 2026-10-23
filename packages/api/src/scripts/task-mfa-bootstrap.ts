@@ -197,6 +197,24 @@ export async function verifyCleanPreconditions(db: Client): Promise<void> {
 
 export { PartialRecoveryCheckpoint }
 
+/**
+ * An external identity service may commit a side effect and throw before
+ * returning its generated ID. An attempted mutation therefore requires
+ * forensic reconciliation even when no checkpoint step was persisted.
+ */
+export function mustClassifyBootstrapFailureAsIndeterminate(
+  mutationAttempted: boolean,
+  completedSteps: readonly string[]
+): boolean {
+  return mutationAttempted || completedSteps.some(
+    (step) => step.startsWith("auth_registered_") ||
+      step.startsWith("user_account_workflow_completed_") ||
+      step.startsWith("person_created_") ||
+      step.startsWith("actor_mapped_") ||
+      step.startsWith("binding_inserted_")
+  )
+}
+
 export default async function taskMfaBootstrap({ container }: ExecArgs): Promise<void> {
   try {
     if (!BOOTSTRAP_EXECUTION_GATE_OPEN) {
@@ -306,6 +324,8 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
         personId: string
       }> = []
 
+      let mutationAttempted = false
+
       try {
         await verifyCleanPreconditions(db)
         await checkpointManager.recordStep(checkpointFile, recoveryState, "preconditions_verified")
@@ -318,6 +338,10 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
           const email = `task-mfa-person-${label.toLowerCase()}-${entropy}@task.invalid`
           const password = randomBytes(32).toString("base64url")
 
+          // A native call may persist its result before throwing. Treat all
+          // failures from this point as indeterminate, including before an
+          // identity ID becomes available for checkpoint recording.
+          mutationAttempted = true
           const reg = await auth.register("emailpass", { body: { email, password } })
           if (!reg.success || !reg.authIdentity) {
             throw new Error(`Failed native registration for Person ${label}`)
@@ -421,10 +445,11 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
         console.log(`[task-mfa-bootstrap] Prepared 2 canonical Persons and verified login bindings in ${signedManifest.manifest.targetDatabase}`)
       } catch (err: unknown) {
         // Handle crash windows as indeterminate when mutations have begun
-        const hasMutations = recoveryState.completedSteps.some(
-          (s) => s.startsWith("auth_registered_") || s.startsWith("user_") || s.startsWith("person_")
+        const indeterminate = mustClassifyBootstrapFailureAsIndeterminate(
+          mutationAttempted,
+          recoveryState.completedSteps
         )
-        await checkpointManager.recordFailure(checkpointFile, recoveryState, err, hasMutations)
+        await checkpointManager.recordFailure(checkpointFile, recoveryState, err, indeterminate)
         throw err
       } finally {
         await db.end()

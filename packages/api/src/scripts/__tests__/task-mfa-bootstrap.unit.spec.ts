@@ -41,6 +41,7 @@ import {
   verifyCleanPreconditions,
   sanitizeAndDecodeDatabaseName,
   BOOTSTRAP_EXECUTION_GATE_OPEN,
+  mustClassifyBootstrapFailureAsIndeterminate,
 } from "../task-mfa-bootstrap"
 import taskMfaBootstrap from "../task-mfa-bootstrap"
 
@@ -330,6 +331,36 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         windowsPrincipal: "S-1-5-21-123456789-123456789-123456789-1001",
       }),
     }
+
+    it("does not consume a nonce when resource identity fails before authorization", async () => {
+      const nonceStore = { claimOnce: jest.fn().mockResolvedValue(true) }
+      const wrongShaAdapter: RuntimeResourceAdapter = {
+        ...mockAdapter,
+        getCurrentGitSha: jest.fn().mockResolvedValue("unapproved_commit_sha"),
+      }
+      await expect(
+        verifyRuntimeEnvironmentOwnership(
+          baseManifest,
+          wrongShaAdapter,
+          nonceStore,
+          "postgres://user:pass@127.0.0.1:55720/task_isolated_authorized_db",
+          "2026-10-22T20:30:00.000Z"
+        )
+      ).rejects.toThrow(/Git commit mismatch/)
+      expect(nonceStore.claimOnce).not.toHaveBeenCalled()
+    })
+
+    it("consumes the nonce once only after resource checks pass", async () => {
+      const nonceStore = { claimOnce: jest.fn().mockResolvedValue(true) }
+      await verifyRuntimeEnvironmentOwnership(
+        baseManifest,
+        mockAdapter,
+        nonceStore,
+        "postgres://user:pass@127.0.0.1:55720/task_isolated_authorized_db",
+        "2026-10-22T20:30:00.000Z"
+      )
+      expect(nonceStore.claimOnce).toHaveBeenCalledTimes(1)
+    })
 
     it("allows first claim and rejects subsequent replay attempt", async () => {
       const nonceStore = new InMemoryAtomicNonceStore()
@@ -1037,6 +1068,12 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
   })
 
   describe("9. Real Bootstrap Entry Point Fail-Closed & Controller Enforcement", () => {
+    it("marks failed native creation as indeterminate even before any ID is checkpointed", () => {
+      expect(mustClassifyBootstrapFailureAsIndeterminate(true, [])).toBe(true)
+      expect(mustClassifyBootstrapFailureAsIndeterminate(false, ["auth_registered_A"])).toBe(true)
+      expect(mustClassifyBootstrapFailureAsIndeterminate(false, ["preconditions_verified"])).toBe(false)
+    })
+
     it("enforces BOOTSTRAP_EXECUTION_GATE_OPEN is false", () => {
       expect(BOOTSTRAP_EXECUTION_GATE_OPEN).toBe(false)
     })
