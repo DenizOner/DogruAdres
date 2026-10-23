@@ -760,7 +760,7 @@ export interface SecurityEnvironmentAdapter {
 export function verifyPathEffectiveSecurity(
   inspection: PathSecurityInspection,
   authorizedPrincipal: string,
-  allowedSystemPrincipals: string[] = ["nt authority\\system", "builtin\\administrators"]
+  allowedSystemPrincipals: string[] = ["S-1-5-18", "S-1-5-32-544", "nt authority\\system", "builtin\\administrators"]
 ): void {
   if (inspection.isReparsePoint) {
     throw new Error(`REFUSED: Path "${inspection.path}" is a reparse point (symlink/junction)`)

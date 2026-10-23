@@ -52,8 +52,8 @@ export class NativeWindowsSecurityAdapter implements SecurityEnvironmentAdapter 
       } else {
         [System.IO.File]::GetAccessControl($target)
       };
-      $owner = $acl.GetOwner([System.Security.Principal.NTAccount]).Value;
-      $entries = @($acl.GetAccessRules($true, $true, [System.Security.Principal.NTAccount]) | ForEach-Object {
+      $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;
+      $entries = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
         @{
           principal = $_.IdentityReference.Value
           rights = @($_.FileSystemRights.ToString().Split(', ') | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })

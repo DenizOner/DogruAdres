@@ -1143,6 +1143,22 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       }
     })
 
+    it("validates SID-based native ownership and rejects a different SID", () => {
+      const sid = "S-1-5-21-123-456-789-1001"
+      const inspection = {
+        path: "C:\\private",
+        owner: sid,
+        isReparsePoint: false,
+        entries: [sid, "S-1-5-18", "S-1-5-32-544"].map(principal => ({
+          principal, rights: ["FullControl"], accessType: "Allow" as const, isInherited: false,
+        })),
+      }
+      expect(() => verifyPathEffectiveSecurity(inspection, sid)).not.toThrow()
+      expect(() => verifyPathEffectiveSecurity(inspection, "S-1-5-21-123-456-789-1002")).toThrow(/owner mismatch/)
+      expect(() => verifyPathEffectiveSecurity({ ...inspection, entries: [...inspection.entries,
+        { principal: "S-1-1-0", rights: ["Read"], accessType: "Allow", isInherited: true },
+      ] }, sid)).toThrow(/Unexpected readable/)
+    })
     it("NativeWindowsSecurityAdapter inspects real filesystem path and returns valid ownership & ACEs", async () => {
       const adapter = new NativeWindowsSecurityAdapter()
       if (process.platform !== "win32") {

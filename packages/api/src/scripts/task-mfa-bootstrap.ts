@@ -3,8 +3,7 @@ import { Client } from "@medusajs/framework/pg"
 import { randomBytes } from "node:crypto"
 import { writeFile, access, stat, realpath } from "node:fs/promises"
 import path from "node:path"
-import DogruAdresAccessModuleService from "../modules/dogruadres-access/service"
-import { createUserAccountWorkflow } from "@medusajs/core-flows"
+import type DogruAdresAccessModuleService from "../modules/dogruadres-access/service"
 import {
   SignedTaskManifest,
   TaskResourceManifest,
@@ -329,6 +328,8 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
         await verifyCleanPreconditions(db)
         await checkpointManager.recordStep(checkpointFile, recoveryState, "preconditions_verified")
 
+        // Load native workflow code only after the trust controller and clean-state checks.
+        const { createUserAccountWorkflow } = await import("@medusajs/core-flows")
         const auth: IAuthModuleService = container.resolve("auth")
         const foundation: DogruAdresAccessModuleService = container.resolve("dogruadresAccess")
 
