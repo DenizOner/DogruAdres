@@ -66,9 +66,11 @@ the durable checkpoint/nonce remains, and another execution is refused.
 `r1-native-entry.ts` checks the independent source scope BEFORE private key/DB access,
 then verifies checkout, actual SID, protected paths, immutable PG/Redis resources and
 signature/flags. It does not invoke Medusa loaders. The source-review record currently
-names 96bba32e4a1b347012a7c73032603977cd9c5860, whose executor was absent. This NEW
-implementation cannot silently inherit that old source approval. The final-SHA
-commissioning decision must use the existing canonical #238 process; no new signer,
+names 96bba32e4a1b347012a7c73032603977cd9c5860, whose executor was absent. That record explicitly permits the minimal executor correction with a NEW exact-SHA
+manifest. Runtime verifies BOTH existing independent PO/TA records by source-pinned
+GitHub ID/owner/body digest, exact published PR/remote SHA, reviewed-base ancestry and
+successful exact-source CI. A changed source requires a NEW signed manifest/intent;
+old signatures fail. This uses the existing #238 process; no new signer,
 reviewer, registry-file authority or environment Boolean can supply it. The historical
 record also explicitly says actual SQL is not authorized by that review alone.
 
@@ -81,3 +83,6 @@ source scope rejects this synthetic signer/source. It reuses the already migrate
 CI DB and existing cleanup, creates no additional service/database, and exercises
 foreign-consumer/nonce/flags/tamper/expiry/checkpoint rejection and a genuine positive
 commit/readback. CI evidence is not protected-runtime activation evidence.
+Native custody now calls actual Authz using the existing project-owned C# probe, with owner/inheritance, actual token and unexpected SID effective access, full file/directory ancestor traversal and reparse/mutability denial. The .NET ACL API avoids the observed Windows PowerShell 5.1 Get-Acl module failure. A fresh host execution of this source preflight passed; no key or ACL changed.
+
+Disposable CI also injects an UPDATE-rejecting test trigger solely in its random DB. The failed run retains INDETERMINATE checkpoint/nonce and is never retried; a separate connection proves xid8 ABORTED and latch false before a separate freshly signed positive test scenario.

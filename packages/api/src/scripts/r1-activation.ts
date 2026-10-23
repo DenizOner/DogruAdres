@@ -80,8 +80,8 @@ export async function executeR1Activation(input:R1ActivationInput,deps:{connecti
   await checkpoint('ARMED_COMMITTED_VERIFIED')
   return {receipt,...result}
  }catch(error){
-  if(attempted){await checkpoint('INDETERMINATE');throw Error('INDETERMINATE: R1 write/commit/readback uncertain; preserve evidence; NO RETRY')}
+  if(attempted){await checkpoint('INDETERMINATE').catch(()=>{});throw Error('INDETERMINATE: R1 write/commit/readback uncertain; preserve evidence; NO RETRY')}
   if(db)await db.query('ROLLBACK').catch(()=>{})
   await checkpoint('REFUSED_NO_WRITE');throw error
- }finally{await db?.end().catch(()=>{});await lock.close()}
+ }finally{await db?.end().catch(()=>{});await lock.close().catch(()=>{})}
 }

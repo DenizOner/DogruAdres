@@ -3,6 +3,8 @@ import {readFile} from 'node:fs/promises'
 import path from 'node:path'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
+import {assertNativeR1Custody} from './r1-native-custody'
+import {assertR1CanonicalPublication} from './r1-canonical-publication'
 import {commissionR1SignerScope} from './r1-signer-scope'
 import {executeR1Activation,verifyR1ActivationInput,type R1ActivationManifest} from './r1-activation'
 import {NativeDockerResourceAdapter,NativeWindowsSecurityAdapter,NativeFileAtomicNonceAdapter} from './native-runtime-adapters'
@@ -16,7 +18,7 @@ async function main(){
  const signed=JSON.parse(await readFile(manifestPath,'utf8')) as R1ActivationManifest,intent=JSON.parse(await readFile(intentPath,'utf8')) as SignedPreIntent
  const m=signed.manifest as any,probe=new NativeDockerResourceAdapter(),git=async(...args:string[])=>(await exec('git',args)).stdout.trim()
  const actual=async()=>({sourceSha:await git('rev-parse','HEAD'),windowsSid:(await probe.getOperatorPrincipal()).windowsPrincipal})
- // Reject unreviewed final source BEFORE reading private key or opening DB.
+ // Fresh exact-SHA signature and existing canonical authority BEFORE key/DB access.
  const registry=commissionR1SignerScope(signed,await actual()),input={manifest:signed,intent,registry}
  verifyR1ActivationInput(input,process.env)
  const directory=m.evidenceDirectory,nonceDirectory=path.join(directory,'nonce-claims'),security=new NativeWindowsSecurityAdapter()
@@ -25,9 +27,11 @@ async function main(){
  const [pg,redis]=m.runtimeResourceBinding.resources
  const adapter=new NativeDockerResourceAdapter(process.cwd(),{containerId:pg.id,imageId:pg.image,composeProject:pg.project,volumeName:pg.mounts[0].Name,volumeMountSource:pg.mounts[0].Source,volumeMountDestination:pg.mounts[0].Destination,loopbackHostPort:m.targetPort,postgresSystemIdentifier:m.runtimeResourceBinding.postgresSystemIdentifier})
  const assertAuthority=async()=>{
+  await assertR1CanonicalPublication(m.targetCommitSha)
   commissionR1SignerScope(signed,await actual());verifyR1ActivationInput(input,process.env)
   if(await git('status','--porcelain=v2','--untracked-files=no'))throw Error('REFUSED: tracked worktree/index changed')
   for(const p of [keyPath,directory,nonceDirectory,manifestPath,intentPath])verifyPathEffectiveSecurity(await security.inspectPathSecurity(p),(await actual()).windowsSid)
+  await assertNativeR1Custody([keyPath,directory,nonceDirectory,manifestPath,intentPath],(await actual()).windowsSid)
   await adapter.inspectContainer(m.targetContainerName)
   const r=JSON.parse((await exec('docker',['inspect','--format','{{json .}}',redis.id])).stdout)
   assertRedisResourceMatchesGrant(r,{name:redis.name,id:redis.id,imageId:redis.image,project:redis.project,mounts:redis.mounts,ports:redis.ports})

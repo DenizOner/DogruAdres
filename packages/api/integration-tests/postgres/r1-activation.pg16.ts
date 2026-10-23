@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import {Client} from '@medusajs/framework/pg'
 import {generateKeyPairSync,sign,randomBytes} from 'node:crypto'
-import {mkdtemp} from 'node:fs/promises'
+import {mkdtemp,readFile} from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {canonicalJsonStringify as canonical,computePublicKeyFingerprint,createTrustedOperatorRegistry,createSignedPreIntent,type PinnedOperatorApproval} from '../../src/scripts/operator-audit-protocol'
@@ -26,7 +26,7 @@ async function main(){
  const pin:PinnedOperatorApproval={trustDomain:'dogruadres-m0-mfa',executorType:'automation_agent',operatorId:manifest.authorizedOperator.operatorId,runId,windowsPrincipal:sid,approvalReference:manifest.authorizedOperator.approvalReference,keyFingerprint:fp,taskEnvironmentId:manifest.taskEnvironmentId,targetDatabase:dbName,targetCommitSha:sha,validFrom:now,validUntil:expires}
  const registry=createTrustedOperatorRegistry({registrySchemaVersion:'1.1.0',trustDomain:pin.trustDomain,operators:[{executorType:pin.executorType,operatorId:pin.operatorId,windowsPrincipal:sid,approvalReference:pin.approvalReference,publicKeyPem:pem,keyFingerprint:fp,validFrom:now,validUntil:expires}]},pin)
  const intent=createSignedPreIntent(runId,manifest,manifest.authorizedOperator.operatorId,privatePem),input={manifest:signed,intent,registry},env={...process.env,...manifest.runtimeFlags}
- assert.throws(()=>commissionR1SignerScope(signed,{sourceSha:sha,windowsSid:sid}),/source-reviewed/)
+ assert.throws(()=>commissionR1SignerScope(signed,{sourceSha:sha,windowsSid:sid}),/scope mismatch/)
  assert.throws(()=>verifyR1ActivationInput({...input,intent:{...intent,nonce:'forged'} as any},env))
  assert.throws(()=>verifyR1ActivationInput(input,{...env,DOGRUADRES_MFA_RUNTIME_ENABLED:'false'}),/flags/)
  assert.throws(()=>verifyR1ActivationInput(input,env,expires),/window/)
@@ -35,6 +35,28 @@ async function main(){
  const foreign=new Client({connectionString:u.toString(),application_name:'r1-owned-spoof'});await foreign.connect()
  try{await assert.rejects(executeR1Activation(input,{...deps,evidenceDirectory:await mkdtemp(path.join(os.tmpdir(),'r1-denied-'))}),/exclusivity/)}finally{await foreign.end()}
  await assert.rejects(executeR1Activation(input,{...deps,evidenceDirectory:await mkdtemp(path.join(os.tmpdir(),'r1-replayed-nonce-')),nonce:{claimIfAbsent:async()=>false}}),/nonce already consumed/)
+ // Separate NEGATIVE TEST_FIXTURE: injected SQL rejection after the write attempt.
+ // Its nonce/checkpoint is NEVER retried. A separate connection proves ABORTED.
+ const failedManifest={...manifest,runId:'r1-TEST_FIXTURE-fault-'+randomBytes(8).toString('hex'),nonce:randomBytes(32).toString('hex')}
+ const failedSigned={manifest:failedManifest,signerKeyFingerprint:fp,signatureBase64:sign(null,Buffer.from(canonical(failedManifest)),privatePem).toString('base64')}
+ const failedPin={...pin,runId:failedManifest.runId}
+ const failedRegistry=createTrustedOperatorRegistry({registrySchemaVersion:'1.1.0',trustDomain:pin.trustDomain,operators:[{executorType:pin.executorType,operatorId:pin.operatorId,windowsPrincipal:sid,approvalReference:pin.approvalReference,publicKeyPem:pem,keyFingerprint:fp,validFrom:now,validUntil:expires}]},failedPin)
+ const failedInput={manifest:failedSigned,intent:createSignedPreIntent(failedManifest.runId,failedManifest,failedManifest.authorizedOperator.operatorId,privatePem),registry:failedRegistry}
+ const failedDir=await mkdtemp(path.join(os.tmpdir(),'r1-TEST_FIXTURE-fault-'))
+ const inject=new Client({connectionString:u.toString()});await inject.connect()
+ try{
+  await inject.query("CREATE FUNCTION ci_r1_write_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'CI_INJECTED_R1_WRITE_FAULT'; END $$")
+  await inject.query("CREATE TRIGGER ci_r1_write_fault BEFORE UPDATE ON da_session_policy FOR EACH ROW EXECUTE FUNCTION ci_r1_write_fault()")
+ }finally{await inject.end()}
+ await assert.rejects(executeR1Activation(failedInput,{...deps,evidenceDirectory:failedDir,nonce:new NativeFileAtomicNonceAdapter(failedDir),assertAuthority:async()=>{verifyR1ActivationInput(failedInput,env)}}),/INDETERMINATE/)
+ const checkpoint=JSON.parse(await readFile(path.join(failedDir,'r1-exclusive.checkpoint.json'),'utf8'));assert.equal(checkpoint.status,'INDETERMINATE')
+ const aborted=new Client({connectionString:u.toString()});await aborted.connect()
+ try{
+  assert.equal((await aborted.query('SELECT pg_xact_status($1::xid8) AS status',[checkpoint.transactionId])).rows[0].status,'aborted')
+  assert.equal((await readR1Readiness(aborted)).latch,false)
+  await aborted.query('DROP TRIGGER ci_r1_write_fault ON da_session_policy');await aborted.query('DROP FUNCTION ci_r1_write_fault()')
+ }finally{await aborted.end()}
+ console.log('PASS R1 TEST_FIXTURE failure: write-attempt INDETERMINATE, durable consumed nonce/checkpoint retained, separate xid8 ABORTED readback; failed run never retried')
  const result=await executeR1Activation(input,deps)
  assert.equal(result.outcome.status,'ARMED');assert.equal(result.evidence.committedEntities.length,8)
  await assert.rejects(executeR1Activation(input,deps),/EEXIST/)
