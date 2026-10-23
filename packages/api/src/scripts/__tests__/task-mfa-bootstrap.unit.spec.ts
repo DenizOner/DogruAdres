@@ -1117,13 +1117,17 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       expect(mustClassifyBootstrapFailureAsIndeterminate(false, ["preconditions_verified"])).toBe(false)
     })
 
-    it("requires an independently commissioned reviewer root", () => {
-      expect(INDEPENDENT_REVIEWER_TRUST_ROOT).toBeNull()
+    it("uses the independently source-pinned reviewer root rather than an agent-provided root", () => {
+      expect(INDEPENDENT_REVIEWER_TRUST_ROOT).not.toBeNull()
+      expect(INDEPENDENT_REVIEWER_TRUST_ROOT?.reviewerId)
+        .toBe("dogruadres-r0d-independent-reviewer-20261023")
+      expect(INDEPENDENT_REVIEWER_TRUST_ROOT?.fingerprint)
+        .toBe("0cff1827bc6cf03e8ffae849278616a5a6da77895d870fbc618fb154a9e850d3")
     })
 
-    it("throws immediately when called with closed gate and redacts sensitive info", async () => {
+    it("rejects bootstrap without required connection and reviewer grant inputs", async () => {
       await expect(taskMfaBootstrap({ container: {} as any, args: [] })).rejects.toThrow(
-        /Reviewer grant trust root is not commissioned/
+        /DATABASE_URL is missing/
       )
     })
   })
