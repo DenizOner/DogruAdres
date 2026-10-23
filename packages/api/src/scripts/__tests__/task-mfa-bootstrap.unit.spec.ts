@@ -20,6 +20,7 @@ import {
   verifyCommittedStateViaAdapter,
   CommittedStateEvidence,
   ReadbackProvenance,
+  CommittedEntityDigest,
   DatabaseReadbackAdapter,
   verifyPathEffectiveSecurity,
   PathSecurityInspection,
@@ -389,7 +390,40 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       querySnapshotSha256: "snapshot_hash_abc_123",
     }
 
-    it("validates valid chain and rejects inverted temporal order or unverified transaction hash", () => {
+    const mockCommittedEntities: CommittedEntityDigest[] = [
+      { entityType: "user", entityId: "usr_01", digestSha256: "digest_u1" },
+      { entityType: "person", entityId: "per_01", digestSha256: "digest_p1" },
+    ]
+
+    const mockReadbackAdapter: DatabaseReadbackAdapter = {
+      async queryCommittedState(targetDatabase, transactionHash, ceremonyId) {
+        if (transactionHash === "tx_hash_forged_999") {
+          throw new Error("Transaction not found in independent database readback")
+        }
+        if (transactionHash === "tx_hash_unarmed_latch") {
+          return createVerifiedCommittedStateEvidence(
+            ceremonyId,
+            targetDatabase,
+            transactionHash,
+            "UNARMED" as any,
+            validProvenance,
+            mockCommittedEntities,
+            "2026-10-22T20:30:04.000Z"
+          )
+        }
+        return createVerifiedCommittedStateEvidence(
+          ceremonyId,
+          targetDatabase,
+          transactionHash,
+          "ARMED",
+          validProvenance,
+          mockCommittedEntities,
+          "2026-10-22T20:30:04.000Z"
+        )
+      },
+    }
+
+    it("validates valid chain and rejects inverted temporal order or unverified transaction hash", async () => {
       const ceremonyId = "ceremony_mfa_closeout_01"
       const preIntent = createSignedPreIntent(
         ceremonyId,
@@ -399,60 +433,116 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         "2026-10-22T20:30:00.000Z"
       )
 
-      const validEvidence = createVerifiedCommittedStateEvidence(
-        ceremonyId,
-        baseManifest.targetDatabase,
-        "tx_hash_valid_777",
-        "ARMED",
-        validProvenance,
-        [
-          { entityType: "user", entityId: "usr_01", digestSha256: "digest_u1" },
-          { entityType: "person", entityId: "per_01", digestSha256: "digest_p1" },
-        ],
-        "2026-10-22T20:30:04.000Z"
-      )
-
-      const validOutcome = createSignedPostCommitOutcome(
+      const { outcome: validOutcome } = await createSignedPostCommitOutcome(
         ceremonyId,
         preIntent,
-        validEvidence,
+        mockReadbackAdapter,
+        baseManifest.targetDatabase,
+        "tx_hash_valid_777",
         privateKeyPem,
         "2026-10-22T20:30:05.000Z"
       )
-      expect(verifyCeremonyAuditChain(preIntent, validOutcome, publicKeyPem, validEvidence)).toBe(true)
+
+      expect(
+        await verifyCeremonyAuditChain(
+          preIntent,
+          validOutcome,
+          publicKeyPem,
+          mockReadbackAdapter,
+          baseManifest.targetDatabase
+        )
+      ).toBe(true)
 
       // Inverted temporal order
-      const invertedOutcome = createSignedPostCommitOutcome(
+      const { outcome: invertedOutcome } = await createSignedPostCommitOutcome(
         ceremonyId,
         preIntent,
-        validEvidence,
+        mockReadbackAdapter,
+        baseManifest.targetDatabase,
+        "tx_hash_valid_777",
         privateKeyPem,
         "2026-10-22T20:29:59.000Z"
       )
-      expect(verifyCeremonyAuditChain(preIntent, invertedOutcome, publicKeyPem, validEvidence)).toBe(false)
+      expect(
+        await verifyCeremonyAuditChain(
+          preIntent,
+          invertedOutcome,
+          publicKeyPem,
+          mockReadbackAdapter,
+          baseManifest.targetDatabase
+        )
+      ).toBe(false)
 
-      // Rejects arbitrary caller-provided outcome without verified evidence
-      expect(() =>
+      // Rejects issuance without commissioned readback adapter
+      await expect(
         createSignedPostCommitOutcome(
           ceremonyId,
           preIntent,
-          null as unknown as CommittedStateEvidence,
+          null,
+          baseManifest.targetDatabase,
+          "tx_hash_valid_777",
           privateKeyPem
         )
-      ).toThrow(/createSignedPostCommitOutcome requires verified CommittedStateEvidence/)
+      ).rejects.toThrow(/BLOCKED: Cannot issue ARMED post-commit outcome without an independently commissioned DatabaseReadbackAdapter/)
 
-      // Rejects unverified / missing evidence in verifyCeremonyAuditChain
-      expect(verifyCeremonyAuditChain(preIntent, validOutcome, publicKeyPem)).toBe(false)
-
-      // Rejects forged / mismatched evidence in verifyCeremonyAuditChain
-      const forgedEvidence: CommittedStateEvidence = {
-        ...validEvidence,
-        transactionHash: "tx_hash_forged_999",
-      }
-      expect(verifyCeremonyAuditChain(preIntent, validOutcome, publicKeyPem, forgedEvidence)).toBe(false)
+      // Rejects verification when readback adapter is null
+      expect(
+        await verifyCeremonyAuditChain(
+          preIntent,
+          validOutcome,
+          publicKeyPem,
+          null,
+          baseManifest.targetDatabase
+        )
+      ).toBe(false)
     })
 
-    it("rejects invalid MFA latch value or missing independent provenance", () => {
+    it("rejects forged but internally consistent evidence as independent activation proof", async () => {
+      const ceremonyId = "ceremony_mfa_closeout_forgery"
+      const preIntent = createSignedPreIntent(
+        ceremonyId,
+        baseManifest,
+        "agent_executor_test_42",
+        privateKeyPem,
+        "2026-10-22T20:30:00.000Z"
+      )
+
+      // Create a valid signed outcome for a valid transaction
+      const { outcome: validOutcome } = await createSignedPostCommitOutcome(
+        ceremonyId,
+        preIntent,
+        mockReadbackAdapter,
+        baseManifest.targetDatabase,
+        "tx_hash_valid_777",
+        privateKeyPem,
+        "2026-10-22T20:30:05.000Z"
+      )
+
+      // Caller attempts to verify against a database where transaction does not exist
+      expect(
+        await verifyCeremonyAuditChain(
+          preIntent,
+          { ...validOutcome, transactionHash: "tx_hash_forged_999" },
+          publicKeyPem,
+          mockReadbackAdapter,
+          baseManifest.targetDatabase
+        )
+      ).toBe(false)
+
+      // Caller attempts to supply an outcome with forged latch state when database readback adapter reveals UNARMED
+      await expect(
+        createSignedPostCommitOutcome(
+          ceremonyId,
+          preIntent,
+          mockReadbackAdapter,
+          baseManifest.targetDatabase,
+          "tx_hash_unarmed_latch",
+          privateKeyPem
+        )
+      ).rejects.toThrow(/Invalid MFA latch value for committed state evidence/)
+    })
+
+    it("rejects invalid MFA latch value or missing independent provenance in evidence factory", () => {
       const ceremonyId = "ceremony_mfa_closeout_02"
       expect(() =>
         createVerifiedCommittedStateEvidence(
@@ -588,6 +678,12 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         atomicWrite: async (fp, content) => {
           storage.set(fp, content)
         },
+        createExclusive: async (fp, content) => {
+          if (storage.has(fp)) {
+            throw new Error(`REFUSED: Checkpoint collision at "${fp}". Exclusive creation failed (EEXIST). Unsafe concurrent reservation prevented`)
+          }
+          storage.set(fp, content)
+        },
       }
 
       const manager = new DurableCheckpointManager(mockStorageAdapter)
@@ -603,16 +699,20 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         /Checkpoint already exists with status "in_progress". Unsafe retry prevented/
       )
 
-      // Record steps
+      // Record steps with per-step native IDs
       await manager.recordStep(cpPath, state, "step_auth_registered_A", {
         label: "A",
-        userId: "usr_1",
         authIdentityId: "aid_1",
-        personId: "per_1",
-        bindingCreated: true,
       })
       expect(state.completedSteps).toContain("step_auth_registered_A")
       expect(state.principals.length).toBe(1)
+      expect(state.principals[0].authIdentityId).toBe("aid_1")
+
+      await manager.recordStep(cpPath, state, "step_user_account_workflow_completed_A", {
+        label: "A",
+        userId: "usr_1",
+      })
+      expect(state.principals[0].userId).toBe("usr_1")
 
       // Record failure with sensitive error
       await manager.recordFailure(cpPath, state, new Error("Failed at postgresql://user:myPass@127.0.0.1/db"))
@@ -636,12 +736,100 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         atomicWrite: async (fp, content) => {
           storage.set(fp, content)
         },
+        createExclusive: async (fp, content) => {
+          if (storage.has(fp)) {
+            throw new Error(`REFUSED: Checkpoint collision at "${fp}". Exclusive creation failed (EEXIST). Unsafe concurrent reservation prevented`)
+          }
+          storage.set(fp, content)
+        },
       }
 
       const manager = new DurableCheckpointManager(mockStorageAdapter)
       await expect(
         manager.initializeCheckpoint("C:\\evidence\\corrupt.checkpoint.json", "target_db")
       ).rejects.toThrow(/Corrupted checkpoint exists.*Manual forensic review required/)
+    })
+
+    it("handles concurrent checkpoint initialization atomically: exactly one succeeds and second is rejected", async () => {
+      const storage = new Map<string, string>()
+      const mockStorageAdapter: CheckpointStorageAdapter = {
+        exists: async (fp) => storage.has(fp),
+        read: async (fp) => storage.get(fp) || "",
+        atomicWrite: async (fp, content) => { storage.set(fp, content) },
+        createExclusive: async (fp, content) => {
+          if (storage.has(fp)) {
+            throw new Error(`REFUSED: Checkpoint collision at "${fp}". Exclusive creation failed (EEXIST). Unsafe concurrent reservation prevented`)
+          }
+          storage.set(fp, content)
+        },
+      }
+
+      const manager1 = new DurableCheckpointManager(mockStorageAdapter)
+      const manager2 = new DurableCheckpointManager(mockStorageAdapter)
+      const cpPath = "C:\\evidence\\racing.checkpoint.json"
+
+      const results = await Promise.allSettled([
+        manager1.initializeCheckpoint(cpPath, "racing_db"),
+        manager2.initializeCheckpoint(cpPath, "racing_db"),
+      ])
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled")
+      const rejected = results.filter((r) => r.status === "rejected")
+
+      expect(fulfilled.length).toBe(1)
+      expect(rejected.length).toBe(1)
+      expect((rejected[0] as PromiseRejectedResult).reason.message).toMatch(
+        /Checkpoint already exists with status "in_progress". Unsafe retry prevented|Checkpoint collision/
+      )
+    })
+
+    it("handles interrupted identity creation and marks crash state as indeterminate", async () => {
+      const storage = new Map<string, string>()
+      const mockStorageAdapter: CheckpointStorageAdapter = {
+        exists: async (fp) => storage.has(fp),
+        read: async (fp) => storage.get(fp) || "",
+        atomicWrite: async (fp, content) => { storage.set(fp, content) },
+        createExclusive: async (fp, content) => {
+          if (storage.has(fp)) throw new Error("EEXIST")
+          storage.set(fp, content)
+        },
+      }
+
+      const manager = new DurableCheckpointManager(mockStorageAdapter)
+      const cpPath = "C:\\evidence\\interrupted.checkpoint.json"
+      const state = await manager.initializeCheckpoint(cpPath, "interrupted_db")
+
+      // Step 1: authIdentity created
+      await manager.recordStep(cpPath, state, "auth_registered_A", {
+        label: "A",
+        authIdentityId: "aid_interrupted_123",
+      })
+
+      // Step 2: userId created
+      await manager.recordStep(cpPath, state, "user_account_workflow_completed_A", {
+        label: "A",
+        userId: "usr_interrupted_456",
+      })
+
+      // Crash / failure during subsequent person creation (mutations have begun)
+      await manager.recordFailure(
+        cpPath,
+        state,
+        new Error("Connection reset by peer mid-transaction"),
+        true // indeterminate
+      )
+
+      expect(state.status).toBe("indeterminate")
+      expect(state.completedSteps).toEqual(["auth_registered_A", "user_account_workflow_completed_A"])
+      expect(state.principals[0].authIdentityId).toBe("aid_interrupted_123")
+      expect(state.principals[0].userId).toBe("usr_interrupted_456")
+
+      // Checkpoint persisted to disk confirms indeterminate status and recorded IDs
+      const rawPersisted = await mockStorageAdapter.read(cpPath)
+      const persistedState = JSON.parse(rawPersisted)
+      expect(persistedState.status).toBe("indeterminate")
+      expect(persistedState.principals[0].userId).toBe("usr_interrupted_456")
+      expect(persistedState.error).toContain("Connection reset by peer")
     })
   })
 
@@ -823,6 +1011,28 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         effectExecuted = true
       })
       expect(effectExecuted).toBe(true)
+    })
+
+    it("prevents any filesystem or database mutations when preflight checks fail", async () => {
+      let mutationOccurred = false
+      const ctx: ExecutionControllerContext = {
+        executionGateOpen: false, // Closed gate
+        pinnedApproval: makePinnedApproval(),
+        registryData: makeRegistryData(),
+        signedManifest: makeSignedManifest(),
+        resourceAdapter: mockResourceAdapter,
+        nonceStore: { claimOnce: async () => true },
+        pathSecurityInspection: validInspection,
+        connectionString: "postgres://127.0.0.1:55720/task_isolated_authorized_db",
+      }
+
+      await expect(
+        executeBootstrapController(ctx, async () => {
+          mutationOccurred = true
+        })
+      ).rejects.toThrow(/BOOTSTRAP_EXECUTION_GATE_OPEN is false/)
+
+      expect(mutationOccurred).toBe(false)
     })
   })
 

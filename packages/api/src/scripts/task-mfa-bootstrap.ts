@@ -267,16 +267,9 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err
     }
 
-    const checkpointAdapter = new FilesystemDurableCheckpointAdapter()
-    const checkpointManager = new DurableCheckpointManager(checkpointAdapter)
-
-    const recoveryState = await checkpointManager.initializeCheckpoint(
-      checkpointFile,
-      signedManifest.manifest.targetDatabase
-    )
-
+    // Preflight: Inspect path security BEFORE any file or database mutations
     const nonceStore = new DurableAtomicNonceStore(NATIVE_NONCE_STORAGE_ADAPTER)
-    const pathInspection = await NATIVE_SECURITY_ADAPTER.inspectPathSecurity(checkpointFile)
+    const pathInspection = await NATIVE_SECURITY_ADAPTER.inspectPathSecurity(realEvidenceDir)
 
     const executionCtx = {
       executionGateOpen: BOOTSTRAP_EXECUTION_GATE_OPEN,
@@ -289,7 +282,18 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
       connectionString: dbUrl,
     }
 
+    // Preflight controller execution: Gate, Pin, Manifest, Resource Ownership, Nonce claim
+    // Must succeed BEFORE any filesystem checkpoint creation or database connection
     await executeBootstrapController(executionCtx, async () => {
+      // 1. Exclusive non-clobber reservation of checkpoint file
+      const checkpointAdapter = new FilesystemDurableCheckpointAdapter()
+      const checkpointManager = new DurableCheckpointManager(checkpointAdapter)
+
+      const recoveryState = await checkpointManager.initializeCheckpoint(
+        checkpointFile,
+        signedManifest.manifest.targetDatabase
+      )
+
       const db = new Client({ connectionString: dbUrl })
       await db.connect()
 
@@ -319,7 +323,13 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
             throw new Error(`Failed native registration for Person ${label}`)
           }
           const authIdentityId = reg.authIdentity.id
-          await checkpointManager.recordStep(checkpointFile, recoveryState, `auth_registered_${label}`)
+          // Record authIdentityId immediately at the earliest safe point
+          await checkpointManager.recordStep(
+            checkpointFile,
+            recoveryState,
+            `auth_registered_${label}`,
+            { label, authIdentityId }
+          )
 
           const workflowResult = await createUserAccountWorkflow(container).run({
             input: {
@@ -331,7 +341,13 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
           if (!user || !user.id) {
             throw new Error(`Failed official createUserAccountWorkflow for Person ${label}`)
           }
-          await checkpointManager.recordStep(checkpointFile, recoveryState, `user_account_workflow_completed_${label}`)
+          // Record userId immediately at the earliest safe point
+          await checkpointManager.recordStep(
+            checkpointFile,
+            recoveryState,
+            `user_account_workflow_completed_${label}`,
+            { label, userId: user.id }
+          )
 
           const verify = await auth.authenticate("emailpass", { body: { email, password } })
           if (!verify.success || verify.authIdentity?.app_metadata?.user_id !== user.id) {
@@ -347,7 +363,13 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
           const [person] = await foundation.createPeople([
             { display_name: `Task Person ${label}` },
           ])
-          await checkpointManager.recordStep(checkpointFile, recoveryState, `person_created_${label}`)
+          // Record personId immediately at the earliest safe point
+          await checkpointManager.recordStep(
+            checkpointFile,
+            recoveryState,
+            `person_created_${label}`,
+            { label, personId: person.id }
+          )
 
           await foundation.createActorMappings([
             {
@@ -365,17 +387,12 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
              VALUES ($1, $2, 'user', $3, now())`,
             [authIdentityId, person.id, user.id]
           )
+          // Record login binding immediately at the earliest safe point
           await checkpointManager.recordStep(
             checkpointFile,
             recoveryState,
             `binding_inserted_${label}`,
-            {
-              label,
-              userId: user.id,
-              authIdentityId,
-              personId: person.id,
-              bindingCreated: true,
-            }
+            { label, bindingCreated: true }
           )
 
           finalSecrets.push({
@@ -403,7 +420,11 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
 
         console.log(`[task-mfa-bootstrap] Prepared 2 canonical Persons and verified login bindings in ${signedManifest.manifest.targetDatabase}`)
       } catch (err: unknown) {
-        await checkpointManager.recordFailure(checkpointFile, recoveryState, err)
+        // Handle crash windows as indeterminate when mutations have begun
+        const hasMutations = recoveryState.completedSteps.some(
+          (s) => s.startsWith("auth_registered_") || s.startsWith("user_") || s.startsWith("person_")
+        )
+        await checkpointManager.recordFailure(checkpointFile, recoveryState, err, hasMutations)
         throw err
       } finally {
         await db.end()

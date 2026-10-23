@@ -591,34 +591,39 @@ export function createSignedPreIntent(
   return { ...unsigned, signatureBase64 }
 }
 
-export function createSignedPostCommitOutcome(
+/**
+ * Issues a signed ARMED post-commit outcome.
+ *
+ * Strict security constraints:
+ * - Does NOT accept caller-supplied digests, transaction strings, or synthetic evidence.
+ * - Requires a commissioned DatabaseReadbackAdapter to query and verify actual database state.
+ * - If no readback adapter is commissioned, explicitly throws BLOCKED.
+ */
+export async function createSignedPostCommitOutcome(
   ceremonyId: string,
   preIntent: SignedPreIntent,
-  evidence: CommittedStateEvidence,
+  readbackAdapter: DatabaseReadbackAdapter | null,
+  targetDatabase: string,
+  transactionHash: string,
   privateKeyPem: string,
   verifiedAt: string = new Date().toISOString()
-): SignedPostCommitOutcome {
-  if (!evidence || typeof evidence !== "object" || !evidence.transactionHash) {
-    throw new Error("REFUSED: createSignedPostCommitOutcome requires verified CommittedStateEvidence")
+): Promise<{ outcome: SignedPostCommitOutcome; evidence: CommittedStateEvidence }> {
+  if (!readbackAdapter) {
+    throw new Error("BLOCKED: Cannot issue ARMED post-commit outcome without an independently commissioned DatabaseReadbackAdapter")
   }
-  if (evidence.ceremonyId !== ceremonyId || evidence.ceremonyId !== preIntent.ceremonyId) {
-    throw new Error("REFUSED: Committed state evidence ceremonyId mismatch with preIntent")
+  if (!transactionHash || typeof transactionHash !== "string" || transactionHash.trim() === "") {
+    throw new Error("REFUSED: Invalid or missing transaction hash for post-commit outcome")
   }
-  if (evidence.mfaLatchValue !== "ARMED") {
-    throw new Error(`REFUSED: Committed state evidence MFA latch is not ARMED: "${evidence.mfaLatchValue}"`)
+  if (preIntent.ceremonyId !== ceremonyId) {
+    throw new Error("REFUSED: Pre-intent ceremonyId does not match outcome ceremonyId")
   }
-  if (evidence.provenance?.verifierIdentity !== "independent_database_readback_adapter") {
-    throw new Error("REFUSED: Committed state evidence lacks independent readback provenance")
-  }
-  const expectedDigest = computeCommittedStateDigest(
-    evidence.committedEntities,
-    evidence.targetDatabase,
-    evidence.mfaLatchValue,
-    evidence.provenance
+
+  const evidence = await verifyCommittedStateViaAdapter(
+    readbackAdapter,
+    targetDatabase,
+    transactionHash,
+    ceremonyId
   )
-  if (evidence.stateDigestSha256 !== expectedDigest) {
-    throw new Error("REFUSED: Committed state evidence digest verification failed")
-  }
 
   const preIntentDigest = computeSha256Digest(canonicalJsonStringify(preIntent))
   const unsigned = {
@@ -633,7 +638,7 @@ export function createSignedPostCommitOutcome(
   }
   const payload = Buffer.from(canonicalJsonStringify(unsigned), "utf8")
   const signatureBase64 = sign(null, payload, privateKeyPem).toString("base64")
-  return { ...unsigned, signatureBase64 }
+  return { outcome: { ...unsigned, signatureBase64 }, evidence }
 }
 
 export function createIndeterminateFailureRecord(
@@ -657,12 +662,22 @@ export function createIndeterminateFailureRecord(
   return { ...unsigned, signatureBase64 }
 }
 
-export function verifyCeremonyAuditChain(
+/**
+ * Verifies an audit ceremony chain (PreIntent -> Outcome).
+ *
+ * Strict fail-closed constraints:
+ * - For ARMED status, caller-supplied digests, hashes, or synthetic evidence objects are NEVER accepted.
+ * - An independent DatabaseReadbackAdapter and targetDatabase are MANDATORY.
+ * - If readback adapter is null or uncommissioned, returns false (verification fail-closed).
+ * - Queries the independent readback adapter and compares returned committed state against outcome.
+ */
+export async function verifyCeremonyAuditChain(
   preIntent: SignedPreIntent,
   outcome: SignedPostCommitOutcome | IndeterminateFailureRecord,
   publicKeyPem: string,
-  committedStateEvidence?: CommittedStateEvidence
-): boolean {
+  readbackAdapter: DatabaseReadbackAdapter | null = null,
+  targetDatabase?: string
+): Promise<boolean> {
   const { signatureBase64: preSig, ...preBody } = preIntent
   const isPreValid = verify(null, Buffer.from(canonicalJsonStringify(preBody), "utf8"), publicKeyPem, Buffer.from(preSig, "base64"))
   if (!isPreValid) return false
@@ -685,26 +700,30 @@ export function verifyCeremonyAuditChain(
     ) {
       return false
     }
-    if (!committedStateEvidence) {
+    // Independent readback adapter is mandatory; caller-supplied evidence objects are forbidden
+    if (!readbackAdapter || !targetDatabase) {
       return false
     }
+    let evidence: CommittedStateEvidence
+    try {
+      evidence = await verifyCommittedStateViaAdapter(
+        readbackAdapter,
+        targetDatabase,
+        outcome.transactionHash,
+        outcome.ceremonyId
+      )
+    } catch {
+      return false
+    }
+
     if (
-      committedStateEvidence.ceremonyId !== outcome.ceremonyId ||
-      committedStateEvidence.transactionHash !== outcome.transactionHash ||
-      committedStateEvidence.stateDigestSha256 !== outcome.stateDigestSha256 ||
-      committedStateEvidence.committedEntities.length !== outcome.committedEntitiesCount ||
-      committedStateEvidence.mfaLatchValue !== "ARMED" ||
-      committedStateEvidence.provenance?.verifierIdentity !== "independent_database_readback_adapter"
+      evidence.ceremonyId !== outcome.ceremonyId ||
+      evidence.targetDatabase !== targetDatabase ||
+      evidence.transactionHash !== outcome.transactionHash ||
+      evidence.stateDigestSha256 !== outcome.stateDigestSha256 ||
+      evidence.committedEntities.length !== outcome.committedEntitiesCount ||
+      evidence.mfaLatchValue !== "ARMED"
     ) {
-      return false
-    }
-    const expectedDigest = computeCommittedStateDigest(
-      committedStateEvidence.committedEntities,
-      committedStateEvidence.targetDatabase,
-      committedStateEvidence.mfaLatchValue,
-      committedStateEvidence.provenance
-    )
-    if (committedStateEvidence.stateDigestSha256 !== expectedDigest) {
       return false
     }
   }
@@ -781,17 +800,17 @@ export function redactSensitiveData(text: string): string {
 
 export interface CheckpointPrincipal {
   readonly label: "A" | "B"
-  readonly userId?: string
-  readonly authIdentityId?: string
-  readonly personId?: string
-  readonly bindingCreated: boolean
+  userId?: string
+  authIdentityId?: string
+  personId?: string
+  bindingCreated?: boolean
 }
 
 export interface PartialRecoveryCheckpoint {
   readonly checkpointVersion: string
   readonly startedAt: string
   readonly targetDatabase: string
-  status: "in_progress" | "failed" | "completed"
+  status: "in_progress" | "failed" | "completed" | "indeterminate"
   completedSteps: string[]
   error?: string
   principals: CheckpointPrincipal[]
@@ -801,6 +820,7 @@ export interface CheckpointStorageAdapter {
   exists(filepath: string): Promise<boolean>
   read(filepath: string): Promise<string>
   atomicWrite(filepath: string, content: string): Promise<void>
+  createExclusive(filepath: string, content: string): Promise<void>
 }
 
 /**
@@ -824,6 +844,41 @@ export class FilesystemDurableCheckpointAdapter implements CheckpointStorageAdap
   async read(filepath: string): Promise<string> {
     const { readFile } = await import("node:fs/promises")
     return readFile(filepath, "utf8")
+  }
+
+  /**
+   * Exclusive non-clobber reservation:
+   * Uses O_CREAT | O_EXCL (flag "wx") directly on the target destination file.
+   * If the file already exists or another process creates it concurrently,
+   * the OS kernel atomically fails with EEXIST, guaranteeing race-free reservation.
+   *
+   * Platform security & durability notes:
+   * - Mode 0o600 sets POSIX permissions; Windows NTFS ignores POSIX mode bits without
+   *   Cygwin/WSL. Real Windows access control MUST be verified through SecurityEnvironmentAdapter.
+   * - handle.sync() flushes file data/inodes, but parent directory directory-entry metadata
+   *   requires OS-specific directory sync.
+   * - Cross-system atomicity between local filesystem checkpoints and PostgreSQL cannot be
+   *   proven without a two-phase protocol; unverified crash windows must be treated as INDETERMINATE.
+   */
+  async createExclusive(filepath: string, content: string): Promise<void> {
+    const { open } = await import("node:fs/promises")
+    let handle
+    try {
+      handle = await open(filepath, "wx", 0o600)
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(
+          `REFUSED: Checkpoint collision at "${filepath}". Exclusive creation failed (EEXIST). Unsafe concurrent reservation prevented`
+        )
+      }
+      throw err
+    }
+    try {
+      await handle.writeFile(content, "utf8")
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
   }
 
   async atomicWrite(filepath: string, content: string): Promise<void> {
@@ -856,18 +911,6 @@ export class DurableCheckpointManager {
     checkpointFile: string,
     targetDatabase: string
   ): Promise<PartialRecoveryCheckpoint> {
-    const exists = await this.adapter.exists(checkpointFile)
-    if (exists) {
-      const raw = await this.adapter.read(checkpointFile)
-      let prev: PartialRecoveryCheckpoint
-      try {
-        prev = JSON.parse(raw) as PartialRecoveryCheckpoint
-      } catch {
-        throw new Error(`REFUSED: Corrupted checkpoint exists at ${checkpointFile}. Manual forensic review required`)
-      }
-      throw new Error(`REFUSED: Checkpoint already exists with status "${prev.status}". Unsafe retry prevented`)
-    }
-
     const state: PartialRecoveryCheckpoint = {
       checkpointVersion: "1.0.0",
       startedAt: new Date().toISOString(),
@@ -876,7 +919,27 @@ export class DurableCheckpointManager {
       completedSteps: [],
       principals: [],
     }
-    await this.adapter.atomicWrite(checkpointFile, JSON.stringify(state, null, 2))
+
+    try {
+      await this.adapter.createExclusive(checkpointFile, JSON.stringify(state, null, 2))
+    } catch (err: unknown) {
+      if (
+        (err instanceof Error && err.message.includes("Checkpoint collision")) ||
+        (err as NodeJS.ErrnoException).code === "EEXIST"
+      ) {
+        let prevStatus = "unknown"
+        try {
+          const raw = await this.adapter.read(checkpointFile)
+          const prev = JSON.parse(raw) as PartialRecoveryCheckpoint
+          prevStatus = prev.status || "unknown"
+        } catch {
+          throw new Error(`REFUSED: Corrupted checkpoint exists at ${checkpointFile}. Manual forensic review required`)
+        }
+        throw new Error(`REFUSED: Checkpoint already exists with status "${prevStatus}". Unsafe retry prevented`)
+      }
+      throw err
+    }
+
     return state
   }
 
@@ -884,11 +947,16 @@ export class DurableCheckpointManager {
     checkpointFile: string,
     state: PartialRecoveryCheckpoint,
     step: string,
-    principal?: CheckpointPrincipal
+    principalUpdate?: Partial<CheckpointPrincipal> & { label: "A" | "B" }
   ): Promise<void> {
     state.completedSteps.push(step)
-    if (principal) {
-      state.principals.push(principal)
+    if (principalUpdate) {
+      const existing = state.principals.find((p) => p.label === principalUpdate.label)
+      if (existing) {
+        Object.assign(existing, principalUpdate)
+      } else {
+        state.principals.push({ ...principalUpdate })
+      }
     }
     await this.adapter.atomicWrite(checkpointFile, JSON.stringify(state, null, 2))
   }
@@ -896,9 +964,10 @@ export class DurableCheckpointManager {
   async recordFailure(
     checkpointFile: string,
     state: PartialRecoveryCheckpoint,
-    error: unknown
+    error: unknown,
+    indeterminate: boolean = false
   ): Promise<void> {
-    state.status = "failed"
+    state.status = indeterminate ? "indeterminate" : "failed"
     const rawError = error instanceof Error ? error.message : String(error)
     state.error = redactSensitiveData(rawError)
     try {
