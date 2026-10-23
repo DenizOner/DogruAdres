@@ -223,6 +223,40 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         .toThrow(/Signer key and operator do not match/)
     })
 
+    it("rejects the superseded R0-A key even when a candidate registry claims independent approval", () => {
+      const oldPublicKeyPem = [
+        "-----BEGIN PUBLIC KEY-----",
+        "MCowBQYDK2VwAyEAxzadu7g+Hsai94XKtfno831EXwn77ZLxIC2tWG78JCE=",
+        "-----END PUBLIC KEY-----",
+        "",
+      ].join("\n")
+      const supersededFingerprint = "f0e625dc8886b15dbd5a270c9f5d18f57b8ae74f3d75d3f02833123ebb916d52"
+      expect(computePublicKeyFingerprint(oldPublicKeyPem)).toBe(supersededFingerprint)
+      const revokedCandidate: TrustedRegistryData = {
+        ...validRegistryData,
+        operators: [{
+          ...validRegistryData.operators[0],
+          publicKeyPem: oldPublicKeyPem,
+          keyFingerprint: supersededFingerprint,
+        }],
+      }
+      expect(() => createTrustedOperatorRegistry(
+        revokedCandidate,
+        { ...pinnedApproval(), keyFingerprint: supersededFingerprint },
+        testNow
+      )).toThrow(/superseded/)
+      const safeRegistry = createTrustedOperatorRegistry(
+        { ...validRegistryData, operators: [{ ...validRegistryData.operators[0], publicKeyPem, keyFingerprint }] },
+        pinnedApproval(),
+        testNow
+      )
+      expect(() => verifySignedManifest({
+        manifest: baseManifest,
+        signerKeyFingerprint: supersededFingerprint,
+        signatureBase64: "unused",
+      }, safeRegistry)).toThrow(/superseded/)
+    })
+
     it("refuses candidate JSON without an independently pinned authorization", () => {
       const candidate = {
         ...validRegistryData,

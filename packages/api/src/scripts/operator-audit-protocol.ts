@@ -178,6 +178,22 @@ export interface TrustedOperatorRegistry {
  * Validates raw parsed JSON and constructs a callable TrustedOperatorRegistry.
  * Rejects corrupt, missing, substituted, or unapproved registry data.
  */
+/**
+ * Superseded R0-A signing key: authenticated review found an unexpected
+ * effective Windows reader. Keep historical signatures verifiable, but
+ * never allow this fingerprint to authorize new runtime mutations.
+ * See Issue #239 independent review and 2026-10-23 PO key rotation approval.
+ */
+const SUPERSEDED_OPERATOR_SIGNER_FINGERPRINTS = new Set([
+  "f0e625dc8886b15dbd5a270c9f5d18f57b8ae74f3d75d3f02833123ebb916d52",
+])
+
+function refuseSupersededOperatorSigner(fingerprint: string): void {
+  if (SUPERSEDED_OPERATOR_SIGNER_FINGERPRINTS.has(fingerprint.toLowerCase())) {
+    throw new Error("REFUSED: Operator signing key is superseded and may not authorize new execution")
+  }
+}
+
 export function createTrustedOperatorRegistry(
   data: unknown,
   independentlyPinned: PinnedOperatorApproval | null,
@@ -186,6 +202,7 @@ export function createTrustedOperatorRegistry(
   if (!independentlyPinned) {
     throw new Error("REFUSED: No independently pinned operator authorization is available")
   }
+  refuseSupersededOperatorSigner(independentlyPinned.keyFingerprint)
   if (independentlyPinned.trustDomain !== "dogruadres-m0-mfa" ||
       independentlyPinned.executorType !== "automation_agent" || !independentlyPinned.runId) {
     throw new Error("REFUSED: Pinned approval trust domain is invalid")
@@ -235,6 +252,7 @@ export function createTrustedOperatorRegistry(
       throw new Error("REFUSED: Malformed operator entry in trusted registry")
     }
 
+    refuseSupersededOperatorSigner(op.keyFingerprint)
     const calculatedFp = computePublicKeyFingerprint(op.publicKeyPem)
     if (calculatedFp.toLowerCase() !== op.keyFingerprint.toLowerCase()) {
       throw new Error(`REFUSED: Key fingerprint mismatch for operator "${op.operatorId}"`)
@@ -321,6 +339,7 @@ export function verifySignedManifest(
   trustedRegistry: TrustedOperatorRegistry
 ): void {
   const { manifest, signerKeyFingerprint, signatureBase64 } = signedManifest
+  refuseSupersededOperatorSigner(signerKeyFingerprint)
   if (manifest?.authorizedOperator?.executorType !== "automation_agent" ||
       manifest?.manifestVersion !== "1.1.0") {
     throw new Error("REFUSED: Expected explicit non-human executor and current manifest version")
