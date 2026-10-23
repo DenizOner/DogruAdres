@@ -12,13 +12,8 @@ import type {
   AtomicNonceStorageAdapter,
   DatabaseReadbackAdapter,
   CommittedStateEvidence,
-  CommittedEntityDigest,
-  ReadbackProvenance,
 } from "./operator-audit-protocol"
 import {
-  createVerifiedCommittedStateEvidence,
-  canonicalJsonStringify,
-  computeSha256Digest,
 } from "./operator-audit-protocol"
 
 const execFileAsync = promisify(execFile)
@@ -124,8 +119,8 @@ export function assertDockerResourceMatchesBinding(
       !/^sha256:[a-f0-9]{64}$/i.test(expected.imageId) ||
       !expected.composeProject || !expected.volumeName ||
       !expected.volumeMountSource || !expected.volumeMountDestination ||
-      !/^\\d+$/.test(expected.loopbackHostPort) ||
-      !/^\\d{10,25}$/.test(expected.postgresSystemIdentifier)) {
+      !/^\d+$/.test(expected.loopbackHostPort) ||
+      !/^\d{10,25}$/.test(expected.postgresSystemIdentifier)) {
     throw new Error("REFUSED: Immutable resource binding is incomplete or malformed")
   }
   const pgBindings = actual?.HostConfig?.PortBindings?.["5432/tcp"]
@@ -225,7 +220,7 @@ export class NativeDockerResourceAdapter implements RuntimeResourceAdapter {
   async getOperatorPrincipal(): Promise<{ windowsPrincipal: string }> {
     if (process.platform === "win32") {
       const { stdout } = await execFileAsync("whoami", ["/user", "/fo", "csv", "/nh"])
-      const sid = stdout.match(/S-1-\\d+(?:-\\d+)+/i)?.[0]
+      const sid = stdout.match(/S-1-\d+(?:-\d+)+/i)?.[0]
       if (!sid) throw new Error("REFUSED: Cannot verify the real Windows security SID")
       return { windowsPrincipal: sid.toLowerCase() }
     }
@@ -304,18 +299,17 @@ export class NativeFileAtomicNonceAdapter implements AtomicNonceStorageAdapter {
 }
 
 /**
- * Real PostgreSQL readback adapter:
- * - Directly queries the real target database for exact committed records.
- * - Computes tamper-evident digest of session policy and identities.
- * - Guarantees readback provenance and verifies mfa_activated state.
+ * R1 readback remains UNCOMMISSIONED: checking the latch is insufficient
+ * to independently attest the exact committed transaction. Never fabricate
+ * ARMED provenance from caller-controlled transaction hashes.
  */
 export class NativePostgresReadbackAdapter implements DatabaseReadbackAdapter {
-  constructor(private connectionString: string) {}
+  constructor(_connectionString: string) {}
 
   async queryCommittedState(
-    targetDatabase: string,
-    transactionHash: string,
-    ceremonyId: string
+    _targetDatabase: string,
+    _transactionHash: string,
+    _ceremonyId: string
   ): Promise<CommittedStateEvidence> {
     // R1 activation is NOT authorized here. A string transactionHash is
     // caller-controlled; querying the latch cannot prove which COMMIT changed
