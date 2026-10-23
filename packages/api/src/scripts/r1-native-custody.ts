@@ -6,7 +6,7 @@ import path from 'node:path'
  */
 export async function assertNativeR1Custody(paths:readonly string[],operatorSid:string) {
  if(process.platform!=='win32')throw Error('REFUSED: R1 effective custody requires native Windows Authz')
- if(!paths.length||!/^S-1-5-21-[0-9-]+$/.test(operatorSid))throw Error('REFUSED: R1 custody inputs')
+ if(!paths.length||!/^S-1-5-21-[0-9-]+$/i.test(operatorSid))throw Error('REFUSED: R1 custody inputs')
  const encoded=Buffer.from(JSON.stringify(paths)).toString('base64'),probe=path.join(__dirname,'r1-authz.cs').replace(/'/g,"''")
  const script=`$ErrorActionPreference='Stop'; Add-Type -Path '${probe}';
  function Get-NativeAcl([string]$p) {if([IO.Directory]::Exists($p)){[IO.Directory]::GetAccessControl($p)}else{[IO.File]::GetAccessControl($p)}};

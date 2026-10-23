@@ -16,7 +16,7 @@ export function commissionR1SignerScope(signed:R1ActivationManifest,actual:{sour
  const a=R1_SIGNER_SCOPE_REVIEW,m=signed.manifest as R1ActivationManifest['manifest'] & {runtimeResourceBinding:{resources:unknown[]};candidateOnly?:boolean;testFixture?:unknown}
  if(!/^[a-f0-9]{40}$/.test(actual.sourceSha)||m.targetCommitSha!==actual.sourceSha)throw Error('REFUSED: R1 exact source SHA mismatch; old approval cannot authorize a changed source')
  if(m.testFixture||m.candidateOnly||m.authorizedOperator.executorType!=='automation_agent'||m.authorizedOperator.operatorId!==a.operatorId||m.authorizedOperator.approvalReference!==a.reference||
-  !/^S-1-5-21-[0-9-]+$/.test(actual.windowsSid)||m.authorizedOperator.windowsSecurityPrincipal!==actual.windowsSid||actual.windowsSid!==a.windowsSid||signed.signerKeyFingerprint!==a.fingerprint||computePublicKeyFingerprint(a.publicKeyPem)!==a.fingerprint||
+  !/^S-1-5-21-[0-9-]+$/i.test(actual.windowsSid)||m.authorizedOperator.windowsSecurityPrincipal.toLowerCase()!==actual.windowsSid.toLowerCase()||actual.windowsSid.toLowerCase()!==a.windowsSid.toLowerCase()||signed.signerKeyFingerprint!==a.fingerprint||computePublicKeyFingerprint(a.publicKeyPem)!==a.fingerprint||
   m.actionScope!=='ACTIVATE_MFA_DEPLOYMENT_LATCH'||m.targetDatabase!=='da_r0b_e7a1_db'||m.targetHost!=='127.0.0.1'||m.targetPort!=='55732'||m.taskEnvironmentId!=='da-r0b-e7a1-env'||m.targetContainerName!=='da-r0b-e7a1-pg'||m.targetVolumeName!=='da-r0b-e7a1-pg-data'||
   m.preconditions.migrations!==234||m.preconditions.guards!==2||m.runtimeResourceBinding.postgresSystemIdentifier!=='7699743845625188386'||hash(canonical(m.runtimeResourceBinding.resources))!==a.resourcesDigest)
    throw Error('REFUSED: R1 source-pinned signer/resource/action scope mismatch')
