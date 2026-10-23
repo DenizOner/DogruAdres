@@ -64,7 +64,7 @@ export async function initializeFixtureModules(control: Client): Promise<NativeF
       event_bus: {resolve:"@medusajs/medusa/event-bus-local"},
       cache: {resolve:"@medusajs/medusa/cache-inmemory"},
       auth: {resolve:"@medusajs/medusa/auth",options:{providers:[{resolve:"@medusajs/medusa/auth-emailpass",id:"emailpass"}],mfa:{encryption_key:process.env.DOGRUADRES_MFA_ENCRYPTION_KEY,disable_policy:"challenge"}}},
-      user: {resolve:"@medusajs/medusa/user"},
+      user: {resolve:"@medusajs/medusa/user",options:{jwt_secret:process.env.JWT_SECRET}},
       dogruadresAccess: {resolve:"./src/modules/dogruadres-access"},
     })
     configManager.loadConfig({baseDir:process.cwd(),projectConfig:{projectConfig:{databaseUrl:connectionUrl.toString(),workerMode:"server",http:{jwtSecret:process.env.JWT_SECRET,cookieSecret:process.env.COOKIE_SECRET}},modules} as any})

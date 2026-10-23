@@ -47,4 +47,4 @@ async function main(){
     console.log("PASS R0-D native entry: read-only initialization unchanged full DB digest; genuine pool provenance; foreign consumer denied; 2 native complete relationships; zero MFA")
   }finally{await native?.close();await control.end()}
 }
-main().then(()=>process.exit(0)).catch(error=>{console.error(error instanceof Error?error.message:String(error));process.exit(1)})
+main().then(()=>process.exit(0)).catch(error=>{console.error(error instanceof Error?error.stack:String(error));process.exit(1)})
