@@ -155,6 +155,11 @@ export class MfaPersistence {
    * Returns the singleton platform policy or a safe default when the row is
    * absent. A corrupt platform_mode value throws InvalidMfaPolicyState.
    */
+  /** Owning Foundation transaction only; never stores codes/seeds/native metadata. */
+  async recordNativeMfaAction(actor:MfaAuditActor, action:"mfa.recovery_codes_generated"|"mfa.native_factor_disabled") {
+    assertActor(actor)
+    await writeOutbox(this.db,action,actor,actor.person_id,null,null)
+  }
   async readPlatformPolicy(): Promise<PlatformMfaPolicy> {
     const rows = await this.db.execute(
       `select platform_mode, version from da_mfa_policy where id='current'`

@@ -305,17 +305,10 @@ export class NativeFileAtomicNonceAdapter implements AtomicNonceStorageAdapter {
  * ARMED provenance from caller-controlled transaction hashes.
  */
 export class NativePostgresReadbackAdapter implements DatabaseReadbackAdapter {
-  constructor(_connectionString: string) {}
-
-  async queryCommittedState(
-    _targetDatabase: string,
-    _transactionHash: string,
-    _ceremonyId: string
-  ): Promise<CommittedStateEvidence> {
-    // R1 activation is NOT authorized here. A string transactionHash is
-    // caller-controlled; querying the latch cannot prove which COMMIT changed
-    // it or that the verifier is independently commissioned. Refuse to issue
-    // a signed ARMED receipt until the separate R1 attestation protocol exists.
-    throw new Error("BLOCKED: R1 commit-bound independent readback attestation is not commissioned")
+  constructor(private readonly connectionString:string,private readonly commissioning?:import("./r1-commit-readback").R1ReadbackCommission) {}
+  async queryCommittedState(targetDatabase:string,transactionHash:string,ceremonyId:string):Promise<CommittedStateEvidence> {
+    if(!this.commissioning)throw Error("BLOCKED: R1 commit-bound independent readback attestation is not commissioned")
+    const {readR1CommittedState}=require("./r1-commit-readback")
+    return readR1CommittedState(this.connectionString,this.commissioning,targetDatabase,transactionHash,ceremonyId)
   }
 }

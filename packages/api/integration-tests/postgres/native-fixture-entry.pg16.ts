@@ -6,6 +6,8 @@ import {Client} from "@medusajs/framework/pg"
 import {mkdtemp} from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
+import {databaseContentDigest} from "../../src/scripts/native-fixture-runtime"
 import {initializeFixtureModules} from "../../src/scripts/native-fixture-runtime"
 import {createTwoNativeFixtures} from "../../src/scripts/task-mfa-bootstrap"
 import {DurableCheckpointManager,FilesystemDurableCheckpointAdapter} from "../../src/scripts/operator-audit-protocol"
@@ -44,6 +46,20 @@ async function main(){
       assert.equal((await independent.query('SELECT count(*)::int n FROM auth_mfa_factor')).rows[0].n,0)
       assert.equal((await independent.query('SELECT count(*)::int n FROM auth_mfa_recovery_code')).rows[0].n,0)
     }finally{await independent.end()}
+    const httpBefore=await databaseContentDigest(control)
+    for(const k of ['DOGRUADRES_IDENTITY_ENABLED','DOGRUADRES_MFA_SETTINGS_ENABLED','DOGRUADRES_MFA_ENROLLMENT_ENABLED','DOGRUADRES_MFA_RUNTIME_ENABLED'])process.env[k]='true'
+    const http=await createPersonalHttpApp(native.container)
+    const server=await new Promise<any>(resolve=>{const server=http.app.listen(0,'127.0.0.1',()=>resolve(server))})
+    try{
+      const origin='http://127.0.0.1:'+server.address().port
+      const page=await fetch(origin+'/personal');assert.equal(page.status,200)
+      const html=await page.text();assert.ok(html.includes('role="radiogroup"'));assert.ok(html.includes('mfa-management'))
+      assert.equal((await fetch(origin+'/personal/session')).status,401)
+      assert.equal((await fetch(origin+'/personal/session',{method:'POST',headers:{'content-type':'application/json',origin:process.env.DOGRUADRES_PUBLIC_ORIGIN!},body:JSON.stringify({email:'unknown@task.invalid',password:'synthetic-not-used'})})).status,503)
+      assert.equal((await fetch(origin+'/personal/mfa/manage',{method:'POST',headers:{'content-type':'application/json',origin:'https://foreign.invalid'},body:'{"action":"recovery_codes"}'})).status,403)
+    }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));await http.close()}
+    assert.equal(await databaseContentDigest(control),httpBefore)
+    console.log('PASS MFA HTTP startup: official API middleware; no defaults writes; inactive R1 denies login; CSRF management denial; unchanged database digest')
     console.log("PASS R0-D native entry: read-only initialization unchanged full DB digest; genuine pool provenance; foreign consumer denied; 2 native complete relationships; zero MFA")
   }finally{await native?.close();await control.end()}
 }

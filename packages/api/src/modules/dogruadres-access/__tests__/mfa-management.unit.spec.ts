@@ -1,0 +1,19 @@
+import {hasRecentMfaProof} from "../mfa-management"
+import AccessService from "../service"
+import {IdentitySessions} from "../identity-session"
+import {MfaPersistence} from "../mfa-persistence"
+describe("MFA management Foundation transaction",()=>{
+ const service=Object.create(AccessService.prototype) as AccessService
+ const session:any={person_id:'person_self',auth_identity_id:'auth_self',actor_type:'user',actor_id:'user_self',last_strong_auth_at:new Date(1000),now_ms:2000,mfa_purpose:'full'}
+ const execute=jest.fn(async()=>[{recent_auth_seconds:300}]),ctx:any={transactionManager:{execute,flush:jest.fn()}}
+ let current:jest.SpyInstance,policy:jest.SpyInstance,person:jest.SpyInstance,record:jest.SpyInstance,logout:jest.SpyInstance,preference:jest.SpyInstance
+ beforeEach(()=>{current=jest.spyOn(IdentitySessions.prototype,'current').mockResolvedValue(session);policy=jest.spyOn(MfaPersistence.prototype,'readPlatformPolicy').mockResolvedValue({platform_mode:'optional',version:1});person=jest.spyOn(MfaPersistence.prototype,'readPersonPreference').mockResolvedValue({person_id:'person_self',user_enabled:true,version:2});record=jest.spyOn(MfaPersistence.prototype,'recordNativeMfaAction').mockResolvedValue(undefined);logout=jest.spyOn(IdentitySessions.prototype,'logout').mockResolvedValue(undefined);preference=jest.spyOn(MfaPersistence.prototype,'setPersonPreference').mockResolvedValue({person_id:'person_self',user_enabled:false,version:3})})
+ afterEach(()=>jest.restoreAllMocks())
+ it.each([null,'garbage',new Date(1000)])('rejects missing/malformed/stale strong proof',async stamp=>{current.mockResolvedValue({...session,last_strong_auth_at:stamp,now_ms:400000});const operation=jest.fn();expect(await service.personalManageNativeMfa('token','recovery_codes',operation,ctx)).toBeNull();expect(operation).not.toHaveBeenCalled()})
+ it('never removes an enforced platform factor',async()=>{policy.mockResolvedValue({platform_mode:'required',version:1});const op=jest.fn();expect(await service.personalManageNativeMfa('token','disable',op,ctx)).toBeNull();expect(op).not.toHaveBeenCalled()})
+ it('reconciles optional self-disable and revokes every session',async()=>{const op=jest.fn().mockResolvedValue({disabled:true});await service.personalManageNativeMfa('token','disable',op,ctx);expect(op).toHaveBeenCalledWith('auth_self');expect(logout).toHaveBeenCalledWith('token',true);expect(preference).toHaveBeenCalledWith('person_self',false,2,expect.objectContaining({person_id:'person_self'}));expect(record).toHaveBeenCalledWith(expect.objectContaining({person_id:'person_self'}),'mfa.native_factor_disabled')})
+ it('preserves preference in disabled platform reconciliation',async()=>{policy.mockResolvedValue({platform_mode:'disabled',version:1});await service.personalManageNativeMfa('token','disable',async()=>({disabled:true}),ctx);expect(logout).toHaveBeenCalled();expect(preference).not.toHaveBeenCalled()})
+ it('does not compensate or retry a native failure',async()=>{const op=jest.fn().mockRejectedValue(Error('uncertain native result'));await expect(service.personalManageNativeMfa('token','disable',op,ctx)).rejects.toThrow('uncertain');expect(op).toHaveBeenCalledTimes(1);expect(record).not.toHaveBeenCalled()})
+ it('records recovery generation against the genuine session actor',async()=>{await service.personalManageNativeMfa('token','recovery_codes',async()=>({}),ctx);expect(record).toHaveBeenCalledWith(expect.objectContaining({person_id:'person_self',actor_id:'user_self'}),'mfa.recovery_codes_generated');expect(logout).not.toHaveBeenCalled()})
+})
+describe('recent MFA time boundary',()=>{it('rejects exact expiry, future proof and non-full scope',()=>{for(const s of [{last_strong_auth_at:new Date(1000),now_ms:301000,mfa_purpose:'full'},{last_strong_auth_at:new Date(3000),now_ms:2000,mfa_purpose:'full'},{last_strong_auth_at:new Date(1000),now_ms:2000,mfa_purpose:'mfa_enroll'}])expect(hasRecentMfaProof(s,300)).toBe(false)})})

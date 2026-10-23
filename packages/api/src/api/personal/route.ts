@@ -37,6 +37,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   #bindings p,#memberships p{overflow-wrap:anywhere;padding:.4rem 0;margin:.3rem 0;border-bottom:1px solid var(--line)}
   pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}
   #workspace>pre{background:#f0f4fa}
+  fieldset{border:1px solid var(--line);border-radius:.6rem;padding:1rem} fieldset label{display:flex;align-items:center;gap:.65rem;margin:.5rem 0} input[type=radio],input[type=checkbox]{width:auto;min-height:auto}
   @media(max-width:700px){body{padding:0 .75rem 2rem}body>h1{margin-top:1.5rem}#workspace{grid-template-columns:minmax(0,1fr)}}
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
   </style>
@@ -57,7 +58,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     </select></label><label>E-posta<input name="email" type="email" autocomplete="username" required></label>
       <label>Parolanızı yeniden girin<input name="password" type="password" autocomplete="current-password" required></label>
       <button>Kurulum kodu oluştur</button></form>
-    <p id="mfa-enroll-secret" role="status" aria-live="polite"></p>
+    <p id="mfa-enroll-secret" role="status" aria-live="polite"></p><label id="mfa-seed-region" hidden>Tek seferlik kurulum anahtarı<input id="mfa-seed" type="password" readonly autocomplete="off"><button id="mfa-seed-toggle" type="button">Anahtarı göster veya gizle</button></label>
     <form id="mfa-enroll-verify" hidden><label>Kimlik doğrulama uygulamasındaki 6 haneli kod
       <input name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required></label>
       <button>Kurulumu doğrula ve oturumu aç</button></form>
@@ -66,11 +67,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <h2>Güvenlik ve MFA ayarları</h2><p id="mfa-info" role="status" aria-live="polite">MFA ayarları henüz etkin değil.</p>
   <button id="mfa-enroll-launch" hidden type="button">TOTP doğrulama uygulamasını kur</button>
   <form id="mfa-person" hidden><label>Kişisel MFA tercihim
-    <select name="user_enabled"><option value="false">Kapalı</option><option value="true">Açık</option></select>
-  </label><p>Yalnız platformun “Seçime bağlı” modunda değiştirilebilir. Tercih, TOTP faktörünü tek başına kurmaz veya devre dışı bırakmaz.</p><button>Tercihimi kaydet</button></form>
-  <form id="mfa-platform" hidden><label>Platform için MFA
-    <select name="platform_mode"><option value="required">Herkes için zorunlu</option><option value="optional">Seçime bağlı</option><option value="disabled">Devre dışı</option></select>
-  </label><p>Bu işlem yalnız özel platform güvenlik yetkisi ve güncel güçlü doğrulamayla yapılır. Mevcut faktörleri kapatmak ayrıca güvenli geçiş gerektirir.</p><button>Platform politikasını kaydet</button></form>
+    <input name="user_enabled" type="checkbox" role="switch" value="true" aria-describedby="mfa-override">Açık
+  </label><p id="mfa-override"></p><p>Yalnız platformun “Seçime bağlı” modunda değiştirilebilir. Tercih, TOTP faktörünü tek başına kurmaz veya devre dışı bırakmaz.</p><button>Tercihimi kaydet</button></form>
+  <form id="mfa-platform" hidden><fieldset role="radiogroup"><legend>Platform için MFA</legend><label><input type="radio" name="platform_mode" value="required" required>Herkes için zorunlu</label><label><input type="radio" name="platform_mode" value="optional">Seçime bağlı</label><label><input type="radio" name="platform_mode" value="disabled">Devre dışı</label></fieldset><p>Bu işlem yalnız özel platform güvenlik yetkisi ve güncel güçlü doğrulamayla yapılır. Mevcut faktörleri kapatmak ayrıca güvenli geçiş gerektirir.</p><button>Platform politikasını kaydet</button></form>
+  <section id="mfa-management" hidden>
+    <h3>Doğrulanmış faktör ve kurtarma</h3>
+    <p>Bu işlemler güncel MFA doğrulaması gerektirir. Belirsiz sonuçta yeniden göndermeyin.</p>
+    <button id="mfa-recovery" type="button">Yeni kurtarma kodları oluştur</button>
+    <section id="mfa-codes" hidden><p>Kodlar yalnız bu yanıtta verilir; yenileri önceki kodları geçersiz kılar. Güvenli bir yerde saklayın.</p><button id="mfa-codes-reveal" type="button">Kodları göster</button><pre id="mfa-codes-value" hidden></pre><button id="mfa-codes-clear" type="button">Bu ekrandan gizle ve sil</button></section>
+    <form id="mfa-disable"><p>Platform zorunlu değilse doğrulanmış native kaldırma yapılır ve tüm oturumlar kapanır. Seçime bağlı modda kişisel tercih Kapalı olur; Devre dışı modda saklı tercih korunur.</p>
+      <label>Doğrulama yöntemi<select name="method"><option value="totp">TOTP</option><option value="recovery_code">Kurtarma kodu</option></select></label>
+      <label>Güncel doğrulama kodu<input name="code" type="password" autocomplete="one-time-code" required maxlength="128"></label><button>Faktörü doğrulayarak kaldır</button>
+    </form>
+  </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre><div id="memberships"></div><button id="staff">Platform yetkisini kontrol et</button>
   <h2>Kuruluş oluşturma</h2><p>Bu işlem açık platform görevi ve güncel güçlü doğrulama gerektirir. İlk iki Owner sunucuda doğrulanır.</p>
   <form id="provision"><label>Yeni kuruluş adı<input name="name" maxlength="200" required></label><label>Birinci Owner türü<select name="type1"><option>user</option><option>member</option><option>customer</option></select></label><label>Birinci Owner kimliği<input name="owner1" required></label><label>İkinci Owner türü<select name="type2"><option>user</option><option>member</option><option>customer</option></select></label><label>İkinci Owner kimliği<input name="owner2" required></label><button>Kuruluş oluştur</button></form><pre id="provision-result"></pre>
@@ -82,6 +91,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <script nonce="${nonce}">
   let csrf=''; const el=id=>document.getElementById(id); const status=t=>el('status').textContent=t;
   async function api(path,options={}){let r;try{r=await fetch('/personal/'+path,{credentials:'same-origin',...options,headers:{'Content-Type':'application/json','x-csrf-token':csrf,...options.headers}})}catch{const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');e.uncertain=true;throw e}const data=await r.json();if(!r.ok){const e=new Error(data.message||'İşlem reddedildi');e.uncertain=r.status>=500;throw e}return data}
+  let recoveryCodes=[];
+  function clearMfaCodes(){recoveryCodes=[];el("mfa-codes-value").textContent="";el("mfa-codes-value").hidden=true;el("mfa-codes").hidden=true}
   let currentOrg='',linkIntent='',organizationRequest=0,mfaState=null;
   async function refreshMfa(){
     try{
@@ -90,7 +101,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       mfaState=data;
       el('mfa-person').hidden=false;el('mfa-platform').hidden=!data.can_manage_platform;
       el('mfa-enroll-launch').hidden=data.platform.platform_mode==='disabled'||data.native_factor_state==='enabled';
-      el('mfa-person').elements.user_enabled.value=String(data.personal.user_enabled);
+      el('mfa-person').elements.user_enabled.checked=data.personal.user_enabled;
+      el('mfa-override').textContent=data.platform.platform_mode==='required'?'Platform tarafından zorunlu':data.platform.platform_mode==='disabled'?'Platform tarafından devre dışı; kişisel tercihiniz korunur':'Kişisel tercihinizi değiştirebilirsiniz';
+      el('mfa-management').hidden=data.native_factor_state!=='enabled';el('mfa-disable').hidden=data.platform.platform_mode==='required';
       el('mfa-platform').elements.platform_mode.value=data.platform.platform_mode;
       el('mfa-person').elements.user_enabled.disabled=data.platform.platform_mode!=='optional';
       el('mfa-person').querySelector('button').disabled=data.platform.platform_mode!=='optional';
@@ -102,7 +115,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         : 'MFA politikası oturum akışına henüz uygulanmıyor.';
       el('mfa-info').textContent='Platform: '+names[data.platform.platform_mode]+'. '+states[data.native_factor_state]+'. Hedef durum: '+progress[data.effective_mfa_target.next_step]+'. '+enforcement;
     }catch{
-      mfaState=null;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;
+      mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;
       el('mfa-enroll-launch').hidden=true;
       el('mfa-info').textContent='MFA ayarları henüz hizmete açılmadı.';
     }
@@ -127,13 +140,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
     }catch{}
   }
-  async function load(){try{const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';mfaState=null;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
+  async function load(){try{const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
   async function updateMfaForm(form,body){
     const button=form.querySelector('button');button.disabled=true;
     let uncertain=false;
     try{
       await api('mfa',{method:'POST',body:JSON.stringify(body)});
-      await refreshMfa();status('MFA ayarı kaydedildi. Native faktör ve oturum geçişi ayrıca doğrulanmalıdır.');
+      await refreshMfa();if(!mfaState){await load();status('MFA ayarı kaydedildi. Güncel güvenlik politikası için yeniden giriş yapın.')}else status('MFA ayarı kaydedildi. Native faktör ve oturum geçişi ayrıca doğrulanmalıdır.');
     }catch(e){
       status(e.message);await refreshMfa();
       if(e.uncertain){uncertain=true;status('İşlemin sonucu belirsiz. Yeniden göndermeden önce kayıt kontrolü gerekli.');}
@@ -155,6 +168,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   };
   el('mfa-platform').onsubmit=async e=>{
     e.preventDefault();if(!mfaState||!mfaState.can_manage_platform)return;
+    if(!confirm('Platform MFA politikasını değiştirmek istiyor musunuz? Etkin native faktörler doğrulanmış kaldırma tamamlanmadan atlanamaz.'))return;
     await updateMfaForm(e.target,{
       action:'platform',platform_mode:new FormData(e.target).get('platform_mode'),
       expected_version:mfaState.platform.version,
@@ -165,10 +179,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('workspace').hidden=true;el('mfa-enrollment').hidden=false;
     el('mfa-enroll-start').hidden=false;el('mfa-enroll-verify').hidden=true;
     el('mfa-enroll-start').reset();el('mfa-enroll-start').querySelector('button').disabled=false;
-    el('mfa-enroll-secret').textContent='';
+    el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;
     el('mfa-enroll-start').elements.setup_action.value=mfaState.native_factor_state==='pending'?'resume':'start';
     status('Kuruluma başlamak veya devam etmek için parolanızı yeniden girin.');
   };
+  el('mfa-seed-toggle').onclick=()=>{el('mfa-seed').type=el('mfa-seed').type==='password'?'text':'password'};
   el('mfa-enroll-start').onsubmit=async e=>{
     e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;
     try{
@@ -178,15 +193,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const data=await api('mfa/enroll',{method:'POST',body:JSON.stringify({action,...values})});
       e.target.reset();
       if(data.reset){
-        el('mfa-enroll-secret').textContent='';
+        el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;
         el('mfa-enroll-verify').hidden=true;
         button.disabled=false;
         status('Bekleyen TOTP kurulumu sıfırlandı. Yeni kurulum için parolanızı yeniden doğrulayın.');
         return;
       }
+      el('mfa-seed').value=data.resumed?'':(data.secret||data.otpauth_url||'');
+      el('mfa-seed').type='password';el('mfa-seed-region').hidden=!!data.resumed;
       el('mfa-enroll-secret').textContent=data.resumed
-        ? 'Önceki kimlik doğrulama uygulamanızdaki kodu girin. Önceki kurulum anahtarı tekrar gösterilemez.'
-        : 'Tek seferlik kurulum anahtarı veya bağlantısı: '+(data.secret||data.otpauth_url);
+        ? 'Önceki kimlik doğrulama uygulamanızdaki kodu girin. Önceki anahtar tekrar gösterilemez.'
+        : 'Kurulum anahtarı yalnız bu ekranda maskeli gösterilir. Güvenli doğrulama uygulamanıza aktarın.';
       el('mfa-enroll-verify').hidden=false;
       status('TOTP doğrulaması gerekiyor. İşlemi tamamlamadan yeni yetki verilmez.');
     }catch(err){status(err.message);if(!err.uncertain)button.disabled=false}
@@ -198,7 +215,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         action:'verify',...Object.fromEntries(new FormData(e.target)),
       })});
       csrf=data.csrf_token;
-      el('mfa-enroll-secret').textContent='';
+      el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;
       el('mfa-enroll-verify').hidden=true;el('mfa-enrollment').hidden=true;
       e.target.reset();await load();
     }catch(err){status(err.message);if(!err.uncertain)button.disabled=false}
@@ -216,7 +233,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }else if(data.enrollment_required){
         el('login').hidden=true;el('mfa-enrollment').hidden=false;
         el('mfa-enroll-start').hidden=false;el('mfa-enroll-verify').hidden=true;
-        el('mfa-enroll-secret').textContent='';
+        el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;
         el('mfa-enroll-start').reset();el('mfa-enroll-start').querySelector('button').disabled=false;
         status('MFA kurulumuna başlamak veya yarım kalan kuruluma devam etmek için parolanızı yeniden doğrulayın.');
       }else await load();
@@ -235,7 +252,21 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('provision').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button'),v=new FormData(e.target);b.disabled=true;try{const result=await api('platform',{method:'POST',body:JSON.stringify({name:v.get('name'),initial_owners:[{actor_type:v.get('type1'),actor_id:v.get('owner1')},{actor_type:v.get('type2'),actor_id:v.get('owner2')}]})});el('provision-result').textContent=JSON.stringify(result,null,2);status('Kuruluş oluşturuldu');e.target.reset()}catch(err){status(err.message);if(!err.uncertain)b.disabled=false}};
   el('seller').onsubmit=async e=>{e.preventDefault();try{const result=await api('contexts?type=member&seller='+encodeURIComponent(new FormData(e.target).get('seller')));el('actor-result').textContent=JSON.stringify(result,null,2);status('Satıcı erişimi doğrulandı')}catch(e){el('actor-result').textContent='';status(e.message)}};
   el('customer').onclick=async()=>{try{const result=await api('contexts?type=customer');el('actor-result').textContent=JSON.stringify(result,null,2);status('Müşteri bağlamı doğrulandı')}catch(e){el('actor-result').textContent='';status(e.message)}};
-  async function logout(all){try{await api('session'+(all?'?all=true':''),{method:'DELETE'});await load()}catch(e){status(e.message)}};
+  el('mfa-recovery').onclick=async()=>{
+    if(!confirm('Yeni kodlar önceki kurtarma kodlarını geçersiz kılar. Devam edilsin mi?'))return;
+    const button=el('mfa-recovery');button.disabled=true;clearMfaCodes();
+    try{const data=await api('mfa/manage',{method:'POST',body:JSON.stringify({action:'recovery_codes'})});recoveryCodes=data.recovery_codes;el('mfa-codes').hidden=false;status('Kurtarma kodları oluşturuldu; yalnız bu ekranda gösterilebilir.');}
+    catch(error){status(error.message);if(!error.uncertain)button.disabled=false}
+  };
+  el('mfa-codes-reveal').onclick=()=>{el('mfa-codes-value').textContent=recoveryCodes.join('\\n');el('mfa-codes-value').hidden=false};
+  el('mfa-codes-clear').onclick=()=>clearMfaCodes();
+  el('mfa-disable').onsubmit=async event=>{
+    event.preventDefault();if(!confirm('Native faktör kaldırılacak ve tüm oturumlar kapanacak. Devam edilsin mi?'))return;
+    const button=event.target.querySelector('button');button.disabled=true;
+    try{await api('mfa/manage',{method:'POST',body:JSON.stringify({action:'disable',...Object.fromEntries(new FormData(event.target))})});event.target.reset();clearMfaCodes();await load();status('Native faktör kaldırıldı; yeniden giriş yapın.');}
+    catch(error){event.target.reset();status(error.message);if(!error.uncertain)button.disabled=false}
+  };
+  async function logout(all){clearMfaCodes();try{await api('session'+(all?'?all=true':''),{method:'DELETE'});await load()}catch(e){status(e.message)}};
   el('select-org').onsubmit=async e=>{e.preventDefault();await selectOrg(new FormData(e.target).get('organization'))};
   el('logout').onclick=()=>logout(false);el('logout-all').onclick=()=>logout(true);el('staff').onclick=async()=>{try{await api('platform');status('Platform görevi için izin var')}catch(e){status(e.message)}};load();
   </script></html>`)

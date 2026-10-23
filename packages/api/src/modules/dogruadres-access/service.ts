@@ -1,3 +1,4 @@
+import { hasRecentMfaProof } from "./mfa-management"
 import {
   InjectTransactionManager,
   MedusaContext,
@@ -371,6 +372,32 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return store.setPersonPreference(session.person_id, enabled, expectedVersion, actor)
   }
 
+  /** Holds session/epoch then platform lock across the native operation.
+   * Native Auth and Foundation are separate transactions: any failure after
+   * native invocation is INDETERMINATE, never compensated or retried here.
+   */
+  @InjectTransactionManager()
+  async personalManageNativeMfa(token:string, action:"recovery_codes"|"disable", operation:(identityId:string)=>Promise<unknown>, @MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager),sessions=new IdentitySessions(sql)
+    const session=await sessions.current(token,true)
+    if(!session)return null
+    const [limits]=await sql.execute("select recent_auth_seconds from da_session_policy where id='current'")
+    if(!hasRecentMfaProof(session,limits?.recent_auth_seconds))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    const store=new MfaPersistence(sql),policy=await store.readPlatformPolicy()
+    if(action==="disable"&&policy.platform_mode==="required")return null
+    const personal=await store.readPersonPreference(session.person_id)
+    const actor={person_id:session.person_id,actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id}
+    const result=await operation(session.auth_identity_id)
+    await store.recordNativeMfaAction(actor,action==="disable"?"mfa.native_factor_disabled":"mfa.recovery_codes_generated")
+    if(action==="disable") {
+      await sessions.logout(token,true)
+      // Disabled platform preserves the preference; optional self-disable turns it off.
+      if(policy.platform_mode==="optional"&&personal.user_enabled)
+        await store.setPersonPreference(session.person_id,false,personal.version,actor)
+    }
+    return {result,sessions_revoked:action==="disable"}
+  }
   @InjectTransactionManager()
   async personalSetPlatformMfaMode(token: string, mode: MfaPlatformMode, expectedVersion: number, @MedusaContext() context: Context = {}) {
     const sql = securitySql(context.transactionManager)

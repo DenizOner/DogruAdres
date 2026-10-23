@@ -1,0 +1,8 @@
+import {assertActiveMfaRuntime,assertR1CleanFacts,verifyR1CommitFacts,observeMfaFlags,MFA_RUNTIME_FLAGS} from "../r1-readiness"
+describe("R1 read-only readiness never authorizes activation",()=>{
+ const facts={database:'da_r0b_e7a1_db',cluster:'7699743845625188386',migrations:234,latch:false,guards:2,other_sessions:0,factors:0,recovery:0,users:2,identities:2,people:2,mappings:2,bindings:2}
+ it('accepts exactly the existing clean two-identity facts',()=>expect(()=>assertR1CleanFacts(facts)).not.toThrow())
+ it.each([{cluster:'foreign'},{database:'m0ssi_a7f1'},{latch:true},{other_sessions:1},{factors:1},{guards:1},{bindings:3}])('rejects resource/state substitution %p',patch=>expect(()=>assertR1CleanFacts({...facts,...patch})).toThrow(/REFUSED/))
+ it('requires a committed latch and all four actual flags',()=>{const env=Object.fromEntries(MFA_RUNTIME_FLAGS.map(k=>[k,'true']));expect(()=>assertActiveMfaRuntime(true,env)).not.toThrow();for(const k of MFA_RUNTIME_FLAGS)expect(()=>assertActiveMfaRuntime(true,{...env,[k]:'false'})).toThrow();expect(()=>assertActiveMfaRuntime(false,env)).toThrow();expect(observeMfaFlags({})).toEqual(Object.fromEntries(MFA_RUNTIME_FLAGS.map(k=>[k,null])))})
+ it('rejects guessed transaction hashes and noncommitted/replaced rows',()=>{const a={transactionStatus:'committed',rowXmin:'42',latch:true,version:2},r={transactionId:'42',expectedVersion:2};expect(verifyR1CommitFacts(a,r)).toEqual(a);for(const p of [{rowXmin:'43'},{transactionStatus:'in progress'},{latch:false},{version:3}])expect(()=>verifyR1CommitFacts({...a,...p},r)).toThrow();expect(()=>verifyR1CommitFacts(a,{...r,transactionId:'caller-controlled-sha'})).toThrow()})
+})

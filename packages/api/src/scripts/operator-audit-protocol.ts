@@ -1,4 +1,4 @@
-﻿import { createHash, verify, sign } from "node:crypto"
+import { createHash, verify, sign } from "node:crypto"
 
 /**
  * Strict canonical JSON serialization according to RFC 8785 (JSON Canonicalization Scheme - JCS)
@@ -480,7 +480,7 @@ export function computeCommittedStateDigest(
   const statePayload = {
     targetDatabase,
     mfaLatchValue,
-    provenance,
+    provenance: {verifierIdentity:provenance.verifierIdentity,querySnapshotSha256:provenance.querySnapshotSha256},
     entities: sorted,
   }
   return computeSha256Digest(canonicalJsonStringify(statePayload))
