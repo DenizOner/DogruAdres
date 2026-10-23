@@ -57,13 +57,6 @@ Steps 3-5 require explicit external/user approval before implementation.
 - Write new GitHub Issue titles, user-facing descriptions, acceptance criteria and progress reports in **Turkish**. Prefer Turkish in PR summaries. Engineering/AI Agent executable instructions are in **English**. When translating old Issues ([#212](https://github.com/DenizOner/DogruAdres/issues/212)), keep immutable historic evidence, original statuses, source code symbols and IDs intact.
 - GitHub Project status, a completed research issue or a successful CI run is never Product Owner approval or completed feature acceptance.
 
-## User-facing communication and local Agent handoff
-
-- Begin each user-facing project reply with a few plain-Turkish sentences on overall stage, current work and verified progress or blocker. Keep it nontechnical and do not confuse plans or agent claims with accepted outcomes.
-- Perform all work accessible to the Technical Advisor directly. For genuinely local-only work, give the Product Owner one ready-to-forward **English** Agent instruction covering the complete authorized outcome, boundaries, acceptance and negative/security checks, focused verification, safe cleanup and evidence report. The Product Owner forwards it and returns the output; do not imply direct access to the local Agent.
-- Verify Agent-reported results independently where possible. Distinguish reported, verified, passed, blocked and pending acceptance; do not create micro-handoffs or separate approvals for authorized steps.
-- End with the recommended next step, carrying it out when accessible and authorized. These communication rules never override approval, security, merge or deployment gates.
-
 ## GitHub/local synchronization and safe Agent execution (mandatory)
 
 **Canonical source of shared committed work:** GitHub remote refs and reviewed PRs. Local checkouts are mutable workspaces, not automatically current or authoritative. Fetching metadata is not permission to overwrite local files. Never presume that `origin/main`, the current checkout, another worktree or a previous Agent report reflects the live target.
