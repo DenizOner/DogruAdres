@@ -49,11 +49,21 @@ describe("Independent reviewer execution grant", () => {
     expect(result.pin.targetCommitSha).toBe(sha)
     expect(result.pin.runId).toBe(manifest.runId)
   })
-  it("does not commission a runtime root from operator evidence or environment flags", async () => {
-    expect(INDEPENDENT_REVIEWER_TRUST_ROOT).toBeNull()
-    await expect(commissionReviewedRuntime(op(),grant(),"unused")).rejects.toThrow(/root is not commissioned/)
+  it("pins an independent source reviewer key and refuses operator-controlled substitution", async () => {
+    expect(INDEPENDENT_REVIEWER_TRUST_ROOT).not.toBeNull()
+    const commissionedRoot = INDEPENDENT_REVIEWER_TRUST_ROOT!
+    expect(commissionedRoot.reviewerId).toBe("dogruadres-r0d-independent-reviewer-20261023")
+    expect(computePublicKeyFingerprint(commissionedRoot.publicKeyPem))
+      .toBe("0cff1827bc6cf03e8ffae849278616a5a6da77895d870fbc618fb154a9e850d3")
+    expect(commissionedRoot.fingerprint).toBe(computePublicKeyFingerprint(commissionedRoot.publicKeyPem))
+    expect(commissionedRoot.fingerprint).not.toBe(computePublicKeyFingerprint(pub))
+    expect(() => verifyReviewerExecutionGrant(commissionedRoot,grant(),op(),actual,now))
+      .toThrow(/signature|reviewer/)
     expect(() => verifyReviewerExecutionGrant(null,grant(),op(),actual,now)).toThrow(/root/)
     expect(() => verifyReviewerExecutionGrant(root,null,op(),actual,now)).toThrow(/missing/)
+    // No agent-provided root argument exists at the production commissioning callsite.
+    // The unrelated test operator cannot commission execution with its own review key.
+    await expect(commissionReviewedRuntime(op(),grant(),"unused")).rejects.toThrow()
   })
   it("rejects an operator-signed approval, a substituted root and tampering", () => {
     expect(() => verifyReviewerExecutionGrant(root,grant(body,operator.privateKey),op(),actual,now)).toThrow(/signature/)
