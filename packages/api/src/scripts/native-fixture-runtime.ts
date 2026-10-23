@@ -31,6 +31,7 @@ export async function initializeFixtureModules(control: Client): Promise<NativeF
   const { ModulesDefinition } = await import("@medusajs/framework/modules-sdk")
   const { ModulesSdkUtils, ContainerRegistrationKeys: K } = await import("@medusajs/framework/utils")
   const { asValue } = await import("@medusajs/framework/awilix")
+  const { logger } = await import("@medusajs/framework/logger")
   const owned: OwnedBackend[] = []
   let writable = false
   const connectionUrl = new URL(process.env.DATABASE_URL!)
@@ -68,7 +69,7 @@ export async function initializeFixtureModules(control: Client): Promise<NativeF
       dogruadresAccess: {resolve:"./src/modules/dogruadres-access"},
     })
     configManager.loadConfig({baseDir:process.cwd(),projectConfig:{projectConfig:{databaseUrl:connectionUrl.toString(),workerMode:"server",http:{jwtSecret:process.env.JWT_SECRET,cookieSecret:process.env.COOKIE_SECRET}},modules} as any})
-    container.register({[K.PG_CONNECTION]:asValue(pool),[K.LOGGER]:asValue(console)})
+    container.register({[K.PG_CONNECTION]:asValue(pool),[K.LOGGER]:asValue(logger)})
     app = await new MedusaAppLoader({container,cwd:process.cwd()}).load()
     await assertNoForeignConsumers()
     const after = await databaseContentDigest(control)

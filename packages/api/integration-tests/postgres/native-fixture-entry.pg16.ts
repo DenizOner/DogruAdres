@@ -48,6 +48,9 @@ async function main(){
     }finally{await independent.end()}
     const httpBefore=await databaseContentDigest(control)
     for(const k of ['DOGRUADRES_IDENTITY_ENABLED','DOGRUADRES_MFA_SETTINGS_ENABLED','DOGRUADRES_MFA_ENROLLMENT_ENABLED','DOGRUADRES_MFA_RUNTIME_ENABLED'])process.env[k]='true'
+    // Exercise real HTTP logging: NODE_ENV=test would hide a console/logger mismatch.
+    const previousNodeEnv=process.env.NODE_ENV;process.env.NODE_ENV="development"
+    assert.equal(typeof native.container.resolve<any>("logger").shouldLog,"function")
     const http=await createPersonalHttpApp(native.container)
     const server=await new Promise<any>(resolve=>{const server=http.app.listen(0,'127.0.0.1',()=>resolve(server))})
     try{
@@ -57,7 +60,7 @@ async function main(){
       assert.equal((await fetch(origin+'/personal/session')).status,401)
       assert.equal((await fetch(origin+'/personal/session',{method:'POST',headers:{'content-type':'application/json',origin:process.env.DOGRUADRES_PUBLIC_ORIGIN!},body:JSON.stringify({email:'unknown@task.invalid',password:'synthetic-not-used'})})).status,503)
       assert.equal((await fetch(origin+'/personal/mfa/manage',{method:'POST',headers:{'content-type':'application/json',origin:'https://foreign.invalid'},body:'{"action":"recovery_codes"}'})).status,403)
-    }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));await http.close()}
+    }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));await http.close();process.env.NODE_ENV=previousNodeEnv}
     assert.equal(await databaseContentDigest(control),httpBefore)
     console.log('PASS MFA HTTP startup: official API middleware; no defaults writes; inactive R1 denies login; CSRF management denial; unchanged database digest')
     console.log("PASS R0-D native entry: read-only initialization unchanged full DB digest; genuine pool provenance; foreign consumer denied; 2 native complete relationships; zero MFA")
