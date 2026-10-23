@@ -20,7 +20,7 @@ import {
   DurableAtomicNonceStore,
   FilesystemDurableCheckpointAdapter,
   DurableCheckpointManager,
-  PartialRecoveryCheckpoint,
+  type PartialRecoveryCheckpoint,
   executeBootstrapController,
 } from "./operator-audit-protocol"
 
@@ -195,7 +195,7 @@ export async function verifyCleanPreconditions(db: Client): Promise<void> {
   }
 }
 
-export { PartialRecoveryCheckpoint }
+export type { PartialRecoveryCheckpoint }
 
 /**
  * An external identity service may commit a side effect and throw before

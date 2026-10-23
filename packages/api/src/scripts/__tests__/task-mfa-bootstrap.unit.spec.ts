@@ -44,6 +44,11 @@ import {
   mustClassifyBootstrapFailureAsIndeterminate,
 } from "../task-mfa-bootstrap"
 import taskMfaBootstrap from "../task-mfa-bootstrap"
+import {
+  NativeWindowsSecurityAdapter,
+  NativeDockerResourceAdapter,
+  NativeFileAtomicNonceAdapter,
+} from "../native-runtime-adapters"
 
 describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
   let publicKeyPem: string
@@ -1082,6 +1087,64 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       await expect(taskMfaBootstrap({ container: {} as any, args: [] })).rejects.toThrow(
         /BOOTSTRAP_EXECUTION_GATE_OPEN = false/
       )
+    })
+  })
+  describe("10. Real Native Runtime Security Adapters", () => {
+    it("NativeWindowsSecurityAdapter inspects real filesystem path and returns valid ownership & ACEs", async () => {
+      const adapter = new NativeWindowsSecurityAdapter()
+      const inspection = await adapter.inspectPathSecurity(process.cwd())
+      expect(inspection.path).toBeDefined()
+      expect(typeof inspection.owner).toBe("string")
+      expect(inspection.owner.length).toBeGreaterThan(0)
+      expect(typeof inspection.isReparsePoint).toBe("boolean")
+      expect(Array.isArray(inspection.entries)).toBe(true)
+      expect(inspection.entries.length).toBeGreaterThan(0)
+      expect(inspection.entries[0].principal).toBeDefined()
+      expect(["Allow", "Deny"]).toContain(inspection.entries[0].accessType)
+    })
+
+    it("NativeDockerResourceAdapter resolves real Git SHA and operator principal", async () => {
+      const adapter = new NativeDockerResourceAdapter(process.cwd())
+      const sha = await adapter.getCurrentGitSha()
+      expect(sha).toMatch(/^[0-9a-f]{40}$/i)
+
+      const principal = await adapter.getOperatorPrincipal()
+      expect(principal.windowsPrincipal).toBeDefined()
+      expect(principal.windowsPrincipal.length).toBeGreaterThan(0)
+    })
+
+    it("NativeDockerResourceAdapter returns non-existent for non-existent container", async () => {
+      const adapter = new NativeDockerResourceAdapter(process.cwd())
+      const info = await adapter.inspectContainer("non_existent_container_123456")
+      expect(info.exists).toBe(false)
+      expect(info.isRunning).toBe(false)
+      expect(info.volumeNames).toEqual([])
+    })
+
+    it("NativeFileAtomicNonceAdapter guarantees exclusive claim-if-absent and rejects replay", async () => {
+      const os = await import("node:os")
+      const path = await import("node:path")
+      const fs = await import("node:fs/promises")
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "da-nonce-test-"))
+
+      try {
+        const adapter = new NativeFileAtomicNonceAdapter(tmpDir)
+        const entry = {
+          nonce: "test_nonce_exclusive_abc_1",
+          runId: "run_test_01",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        }
+
+        // First claim succeeds
+        const first = await adapter.claimIfAbsent(entry)
+        expect(first).toBe(true)
+
+        // Second duplicate claim fails
+        const second = await adapter.claimIfAbsent(entry)
+        expect(second).toBe(false)
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+      }
     })
   })
 })
