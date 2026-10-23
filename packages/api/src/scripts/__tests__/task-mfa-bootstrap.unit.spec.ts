@@ -1,4 +1,5 @@
-﻿import { generateKeyPairSync } from "node:crypto"
+﻿import { INDEPENDENT_REVIEWER_TRUST_ROOT } from "../reviewer-execution-grant"
+import { generateKeyPairSync } from "node:crypto"
 import {
   canonicalJsonStringify,
   computePublicKeyFingerprint,
@@ -40,7 +41,7 @@ import {
   validateTargetAgainstManifest,
   verifyCleanPreconditions,
   sanitizeAndDecodeDatabaseName,
-  BOOTSTRAP_EXECUTION_GATE_OPEN,
+
   mustClassifyBootstrapFailureAsIndeterminate,
 } from "../task-mfa-bootstrap"
 import taskMfaBootstrap from "../task-mfa-bootstrap"
@@ -1116,13 +1117,13 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       expect(mustClassifyBootstrapFailureAsIndeterminate(false, ["preconditions_verified"])).toBe(false)
     })
 
-    it("enforces BOOTSTRAP_EXECUTION_GATE_OPEN is false", () => {
-      expect(BOOTSTRAP_EXECUTION_GATE_OPEN).toBe(false)
+    it("requires an independently commissioned reviewer root", () => {
+      expect(INDEPENDENT_REVIEWER_TRUST_ROOT).toBeNull()
     })
 
     it("throws immediately when called with closed gate and redacts sensitive info", async () => {
       await expect(taskMfaBootstrap({ container: {} as any, args: [] })).rejects.toThrow(
-        /BOOTSTRAP_EXECUTION_GATE_OPEN = false/
+        /Reviewer grant trust root is not commissioned/
       )
     })
   })

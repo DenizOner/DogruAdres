@@ -8,14 +8,8 @@ import {
   SignedTaskManifest,
   TaskResourceManifest,
   verifySignedManifest,
-  createTrustedOperatorRegistry,
   redactSensitiveData,
-  PinnedOperatorApproval,
   TrustedOperatorRegistry,
-  RuntimeResourceAdapter,
-  AtomicNonceStorageAdapter,
-  SecurityEnvironmentAdapter,
-  DatabaseReadbackAdapter,
   DurableAtomicNonceStore,
   FilesystemDurableCheckpointAdapter,
   DurableCheckpointManager,
@@ -23,28 +17,7 @@ import {
   executeBootstrapController,
 } from "./operator-audit-protocol"
 
-/**
- * Execution gate switch.
- * The task bootstrap runner is DELIBERATELY DISABLED (BLOCKED) until an authorized,
- * independently audited environment and pinned operator manifest are formally commissioned.
- */
-export const BOOTSTRAP_EXECUTION_GATE_OPEN = false
-
-/**
- * No operator key, identity or execution target has been independently
- * commissioned. Do not initialize this from a manifest, path or environment
- * variable. It requires a separately approved, source-reviewed runtime controller.
- */
-export const INDEPENDENT_PINNED_OPERATOR_APPROVAL: PinnedOperatorApproval | null = null
-
-/**
- * In this source-only checkpoint, no real Docker daemon, persistent database
- * or independent readback adapter has been commissioned.
- */
-export const NATIVE_RESOURCE_ADAPTER: RuntimeResourceAdapter | null = null
-export const NATIVE_NONCE_STORAGE_ADAPTER: AtomicNonceStorageAdapter | null = null
-export const NATIVE_SECURITY_ADAPTER: SecurityEnvironmentAdapter | null = null
-export const NATIVE_READBACK_ADAPTER: DatabaseReadbackAdapter | null = null
+import { INDEPENDENT_REVIEWER_TRUST_ROOT, commissionReviewedRuntime, type SignedReviewerGrant } from "./reviewer-execution-grant"
 
 export const FORBIDDEN_DATABASE_PATTERNS: ReadonlyArray<RegExp> = [
   /^m0ssi_a7f1$/i,
@@ -173,6 +146,20 @@ export function validateTargetAgainstManifest(
 }
 
 export async function verifyCleanPreconditions(db: Client): Promise<void> {
+  const state = await db.query(`SELECT
+    (SELECT count(*) FROM mikro_orm_migrations)::int AS migrations,
+    (SELECT count(*) FROM da_session_policy)::int AS policies,
+    (SELECT mfa_activated FROM da_session_policy WHERE id='current') AS activated,
+    (SELECT count(*) FROM auth_mfa_factor)::int AS factors,
+    (SELECT count(*) FROM auth_mfa_recovery_code)::int AS recovery,
+    (SELECT count(*) FROM pg_trigger WHERE tgrelid='da_session_policy'::regclass
+      AND NOT tgisinternal AND tgenabled='O' AND tgname IN
+      ('da_mfa_activation_guard_rows','da_mfa_activation_guard_truncate'))::int AS guards`)
+  const safety = state.rows[0]
+  if (!safety || safety.migrations !== 234 || safety.policies !== 1 || safety.activated !== false ||
+      safety.factors !== 0 || safety.recovery !== 0 || safety.guards !== 2) {
+    throw new Error("REFUSED: R0-D inactive MFA/ledger/guard preconditions failed")
+  }
   const userCountRes = await db.query('SELECT count(*)::int as cnt FROM "user"')
   if (userCountRes.rows[0].cnt > 0) {
     throw new Error(`REFUSED: Target database already contains ${userCountRes.rows[0].cnt} User records`)
@@ -216,26 +203,8 @@ export function mustClassifyBootstrapFailureAsIndeterminate(
 
 export default async function taskMfaBootstrap({ container }: ExecArgs): Promise<void> {
   try {
-    if (!BOOTSTRAP_EXECUTION_GATE_OPEN) {
-      throw new Error(
-        "REFUSED: taskMfaBootstrap is locked by BOOTSTRAP_EXECUTION_GATE_OPEN = false. Execution is prohibited until an independently authorized clean environment is commissioned."
-      )
-    }
-
-    if (!INDEPENDENT_PINNED_OPERATOR_APPROVAL) {
-      throw new Error(
-        "REFUSED: taskMfaBootstrap is locked by INDEPENDENT_PINNED_OPERATOR_APPROVAL = null. Execution requires an independently approved and source-pinned authorization."
-      )
-    }
-
-    if (
-      !NATIVE_RESOURCE_ADAPTER ||
-      !NATIVE_NONCE_STORAGE_ADAPTER ||
-      !NATIVE_SECURITY_ADAPTER
-    ) {
-      throw new Error(
-        "REFUSED: Required R0-D native runtime adapters (Resource, NonceStorage, Security) are not commissioned. Execution remains strictly fail-closed."
-      )
+    if (!INDEPENDENT_REVIEWER_TRUST_ROOT) {
+      throw new Error("REFUSED: Reviewer grant trust root is not commissioned")
     }
 
     const dbUrl = process.env.DATABASE_URL
@@ -245,10 +214,10 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     const manifestPath = process.env.M0_RESOURCE_MANIFEST_PATH
     const evidenceDir = process.env.M0_FIXTURE_EVIDENCE_DIR
     const outputFilenameRaw = process.env.M0_BOOTSTRAP_OUTPUT_FILE || "task-mfa-users.private.json"
-    const trustedRegistryPath = process.env.M0_TRUSTED_REGISTRY_PATH
+    const grantPath = process.env.M0_REVIEWER_GRANT_PATH
 
-    if (!manifestPath || !evidenceDir || !trustedRegistryPath) {
-      throw new Error("REFUSED: Missing M0_RESOURCE_MANIFEST_PATH, M0_FIXTURE_EVIDENCE_DIR, or M0_TRUSTED_REGISTRY_PATH")
+    if (!manifestPath || !evidenceDir || !grantPath) {
+      throw new Error("REFUSED: Missing M0_RESOURCE_MANIFEST_PATH, M0_FIXTURE_EVIDENCE_DIR, or M0_REVIEWER_GRANT_PATH")
     }
 
     const safeOutputFilename = validateSafeBasename(outputFilenameRaw)
@@ -262,14 +231,10 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
       throw new Error(`REFUSED: Cannot read or parse resource manifest from ${manifestPath}: ${String(err)}`)
     }
 
-    let trustedRegistry: TrustedOperatorRegistry
-    try {
-      const registryRaw = await (await import("node:fs/promises")).readFile(trustedRegistryPath, "utf8")
-      const parsedRegistry = JSON.parse(registryRaw)
-      trustedRegistry = createTrustedOperatorRegistry(parsedRegistry, INDEPENDENT_PINNED_OPERATOR_APPROVAL)
-    } catch (err: unknown) {
-      throw new Error(`REFUSED: Cannot construct validated operator registry from ${trustedRegistryPath}: ${String(err)}`)
-    }
+    // Input paths are untrusted transport. Only the source-root reviewer signature grants authority.
+    const signedGrant = JSON.parse(await (await import("node:fs/promises")).readFile(grantPath, "utf8")) as SignedReviewerGrant
+    const commissioned = await commissionReviewedRuntime(signedManifest, signedGrant, realEvidenceDir)
+    const trustedRegistry = commissioned.registry
 
     validateTargetAgainstManifest(targetUrl, signedManifest.manifest, trustedRegistry, signedManifest)
 
@@ -284,15 +249,15 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     }
 
     // Preflight: Inspect path security BEFORE any file or database mutations
-    const nonceStore = new DurableAtomicNonceStore(NATIVE_NONCE_STORAGE_ADAPTER)
-    const pathInspection = await NATIVE_SECURITY_ADAPTER.inspectPathSecurity(realEvidenceDir)
+    const nonceStore = new DurableAtomicNonceStore(commissioned.nonce)
+    const pathInspection = commissioned.inspection
 
     const executionCtx = {
-      executionGateOpen: BOOTSTRAP_EXECUTION_GATE_OPEN,
-      pinnedApproval: INDEPENDENT_PINNED_OPERATOR_APPROVAL,
-      registryData: JSON.parse(await (await import("node:fs/promises")).readFile(trustedRegistryPath, "utf8")),
+      executionGateOpen: true, // reachable only after verified reviewer commissioning
+      pinnedApproval: commissioned.pin,
+      registryData: commissioned.registryData,
       signedManifest,
-      resourceAdapter: NATIVE_RESOURCE_ADAPTER,
+      resourceAdapter: commissioned.resources,
       nonceStore,
       pathSecurityInspection: pathInspection,
       connectionString: dbUrl,
@@ -301,6 +266,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
     // Preflight controller execution: Gate, Pin, Manifest, Resource Ownership, Nonce claim
     // Must succeed BEFORE any filesystem checkpoint creation or database connection
     await executeBootstrapController(executionCtx, async () => {
+      await commissioned.assertCurrentGrant()
       // 1. Exclusive non-clobber reservation of checkpoint file
       const checkpointAdapter = new FilesystemDurableCheckpointAdapter()
       const checkpointManager = new DurableCheckpointManager(checkpointAdapter)
@@ -334,6 +300,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
         const foundation: DogruAdresAccessModuleService = container.resolve("dogruadresAccess")
 
         for (const label of ["A", "B"] as const) {
+          await commissioned.assertCurrentGrant()
           const entropy = randomBytes(16).toString("hex")
           const email = `task-mfa-person-${label.toLowerCase()}-${entropy}@task.invalid`
           const password = randomBytes(32).toString("base64url")
@@ -355,6 +322,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
             { label, authIdentityId }
           )
 
+          await commissioned.assertCurrentGrant()
           const workflowResult = await createUserAccountWorkflow(container).run({
             input: {
               authIdentityId,
@@ -384,6 +352,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
             throw new Error(`Integrity violation: Pre-existing MFA factor on fresh Person ${label}`)
           }
 
+          await commissioned.assertCurrentGrant()
           const [person] = await foundation.createPeople([
             { display_name: `Task Person ${label}` },
           ])
@@ -395,6 +364,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
             { label, personId: person.id }
           )
 
+          await commissioned.assertCurrentGrant()
           await foundation.createActorMappings([
             {
               actor_type: "user",
@@ -406,6 +376,7 @@ export default async function taskMfaBootstrap({ container }: ExecArgs): Promise
           ])
           await checkpointManager.recordStep(checkpointFile, recoveryState, `actor_mapped_${label}`)
 
+          await commissioned.assertCurrentGrant()
           await db.query(
             `INSERT INTO da_login_binding (auth_identity_id, person_id, actor_type, actor_id, verified_at)
              VALUES ($1, $2, 'user', $3, now())`,
