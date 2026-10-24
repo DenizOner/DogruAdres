@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // READ-ONLY local inventory. Never deletes, resets, prunes, fetches, or writes.
@@ -31,6 +31,7 @@ const lines = (v) => v ? v.split("\n").filter(Boolean).length : 0;
 
 export function collectLocalEvidence(root, read = git) {
   if (!root || typeof root !== "string") throw new Error("One explicit existing --root is required");
+  if (!isAbsolute(root)) throw new Error("Absolute canonical --root required: refusing implicit current-directory checkout");
   const target = resolve(root), physical = realpathSync(target);
   const topLevel = read(target, "rev-parse", "--show-toplevel");
   const gitCommon = read(target, "rev-parse", "--git-common-dir");
