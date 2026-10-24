@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 const monitoredIssues = [147, 208, 229, 235];
 const commentPrefix = "<!-- DA-GOVERNANCE-PULSE-245:v1:";
 const maxPrs = 12;
+const expectedWorkflowRef = 'DenizOner/DogruAdres/.github/workflows/governance-automation.yml@refs/heads/main';
+const markerRe = /^<!-- DA-GOVERNANCE-PULSE-245:v1:([a-f0-9]{64}) -->\n/;
 
 export function md(value) {
   return String(value ?? "")
@@ -16,8 +18,50 @@ export function md(value) {
     .replace(/[\r\n]+/g, " ");
 }
 
-export function fingerprint(snapshot) {
-  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+export function fingerprint(value) {
+  return createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
+}
+
+export function validateTrustedExecution(env) {
+  if (env.repository !== "DenizOner/DogruAdres" || env.issueNumber !== 245 ||
+      env.ref !== "refs/heads/main" || env.workflowRef !== expectedWorkflowRef ||
+      !["schedule", "workflow_dispatch"].includes(env.eventName)) {
+    throw new Error("Untrusted repo, workflow source, branch, event or target: no writes allowed");
+  }
+}
+
+export function latestTrustedPulseComment(comments) {
+  return comments.filter((item) =>
+    item.user?.login === "github-actions[bot]" &&
+    item.user?.type === "Bot" &&
+    typeof item.body === "string" &&
+    markerRe.test(item.body)
+  ).at(-1);
+}
+
+// Read every page before deciding whether to publish. Never write after partial API
+// retrieval or an excessive page count; it could cause duplicate notification storms.
+export async function publishPulse(api, issueNumber, content) {
+  if (issueNumber !== 245) throw new Error("Unexpected target Issue: no writes allowed");
+  const comments = [];
+  let complete = false;
+  for (let page = 1; page <= 100; page++) {
+    const batch = await api(`/issues/245/comments?per_page=100&page=${page}`);
+    if (!Array.isArray(batch) || batch.length > 100) throw new Error("Invalid GitHub comment page");
+    comments.push(...batch);
+    if (batch.length < 100) { complete = true; break; }
+  }
+  if (!complete) throw new Error("Comment pagination safety limit: no writes allowed");
+
+  // Only user-visible content determines whether a new notification is meaningful.
+  const marker = `${commentPrefix}${fingerprint(content)} -->`;
+  const last = latestTrustedPulseComment(comments);
+  if (last?.body?.startsWith(marker + "\n")) return "unchanged";
+  await api("/issues/245/comments", {
+    method: "POST",
+    body: JSON.stringify({ body: marker + "\n" + content }),
+  });
+  return "posted";
 }
 
 export function renderPulse(snapshot) {
@@ -56,9 +100,14 @@ async function pulse() {
   const token = process.env.GITHUB_TOKEN;
   const repository = process.env.GITHUB_REPOSITORY;
   const issueNumber = Number(process.env.PULSE_ISSUE_NUMBER || 245);
-  if (!token || repository !== "DenizOner/DogruAdres" || issueNumber !== 245) {
-    throw new Error("Unexpected repository/issue or missing scoped GITHUB_TOKEN; no write attempted");
-  }
+  validateTrustedExecution({
+    repository,
+    issueNumber,
+    ref: process.env.GITHUB_REF,
+    workflowRef: process.env.GITHUB_WORKFLOW_REF,
+    eventName: process.env.GITHUB_EVENT_NAME,
+  });
+  if (!token) throw new Error("Missing scoped GITHUB_TOKEN: no writes allowed");
 
   const base = `https://api.github.com/repos/${repository}`;
   async function api(path, init = {}) {
@@ -89,12 +138,15 @@ async function pulse() {
       }));
       checks.sort((a, b) => a.name.localeCompare(b.name));
       const failed = checks.filter((check) => ["failure", "timed_out", "cancelled", "action_required"].includes(check.status));
+      const pending = checks.filter((check) => check.status === "pending");
       return {
         number: pr.number,
         draft: Boolean(pr.draft),
         sha: pr.head.sha,
-        headChecks: checks.length ? (failed.length ? `${failed.length} başarısız/iptal kontrol` : `${checks.length} HEAD kontrolü, merge-ref doğrulanmadı`) : "KONTROL BULUNAMADI",
-        checks,
+        headChecks: !checks.length ? "KONTROL BULUNAMADI" :
+          failed.length ? `${failed.length} başarısız/iptal kontrol` :
+          pending.length ? `${pending.length} tamamlanmamış HEAD kontrolü` :
+          `${checks.length} HEAD kontrolü, merge-ref doğrulanmadı`,
       };
     }),
   );
@@ -114,18 +166,10 @@ async function pulse() {
     await appendFile(process.env.GITHUB_STEP_SUMMARY, content + "\n");
   }
 
-  const marker = `${commentPrefix}${fingerprint(snapshot)} -->`;
-  const comments = await api(`/issues/${issueNumber}/comments?per_page=100`);
-  const previous = comments.filter((entry) => typeof entry.body === "string" && entry.body.startsWith(commentPrefix)).at(-1);
-  if (previous?.body?.startsWith(marker)) {
-    process.stdout.write("No meaningful project-metadata change; no issue comment added.\n");
-    return;
-  }
-  await api(`/issues/${issueNumber}/comments`, {
-    method: "POST",
-    body: JSON.stringify({ body: marker + "\n" + content }),
-  });
-  process.stdout.write("Posted changed metadata snapshot to automation tracking Issue #245.\n");
+  const outcome = await publishPulse(api, issueNumber, content);
+  process.stdout.write(outcome === "unchanged"
+    ? "No visible-report change; no issue comment added.\n"
+    : "Posted changed visible report to automation tracking Issue #245.\n");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
