@@ -383,7 +383,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         }),
       });
       if(res.ok){
-        el('smtp-test-result').textContent='Test başarılı! Mesaj kabul edildi. (ID: '+(res.messageId||'ok')+')';
+        el('smtp-test-result').textContent='SMTP sunucusu e-postayı gönderim için kabul etti. Teslimatı alıcının gelen kutusundan kontrol edin.';
         status('Test e-postası başarıyla kabul edildi');
       }else{
         el('smtp-test-result').textContent='Test başarısız: '+(res.message||'Hata');
