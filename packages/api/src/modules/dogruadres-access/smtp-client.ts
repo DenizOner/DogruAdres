@@ -225,7 +225,14 @@ export class SmtpConnection {
   }
 
   public async connect(): Promise<void> {
-    const allowTestLoopback = process.env.NODE_ENV === "test" && (this.config.security === "none" || this.config.host === "127.0.0.1")
+    // Only an isolated loopback mock may use plaintext transport in tests.
+    // Never permit unauthenticated or authenticated plaintext SMTP on real targets.
+    const allowTestLoopback =
+      process.env.NODE_ENV === "test" &&
+      (this.config.host === "127.0.0.1" || this.config.host === "::1")
+    if (this.config.security === "none" && !allowTestLoopback) {
+      throw new Error("Unencrypted SMTP is prohibited outside isolated loopback tests")
+    }
     const connectIp = await resolveAndValidateHost(this.config.host, allowTestLoopback)
 
     if (this.config.security === "ssl") {
