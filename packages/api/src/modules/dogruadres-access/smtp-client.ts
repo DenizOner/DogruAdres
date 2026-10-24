@@ -294,8 +294,8 @@ export class SmtpConnection {
 
     // Upgrade the existing socket to TLS
     await new Promise<void>((resolve, reject) => {
-      const tlsSocket = new tls.TLSSocket(this.socket as net.Socket, {
-        isServer: false,
+      const tlsSocket = tls.connect({
+        socket: this.socket as net.Socket,
         servername: this.config.host,
         rejectUnauthorized: true,
       })
