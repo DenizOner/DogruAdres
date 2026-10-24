@@ -12,7 +12,7 @@ const copy = {
     brandTitle: "DoğruAdres",
     brandSubtitle: "Pazaryeri Güvenlik ve Kimlik Doğrulama",
     pageHeading: "E-posta Doğrulama",
-    pendingDesc: "hesabınızın e-posta adresini doğrulamak ve platform işlemlerine güvenle başlamak için lütfen aşağıdaki butona tıklayınız.",
+    pendingDesc: "E-posta adresinizi doğrulamak için aşağıdaki düğmeyi kullanın.",
     verifyBtn: "E-posta Adresimi Doğrula",
     verifyingBtn: "Doğrulanıyor...",
     confirmedTitle: "E-posta Başarıyla Doğrulandı",
@@ -27,7 +27,7 @@ const copy = {
     invalidTitle: "Geçersiz Bağlantı",
     invalidDesc: "Doğrulama bağlantısı geçersiz, hatalı veya eksik. Lütfen e-postanızdaki bağlantıyı kontrol ediniz.",
     securityNoteTitle: "Güvenlik Notu:",
-    securityNoteText: "Bu bağlantı tek kullanımlıktır. Outlook SafeLinks ve otomatik tarayıcılar gibi güvenlik sistemlerinin bağlantınızı istem dışı tüketmesini önlemek için açık onayınız gereklidir.",
+    securityNoteText: "Bu bağlantı tek kullanımlıktır. İşlemi tamamlamak için onayınız gerekir.",
     supportText: "Destek:",
     themeDark: "Koyu Mod",
     themeLight: "Açık Mod",
@@ -51,7 +51,7 @@ const copy = {
     invalidTitle: "Invalid Link",
     invalidDesc: "The verification link is invalid, malformed, or missing. Please check the link in your email.",
     securityNoteTitle: "Security Notice:",
-    securityNoteText: "This verification link is single-use. Your explicit confirmation is required to prevent automated email scanners from consuming your link.",
+    securityNoteText: "This link can be used once. Confirm to complete verification.",
     supportText: "Support:",
     themeDark: "Dark Mode",
     themeLight: "Light Mode",
@@ -75,7 +75,7 @@ const copy = {
     invalidTitle: "رابط غير صالح",
     invalidDesc: "رابط التحقق غير صالح أو غير مكتمل. يرجى التأكد من الرابط الوارد في بريدك الإلكتروني.",
     securityNoteTitle: "ملاحظة أمنية:",
-    securityNoteText: "هذا الرابط صالح للاستخدام مرة واحدة فقط. يلزم تأكيدك الصريح لحماية الرابط من الماسحات التلقائية للبريد.",
+    securityNoteText: "يمكن استخدام هذا الرابط مرة واحدة فقط. أكّد لإتمام التحقق.",
     supportText: "الدعم الفني:",
     themeDark: "الوضع الداكن",
     themeLight: "الوضع الفاتح",
@@ -92,7 +92,7 @@ export default function VerifyEmailPage() {
 
   const [currentLocale, setCurrentLocale] = useState<SupportedLocale>(initialLocale)
   const [state, setState] = useState<VerificationState>("loading")
-  const [entityId, setEntityId] = useState<string>("")
+
   const [errorMessage, setErrorMessage] = useState<string>("")
   const [isPendingTransition, startTransition] = useTransition()
 
@@ -125,13 +125,11 @@ export default function VerifyEmailPage() {
 
         if (!response.ok || !data.ok) {
           setState("invalid")
-          setErrorMessage(data.message || "")
+          setErrorMessage("")
           return
         }
 
-        if (data.entity_id) {
-          setEntityId(data.entity_id)
-        }
+
 
         if (data.status === "consumed") {
           setState("consumed")
@@ -175,7 +173,7 @@ export default function VerifyEmailPage() {
 
       if (response.status === 200 && data.ok) {
         setState("confirmed")
-        if (data.entity_id) setEntityId(data.entity_id)
+
 
         // Scrub token from URL & browser history for leak protection
         if (typeof window !== "undefined") {
@@ -187,7 +185,7 @@ export default function VerifyEmailPage() {
         setState("consumed")
       } else {
         setState("invalid")
-        setErrorMessage(data.message || "")
+        setErrorMessage("")
       }
     } catch (err) {
       setState("invalid")
@@ -265,14 +263,7 @@ export default function VerifyEmailPage() {
                   {t.pageHeading}
                 </h1>
                 <p className="mt-3 text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                  {entityId ? (
-                    <>
-                      <strong className="text-slate-900 dark:text-slate-200 font-semibold">{entityId}</strong>{" "}
-                      {t.pendingDesc}
-                    </>
-                  ) : (
-                    t.pendingDesc
-                  )}
+{t.pendingDesc}
                 </p>
               </div>
 
