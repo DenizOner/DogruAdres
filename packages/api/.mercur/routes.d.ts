@@ -544,6 +544,7 @@ export type Routes = {
             confirm: typeof import("@medusajs/medusa/api/auth/verification/confirm/route");
             request: typeof import("@medusajs/medusa/api/auth/verification/request/route");
         };
+        verifyEmail: typeof import("../src/api/auth/verify-email/route");
     };
     cloud: {
         auth: typeof import("@medusajs/medusa/api/cloud/auth/route") & {
