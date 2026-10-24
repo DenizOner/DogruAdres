@@ -55,5 +55,6 @@ test("read-only commands collect redacted metadata; do not inspect secrets or de
 test("no implicit root or CLI default; invalid checkout fails closed",()=>{
   assert.throws(()=>main([]),/Usage/);
   assert.throws(()=>collectLocalEvidence(""),/explicit existing/);
+  assert.throws(()=>collectLocalEvidence("."),/Absolute canonical/);
   assert.throws(()=>collectLocalEvidence("/nonexistent-branch-cleanup-test-dir"),/ENOENT/);
 });
