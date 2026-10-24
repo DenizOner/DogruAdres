@@ -36,7 +36,7 @@ jobs:
           node-version: '24.21.0'
           package-manager-cache: false
       - name: Read-only guard tests
-        run: node --test quality/automation/branch-lifecycle.test.mjs
+        run: node --test quality/automation/branch-lifecycle.test.mjs quality/automation/local-worktree-preflight.test.mjs
       - name: Read-only remote branch inventory
         if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && github.ref == 'refs/heads/main' && github.repository == 'DenizOner/DogruAdres' }}
         env:
