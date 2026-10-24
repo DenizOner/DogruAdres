@@ -36,7 +36,7 @@ describe("auth-verification-requested subscriber unit test", () => {
   it("dispatches email when entity_type is email with valid code", async () => {
     ;(sendSmtpEmail as jest.Mock).mockResolvedValue({
       messageId: "mock-id-123",
-      accepted: ["denizoner1985@gmail.com"],
+      accepted: ["recipient@example.test"],
     })
 
     const container = {
@@ -47,7 +47,7 @@ describe("auth-verification-requested subscriber unit test", () => {
       event: {
         name: "auth.verification_requested",
         data: {
-          entity_id: "denizoner1985@gmail.com",
+          entity_id: "recipient@example.test",
           entity_type: "email",
           code_provider: "token",
           auth_identity_id: "authid_test_gmail",
@@ -61,16 +61,47 @@ describe("auth-verification-requested subscriber unit test", () => {
     expect(sendSmtpEmail).toHaveBeenCalledTimes(1)
     expect(sendSmtpEmail).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: "denizoner1985@gmail.com",
+        to: "recipient@example.test",
         subject: "DoğruAdres E-posta Doğrulama",
         text: expect.stringContaining("654321"),
       })
     )
   })
+  it("does not log recipient details or downstream SMTP error contents", async () => {
+    const logger = { info: jest.fn(), error: jest.fn() }
+    const container = {
+      resolve: jest.fn().mockReturnValue(logger),
+    }
+    ;(sendSmtpEmail as jest.Mock).mockRejectedValue(
+      new Error("SMTP error containing recipient@example.test and a credential")
+    )
+
+    await authVerificationRequestedSubscriber({
+      event: {
+        name: "auth.verification_requested",
+        data: {
+          entity_id: "recipient@example.test",
+          entity_type: "email",
+          code_provider: "token",
+          auth_identity_id: "authid_synthetic",
+          code: "test-only-token",
+        },
+      },
+      container: container as any,
+      pluginOptions: {},
+    })
+
+    expect(logger.error).toHaveBeenCalledTimes(1)
+    const logged = JSON.stringify([logger.info.mock.calls, logger.error.mock.calls])
+    expect(logged).not.toContain("recipient@example.test")
+    expect(logged).not.toContain("test-only-token")
+    expect(logged).not.toContain("credential")
+  })
+
   it("uses dynamic runtime SMTP config when access service provides it", async () => {
     ;(sendSmtpEmail as jest.Mock).mockResolvedValue({
       messageId: "mock-id-456",
-      accepted: ["denizoner1985@gmail.com"],
+      accepted: ["recipient@example.test"],
     })
 
     const mockAccess = {
@@ -97,7 +128,7 @@ describe("auth-verification-requested subscriber unit test", () => {
       event: {
         name: "auth.verification_requested",
         data: {
-          entity_id: "denizoner1985@gmail.com",
+          entity_id: "recipient@example.test",
           entity_type: "email",
           code_provider: "token",
           auth_identity_id: "authid_test_gmail",
@@ -109,7 +140,7 @@ describe("auth-verification-requested subscriber unit test", () => {
     })
 
     expect(sendSmtpEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "denizoner1985@gmail.com" }),
+      expect.objectContaining({ to: "recipient@example.test" }),
       expect.objectContaining({
         host: "smtp.sendgrid.net",
         fromEmail: "notifications@dogruadres.com",
