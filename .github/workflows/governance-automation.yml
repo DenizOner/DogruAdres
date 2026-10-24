@@ -54,7 +54,7 @@ jobs:
 
   pulse:
     name: GitHub project pulse (metadata only)
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.repository == 'DenizOner/DogruAdres' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     permissions:
@@ -66,6 +66,7 @@ jobs:
       - name: Checkout trusted default-branch source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           persist-credentials: false
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
