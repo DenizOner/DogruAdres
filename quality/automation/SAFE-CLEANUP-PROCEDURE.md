@@ -28,3 +28,16 @@ Operatörün kendi bilgisayarında erişebildiği tüm Git common-dir'ler için 
 İş tamamlandı iddiası için her adayın gerçek yerel özel envanteri, yedeği, hash ve restore kanıtı, ayrı icracı PASS, son SHA preflight ve normal işlem raporu gerekli. Sırf GitHub'da merge edilmiş PR veya boş `git status` güvenli silme kanıtı değildir. Dosya ve süreç sahipliği farklı yerel Agent'larda olduğundan otomatik CI kararını doğrudan disk silme iznine dönüştürmeyin.
 
 İş akışı geliştirme PR'si #208'e göre gerçek yazardan bağımsız kaynak review PASS ve ilgili CI görmeden birleştirilemez.
+
+
+## B0 — Yerel envanter yardımcı komutu (hiçbir silme yok)
+
+Yalnız yetkili yerel Windows Agent, **önceden doğruladığı tek bir** canonical checkout içinde, aktif M0/DB/servis sahipliğiyle çakışmadığı salt-okunur zaman aralığında çalıştırabilir:
+
+```powershell
+node quality/automation/local-worktree-preflight.mjs --root "<önceden-doğrulanmış mutlak çalışma klasörü>"
+```
+
+Bu komut `git --no-optional-locks` kullanır: branch/HEAD/common-dir, tam/untracked/ignored dosyaların **yalnız sayıları**, stash, reflog, remote'a çıkmamış commit sayısı ve Git worktree envanterini okur. Git fetch/push, `git clean`, `git reset`, checkout, database/Docker veya dizin silme yapmaz. Tam yerel path, uzak URL, dosya adları, token ve sırların içerikleri rapora yazılmaz; klasörler yalnız path digest ile gösterilir. Elde edilen çıktı **yalnız güvenli yerel özel kanıt alanında** tutulmalı, public GitHub Actions loguna veya Issue yorumuna olduğu gibi yapıştırılmamalıdır.
+
+Sınıflandırma her durumda `deletion: BLOCKED`; bu **bilinçlidir**. Süreç sahibi, aktif PID/CWD/port, Docker bind mount, backup restore, kopyaların tekilliği ve #229 P0 kurtarma kapısı bu komutla kanıtlanamaz. Araç yalnız reddetme ve insan incelemesine hazırlık otomasyonudur. `localOnlyCommits` veya `reflogEntries` bulunması bir veri kaybı riski işaretidir; salt-okunur çıktı hiçbir zaman silme yetkisi üretmez. Gerçek bir güvenli aday ancak yerel ikinci bağımsız denetim ve yukarıdaki C kapılarından sonra belirlenebilir.
