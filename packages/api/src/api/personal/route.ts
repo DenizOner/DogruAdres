@@ -448,10 +448,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const btn=el('accept-invitation-btn');btn.disabled=true;
     el('invitation-result').textContent='Davet kabul ediliyor...';
     try{
-      const res=await api('invitations',{method:'POST',body:JSON.stringify({action:'accept',token})});
-      el('invitation-result').textContent='Kuruluş üyeliğiniz başarıyla aktif edildi (Üyelik ID: '+res.membership.id+').';
-      status('Davet başarıyla kabul edildi');
+      await api('invitations',{method:'POST',body:JSON.stringify({action:'accept',token})});
+      // Remove the consumed bearer token before refreshing session and organization data.
+      history.replaceState(null,'','/personal');
       await load();
+      status('Kuruluş üyeliğiniz başarıyla aktifleştirildi.');
     }catch(err){
       el('invitation-card').hidden=true;
       el('invitation-mismatch-banner').hidden=false;
