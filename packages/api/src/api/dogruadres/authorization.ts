@@ -6,6 +6,7 @@ import {
 } from "../../utils/organization-authorization"
 import DogruAdresAccessModuleService from "../../modules/dogruadres-access/service"
 import { DOGRUADRES_ACCESS_MODULE } from "../../modules/dogruadres-access"
+import { enabled, sessionToken } from "../personal/security"
 
 export async function requireOrganizationAccess(
   req: AuthenticatedMedusaRequest,
@@ -67,9 +68,12 @@ export async function requireOrganizationAccess(
   return { personId: decision.personId, organizationId: decision.organizationId, service }
 }
 
-export function requirePlatformAdministrator(req: AuthenticatedMedusaRequest) {
-  if (req.auth_context?.actor_type !== "user" || !req.auth_context?.actor_id) {
+export async function requirePlatformAdministrator(req: AuthenticatedMedusaRequest) {
+  if (!enabled()) {
     throw new MedusaError(MedusaError.Types.FORBIDDEN, "Platform administrator authentication is required")
   }
-  return { actor_id: req.auth_context.actor_id, actor_type: req.auth_context.actor_type }
+  const service = req.scope.resolve<DogruAdresAccessModuleService>(DOGRUADRES_ACCESS_MODULE)
+  const staff = await service.personalStaff(sessionToken(req),"organization.provision","platform")
+  if (!staff) throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
+  return { actor_id: staff.actor_id, actor_type: staff.actor_type }
 }

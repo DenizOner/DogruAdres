@@ -510,6 +510,9 @@ export type Routes = {
             };
         };
         custom: typeof import("../src/api/admin/custom/route");
+        dogruadres: {
+            organizations: typeof import("../src/api/admin/dogruadres/organizations/route");
+        };
     };
     auth: {
         $actorType: {
@@ -541,6 +544,7 @@ export type Routes = {
             confirm: typeof import("@medusajs/medusa/api/auth/verification/confirm/route");
             request: typeof import("@medusajs/medusa/api/auth/verification/request/route");
         };
+        verifyEmail: typeof import("../src/api/auth/verify-email/route");
     };
     cloud: {
         auth: typeof import("@medusajs/medusa/api/cloud/auth/route") & {
@@ -925,5 +929,36 @@ export type Routes = {
         };
         stores: typeof import("@mercurjs/core/api/vendor/stores/route");
         uploads: typeof import("@mercurjs/core/api/vendor/uploads/route");
+    };
+    dogruadres: {
+        invitations: {
+            accept: typeof import("../src/api/dogruadres/invitations/accept/route");
+        };
+        organizations: {
+            $id: typeof import("../src/api/dogruadres/organizations/[id]/route") & {
+                invitations: typeof import("../src/api/dogruadres/organizations/[id]/invitations/route") & {
+                    $invitationId: typeof import("../src/api/dogruadres/organizations/[id]/invitations/[invitation_id]/route");
+                };
+                memberships: typeof import("../src/api/dogruadres/organizations/[id]/memberships/route") & {
+                    $membershipId: typeof import("../src/api/dogruadres/organizations/[id]/memberships/[membership_id]/route");
+                };
+            };
+        };
+    };
+    personal: typeof import("../src/api/personal/route") & {
+        challenge: typeof import("../src/api/personal/challenge/route");
+        contexts: typeof import("../src/api/personal/contexts/route");
+        invitations: typeof import("../src/api/personal/invitations/route");
+        links: typeof import("../src/api/personal/links/route");
+        memberships: typeof import("../src/api/personal/memberships/route");
+        mfa: typeof import("../src/api/personal/mfa/route") & {
+            enroll: typeof import("../src/api/personal/mfa/enroll/route");
+            manage: typeof import("../src/api/personal/mfa/manage/route");
+        };
+        organizations: typeof import("../src/api/personal/organizations/route");
+        platform: typeof import("../src/api/personal/platform/route") & {
+            smtp: typeof import("../src/api/personal/platform/smtp/route");
+        };
+        session: typeof import("../src/api/personal/session/route");
     };
 };

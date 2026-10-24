@@ -1,3 +1,4 @@
+import { hasRecentMfaProof } from "./mfa-management"
 import {
   InjectTransactionManager,
   MedusaContext,
@@ -6,9 +7,22 @@ import {
 } from "@medusajs/framework/utils"
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
-import { ActorMapping, AuditEvent, Invitation, Membership, Organization, Person } from "./models"
+import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
 import { randomBytes } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
+import { IdentitySessions, securitySql, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced } from "./identity-session"
+import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
+import { MfaEnrollmentTickets } from "./mfa-enrollment-ticket"
+import { resolveMfaPolicy, type MfaPlatformMode } from "./mfa-policy"
+import { generateJwtToken } from "@medusajs/framework/utils"
+import { ActorDelegation } from './actor-delegation'
+import {AccountLinking,type VerifiedSecondary} from './account-linking'
+import {
+  PlatformSmtpPersistence,
+  type UpdateSmtpSettingsInput,
+  type SmtpAuditActor,
+} from "./smtp-settings"
+import { sendSmtpEmail } from "./smtp-client"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -16,6 +30,7 @@ type ProvisionOrganizationInput = Readonly<{
   name: string
   provisioned_by: ActorReference
   initial_owners: ActorReference[]
+  staff_grant_id?: string
 }>
 
 type ChangeMembershipInput = Readonly<{
@@ -28,13 +43,28 @@ type ChangeMembershipInput = Readonly<{
   actor_id: string
 }>
 
+type FoundationAuditInput = {
+  actor_person_id: string
+  actor_type: string
+  actor_id: string
+  role_context?: string | null
+  organization_id?: string | null
+  action: string
+  module: string
+  resource: string
+  target_id?: string | null
+  previous_values?: Record<string, unknown> | null
+  new_values?: Record<string, unknown> | null
+  occurred_at: Date
+}
+
 type AdvisoryLockManager = Readonly<{
   execute: (query: string, parameters: string[]) => Promise<unknown>
 }>
 
 const activeStatus = "active"
 const supportedActorTypes = new Set(["user", "member", "customer"])
-export const DOGRUADRES_AUDIT_MODULE = "dogruadres-access"
+export const DOGRUADRES_AUDIT_MODULE: "dogruadres-access" = "dogruadres-access"
 
 export default class DogruAdresAccessModuleService extends MedusaService({
   Person,
@@ -43,7 +73,388 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   Membership,
   Invitation,
   AuditEvent,
+  AuditOutbox,
 }) {
+  private async persistAuditEventsWithOutbox_(input: FoundationAuditInput[], sharedContext: Context) {
+    // No decorator here: the five mutation entrypoints already own the physical
+    // module transaction. Refuse accidental use without that active manager.
+    if (!sharedContext.transactionManager || !input.length || input.some(event => event.module !== DOGRUADRES_AUDIT_MODULE)) {
+      throw new Error("Foundation audit/outbox persistence requires an active transaction and Foundation events")
+    }
+    const events = await this.createAuditEvents(input, sharedContext)
+    if (events.length !== input.length || new Set(events.map(event => event.id)).size !== input.length) {
+      throw new Error("Canonical audit cardinality mismatch")
+    }
+    const outbox = await this.createAuditOutboxes(events.map(event => {
+      if (!event.id || event.module !== DOGRUADRES_AUDIT_MODULE) throw new Error("Invalid canonical Foundation audit identity")
+      return {
+        source_audit_event_id: event.id,
+        source_module: DOGRUADRES_AUDIT_MODULE,
+        envelope_version: 1,
+        status: "pending" as const,
+        // Explicit allowlist. No before/after payload, recipient email, token or
+        // credentials; use only the actual persisted canonical audit identifiers.
+        envelope: {
+          version: 1,
+          source_module: DOGRUADRES_AUDIT_MODULE,
+          source_audit_event_id: event.id,
+          organization_id: event.organization_id ?? null,
+          actor: {
+            person_id: event.actor_person_id,
+            type: event.actor_type,
+            id: event.actor_id,
+            role_context: event.role_context ?? null,
+          },
+          action: event.action,
+          resource: event.resource,
+          target_id: event.target_id ?? null,
+          occurred_at: new Date(event.occurred_at).toISOString(),
+        },
+      }
+    }), sharedContext)
+    const sourceIds = new Set(events.map(event => event.id))
+    if (outbox.length !== events.length || new Set(outbox.map(row => row.source_audit_event_id)).size !== events.length ||
+        outbox.some(row => row.source_module !== DOGRUADRES_AUDIT_MODULE || !sourceIds.has(row.source_audit_event_id))) {
+      throw new Error("Foundation audit/outbox cardinality mismatch")
+    }
+    // All errors escape the enclosing transaction; no network publish, independent
+    // transaction or workflow compensation substitutes for rollback here.
+    return events
+  }
+
+
+  @InjectTransactionManager()
+  async personalLinkPrimary(token:string,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).primary(token)}
+  @InjectTransactionManager()
+  async beginActorLink(token:string,proof:VerifiedSecondary,challenge:string|null,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).begin(token,proof,challenge)}
+  @InjectTransactionManager()
+  async readActorLink(token:string,intent:string,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).read(token,intent)}
+  @InjectTransactionManager()
+  async completeActorLink(token:string,intent:string,proof:VerifiedSecondary,challenge:string|null,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).complete(token,intent,proof,challenge)}
+  @InjectTransactionManager()
+  async unlinkActor(token:string,id:string,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).unlink(token,id)}
+  @InjectTransactionManager()
+  async personalActorLinks(token:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager),s=await new IdentitySessions(sql).current(token)
+    if(!s)return null // Preserve terminal expiry when returning denial.
+    return sql.execute(`select id,actor_type,actor_id,revoked_at from da_verified_actor_binding where person_id=? order by verified_at`,[s.person_id])
+  }
+  @InjectTransactionManager()
+  async personalActorBinding(token:string,type:string,@MedusaContext() context:Context={}) {
+    const result=await new ActorDelegation(securitySql(context.transactionManager)).binding(token,type)
+    return result?.binding??null
+  }
+  @InjectTransactionManager()
+  async personalActorCredential(token:string,type:string,identity:{id:string;app_metadata?:Record<string,unknown>},http:Parameters<typeof generateJwtToken>[1],@MedusaContext() context:Context={}) {
+    return new ActorDelegation(securitySql(context.transactionManager)).credential(token,type,identity,http)
+  }
+  @InjectTransactionManager()
+  async personalMemberships(token:string,org:string,@MedusaContext() context:Context={}) {
+    const decision=await new IdentitySessions(securitySql(context.transactionManager)).organizations(token,org)
+    if(!decision||!['owner','admin'].includes(decision.organizations[0].role))throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
+    return this.listMemberships({organization_id:org},{select:['id','person_id','role','status','protected_owner']},context)
+  }
+  @InjectTransactionManager()
+  async personalRevokeMembership(token:string,org:string,membership:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`,[org])
+    const sessions=new IdentitySessions(sql),identity=await sessions.current(token,true)
+    const decision=identity?await sessions.organizations(token,org):null
+    if(!identity||!decision||!['owner','admin'].includes(decision.organizations[0].role))throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
+    const result=await this.changeMembership({organization_id:org,membership_id:membership,actor_person_id:identity.person_id,actor_type:identity.actor_type,actor_id:identity.actor_id,status:'revoked'},context)
+    return {id:result.id,status:result.status}
+  }
+  @InjectTransactionManager()
+  async personalChangeMembershipRole(token:string,org:string,membership:string,role:'member'|'admin',@MedusaContext() context:Context={}) {
+    if(role!=='member'&&role!=='admin')throw new MedusaError(MedusaError.Types.INVALID_DATA,'Invalid role')
+    const sql=securitySql(context.transactionManager)
+    await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`,[org])
+    const sessions=new IdentitySessions(sql),identity=await sessions.current(token,true)
+    const decision=identity?await sessions.organizations(token,org):null
+    if(!identity||!decision||!['owner','admin'].includes(decision.organizations[0].role))throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
+    const target=await this.getMembershipInOrganization(membership,org,context)
+    if(!target)throw new MedusaError(MedusaError.Types.NOT_FOUND,'Membership not found in the selected Organization')
+    if(target.protected_owner||target.role==='owner')throw new MedusaError(MedusaError.Types.FORBIDDEN,'Protected Owner cannot be changed through ordinary role controls')
+    const result=await this.changeMembership({
+      organization_id:org,
+      membership_id:membership,
+      actor_person_id:identity.person_id,
+      actor_type:identity.actor_type,
+      actor_id:identity.actor_id,
+      role
+    },context)
+    return {id:result.id,role:result.role,status:result.status}
+  }
+  @InjectTransactionManager()
+  async personalMachineGrant(apiKeyId:string,method:string,resource:string,@MedusaContext() context:Context={}) {
+    const rows=await securitySql(context.transactionManager).execute(`select id from da_machine_grant where api_key_id=? and method=? and resource=? and revoked_at is null`,[apiKeyId,method,resource])
+    return rows.length===1
+  }
+  @InjectTransactionManager()
+  async renewPersonalNativeCredential(token:string,identity:{id:string;app_metadata?:Record<string,unknown>},http:Parameters<typeof generateJwtToken>[1],@MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).renewNative(token,identity,http)
+  }
+  @InjectTransactionManager()
+  async personalNativeCredential(hash:string,@MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).native(hash)
+  }
+  @InjectTransactionManager()
+  async personalLoginAttempt(subjectHash:string, addressHash:string, @MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    // Fixed server-owned engineering abuse limits, never an authorization grant.
+    for(const [bucket,maximum] of [["subject:"+subjectHash,10],["address:"+addressHash,60]] as const){
+      const [row]=await sql.execute(`insert into da_login_attempt(bucket,minute,attempts)
+        values (?,floor(extract(epoch from clock_timestamp())/60),1)
+        on conflict(bucket,minute) do update set attempts=da_login_attempt.attempts+1 returning attempts`,[bucket])
+      if(!row || row.attempts>maximum)return false
+    }
+    return true
+  }
+  @InjectTransactionManager()
+  async pendingPersonalChallenge(authId:string, challengeId:string, @MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).pending(authId,challengeId)
+  }
+  @InjectTransactionManager()
+  async readPersonalChallenge(token:string, @MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).challenge(token)
+  }
+  @InjectTransactionManager()
+  async completePersonalChallenge(token:string, completedAt:Date, @MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).complete(token,completedAt)
+  }
+  @InjectTransactionManager()
+  async openPersonalSession(
+    authIdentityId: string,
+    purpose:BrowserMfaPurpose="legacy",
+    expectedRevision?:Readonly<{platform:number;person:number}>,
+    @MedusaContext() context: Context = {}
+  ) {
+    return new IdentitySessions(securitySql(context.transactionManager))
+      .create(authIdentityId,null,purpose,expectedRevision)
+  }
+  @InjectTransactionManager()
+  async personalMfaRuntimeActivation(@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    const rows=await sql.execute(`select
+      coalesce(to_jsonb(q)->>'mfa_activated','false') as mfa_activated
+      from da_session_policy q where q.id='current' for share`)
+    if(rows.length!==1||!["true","false"].includes(rows[0].mfa_activated))
+      throw new IdentityAccessDenied()
+    return rows[0].mfa_activated==="true"
+  }
+
+  @InjectTransactionManager()
+  async personalLoginMfaDecision(
+    authIdentityId:string,
+    nativeFactorState:"enabled"|"pending"|"not_enrolled",
+    @MedusaContext() context: Context = {}) {
+    if(!mfaRuntimeEnforced())throw new IdentityAccessDenied()
+    const sql=securitySql(context.transactionManager)
+    const bindings=await sql.execute(`select b.person_id from da_login_binding b
+      join da_person p on p.id=b.person_id and p.disabled_at is null and p.deleted_at is null
+      join da_actor_mapping a on a.person_id=p.id and a.actor_type=b.actor_type
+        and a.actor_id=b.actor_id and a.deleted_at is null
+      where b.auth_identity_id=? and b.revoked_at is null and b.verified_at is not null`,
+      [authIdentityId])
+    if(bindings.length!==1)throw new IdentityAccessDenied()
+    const persistence=new MfaPersistence(sql)
+    const [policy,personal]=await Promise.all([
+      persistence.readPlatformPolicy(),persistence.readPersonPreference(bindings[0].person_id),
+    ])
+    if(!["enabled","pending","not_enrolled"].includes(nativeFactorState))
+      throw new IdentityAccessDenied()
+    const decision=resolveMfaPolicy(policy.platform_mode,personal.user_enabled,
+      nativeFactorState==="enabled")
+    // Enabled always needs a completed native challenge, never password-only.
+    if(nativeFactorState==="enabled")throw new IdentityAccessDenied()
+    // Pending factors are not usable for authentication. Give only setup access
+    // so the owner can resume with fresh password proof and existing secret.
+    // Never treat "pending" as a completed, full-strength MFA factor.
+    if(nativeFactorState==="pending" && policy.platform_mode==="disabled")
+      throw new IdentityAccessDenied()
+    return {
+      purpose:(nativeFactorState==="pending"||decision.required?"mfa_enroll":"full") as BrowserMfaPurpose,
+      expectedRevision:{platform:policy.version,person:personal.version},
+    }
+  }
+  @InjectTransactionManager()
+  async personalEnrollmentSession(token:string,@MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).enrollment(token)
+  }
+  @InjectTransactionManager()
+  async personalEnrollmentMfaSettings(token:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    const s=await new IdentitySessions(sql).enrollment(token)
+    if(!s)return null
+    const store=new MfaPersistence(sql)
+    return {
+      platform:await store.readPlatformPolicy(),
+      personal:await store.readPersonPreference(s.person_id),
+    }
+  }
+
+  @InjectTransactionManager()
+  async personalSession(token: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).current(token)
+  }
+
+  @InjectTransactionManager()
+  async closePersonalSession(token: string, all: boolean, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).logout(token, all)
+  }
+
+  @InjectTransactionManager()
+  async personalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId)
+  }
+
+  @InjectTransactionManager()
+  async personalStaff(token: string, task: string, resource: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).staff(token, task, resource)
+  }
+
+  /**
+   * Settings are always scoped to the current canonical Person. No Person or
+   * native actor selector is accepted from the client.
+   * This source path remains unreachable until MFA settings ingress is enabled.
+   */
+  /** These internal helpers never accept client Person or actor selectors. */
+  @InjectTransactionManager()
+  async personalBeginMfaEnrollment(token:string,authIdentityId:string,factorId:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    // Session/Person lock comes FIRST, matching staff policy-change lock order.
+    // Taking the platform advisory lock first could deadlock against a staff
+    // update that already holds this same browser session lock.
+    if(!await new IdentitySessions(sql).enrollment(token))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).beginAfterPasswordProof(token,authIdentityId,factorId)
+  }
+
+  @InjectTransactionManager()
+  async personalRevokePendingMfaEnrollment(token:string,factorId:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    if(!await new IdentitySessions(sql).enrollment(token))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).revokePendingFactor(token,factorId)
+  }
+
+  @InjectTransactionManager()
+  async personalClaimMfaVerification(token:string,ticket:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    // Session/Person lock comes FIRST, matching staff policy-change lock order.
+    // Taking the platform advisory lock first could deadlock against a staff
+    // update that already holds this same browser session lock.
+    if(!await new IdentitySessions(sql).enrollment(token))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).claimVerificationAttempt(token,ticket)
+  }
+
+  @InjectTransactionManager()
+  async personalCompleteMfaEnrollment(token:string,ticket:string,factorId:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    // Session/Person lock comes FIRST, matching staff policy-change lock order.
+    // Taking the platform advisory lock first could deadlock against a staff
+    // update that already holds this same browser session lock.
+    if(!await new IdentitySessions(sql).enrollment(token))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).completeAfterNativeVerification(token,ticket,factorId,new Date())
+  }
+
+  @InjectTransactionManager()
+  async personalMfaSettings(token: string, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const session = await sessions.current(token)
+    if (!session) return null
+    const store = new MfaPersistence(sql)
+    const platform = await store.readPlatformPolicy()
+    const personal = await store.readPersonPreference(session.person_id)
+    const platformGrant = await sessions.staff(token, "security.mfa.manage", "platform")
+    return {
+      platform, personal,
+      can_manage_platform: !!platformGrant,
+      // Exact AuthIdentity native factor status is NOT inferred from preference.
+      native_factor_state: "unverified" as const,
+    }
+  }
+
+  @InjectTransactionManager()
+  async personalSetMfaPreference(token: string, enabled: boolean, expectedVersion: number, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const session = await sessions.current(token, true)
+    if (!session) return null
+    const store = new MfaPersistence(sql)
+    const policy = await store.readPlatformPolicy()
+    if (policy.platform_mode !== "optional") return null
+    const actor: MfaAuditActor = {
+      person_id: session.person_id,
+      actor_type: session.actor_type as MfaAuditActor["actor_type"],
+      actor_id: session.actor_id,
+    }
+    return store.setPersonPreference(session.person_id, enabled, expectedVersion, actor)
+  }
+
+  /** Holds session/epoch then platform lock across the native operation.
+   * Native Auth and Foundation are separate transactions: any failure after
+   * native invocation is INDETERMINATE, never compensated or retried here.
+   */
+  @InjectTransactionManager()
+  async personalManageNativeMfa(token:string, action:"recovery_codes"|"disable", operation:(identityId:string)=>Promise<unknown>, @MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager),sessions=new IdentitySessions(sql)
+    const session=await sessions.current(token,true)
+    if(!session)return null
+    const [limits]=await sql.execute("select recent_auth_seconds from da_session_policy where id='current'")
+    if(!hasRecentMfaProof(session,limits?.recent_auth_seconds))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    const store=new MfaPersistence(sql),policy=await store.readPlatformPolicy()
+    if(action==="disable"&&policy.platform_mode==="required")return null
+    const personal=await store.readPersonPreference(session.person_id)
+    const actor={person_id:session.person_id,actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id}
+    const result=await operation(session.auth_identity_id)
+    await store.recordNativeMfaAction(actor,action==="disable"?"mfa.native_factor_disabled":"mfa.recovery_codes_generated")
+    if(action==="disable") {
+      await sessions.logout(token,true)
+      // Disabled platform preserves the preference; optional self-disable turns it off.
+      if(policy.platform_mode==="optional"&&personal.user_enabled)
+        await store.setPersonPreference(session.person_id,false,personal.version,actor)
+    }
+    return {result,sessions_revoked:action==="disable"}
+  }
+  @InjectTransactionManager()
+  async personalSetPlatformMfaMode(token: string, mode: MfaPlatformMode, expectedVersion: number, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const staff = await new IdentitySessions(sql).staff(token, "security.mfa.manage", "platform")
+    if (!staff) return null
+    const actor: MfaAuditActor = {
+      person_id: staff.person_id,
+      actor_type: staff.actor_type as MfaAuditActor["actor_type"],
+      actor_id: staff.actor_id,
+    }
+    return new MfaPersistence(sql).setPlatformPolicy(mode, expectedVersion, actor)
+  }
+
+  @InjectTransactionManager()
+  async provisionPersonalOrganization(token: string, input: Omit<ProvisionOrganizationInput,"provisioned_by">, @MedusaContext() context:Context={}) {
+    const staff=await new IdentitySessions(securitySql(context.transactionManager)).staff(token,"organization.provision","platform")
+    if(!staff)throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
+    const result=await this.provisionOrganization({...input,staff_grant_id:staff.grant_id,provisioned_by:{actor_type:staff.actor_type,actor_id:staff.actor_id}},context)
+    // Generated MedusaService writes may still be pending in this transaction's
+    // identity map. Flush before the raw SELECT/FK insert; commit stays owned here.
+    const manager=context.transactionManager
+    if(!manager || typeof manager!=="object" || !("flush" in manager) || typeof manager.flush!=="function")throw new Error("Foundation transaction manager unavailable")
+    await manager.flush()
+    const sql=securitySql(context.transactionManager)
+    await sql.execute(`insert into da_security_outbox(id,audit_event_id,created_at)
+      select 'security_'||id,id,clock_timestamp() from da_audit_event where organization_id=?
+      and action in ('organization.provisioned','organization.owner_assigned') on conflict(audit_event_id) do nothing`,[result.organization.id])
+    return result
+  }
+
   private async ensureActorPerson_(
     actor: ActorReference,
     createdBy: ActorReference,
@@ -200,31 +611,32 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       })),
       sharedContext
     )
-    await this.createAuditEvents([
+    await this.persistAuditEventsWithOutbox_([
       {
         actor_id: input.provisioned_by.actor_id,
         actor_type: input.provisioned_by.actor_type,
         actor_person_id: provisioner.id,
-        role_context: "platform_administrator",
+        role_context: input.staff_grant_id ? "platform_staff" : "platform_administrator",
         organization_id: organization.id,
         action: "organization.provisioned",
         module: DOGRUADRES_AUDIT_MODULE,
         resource: "organization",
         target_id: organization.id,
-        new_values: { name: organization.name, initial_owner_count: memberships.length },
+        new_values: { name: organization.name, initial_owner_count: memberships.length, ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:"organization.provision",staff_resource:"platform"}:{}) },
         occurred_at: new Date(),
       },
       ...memberships.map((membership, index) => ({
         actor_id: input.provisioned_by.actor_id,
         actor_type: input.provisioned_by.actor_type,
         actor_person_id: provisioner.id,
-        role_context: "platform_administrator",
+        role_context: input.staff_grant_id ? "platform_staff" : "platform_administrator",
         organization_id: organization.id,
         action: "organization.owner_assigned",
         module: DOGRUADRES_AUDIT_MODULE,
         resource: "membership",
         target_id: membership.id,
-        new_values: { role: "owner", protected_owner: true, person_id: owners[index].id },
+        new_values: { role: "owner", protected_owner: true, person_id: owners[index].id,
+          ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:"organization.provision",staff_resource:"platform"}:{}) },
         occurred_at: new Date(),
       })),
     ], sharedContext)
@@ -281,7 +693,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       protected_owner: nextRole === "owner" && nextStatus === "active",
       revoked_at: nextStatus === "revoked" ? new Date() : null,
     }, sharedContext)
-    await this.createAuditEvents([{
+    const [membershipAudit] = await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor_id,
       actor_type: input.actor_type,
       actor_person_id: input.actor_person_id,
@@ -295,6 +707,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       new_values: { role: nextRole, status: nextStatus, protected_owner: nextRole === "owner" && nextStatus === "active" },
       occurred_at: new Date(),
     }], sharedContext)
+    const auditManager=sharedContext.transactionManager as {flush():Promise<void>}
+    await auditManager.flush()
+    await securitySql(sharedContext.transactionManager).execute(`insert into da_security_outbox(id,audit_event_id,created_at) values(?,?,clock_timestamp())`,['security_'+membershipAudit.id,membershipAudit.id])
     return updated
   }
 
@@ -326,7 +741,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }], sharedContext)
     const token = deriveInvitationToken(invitation.id)
     const updated = await this.updateInvitations({ id: invitation.id, token_hash: hashInvitationToken(token) }, sharedContext)
-    await this.createAuditEvents([{
+    await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor_id,
       actor_type: input.actor_type,
       actor_person_id: input.actor_person_id,
@@ -355,7 +770,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const current = await this.getInvitationInOrganization(invitation.id, input.organization_id, sharedContext)
     if (!current || current.status !== "pending" || current.expires_at.getTime() <= Date.now()) throw new MedusaError(MedusaError.Types.NOT_FOUND, "Pending invitation not found")
     const updated = await this.updateInvitations({ id: current.id, status: "revoked", revoked_at: new Date() }, sharedContext)
-    await this.createAuditEvents([{
+    await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor_id,
       actor_type: input.actor_type,
       actor_person_id: input.actor_person_id,
@@ -425,7 +840,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       accepted_at: new Date(),
       accepted_by_person_id: person.id,
     }, sharedContext)
-    await this.createAuditEvents([{
+    await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor.actor_id,
       actor_type: input.actor.actor_type,
       actor_person_id: person.id,
@@ -439,5 +854,87 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       occurred_at: new Date(),
     }], sharedContext)
     return { membership, invitation: accepted }
+  }
+
+  @InjectTransactionManager()
+  async getActiveSmtpConfig(@MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    return new PlatformSmtpPersistence(sql).readSettings(true)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformSmtpSettings(token: string, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
+    if (!staff) return null
+    const persistence = new PlatformSmtpPersistence(sql)
+    const settings = await persistence.readSettings(false)
+    return {
+      settings,
+      can_manage: true,
+    }
+  }
+
+  @InjectTransactionManager()
+  async personalUpdatePlatformSmtpSettings(
+    token: string,
+    input: UpdateSmtpSettingsInput,
+    @MedusaContext() context: Context = {}
+  ) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
+    if (!staff) return null
+    const actor: SmtpAuditActor = {
+      person_id: staff.person_id,
+      actor_type: staff.actor_type as SmtpAuditActor["actor_type"],
+      actor_id: staff.actor_id,
+    }
+    const persistence = new PlatformSmtpPersistence(sql)
+    return persistence.updateSettings(input, actor)
+  }
+
+  @InjectTransactionManager()
+  async personalTestPlatformSmtpSettings(
+    token: string,
+    targetRecipient: string,
+    candidateSettings?: Partial<UpdateSmtpSettingsInput>,
+    @MedusaContext() context: Context = {}
+  ) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
+    if (!staff) return null
+
+    const persistence = new PlatformSmtpPersistence(sql)
+    const current = await persistence.readSettings(true)
+
+    const testHost = candidateSettings?.host || current.host
+    const testPort = candidateSettings?.port || current.port
+    const testSecurity = candidateSettings?.security || current.security
+    const testUsername = candidateSettings?.username !== undefined ? candidateSettings.username : current.username
+    const testPassword = candidateSettings?.password !== undefined ? candidateSettings.password : current.password
+    const testFromEmail = candidateSettings?.from_email || current.from_email
+    const testFromName = candidateSettings?.from_name !== undefined ? candidateSettings.from_name : current.from_name
+
+    return sendSmtpEmail(
+      {
+        to: targetRecipient,
+        subject: "DogruAdres Platform SMTP Test Mesaji",
+        text: `DogruAdres Platform SMTP Yapilandirma Testi basariyla tamamlandi.\n\nZaman: ${new Date().toISOString()}\nSunucu: ${testHost}:${testPort}`,
+        html: `<div style="font-family:sans-serif;padding:20px;border:1px solid #ddd;border-radius:6px;"><h3>DogruAdres Platform SMTP Test</h3><p>SMTP Yapilandirma Testi basariyla tamamlandi.</p><p><strong>Sunucu:</strong> ${testHost}:${testPort}</p><p><strong>Zaman:</strong> ${new Date().toISOString()}</p></div>`,
+      },
+      {
+        enabled: true,
+        host: testHost,
+        port: testPort,
+        security: testSecurity,
+        username: testUsername || undefined,
+        password: testPassword || undefined,
+        fromEmail: testFromEmail,
+        fromName: testFromName || undefined,
+      }
+    )
   }
 }

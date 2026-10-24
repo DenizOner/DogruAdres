@@ -1,0 +1,25 @@
+import {POST} from "../mfa/manage/route"
+import {access,csrf,sessionToken} from "../security"
+import {mfaSettingsEnabled} from "../mfa/route"
+import {mfaRuntimeEnforced} from "../../../modules/dogruadres-access/identity-session"
+import {readNativeMfaSummary} from "../../../modules/dogruadres-access/native-mfa-summary"
+jest.mock("../security",()=>({access:jest.fn(),csrf:jest.fn(),sessionToken:jest.fn()}))
+jest.mock("../mfa/route",()=>({mfaSettingsEnabled:jest.fn()}))
+jest.mock("../../../modules/dogruadres-access/identity-session",()=>({mfaRuntimeEnforced:jest.fn(),digest:(x:string)=>x}))
+jest.mock("../../../modules/dogruadres-access/native-mfa-summary",()=>({readNativeMfaSummary:jest.fn()}))
+describe("native MFA management exact identity boundary",()=>{
+ const store={personalManageNativeMfa:jest.fn(),personalLoginAttempt:jest.fn()}
+ const auth={generateAuthMfaRecoveryCodes:jest.fn(),listAuthMfa:jest.fn(),disableAuthMfa:jest.fn()}
+ const codes=Array.from({length:10},(_,i)=>'SYNTHETIC-NONSECRET-'+i)
+ beforeEach(()=>{jest.resetAllMocks();(access as jest.Mock).mockReturnValue(store);(csrf as jest.Mock).mockResolvedValue(true);(sessionToken as jest.Mock).mockReturnValue('opaque');(mfaSettingsEnabled as jest.Mock).mockReturnValue(true);(mfaRuntimeEnforced as jest.Mock).mockReturnValue(true);(readNativeMfaSummary as jest.Mock).mockResolvedValue({enabled:true,state:'enabled'});store.personalLoginAttempt.mockResolvedValue(true);store.personalManageNativeMfa.mockImplementation(async(_t,a,op)=>({result:await op('auth_self'),sessions_revoked:a==='disable'}));auth.listAuthMfa.mockResolvedValue([{id:'native_self',auth_identity_id:'auth_self',provider:'totp',status:'enabled'}]);auth.generateAuthMfaRecoveryCodes.mockResolvedValue({codes});auth.disableAuthMfa.mockResolvedValue({id:'native_self',auth_identity_id:'auth_self',status:'disabled'})})
+ const run=async(body:any,query:any={})=>{const res:any={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),json:jest.fn(),clearCookie:jest.fn()};await POST({body,query,socket:{remoteAddress:'127.0.0.1'},scope:{resolve:()=>auth}} as any,res);return res}
+ it('generates codes for only the server session identity',async()=>{const r=await run({action:'recovery_codes'});expect(auth.generateAuthMfaRecoveryCodes).toHaveBeenCalledWith({auth_identity_id:'auth_self',count:10});expect(r.json).toHaveBeenCalledWith({recovery_codes:codes,sessions_revoked:false});expect(r.setHeader).toHaveBeenCalledWith('Cache-Control','no-store')})
+ it.each([{action:'recovery_codes',auth_identity_id:'victim'},{action:'disable',method:'totp',code:'123456',factor_id:'victim'},{action:'disable',method:'totp',code:'bad'}])('rejects client-selected identity/factor and malformed proof',async b=>{expect((await run(b)).status).toHaveBeenCalledWith(400);expect(store.personalManageNativeMfa).not.toHaveBeenCalled()})
+ it('rejects CSRF before any native read or mutation',async()=>{(csrf as jest.Mock).mockResolvedValue(false);expect((await run({action:'recovery_codes'})).status).toHaveBeenCalledWith(403);expect(auth.generateAuthMfaRecoveryCodes).not.toHaveBeenCalled()})
+ it('keeps disabled runtime closed',async()=>{(mfaRuntimeEnforced as jest.Mock).mockReturnValue(false);expect((await run({action:'recovery_codes'})).status).toHaveBeenCalledWith(503);expect(store.personalManageNativeMfa).not.toHaveBeenCalled()})
+ it('requires real recent proof from Foundation',async()=>{store.personalManageNativeMfa.mockResolvedValue(null);expect((await run({action:'recovery_codes'})).status).toHaveBeenCalledWith(403);expect(auth.generateAuthMfaRecoveryCodes).not.toHaveBeenCalled()})
+ it('rejects throttled attempts',async()=>{store.personalLoginAttempt.mockResolvedValue(false);expect((await run({action:'recovery_codes'})).status).toHaveBeenCalledWith(429)})
+ it('never disables a foreign identity result',async()=>{auth.listAuthMfa.mockResolvedValue([{id:'other',auth_identity_id:'victim',provider:'totp',status:'enabled'}]);expect((await run({action:'disable',method:'totp',code:'123456'})).status).toHaveBeenCalledWith(409);expect(auth.disableAuthMfa).not.toHaveBeenCalled()})
+ it('passes native proof and clears the cookie only after verified disable',async()=>{const r=await run({action:'disable',method:'totp',code:'123456'});expect(auth.disableAuthMfa).toHaveBeenCalledWith({id:'native_self',method:'totp',code:'123456'});expect(r.clearCookie).toHaveBeenCalledWith('da_session',{path:'/'})})
+ it('classifies uncertain native results without retry',async()=>{auth.generateAuthMfaRecoveryCodes.mockRejectedValue(Error('network lost after write'));const r=await run({action:'recovery_codes'});expect(r.status).toHaveBeenCalledWith(503);expect(r.json).toHaveBeenCalledWith(expect.objectContaining({message:expect.stringContaining('INDETERMINATE')}));expect(auth.generateAuthMfaRecoveryCodes).toHaveBeenCalledTimes(1)})
+})
