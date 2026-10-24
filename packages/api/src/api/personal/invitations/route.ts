@@ -86,7 +86,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         role: result.membership.role, status: result.membership.status,
       },
     })
-  } catch (err: any) {
-    return res.status(403).json({ message: err?.message || "Invitation is invalid, expired, revoked, or already used" })
+  } catch {
+    // Invitation failures may include sensitive actor or organization details.
+    // Never reflect workflow or persistence errors into public HTTP responses.
+    return res.status(403).json({ message: "Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin." })
   }
 }
