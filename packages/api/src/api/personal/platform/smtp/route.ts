@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { z } from "@medusajs/framework/zod"
 import { access, csrf, enabled, sessionToken } from "../../security"
+import { IdentityAccessDenied } from "../../../../modules/dogruadres-access/identity-session"
 import { SmtpConcurrentUpdateError, InvalidSmtpSettingsState } from "../../../../modules/dogruadres-access/smtp-settings"
 import { isPrivateIp } from "../../../../modules/dogruadres-access/smtp-client"
 
@@ -49,8 +50,12 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   if (!enabled()) return res.status(503).json({ message: "Unavailable" })
   if (Object.keys(req.query || {}).length) return res.status(400).json({ message: "Invalid input" })
 
-  const service = access(req)
   const token = sessionToken(req)
+  if (!token) {
+    return res.status(403).json({ message: "Access denied or strong authentication required" })
+  }
+
+  const service = access(req)
 
   try {
     const result = await service.personalPlatformSmtpSettings(token)
@@ -59,6 +64,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     }
     return res.json(result)
   } catch (err) {
+    if (err instanceof IdentityAccessDenied) {
+      return res.status(403).json({ message: "Access denied or strong authentication required" })
+    }
     return res.status(500).json({ message: "Failed to read platform SMTP settings" })
   }
 }
@@ -73,6 +81,11 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   } catch {}
   if (!csrfValid) return res.status(403).json({ message: "Access denied" })
 
+  const token = sessionToken(req)
+  if (!token) {
+    return res.status(403).json({ message: "Access denied or strong authentication required" })
+  }
+
   const parsed = requestSchema.safeParse(req.body)
   if (!parsed.success) {
     return res.status(400).json({
@@ -82,7 +95,6 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   }
 
   const service = access(req)
-  const token = sessionToken(req)
 
   if (parsed.data.action === "save") {
     try {
@@ -104,6 +116,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
       return res.json({ settings: updated })
     } catch (err) {
+      if (err instanceof IdentityAccessDenied) {
+        return res.status(403).json({ message: "Access denied or strong authentication required" })
+      }
       if (err instanceof SmtpConcurrentUpdateError) {
         return res.status(409).json({ message: "Settings changed; refresh before retry" })
       }
@@ -138,7 +153,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         messageId: sendResult.messageId,
         accepted: sendResult.accepted,
       })
-    } catch {
+    } catch (err) {
+      if (err instanceof IdentityAccessDenied) {
+        return res.status(403).json({ message: "Access denied or strong authentication required" })
+      }
       // Provider errors may contain addresses or credentials in short fragments.
       // Never reflect them into an HTTP response.
       return res.status(400).json({

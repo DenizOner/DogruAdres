@@ -40,17 +40,20 @@ export default function PlatformSmtpSettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  
-  // Settings Form State
+  const [csrfToken, setCsrfToken] = useState<string>("")
+  const [authError, setAuthError] = useState<string | null>(null)
+  const [canManage, setCanManage] = useState<boolean>(true)
+
+  // Settings Form State - initialized empty / unpopulated until server readback
   const [enabled, setEnabled] = useState(true)
-  const [host, setHost] = useState("smtp.gmail.com")
+  const [host, setHost] = useState("")
   const [port, setPort] = useState(465)
   const [security, setSecurity] = useState<"ssl" | "tls">("ssl")
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [hasExistingPassword, setHasExistingPassword] = useState(false)
   const [fromEmail, setFromEmail] = useState("")
-  const [fromName, setFromName] = useState("DoğruAdres Platformu")
+  const [fromName, setFromName] = useState("")
   const [version, setVersion] = useState(1)
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
 
@@ -65,6 +68,29 @@ export default function PlatformSmtpSettingsPage() {
     async function loadSettings() {
       try {
         setLoading(true)
+        setAuthError(null)
+
+        // 1. Fetch CSRF token from /personal/session
+        try {
+          const sessionRes = await fetch(`${backendUrl}/personal/session`, {
+            method: "GET",
+            headers: {
+              ...getAuthHeaders(),
+              "Accept": "application/json",
+            },
+            credentials: "include",
+          })
+          if (sessionRes.ok) {
+            const sessionData = await sessionRes.json()
+            if (sessionData?.csrf_token) {
+              setCsrfToken(sessionData.csrf_token)
+            }
+          }
+        } catch {
+          // Frontdoor / proxy fallback handles same-origin credentials
+        }
+
+        // 2. Fetch platform SMTP settings
         const res = await fetch(`${backendUrl}/personal/platform/smtp`, {
           method: "GET",
           headers: {
@@ -75,22 +101,28 @@ export default function PlatformSmtpSettingsPage() {
         })
 
         if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            setCanManage(false)
+            setAuthError("SMTP ayarlarını görüntülemek ve yönetmek için 'platform.smtp.manage' yetkisi ve güçlü kimlik doğrulaması (MFA) gereklidir.")
+            return
+          }
           throw new Error("HTTP " + res.status)
         }
 
-        const data: { settings: SmtpSettings } = await res.json()
+        const data: { settings: SmtpSettings; can_manage?: boolean } = await res.json()
         if (data?.settings) {
           const s = data.settings
           setEnabled(s.enabled)
-          setHost(s.host)
-          setPort(s.port)
-          setSecurity(s.security)
+          setHost(s.host || "")
+          setPort(s.port || 465)
+          setSecurity(s.security || "ssl")
           setUsername(s.username || "")
-          setFromEmail(s.from_email)
+          setFromEmail(s.from_email || "")
           setFromName(s.from_name || "")
           setHasExistingPassword(s.has_password)
           setVersion(s.version)
           setLastUpdated(s.updated_at)
+          setCanManage(data.can_manage !== false)
           if (s.from_email && !testRecipient) {
             setTestRecipient(s.from_email)
           }
@@ -128,13 +160,18 @@ export default function PlatformSmtpSettingsPage() {
         payload.password = password
       }
 
+      const headers: Record<string, string> = {
+        ...getAuthHeaders(),
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      }
+      if (csrfToken) {
+        headers["x-csrf-token"] = csrfToken
+      }
+
       const res = await fetch(`${backendUrl}/personal/platform/smtp`, {
         method: "POST",
-        headers: {
-          ...getAuthHeaders(),
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
+        headers,
         credentials: "include",
         body: JSON.stringify(payload),
       })
@@ -154,7 +191,7 @@ export default function PlatformSmtpSettingsPage() {
         setVersion(data.settings.version)
         setHasExistingPassword(data.settings.has_password)
         setLastUpdated(data.settings.updated_at)
-        setPassword("") // Clear plaintext password from input
+        setPassword("") // Clear plaintext password immediately
         toast.success("E-posta ayarları kaydedildi.")
       }
     } catch (err: any) {
@@ -192,13 +229,18 @@ export default function PlatformSmtpSettingsPage() {
         payload.candidate_settings.password = password
       }
 
+      const headers: Record<string, string> = {
+        ...getAuthHeaders(),
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      }
+      if (csrfToken) {
+        headers["x-csrf-token"] = csrfToken
+      }
+
       const res = await fetch(`${backendUrl}/personal/platform/smtp`, {
         method: "POST",
-        headers: {
-          ...getAuthHeaders(),
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
+        headers,
         credentials: "include",
         body: JSON.stringify(payload),
       })
@@ -257,12 +299,35 @@ export default function PlatformSmtpSettingsPage() {
         )}
       </div>
 
+      {authError && (
+        <Alert variant="error" className="p-4 rounded-xl border border-red-200 bg-red-50/50">
+          <div className="space-y-2">
+            <Text className="text-sm font-semibold text-red-900">{authError}</Text>
+            <Text className="text-xs text-red-700">
+              Platform SMTP ayarlarını yönetmek güvenlik gereği güçlü kimlik doğrulaması (TOTP / MFA) ve platform staff yetkisi gerektirir.
+            </Text>
+            <div className="pt-1">
+              <Button
+                asChild
+                variant="secondary"
+                size="small"
+                className="min-h-[48px] px-4 font-semibold text-ui-fg-base"
+              >
+                <a href="https://127.0.0.1:19102/personal" target="_blank" rel="noopener noreferrer">
+                  Personal Frontdoor Panelinde Doğrula &rarr;
+                </a>
+              </Button>
+            </div>
+          </div>
+        </Alert>
+      )}
+
       {loading ? (
         <Container className="p-8 text-center">
           <div className="w-8 h-8 border-3 border-[#0e66c2]/20 border-t-[#0e66c2] rounded-full animate-spin mx-auto mb-3" />
           <Text className="text-sm text-ui-fg-muted">Yapılandırma yükleniyor...</Text>
         </Container>
-      ) : (
+      ) : canManage ? (
         <form onSubmit={handleSave} className="space-y-6">
           {/* Main Configuration Card */}
           <Container className="p-6 space-y-6 rounded-xl border border-ui-border-base bg-ui-bg-base">
@@ -303,9 +368,9 @@ export default function PlatformSmtpSettingsPage() {
                   id="smtp-host"
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
-                  placeholder="smtp.gmail.com"
+                  placeholder="smtp.example.com"
                   required
-                  className="min-h-[44px]"
+                  className="min-h-[48px]"
                 />
               </div>
 
@@ -320,7 +385,7 @@ export default function PlatformSmtpSettingsPage() {
                   onChange={(e) => setPort(Number(e.target.value))}
                   placeholder="465"
                   required
-                  className="min-h-[44px]"
+                  className="min-h-[48px]"
                 />
               </div>
             </div>
@@ -333,7 +398,7 @@ export default function PlatformSmtpSettingsPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label
                   onClick={() => { setSecurity("ssl"); if (port === 587) setPort(465) }}
-                  className={`p-4 rounded-lg border-2 cursor-pointer transition-all flex items-start gap-3 ${
+                  className={`min-h-[48px] p-4 rounded-lg border-2 cursor-pointer transition-all flex items-start gap-3 ${
                     security === "ssl"
                       ? "border-[#0e66c2] bg-blue-50/50 dark:bg-blue-950/20"
                       : "border-ui-border-base hover:bg-ui-bg-subtle"
@@ -359,7 +424,7 @@ export default function PlatformSmtpSettingsPage() {
 
                 <label
                   onClick={() => { setSecurity("tls"); if (port === 465) setPort(587) }}
-                  className={`p-4 rounded-lg border-2 cursor-pointer transition-all flex items-start gap-3 ${
+                  className={`min-h-[48px] p-4 rounded-lg border-2 cursor-pointer transition-all flex items-start gap-3 ${
                     security === "tls"
                       ? "border-[#0e66c2] bg-blue-50/50 dark:bg-blue-950/20"
                       : "border-ui-border-base hover:bg-ui-bg-subtle"
@@ -396,7 +461,7 @@ export default function PlatformSmtpSettingsPage() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="ornek@dogruadres.com"
-                  className="min-h-[44px]"
+                  className="min-h-[48px]"
                 />
               </div>
 
@@ -416,8 +481,8 @@ export default function PlatformSmtpSettingsPage() {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={hasExistingPassword ? "•••••••••••••••• (Değiştirmek için yeni parola girin)" : "Uygulama Şifresi"}
-                  className="min-h-[44px]"
+                  placeholder={hasExistingPassword ? "•••••••••••••••• (Değiştirmek için yeni parola girin)" : "Uygulama şifresi"}
+                  className="min-h-[48px]"
                 />
               </div>
             </div>
@@ -435,7 +500,7 @@ export default function PlatformSmtpSettingsPage() {
                   onChange={(e) => setFromEmail(e.target.value)}
                   placeholder="bildirim@dogruadres.com"
                   required
-                  className="min-h-[44px]"
+                  className="min-h-[48px]"
                 />
               </div>
 
@@ -448,7 +513,7 @@ export default function PlatformSmtpSettingsPage() {
                   value={fromName}
                   onChange={(e) => setFromName(e.target.value)}
                   placeholder="DoğruAdres Platformu"
-                  className="min-h-[44px]"
+                  className="min-h-[48px]"
                 />
               </div>
             </div>
@@ -458,7 +523,7 @@ export default function PlatformSmtpSettingsPage() {
               <Button
                 type="submit"
                 disabled={saving}
-                className="bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold min-h-[44px] px-6"
+                className="bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold min-h-[48px] px-6"
               >
                 {saving ? "Kaydediliyor..." : "Ayarları kaydet"}
               </Button>
@@ -496,7 +561,7 @@ export default function PlatformSmtpSettingsPage() {
                   value={testRecipient}
                   onChange={(e) => setTestRecipient(e.target.value)}
                   placeholder="yonetici@dogruadres.net"
-                  className="min-h-[44px]"
+                  className="min-h-[48px]"
                 />
               </div>
               <Button
@@ -504,14 +569,14 @@ export default function PlatformSmtpSettingsPage() {
                 onClick={handleTest}
                 disabled={testing}
                 variant="secondary"
-                className="min-h-[44px] px-5 font-semibold text-ui-fg-base"
+                className="min-h-[48px] px-5 font-semibold text-ui-fg-base"
               >
                 {testing ? "Bağlanıyor..." : "Bağlantıyı ve E-posta Gönderimini Test Et"}
               </Button>
             </div>
           </Container>
         </form>
-      )}
+      ) : null}
     </div>
   )
 }

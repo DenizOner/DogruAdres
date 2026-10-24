@@ -50,3 +50,10 @@ test('personal, public catalog and purpose-bound recovery are explicit exception
   assert.equal(allowedPublicRequest('POST','/admin/api-keys'),false)
   assert.equal(allowedPublicRequest('GET','/personal/private'),false)
 })
+
+test('platform SMTP settings has exact GET/POST relay only', () => {
+  for (const method of ['GET', 'POST']) assert.equal(allowedPublicRequest(method, '/personal/platform/smtp'), true)
+  for (const method of ['HEAD', 'OPTIONS', 'PUT', 'PATCH', 'DELETE']) assert.equal(allowedPublicRequest(method, '/personal/platform/smtp'), false)
+  for (const path of ['/personal/platform/smtp/', '/personal/platform/smtp/extra'])
+    assert.equal(allowedPublicRequest('POST', path), false)
+})

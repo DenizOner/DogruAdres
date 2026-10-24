@@ -53,6 +53,11 @@ describe("personal ingress (unit contract only)",()=>{
     for(const method of ["GET","POST"])expect((await probe("/auth/verify-email",method)).next).toHaveBeenCalled()
     for(const method of ["PUT","DELETE","OPTIONS"])expect((await probe("/auth/verify-email",method)).res.status).toHaveBeenCalledWith(401)
   })
+  it("preserves platform SMTP management GET and POST", async () => {
+    expect((await probe("/personal/platform/smtp", "GET")).next).toHaveBeenCalled()
+    expect((await probe("/personal/platform/smtp", "POST")).next).toHaveBeenCalled()
+    expect((await probe("/personal/platform/smtp", "DELETE")).next).not.toHaveBeenCalled()
+  })
   it("does not treat a native cookie session as anonymous verification",async()=>{
     const next=jest.fn(),res:any={status:jest.fn().mockReturnThis(),json:jest.fn()}
     await nativeIngress({originalUrl:"/auth/verification/confirm",method:"POST",headers:{},session:{auth_context:{auth_identity_id:"old-native-session"}}} as any,res,next)

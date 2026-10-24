@@ -80,6 +80,31 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <label>Güncel doğrulama kodu<input name="code" type="password" autocomplete="one-time-code" required maxlength="128"></label><button>Faktörü doğrulayarak kaldır</button>
     </form>
   </section>
+  
+  <section id="smtp-platform" hidden>
+    <h2>Platform SMTP ve Bildirim Ayarları</h2>
+    <p id="smtp-status" role="status" aria-live="polite">SMTP yapılandırması yükleniyor...</p>
+    <form id="smtp-form">
+      <label>SMTP Servis Durumu<input name="enabled" type="checkbox" role="switch" value="true">Etkin</label>
+      <label>Sunucu Adresi (Host)<input name="host" required maxlength="255" placeholder="smtp.example.com"></label>
+      <label>Port<input name="port" type="number" required min="1" max="65535" value="465"></label>
+      <label>Güvenlik Protokolü<select name="security">
+        <option value="ssl">SSL / TLS (Port 465)</option>
+        <option value="tls">STARTTLS (Port 587)</option>
+      </select></label>
+      <label>Kullanıcı Adı<input name="username" maxlength="255" autocomplete="off"></label>
+      <label>Parola / Uygulama Şifresi<input name="password" type="password" maxlength="512" autocomplete="new-password" placeholder="(Kayıtlı parolayı korumak için boş bırakın)"></label>
+      <label>Gönderen E-posta (From Email)<input name="from_email" type="email" required maxlength="255"></label>
+      <label>Gönderen Adı (From Name)<input name="from_name" maxlength="255"></label>
+      <button>SMTP Ayarlarını Kaydet</button>
+    </form>
+    <h3>Canlı Bağlantı ve Test E-postası</h3>
+    <form id="smtp-test-form">
+      <label>Test Alıcısı (Hedef E-posta)<input name="target_recipient" type="email" required maxlength="255" placeholder="alici@dogruadres.net"></label>
+      <button>Bağlantıyı ve Gönderimi Test Et</button>
+    </form>
+    <p id="smtp-test-result" role="status" aria-live="polite"></p>
+  </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre><div id="memberships"></div><button id="staff">Platform yetkisini kontrol et</button>
   <h2>Kuruluş oluşturma</h2><p>Bu işlem açık platform görevi ve güncel güçlü doğrulama gerektirir. İlk iki Owner sunucuda doğrulanır.</p>
   <form id="provision"><label>Yeni kuruluş adı<input name="name" maxlength="200" required></label><label>Birinci Owner türü<select name="type1"><option>user</option><option>member</option><option>customer</option></select></label><label>Birinci Owner kimliği<input name="owner1" required></label><label>İkinci Owner türü<select name="type2"><option>user</option><option>member</option><option>customer</option></select></label><label>İkinci Owner kimliği<input name="owner2" required></label><button>Kuruluş oluştur</button></form><pre id="provision-result"></pre>
@@ -115,7 +140,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         : 'MFA politikası oturum akışına henüz uygulanmıyor.';
       el('mfa-info').textContent='Platform: '+names[data.platform.platform_mode]+'. '+states[data.native_factor_state]+'. Hedef durum: '+progress[data.effective_mfa_target.next_step]+'. '+enforcement;
     }catch{
-      mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;
+      mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;smtpSettings=null;el('smtp-platform').hidden=true;
       el('mfa-enroll-launch').hidden=true;
       el('mfa-info').textContent='MFA ayarları henüz hizmete açılmadı.';
     }
@@ -152,7 +177,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
     }catch{}
   }
-  async function load(){try{const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
+  async function load(){try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
   async function updateMfaForm(form,body){
     const button=form.querySelector('button');button.disabled=true;
     let uncertain=false;
@@ -278,7 +303,100 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     try{await api('mfa/manage',{method:'POST',body:JSON.stringify({action:'disable',...Object.fromEntries(new FormData(event.target))})});event.target.reset();clearMfaCodes();await load();status('Native faktör kaldırıldı; yeniden giriş yapın.');}
     catch(error){event.target.reset();status(error.message);if(!error.uncertain)button.disabled=false}
   };
-  async function logout(all){clearMfaCodes();try{await api('session'+(all?'?all=true':''),{method:'DELETE'});await load()}catch(e){status(e.message)}};
+  async function logout(all){clearMfaCodes();smtpSettings=null;el('smtp-platform').hidden=true;try{await api('session'+(all?'?all=true':''),{method:'DELETE'});await load()}catch(e){status(e.message)}};
+  
+  let smtpSettings=null;
+  async function refreshSmtp(){
+    try{
+      const data=await api('platform/smtp');
+      if(data&&data.can_manage&&data.settings){
+        smtpSettings=data.settings;
+        el('smtp-platform').hidden=false;
+        el('smtp-status').textContent='Ayar sürümü: '+smtpSettings.version+' ('+(smtpSettings.enabled?'Aktif':'Devre Dışı')+'). '+(smtpSettings.has_password?'AES-256 Parola Kayıtlı.':'Parola Tanımlanmamış.');
+        const form=el('smtp-form');
+        form.elements.enabled.checked=!!smtpSettings.enabled;
+        form.elements.host.value=smtpSettings.host||'';
+        form.elements.port.value=smtpSettings.port||465;
+        form.elements.security.value=smtpSettings.security||'ssl';
+        form.elements.username.value=smtpSettings.username||'';
+        form.elements.password.value='';
+        form.elements.from_email.value=smtpSettings.from_email||'';
+        form.elements.from_name.value=smtpSettings.from_name||'';
+      }else{
+        smtpSettings=null;el('smtp-platform').hidden=true;
+      }
+    }catch{
+      smtpSettings=null;el('smtp-platform').hidden=true;
+    }
+  }
+  el('smtp-form').onsubmit=async e=>{
+    e.preventDefault();if(!smtpSettings)return;
+    const b=e.target.querySelector('button');b.disabled=true;
+    try{
+      const fd=new FormData(e.target);
+      const payload={
+        action:'save',
+        enabled:fd.get('enabled')==='true',
+        host:fd.get('host'),
+        port:Number(fd.get('port')),
+        security:fd.get('security'),
+        username:fd.get('username')||null,
+        from_email:fd.get('from_email'),
+        from_name:fd.get('from_name')||null,
+        expected_version:smtpSettings.version,
+      };
+      const pw=fd.get('password');
+      if(pw)payload.password=pw;
+      const res=await api('platform/smtp',{method:'POST',body:JSON.stringify(payload)});
+      if(res.settings){
+        smtpSettings=res.settings;
+        await refreshSmtp();
+        status('SMTP ayarları kaydedildi (Sürüm: '+res.settings.version+')');
+      }
+    }catch(err){status(err.message)}finally{b.disabled=false}
+  };
+  el('smtp-test-form').onsubmit=async e=>{
+    e.preventDefault();
+    const b=e.target.querySelector('button');b.disabled=true;
+    el('smtp-test-result').textContent='Test e-postası gönderiliyor...';
+    try{
+      const fd=new FormData(e.target);
+      const recipient=fd.get('target_recipient');
+      const sf=el('smtp-form');
+      const sfd=new FormData(sf);
+      const candidate={
+        host:sfd.get('host'),
+        port:Number(sfd.get('port')),
+        security:sfd.get('security'),
+        username:sfd.get('username')||null,
+        from_email:sfd.get('from_email'),
+        from_name:sfd.get('from_name')||null,
+      };
+      const pw=sfd.get('password');
+      if(pw)candidate.password=pw;
+      const res=await api('platform/smtp',{
+        method:'POST',
+        body:JSON.stringify({
+          action:'test',
+          target_recipient:recipient,
+          candidate_settings:candidate,
+        }),
+      });
+      if(res.ok){
+        el('smtp-test-result').textContent='Test başarılı! Mesaj kabul edildi. (ID: '+(res.messageId||'ok')+')';
+        status('Test e-postası başarıyla kabul edildi');
+      }else{
+        el('smtp-test-result').textContent='Test başarısız: '+(res.message||'Hata');
+        status('Test e-postası gönderilemedi');
+      }
+    }catch(err){
+      el('smtp-test-result').textContent='Test hatası: '+err.message;
+      status('Test hatası: '+err.message);
+    }finally{
+      b.disabled=false;
+    }
+  };
+
   el('select-org').onsubmit=async e=>{e.preventDefault();await selectOrg(new FormData(e.target).get('organization'))};
   el('logout').onclick=()=>logout(false);el('logout-all').onclick=()=>logout(true);el('staff').onclick=async()=>{try{await api('platform');status('Platform görevi için izin var')}catch(e){status(e.message)}};load();
   </script></html>`)

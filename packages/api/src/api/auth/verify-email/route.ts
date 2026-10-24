@@ -135,7 +135,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     const authService: IAuthModuleService = req.scope.resolve(Modules.AUTH)
 
-    const result = await authService.confirmAuthVerification({
+    await authService.confirmAuthVerification({
       code: rawToken,
       code_provider: "token",
     })

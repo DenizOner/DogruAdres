@@ -10,7 +10,7 @@ export function allowedPublicRequest(method,path){
   const personal={
     '/personal':['GET'], '/personal/session':['GET','POST','DELETE'],
     '/personal/challenge':['POST'], '/personal/organizations':['GET'],
-    '/personal/platform':['GET','POST'], '/personal/memberships':['GET','POST'],
+    '/personal/platform':['GET','POST'], '/personal/platform/smtp':['GET','POST'], '/personal/memberships':['GET','POST'],
     '/personal/invitations':['POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
     '/personal/contexts':['GET'],
     '/personal/links':['GET','POST'],
