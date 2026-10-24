@@ -209,6 +209,38 @@ describe("personal platform smtp route unit tests", () => {
       })
     })
 
+    it("rejects tests without an explicit recipient and does not dispatch", async () => {
+      const req = createMockReq({ action: "test" })
+      const res = createMockRes()
+
+      await POST(req, res)
+
+      expect(res.status).toHaveBeenCalledWith(400)
+      expect(res.json).toHaveBeenCalledWith({
+        message: "Target recipient email is required for test email dispatch",
+      })
+      expect(mockService.personalTestPlatformSmtpSettings).not.toHaveBeenCalled()
+    })
+
+    it("never reflects SMTP provider errors containing addresses or secrets", async () => {
+      mockService.personalTestPlatformSmtpSettings.mockRejectedValue(
+        new Error("535 failure from operator@example.test: password=test")
+      )
+      const req = createMockReq({
+        action: "test",
+        target_recipient: "recipient@example.test",
+      })
+      const res = createMockRes()
+
+      await POST(req, res)
+
+      expect(res.status).toHaveBeenCalledWith(400)
+      const payload = JSON.stringify(res.json.mock.calls)
+      expect(payload).not.toContain("operator@example.test")
+      expect(payload).not.toContain("password=test")
+      expect(payload).toContain("SMTP test failed")
+    })
+
     it("returns 200 and dispatches live test email on test action", async () => {
       mockService.personalTestPlatformSmtpSettings.mockResolvedValue({
         messageId: "<test-msg-123@smtp.gmail.com>",
