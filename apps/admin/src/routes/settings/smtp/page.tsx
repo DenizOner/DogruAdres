@@ -155,7 +155,7 @@ export default function PlatformSmtpSettingsPage() {
         setHasExistingPassword(data.settings.has_password)
         setLastUpdated(data.settings.updated_at)
         setPassword("") // Clear plaintext password from input
-        toast.success("SMTP yapılandırması başarıyla kaydedildi (CAS Versiyon: " + data.settings.version + ")")
+        toast.success("E-posta ayarları kaydedildi.")
       }
     } catch (err: any) {
       toast.error("Hata: " + (err.message || "Sunucuya ulaşılamadı"))
@@ -208,7 +208,7 @@ export default function PlatformSmtpSettingsPage() {
       if (res.ok && data.ok) {
         setTestResult({
           ok: true,
-          message: `250 OK: Canlı bağlantı ve teslimat testi başarılı (MessageId: ${data.messageId})`,
+          message: "E-posta gönderim için kabul edildi. Gelen kutusundan teslimatı kontrol edin.",
         })
         toast.success("Test e-postası başarıyla gönderildi!")
       } else {
@@ -241,7 +241,7 @@ export default function PlatformSmtpSettingsPage() {
               Platform SMTP Ayarları
             </Heading>
             <Badge color="blue" size="small" className="bg-[#0e66c2]/10 text-[#0e66c2] border-[#0e66c2]/20 font-semibold">
-              Versiyon: {version} (CAS Aktif)
+              Ayar sürümü: {version}
             </Badge>
           </div>
           <Text className="text-sm text-ui-fg-subtle">
@@ -460,7 +460,7 @@ export default function PlatformSmtpSettingsPage() {
                 disabled={saving}
                 className="bg-[#0e66c2] hover:bg-[#0b57a4] text-white font-semibold min-h-[44px] px-6"
               >
-                {saving ? "Kaydediliyor..." : "Ayarları Kaydet (CAS Güvenli)"}
+                {saving ? "Kaydediliyor..." : "Ayarları kaydet"}
               </Button>
             </div>
           </Container>
