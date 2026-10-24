@@ -73,10 +73,11 @@ describe("verify-email route unit tests", () => {
       await GET(req, res)
 
       expect(res.status).toHaveBeenCalledWith(200)
+      expect(JSON.stringify(res.json.mock.calls)).not.toContain("user@example.com")
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           status: "pending",
-          entity_id: "user@example.com",
+
         })
       )
     })
@@ -108,10 +109,11 @@ describe("verify-email route unit tests", () => {
       await GET(req, res)
 
       expect(res.status).toHaveBeenCalledWith(200)
+      expect(JSON.stringify(res.json.mock.calls)).not.toContain("user@example.com")
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           status: "consumed",
-          entity_id: "user@example.com",
+
         })
       )
     })
@@ -144,10 +146,11 @@ describe("verify-email route unit tests", () => {
       await GET(req, res)
 
       expect(res.status).toHaveBeenCalledWith(200)
+      expect(JSON.stringify(res.json.mock.calls)).not.toContain("user@example.com")
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           status: "expired",
-          entity_id: "user@example.com",
+
         })
       )
     })
@@ -188,11 +191,12 @@ describe("verify-email route unit tests", () => {
         code_provider: "token",
       })
       expect(res.status).toHaveBeenCalledWith(200)
+      expect(JSON.stringify(res.json.mock.calls)).not.toContain("user@example.com")
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           ok: true,
           status: "confirmed",
-          entity_id: "user@example.com",
+
         })
       )
     })
