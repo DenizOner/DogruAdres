@@ -495,7 +495,7 @@ export default function PlatformSmtpSettingsPage() {
                   type="email"
                   value={testRecipient}
                   onChange={(e) => setTestRecipient(e.target.value)}
-                  placeholder="denizoner1985@gmail.com"
+                  placeholder="yonetici@dogruadres.net"
                   className="min-h-[44px]"
                 />
               </div>
