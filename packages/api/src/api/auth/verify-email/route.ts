@@ -57,7 +57,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     }
 
     const rows = await pgConnection("auth_verification")
-      .select("id", "auth_identity_id", "entity_id", "entity_type", "verified_at", "requested_at")
+      .select("id", "verified_at", "requested_at")
       .whereRaw("provider_metadata->>'token_hash' = ?", [tokenHash])
       .whereNull("deleted_at")
       .limit(1)
@@ -78,8 +78,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       return res.status(200).json({
         ok: true,
         status: "consumed",
-        entity_id: verification.entity_id,
-        verified_at: verification.verified_at,
+
         message: "Verification link has already been used",
       })
     }
@@ -88,9 +87,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       return res.status(200).json({
         ok: true,
         status: "expired",
-        entity_id: verification.entity_id,
-        requested_at: verification.requested_at,
-        expires_at: expiresAt.toISOString(),
+
         message: "Verification link has expired",
       })
     }
@@ -98,9 +95,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.status(200).json({
       ok: true,
       status: "pending",
-      entity_id: verification.entity_id,
-      requested_at: verification.requested_at,
-      expires_at: expiresAt.toISOString(),
+
     })
   } catch (err) {
     return res.status(500).json({
@@ -148,8 +143,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.status(200).json({
       ok: true,
       status: "confirmed",
-      entity_id: result.entity_id,
-      verified_at: result.verified_at,
+
       message: "Email address successfully verified",
     })
   } catch (err: any) {
@@ -174,7 +168,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.status(400).json({
       ok: false,
       status: "failed",
-      message: "Verification failed: " + message,
+      message: "Verification could not be completed",
     })
   }
 }
