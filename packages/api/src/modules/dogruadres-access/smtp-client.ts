@@ -1,5 +1,6 @@
 import tls from "node:tls"
 import net from "node:net"
+import dns from "node:dns"
 import { randomBytes } from "node:crypto"
 
 export interface SmtpConfig {
@@ -29,19 +30,73 @@ export interface SendMailResult {
 
 const DEFAULT_TIMEOUT_MS = 15000
 
-export const isPrivateIp = (ip: string, allowLoopback = false): boolean => {
-  if (ip === "localhost" || ip === "127.0.0.1" || ip === "::1") {
+/**
+ * Checks whether an IP address belongs to private, loopback, link-local,
+ * CGNAT or unspecified ranges.
+ */
+export const isPrivateIp = (ipOrHost: string, allowLoopback = false): boolean => {
+  const normalized = ipOrHost.trim().toLowerCase()
+  if (normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "0.0.0.0" || normalized === "::") {
     return !allowLoopback
   }
-  const parts = ip.split(".").map(Number)
-  if (parts.length === 4) {
+
+  // IPv4 mapped IPv6 (e.g. ::ffff:127.0.0.1)
+  if (normalized.startsWith("::ffff:")) {
+    return isPrivateIp(normalized.slice(7), allowLoopback)
+  }
+
+  // IPv6 checks
+  if (normalized.includes(":")) {
+    if (normalized.startsWith("fe80:") || normalized.startsWith("fc00:") || normalized.startsWith("fd")) {
+      return true
+    }
+    return false
+  }
+
+  // IPv4 checks
+  const parts = normalized.split(".").map(Number)
+  if (parts.length === 4 && parts.every((p) => !isNaN(p) && p >= 0 && p <= 255)) {
+    if (parts[0] === 127) return !allowLoopback
     if (parts[0] === 10) return true
     if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
     if (parts[0] === 192 && parts[1] === 168) return true
-    if (parts[0] === 169 && parts[1] === 254) return true
-    if (parts[0] === 0 || parts[0] === 127) return true
+    if (parts[0] === 169 && parts[1] === 254) return true // Link-local & cloud metadata
+    if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true // CGNAT
+    if (parts[0] === 0) return true
   }
+
   return false
+}
+
+/**
+ * Performs DNS resolution and verifies that none of the resolved IPs
+ * point to private, loopback or restricted internal networks.
+ * Returns the first resolved public IP for direct connection to prevent DNS rebinding.
+ */
+export async function resolveAndValidateHost(host: string, allowLoopback = false): Promise<string> {
+  if (isPrivateIp(host, allowLoopback)) {
+    throw new Error(`Connecting to private or internal IP range is disallowed: ${host}`)
+  }
+
+  // If host is already an IP literal, it has been validated by isPrivateIp
+  const isIpv4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+  const isIpv6 = host.includes(":")
+  if (isIpv4 || isIpv6) {
+    return host
+  }
+
+  const lookupResults = await dns.promises.lookup(host, { all: true, verbatim: true })
+  if (!lookupResults || lookupResults.length === 0) {
+    throw new Error(`DNS resolution failed for host: ${host}`)
+  }
+
+  for (const entry of lookupResults) {
+    if (isPrivateIp(entry.address, allowLoopback)) {
+      throw new Error(`Resolved address ${entry.address} for host ${host} is in a private/restricted range (SSRF / DNS rebinding protection)`)
+    }
+  }
+
+  return lookupResults[0].address
 }
 
 export const getResolvedSmtpConfig = (): SmtpConfig | null => {
@@ -49,7 +104,8 @@ export const getResolvedSmtpConfig = (): SmtpConfig | null => {
   const host = process.env.SMTP_HOST || "smtp.gmail.com"
   const port = parseInt(process.env.SMTP_PORT || "465", 10)
   const securityRaw = (process.env.SMTP_SECURITY || "ssl").toLowerCase()
-  const security: "ssl" | "tls" | "none" = securityRaw === "ssl" || port === 465 ? "ssl" : securityRaw === "none" ? "none" : "tls"
+  const security: "ssl" | "tls" | "none" =
+    securityRaw === "ssl" || port === 465 ? "ssl" : securityRaw === "none" ? "none" : "tls"
   const username = process.env.SMTP_USERNAME
   const password = process.env.SMTP_PASSWORD
   const fromEmail = process.env.SMTP_FROM_EMAIL || username
@@ -72,10 +128,30 @@ export const getResolvedSmtpConfig = (): SmtpConfig | null => {
   }
 }
 
+function sanitizeHeader(val: string, fieldName: string): string {
+  if (/[\r\n]/.test(val)) {
+    throw new Error(`CRLF injection detected in ${fieldName} header`)
+  }
+  return val.trim()
+}
+
+function encodeSubject(subject: string): string {
+  sanitizeHeader(subject, "Subject")
+  if (/[^\x20-\x7E]/.test(subject)) {
+    return `=?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`
+  }
+  return subject
+}
+
+function dotStuff(content: string): string {
+  return content.replace(/(^|\r?\n)\./g, "$1..")
+}
+
 export class SmtpConnection {
   private socket: tls.TLSSocket | net.Socket | null = null
   private buffer = ""
   private config: SmtpConfig
+  private isTlsUpgraded = false
 
   constructor(config: SmtpConfig) {
     this.config = config
@@ -149,16 +225,14 @@ export class SmtpConnection {
   }
 
   public async connect(): Promise<void> {
-    const allowTestLoopback = process.env.NODE_ENV === "test" && this.config.security === "none"
-    if (isPrivateIp(this.config.host, allowTestLoopback)) {
-      throw new Error(`Connecting to private IP/range is disallowed: ${this.config.host}`)
-    }
+    const allowTestLoopback = process.env.NODE_ENV === "test" && (this.config.security === "none" || this.config.host === "127.0.0.1")
+    const connectIp = await resolveAndValidateHost(this.config.host, allowTestLoopback)
 
     if (this.config.security === "ssl") {
       await new Promise<void>((resolve, reject) => {
         const socket = tls.connect(
           {
-            host: this.config.host,
+            host: connectIp,
             port: this.config.port,
             rejectUnauthorized: true,
             servername: this.config.host,
@@ -166,6 +240,7 @@ export class SmtpConnection {
           },
           () => {
             this.socket = socket
+            this.isTlsUpgraded = true
             resolve()
           }
         )
@@ -179,12 +254,13 @@ export class SmtpConnection {
       await new Promise<void>((resolve, reject) => {
         const socket = net.createConnection(
           {
-            host: this.config.host,
+            host: connectIp,
             port: this.config.port,
             timeout: this.config.connectionTimeoutMs || DEFAULT_TIMEOUT_MS,
           },
           () => {
             this.socket = socket
+            this.isTlsUpgraded = false
             resolve()
           }
         )
@@ -202,10 +278,67 @@ export class SmtpConnection {
     }
   }
 
-  public async sendMail(options: SendMailOptions): Promise<SendMailResult> {
-    await this.sendCommand("EHLO localhost", 250)
+  /**
+   * Upgrades the plaintext socket to TLS using STARTTLS.
+   * If STARTTLS is not supported or fails, it fails closed immediately.
+   */
+  public async upgradeStarttls(): Promise<void> {
+    if (!this.socket || this.isTlsUpgraded) {
+      return
+    }
 
+    const reply = await this.sendCommand("STARTTLS", 220)
+    if (reply.code !== 220) {
+      throw new Error(`STARTTLS failed with code ${reply.code}: ${reply.message}`)
+    }
+
+    // Upgrade the existing socket to TLS
+    await new Promise<void>((resolve, reject) => {
+      const tlsSocket = new tls.TLSSocket(this.socket as net.Socket, {
+        isServer: false,
+        servername: this.config.host,
+        rejectUnauthorized: true,
+      })
+
+      tlsSocket.once("secureConnect", () => {
+        this.socket = tlsSocket
+        this.isTlsUpgraded = true
+        resolve()
+      })
+
+      tlsSocket.once("error", (err) => {
+        reject(new Error(`STARTTLS handshake failed: ${err.message}`))
+      })
+    })
+
+    // Re-issue EHLO over the secure TLS channel
+    await this.sendCommand("EHLO localhost", 250)
+  }
+
+  public async sendMail(options: SendMailOptions): Promise<SendMailResult> {
+    const safeTo = sanitizeHeader(options.to, "To")
+    const safeFromEmail = sanitizeHeader(this.config.fromEmail, "From Email")
+    const safeFromName = this.config.fromName ? sanitizeHeader(this.config.fromName, "From Name") : undefined
+    const safeSubject = encodeSubject(options.subject)
+
+    const ehloReply = await this.sendCommand("EHLO localhost", 250)
+
+    // Handle STARTTLS upgrade if security mode is tls
+    if (this.config.security === "tls") {
+      if (!ehloReply.message.includes("STARTTLS")) {
+        throw new Error("Server does not advertise STARTTLS capability; refusing plaintext credentials or transmission")
+      }
+      await this.upgradeStarttls()
+    }
+
+    // Security check: NEVER transmit credentials over plaintext socket unless in explicit test loopback
     if (this.config.username && this.config.password) {
+      const isPlaintext = !this.isTlsUpgraded && this.config.security !== "ssl"
+      const isTestEnv = process.env.NODE_ENV === "test" && (this.config.host === "127.0.0.1" || this.config.host === "localhost")
+      if (isPlaintext && !isTestEnv) {
+        throw new Error("Security policy violation: Transmitting credentials over an unencrypted SMTP connection is prohibited")
+      }
+
       const authReply = await this.sendCommand("AUTH LOGIN")
       if (authReply.code !== 334) {
         throw new Error(`AUTH LOGIN initiation failed: ${authReply.code} ${authReply.message}`)
@@ -222,29 +355,43 @@ export class SmtpConnection {
       }
     }
 
-    await this.sendCommand(`MAIL FROM:<${this.config.fromEmail}>`, 250)
-    await this.sendCommand(`RCPT TO:<${options.to}>`, 250)
+    await this.sendCommand(`MAIL FROM:<${safeFromEmail}>`, 250)
+    await this.sendCommand(`RCPT TO:<${safeTo}>`, 250)
     await this.sendCommand("DATA", 354)
 
     const messageId = `<${Date.now()}.${randomBytes(8).toString("hex")}@${this.config.host}>`
-    const fromHeader = this.config.fromName
-      ? `"${this.config.fromName}" <${this.config.fromEmail}>`
-      : this.config.fromEmail
+    const fromHeader = safeFromName ? `"${safeFromName}" <${safeFromEmail}>` : safeFromEmail
 
     let message = ""
     message += `From: ${fromHeader}\r\n`
-    message += `To: <${options.to}>\r\n`
-    message += `Subject: ${options.subject}\r\n`
+    message += `To: <${safeTo}>\r\n`
+    message += `Subject: ${safeSubject}\r\n`
     message += `Date: ${new Date().toUTCString()}\r\n`
     message += `Message-ID: ${messageId}\r\n`
     message += `MIME-Version: 1.0\r\n`
-    if (options.html) {
-      message += `Content-Type: text/html; charset=utf-8\r\n\r\n`
-      message += `${options.html}\r\n`
+
+    if (options.html && options.text) {
+      const boundary = `----=_Part_${randomBytes(16).toString("hex")}`
+      message += `Content-Type: multipart/alternative; boundary="${boundary}"\r\n\r\n`
+      message += `--${boundary}\r\n`
+      message += `Content-Type: text/plain; charset=utf-8\r\n`
+      message += `Content-Transfer-Encoding: 8bit\r\n\r\n`
+      message += dotStuff(options.text) + "\r\n\r\n"
+      message += `--${boundary}\r\n`
+      message += `Content-Type: text/html; charset=utf-8\r\n`
+      message += `Content-Transfer-Encoding: 8bit\r\n\r\n`
+      message += dotStuff(options.html) + "\r\n\r\n"
+      message += `--${boundary}--\r\n`
+    } else if (options.html) {
+      message += `Content-Type: text/html; charset=utf-8\r\n`
+      message += `Content-Transfer-Encoding: 8bit\r\n\r\n`
+      message += dotStuff(options.html) + "\r\n"
     } else {
-      message += `Content-Type: text/plain; charset=utf-8\r\n\r\n`
-      message += `${options.text}\r\n`
+      message += `Content-Type: text/plain; charset=utf-8\r\n`
+      message += `Content-Transfer-Encoding: 8bit\r\n\r\n`
+      message += dotStuff(options.text) + "\r\n"
     }
+
     message += `.\r\n`
 
     if (!this.socket) {

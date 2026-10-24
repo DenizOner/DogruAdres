@@ -62,7 +62,7 @@ describe("auth-verification-requested subscriber unit test", () => {
     expect(sendSmtpEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "denizoner1985@gmail.com",
-        subject: "DogruAdres E-posta Dogrulama Kodu",
+        subject: "DoğruAdres E-posta Doğrulama",
         text: expect.stringContaining("654321"),
       })
     )

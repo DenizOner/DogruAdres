@@ -13,13 +13,17 @@ export class SmtpCryptoError extends Error {
 
 export function getSmtpEncryptionKey(): Buffer {
   const raw = process.env.DOGRUADRES_SMTP_ENCRYPTION_KEY
-  if (!raw || Buffer.byteLength(raw, "utf8") < 32) {
-    throw new SmtpCryptoError("DOGRUADRES_SMTP_ENCRYPTION_KEY must be configured with at least 32 bytes")
+  if (!raw) {
+    throw new SmtpCryptoError("DOGRUADRES_SMTP_ENCRYPTION_KEY must be configured")
   }
   if (/^[0-9a-fA-F]{64}$/.test(raw)) {
     return Buffer.from(raw, "hex")
   }
-  return Buffer.from(raw, "utf8").subarray(0, 32)
+  const buf = Buffer.from(raw, "utf8")
+  if (buf.length !== 32) {
+    throw new SmtpCryptoError("DOGRUADRES_SMTP_ENCRYPTION_KEY must be exactly 32 bytes or 64 hex characters")
+  }
+  return buf
 }
 
 export function encryptSmtpPassword(plaintext: string): string {

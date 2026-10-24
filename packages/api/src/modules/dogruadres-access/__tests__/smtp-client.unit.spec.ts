@@ -137,4 +137,48 @@ describe("smtp-client unit tests", () => {
       expect(result.messageId).toContain("@127.0.0.1")
     })
   })
+  describe("security validations: CRLF injection, dot-stuffing and SSRF", () => {
+    it("rejects CRLF injection in headers", async () => {
+      const conn = new SmtpConnection({
+        enabled: true,
+        host: "127.0.0.1",
+        port: 25,
+        security: "none",
+        fromEmail: "attacker@example.com\r\nBcc: victim@example.com",
+      })
+
+      await expect(
+        conn.sendMail({
+          to: "valid@example.com",
+          subject: "Test",
+          text: "Body",
+        })
+      ).rejects.toThrow("CRLF injection detected")
+
+      const conn2 = new SmtpConnection({
+        enabled: true,
+        host: "127.0.0.1",
+        port: 25,
+        security: "none",
+        fromEmail: "sender@example.com",
+      })
+
+      await expect(
+        conn2.sendMail({
+          to: "valid@example.com\nInjected-Header: evil",
+          subject: "Test",
+          text: "Body",
+        })
+      ).rejects.toThrow("CRLF injection detected")
+    })
+
+    it("identifies IPv6 and CGNAT private ranges", () => {
+      expect(isPrivateIp("100.64.0.1")).toBe(true)
+      expect(isPrivateIp("100.127.255.255")).toBe(true)
+      expect(isPrivateIp("fe80::1")).toBe(true)
+      expect(isPrivateIp("fc00::1")).toBe(true)
+      expect(isPrivateIp("::ffff:127.0.0.1")).toBe(true)
+    })
+  })
+
 })
