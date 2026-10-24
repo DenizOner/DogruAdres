@@ -19,7 +19,8 @@ export function allowedPublicRequest(method,path){
   // Installed public read-only Store route classes; customer/cart/order writers
   // are deliberately absent. Their legal Buyer Organization contract is open.
   const catalog=/^\/store\/(regions|products|product-categories|collections|currencies|locales|offers|sellers|reviews|product-attributes|product-options|product-tags|product-types|product-variants|shipping-options|payment-providers|return-reasons)(?:\/[^/]+)?$/
-  if(method==='GET' && (catalog.test(path)||['/cloud/auth','/health'].includes(path)))return true
+  const dashboard=/^\/dashboard(?:\/.*)?$/
+  if(method==='GET' && (catalog.test(path)||['/cloud/auth','/health'].includes(path)||dashboard.test(path)))return true
   if(['GET','POST'].includes(method) && path==='/auth/verify-email')return true
   if(method==='POST' && (path==='/auth/verification/confirm'||/^\/auth\/(user|member|customer)\/emailpass\/(reset-password|update)$/.test(path)))return true
   if(method==='GET' && path==='/admin/api-keys')return 'machine'
@@ -48,10 +49,15 @@ export function startFrontdoor(env=process.env){
       if(mode==='machine'||url.pathname.endsWith('/emailpass/update'))headers.authorization=req.headers.authorization??''
       const chunks=[];let size=0
       for await(const chunk of req){size+=chunk.length;if(size>65536){res.writeHead(413).end();return}chunks.push(chunk)}
-      const response=await fetch(upstream+url.pathname+url.search,{method:req.method,headers,redirect:'manual',signal:AbortSignal.timeout(config.upstreamTimeoutMs),...(size?{body:Buffer.concat(chunks)}:{})})
+      const upstreamPath=url.pathname==='/dashboard'?'/dashboard/':url.pathname
+      const response=await fetch(upstream+upstreamPath+url.search,{method:req.method,headers,redirect:'manual',signal:AbortSignal.timeout(config.upstreamTimeoutMs),...(size?{body:Buffer.concat(chunks)}:{})})
       // Do not rewrite auth payloads to hide tokens. Only routes whose native
       // contracts are safe are reachable at all; redirects fail closed.
-      if(response.status>=300&&response.status<400){res.writeHead(502).end();return}
+      if(response.status>=300&&response.status<400){
+        const loc=response.headers.get('location')??''
+        if(loc.endsWith('/dashboard/')||loc==='/dashboard/'){res.writeHead(302,{'Location':'/dashboard/'}).end();return}
+        res.writeHead(502).end();return
+      }
       for(const key of ['content-type','content-security-policy','x-content-type-options'])if(response.headers.has(key))res.setHeader(key,response.headers.get(key))
       const cookies=response.headers.getSetCookie();if(cookies.length)res.setHeader('Set-Cookie',cookies)
       res.writeHead(response.status);res.end(Buffer.from(await response.arrayBuffer()))

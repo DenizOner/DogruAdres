@@ -68,6 +68,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/mfa/enroll" && req.method==="POST") ||
       (path==="/personal/mfa/manage" && req.method==="POST") ||
       ((path==="/health" || path==="/cloud/auth") && req.method==="GET") ||
+      (anonymous && /^\/dashboard(?:\/.*)?$/.test(path) && req.method==="GET") ||
       (anonymous && publicAuth.test(path) && ["GET","POST"].includes(req.method)) ||
       (anonymous && /^\/auth\/(user|member|customer)\/emailpass\/(register|reset-password)$/.test(path) && req.method==="POST") ||
       (anonymous && /^\/auth\/(user|member|customer)\/providers$/.test(path) && req.method==="GET") ||

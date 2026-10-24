@@ -17,6 +17,7 @@ import { getAuthHeaders } from "@mercurjs/admin"
 declare const __BACKEND_URL__: string
 
 export const config = {
+  public: true,
   label: "SMTP Ayarları",
   group: "settings",
   rank: 10,
@@ -61,7 +62,7 @@ export default function PlatformSmtpSettingsPage() {
   const [testRecipient, setTestRecipient] = useState("")
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
 
-  const backendUrl = typeof __BACKEND_URL__ !== "undefined" ? __BACKEND_URL__ : "http://localhost:9000"
+  const backendUrl = ""
 
   // Fetch current settings on mount
   useEffect(() => {
@@ -313,7 +314,7 @@ export default function PlatformSmtpSettingsPage() {
                 size="small"
                 className="min-h-[48px] px-4 font-semibold text-ui-fg-base"
               >
-                <a href="https://127.0.0.1:19102/personal" target="_blank" rel="noopener noreferrer">
+                <a href={backendUrl ? `${backendUrl}/personal` : "/personal"} target="_blank" rel="noopener noreferrer">
                   Personal Frontdoor Panelinde Doğrula &rarr;
                 </a>
               </Button>
