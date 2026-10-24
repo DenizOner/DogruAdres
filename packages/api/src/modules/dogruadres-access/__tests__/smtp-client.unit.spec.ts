@@ -63,6 +63,22 @@ describe("smtp-client unit tests", () => {
     })
   })
 
+  describe("transport policy", () => {
+    it("rejects plaintext SMTP for external destinations before connecting", async () => {
+      const connection = new SmtpConnection({
+        enabled: true,
+        host: "smtp.example.com",
+        port: 25,
+        security: "none",
+        fromEmail: "sender@example.com",
+      })
+
+      await expect(connection.connect()).rejects.toThrow(
+        "Unencrypted SMTP is prohibited outside isolated loopback tests"
+      )
+    })
+  })
+
   describe("SmtpConnection protocol exchange", () => {
     let mockServer: net.Server
     let serverPort: number
