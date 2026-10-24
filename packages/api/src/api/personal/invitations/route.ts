@@ -73,16 +73,20 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     user_metadata: {},
   })
   if (!email) return res.status(403).json({ message: "Verified recipient email required" })
-  const { result } = await acceptInvitationWorkflow(req.scope).run({
-    input: {
-      token: parsed.data.token, email, email_verified: true,
-      actor: { actor_type: principal.actor_type, actor_id: principal.actor_id },
-    },
-  })
-  return res.json({
-    membership: {
-      id: result.membership.id, organization_id: result.membership.organization_id,
-      role: result.membership.role, status: result.membership.status,
-    },
-  })
+  try {
+    const { result } = await acceptInvitationWorkflow(req.scope).run({
+      input: {
+        token: parsed.data.token, email, email_verified: true,
+        actor: { actor_type: principal.actor_type, actor_id: principal.actor_id },
+      },
+    })
+    return res.json({
+      membership: {
+        id: result.membership.id, organization_id: result.membership.organization_id,
+        role: result.membership.role, status: result.membership.status,
+      },
+    })
+  } catch (err: any) {
+    return res.status(403).json({ message: err?.message || "Invitation is invalid, expired, revoked, or already used" })
+  }
 }

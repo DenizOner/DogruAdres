@@ -42,6 +42,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
   </style>
   <h1>DoğruAdres</h1><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
+  <section id="invitation-section" hidden style="margin-bottom: 24px; padding: 20px; border: 1px solid #c1c6d4; border-radius: 12px; background: #f9f9ff;">
+    <h2 style="margin-top: 0; color: #004e99;">Kuruluş Üyelik Daveti</h2>
+    <div id="invitation-mismatch-banner" hidden role="alert" style="padding: 14px 18px; background: #ffdad6; border: 1px solid #ba1a1a; border-radius: 8px; margin-bottom: 16px;">
+      <p id="invitation-mismatch-text" style="color: #93000a; font-weight: 600; margin: 0; font-size: 14px;">Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.</p>
+    </div>
+    <div id="invitation-card" hidden style="padding: 18px; border: 1px solid #bfd5ff; border-radius: 8px; background: #ffffff;">
+      <p style="margin: 0 0 8px 0; font-size: 15px; font-weight: 600; color: #191c21;">DoğruAdres Kuruluş Üyeliği</p>
+      <p style="margin: 0 0 16px 0; font-size: 13px; color: #414752;">Bu davet, kuruluş operasyonlarına standart üye (<code>member</code>) rolüyle katılımınızı sağlar. Doğrulanmış e-posta hesabınızla kabul edebilirsiniz.</p>
+      <button id="accept-invitation-btn" type="button" style="min-height: 44px; padding: 10px 20px; background: #0e66c2; color: #ffffff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer;">Daveti Kabul Et ve Kuruluşa Katıl</button>
+      <p id="invitation-result" role="status" aria-live="polite" style="margin-top: 12px; font-size: 13px; font-weight: 500;"></p>
+    </div>
+  </section>
   <form id="login"><label>E-posta<input name="email" type="email" autocomplete="username" required></label><label>Parola<input name="password" type="password" autocomplete="current-password" required></label><button>Giriş yap</button></form>
   <form id="challenge" hidden><label>İkinci faktör yöntemi<select name="method">
       <option value="totp">Kimlik doğrulama uygulaması</option>
@@ -105,7 +117,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     </form>
     <p id="smtp-test-result" role="status" aria-live="polite"></p>
   </section>
-  <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre><div id="memberships"></div><button id="staff">Platform yetkisini kontrol et</button>
+  <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre><div id="memberships"></div>
+  <form id="invite-member" hidden style="margin-top: 16px; padding: 14px; border: 1px solid #c1c6d4; border-radius: 8px; background: #f2f3fb;">
+    <h3 style="margin-top: 0; font-size: 14px;">Kuruluşa Yeni Üye Davet Et</h3>
+    <label>Davet edilecek e-posta adresi<input name="email" type="email" required maxlength="320" placeholder="yeni.uye@alanadi.invalid"></label>
+    <button>Üyelik Daveti Oluştur</button>
+  </form>
+  <p id="invite-result" role="status" aria-live="polite"></p>
+  <button id="staff">Platform yetkisini kontrol et</button>
   <h2>Kuruluş oluşturma</h2><p>Bu işlem açık platform görevi ve güncel güçlü doğrulama gerektirir. İlk iki Owner sunucuda doğrulanır.</p>
   <form id="provision"><label>Yeni kuruluş adı<input name="name" maxlength="200" required></label><label>Birinci Owner türü<select name="type1"><option>user</option><option>member</option><option>customer</option></select></label><label>Birinci Owner kimliği<input name="owner1" required></label><label>İkinci Owner türü<select name="type2"><option>user</option><option>member</option><option>customer</option></select></label><label>İkinci Owner kimliği<input name="owner2" required></label><button>Kuruluş oluştur</button></form><pre id="provision-result"></pre>
   <h2>Satıcı ve müşteri çalışma bağlamı</h2><form id="seller"><label>Satıcı kimliği<input name="seller" required></label><button>Satıcı erişimini doğrula</button></form><button id="customer">Müşteri bağlamımı aç</button><pre id="actor-result"></pre>
@@ -150,6 +169,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const request=++organizationRequest;currentOrg='';el('detail').textContent='';el('memberships').replaceChildren();history.replaceState(null,'','/personal');
     try{const result=await api('organizations?id='+encodeURIComponent(id));if(request!==organizationRequest)return;
       currentOrg=id;el('detail').textContent=JSON.stringify(result.organizations[0],null,2);history.replaceState(null,'','/personal?organization='+encodeURIComponent(id));
+      if(['owner','admin'].includes(result.organizations[0]?.role)){el('invite-member').hidden=false;}else{el('invite-member').hidden=true;}
       await memberships(id,request);if(request===organizationRequest)status('Kuruluş erişimi doğrulandı');
     }catch(e){if(request!==organizationRequest)return;currentOrg='';el('detail').textContent='';el('memberships').replaceChildren();status(e.message)}
   }
@@ -177,7 +197,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
     }catch{}
   }
-  async function load(){try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
+  async function load(){try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();
+    const inviteToken=new URLSearchParams(location.search).get('invitation_token');
+    if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
+    else{el('invitation-section').hidden=true;}
+    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;el('invite-result').textContent='';
+    const inviteToken=new URLSearchParams(location.search).get('invitation_token');
+    if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
+    else{el('invitation-section').hidden=true;}
+    for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
   async function updateMfaForm(form,body){
     const button=form.querySelector('button');button.disabled=true;
     let uncertain=false;
@@ -397,6 +425,40 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   };
 
+  el('invite-member').onsubmit=async e=>{
+    e.preventDefault();
+    const orgId = currentOrg || new URLSearchParams(location.search).get('organization');
+    if(!orgId)return;
+    const b=e.target.querySelector('button');b.disabled=true;
+    el('invite-result').textContent='Davet oluşturuluyor...';
+    try{
+      const email=new FormData(e.target).get('email');
+      const res=await api('invitations',{method:'POST',body:JSON.stringify({action:'create',organization_id:orgId,email,role:'member'})});
+      el('invite-result').textContent='Davet oluşturuldu: /personal?invitation_token='+res.invitation_token;
+      status('Kuruluş üyelik daveti oluşturuldu');
+      e.target.reset();
+    }catch(err){
+      el('invite-result').textContent='Davet oluşturulamadı: '+err.message;
+      status(err.message);
+    }finally{b.disabled=false}
+  };
+  el('accept-invitation-btn').onclick=async()=>{
+    const token=new URLSearchParams(location.search).get('invitation_token');
+    if(!token)return;
+    const btn=el('accept-invitation-btn');btn.disabled=true;
+    el('invitation-result').textContent='Davet kabul ediliyor...';
+    try{
+      const res=await api('invitations',{method:'POST',body:JSON.stringify({action:'accept',token})});
+      el('invitation-result').textContent='Kuruluş üyeliğiniz başarıyla aktif edildi (Üyelik ID: '+res.membership.id+').';
+      status('Davet başarıyla kabul edildi');
+      await load();
+    }catch(err){
+      el('invitation-card').hidden=true;
+      el('invitation-mismatch-banner').hidden=false;
+      el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';
+      status('Bu bağlantıyla mevcut oturumda devam edilemiyor.');
+    }finally{btn.disabled=false}
+  };
   el('select-org').onsubmit=async e=>{e.preventDefault();await selectOrg(new FormData(e.target).get('organization'))};
   el('logout').onclick=()=>logout(false);el('logout-all').onclick=()=>logout(true);el('staff').onclick=async()=>{try{await api('platform');status('Platform görevi için izin var')}catch(e){status(e.message)}};load();
   </script></html>`)
