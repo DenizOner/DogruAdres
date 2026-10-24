@@ -103,7 +103,7 @@ export default function PlatformSmtpSettingsPage() {
         if (!res.ok) {
           if (res.status === 401 || res.status === 403) {
             setCanManage(false)
-            setAuthError("SMTP ayarlarını görüntülemek ve yönetmek için 'platform.smtp.manage' yetkisi ve güçlü kimlik doğrulaması (MFA) gereklidir.")
+            setAuthError("SMTP ayarlarını yönetmek için yetkili platform hesabınızla ek doğrulama yapmanız gerekiyor.")
             return
           }
           throw new Error("HTTP " + res.status)
@@ -252,7 +252,7 @@ export default function PlatformSmtpSettingsPage() {
           ok: true,
           message: "E-posta gönderim için kabul edildi. Gelen kutusundan teslimatı kontrol edin.",
         })
-        toast.success("Test e-postası başarıyla gönderildi!")
+        toast.success("SMTP sunucusu e-postayı gönderim için kabul etti.")
       } else {
         setTestResult({
           ok: false,
@@ -304,7 +304,7 @@ export default function PlatformSmtpSettingsPage() {
           <div className="space-y-2">
             <Text className="text-sm font-semibold text-red-900">{authError}</Text>
             <Text className="text-xs text-red-700">
-              Platform SMTP ayarlarını yönetmek güvenlik gereği güçlü kimlik doğrulaması (TOTP / MFA) ve platform staff yetkisi gerektirir.
+              Güçlü kimlik doğrulamasını tamamladıktan sonra yeniden deneyin.
             </Text>
             <div className="pt-1">
               <Button
@@ -537,7 +537,7 @@ export default function PlatformSmtpSettingsPage() {
                 Canlı Bağlantı ve Teslimat Testi
               </Heading>
               <Text className="text-xs text-ui-fg-subtle">
-                Yapılandırılan sunucu üzerinden gerçek bir test e-postası göndererek SMTP-AUTH el sıkışmasını ve teslimatı teyit ediniz.
+                Test e-postası gönderin; sunucu tarafından kabulünü ve gelen kutusundaki teslimatını ayrı ayrı kontrol edin.
               </Text>
             </div>
 
