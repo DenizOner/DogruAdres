@@ -131,6 +131,18 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     expect(res.json).toHaveBeenCalledWith({ message: "Verified recipient email required" })
     expect(mockAcceptRun).not.toHaveBeenCalled()
   })
+  it("never reflects internal workflow errors or another actor identity", async () => {
+    mockAcceptRun.mockRejectedValueOnce(
+      new Error("Membership lookup failed for other-person@example.invalid, internal actor reference")
+    )
+    const res = await invoke(acceptBody)
+    expect(res.status).toHaveBeenCalledWith(403)
+    const response = JSON.stringify(res.json.mock.calls)
+    expect(response).not.toContain("other-person@example.invalid")
+    expect(response).not.toContain("internal actor reference")
+    expect(response).toContain("Bu bağlantıyla mevcut oturumda devam edilemiyor")
+  })
+
   it("accepts using server-held actor and provider email proof only", async () => {
     const res = await invoke(acceptBody)
     expect(verifiedEmailForActorContext).toHaveBeenCalledWith(
