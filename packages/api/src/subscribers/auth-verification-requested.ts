@@ -167,11 +167,11 @@ export default async function authVerificationRequestedSubscriber({
       : await sendSmtpEmail({ to: data.entity_id, subject, text, html })
 
     if (logger?.info) {
-      logger.info(`[auth-verification-requested] Verification email successfully dispatched to ${data.entity_id} (MessageId: ${result.messageId})`)
+      logger.info(`[auth-verification-requested] Verification email accepted by SMTP transport`)
     }
   } catch (error) {
     if (logger?.error) {
-      logger.error(`[auth-verification-requested] Failed to dispatch verification email to ${data.entity_id}: ${(error as Error).message}`)
+      logger.error(`[auth-verification-requested] Verification email dispatch failed`)
     }
   }
 }
