@@ -1,0 +1,47 @@
+name: Temporary sanitize-html lockfile generation (read-only)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/temporary-sanitize-lock-generation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate-lock-patch:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the PR merge ref without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup exact repository Bun version
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.2'
+      - name: Produce genuine Bun lockfile delta (never push)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Bun version: $(bun --version)"
+          bun install --lockfile-only --ignore-scripts
+          git diff --numstat -- bun.lock
+          git diff -- bun.lock > /tmp/sanitize-lock.patch
+          bytes=$(wc -c < /tmp/sanitize-lock.patch)
+          echo "BUN_PATCH_SIZE=$bytes"
+          test "$bytes" -gt 0
+          test "$bytes" -lt 64000
+          echo 'BEGIN_BUN_LOCK_DIFF'
+          cat /tmp/sanitize-lock.patch
+          echo 'END_BUN_LOCK_DIFF'
+          git status --short
+      - name: Confirm regenerated lock supports frozen install
+        shell: bash
+        run: bun install --frozen-lockfile --ignore-scripts
