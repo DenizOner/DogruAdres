@@ -3,7 +3,7 @@ import { appendFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const monitoredIssues = [147, 208, 229, 235, 245];
+const monitoredIssues = [147, 208, 229, 235];
 const commentPrefix = "<!-- DA-GOVERNANCE-PULSE-245:v1:";
 const maxPrs = 12;
 
