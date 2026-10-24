@@ -24,7 +24,10 @@
 
 - [ ] Bağımsız kaynak incelemesi ve gerekli güvenlik testleri yapıldı.
 - [ ] Nihai HEAD ve base, CI sonuçlarıyla eşleştirildi.
-- [ ] Ürün Sahibinin ayrı, geçerli ve kapsamı belirli merge izni kontrol edildi.
+- [ ] Bağımsız incelemenin gerçek icracısı/yazardan ayrılığı, incelenen tam HEAD/base ve PASS kanıtı kaydedildi.
+- [ ] Engelleyici bulgu kalmadı; gerekli CI/test/güvenlik ve varsa tarayıcı/DB/negatif kabul kanıtı HEAD/base ile eşleşiyor.
+- [ ] Merge hemen öncesi güncel HEAD/base, GitHub'da gerçekten etkin kurallar ve yetkilendirilmiş uygulama kapsamı doğrulandı.
+- [ ] Bu PR'nin kapsamındaki ayrı Product Owner ürün/güvenlik/DB/deploy kararları gerekiyorsa önceden alınmış; sırf merge için yeniden kullanıcı onayı gerekmiyor (#208).
 - [ ] `main` üzerinde ücretli plan gerektiren dal korumasının zorunlu uygulandığı iddia edilmiyor.
 
-> Bu şablonun doldurulması, CI başarısı veya review notu otomatik merge/onay değildir.
+> Bu şablonun doldurulması, tek başına CI başarısı ya da yazarın kendi incelemesi merge izni değildir. #208'in bağımsız inceleme ve exact-SHA kapıları geçildiyse yetkili yürütücü ayrıca Ürün Sahibi merge onayı istemeden birleştirebilir; eksikse BLOCKED.
