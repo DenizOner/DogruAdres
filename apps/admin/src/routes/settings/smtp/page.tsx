@@ -12,7 +12,6 @@ import {
   toast,
   Label,
 } from "@medusajs/ui"
-import { getAuthHeaders } from "@mercurjs/admin"
 
 declare const __BACKEND_URL__: string
 
@@ -76,7 +75,7 @@ export default function PlatformSmtpSettingsPage() {
           const sessionRes = await fetch(`${backendUrl}/personal/session`, {
             method: "GET",
             headers: {
-              ...getAuthHeaders(),
+
               "Accept": "application/json",
             },
             credentials: "include",
@@ -95,7 +94,7 @@ export default function PlatformSmtpSettingsPage() {
         const res = await fetch(`${backendUrl}/personal/platform/smtp`, {
           method: "GET",
           headers: {
-            ...getAuthHeaders(),
+
             "Accept": "application/json",
           },
           credentials: "include",
@@ -124,9 +123,6 @@ export default function PlatformSmtpSettingsPage() {
           setVersion(s.version)
           setLastUpdated(s.updated_at)
           setCanManage(data.can_manage !== false)
-          if (s.from_email && !testRecipient) {
-            setTestRecipient(s.from_email)
-          }
         }
       } catch (err: any) {
         toast.error("SMTP ayarları yüklenemedi: " + (err.message || ""))
@@ -162,7 +158,7 @@ export default function PlatformSmtpSettingsPage() {
       }
 
       const headers: Record<string, string> = {
-        ...getAuthHeaders(),
+
         "Content-Type": "application/json",
         "Accept": "application/json",
       }
@@ -231,7 +227,7 @@ export default function PlatformSmtpSettingsPage() {
       }
 
       const headers: Record<string, string> = {
-        ...getAuthHeaders(),
+
         "Content-Type": "application/json",
         "Accept": "application/json",
       }
