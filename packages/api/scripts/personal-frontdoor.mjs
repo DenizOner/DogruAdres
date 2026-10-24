@@ -20,6 +20,7 @@ export function allowedPublicRequest(method,path){
   // are deliberately absent. Their legal Buyer Organization contract is open.
   const catalog=/^\/store\/(regions|products|product-categories|collections|currencies|locales|offers|sellers|reviews|product-attributes|product-options|product-tags|product-types|product-variants|shipping-options|payment-providers|return-reasons)(?:\/[^/]+)?$/
   if(method==='GET' && (catalog.test(path)||['/cloud/auth','/health'].includes(path)))return true
+  if(['GET','POST'].includes(method) && path==='/auth/verify-email')return true
   if(method==='POST' && (path==='/auth/verification/confirm'||/^\/auth\/(user|member|customer)\/emailpass\/(reset-password|update)$/.test(path)))return true
   if(method==='GET' && path==='/admin/api-keys')return 'machine'
   return false
@@ -34,7 +35,8 @@ export function startFrontdoor(env=process.env){
       const securityHeaders=['host','origin','authorization','cookie','content-length','transfer-encoding']
       const names=req.rawHeaders.filter((_,i)=>i%2===0).map(v=>v.toLowerCase())
       const duplicate=securityHeaders.some(name=>names.filter(v=>v===name).length>1)
-      if(!raw.startsWith('/')||/[\\%#]/.test(raw)||raw.includes('//')||raw.split('?')[0].split('/').includes('..')||req.headers.host!==authority||duplicate){res.writeHead(400).end();return}
+      const pathOnly=raw.split('?')[0]
+      if(!raw.startsWith('/')||/[\\#]/.test(raw)||/%/.test(pathOnly)||raw.includes('//')||pathOnly.split('/').includes('..')||req.headers.host!==authority||duplicate){res.writeHead(400).end();return}
       const url=new URL(raw,config.publicOrigin)
       if(url.origin!==config.publicOrigin){res.writeHead(400).end();return}
       const mode=allowedPublicRequest(req.method,url.pathname)

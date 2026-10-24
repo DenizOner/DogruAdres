@@ -36,6 +36,13 @@ test('MFA enrollment is POST-only and never a native MFA wildcard',()=>{
   for(const path of ['/personal/mfa/enroll/extra','/auth/mfa/start','/auth/mfa/disable'])
     assert.equal(allowedPublicRequest('POST',path),false)
 })
+test('email verification route allows GET and POST and denies other methods',()=>{
+  for(const method of ['GET','POST'])
+    assert.equal(allowedPublicRequest(method,'/auth/verify-email'),true)
+  for(const method of ['PUT','PATCH','DELETE','HEAD','OPTIONS'])
+    assert.equal(allowedPublicRequest(method,'/auth/verify-email'),false)
+})
+
 test('personal, public catalog and purpose-bound recovery are explicit exceptions',()=>{
   for(const path of ['/personal','/personal/contexts','/personal/memberships','/store/regions','/store/products','/store/products/prod_test','/store/sellers','/store/product-categories'])assert.equal(allowedPublicRequest('GET',path),true)
   for(const path of ['/auth/user/emailpass/reset-password','/auth/customer/emailpass/update','/auth/verification/confirm'])assert.equal(allowedPublicRequest('POST',path),true)

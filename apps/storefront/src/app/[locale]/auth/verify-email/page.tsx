@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect, useState, useTransition } from "react"
+import React, { useEffect, useState, useRef, useTransition } from "react"
 import { useSearchParams, useRouter, useParams } from "next/navigation"
 import Link from "next/link"
 
@@ -95,15 +95,20 @@ export default function VerifyEmailPage() {
 
   const [errorMessage, setErrorMessage] = useState<string>("")
   const [isPendingTransition, startTransition] = useTransition()
+  const isTerminalRef = useRef(false)
 
   const token = searchParams.get("token") || ""
   const isRtl = currentLocale === "ar"
   const t = copy[currentLocale]
 
-  const backendUrl = process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL || "http://localhost:9000"
+  const backendUrl =
+    process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL ||
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    "http://127.0.0.1:19100"
 
   // 1. Safe GET inspection on mount
   useEffect(() => {
+    if (isTerminalRef.current) return
     if (!token) {
       setState("invalid")
       return
@@ -172,6 +177,7 @@ export default function VerifyEmailPage() {
       const data = await response.json()
 
       if (response.status === 200 && data.ok) {
+        isTerminalRef.current = true
         setState("confirmed")
 
 
@@ -180,8 +186,10 @@ export default function VerifyEmailPage() {
           window.history.replaceState({}, document.title, window.location.pathname)
         }
       } else if (response.status === 410 || data.status === "expired") {
+        isTerminalRef.current = true
         setState("expired")
       } else if (response.status === 409 || data.status === "consumed") {
+        isTerminalRef.current = true
         setState("consumed")
       } else {
         setState("invalid")
@@ -227,14 +235,14 @@ export default function VerifyEmailPage() {
                   : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               }`}
             >
-              {loc}
+              {loc === "ar" ? "AR (العربية)" : loc.toUpperCase()}
             </button>
           ))}
         </div>
       </header>
 
       {/* Main Card */}
-      <main className="max-w-md w-full mx-auto bg-white dark:bg-slate-900 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-none border border-slate-200/80 dark:border-slate-800 overflow-hidden">
+      <main dir={isRtl ? "rtl" : "ltr"} className="max-w-md w-full mx-auto bg-white dark:bg-slate-900 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-none border border-slate-200/80 dark:border-slate-800 overflow-hidden">
         {/* Accent Bar (#0e66c2) */}
         <div className="h-1.5 w-full bg-[#0e66c2]" />
 

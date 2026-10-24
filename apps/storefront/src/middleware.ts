@@ -114,6 +114,18 @@ export async function middleware(request: NextRequest) {
   }
 
   const { pathname } = request.nextUrl;
+
+  // Auth routes (like email verification) do not depend on store regions or publishable keys
+  if (pathname.includes('/auth/verify-email') || pathname.includes('/verify-email')) {
+    if (pathname === '/auth/verify-email' || pathname.startsWith('/auth/verify-email/')) {
+      const locale = DEFAULT_REGION || 'tr';
+      const rewriteUrl = request.nextUrl.clone();
+      rewriteUrl.pathname = `/${locale}${pathname}`;
+      return NextResponse.rewrite(rewriteUrl);
+    }
+    return NextResponse.next();
+  }
+
   const cacheIdCookie = request.cookies.get('_medusa_cache_id');
   const cacheId = cacheIdCookie?.value || crypto.randomUUID();
 

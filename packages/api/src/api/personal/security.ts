@@ -73,6 +73,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (anonymous && /^\/auth\/(user|member|customer)\/providers$/.test(path) && req.method==="GET") ||
       // Confirm accepts an anonymous single-use verification code. Request does NOT.
       (anonymous && path==="/auth/verification/confirm" && req.method==="POST") ||
+      (anonymous && path==="/auth/verify-email" && ["GET","POST"].includes(req.method)) ||
       // Medusa validateToken verifies signature, purpose=reset and atomically
       // consumes the persisted jti. A session JWT cannot pass that middleware.
       (!nativeSession && /^\/auth\/(user|member|customer)\/emailpass\/update$/.test(path) && req.method==="POST") ||
