@@ -162,9 +162,11 @@ export default async function authVerificationRequestedSubscriber({
       // Fallback to static env configuration
     }
 
-    const result = runtimeOverride
-      ? await sendSmtpEmail({ to: data.entity_id, subject, text, html }, runtimeOverride)
-      : await sendSmtpEmail({ to: data.entity_id, subject, text, html })
+    if (runtimeOverride) {
+      await sendSmtpEmail({ to: data.entity_id, subject, text, html }, runtimeOverride)
+    } else {
+      await sendSmtpEmail({ to: data.entity_id, subject, text, html })
+    }
 
     if (logger?.info) {
       logger.info(`[auth-verification-requested] Verification email accepted by SMTP transport`)
