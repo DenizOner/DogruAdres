@@ -17,6 +17,12 @@ import { resolveMfaPolicy, type MfaPlatformMode } from "./mfa-policy"
 import { generateJwtToken } from "@medusajs/framework/utils"
 import { ActorDelegation } from './actor-delegation'
 import {AccountLinking,type VerifiedSecondary} from './account-linking'
+import {
+  PlatformSmtpPersistence,
+  type UpdateSmtpSettingsInput,
+  type SmtpAuditActor,
+} from "./smtp-settings"
+import { sendSmtpEmail } from "./smtp-client"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -848,5 +854,87 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       occurred_at: new Date(),
     }], sharedContext)
     return { membership, invitation: accepted }
+  }
+
+  @InjectTransactionManager()
+  async getActiveSmtpConfig(@MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    return new PlatformSmtpPersistence(sql).readSettings(true)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformSmtpSettings(token: string, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
+    if (!staff) return null
+    const persistence = new PlatformSmtpPersistence(sql)
+    const settings = await persistence.readSettings(false)
+    return {
+      settings,
+      can_manage: true,
+    }
+  }
+
+  @InjectTransactionManager()
+  async personalUpdatePlatformSmtpSettings(
+    token: string,
+    input: UpdateSmtpSettingsInput,
+    @MedusaContext() context: Context = {}
+  ) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
+    if (!staff) return null
+    const actor: SmtpAuditActor = {
+      person_id: staff.person_id,
+      actor_type: staff.actor_type as SmtpAuditActor["actor_type"],
+      actor_id: staff.actor_id,
+    }
+    const persistence = new PlatformSmtpPersistence(sql)
+    return persistence.updateSettings(input, actor)
+  }
+
+  @InjectTransactionManager()
+  async personalTestPlatformSmtpSettings(
+    token: string,
+    targetRecipient: string,
+    candidateSettings?: Partial<UpdateSmtpSettingsInput>,
+    @MedusaContext() context: Context = {}
+  ) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
+    if (!staff) return null
+
+    const persistence = new PlatformSmtpPersistence(sql)
+    const current = await persistence.readSettings(true)
+
+    const testHost = candidateSettings?.host || current.host
+    const testPort = candidateSettings?.port || current.port
+    const testSecurity = candidateSettings?.security || current.security
+    const testUsername = candidateSettings?.username !== undefined ? candidateSettings.username : current.username
+    const testPassword = candidateSettings?.password !== undefined ? candidateSettings.password : current.password
+    const testFromEmail = candidateSettings?.from_email || current.from_email
+    const testFromName = candidateSettings?.from_name !== undefined ? candidateSettings.from_name : current.from_name
+
+    return sendSmtpEmail(
+      {
+        to: targetRecipient,
+        subject: "DogruAdres Platform SMTP Test Mesaji",
+        text: `DogruAdres Platform SMTP Yapilandirma Testi basariyla tamamlandi.\n\nZaman: ${new Date().toISOString()}\nSunucu: ${testHost}:${testPort}`,
+        html: `<div style="font-family:sans-serif;padding:20px;border:1px solid #ddd;border-radius:6px;"><h3>DogruAdres Platform SMTP Test</h3><p>SMTP Yapilandirma Testi basariyla tamamlandi.</p><p><strong>Sunucu:</strong> ${testHost}:${testPort}</p><p><strong>Zaman:</strong> ${new Date().toISOString()}</p></div>`,
+      },
+      {
+        enabled: true,
+        host: testHost,
+        port: testPort,
+        security: testSecurity,
+        username: testUsername || undefined,
+        password: testPassword || undefined,
+        fromEmail: testFromEmail,
+        fromName: testFromName || undefined,
+      }
+    )
   }
 }

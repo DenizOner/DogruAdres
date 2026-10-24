@@ -952,9 +952,12 @@ export type Routes = {
         memberships: typeof import("../src/api/personal/memberships/route");
         mfa: typeof import("../src/api/personal/mfa/route") & {
             enroll: typeof import("../src/api/personal/mfa/enroll/route");
+            manage: typeof import("../src/api/personal/mfa/manage/route");
         };
         organizations: typeof import("../src/api/personal/organizations/route");
-        platform: typeof import("../src/api/personal/platform/route");
+        platform: typeof import("../src/api/personal/platform/route") & {
+            smtp: typeof import("../src/api/personal/platform/smtp/route");
+        };
         session: typeof import("../src/api/personal/session/route");
     };
 };
