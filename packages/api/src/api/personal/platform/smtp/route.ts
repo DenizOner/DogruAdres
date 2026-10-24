@@ -115,17 +115,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   }
 
   if (parsed.data.action === "test") {
-    // Determine target recipient (if not provided, default to authorized admin's email)
-    let recipient = parsed.data.target_recipient
-    if (!recipient) {
-      try {
-        const session = await service.personalSession(token)
-        if (session && session.auth_identity_id) {
-          // Resolve email from login session
-          recipient = process.env.SMTP_FROM_EMAIL || "test@dogruadres.invalid"
-        }
-      } catch {}
-    }
+    // A test must have an explicit, verified-by-operator destination.
+    // SMTP_FROM_EMAIL is the sender, not evidence of the current admin's inbox.
+    const recipient = parsed.data.target_recipient
     if (!recipient) {
       return res.status(400).json({ message: "Target recipient email is required for test email dispatch" })
     }
@@ -146,12 +138,12 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         messageId: sendResult.messageId,
         accepted: sendResult.accepted,
       })
-    } catch (err) {
-      // Return descriptive error message without leaking secret material
-      const message = (err as Error).message.replace(/[A-Za-z0-9+/=]{20,}/g, "[REDACTED]")
+    } catch {
+      // Provider errors may contain addresses or credentials in short fragments.
+      // Never reflect them into an HTTP response.
       return res.status(400).json({
         ok: false,
-        message: `SMTP test connection failed: ${message}`,
+        message: "SMTP test failed. Check the settings and try again.",
       })
     }
   }
