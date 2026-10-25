@@ -817,7 +817,7 @@ export function redactSensitiveData(text: string): string {
     .replace(/(postgres(?:ql)?:\/\/[^:]+:)[^@]+(@)/gi, "$1[REDACTED_PASSWORD]$2")
     .replace(/(password["':\s]+)[^\s,"'}]+/gi, '$1"[REDACTED]"')
     .replace(/(bearer\s+)[a-zA-Z0-9_\-\.]+/gi, "$1[REDACTED_TOKEN]")
-    .replace(/-----BEGIN [A-Z0-9_ -]*PRIVATE KEY[A-Z0-9_ -]*-----[\s\S]*?-----END [A-Z0-9_ -]*PRIVATE KEY[A-Z0-9_ -]*-----/gi, "[REDACTED_PRIVATE_KEY]")
+    .replace(/-----BEGIN ((?:[A-Z0-9_]+(?: [A-Z0-9_]+)* )?PRIVATE KEY(?: BLOCK)?)-----[\s\S]*?-----END \1-----/gi, "[REDACTED_PRIVATE_KEY]")
 }
 
 export interface CheckpointPrincipal {

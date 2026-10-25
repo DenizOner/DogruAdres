@@ -785,6 +785,70 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       expect(publicOutput).toContain(publicKeyPem)
     })
 
+    it("redacts multiple PEM private-key blocks sharing a line or separated by ordinary text without exposing subsequent blocks", () => {
+      // 1. Two blocks separated by ordinary text on the exact same line (regression for PR comment 6403061324)
+      const sameLineTwoBlocks =
+        "-----BEGIN PRIVATE KEY-----\nKeyONEabc==\n-----END PRIVATE KEY----- and -----BEGIN PRIVATE KEY-----\nKeyTWOxyz==\n-----END PRIVATE KEY-----"
+      const sameLineRedacted = redactSensitiveData(sameLineTwoBlocks)
+      expect(sameLineRedacted).toBe("[REDACTED_PRIVATE_KEY] and [REDACTED_PRIVATE_KEY]")
+      expect(sameLineRedacted).not.toContain("KeyONEabc==")
+      expect(sameLineRedacted).not.toContain("KeyTWOxyz==")
+      expect(sameLineRedacted).not.toContain("-----BEGIN PRIVATE KEY-----")
+      expect(sameLineRedacted).not.toContain("-----END PRIVATE KEY-----")
+
+      // 2. Two blocks separated by newlines
+      const newlineTwoBlocks =
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nsshBodySynthetic123\n-----END OPENSSH PRIVATE KEY-----\n\n-----BEGIN ENCRYPTED PRIVATE KEY-----\nencBodySynthetic456\n-----END ENCRYPTED PRIVATE KEY-----"
+      const newlineRedacted = redactSensitiveData(newlineTwoBlocks)
+      expect(newlineRedacted).toBe("[REDACTED_PRIVATE_KEY]\n\n[REDACTED_PRIVATE_KEY]")
+      expect(newlineRedacted).not.toContain("sshBodySynthetic123")
+      expect(newlineRedacted).not.toContain("encBodySynthetic456")
+      expect(newlineRedacted).not.toContain("-----BEGIN OPENSSH PRIVATE KEY-----")
+      expect(newlineRedacted).not.toContain("-----BEGIN ENCRYPTED PRIVATE KEY-----")
+
+      // 3. Mixed supported private-key types on same line with text before, middle, after
+      const mixedTypes =
+        "log prefix before keys -----BEGIN RSA PRIVATE KEY-----\nrsaSynthetic789\n-----END RSA PRIVATE KEY----- log separator middle -----BEGIN EC PRIVATE KEY-----\necSynthetic012\n-----END EC PRIVATE KEY----- log suffix after keys"
+      const mixedRedacted = redactSensitiveData(mixedTypes)
+      expect(mixedRedacted).toBe(
+        "log prefix before keys [REDACTED_PRIVATE_KEY] log separator middle [REDACTED_PRIVATE_KEY] log suffix after keys"
+      )
+      expect(mixedRedacted).not.toContain("rsaSynthetic789")
+      expect(mixedRedacted).not.toContain("ecSynthetic012")
+      expect(mixedRedacted).toContain("log prefix before keys ")
+      expect(mixedRedacted).toContain(" log separator middle ")
+      expect(mixedRedacted).toContain(" log suffix after keys")
+
+      // 4. Multiple blocks with passwords, DSNs, bearer tokens and public keys combined
+      const combined =
+        "auth error at postgresql://user:myDbPass@127.0.0.1:5432/db with token bearer tok123456 and password: mySecPass " +
+        "public: -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A...\n-----END PUBLIC KEY----- " +
+        "key1: -----BEGIN PGP PRIVATE KEY BLOCK-----\npgpSyntheticKeyMaterial\n-----END PGP PRIVATE KEY BLOCK----- " +
+        "key2: -----BEGIN ED25519 PRIVATE KEY-----\ned25519SyntheticKeyMaterial\n-----END ED25519 PRIVATE KEY-----"
+      const combinedRedacted = redactSensitiveData(combined)
+      expect(combinedRedacted).not.toContain("myDbPass")
+      expect(combinedRedacted).not.toContain("tok123456")
+      expect(combinedRedacted).not.toContain("mySecPass")
+      expect(combinedRedacted).not.toContain("pgpSyntheticKeyMaterial")
+      expect(combinedRedacted).not.toContain("ed25519SyntheticKeyMaterial")
+      expect(combinedRedacted).toContain("[REDACTED_PASSWORD]")
+      expect(combinedRedacted).toContain("[REDACTED_TOKEN]")
+      expect(combinedRedacted).toContain('password: "[REDACTED]"')
+      expect(combinedRedacted).toContain(
+        "public: -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A...\n-----END PUBLIC KEY-----"
+      )
+      expect(combinedRedacted).toContain("key1: [REDACTED_PRIVATE_KEY]")
+      expect(combinedRedacted).toContain("key2: [REDACTED_PRIVATE_KEY]")
+
+      // 5. Incomplete / unclosed PEM block behavior (fail-closed check)
+      const incompletePrecedingClosed =
+        "log before -----BEGIN PRIVATE KEY-----\nunclosedSyntheticBody\nlog between -----BEGIN PRIVATE KEY-----\nsecondSyntheticBody\n-----END PRIVATE KEY----- log after"
+      const incompleteRedacted = redactSensitiveData(incompletePrecedingClosed)
+      expect(incompleteRedacted).not.toContain("unclosedSyntheticBody")
+      expect(incompleteRedacted).not.toContain("secondSyntheticBody")
+      expect(incompleteRedacted).toContain("log before [REDACTED_PRIVATE_KEY] log after")
+    })
+
     it("initializes checkpoint and prevents unsafe retries on existing incomplete/completed checkpoint", async () => {
       const storage = new Map<string, string>()
       const mockStorageAdapter: CheckpointStorageAdapter = {
