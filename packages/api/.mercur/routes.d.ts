@@ -936,7 +936,6 @@ export type Routes = {
         };
         organizations: {
             $id: typeof import("../src/api/dogruadres/organizations/[id]/route") & {
-                auditTimeline: typeof import("../src/api/dogruadres/organizations/[id]/audit-timeline/route");
                 invitations: typeof import("../src/api/dogruadres/organizations/[id]/invitations/route") & {
                     $invitationId: typeof import("../src/api/dogruadres/organizations/[id]/invitations/[invitation_id]/route");
                 };
