@@ -38,7 +38,7 @@ Yalnız yetkili yerel Windows Agent, **önceden doğruladığı tek bir** canoni
 node quality/automation/local-worktree-preflight.mjs --root "<önceden-doğrulanmış mutlak çalışma klasörü>"
 ```
 
-Bu komut **yalnız mutlak path** kabul eder; `--root .` gibi belirsiz göreli çalışma dizinleri reddedilir. Hiçbir repo hedefi otomatik tahmin edilmez.
+Bu komut **yalnız mutlak path** kabul eder; `--root .` gibi belirsiz göreli çalışma dizinleri reddedilir. Yerel ignored dosya taraması büyük `node_modules` ağaçlarında 60 saniyeye kadar sürebilir; diğer Git okumaları 15 saniyeyle sınırlıdır. Her komutun 8 MiB çıktı sınırı değişmedi. Zaman aşımı/bellek sınırı = **BLOCKED**, otomatik daraltılmış kapsam veya silme izni üretmez. Windows gerçek başarı kanıtı ayrıca gereklidir. Hiçbir repo hedefi otomatik tahmin edilmez.
 
 Bu komut `git --no-optional-locks` kullanır: branch/HEAD/common-dir, tam/untracked/ignored dosyaların **yalnız sayıları**, stash, reflog, remote'a çıkmamış commit sayısı ve Git worktree envanterini okur. Git fetch/push, `git clean`, `git reset`, checkout, database/Docker veya dizin silme yapmaz. Tam yerel path, uzak URL, dosya adları, token ve sırların içerikleri rapora yazılmaz; klasörler yalnız path digest ile gösterilir. Elde edilen çıktı **yalnız güvenli yerel özel kanıt alanında** tutulmalı, public GitHub Actions loguna veya Issue yorumuna olduğu gibi yapıştırılmamalıdır.
 
