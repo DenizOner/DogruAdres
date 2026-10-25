@@ -1,6 +1,7 @@
 import { POST } from "../invitations/route"
 import { access, csrf, enabled, sessionToken } from "../security"
 import { createInvitationWorkflow } from "../../../workflows/dogruadres-access/create-invitation"
+import { revokeInvitationWorkflow } from "../../../workflows/dogruadres-access/revoke-invitation"
 import { acceptInvitationWorkflow } from "../../../workflows/dogruadres-access/accept-invitation"
 import { verifiedEmailForActorContext } from "../../dogruadres/invitations/accept/route"
 import { sendSmtpEmail } from "../../../modules/dogruadres-access/smtp-client"
@@ -10,6 +11,9 @@ jest.mock("../security", () => ({
 }))
 jest.mock("../../../workflows/dogruadres-access/create-invitation", () => ({
   createInvitationWorkflow: jest.fn(),
+}))
+jest.mock("../../../workflows/dogruadres-access/revoke-invitation", () => ({
+  revokeInvitationWorkflow: jest.fn(),
 }))
 jest.mock("../../../workflows/dogruadres-access/accept-invitation", () => ({
   acceptInvitationWorkflow: jest.fn(),
@@ -137,6 +141,26 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     )
     expect(mockAcceptRun).not.toHaveBeenCalled()
   })
+  it("supersedes prior pending invitations for the same recipient before creating a new one", async () => {
+    const priorPending = [{
+      id: "dainv_prior",
+      expires_at: new Date(Date.now() + 100000),
+    }]
+    ;(service as any).listInvitations = jest.fn().mockResolvedValueOnce(priorPending)
+    const mockRevoke = jest.fn().mockResolvedValueOnce({ result: {} })
+    ;(revokeInvitationWorkflow as unknown as jest.Mock).mockReturnValue({ run: mockRevoke })
+
+    const res = await invoke(createBody)
+    expect(res.status).toHaveBeenCalledWith(201)
+    expect(mockRevoke).toHaveBeenCalledWith(expect.objectContaining({
+      input: expect.objectContaining({
+        invitation_id: "dainv_prior",
+        organization_id: "daorg_allowed",
+      }),
+    }))
+    expect(mockCreateRun).toHaveBeenCalled()
+  })
+
   it("records delivery failure without aborting invitation record creation", async () => {
     ;(sendSmtpEmail as jest.Mock).mockRejectedValueOnce(new Error("Connection refused"))
     const res = await invoke(createBody)
