@@ -43,19 +43,27 @@ describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () =
   const adminPersonId = 'da_prs_admin_' + testRunId;
   const memberPersonId = 'da_prs_member_' + testRunId;
   let relayOccurredAt: string;
+  let initEventId: string;
 
   beforeAll(async () => {
     try {
       db = new Client({ connectionString: DB_URL });
       await db.connect();
 
-      // Verify isolated DB
-      const res = await db.query('SELECT current_database(), current_user');
-      expect(res.rows[0].current_database).toBe('b14_test_db');
+      // Verify explicitly identified, disposable, task-owned database
+      const dbIdent = await db.query('SELECT current_database() as db, current_user as u');
+      expect(['b14_test_db', 'b14_integration_db']).toContain(dbIdent.rows[0].db);
+      expect(dbIdent.rows[0].u).toBe('b14_user');
 
-      // Clear any leftover outbox and index rows from previous scratch runs
-      await db.query('DELETE FROM da_audit_outbox');
-      await db.query('DELETE FROM da_audit_index_entry');
+      // Fail-closed safety check: require fresh empty fixture, never wipe existing database
+      const preExistingOutbox = await db.query('SELECT COUNT(*)::int as cnt FROM da_audit_outbox WHERE deleted_at IS NULL');
+      if (preExistingOutbox.rows[0].cnt > 0) {
+        throw new Error(`FAIL_CLOSED: da_audit_outbox contains ${preExistingOutbox.rows[0].cnt} pre-existing rows in test database. Refusing to run on dirty environment.`);
+      }
+      const preExistingIndex = await db.query('SELECT COUNT(*)::int as cnt FROM da_audit_index_entry WHERE deleted_at IS NULL');
+      if (preExistingIndex.rows[0].cnt > 0) {
+        throw new Error(`FAIL_CLOSED: da_audit_index_entry contains ${preExistingIndex.rows[0].cnt} pre-existing rows in test database. Refusing to run on dirty environment.`);
+      }
 
       deliveryTx = createDeliveryManager(db);
 
@@ -118,7 +126,7 @@ describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () =
       );
 
       // Insert an initial row in da_audit_event so row-level append-only triggers have a target
-      const initEventId = 'da_aud_init_' + testRunId;
+      initEventId = 'da_aud_init_' + testRunId;
       await db.query(
         'INSERT INTO da_audit_event(id, actor_person_id, actor_type, actor_id, role_context, organization_id, action, module, resource, target_id, occurred_at, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW(), NOW())',
         [initEventId, ownerPersonId, 'user', 'usr_' + testRunId, 'owner', orgId, 'organization.provisioned', 'dogruadres-access', 'organization', orgId]
@@ -143,20 +151,20 @@ describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () =
     expect(triggerNames).toContain('da_audit_event_append_only_rows');
     expect(triggerNames).toContain('da_audit_event_append_only_truncate');
 
-    // Test that direct UPDATE is blocked by the row-level trigger
+    // Test that direct UPDATE is blocked by the row-level trigger (restricted to synthetic test row)
     let updateFailed = false;
     try {
-      await db.query("UPDATE da_audit_event SET action = 'tampered'");
+      await db.query("UPDATE da_audit_event SET action = 'tampered' WHERE id = $1", [initEventId]);
     } catch (e: any) {
       updateFailed = true;
       expect(e.message).toContain('append-only');
     }
     expect(updateFailed).toBe(true);
 
-    // Test that direct DELETE is blocked by the row-level trigger
+    // Test that direct DELETE is blocked by the row-level trigger (restricted to synthetic test row)
     let deleteFailed = false;
     try {
-      await db.query('DELETE FROM da_audit_event');
+      await db.query('DELETE FROM da_audit_event WHERE id = $1', [initEventId]);
     } catch (e: any) {
       deleteFailed = true;
       expect(e.message).toContain('append-only');
