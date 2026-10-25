@@ -17,7 +17,10 @@ import {
   type FoundationAuditRelayIndex
 } from '../../src/workflows/dogruadres-audit-relay/relay';
 
-const DB_URL = process.env.B14_DATABASE_URL || 'postgres://b14_user:b14_secure_test_pw@127.0.0.1:55780/b14_test_db';
+const DB_URL = process.env.B14_DATABASE_URL;
+if (!DB_URL) {
+  throw new Error('FAIL_CLOSED: B14_DATABASE_URL environment variable is strictly required. Hardcoded database fallback is forbidden.');
+}
 const CURSOR_KEY = process.env.DOGRUADRES_AUDIT_CURSOR_KEY || 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=';
 
 function createDeliveryManager(client: InstanceType<typeof Client>): DeliveryManager {

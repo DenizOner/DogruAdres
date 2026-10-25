@@ -17,6 +17,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   if (Object.keys(req.query).some(k => k !== "organization" && k !== "limit" && k !== "cursor")) {
     return res.status(400).json({ message: "Invalid input" })
   }
+  const token = sessionToken(req)
+  if (!token) {
+    return res.status(401).json({ message: "Personal session required" })
+  }
   try {
     const { limit, cursor } = req.query
     const paginationQuery: Record<string, unknown> = {}

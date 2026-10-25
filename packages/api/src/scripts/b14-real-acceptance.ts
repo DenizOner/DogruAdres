@@ -38,7 +38,10 @@ export default async function b14RealAcceptance({ container }: { container: Medu
   // STEP 2: Database Connection & Disposable Identity Verification
   // ---------------------------------------------------------------------------
   console.log("\n--- [STEP 2] Disposable PostgreSQL 16 Verification ---")
-  const dbUrl = process.env.DATABASE_URL || "postgres://b14_user:b14_secure_test_pw@127.0.0.1:55780/b14_test_db"
+    const dbUrl = process.env.DATABASE_URL
+  if (!dbUrl) {
+    throw new Error("FAIL_CLOSED: DATABASE_URL is strictly required. Hardcoded database fallback is forbidden.")
+  }
   const client = new Client({ connectionString: dbUrl })
   await client.connect()
 

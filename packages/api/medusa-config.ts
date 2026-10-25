@@ -33,7 +33,7 @@ const dashboardAppDir = (name: string) => {
   return fs.existsSync(bundled) ? bundled : path.join(__dirname, `../../apps/${name}`)
 }
 
-module.exports = withMercur({
+const baseConfig = withMercur({
   projectConfig: {
     databaseUrl: process.env.DATABASE_URL,
     redisUrl: process.env.REDIS_URL,
@@ -101,3 +101,6 @@ module.exports = withMercur({
     },
   ],
 })
+
+if (baseConfig?.projectConfig) { (baseConfig.projectConfig as any).workerMode = process.env.MEDUSA_WORKER_MODE || "shared" }
+module.exports = baseConfig
