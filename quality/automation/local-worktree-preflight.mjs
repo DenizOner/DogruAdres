@@ -20,9 +20,16 @@ export function classifyLocalEvidence(e) {
   return { deletion: "BLOCKED", reason: hard.join("; "), nextStep: "PRIVATE REVIEW ONLY" };
 }
 
+// Ignored-file enumeration can traverse large dependency trees on Windows.
+// Increase only its read-only time budget. Output is still capped at 8 MiB;
+// an incomplete scan must continue to abort with deletion BLOCKED.
+export function readOnlyGitTimeoutMs(args) {
+  return args[0] === "ls-files" && args.includes("--ignored") ? 60_000 : 15_000;
+}
+
 function git(root, ...args) {
   return execFileSync("git", ["--no-optional-locks", "-C", root, ...args], {
-    encoding: "utf8", timeout: 15000, maxBuffer: 8 * 1024 * 1024, windowsHide: true,
+    encoding: "utf8", timeout: readOnlyGitTimeoutMs(args), maxBuffer: 8 * 1024 * 1024, windowsHide: true,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" }
   }).trim();
 }
