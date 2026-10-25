@@ -812,12 +812,17 @@ export function verifyPathEffectiveSecurity(
 // Task-Private Durable Checkpoints & Sensitive Error Redaction
 // ---------------------------------------------------------------------------
 
+const PRIVATE_KEY_BEGIN_MARKER = /-----BEGIN ((?:[A-Z0-9_]+(?: [A-Z0-9_]+)* )?PRIVATE KEY(?: BLOCK)?)-----/i
+
 export function redactSensitiveData(text: string): string {
+  if (PRIVATE_KEY_BEGIN_MARKER.test(text)) {
+    return "[REDACTED_PRIVATE_KEY]"
+  }
+
   return text
     .replace(/(postgres(?:ql)?:\/\/[^:]+:)[^@]+(@)/gi, "$1[REDACTED_PASSWORD]$2")
     .replace(/(password["':\s]+)[^\s,"'}]+/gi, '$1"[REDACTED]"')
     .replace(/(bearer\s+)[a-zA-Z0-9_\-\.]+/gi, "$1[REDACTED_TOKEN]")
-    .replace(/-----BEGIN ((?:[A-Z0-9_]+(?: [A-Z0-9_]+)* )?PRIVATE KEY(?: BLOCK)?)-----[\s\S]*?-----END \1-----/gi, "[REDACTED_PRIVATE_KEY]")
 }
 
 export interface CheckpointPrincipal {

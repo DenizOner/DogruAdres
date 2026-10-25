@@ -729,31 +729,27 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
   })
 
   describe("6. Task-Private Durable Checkpoints & Sensitive Error Redaction", () => {
-    it("redacts database connection passwords, bearer tokens, and private keys from errors", () => {
+    it("redacts database connection passwords, bearer tokens, and passwords from ordinary error messages", () => {
       const prefix = "Operation prefix log: connecting to "
       const suffix = " for user authentication; please verify credentials."
-      const sensitiveMsg = `${prefix}postgresql://postgres:superSecretPass123@127.0.0.1:5432/mfa_db with Bearer eyJhbGciOiJIUzI1NiJ9.secret and key -----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg\n-----END PRIVATE KEY-----${suffix}`
-      const redacted = redactSensitiveData(sensitiveMsg)
+      const ordinarySensitiveMsg = `${prefix}postgresql://postgres:superSecretPass123@127.0.0.1:5432/mfa_db with Bearer eyJhbGciOiJIUzI1NiJ9.secret and password: mySecretPassword${suffix}`
+      const redacted = redactSensitiveData(ordinarySensitiveMsg)
 
-      // Verify passwords and tokens are redacted
+      // Verify passwords and tokens are redacted in ordinary messages
       expect(redacted).not.toContain("superSecretPass123")
       expect(redacted).not.toContain("eyJhbGciOiJIUzI1NiJ9.secret")
+      expect(redacted).not.toContain("mySecretPassword")
       expect(redacted).toContain("[REDACTED_PASSWORD]")
       expect(redacted).toContain("[REDACTED_TOKEN]")
+      expect(redacted).toContain('password: "[REDACTED]"')
       expect(redacted).toContain("127.0.0.1:5432/mfa_db")
 
-      // Verify private key material AND delimiters completely disappear
-      expect(redacted).not.toContain("MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg")
-      expect(redacted).not.toContain("-----BEGIN PRIVATE KEY-----")
-      expect(redacted).not.toContain("-----END PRIVATE KEY-----")
-      expect(redacted).toContain("[REDACTED_PRIVATE_KEY]")
-
-      // Verify unrelated prefix and suffix text remains exactly intact
+      // Verify unrelated prefix and suffix text remains exactly intact for ordinary messages
       expect(redacted).toContain(prefix)
       expect(redacted).toContain(suffix)
     })
 
-    it("redacts all supported PEM private-key formats and leaves public keys intact", () => {
+    it("replaces entire error message with fixed non-sensitive string when any private-key PEM BEGIN marker is present", () => {
       const pemKeyTypes = [
         { header: "PRIVATE KEY", body: "abcxyz123=" },
         { header: "RSA PRIVATE KEY", body: "MIIEowIBAAKCAQEA0syntheticRsaKeyMaterial==" },
@@ -761,92 +757,82 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
         { header: "ENCRYPTED PRIVATE KEY", body: "MIICxxxxSyntheticEncryptedKeyMaterial==" },
         { header: "OPENSSH PRIVATE KEY", body: "b3BlbnNzaGFjZTJ0ZXN0U3ludGhldGljT3BlblNzaEtleQ==" },
         { header: "ED25519 PRIVATE KEY", body: "MC4CAQAwBQYDK2VwBCIEIPsyntheticEd25519KeyMaterial==" },
+        { header: "PGP PRIVATE KEY BLOCK", body: "pgpSyntheticKeyMaterial123==" },
+        { header: "DSA PRIVATE KEY", body: "dsaSyntheticKeyMaterial456==" },
       ]
 
       for (const { header, body } of pemKeyTypes) {
-        const input = `Pre-text before ${header}: -----BEGIN ${header}-----\n${body}\n-----END ${header}----- Post-text after ${header}.`
-        const redacted = redactSensitiveData(input)
-
-        // Key body and delimiters must be completely absent
-        expect(redacted).not.toContain(body)
-        expect(redacted).not.toContain(`-----BEGIN ${header}-----`)
-        expect(redacted).not.toContain(`-----END ${header}-----`)
-        expect(redacted).toContain("[REDACTED_PRIVATE_KEY]")
-
-        // Surrounding unrelated text must be preserved
-        expect(redacted).toContain(`Pre-text before ${header}: `)
-        expect(redacted).toContain(` Post-text after ${header}.`)
+        // Complete PEM block
+        const completeInput = `Error log: failed to load credentials from -----BEGIN ${header}-----\n${body}\n-----END ${header}----- at module init.`
+        const completeRedacted = redactSensitiveData(completeInput)
+        expect(completeRedacted).toBe("[REDACTED_PRIVATE_KEY]")
+        expect(completeRedacted).not.toContain(body)
+        expect(completeRedacted).not.toContain(`-----BEGIN ${header}-----`)
+        expect(completeRedacted).not.toContain(`-----END ${header}-----`)
       }
+    })
 
+    it("safely handles multiple, incomplete, truncated, and mismatched private-key examples without leaking key material", () => {
+      // 1. Incomplete / unclosed private key (no END marker at all)
+      const incompleteInput = "prefix log -----BEGIN PRIVATE KEY-----\nSensitiveHalfAbc012345xyz"
+      const incompleteRedacted = redactSensitiveData(incompleteInput)
+      expect(incompleteRedacted).toBe("[REDACTED_PRIVATE_KEY]")
+      expect(incompleteRedacted).not.toContain("SensitiveHalfAbc012345xyz")
+      expect(incompleteRedacted).not.toContain("-----BEGIN PRIVATE KEY-----")
+
+      // 2. Incomplete first block followed by complete second block
+      const unclosedThenComplete =
+        "unclosed first: -----BEGIN RSA PRIVATE KEY-----\nKeyUnclosed999\nsecond complete: -----BEGIN EC PRIVATE KEY-----\necKeyMaterial\n-----END EC PRIVATE KEY-----"
+      const unclosedThenCompleteRedacted = redactSensitiveData(unclosedThenComplete)
+      expect(unclosedThenCompleteRedacted).toBe("[REDACTED_PRIVATE_KEY]")
+      expect(unclosedThenCompleteRedacted).not.toContain("KeyUnclosed999")
+      expect(unclosedThenCompleteRedacted).not.toContain("ecKeyMaterial")
+
+      // 3. Mismatched BEGIN / END headers
+      const mismatchedHeaders =
+        "mismatched: -----BEGIN RSA PRIVATE KEY-----\nmismatchedKeyBody123\n-----END EC PRIVATE KEY-----"
+      const mismatchedRedacted = redactSensitiveData(mismatchedHeaders)
+      expect(mismatchedRedacted).toBe("[REDACTED_PRIVATE_KEY]")
+      expect(mismatchedRedacted).not.toContain("mismatchedKeyBody123")
+
+      // 4. Multiple complete PEM blocks sharing a line or separated by ordinary text
+      const multipleBlocks =
+        "-----BEGIN PRIVATE KEY-----\nKeyONEabc==\n-----END PRIVATE KEY----- and separator -----BEGIN PRIVATE KEY-----\nKeyTWOxyz==\n-----END PRIVATE KEY-----"
+      const multipleRedacted = redactSensitiveData(multipleBlocks)
+      expect(multipleRedacted).toBe("[REDACTED_PRIVATE_KEY]")
+      expect(multipleRedacted).not.toContain("KeyONEabc==")
+      expect(multipleRedacted).not.toContain("KeyTWOxyz==")
+
+      // 5. Multiple blocks separated by newlines
+      const newlineBlocks =
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nssh123\n-----END OPENSSH PRIVATE KEY-----\n\n-----BEGIN ENCRYPTED PRIVATE KEY-----\nenc456\n-----END ENCRYPTED PRIVATE KEY-----"
+      const newlineRedacted = redactSensitiveData(newlineBlocks)
+      expect(newlineRedacted).toBe("[REDACTED_PRIVATE_KEY]")
+      expect(newlineRedacted).not.toContain("ssh123")
+      expect(newlineRedacted).not.toContain("enc456")
+    })
+
+    it("preserves public-key-only messages without redaction", () => {
       // Public key must remain untouched
-      const publicKeyPem = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...\n-----END PUBLIC KEY-----"
+      const publicKeyPem =
+        "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...\n-----END PUBLIC KEY-----"
       const publicOutput = redactSensitiveData(`Public key output: ${publicKeyPem}`)
       expect(publicOutput).not.toContain("[REDACTED_PRIVATE_KEY]")
       expect(publicOutput).toContain(publicKeyPem)
-    })
 
-    it("redacts multiple PEM private-key blocks sharing a line or separated by ordinary text without exposing subsequent blocks", () => {
-      // 1. Two blocks separated by ordinary text on the exact same line (regression for PR comment 6403061324)
-      const sameLineTwoBlocks =
-        "-----BEGIN PRIVATE KEY-----\nKeyONEabc==\n-----END PRIVATE KEY----- and -----BEGIN PRIVATE KEY-----\nKeyTWOxyz==\n-----END PRIVATE KEY-----"
-      const sameLineRedacted = redactSensitiveData(sameLineTwoBlocks)
-      expect(sameLineRedacted).toBe("[REDACTED_PRIVATE_KEY] and [REDACTED_PRIVATE_KEY]")
-      expect(sameLineRedacted).not.toContain("KeyONEabc==")
-      expect(sameLineRedacted).not.toContain("KeyTWOxyz==")
-      expect(sameLineRedacted).not.toContain("-----BEGIN PRIVATE KEY-----")
-      expect(sameLineRedacted).not.toContain("-----END PRIVATE KEY-----")
+      // RSA PUBLIC KEY
+      const rsaPublicKeyPem =
+        "-----BEGIN RSA PUBLIC KEY-----\nMIIBCgKCAQEAzSyntheticRsaPublicKeyMaterial...\n-----END RSA PUBLIC KEY-----"
+      const rsaPublicOutput = redactSensitiveData(`RSA Public key: ${rsaPublicKeyPem}`)
+      expect(rsaPublicOutput).not.toContain("[REDACTED_PRIVATE_KEY]")
+      expect(rsaPublicOutput).toContain(rsaPublicKeyPem)
 
-      // 2. Two blocks separated by newlines
-      const newlineTwoBlocks =
-        "-----BEGIN OPENSSH PRIVATE KEY-----\nsshBodySynthetic123\n-----END OPENSSH PRIVATE KEY-----\n\n-----BEGIN ENCRYPTED PRIVATE KEY-----\nencBodySynthetic456\n-----END ENCRYPTED PRIVATE KEY-----"
-      const newlineRedacted = redactSensitiveData(newlineTwoBlocks)
-      expect(newlineRedacted).toBe("[REDACTED_PRIVATE_KEY]\n\n[REDACTED_PRIVATE_KEY]")
-      expect(newlineRedacted).not.toContain("sshBodySynthetic123")
-      expect(newlineRedacted).not.toContain("encBodySynthetic456")
-      expect(newlineRedacted).not.toContain("-----BEGIN OPENSSH PRIVATE KEY-----")
-      expect(newlineRedacted).not.toContain("-----BEGIN ENCRYPTED PRIVATE KEY-----")
-
-      // 3. Mixed supported private-key types on same line with text before, middle, after
-      const mixedTypes =
-        "log prefix before keys -----BEGIN RSA PRIVATE KEY-----\nrsaSynthetic789\n-----END RSA PRIVATE KEY----- log separator middle -----BEGIN EC PRIVATE KEY-----\necSynthetic012\n-----END EC PRIVATE KEY----- log suffix after keys"
-      const mixedRedacted = redactSensitiveData(mixedTypes)
-      expect(mixedRedacted).toBe(
-        "log prefix before keys [REDACTED_PRIVATE_KEY] log separator middle [REDACTED_PRIVATE_KEY] log suffix after keys"
-      )
-      expect(mixedRedacted).not.toContain("rsaSynthetic789")
-      expect(mixedRedacted).not.toContain("ecSynthetic012")
-      expect(mixedRedacted).toContain("log prefix before keys ")
-      expect(mixedRedacted).toContain(" log separator middle ")
-      expect(mixedRedacted).toContain(" log suffix after keys")
-
-      // 4. Multiple blocks with passwords, DSNs, bearer tokens and public keys combined
-      const combined =
-        "auth error at postgresql://user:myDbPass@127.0.0.1:5432/db with token bearer tok123456 and password: mySecPass " +
-        "public: -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A...\n-----END PUBLIC KEY----- " +
-        "key1: -----BEGIN PGP PRIVATE KEY BLOCK-----\npgpSyntheticKeyMaterial\n-----END PGP PRIVATE KEY BLOCK----- " +
-        "key2: -----BEGIN ED25519 PRIVATE KEY-----\ned25519SyntheticKeyMaterial\n-----END ED25519 PRIVATE KEY-----"
-      const combinedRedacted = redactSensitiveData(combined)
-      expect(combinedRedacted).not.toContain("myDbPass")
-      expect(combinedRedacted).not.toContain("tok123456")
-      expect(combinedRedacted).not.toContain("mySecPass")
-      expect(combinedRedacted).not.toContain("pgpSyntheticKeyMaterial")
-      expect(combinedRedacted).not.toContain("ed25519SyntheticKeyMaterial")
-      expect(combinedRedacted).toContain("[REDACTED_PASSWORD]")
-      expect(combinedRedacted).toContain("[REDACTED_TOKEN]")
-      expect(combinedRedacted).toContain('password: "[REDACTED]"')
-      expect(combinedRedacted).toContain(
-        "public: -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A...\n-----END PUBLIC KEY-----"
-      )
-      expect(combinedRedacted).toContain("key1: [REDACTED_PRIVATE_KEY]")
-      expect(combinedRedacted).toContain("key2: [REDACTED_PRIVATE_KEY]")
-
-      // 5. Incomplete / unclosed PEM block behavior (fail-closed check)
-      const incompletePrecedingClosed =
-        "log before -----BEGIN PRIVATE KEY-----\nunclosedSyntheticBody\nlog between -----BEGIN PRIVATE KEY-----\nsecondSyntheticBody\n-----END PRIVATE KEY----- log after"
-      const incompleteRedacted = redactSensitiveData(incompletePrecedingClosed)
-      expect(incompleteRedacted).not.toContain("unclosedSyntheticBody")
-      expect(incompleteRedacted).not.toContain("secondSyntheticBody")
-      expect(incompleteRedacted).toContain("log before [REDACTED_PRIVATE_KEY] log after")
+      // CERTIFICATE
+      const certificatePem =
+        "-----BEGIN CERTIFICATE-----\nMIIDXTCCAkWgAwIBAgIJALsyntheticCertMaterial...\n-----END CERTIFICATE-----"
+      const certOutput = redactSensitiveData(`Cert: ${certificatePem}`)
+      expect(certOutput).not.toContain("[REDACTED_PRIVATE_KEY]")
+      expect(certOutput).toContain(certificatePem)
     })
 
     it("initializes checkpoint and prevents unsafe retries on existing incomplete/completed checkpoint", async () => {
