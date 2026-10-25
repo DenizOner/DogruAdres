@@ -23,10 +23,16 @@ jest.mock("../../../modules/dogruadres-access/smtp-client", () => ({
 
 describe("session-bound personal invitations (no native bearer delegation)", () => {
   const originalInvitationSecret = process.env.DOGRUADRES_INVITATION_SECRET
-  beforeAll(() => { process.env.DOGRUADRES_INVITATION_SECRET = "unit-only-" + "x".repeat(48) })
+  const originalOrigin = process.env.DOGRUADRES_PUBLIC_ORIGIN
+  beforeAll(() => {
+    process.env.DOGRUADRES_INVITATION_SECRET = "unit-only-" + "x".repeat(48)
+    process.env.DOGRUADRES_PUBLIC_ORIGIN = "http://127.0.0.1:19102"
+  })
   afterAll(() => {
     if (originalInvitationSecret === undefined) delete process.env.DOGRUADRES_INVITATION_SECRET
     else process.env.DOGRUADRES_INVITATION_SECRET = originalInvitationSecret
+    if (originalOrigin === undefined) delete process.env.DOGRUADRES_PUBLIC_ORIGIN
+    else process.env.DOGRUADRES_PUBLIC_ORIGIN = originalOrigin
   })
   const principal = {
     person_id: "person_owner", actor_type: "user", actor_id: "user_owner",
@@ -124,8 +130,7 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     expect(res.status).toHaveBeenCalledWith(201)
     expect(res.json).toHaveBeenCalledWith({
       invitation: expect.objectContaining({ id: "dainv_new", role: "member", status: "pending" }),
-      invitation_token: expect.any(String),
-      delivery: { status: "sent", error: undefined },
+      delivery: { status: "sent" },
     })
     expect(sendSmtpEmail).toHaveBeenCalledWith(
       expect.objectContaining({ to: "member@example.invalid", subject: "DoğruAdres Kuruluş Üyelik Daveti" })
@@ -138,10 +143,33 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     expect(res.status).toHaveBeenCalledWith(201)
     expect(res.json).toHaveBeenCalledWith({
       invitation: expect.objectContaining({ id: "dainv_new", role: "member", status: "pending" }),
-      invitation_token: expect.any(String),
-      delivery: { status: "failed", error: "Connection refused" },
+      delivery: { status: "failed" },
     })
   })
+  it("refuses creation without a configured public origin before any write or SMTP send", async () => {
+    delete process.env.DOGRUADRES_PUBLIC_ORIGIN
+    try {
+      const res = await invoke(createBody)
+      expect(res.status).toHaveBeenCalledWith(503)
+      expect(mockCreateRun).not.toHaveBeenCalled()
+      expect(sendSmtpEmail).not.toHaveBeenCalled()
+    } finally {
+      process.env.DOGRUADRES_PUBLIC_ORIGIN = "http://127.0.0.1:19102"
+    }
+  })
+  it("never reflects SMTP error details or invitation tokens in response JSON", async () => {
+    ;(sendSmtpEmail as jest.Mock).mockRejectedValueOnce(
+      new Error("SMTP error: recipient=private@example.test password=confidential")
+    )
+    const res = await invoke(createBody)
+    const response = JSON.stringify(res.json.mock.calls)
+    expect(response).not.toContain("private@example.test")
+    expect(response).not.toContain("confidential")
+    expect(response).not.toContain("invitation_token")
+    expect(response).not.toContain("unit-only-")
+    expect(response).toContain('"failed"')
+  })
+
   it("never accepts a recipient without native verified-email proof", async () => {
     ;(verifiedEmailForActorContext as jest.Mock).mockResolvedValue(null)
     const res = await invoke(acceptBody)
