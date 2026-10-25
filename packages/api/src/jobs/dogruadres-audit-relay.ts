@@ -1,4 +1,3 @@
-console.log("[AUDIT-RELAY-FILE] Job file imported at:", new Date().toISOString())
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { relayFoundationAuditWorkflow } from "../workflows/dogruadres-audit-relay"
 
@@ -23,7 +22,6 @@ export async function runAuditRelayBatch(
 }
 
 export default async function dogruadresAuditRelayJob(container: MedusaContainer) {
-  console.log("[AUDIT-RELAY-EXEC] Scheduled job executing at:", new Date().toISOString())
   await runAuditRelayBatch(container)
 }
 

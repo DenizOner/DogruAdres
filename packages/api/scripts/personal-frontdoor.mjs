@@ -64,7 +64,7 @@ export function startFrontdoor(env=process.env){
       for(const key of ['content-type','content-security-policy','x-content-type-options'])if(response.headers.has(key))res.setHeader(key,response.headers.get(key))
       const cookies=response.headers.getSetCookie();if(cookies.length)res.setHeader('Set-Cookie',cookies)
       res.writeHead(response.status);res.end(Buffer.from(await response.arrayBuffer()))
-    }catch(err){console.error("[FRONTDOOR-ERROR]", err);if(!res.headersSent)res.writeHead(503,{'Content-Type':'application/json'});res.end('{"message":"Service unavailable"}')}
+    }catch(err){if(!res.headersSent)res.writeHead(503,{'Content-Type':'application/json'});res.end('{"message":"Service unavailable"}')}
   }
   const server=config.tls?https.createServer({key:readFileSync(config.key),cert:readFileSync(config.cert),minVersion:'TLSv1.2'},handler):http.createServer(handler)
   server.requestTimeout=20000;server.headersTimeout=10000

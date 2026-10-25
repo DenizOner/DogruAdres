@@ -33,10 +33,11 @@ const dashboardAppDir = (name: string) => {
   return fs.existsSync(bundled) ? bundled : path.join(__dirname, `../../apps/${name}`)
 }
 
-const baseConfig = withMercur({
+module.exports = withMercur({
   projectConfig: {
     databaseUrl: process.env.DATABASE_URL,
     redisUrl: process.env.REDIS_URL,
+    workerMode: (process.env.MEDUSA_WORKER_MODE as any) || "shared",
     http: {
       storeCors: process.env.STORE_CORS!,
       adminCors: process.env.ADMIN_CORS!,
@@ -100,7 +101,4 @@ const baseConfig = withMercur({
       resolve: './src/modules/dogruadres-audit-index',
     },
   ],
-})
-
-if (baseConfig?.projectConfig) { (baseConfig.projectConfig as any).workerMode = process.env.MEDUSA_WORKER_MODE || "shared" }
-module.exports = baseConfig
+})

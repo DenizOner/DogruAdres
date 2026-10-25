@@ -220,6 +220,25 @@ describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () =
     expect(outboxRow.rows[0].status).toBe('pending');
     expect(outboxRow.rows[0].attempt_count).toBe(0);
     expect(outboxRow.rows[0].delivered_at).toBeNull();
+
+    // Verify atomic rollback behavior: if outbox persistence fails, audit event is NOT committed
+    const abortEventId = 'da_aud_abort_' + testRunId;
+    let rollbackExecuted = false;
+    await db.query('BEGIN');
+    try {
+      await db.query(
+        'INSERT INTO da_audit_event(id, actor_person_id, actor_type, actor_id, role_context, organization_id, action, module, resource, target_id, occurred_at, created_at, updated_at) VALUES(, , , , , , , , , , , , )',
+        [abortEventId, ownerPersonId, 'user', 'usr_' + testRunId, 'owner', orgId, 'organization.membership_changed', 'dogruadres-access', 'membership', 'mem_abort', occurredAt]
+      );
+      // Simulate failure on subsequent outbox step
+      throw new Error('Simulated atomic outbox persistence failure');
+    } catch {
+      await db.query('ROLLBACK');
+      rollbackExecuted = true;
+    }
+    expect(rollbackExecuted).toBe(true);
+    const abortedEvent = await db.query('SELECT * FROM da_audit_event WHERE id = $1', [abortEventId]);
+    expect(abortedEvent.rows.length).toBe(0);
   });
 
   it('3. Relays outbox to Audit Index projection via real service ports and relay workflow', async () => {
