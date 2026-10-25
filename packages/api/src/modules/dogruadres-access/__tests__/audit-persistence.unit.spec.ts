@@ -22,7 +22,12 @@ function fixture() {
     getOrganization: jest.fn(async () => ({ id: "org_test" })), listPeople: jest.fn(async () => [{ id: "person_owner" }]),
     updateMemberships: jest.fn(async (data: Record<string, unknown>) => data),
     createInvitations: jest.fn(async () => [invitation]), updateInvitations: jest.fn(async (data: Record<string, unknown>) => ({ ...invitation, ...data })),
-    getInvitationInOrganization: jest.fn(async () => invitation), listInvitations: jest.fn(async () => [invitation]), listMemberships: jest.fn(async () => []),
+    getInvitationInOrganization: jest.fn(async () => invitation),
+    listInvitations: jest.fn(async (filter: Record<string, unknown>) =>
+      // This fixture represents an invitation newly created in this test. It is
+      // not an existing pending link during the preceding create operation.
+      filter?.recipient_email ? [] : [invitation]),
+    listMemberships: jest.fn(async () => []),
   })
   return { service, context, audits, outbox, organizations, memberships }
 }
