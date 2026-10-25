@@ -1,19 +1,48 @@
 import { Client } from '@medusajs/framework/pg';
-import { randomBytes } from 'node:crypto';
-import { validateAuditIndexEnvelope, projectFoundationAuditEvent } from '../../src/modules/dogruadres-audit-index/envelope';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { validateAuditIndexEnvelope, projectFoundationAuditEvent, matchesAuditIndexProjection } from '../../src/modules/dogruadres-audit-index/envelope';
 import { cursorKey, pagination, encodeCursor, decodeCursor, timelinePage, TimelineError } from '../../src/api/dogruadres/audit-timeline';
 import { requireOrganizationAccess } from '../../src/api/dogruadres/authorization';
+import {
+  claimAuditDelivery,
+  loadClaimedAuditEvent,
+  acknowledgeAuditDelivery,
+  deferAuditDelivery,
+  quarantineAuditDelivery,
+  type DeliveryManager
+} from '../../src/modules/dogruadres-access/audit-delivery';
+import {
+  relayOneFoundationAudit,
+  type FoundationAuditRelaySource,
+  type FoundationAuditRelayIndex
+} from '../../src/workflows/dogruadres-audit-relay/relay';
 
 const DB_URL = process.env.B14_DATABASE_URL || 'postgres://b14_user:b14_secure_test_pw@127.0.0.1:55780/b14_test_db';
 const CURSOR_KEY = process.env.DOGRUADRES_AUDIT_CURSOR_KEY || 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=';
 
+function createDeliveryManager(client: InstanceType<typeof Client>): DeliveryManager {
+  return {
+    async execute(query: string, parameters: unknown[] = []): Promise<Record<string, any>[]> {
+      let paramIdx = 1;
+      const pgSql = query.replace(/\?/g, () => `$${paramIdx++}`);
+      const res = await client.query(pgSql, parameters);
+      return res.rows;
+    }
+  };
+}
+
 describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () => {
   let db: InstanceType<typeof Client>;
+  let deliveryTx: DeliveryManager;
+  let relaySource: FoundationAuditRelaySource;
+  let relayIndex: FoundationAuditRelayIndex;
+
   const testRunId = randomBytes(4).toString('hex');
   const orgId = 'da_org_b14_' + testRunId;
   const ownerPersonId = 'da_prs_owner_' + testRunId;
   const adminPersonId = 'da_prs_admin_' + testRunId;
   const memberPersonId = 'da_prs_member_' + testRunId;
+  let relayOccurredAt: string;
 
   beforeAll(async () => {
     try {
@@ -23,6 +52,45 @@ describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () =
       // Verify isolated DB
       const res = await db.query('SELECT current_database(), current_user');
       expect(res.rows[0].current_database).toBe('b14_test_db');
+
+      // Clear any leftover outbox and index rows from previous scratch runs
+      await db.query('DELETE FROM da_audit_outbox');
+      await db.query('DELETE FROM da_audit_index_entry');
+
+      deliveryTx = createDeliveryManager(db);
+
+      relaySource = {
+        claimFoundationAuditOutbox: () => claimAuditDelivery(deliveryTx),
+        readClaimedFoundationAudit: (claim) => loadClaimedAuditEvent(deliveryTx, claim),
+        acknowledgeFoundationAudit: (claim) => acknowledgeAuditDelivery(deliveryTx, claim),
+        deferFoundationAudit: (claim, code) => deferAuditDelivery(deliveryTx, claim, code),
+        quarantineFoundationAudit: (claim, code) => quarantineAuditDelivery(deliveryTx, claim, code),
+      };
+
+      relayIndex = {
+        async inspectFoundationAuditEvent(sourceEvent: unknown) {
+          const envelope = projectFoundationAuditEvent(sourceEvent);
+          const idxRes = await db.query(
+            'SELECT * FROM da_audit_index_entry WHERE source_module = $1 AND source_event_id = $2 AND deleted_at IS NULL',
+            [envelope.source_module, envelope.source_event_id]
+          );
+          if (!idxRes.rows.length) return 'missing';
+          return idxRes.rows.length === 1 && matchesAuditIndexProjection(idxRes.rows[0], envelope) ? 'matching' : 'conflict';
+        },
+        async indexFoundationAuditEvent(sourceEvent: unknown) {
+          const envelope = projectFoundationAuditEvent(sourceEvent);
+          const id = 'da_idx_' + randomBytes(8).toString('hex');
+          await db.query(
+            'INSERT INTO da_audit_index_entry(id, source_module, source_event_id, envelope_version, organization_id, actor_person_id, actor_type, actor_id, action, resource, target_id, occurred_at, indexed_at, envelope, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), $13, NOW(), NOW())',
+            [
+              id, envelope.source_module, envelope.source_event_id, envelope.version, envelope.organization_id,
+              envelope.actor.person_id, envelope.actor.type, envelope.actor.id, envelope.action, envelope.resource,
+              envelope.target_id, envelope.occurred_at, JSON.stringify(envelope)
+            ]
+          );
+          return { id, created: true };
+        }
+      };
 
       // Setup Persons
       for (const pId of [ownerPersonId, adminPersonId, memberPersonId]) {
@@ -102,15 +170,15 @@ describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () =
     const occurredAt = new Date().toISOString();
 
     const envelope = {
-      source_audit_event_id: eventId,
+      version: 1,
       source_module: 'dogruadres-access',
-      action: 'organization.provisioned',
-      actor: { type: 'user', id: 'usr_' + testRunId },
-      occurred_at: occurredAt,
+      source_audit_event_id: eventId,
       organization_id: orgId,
-      summary: 'Organization provisioned',
-      payload: { org_id: orgId, name: 'Test Org ' + testRunId },
-      metadata: { correlation_id: 'corr_' + testRunId }
+      actor: { person_id: ownerPersonId, type: 'user', id: 'usr_' + testRunId, role_context: 'owner' },
+      action: 'organization.provisioned',
+      resource: 'organization',
+      target_id: orgId,
+      occurred_at: occurredAt
     };
 
     // Atomic transaction
@@ -143,76 +211,85 @@ describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () =
     expect(outboxRow.rows[0].delivered_at).toBeNull();
   });
 
-  it('3. Relays outbox to Audit Index projection and acknowledges outbox', async () => {
+  it('3. Relays outbox to Audit Index projection via real service ports and relay workflow', async () => {
     const eventId = 'da_aud_evt_' + testRunId + '_1';
     const outboxId = 'da_aob_' + testRunId + '_1';
 
-    // Claim lease
-    const leaseToken = 'lease_' + randomBytes(8).toString('hex');
-    const claimRes = await db.query(
-      "UPDATE da_audit_outbox SET lease_token = $1, lease_expires_at = NOW() + INTERVAL '30 seconds', attempt_count = attempt_count + 1 WHERE id = $2 AND status = 'pending' RETURNING *",
-      [leaseToken, outboxId]
-    );
-    expect(claimRes.rows.length).toBe(1);
-    expect(claimRes.rows[0].attempt_count).toBe(1);
+    // Step A: Exercise claimAuditDelivery service port directly against real PostgreSQL
+    const directClaim = await claimAuditDelivery(deliveryTx);
+    expect(directClaim).not.toBeNull();
+    expect(directClaim!.id).toBe(outboxId);
+    expect(directClaim!.leaseToken).toBeDefined();
+    expect(directClaim!.attempt).toBe(1);
+    expect(directClaim!.reconcileOnly).toBe(false);
 
-    // Validate projection from source event
-    const sourceEvent = {
-      module: 'dogruadres-access',
-      id: eventId,
+    // Step B: Exercise loadClaimedAuditEvent service port directly against real PostgreSQL
+    const directLoad = await loadClaimedAuditEvent(deliveryTx, directClaim!);
+    expect(directLoad.state).toBe('valid');
+    if (directLoad.state === 'valid') {
+      expect(directLoad.event.id).toBe(eventId);
+      expect(directLoad.event.action).toBe('organization.provisioned');
+      expect(directLoad.event.module).toBe('dogruadres-access');
+    }
+
+    // Step C: Exercise acknowledgeAuditDelivery service port directly against real PostgreSQL
+    const directAck = await acknowledgeAuditDelivery(deliveryTx, directClaim!);
+    expect(directAck).toBe(true);
+
+    // Verify outbox row updated in real PostgreSQL
+    const ackedOutbox = await db.query('SELECT * FROM da_audit_outbox WHERE id = $1', [outboxId]);
+    expect(ackedOutbox.rows[0].status).toBe('delivered');
+    expect(ackedOutbox.rows[0].delivered_at).not.toBeNull();
+    expect(ackedOutbox.rows[0].lease_token).toBeNull();
+
+    // Now test end-to-end relayOneFoundationAudit with a fresh event and outbox row
+    const eventId2 = 'da_aud_evt_' + testRunId + '_relay';
+    const outboxId2 = 'da_aob_' + testRunId + '_relay';
+    relayOccurredAt = new Date().toISOString();
+
+    const envelope2 = {
+      version: 1,
+      source_module: 'dogruadres-access',
+      source_audit_event_id: eventId2,
       organization_id: orgId,
-      actor_person_id: ownerPersonId,
-      actor_type: 'user',
-      actor_id: 'usr_' + testRunId,
-      role_context: 'owner',
+      actor: { person_id: ownerPersonId, type: 'user', id: 'usr_' + testRunId, role_context: 'owner' },
       action: 'organization.provisioned',
       resource: 'organization',
       target_id: orgId,
-      occurred_at: new Date().toISOString(),
+      occurred_at: relayOccurredAt
     };
-    const projected = projectFoundationAuditEvent(sourceEvent);
-    expect(projected.action).toBe('organization.provisioned');
-    expect(projected.resource).toBe('organization');
 
-    // Project into da_audit_index_entry
-    const indexEntryId = 'da_idx_' + testRunId + '_1';
     await db.query(
-      'INSERT INTO da_audit_index_entry(id, source_module, source_event_id, envelope_version, organization_id, actor_person_id, actor_type, actor_id, action, resource, target_id, occurred_at, indexed_at, envelope, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), $13, NOW(), NOW())',
-      [
-        indexEntryId,
-        projected.source_module,
-        projected.source_event_id,
-        projected.version,
-        projected.organization_id,
-        projected.actor.person_id,
-        projected.actor.type,
-        projected.actor.id,
-        projected.action,
-        projected.resource,
-        projected.target_id,
-        projected.occurred_at,
-        JSON.stringify(projected)
-      ]
+      'INSERT INTO da_audit_event(id, actor_person_id, actor_type, actor_id, role_context, organization_id, action, module, resource, target_id, occurred_at, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $11)',
+      [eventId2, ownerPersonId, 'user', 'usr_' + testRunId, 'owner', orgId, 'organization.provisioned', 'dogruadres-access', 'organization', orgId, relayOccurredAt]
+    );
+    await db.query(
+      'INSERT INTO da_audit_outbox(id, source_audit_event_id, source_module, envelope_version, envelope, status, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $7)',
+      [outboxId2, eventId2, 'dogruadres-access', 1, JSON.stringify(envelope2), 'pending', relayOccurredAt]
     );
 
-    // Acknowledge outbox
-    const ackRes = await db.query(
-      "UPDATE da_audit_outbox SET status = 'delivered', delivered_at = NOW(), lease_token = NULL, lease_expires_at = NULL WHERE id = $1 AND lease_token = $2 RETURNING *",
-      [outboxId, leaseToken]
-    );
-    expect(ackRes.rows.length).toBe(1);
-    expect(ackRes.rows[0].status).toBe('delivered');
-    expect(ackRes.rows[0].delivered_at).not.toBeNull();
+    // Run real relay algorithm against PostgreSQL
+    const relayOutcome = await relayOneFoundationAudit(relaySource, relayIndex);
+    expect(relayOutcome).toBe('delivered');
 
-    // Verify index entry persisted
-    const idxRes = await db.query('SELECT * FROM da_audit_index_entry WHERE id = $1', [indexEntryId]);
-    expect(idxRes.rows.length).toBe(1);
-    expect(idxRes.rows[0].source_event_id).toBe(eventId);
-    expect(idxRes.rows[0].source_module).toBe('dogruadres-access');
+    // Verify outbox row was acknowledged by relay
+    const relayedOutbox = await db.query('SELECT * FROM da_audit_outbox WHERE id = $1', [outboxId2]);
+    expect(relayedOutbox.rows[0].status).toBe('delivered');
+    expect(relayedOutbox.rows[0].delivered_at).not.toBeNull();
+
+    // Verify index entry created by relay
+    const indexRow = await db.query('SELECT * FROM da_audit_index_entry WHERE source_event_id = $1', [eventId2]);
+    expect(indexRow.rows.length).toBe(1);
+    expect(indexRow.rows[0].action).toBe('organization.provisioned');
+    expect(indexRow.rows[0].source_module).toBe('dogruadres-access');
+
+    // Idle outcome when no eligible pending outbox rows remain
+    const nextOutcome = await relayOneFoundationAudit(relaySource, relayIndex);
+    expect(nextOutcome).toBe('idle');
   });
 
   it('4. Idempotently rejects duplicate projection identity (source_module, source_event_id)', async () => {
-    const eventId = 'da_aud_evt_' + testRunId + '_1';
+    const eventId = 'da_aud_evt_' + testRunId + '_relay';
     let duplicateRejected = false;
     try {
       await db.query(
@@ -224,17 +301,36 @@ describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () =
       expect(e.message).toContain('unique');
     }
     expect(duplicateRejected).toBe(true);
+
+    // Verify inspectFoundationAuditEvent reports 'matching' for existing projection
+    const canonical = {
+      id: eventId,
+      module: 'dogruadres-access',
+      organization_id: orgId,
+      actor_person_id: ownerPersonId,
+      actor_type: 'user',
+      actor_id: 'usr_' + testRunId,
+      role_context: 'owner',
+      action: 'organization.provisioned',
+      resource: 'organization',
+      target_id: orgId,
+      occurred_at: relayOccurredAt,
+      deleted_at: null
+    };
+    const inspected = await relayIndex.inspectFoundationAuditEvent(canonical);
+    expect(inspected).toBe('matching');
   });
 
   it('5. Queries timeline with pagination and verifies cursor encryption', async () => {
-    // Insert 2 more index entries to test ordering and pagination
+    // Insert and relay 2 more events through the real relay workflow
     for (let i = 2; i <= 4; i++) {
       const eId = 'da_aud_evt_' + testRunId + '_' + i;
+      const oId = 'da_aob_' + testRunId + '_' + i;
       const occurred = new Date(Date.now() + i * 1000).toISOString();
       const envelope = {
         version: 1,
         source_module: 'dogruadres-access',
-        source_event_id: eId,
+        source_audit_event_id: eId,
         organization_id: orgId,
         actor: { person_id: ownerPersonId, type: 'user', id: 'usr_' + testRunId, role_context: 'owner' },
         action: 'organization.membership_changed',
@@ -242,24 +338,19 @@ describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () =
         target_id: 'mem_' + i,
         occurred_at: occurred,
       };
+
       await db.query(
-        'INSERT INTO da_audit_index_entry(id, source_module, source_event_id, envelope_version, organization_id, actor_person_id, actor_type, actor_id, action, resource, target_id, occurred_at, indexed_at, envelope, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), $13, NOW(), NOW())',
-        [
-          'da_idx_' + testRunId + '_' + i,
-          'dogruadres-access',
-          eId,
-          1,
-          orgId,
-          ownerPersonId,
-          'user',
-          'usr_' + testRunId,
-          'organization.membership_changed',
-          'membership',
-          'mem_' + i,
-          occurred,
-          JSON.stringify(envelope)
-        ]
+        'INSERT INTO da_audit_event(id, actor_person_id, actor_type, actor_id, role_context, organization_id, action, module, resource, target_id, occurred_at, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $11)',
+        [eId, ownerPersonId, 'user', 'usr_' + testRunId, 'owner', orgId, 'organization.membership_changed', 'dogruadres-access', 'membership', 'mem_' + i, occurred]
       );
+      await db.query(
+        'INSERT INTO da_audit_outbox(id, source_audit_event_id, source_module, envelope_version, envelope, status, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $7)',
+        [oId, eId, 'dogruadres-access', 1, JSON.stringify(envelope), 'pending', occurred]
+      );
+
+      // Relay into index
+      const outcome = await relayOneFoundationAudit(relaySource, relayIndex);
+      expect(outcome).toBe('delivered');
     }
 
     // Page 1 with limit = 2
