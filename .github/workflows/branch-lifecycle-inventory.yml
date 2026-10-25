@@ -9,6 +9,7 @@ on:
     paths:
       - '.github/workflows/branch-lifecycle-inventory.yml'
       - 'quality/automation/branch-lifecycle*.mjs'
+      - 'quality/automation/local-worktree-preflight*.mjs'
 
 permissions:
   contents: read
