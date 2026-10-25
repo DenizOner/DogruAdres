@@ -112,6 +112,12 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     if (!scoped || scoped.organizations.length !== 1 ||
         !["owner", "admin"].includes(scoped.organizations[0].role))
       return res.status(403).json({ message: "Access denied" })
+    // Never derive an invitation link from caller-controlled headers or localhost defaults.
+    // Check configuration before creating a persistent invitation record.
+    const configuredOrigin = process.env.DOGRUADRES_PUBLIC_ORIGIN
+    if (!configuredOrigin) {
+      return res.status(503).json({ message: "Davet bağlantısı şu anda oluşturulamıyor." })
+    }
     // The original Foundation workflow also rechecks Owner/Admin membership
     // under its own transaction; this read is never a mutation authorization.
     const { result } = await createInvitationWorkflow(req.scope).run({
@@ -123,15 +129,11 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     })
 
     const derivedToken = deriveInvitationToken(result.id)
-    const publicOrigin = (
-      process.env.DOGRUADRES_PUBLIC_ORIGIN ||
-      (req.headers.origin as string) ||
-      "http://127.0.0.1:19101"
-    ).replace(/\/$/, "")
+    const publicOrigin = configuredOrigin.replace(/\/$/, "")
     const inviteUrl = `${publicOrigin}/personal?invitation_token=${encodeURIComponent(derivedToken)}`
 
     let deliveryStatus: "sent" | "failed" = "failed"
-    let deliveryError: string | undefined = undefined
+
 
     try {
       let runtimeOverride: any = undefined
@@ -159,18 +161,14 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         await sendSmtpEmail({ to: input.email, ...emailContent })
       }
       deliveryStatus = "sent"
-    } catch (err: any) {
+    } catch {
+      // SMTP provider errors may contain recipient, credentials or sensitive server details.
       deliveryStatus = "failed"
-      deliveryError = err?.message || "Delivery failed"
     }
 
     return res.status(201).json({
       invitation: { id: result.id, role: result.role, status: result.status, expires_at: result.expires_at },
-      invitation_token: derivedToken,
-      delivery: {
-        status: deliveryStatus,
-        error: deliveryStatus === "failed" ? deliveryError : undefined,
-      },
+      delivery: { status: deliveryStatus },
     })
   }
 
