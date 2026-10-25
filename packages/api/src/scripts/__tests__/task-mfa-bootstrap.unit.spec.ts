@@ -730,14 +730,59 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
 
   describe("6. Task-Private Durable Checkpoints & Sensitive Error Redaction", () => {
     it("redacts database connection passwords, bearer tokens, and private keys from errors", () => {
-      const sensitiveMsg = "Error connecting to postgresql://postgres:superSecretPass123@127.0.0.1:5432/mfa_db with Bearer eyJhbGciOiJIUzI1NiJ9.secret and key -----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg\n-----END PRIVATE KEY-----"
+      const prefix = "Operation prefix log: connecting to "
+      const suffix = " for user authentication; please verify credentials."
+      const sensitiveMsg = `${prefix}postgresql://postgres:superSecretPass123@127.0.0.1:5432/mfa_db with Bearer eyJhbGciOiJIUzI1NiJ9.secret and key -----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg\n-----END PRIVATE KEY-----${suffix}`
       const redacted = redactSensitiveData(sensitiveMsg)
+
+      // Verify passwords and tokens are redacted
       expect(redacted).not.toContain("superSecretPass123")
       expect(redacted).not.toContain("eyJhbGciOiJIUzI1NiJ9.secret")
-      expect(redacted).not.toContain("MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg")
       expect(redacted).toContain("[REDACTED_PASSWORD]")
       expect(redacted).toContain("[REDACTED_TOKEN]")
+      expect(redacted).toContain("127.0.0.1:5432/mfa_db")
+
+      // Verify private key material AND delimiters completely disappear
+      expect(redacted).not.toContain("MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg")
+      expect(redacted).not.toContain("-----BEGIN PRIVATE KEY-----")
+      expect(redacted).not.toContain("-----END PRIVATE KEY-----")
       expect(redacted).toContain("[REDACTED_PRIVATE_KEY]")
+
+      // Verify unrelated prefix and suffix text remains exactly intact
+      expect(redacted).toContain(prefix)
+      expect(redacted).toContain(suffix)
+    })
+
+    it("redacts all supported PEM private-key formats and leaves public keys intact", () => {
+      const pemKeyTypes = [
+        { header: "PRIVATE KEY", body: "abcxyz123=" },
+        { header: "RSA PRIVATE KEY", body: "MIIEowIBAAKCAQEA0syntheticRsaKeyMaterial==" },
+        { header: "EC PRIVATE KEY", body: "MHcCAQEEIsyntheticEcKeyMaterial==" },
+        { header: "ENCRYPTED PRIVATE KEY", body: "MIICxxxxSyntheticEncryptedKeyMaterial==" },
+        { header: "OPENSSH PRIVATE KEY", body: "b3BlbnNzaGFjZTJ0ZXN0U3ludGhldGljT3BlblNzaEtleQ==" },
+        { header: "ED25519 PRIVATE KEY", body: "MC4CAQAwBQYDK2VwBCIEIPsyntheticEd25519KeyMaterial==" },
+      ]
+
+      for (const { header, body } of pemKeyTypes) {
+        const input = `Pre-text before ${header}: -----BEGIN ${header}-----\n${body}\n-----END ${header}----- Post-text after ${header}.`
+        const redacted = redactSensitiveData(input)
+
+        // Key body and delimiters must be completely absent
+        expect(redacted).not.toContain(body)
+        expect(redacted).not.toContain(`-----BEGIN ${header}-----`)
+        expect(redacted).not.toContain(`-----END ${header}-----`)
+        expect(redacted).toContain("[REDACTED_PRIVATE_KEY]")
+
+        // Surrounding unrelated text must be preserved
+        expect(redacted).toContain(`Pre-text before ${header}: `)
+        expect(redacted).toContain(` Post-text after ${header}.`)
+      }
+
+      // Public key must remain untouched
+      const publicKeyPem = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...\n-----END PUBLIC KEY-----"
+      const publicOutput = redactSensitiveData(`Public key output: ${publicKeyPem}`)
+      expect(publicOutput).not.toContain("[REDACTED_PRIVATE_KEY]")
+      expect(publicOutput).toContain(publicKeyPem)
     })
 
     it("initializes checkpoint and prevents unsafe retries on existing incomplete/completed checkpoint", async () => {

@@ -11,7 +11,8 @@ import assert from "node:assert/strict"
 
 export default async function b14RealAcceptance({ container }: { container: MedusaContainer }) {
   console.log("================================================================================")
-  console.log("        DOGRUADRES M0 B14 — REAL ACCEPTANCE & VERIFICATION SUITE                ")
+  console.log("   DOGRUADRES M0 B14 — INTERNAL DISPOSABLE DIAGNOSTIC & RELAY HARNESS           ")
+  console.log("   (Notice: Diagnostic only; not a substitute for frontdoor browser acceptance) ")
   console.log("================================================================================")
 
   // ---------------------------------------------------------------------------
