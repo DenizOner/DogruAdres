@@ -145,6 +145,27 @@ describe("personal platform smtp route unit tests", () => {
       )
     })
 
+    it("returns 400 when host points to IPv6 ULA, Link-Local or IPv4-mapped private ranges (SSRF prevention)", async () => {
+      for (const blockedHost of ["fc42::1", "fea0::1", "::ffff:192.168.1.1", "::ffff:c0a8:101"]) {
+        const req = createMockReq({
+          action: "save",
+          enabled: true,
+          host: blockedHost,
+          port: 465,
+          security: "ssl",
+          from_email: "admin@dogruadres.com",
+          expected_version: 0,
+        })
+        const res = createMockRes()
+
+        await POST(req, res)
+        expect(res.status).toHaveBeenCalledWith(400)
+        expect(res.json).toHaveBeenCalledWith(
+          expect.objectContaining({ message: "Invalid input" })
+        )
+      }
+    })
+
     it("returns 409 when concurrent update conflict occurs", async () => {
       mockService.personalUpdatePlatformSmtpSettings.mockRejectedValue(
         new SmtpConcurrentUpdateError()

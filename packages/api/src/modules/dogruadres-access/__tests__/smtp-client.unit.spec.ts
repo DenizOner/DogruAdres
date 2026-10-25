@@ -1,5 +1,6 @@
 import net from "node:net"
-import { isPrivateIp, getResolvedSmtpConfig, SmtpConnection } from "../smtp-client"
+import dns from "node:dns"
+import { isPrivateIp, resolveAndValidateHost, getResolvedSmtpConfig, SmtpConnection } from "../smtp-client"
 
 describe("smtp-client unit tests", () => {
   const originalEnv = process.env
@@ -188,13 +189,143 @@ describe("smtp-client unit tests", () => {
       ).rejects.toThrow("CRLF injection detected")
     })
 
-    it("identifies IPv6 and CGNAT private ranges", () => {
+    it("identifies IPv6 and CGNAT private ranges correctly", () => {
       expect(isPrivateIp("100.64.0.1")).toBe(true)
       expect(isPrivateIp("100.127.255.255")).toBe(true)
       expect(isPrivateIp("fe80::1")).toBe(true)
       expect(isPrivateIp("fc00::1")).toBe(true)
       expect(isPrivateIp("::ffff:127.0.0.1")).toBe(true)
     })
+
+    it("correctly identifies and rejects full IPv6 ULA (fc00::/7) addresses including fc42::1", () => {
+      expect(isPrivateIp("fc42::1")).toBe(true)
+      expect(isPrivateIp("fc00::1")).toBe(true)
+      expect(isPrivateIp("fd00::1")).toBe(true)
+      expect(isPrivateIp("fd12:3456:789a:1::1")).toBe(true)
+      expect(isPrivateIp("fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")).toBe(true)
+    })
+
+    it("correctly identifies and rejects full IPv6 Link-Local (fe80::/10) addresses including fea0::1", () => {
+      expect(isPrivateIp("fea0::1")).toBe(true)
+      expect(isPrivateIp("fe80::1")).toBe(true)
+      expect(isPrivateIp("fe90::1")).toBe(true)
+      expect(isPrivateIp("febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff")).toBe(true)
+    })
+
+    it("identifies IPv4-mapped IPv6 private addresses in dotted-decimal and hex notation", () => {
+      // Dotted decimal
+      expect(isPrivateIp("::ffff:192.168.1.1")).toBe(true)
+      expect(isPrivateIp("::ffff:10.0.0.1")).toBe(true)
+      expect(isPrivateIp("::ffff:172.16.0.1")).toBe(true)
+      expect(isPrivateIp("::ffff:169.254.169.254")).toBe(true)
+      expect(isPrivateIp("::ffff:127.0.0.1")).toBe(true)
+      expect(isPrivateIp("::ffff:127.0.0.1", true)).toBe(false) // loopback allowed when explicitly requested
+
+      // Hexadecimal representation of mapped IPv4 (e.g. 192.168.1.1 = c0a8:0101 / c0a8:101)
+      expect(isPrivateIp("::ffff:c0a8:101")).toBe(true)
+      expect(isPrivateIp("::ffff:c0a8:0101")).toBe(true)
+      expect(isPrivateIp("::ffff:7f00:1")).toBe(true)
+      expect(isPrivateIp("::ffff:7f00:1", true)).toBe(false)
+      expect(isPrivateIp("0:0:0:0:0:ffff:c0a8:101")).toBe(true)
+    })
+
+    it("allows public IPv4 and IPv6 addresses", () => {
+      expect(isPrivateIp("2001:4860:4860::8888")).toBe(false) // Google public DNS IPv6
+      expect(isPrivateIp("2606:4700:4700::1111")).toBe(false) // Cloudflare public DNS IPv6
+      expect(isPrivateIp("8.8.8.8")).toBe(false)
+      expect(isPrivateIp("1.1.1.1")).toBe(false)
+      expect(isPrivateIp("::ffff:8.8.8.8")).toBe(false) // Public IPv4 mapped
+      expect(isPrivateIp("smtp.gmail.com")).toBe(false) // Hostnames are passed through to DNS resolution
+    })
+
+    it("identifies IPv6 unspecified, loopback and documentation addresses", () => {
+      expect(isPrivateIp("::")).toBe(true)
+      expect(isPrivateIp("::1")).toBe(true)
+      expect(isPrivateIp("::1", true)).toBe(false) // loopback allowed in test gate
+      expect(isPrivateIp("2001:db8::1")).toBe(true) // Documentation
+      expect(isPrivateIp("ff02::1")).toBe(true) // Multicast
+    })
   })
 
+  describe("resolveAndValidateHost SSRF protections", () => {
+    let originalLookup: typeof dns.promises.lookup
+
+    beforeAll(() => {
+      originalLookup = dns.promises.lookup
+    })
+
+    afterEach(() => {
+      dns.promises.lookup = originalLookup
+    })
+
+    it("rejects private/internal literal IPs directly without DNS lookup", async () => {
+      await expect(resolveAndValidateHost("fc42::1")).rejects.toThrow(
+        "Connecting to private or internal IP range is disallowed: fc42::1"
+      )
+      await expect(resolveAndValidateHost("fea0::1")).rejects.toThrow(
+        "Connecting to private or internal IP range is disallowed: fea0::1"
+      )
+      await expect(resolveAndValidateHost("::ffff:192.168.1.1")).rejects.toThrow(
+        "Connecting to private or internal IP range is disallowed: ::ffff:192.168.1.1"
+      )
+      await expect(resolveAndValidateHost("::ffff:c0a8:101")).rejects.toThrow(
+        "Connecting to private or internal IP range is disallowed: ::ffff:c0a8:101"
+      )
+      await expect(resolveAndValidateHost("127.0.0.1")).rejects.toThrow(
+        "Connecting to private or internal IP range is disallowed: 127.0.0.1"
+      )
+    })
+
+    it("allows loopback literal when explicitly permitted in test gate", async () => {
+      const resolved = await resolveAndValidateHost("127.0.0.1", true)
+      expect(resolved).toBe("127.0.0.1")
+      const resolvedIpv6 = await resolveAndValidateHost("::1", true)
+      expect(resolvedIpv6).toBe("::1")
+    })
+
+    it("allows public literal IPs directly", async () => {
+      const publicIpv6 = await resolveAndValidateHost("2001:4860:4860::8888")
+      expect(publicIpv6).toBe("2001:4860:4860::8888")
+      const publicIpv4 = await resolveAndValidateHost("8.8.8.8")
+      expect(publicIpv4).toBe("8.8.8.8")
+    })
+
+    it("rejects hostnames that resolve to private/link-local IPv6 addresses via DNS (AAAA)", async () => {
+      dns.promises.lookup = jest.fn().mockResolvedValue([
+        { address: "fc42::1", family: 6 },
+      ]) as any
+
+      await expect(resolveAndValidateHost("internal.company.local")).rejects.toThrow(
+        "Resolved address fc42::1 for host internal.company.local is in a private/restricted range (SSRF / DNS rebinding protection)"
+      )
+
+      dns.promises.lookup = jest.fn().mockResolvedValue([
+        { address: "fea0::1", family: 6 },
+      ]) as any
+
+      await expect(resolveAndValidateHost("linklocal.company.local")).rejects.toThrow(
+        "Resolved address fea0::1 for host linklocal.company.local is in a private/restricted range (SSRF / DNS rebinding protection)"
+      )
+    })
+
+    it("rejects hostnames that resolve to dual-stack if any resolved address is private", async () => {
+      dns.promises.lookup = jest.fn().mockResolvedValue([
+        { address: "8.8.8.8", family: 4 },
+        { address: "fc42::1", family: 6 },
+      ]) as any
+
+      await expect(resolveAndValidateHost("dual-stack-evil.example.com")).rejects.toThrow(
+        "Resolved address fc42::1 for host dual-stack-evil.example.com is in a private/restricted range (SSRF / DNS rebinding protection)"
+      )
+    })
+
+    it("returns pinned IP when hostname resolves to public addresses only", async () => {
+      dns.promises.lookup = jest.fn().mockResolvedValue([
+        { address: "2001:4860:4860::8888", family: 6 },
+      ]) as any
+
+      const result = await resolveAndValidateHost("smtp.google.com")
+      expect(result).toBe("2001:4860:4860::8888")
+    })
+  })
 })

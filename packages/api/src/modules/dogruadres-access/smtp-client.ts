@@ -30,39 +30,103 @@ export interface SendMailResult {
 
 const DEFAULT_TIMEOUT_MS = 15000
 
+// BlockLists for comprehensive SSRF prevention across IPv4 and IPv6 CIDR ranges
+const ipv4PrivateBlockList = new net.BlockList()
+ipv4PrivateBlockList.addSubnet("0.0.0.0", 8, "ipv4") // Current network (RFC 1122)
+ipv4PrivateBlockList.addSubnet("10.0.0.0", 8, "ipv4") // Private (RFC 1918)
+ipv4PrivateBlockList.addSubnet("100.64.0.0", 10, "ipv4") // Carrier-Grade NAT (RFC 6598)
+ipv4PrivateBlockList.addSubnet("169.254.0.0", 16, "ipv4") // Link-local & cloud metadata (RFC 3927)
+ipv4PrivateBlockList.addSubnet("172.16.0.0", 12, "ipv4") // Private (RFC 1918)
+ipv4PrivateBlockList.addSubnet("192.0.0.0", 24, "ipv4") // IETF Protocol Assignments (RFC 6890)
+ipv4PrivateBlockList.addSubnet("192.0.2.0", 24, "ipv4") // TEST-NET-1 documentation (RFC 5737)
+ipv4PrivateBlockList.addSubnet("192.168.0.0", 16, "ipv4") // Private (RFC 1918)
+ipv4PrivateBlockList.addSubnet("198.18.0.0", 15, "ipv4") // Network benchmark tests (RFC 2544)
+ipv4PrivateBlockList.addSubnet("198.51.100.0", 24, "ipv4") // TEST-NET-2 documentation (RFC 5737)
+ipv4PrivateBlockList.addSubnet("203.0.113.0", 24, "ipv4") // TEST-NET-3 documentation (RFC 5737)
+ipv4PrivateBlockList.addSubnet("224.0.0.0", 4, "ipv4") // Multicast (RFC 5771)
+ipv4PrivateBlockList.addSubnet("240.0.0.0", 4, "ipv4") // Reserved/experimental (RFC 1112)
+ipv4PrivateBlockList.addAddress("255.255.255.255", "ipv4") // Broadcast
+
+const ipv4LoopbackBlockList = new net.BlockList()
+ipv4LoopbackBlockList.addSubnet("127.0.0.0", 8, "ipv4") // Loopback (RFC 1122)
+
+const ipv6PrivateBlockList = new net.BlockList()
+ipv6PrivateBlockList.addAddress("::", "ipv6") // Unspecified address (RFC 4291)
+ipv6PrivateBlockList.addSubnet("fc00::", 7, "ipv6") // Unique Local Addresses (ULA, RFC 4193 - fc00::/8 & fd00::/8)
+ipv6PrivateBlockList.addSubnet("fe80::", 10, "ipv6") // Link-Local Unicast (RFC 4291 - fe80::/10, covers fe80..febf)
+ipv6PrivateBlockList.addSubnet("ff00::", 8, "ipv6") // Multicast (RFC 4291)
+ipv6PrivateBlockList.addSubnet("2001:db8::", 32, "ipv6") // Documentation (RFC 3849)
+ipv6PrivateBlockList.addSubnet("64:ff9b::", 96, "ipv6") // IPv4/IPv6 translation (RFC 6052)
+ipv6PrivateBlockList.addSubnet("100::", 64, "ipv6") // Discard-only prefix (RFC 6666)
+ipv6PrivateBlockList.addSubnet("2001::", 23, "ipv6") // IETF Protocol Assignments (RFC 2928)
+ipv6PrivateBlockList.addSubnet("2002::", 16, "ipv6") // 6to4 prefix with embedded IPv4 (RFC 3056)
+
+const ipv6LoopbackBlockList = new net.BlockList()
+ipv6LoopbackBlockList.addAddress("::1", "ipv6") // Loopback (RFC 4291)
+
+const ipv6MappedBlockList = new net.BlockList()
+ipv6MappedBlockList.addSubnet("::ffff:0:0", 96, "ipv6") // IPv4-mapped addresses (RFC 4291)
+
+function extractIpv4FromMapped(ip: string): string | null {
+  const cleaned = ip.trim().toLowerCase()
+  // Check for embedded dotted decimal, e.g. ::ffff:192.168.1.1
+  const dottedMatch = cleaned.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
+  if (dottedMatch && net.isIP(dottedMatch[1]) === 4) {
+    return dottedMatch[1]
+  }
+
+  // Check for hex segments, e.g. ::ffff:c0a8:101 or ::ffff:c0a8:0101
+  const parts = cleaned.split(":")
+  if (parts.length >= 2) {
+    const p1 = parseInt(parts[parts.length - 2], 16)
+    const p2 = parseInt(parts[parts.length - 1], 16)
+    if (!isNaN(p1) && !isNaN(p2) && p1 >= 0 && p1 <= 0xffff && p2 >= 0 && p2 <= 0xffff) {
+      const o1 = (p1 >> 8) & 0xff
+      const o2 = p1 & 0xff
+      const o3 = (p2 >> 8) & 0xff
+      const o4 = p2 & 0xff
+      return `${o1}.${o2}.${o3}.${o4}`
+    }
+  }
+
+  return null
+}
+
 /**
  * Checks whether an IP address belongs to private, loopback, link-local,
- * CGNAT or unspecified ranges.
+ * ULA, CGNAT, multicast, documentation or unspecified CIDR ranges.
  */
 export const isPrivateIp = (ipOrHost: string, allowLoopback = false): boolean => {
   const normalized = ipOrHost.trim().toLowerCase()
-  if (normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "0.0.0.0" || normalized === "::") {
+  if (normalized === "localhost") {
     return !allowLoopback
   }
 
-  // IPv4 mapped IPv6 (e.g. ::ffff:127.0.0.1)
-  if (normalized.startsWith("::ffff:")) {
-    return isPrivateIp(normalized.slice(7), allowLoopback)
+  const ipVersion = net.isIP(normalized)
+  if (ipVersion === 4) {
+    if (ipv4LoopbackBlockList.check(normalized, "ipv4")) {
+      return !allowLoopback
+    }
+    return ipv4PrivateBlockList.check(normalized, "ipv4")
   }
 
-  // IPv6 checks
-  if (normalized.includes(":")) {
-    if (normalized.startsWith("fe80:") || normalized.startsWith("fc00:") || normalized.startsWith("fd")) {
+  if (ipVersion === 6) {
+    if (ipv6LoopbackBlockList.check(normalized, "ipv6")) {
+      return !allowLoopback
+    }
+
+    if (ipv6MappedBlockList.check(normalized, "ipv6")) {
+      const extractedIpv4 = extractIpv4FromMapped(normalized)
+      if (extractedIpv4) {
+        if (ipv4LoopbackBlockList.check(extractedIpv4, "ipv4")) {
+          return !allowLoopback
+        }
+        return ipv4PrivateBlockList.check(extractedIpv4, "ipv4")
+      }
       return true
     }
-    return false
-  }
 
-  // IPv4 checks
-  const parts = normalized.split(".").map(Number)
-  if (parts.length === 4 && parts.every((p) => !isNaN(p) && p >= 0 && p <= 255)) {
-    if (parts[0] === 127) return !allowLoopback
-    if (parts[0] === 10) return true
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
-    if (parts[0] === 192 && parts[1] === 168) return true
-    if (parts[0] === 169 && parts[1] === 254) return true // Link-local & cloud metadata
-    if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true // CGNAT
-    if (parts[0] === 0) return true
+    return ipv6PrivateBlockList.check(normalized, "ipv6")
   }
 
   return false
@@ -74,25 +138,26 @@ export const isPrivateIp = (ipOrHost: string, allowLoopback = false): boolean =>
  * Returns the first resolved public IP for direct connection to prevent DNS rebinding.
  */
 export async function resolveAndValidateHost(host: string, allowLoopback = false): Promise<string> {
-  if (isPrivateIp(host, allowLoopback)) {
-    throw new Error(`Connecting to private or internal IP range is disallowed: ${host}`)
+  const trimmed = host.trim()
+  if (isPrivateIp(trimmed, allowLoopback)) {
+    throw new Error(`Connecting to private or internal IP range is disallowed: ${trimmed}`)
   }
 
-  // If host is already an IP literal, it has been validated by isPrivateIp
-  const isIpv4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
-  const isIpv6 = host.includes(":")
-  if (isIpv4 || isIpv6) {
-    return host
+  // If host is already a valid IP literal, it was validated above by isPrivateIp
+  if (net.isIP(trimmed) !== 0) {
+    return trimmed
   }
 
-  const lookupResults = await dns.promises.lookup(host, { all: true, verbatim: true })
+  const lookupResults = await dns.promises.lookup(trimmed, { all: true, verbatim: true })
   if (!lookupResults || lookupResults.length === 0) {
-    throw new Error(`DNS resolution failed for host: ${host}`)
+    throw new Error(`DNS resolution failed for host: ${trimmed}`)
   }
 
   for (const entry of lookupResults) {
     if (isPrivateIp(entry.address, allowLoopback)) {
-      throw new Error(`Resolved address ${entry.address} for host ${host} is in a private/restricted range (SSRF / DNS rebinding protection)`)
+      throw new Error(
+        `Resolved address ${entry.address} for host ${trimmed} is in a private/restricted range (SSRF / DNS rebinding protection)`
+      )
     }
   }
 
