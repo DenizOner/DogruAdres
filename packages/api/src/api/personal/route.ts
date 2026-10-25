@@ -435,10 +435,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const email=new FormData(e.target).get('email');
       const res=await api('invitations',{method:'POST',body:JSON.stringify({action:'create',organization_id:orgId,email,role:'member'})});
       if(res.delivery?.status==='sent'){
-        el('invite-result').textContent='Davet başarıyla oluşturuldu ve davet e-postası alıcıya iletildi.';
-        status('Davet e-postası başarıyla gönderildi');
+        el('invite-result').textContent='Davet oluşturuldu. E-posta gönderim için kabul edildi.';
+        status('Davet e-postası gönderim için kabul edildi');
       }else if(res.delivery?.status==='failed'){
-        el('invite-result').textContent='Davet kaydı oluşturuldu ancak e-posta iletilemedi. Lütfen sistem SMTP ayarlarını kontrol edin.';
+        el('invite-result').textContent='Davet oluşturuldu ancak e-posta gönderilemedi. Lütfen platform yöneticisine bildirin.';
         status('Davet oluşturuldu (e-posta teslimi başarısız)');
       }else{
         el('invite-result').textContent='Davet oluşturuldu.';
