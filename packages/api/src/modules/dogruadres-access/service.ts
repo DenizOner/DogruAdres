@@ -728,6 +728,34 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const recipient = normalizeEmail(input.email)
     if (!recipient || !recipient.includes("@")) throw new MedusaError(MedusaError.Types.INVALID_DATA, "A valid recipient email is required")
 
+    // Serialize invitations for the same recipient/organization within this transaction.
+    // Reuse a valid pending invitation on resend: revoking it before a new record or
+    // email exists can strand the intended recipient when either operation fails.
+    const transactionManager = sharedContext.transactionManager as AdvisoryLockManager | undefined
+    if (!transactionManager) throw new Error("Invitation creation requires an active database transaction")
+    await transactionManager.execute(
+      "SELECT pg_advisory_xact_lock(hashtext('dogruadres-invite-recipient'), hashtext(?))",
+      [JSON.stringify([organization.id, recipient])]
+    )
+    const pending = await this.listInvitations({
+      organization_id: organization.id,
+      recipient_email: recipient,
+      status: "pending",
+    }, { take: 100 }, sharedContext)
+    if (pending.length >= 100) throw new Error("Invitation state requires authorized review")
+    const active = pending.filter((item) => item.expires_at.getTime() > Date.now())
+    if (active.length > 1) throw new Error("Multiple active invitations require authorized review")
+    if (active.length === 1) {
+      const existing = active[0]
+      // A secret rotation may have invalidated this deterministic link.
+      // Never report a resend as sent when the stored hash does not match.
+      if (existing.role !== input.role ||
+          !invitationTokenMatches(deriveInvitationToken(existing.id), existing.token_hash)) {
+        throw new Error("Existing invitation cannot be safely resent")
+      }
+      return existing
+    }
+
     // The placeholder is replaced inside this transaction. The plaintext token is
     // derived from the invitation id and is never returned by the workflow step.
     const [invitation] = await this.createInvitations([{
