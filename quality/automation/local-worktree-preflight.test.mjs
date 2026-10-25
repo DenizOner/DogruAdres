@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { classifyLocalEvidence, collectLocalEvidence, main } from "./local-worktree-preflight.mjs";
+import { classifyLocalEvidence, collectLocalEvidence, main, readOnlyGitTimeoutMs } from "./local-worktree-preflight.mjs";
 
 const clean = { trackedChanges: 0, untracked: 0, ignored: 0,
   stashes: 0, localOnlyCommits: 0, reflogEntries: 0,
@@ -57,4 +57,12 @@ test("no implicit root or CLI default; invalid checkout fails closed",()=>{
   assert.throws(()=>collectLocalEvidence(""),/explicit existing/);
   assert.throws(()=>collectLocalEvidence("."),/Absolute canonical/);
   assert.throws(()=>collectLocalEvidence("/nonexistent-branch-cleanup-test-dir"),/ENOENT/);
+});
+
+test("slow Windows ignored scan gets a bounded read-only 60s budget, all others remain 15s", () => {
+  assert.equal(readOnlyGitTimeoutMs(["ls-files","--others","--ignored","--exclude-standard","-z"]), 60_000);
+  for (const args of [["status","--porcelain=v1"],["ls-files","--others","-z"],["worktree","prune","--dry-run"]]) {
+    assert.equal(readOnlyGitTimeoutMs(args), 15_000);
+  }
+  assert.equal(classifyLocalEvidence(clean).deletion, "BLOCKED");
 });
