@@ -1,7 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { z } from "@medusajs/framework/zod"
 import { createInvitationWorkflow } from "../../../workflows/dogruadres-access/create-invitation"
-import { revokeInvitationWorkflow } from "../../../workflows/dogruadres-access/revoke-invitation"
 import { acceptInvitationWorkflow } from "../../../workflows/dogruadres-access/accept-invitation"
 import { deriveInvitationToken } from "../../../modules/dogruadres-access/security"
 import { sendSmtpEmail } from "../../../modules/dogruadres-access/smtp-client"
@@ -121,33 +120,6 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     }
     // The original Foundation workflow also rechecks Owner/Admin membership
     // under its own transaction; this read is never a mutation authorization.
-    // Supersede any active pending invitations for the same recipient in this organization
-    // so repeated creation or retries never leave duplicate valid live invitations.
-    if (service && typeof service.listInvitations === "function") {
-      try {
-        const priorPending = await service.listInvitations({
-          organization_id: input.organization_id,
-          recipient_email: input.email.trim().toLowerCase(),
-          status: "pending",
-        }, { take: 10 })
-        for (const prior of priorPending) {
-          if (prior.expires_at && prior.expires_at.getTime() > Date.now()) {
-            await revokeInvitationWorkflow(req.scope).run({
-              input: {
-                organization_id: input.organization_id,
-                invitation_id: prior.id,
-                actor_person_id: principal.person_id,
-                actor_type: principal.actor_type,
-                actor_id: principal.actor_id,
-              },
-            })
-          }
-        }
-      } catch {
-        // Non-blocking: proceed with creation if query fails
-      }
-    }
-
     const { result } = await createInvitationWorkflow(req.scope).run({
       input: {
         organization_id: input.organization_id, email: input.email,
