@@ -20,17 +20,6 @@ export default defineMiddlewares({
     return errorHandler()(error,req,res,next)
   },
   routes: [
-    {
-      matcher: "/dogruadres/organizations/:id/audit-timeline",
-      // Methodless: Medusa 2.21.2 classifies this as global, before wildcard auth.
-      // app.use is prefix-based; restrict the effect to the exact GET timeline.
-      middlewares: [(req, res, next) => {
-        if (req.method === "GET" && /^\/dogruadres\/organizations\/[^/]+\/audit-timeline\/?$/.test(req.originalUrl.split("?")[0])) {
-          res.setHeader("Cache-Control", "no-store")
-        }
-        next()
-      }],
-    },
     { matcher: "/*", middlewares: [nativeIngress] },
     {
       matcher: "/admin/dogruadres/organizations",
