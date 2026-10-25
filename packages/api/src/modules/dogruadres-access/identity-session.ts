@@ -174,8 +174,8 @@ export class IdentitySessions {
     await this.audit(s.person_id,s.actor_type,s.actor_id,all?"session.all_revoked":"session.revoked",s.id)
   }
 
-  async organizations(token: string, organizationId?: string) {
-    const s = await this.current(token)
+  async organizations(token: string, organizationId?: string, touch = true) {
+    const s = await this.current(token, false, touch)
     if (!s) return null
     // One statement is the observation point L for these Foundation-owned reads.
     const rows = await this.db.execute(`select o.id,o.name,m.id as membership_id,m.role from da_organization o

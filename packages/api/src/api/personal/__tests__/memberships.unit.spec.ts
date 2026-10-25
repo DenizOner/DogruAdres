@@ -74,6 +74,13 @@ describe("personal memberships route", () => {
       })
     })
 
+    it("does not serialize implicit ORM relations or unrelated fields", async () => {
+      req.query = { organization: orgId }
+      mockService.personalMemberships.mockResolvedValueOnce([{ id: memberId, person_id: 'p', role: 'member', status: 'active', protected_owner: false, person: { id: 'p', email: 'private@example.invalid' }, secret: 'must-not-serialize' }])
+      await GET(req, res)
+      expect(res.json).toHaveBeenCalledWith({ memberships: [{ id: memberId, person_id: 'p', role: 'member', status: 'active', protected_owner: false }] })
+    })
+
     it("rejects invalid or malformed organization ID", async () => {
       req.query = { organization: "invalid_org" }
       await GET(req, res)

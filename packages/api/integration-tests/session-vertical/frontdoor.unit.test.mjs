@@ -1,6 +1,8 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {allowedPublicRequest} from '../../scripts/personal-frontdoor.mjs'
+import http from 'node:http'
+import {once} from 'node:events'
+import {allowedPublicRequest,startFrontdoor} from '../../scripts/personal-frontdoor.mjs'
 
 test('closed public method/path contract never exposes native login or refresh',()=>{
   for(const actor of ['user','member','customer'])for(const method of ['GET','POST'])
@@ -57,3 +59,20 @@ test('platform SMTP settings has exact GET/POST relay only', () => {
   for (const path of ['/personal/platform/smtp/', '/personal/platform/smtp/extra'])
     assert.equal(allowedPublicRequest('POST', path), false)
 })
+
+// Real local relay, controlled upstream: header forwarding contract only.
+test('observer header is forwarded only for exact GET organizations and value 1',async()=>{
+  const seen=[];
+  const upstream=http.createServer((req,res)=>{seen.push({url:req.url,observer:req.headers['x-da-observe']});res.setHeader('Content-Type','application/json');res.end('{}')});
+  upstream.listen(0,'127.0.0.1');await once(upstream,'listening');
+  const reservation=http.createServer();reservation.listen(0,'127.0.0.1');await once(reservation,'listening');const port=reservation.address().port;await new Promise(r=>reservation.close(r));
+  const origin='http://127.0.0.1:'+port;
+  const front=startFrontdoor({NODE_ENV:'test',DOGRUADRES_PUBLIC_ORIGIN:origin,DOGRUADRES_PRIVATE_API:'http://127.0.0.1:'+upstream.address().port,DOGRUADRES_FRONTDOOR_HOST:'127.0.0.1',DOGRUADRES_FRONTDOOR_PORT:String(port)});await once(front,'listening');
+  try{
+    for(const [path,value] of [['/personal/organizations','1'],['/personal/organizations?id=daorg_test','1'],['/personal/organizations','01'],['/personal/organizations','true'],['/personal/session','1'],['/personal/memberships?organization=daorg_test','1']]){
+      const r=await fetch(origin+path,{headers:{'x-da-observe':value}});assert.equal(r.status,200);await r.text();
+    }
+    assert.deepEqual(seen.map(r=>r.observer),['1','1',undefined,undefined,undefined,undefined]);
+    const r=await fetch(origin+'/personal/organizations',{method:'POST',headers:{'x-da-observe':'1'}});assert.equal(r.status,401);await r.text();assert.equal(seen.length,6);
+  }finally{front.closeAllConnections();upstream.closeAllConnections();await Promise.all([new Promise(r=>front.close(r)),new Promise(r=>upstream.close(r))]);}
+});

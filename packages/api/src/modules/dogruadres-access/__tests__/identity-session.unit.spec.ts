@@ -89,6 +89,12 @@ describe("persistent identity/session boundaries (SQL mocks, not PostgreSQL evid
     expect(read![1]).toEqual(["hash","person"])
     expect(read![0]).not.toContain("and o.id=?")
   })
+  it("privacy observation preserves scope without touching last activity",async()=>{
+    const {service,execute}=organizationsWithRows([{id:'daorg_allowed',name:'Allowed',membership_id:'m',role:'member'}])
+    await expect(service.organizations(opaque(),'daorg_allowed',false)).resolves.toMatchObject({person_id:'person'})
+    expect(execute.mock.calls.some(([q])=>q.includes('last_activity_at=clock_timestamp'))).toBe(false)
+    expect(execute.mock.calls.find(([q])=>q.startsWith('select o.id'))![1]).toEqual(['hash','person','daorg_allowed'])
+  })
   it("B04: duplicate Organization scope is denied, not first-match selected",async()=>{
     const row={id:"daorg_allowed",name:"Allowed",membership_id:"damem_1",role:"owner"}
     const {service}=organizationsWithRows([row,{...row,membership_id:"damem_2"}])

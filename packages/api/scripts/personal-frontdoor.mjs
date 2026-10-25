@@ -47,6 +47,8 @@ export function startFrontdoor(env=process.env){
       // Only purpose-bound password reset and scoped machine auth need this
       // header. No browser actor header or seller context is forwarded.
       if(mode==='machine'||url.pathname.endsWith('/emailpass/update'))headers.authorization=req.headers.authorization??''
+      // The privacy observer retains the same session authorization as normal reads.
+      if(req.method==='GET'&&url.pathname==='/personal/organizations'&&req.headers['x-da-observe']==='1')headers['x-da-observe']='1'
       const chunks=[];let size=0
       for await(const chunk of req){size+=chunk.length;if(size>65536){res.writeHead(413).end();return}chunks.push(chunk)}
       const upstreamPath=url.pathname==='/dashboard'?'/dashboard/':url.pathname

@@ -101,4 +101,13 @@ describe("personal ingress (unit contract only)",()=>{
     expect(res.json).toHaveBeenCalledWith(result)
     expect(res.status).not.toHaveBeenCalled()
   })
+  it.each(['1','01','true'])('only exact observer header uses no-touch authority: %s',async value=>{
+    const personalOrganizations=jest.fn().mockResolvedValue(null),observePersonalOrganizations=jest.fn().mockResolvedValue(null)
+    const res:any={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),json:jest.fn()}
+    await organizationsGet({query:{id:'daorg_denied'},headers:{cookie:'da_session=synthetic','x-da-observe':value},scope:{resolve:()=>({personalOrganizations,observePersonalOrganizations})}} as any,res)
+    expect(value==='1'?observePersonalOrganizations:personalOrganizations).toHaveBeenCalledWith('synthetic','daorg_denied')
+    expect(value==='1'?personalOrganizations:observePersonalOrganizations).not.toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(403)
+  })
+
 })

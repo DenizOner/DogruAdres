@@ -28,7 +28,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const id = org.safeParse(req.query.organization)
   if (!id.success || Object.keys(req.query).length !== 1) return res.status(400).json({ message: 'Invalid input' })
   const memberships = await access(req).personalMemberships(sessionToken(req), id.data)
-  return res.json({ memberships })
+  // ORM serialization may include implicit relations despite a select list.
+  return res.json({ memberships: memberships.map(({ id, person_id, role, status, protected_owner }) =>
+    ({ id, person_id, role, status, protected_owner })) })
 }
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {

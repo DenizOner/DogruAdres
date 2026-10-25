@@ -38,6 +38,17 @@ describe('Organization selection response ordering (UI-only)',()=>{
     expect(h.state.url).toBe('/personal')
     expect(h.state.status).toBe('Access denied')
   })
+  it('hides the previous invitation controls before a denied selection',async()=>{
+    const h=harness(),a=h.select('A')
+    h.pending[0].resolve(org('A'));await settle();h.pending.find(p=>p.path==='memberships?organization=A')!.resolve({memberships:[]});await a
+    expect(h.el('invite-member').hidden).toBe(false)
+    h.el('invite-result').textContent='old recipient context'
+    const b=h.select('foreign')
+    expect(h.el('invite-member').hidden).toBe(true)
+    expect(h.el('invite-result').textContent).toBe('')
+    h.pending.find(p=>p.path==='organizations?id=foreign')!.reject(new Error('Access denied'));await b
+    expect(h.el('invite-member').hidden).toBe(true)
+  })
   it('ignores late membership data from a superseded Organization',async()=>{
     const h=harness(),a=h.select('A')
     h.pending[0].resolve(org('A'));await settle()

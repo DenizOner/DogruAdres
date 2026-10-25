@@ -10,6 +10,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   if (Object.keys(req.query).some(key => key !== "id") ||
       (id !== undefined && (typeof id !== "string" || !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(id))))
     return res.status(400).json({message:"Invalid input"})
-  const result = await access(req).personalOrganizations(sessionToken(req),id)
+  const result = req.headers['x-da-observe'] === '1'
+    ? await access(req).observePersonalOrganizations(sessionToken(req),id)
+    : await access(req).personalOrganizations(sessionToken(req),id)
   return result ? res.json(result) : res.status(403).json({message:"Access denied"})
 }

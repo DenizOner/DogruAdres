@@ -308,6 +308,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId)
   }
 
+  // Background privacy checks must not extend the user's idle session.
+  @InjectTransactionManager()
+  async observePersonalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId, false)
+  }
+
   @InjectTransactionManager()
   async personalStaff(token: string, task: string, resource: string, @MedusaContext() context: Context = {}) {
     return new IdentitySessions(securitySql(context.transactionManager)).staff(token, task, resource)
