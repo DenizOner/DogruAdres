@@ -49,8 +49,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     </div>
     <div id="invitation-card" hidden style="padding: 18px; border: 1px solid #bfd5ff; border-radius: 8px; background: #ffffff;">
       <p style="margin: 0 0 8px 0; font-size: 15px; font-weight: 600; color: #191c21;">DoğruAdres Kuruluş Üyeliği</p>
-      <p style="margin: 0 0 16px 0; font-size: 13px; color: #414752;">Bu davet, kuruluş operasyonlarına standart üye (<code>member</code>) rolüyle katılımınızı sağlar. Doğrulanmış e-posta hesabınızla kabul edebilirsiniz.</p>
-      <button id="accept-invitation-btn" type="button" style="min-height: 44px; padding: 10px 20px; background: #0e66c2; color: #ffffff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer;">Daveti Kabul Et ve Kuruluşa Katıl</button>
+      <p style="margin: 0 0 16px 0; font-size: 13px; color: #414752;">Size iletilen davet bağlantısı üzerinden kuruluş üyeliğinizi onaylayabilirsiniz. Üyelik işlemi yalnızca davetin tanımlandığı doğrulanmış hesapla tamamlanabilir.</p>
+      <button id="accept-invitation-btn" type="button" style="min-height: 44px; padding: 10px 20px; background: #0e66c2; color: #ffffff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer;">Daveti Onayla ve Katıl</button>
       <p id="invitation-result" role="status" aria-live="polite" style="margin-top: 12px; font-size: 13px; font-weight: 500;"></p>
     </div>
   </section>
@@ -430,12 +430,20 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const orgId = currentOrg || new URLSearchParams(location.search).get('organization');
     if(!orgId)return;
     const b=e.target.querySelector('button');b.disabled=true;
-    el('invite-result').textContent='Davet oluşturuluyor...';
+    el('invite-result').textContent='Davet oluşturuluyor ve e-posta iletiliyor...';
     try{
       const email=new FormData(e.target).get('email');
       const res=await api('invitations',{method:'POST',body:JSON.stringify({action:'create',organization_id:orgId,email,role:'member'})});
-      el('invite-result').textContent='Davet oluşturuldu: /personal?invitation_token='+res.invitation_token;
-      status('Kuruluş üyelik daveti oluşturuldu');
+      if(res.delivery?.status==='sent'){
+        el('invite-result').textContent='Davet başarıyla oluşturuldu ve davet e-postası alıcıya iletildi.';
+        status('Davet e-postası başarıyla gönderildi');
+      }else if(res.delivery?.status==='failed'){
+        el('invite-result').textContent='Davet kaydı oluşturuldu ancak e-posta iletilemedi. Lütfen sistem SMTP ayarlarını kontrol edin.';
+        status('Davet oluşturuldu (e-posta teslimi başarısız)');
+      }else{
+        el('invite-result').textContent='Davet oluşturuldu.';
+        status('Kuruluş üyelik daveti oluşturuldu');
+      }
       e.target.reset();
     }catch(err){
       el('invite-result').textContent='Davet oluşturulamadı: '+err.message;

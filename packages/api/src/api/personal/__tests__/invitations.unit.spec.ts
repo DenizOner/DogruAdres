@@ -3,6 +3,7 @@ import { access, csrf, enabled, sessionToken } from "../security"
 import { createInvitationWorkflow } from "../../../workflows/dogruadres-access/create-invitation"
 import { acceptInvitationWorkflow } from "../../../workflows/dogruadres-access/accept-invitation"
 import { verifiedEmailForActorContext } from "../../dogruadres/invitations/accept/route"
+import { sendSmtpEmail } from "../../../modules/dogruadres-access/smtp-client"
 
 jest.mock("../security", () => ({
   access: jest.fn(), csrf: jest.fn(), enabled: jest.fn(), sessionToken: jest.fn(),
@@ -15,6 +16,9 @@ jest.mock("../../../workflows/dogruadres-access/accept-invitation", () => ({
 }))
 jest.mock("../../dogruadres/invitations/accept/route", () => ({
   verifiedEmailForActorContext: jest.fn(),
+}))
+jest.mock("../../../modules/dogruadres-access/smtp-client", () => ({
+  sendSmtpEmail: jest.fn(),
 }))
 
 describe("session-bound personal invitations (no native bearer delegation)", () => {
@@ -121,8 +125,22 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     expect(res.json).toHaveBeenCalledWith({
       invitation: expect.objectContaining({ id: "dainv_new", role: "member", status: "pending" }),
       invitation_token: expect.any(String),
+      delivery: { status: "sent", error: undefined },
     })
+    expect(sendSmtpEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "member@example.invalid", subject: "DoğruAdres Kuruluş Üyelik Daveti" })
+    )
     expect(mockAcceptRun).not.toHaveBeenCalled()
+  })
+  it("records delivery failure without aborting invitation record creation", async () => {
+    ;(sendSmtpEmail as jest.Mock).mockRejectedValueOnce(new Error("Connection refused"))
+    const res = await invoke(createBody)
+    expect(res.status).toHaveBeenCalledWith(201)
+    expect(res.json).toHaveBeenCalledWith({
+      invitation: expect.objectContaining({ id: "dainv_new", role: "member", status: "pending" }),
+      invitation_token: expect.any(String),
+      delivery: { status: "failed", error: "Connection refused" },
+    })
   })
   it("never accepts a recipient without native verified-email proof", async () => {
     ;(verifiedEmailForActorContext as jest.Mock).mockResolvedValue(null)

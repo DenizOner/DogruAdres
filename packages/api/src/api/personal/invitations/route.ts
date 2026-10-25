@@ -3,8 +3,72 @@ import { z } from "@medusajs/framework/zod"
 import { createInvitationWorkflow } from "../../../workflows/dogruadres-access/create-invitation"
 import { acceptInvitationWorkflow } from "../../../workflows/dogruadres-access/accept-invitation"
 import { deriveInvitationToken } from "../../../modules/dogruadres-access/security"
+import { sendSmtpEmail } from "../../../modules/dogruadres-access/smtp-client"
 import { verifiedEmailForActorContext } from "../../dogruadres/invitations/accept/route"
 import { access, csrf, enabled, sessionToken } from "../security"
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
+}
+
+function buildInvitationEmail(inviteUrl: string, recipientEmail: string) {
+  const safeRecipient = escapeHtml(recipientEmail)
+  const subject = "DoğruAdres Kuruluş Üyelik Daveti"
+  const text = `Merhaba,\n\nDoğruAdres platformunda bir kuruluş üyelik daveti aldınız.\nDaveti onaylamak ve üyeliğinizi aktifleştirmek için lütfen aşağıdaki güvenli bağlantıyı tarayıcınızda açınız:\n${inviteUrl}\n\nGüvenlik Notu: Bu davet bağlantısı 7 gün süreyle geçerlidir ve tek kullanımlıktır. Yalnızca bu e-posta adresine bağlı doğrulanmış DoğruAdres hesabıyla kabul edilebilir.\n\nEğer bu daveti siz beklemiyorsanız, bu e-postayı güvenle yok sayabilirsiniz.\n\nDoğruAdres Platformu`
+
+  const html = `<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DoğruAdres Kuruluş Daveti</title>
+</head>
+<body style="margin: 0; padding: 24px 0; background-color: #f8fafc; font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b;">
+  <div style="max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+    <div style="background-color: #0f172a; padding: 24px 32px; border-bottom: 3px solid #0e66c2;">
+      <h1 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 700; letter-spacing: -0.5px;">DoğruAdres</h1>
+      <p style="margin: 4px 0 0; color: #94a3b8; font-size: 13px;">Kuruluş Yönetimi ve Üyelik Daveti</p>
+    </div>
+    <div style="padding: 32px;">
+      <h2 style="margin: 0 0 16px; color: #0f172a; font-size: 18px; font-weight: 600;">Kuruluş Üyelik Daveti</h2>
+      <p style="margin: 0 0 16px; font-size: 15px; line-height: 1.6; color: #334155;">
+        Merhaba,<br><br>
+        <strong>${safeRecipient}</strong> adresine bir kuruluş üyelik daveti iletildi. Daveti incelemek ve üyeliğinizi onaylamak için aşağıdaki bağlantıyı kullanabilirsiniz:
+      </p>
+      <div style="text-align: center; margin: 32px 0;">
+        <a href="${inviteUrl}" style="background-color: #0e66c2; color: #ffffff; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-size: 15px; display: inline-block; min-height: 48px; box-sizing: border-box; line-height: 20px;">
+          Daveti Onayla ve Katıl
+        </a>
+      </div>
+      <div style="background-color: #f1f5f9; border-left: 4px solid #0e66c2; padding: 14px 18px; border-radius: 6px; margin: 24px 0;">
+        <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #475569;">
+          <strong>Güvenlik Notu:</strong> Bu davet bağlantısı 7 gün süreyle geçerlidir ve tek kullanımlıktır. Yalnızca bu e-posta adresine bağlı doğrulanmış DoğruAdres hesabıyla kabul edilebilir.
+        </p>
+      </div>
+      <p style="margin: 24px 0 8px; font-size: 13px; color: #64748b;">
+        Buton çalışmıyorsa aşağıdaki güvenli bağlantıyı tarayıcınızın adres çubuğuna kopyalayabilirsiniz:
+      </p>
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; font-size: 12px; color: #0f172a; word-break: break-all;">
+        <a href="${inviteUrl}" style="color: #0e66c2; text-decoration: underline;">${inviteUrl}</a>
+      </div>
+      <p style="margin: 24px 0 0; font-size: 13px; line-height: 1.5; color: #64748b;">
+        Eğer bu daveti siz beklemiyorsanız, bu e-postayı güvenle yok sayabilirsiniz.
+      </p>
+    </div>
+    <div style="background-color: #f8fafc; padding: 20px 32px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8; text-align: center;">
+      <p style="margin: 0 0 6px;">DoğruAdres Pazaryeri Platformu</p>
+      <p style="margin: 0;">Destek: <a href="mailto:destek@dogruadres.net" style="color: #64748b; text-decoration: underline;">destek@dogruadres.net</a></p>
+    </div>
+  </div>
+</body>
+</html>`;
+  return { subject, text, html };
+}
 
 // No client-provided actor, Person, role elevation, auth provider, or native JWT.
 const organization = z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/)
@@ -57,9 +121,56 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         actor_type: principal.actor_type, actor_id: principal.actor_id,
       },
     })
+
+    const derivedToken = deriveInvitationToken(result.id)
+    const publicOrigin = (
+      process.env.DOGRUADRES_PUBLIC_ORIGIN ||
+      (req.headers.origin as string) ||
+      "http://127.0.0.1:19101"
+    ).replace(/\/$/, "")
+    const inviteUrl = `${publicOrigin}/personal?invitation_token=${encodeURIComponent(derivedToken)}`
+
+    let deliveryStatus: "sent" | "failed" = "failed"
+    let deliveryError: string | undefined = undefined
+
+    try {
+      let runtimeOverride: any = undefined
+      if (service && typeof service.getActiveSmtpConfig === "function") {
+        const active = await service.getActiveSmtpConfig()
+        if (active) {
+          runtimeOverride = {
+            enabled: active.enabled,
+            host: active.host,
+            port: active.port,
+            security: active.security,
+            username: active.username || undefined,
+            password: active.password || undefined,
+            fromEmail: active.from_email,
+            fromName: active.from_name || undefined,
+          }
+        }
+      }
+
+      const emailContent = buildInvitationEmail(inviteUrl, input.email)
+
+      if (runtimeOverride) {
+        await sendSmtpEmail({ to: input.email, ...emailContent }, runtimeOverride)
+      } else {
+        await sendSmtpEmail({ to: input.email, ...emailContent })
+      }
+      deliveryStatus = "sent"
+    } catch (err: any) {
+      deliveryStatus = "failed"
+      deliveryError = err?.message || "Delivery failed"
+    }
+
     return res.status(201).json({
       invitation: { id: result.id, role: result.role, status: result.status, expires_at: result.expires_at },
-      invitation_token: deriveInvitationToken(result.id),
+      invitation_token: derivedToken,
+      delivery: {
+        status: deliveryStatus,
+        error: deliveryStatus === "failed" ? deliveryError : undefined,
+      },
     })
   }
 
