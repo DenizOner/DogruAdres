@@ -96,5 +96,8 @@ module.exports = withMercur({
     {
       resolve: './src/modules/dogruadres-access',
     },
+    {
+      resolve: './src/modules/dogruadres-audit-index',
+    },
   ],
 })

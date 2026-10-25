@@ -14,6 +14,7 @@ export function allowedPublicRequest(method,path){
     '/personal/invitations':['POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
     '/personal/contexts':['GET'],
     '/personal/links':['GET','POST'],
+    '/personal/audit-timeline':['GET'],
   }
   if(personal[path]?.includes(method))return true
   // Installed public read-only Store route classes; customer/cart/order writers

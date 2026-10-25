@@ -118,6 +118,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="smtp-test-result" role="status" aria-live="polite"></p>
   </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre><div id="memberships"></div>
+  <section id="audit-timeline-section" hidden style="margin-top: 16px; padding: 14px; border: 1px solid #c1c6d4; border-radius: 8px; background: #f8f9fa;">
+    <h3 style="margin-top: 0; font-size: 14px;">Kurulus Denetim Zaman Cizelgesi</h3>
+    <p style="font-size: 12px; color: #555; margin-bottom: 8px;">Projeksiyon durumu: Nihai tutarlilik (eventual), tamlik garantilenmemistir (not_guaranteed).</p>
+    <div style="margin-bottom: 8px;">
+      <button id="audit-timeline-refresh" type="button">Zaman cizelgesini yenile</button>
+    </div>
+    <p id="audit-timeline-status" role="status" aria-live="polite" style="font-size: 13px; font-weight: 500; margin: 4px 0 8px 0;"></p>
+    <div id="audit-timeline-entries"></div>
+    <div style="margin-top: 8px;">
+      <button id="audit-timeline-next" type="button" hidden>Sonraki sayfa</button>
+    </div>
+  </section>
   <form id="invite-member" hidden style="margin-top: 16px; padding: 14px; border: 1px solid #c1c6d4; border-radius: 8px; background: #f2f3fb;">
     <h3 style="margin-top: 0; font-size: 14px;">Kuruluşa Yeni Üye Davet Et</h3>
     <label>Davet edilecek e-posta adresi<input name="email" type="email" required maxlength="320" placeholder="yeni.uye@alanadi.invalid"></label>
@@ -138,7 +150,56 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   async function api(path,options={}){const epoch=viewEpoch;let r;try{r=await fetch('/personal/'+path,{credentials:'same-origin',...options,headers:{'Content-Type':'application/json','x-csrf-token':csrf,...options.headers}})}catch{const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');e.uncertain=true;throw e}const data=await r.json();if(epoch!==viewEpoch)throw new Error('Görünüm yenilendi');if(!r.ok){const e=new Error(data.message||'İşlem reddedildi');e.uncertain=r.status>=500;throw e}return data}
   let recoveryCodes=[];
   function clearMfaCodes(){recoveryCodes=[];el("mfa-codes-value").textContent="";el("mfa-codes-value").hidden=true;el("mfa-codes").hidden=true}
-  let currentOrg='',linkIntent='',organizationRequest=0,mfaState=null;
+  let currentOrg='',linkIntent='',organizationRequest=0,mfaState=null,timelineCursor=null,timelineOrg='';
+  async function loadTimeline(org, cursor = null, append = false) {
+    if (!org) return;
+    timelineOrg = org;
+    const entriesEl = el('audit-timeline-entries');
+    const statusEl = el('audit-timeline-status');
+    const nextBtn = el('audit-timeline-next');
+    if (!append) {
+      entriesEl.replaceChildren();
+      statusEl.textContent = 'Denetim kayitlari yukleniyor...';
+      nextBtn.hidden = true;
+    }
+    try {
+      const q = new URLSearchParams({ organization: org, limit: '25' });
+      if (cursor) q.set('cursor', cursor);
+      const data = await api('audit-timeline?' + q.toString());
+      if (timelineOrg !== org) return;
+      if (!append && (!data.items || data.items.length === 0)) {
+        statusEl.textContent = 'Bu kurulus icin henuz denetim kaydi bulunmuyor (gercek bos durum).';
+        nextBtn.hidden = true;
+        return;
+      }
+      statusEl.textContent = 'Gosterilen kayit sayisi: ' + (append ? entriesEl.children.length + data.items.length : data.items.length);
+      for (const item of data.items) {
+        const card = document.createElement('div');
+        card.className = 'audit-entry';
+        card.style.cssText = 'padding: 6px 10px; margin-bottom: 4px; border: 1px solid #dcdcdc; border-radius: 4px; background: #fff; font-size: 12px; font-family: monospace;';
+        card.textContent = item.occurred_at + ' | ' + item.action + ' | Kaynak: ' + item.resource + ' | Hedef: ' + item.target_id + ' | Aktor Person: ' + (item.actor ? item.actor.person_id : '-');
+        entriesEl.append(card);
+      }
+      if (data.page && data.page.has_more && data.page.next_cursor) {
+        timelineCursor = data.page.next_cursor;
+        nextBtn.hidden = false;
+      } else {
+        timelineCursor = null;
+        nextBtn.hidden = true;
+      }
+    } catch (err) {
+      if (timelineOrg !== org) return;
+      nextBtn.hidden = true;
+      if (err.message === 'Audit timeline unavailable' || err.uncertain) {
+        statusEl.textContent = 'Denetim indeksi su anda kullanilamiyor (kesinti/erisilemez). Bu durum kurulusta kayit olmadigi anlamina gelmez.';
+      } else if (err.message === 'Access denied') {
+        el('audit-timeline-section').hidden = true;
+        statusEl.textContent = 'Denetim zaman cizelgesi icin yetki yok (yalnizca Owner ve Admin erisebilir).';
+      } else {
+        statusEl.textContent = 'Denetim yukleme hatasi: ' + err.message;
+      }
+    }
+  }
   async function refreshMfa(){
     try{
       const data=await api('mfa');
@@ -170,7 +231,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const request=++organizationRequest;currentOrg='';el('invite-member').hidden=true;el('invite-result').textContent='';el('detail').textContent='';el('memberships').replaceChildren();history.replaceState(null,'','/personal');
     try{const result=await api('organizations?id='+encodeURIComponent(id));if(request!==organizationRequest)return;
       currentOrg=id;el('detail').textContent=JSON.stringify(result.organizations[0],null,2);history.replaceState(null,'','/personal?organization='+encodeURIComponent(id));
-      if(['owner','admin'].includes(result.organizations[0]?.role)){el('invite-member').hidden=false;}else{el('invite-member').hidden=true;}
+      if(['owner','admin'].includes(result.organizations[0]?.role)){
+        el('invite-member').hidden=false;
+        el('audit-timeline-section').hidden=false;
+        timelineCursor = null;
+        await loadTimeline(id);
+      }else{
+        el('invite-member').hidden=true;
+        el('audit-timeline-section').hidden=true;
+        el('audit-timeline-entries').replaceChildren();
+      }
       await memberships(id,request);if(request===organizationRequest)status('Kuruluş erişimi doğrulandı');
     }catch(e){if(request!==organizationRequest)return;currentOrg='';el('detail').textContent='';el('memberships').replaceChildren();status(e.message)}
   }
@@ -472,9 +542,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Conceal before browser history or hidden-page restoration; pending reads
   // belong to a view epoch and cannot repopulate a concealed private workspace.
   function concealPrivateView(){
-    viewEpoch++;organizationRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();
-    el('workspace').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;
-    for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret'])el(id).replaceChildren();
+    viewEpoch++;organizationRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
+    el('workspace').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;
+    for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');
   }
@@ -493,6 +563,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   window.addEventListener('focus',()=>{if(el('workspace').hidden&&loadedScope==='')load();else observeAccess()});
   window.addEventListener('popstate',()=>{concealPrivateView();load()});
   setInterval(observeAccess,5000);
+  el('audit-timeline-refresh').onclick=async()=>{timelineCursor=null;await loadTimeline(currentOrg);};
+  el('audit-timeline-next').onclick=async()=>{if(timelineCursor&&currentOrg)await loadTimeline(currentOrg,timelineCursor,true);};
   el('select-org').onsubmit=async e=>{e.preventDefault();await selectOrg(new FormData(e.target).get('organization'))};
   el('logout').onclick=()=>logout(false);el('logout-all').onclick=()=>logout(true);el('staff').onclick=async()=>{try{await api('platform');status('Platform görevi için izin var')}catch(e){status(e.message)}};load();
   </script></html>`)

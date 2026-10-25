@@ -46,11 +46,19 @@ test('email verification route allows GET and POST and denies other methods',()=
 })
 
 test('personal, public catalog and purpose-bound recovery are explicit exceptions',()=>{
-  for(const path of ['/personal','/personal/contexts','/personal/memberships','/store/regions','/store/products','/store/products/prod_test','/store/sellers','/store/product-categories'])assert.equal(allowedPublicRequest('GET',path),true)
+  for(const path of ['/personal','/personal/contexts','/personal/memberships','/personal/audit-timeline','/store/regions','/store/products','/store/products/prod_test','/store/sellers','/store/product-categories'])assert.equal(allowedPublicRequest('GET',path),true)
   for(const path of ['/auth/user/emailpass/reset-password','/auth/customer/emailpass/update','/auth/verification/confirm'])assert.equal(allowedPublicRequest('POST',path),true)
   assert.equal(allowedPublicRequest('GET','/admin/api-keys'),'machine')
   assert.equal(allowedPublicRequest('POST','/admin/api-keys'),false)
   assert.equal(allowedPublicRequest('GET','/personal/private'),false)
+})
+
+test('audit timeline route has exact GET relay only', () => {
+  assert.equal(allowedPublicRequest('GET', '/personal/audit-timeline'), true)
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'])
+    assert.equal(allowedPublicRequest(method, '/personal/audit-timeline'), false)
+  for (const path of ['/personal/audit-timeline/', '/personal/audit-timeline/extra', '/dogruadres/organizations/daorg_test/audit-timeline'])
+    assert.equal(allowedPublicRequest('GET', path), false)
 })
 
 test('platform SMTP settings has exact GET/POST relay only', () => {

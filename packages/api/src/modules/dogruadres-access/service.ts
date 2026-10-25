@@ -1,3 +1,5 @@
+import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
+import type { OutboxClaim, DeliveryErrorCode } from "./audit-delivery-policy"
 import { hasRecentMfaProof } from "./mfa-management"
 import {
   InjectTransactionManager,
@@ -120,6 +122,33 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // All errors escape the enclosing transaction; no network publish, independent
     // transaction or workflow compensation substitutes for rollback here.
     return events
+  }
+
+  // Every operation owns a short Foundation transaction. No Index call occurs
+  // while a Foundation row lock/EntityManager is held across module boundaries.
+  @InjectTransactionManager()
+  async claimFoundationAuditOutbox(@MedusaContext() context: Context = {}) {
+    return claimAuditDelivery(this.auditDeliveryManager_(context))
+  }
+  @InjectTransactionManager()
+  async readClaimedFoundationAudit(claim: OutboxClaim, @MedusaContext() context: Context = {}) {
+    return loadClaimedAuditEvent(this.auditDeliveryManager_(context), claim)
+  }
+  @InjectTransactionManager()
+  async acknowledgeFoundationAudit(claim: OutboxClaim, @MedusaContext() context: Context = {}) {
+    return acknowledgeAuditDelivery(this.auditDeliveryManager_(context), claim)
+  }
+  @InjectTransactionManager()
+  async deferFoundationAudit(claim: OutboxClaim, code: DeliveryErrorCode, @MedusaContext() context: Context = {}) {
+    return deferAuditDelivery(this.auditDeliveryManager_(context), claim, code)
+  }
+  @InjectTransactionManager()
+  async quarantineFoundationAudit(claim: OutboxClaim, code: DeliveryErrorCode, @MedusaContext() context: Context = {}) {
+    return quarantineAuditDelivery(this.auditDeliveryManager_(context), claim, code)
+  }
+  private auditDeliveryManager_(context: Context): DeliveryManager {
+    if (!context.transactionManager) throw new Error("FOUNDATION_DELIVERY_TRANSACTION_REQUIRED")
+    return context.transactionManager as unknown as DeliveryManager
   }
 
 
