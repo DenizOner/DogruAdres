@@ -2,7 +2,7 @@
  * Runs only in the existing random disposable CI database. No public ingress change.
  */
 import type { ExecArgs, IAuthModuleService, INotificationModuleService } from "@medusajs/framework/types"
-import { AuthWorkflowEvents, Modules } from "@medusajs/framework/utils"
+import { AuthWorkflowEvents, ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { requestVerificationWorkflow } from "@medusajs/core-flows"
 import { readFileSync } from "node:fs"
 import { createServer, TLSSocket } from "node:tls"
@@ -10,6 +10,7 @@ import { randomBytes } from "node:crypto"
 import assert from "node:assert/strict"
 import subscriber from "../../src/subscribers/auth-verification-requested"
 import { encryptSmtpPassword } from "../../src/modules/dogruadres-access/smtp-crypto"
+import type DogruAdresAccessModuleService from "../../src/modules/dogruadres-access/service"
 
 export default async function({ container }: ExecArgs) {
   const target = new URL(process.env.DATABASE_URL || "postgres://invalid/invalid")
@@ -19,10 +20,10 @@ export default async function({ container }: ExecArgs) {
       process.env.PG_MFA_NATIVE_TEST_DATABASE !== target.pathname.slice(1) || process.env.NODE_ENV !== "test" ||
       process.env.DOGRUADRES_IDENTITY_ENABLED !== "true" || !process.env.SMTP_TEST_CERT || !process.env.SMTP_TEST_KEY ||
       process.env.NODE_EXTRA_CA_CERTS !== process.env.SMTP_TEST_CERT) throw Error("REFUSED: isolated SMTP CI environment required")
-  const pg = container.resolve<any>("pg_connection")
+  const pg = container.resolve(ContainerRegistrationKeys.PG_CONNECTION)
   const notifications: INotificationModuleService = container.resolve(Modules.NOTIFICATION)
   const bus = container.resolve(Modules.EVENT_BUS)
-  const access = container.resolve("dogruadresAccess")
+  const access = container.resolve<DogruAdresAccessModuleService>("dogruadresAccess")
   const logger = container.resolve("logger")
   const providers = await pg("notification_provider").where({ is_enabled: true }).select("id", "channels")
   const emailProviders = providers.filter((p: any) => p.channels.includes("email"))
