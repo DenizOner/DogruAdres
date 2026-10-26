@@ -24,10 +24,12 @@ if(typeof SQL!=="function")throw Error("Bun PostgreSQL driver unavailable")
 const scope = (process.env.PG_MFA_TEST_SCOPE ||
   process.argv.slice(2).find(arg => arg.startsWith("--scope="))?.split("=")[1] ||
   "all").toLowerCase()
-if (!["all", "mfa", "verification", "b02", "b04", "b04-ui"].includes(scope))
-  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b02, b04, b04-ui`)
+if (!["all", "mfa", "verification", "b02", "b04", "b04-ui", "b05-ui"].includes(scope))
+  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b02, b04, b04-ui, b05-ui`)
 if (scope === "b04-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B04_UI_DISPATCH_SCOPE !== "b04-ui"))
   throw Error("REFUSED: B04-UI requires explicit workflow_dispatch scope=b04-ui")
+if (scope === "b05-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B05_UI_DISPATCH_SCOPE !== "b05-ui"))
+  throw Error("REFUSED: B05-UI requires explicit workflow_dispatch scope=b05-ui")
 
 const admin=new SQL(adminUrl.toString())
 const dbName="mfa_cli_ci_"+randomBytes(8).toString("hex")
@@ -134,6 +136,17 @@ async function run(){
         process.stdout.write(output + "\n")
         if (browser.error || browser.status !== 0) throw Error("B04-UI execution failed; sanitized evidence only; no retry")
         assert.ok(output.includes("PASS B04-UI real Chrome UI/HTTP/SQL"), "Missing B04-UI evidence")
+      }
+
+      if (scope === "b05-ui") {
+        const browser = spawnSync(process.execPath, ["run", "medusa", "exec",
+          "./integration-tests/postgres/b05-memberships.exec.ts"], {
+          cwd: process.cwd(), env: nativeEnv, encoding: "utf8", timeout: 300000, maxBuffer: 2*1024*1024,
+        })
+        const output = String(browser.stdout ?? "").split("\n").filter(line => /^(B05_UI_EVIDENCE |PASS B05-UI )/.test(line)).join("\n")
+        process.stdout.write(output + "\n")
+        if (browser.error || browser.status !== 0) throw Error("B05-UI failed; sanitized evidence only; no retry")
+        assert.ok(output.includes("PASS B05-UI real Chrome membership listing/refresh"), "Missing B05-UI evidence")
       }
 
       if (scope === "all" || scope === "mfa") {

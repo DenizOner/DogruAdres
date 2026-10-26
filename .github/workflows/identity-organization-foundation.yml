@@ -7,7 +7,7 @@ on:
         description: Authorized isolated acceptance scope
         required: true
         type: choice
-        options: [b02, b04, b04-ui]
+        options: [b02, b04, b04-ui, b05-ui]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -296,6 +296,27 @@ jobs:
         with:
           name: b04-ui-chrome-http-sql
           path: ${{ runner.temp }}/b04-ui-evidence.log
+          if-no-files-found: error
+      - name: B05-UI-only membership listing in real Chrome and native HTTP/SQL
+        if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b05-ui'
+        working-directory: packages/api
+        timeout-minutes: 10
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+          PG_MFA_TEST_SCOPE: b05-ui
+          B05_UI_DISPATCH_SCOPE: b05-ui
+        run: |
+          set -o pipefail
+          echo "B05-UI source HEAD=$(git rev-parse HEAD) event=$GITHUB_EVENT_NAME scope=$B05_UI_DISPATCH_SCOPE"
+          bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts | tee "$RUNNER_TEMP/b05-ui-evidence.log"
+      - name: Preserve sanitized B05-UI execution evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.scope == 'b05-ui'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: b05-ui-chrome-http-sql
+          path: ${{ runner.temp }}/b05-ui-evidence.log
           if-no-files-found: error
       - name: Foundation native Medusa module / ORM transaction on disposable PG16
         if: github.event_name != 'workflow_dispatch'
