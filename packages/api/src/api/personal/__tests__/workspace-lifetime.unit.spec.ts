@@ -11,8 +11,10 @@ function harness() {
     return nodes.get(id)
   }
   const document={hidden:false,getElementById:el,createElement:()=>({textContent:''}),addEventListener:(n:string,f:Function)=>listeners.set(n,f)}
-  const context=createContext({document,window:{addEventListener:(n:string,f:Function)=>listeners.set(n,f)},location:{search:''},history:{replaceState(){}},URLSearchParams,setInterval:(f:Function)=>listeners.set('poll',f),fetch:(path:string,options:any)=>new Promise(resolve=>pending.push({path,options,resolve}))})
-  runInContext(source.slice(source.indexOf('  let viewEpoch='),source.indexOf('  </script>')),context)
+  const context=createContext({document,window:{addEventListener:(n:string,f:Function)=>listeners.set(n,f)},location:new URL('https://app.example.invalid/personal'),URL,history:{replaceState(){}},URLSearchParams,setInterval:(f:Function)=>listeners.set('poll',f),fetch:(path:string,options:any)=>new Promise(resolve=>pending.push({path,options,resolve}))})
+  const scripts=[...source.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1])
+  // Execute the early token capture too; workspace lifetime keeps its original assertions.
+  for(const script of scripts)runInContext(script,context)
   runInContext('links=async()=>{};refreshMfa=async()=>{};refreshSmtp=async()=>{}',context)
   return {context,el,pending,listeners,document}
 }

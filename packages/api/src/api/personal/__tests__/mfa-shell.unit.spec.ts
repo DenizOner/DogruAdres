@@ -9,7 +9,7 @@ describe('MFA settings shell contract (not browser acceptance)',()=>{
    expect(html).toContain('id="mfa-seed" type="password"');expect(html).toContain('id="mfa-codes-value" hidden')
    for(const name of ['required','optional','disabled'])expect(html).toContain('type="radio" name="platform_mode" value="'+name+'"')
    expect(html).not.toMatch(/localStorage|sessionStorage|console\.log/)
-   const code=html.match(/<script[^>]*>([\s\S]*?)<\/script>/)![1]
+   const code=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1]).join('\n')
    expect(()=>new Function(code)).not.toThrow()
    expect(code).not.toContain("'+(data.secret||data.otpauth_url)")
  })
