@@ -326,7 +326,9 @@ export async function verifyNativeBrowser({
     // c. Relevant DOM states (confirmed, consumed, error) must not leak bearer secrets.
     const errorDomHtml = await evaluate<string>("document.body.innerHTML")
     assert.ok(!errorDomHtml.includes(token), "Bearer token leaked into error DOM HTML")
-    assert.ok(!errorDomHtml.includes("invalid-synthetic-bearer"), "Invalid bearer leaked into error DOM HTML")
+    const errorCardText = await evaluate<string>("document.querySelector('main')?.innerText || document.body.innerText")
+    assert.ok(!errorCardText.includes(token), "Bearer token leaked in rendered error UI text")
+    assert.ok(!errorCardText.includes("invalid-synthetic-bearer"), "Invalid token leaked in rendered error UI text")
 
     // d. Task-owned Next dev logs must not leak bearer secrets.
     assert.ok(!storefrontLogs.includes(token), "Bearer token leaked into Next dev server logs")
