@@ -107,9 +107,9 @@ export default async function({ container }: ExecArgs) {
       if (failure === "disabled") await pg("da_platform_smtp_settings").where({ id: "current" }).update({ enabled: false })
       if (failure === "provider") await pg("da_platform_smtp_settings").where({ id: "current" }).update({ enabled: true, password_encrypted: "invalid-test-ciphertext" })
       const before = messages.length
-      const previousFailures = Number((await pg("notification").where({ to: recipient, status: "failure" }).count("*").first()).count)
+      const previousFailures = Number((await pg("notification").where({ to: recipient, status: "failure" }).count("*").first())!.count)
       await assert.rejects(dispatch(), { message: "Verification email dispatch failed" })
-      const failures = Number((await pg("notification").where({ to: recipient, status: "failure" }).count("*").first()).count)
+      const failures = Number((await pg("notification").where({ to: recipient, status: "failure" }).count("*").first())!.count)
       assert.ok(Number(messages.length) === before && failures === previousFailures + 1, "Failed send must persist failure without delivery/false success")
     }
     process.stdout.write("PASS SMTP native failures: authentication, network, disabled and credential/provider errors persist failure and reject with safe messages\n")
@@ -125,11 +125,11 @@ export default async function({ container }: ExecArgs) {
     process.stdout.write("PASS SMTP native TLS: untrusted certificate rejected with verification enabled and persisted failure\n")
 
     mode = "auth"
-    const beforeCount = Number((await pg("notification").where({ to: recipient }).count("*").first()).count)
+    const beforeCount = Number((await pg("notification").where({ to: recipient }).count("*").first())!.count)
     await bus.emit({ name: AuthWorkflowEvents.VERIFICATION_REQUESTED, data: payload })
-    await until(async () => Number((await pg("notification").where({ to: recipient }).count("*").first()).count) === beforeCount + 1 && logged.some(x => x.includes("Verification email dispatch failed")))
+    await until(async () => Number((await pg("notification").where({ to: recipient }).count("*").first())!.count) === beforeCount + 1 && logged.some(x => x.includes("Verification email dispatch failed")))
     await pause(300)
-    assert.ok(Number((await pg("notification").where({ to: recipient }).count("*").first()).count) === beforeCount + 1, "Unexpected automatic local retry")
+    assert.ok(Number((await pg("notification").where({ to: recipient }).count("*").first())!.count) === beforeCount + 1, "Unexpected automatic local retry")
     // Real local bus contains/logs the subscriber rejection; emit is not delivery acknowledgement.
     process.stdout.write("PASS SMTP native local-event failure: subscriber rejection logged safely; no retry observed in bounded window (no durable retry guarantee)\n")
 
