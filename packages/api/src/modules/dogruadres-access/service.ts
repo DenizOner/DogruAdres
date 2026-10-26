@@ -475,15 +475,39 @@ export default class DogruAdresAccessModuleService extends MedusaService({
 
   @InjectTransactionManager()
   async provisionPersonalOrganization(token: string, input: Omit<ProvisionOrganizationInput,"provisioned_by">, @MedusaContext() context:Context={}) {
-    const staff=await new IdentitySessions(securitySql(context.transactionManager)).staff(token,"organization.provision","platform")
+    const sql=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(sql).staff(token,"organization.provision","platform")
     if(!staff)throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
+    const ownerPersonIds = new Set<string>()
+    for (const owner of input.initial_owners) {
+      if (!supportedActorTypes.has(owner.actor_type) || !owner.actor_id) {
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+      }
+      const verified = await sql.execute(
+        `select b.person_id from (
+          select person_id, actor_type, actor_id, verified_at, revoked_at from da_login_binding where actor_type=? and actor_id=?
+          union all
+          select person_id, actor_type, actor_id, verified_at, revoked_at from da_verified_actor_binding where actor_type=? and actor_id=?
+        ) b
+        join da_actor_mapping m on m.person_id=b.person_id and m.actor_type=b.actor_type and m.actor_id=b.actor_id and m.deleted_at is null
+        join da_person p on p.id=b.person_id and p.disabled_at is null and p.deleted_at is null
+        where b.verified_at is not null and b.revoked_at is null`,
+        [owner.actor_type, owner.actor_id, owner.actor_type, owner.actor_id]
+      )
+      if (verified.length !== 1) {
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+      }
+      ownerPersonIds.add(verified[0].person_id)
+    }
+    if (ownerPersonIds.size !== input.initial_owners.length) {
+      throw new MedusaError(MedusaError.Types.INVALID_DATA, "Initial Owners must be distinct canonical Persons")
+    }
     const result=await this.provisionOrganization({...input,staff_grant_id:staff.grant_id,provisioned_by:{actor_type:staff.actor_type,actor_id:staff.actor_id}},context)
     // Generated MedusaService writes may still be pending in this transaction's
     // identity map. Flush before the raw SELECT/FK insert; commit stays owned here.
     const manager=context.transactionManager
     if(!manager || typeof manager!=="object" || !("flush" in manager) || typeof manager.flush!=="function")throw new Error("Foundation transaction manager unavailable")
     await manager.flush()
-    const sql=securitySql(context.transactionManager)
     await sql.execute(`insert into da_security_outbox(id,audit_event_id,created_at)
       select 'security_'||id,id,clock_timestamp() from da_audit_event where organization_id=?
       and action in ('organization.provisioned','organization.owner_assigned') on conflict(audit_event_id) do nothing`,[result.organization.id])
