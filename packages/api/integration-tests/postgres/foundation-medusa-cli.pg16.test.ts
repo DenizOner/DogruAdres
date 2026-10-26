@@ -24,8 +24,8 @@ if(typeof SQL!=="function")throw Error("Bun PostgreSQL driver unavailable")
 const scope = (process.env.PG_MFA_TEST_SCOPE ||
   process.argv.slice(2).find(arg => arg.startsWith("--scope="))?.split("=")[1] ||
   "all").toLowerCase()
-if (!["all", "mfa", "verification", "b02"].includes(scope))
-  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b02`)
+if (!["all", "mfa", "verification", "b02", "b04"].includes(scope))
+  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b02, b04`)
 
 const admin=new SQL(adminUrl.toString())
 const dbName="mfa_cli_ci_"+randomBytes(8).toString("hex")
@@ -110,6 +110,17 @@ async function run(){
         process.stdout.write(output+"\n")
         if(b02.error||b02.status!==0)throw Error("B02 native execution failed; inspect sanitized evidence")
         assert.ok(output.includes("PASS B02 bounded HTTP/SQL execution"),"Missing B02 execution evidence")
+      }
+
+      if (scope === "b04") {
+        const b04=spawnSync(process.execPath,["run","medusa","exec",
+          "./integration-tests/postgres/b04-roles-and-access.exec.ts"],{
+          cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
+        })
+        const output=String(b04.stdout??"").split("\n").filter(line=>/^(B04_EVIDENCE |PASS B04 |BLOCKED B04 )/.test(line)).join("\n")
+        process.stdout.write(output+"\n")
+        if(b04.error||b04.status!==0)throw Error("B04 native execution failed; inspect sanitized evidence")
+        assert.ok(output.includes("PASS B04 bounded HTTP/SQL execution"),"Missing B04 execution evidence")
       }
 
       if (scope === "all" || scope === "mfa") {

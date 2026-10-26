@@ -7,7 +7,7 @@ on:
         description: Authorized isolated acceptance scope
         required: true
         type: choice
-        options: [b02]
+        options: [b02, b04]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -256,6 +256,25 @@ jobs:
         with:
           name: b02-native-http-sql
           path: ${{ runner.temp }}/b02-evidence.log
+          if-no-files-found: error
+      - name: B04-only native HTTP and SQL acceptance
+        if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b04'
+        working-directory: packages/api
+        timeout-minutes: 7
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+          PG_MFA_TEST_SCOPE: b04
+        run: |
+          set -o pipefail
+          bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts | tee "$RUNNER_TEMP/b04-evidence.log"
+      - name: Preserve sanitized B04 execution evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.scope == 'b04'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: b04-native-http-sql
+          path: ${{ runner.temp }}/b04-evidence.log
           if-no-files-found: error
       - name: Foundation native Medusa module / ORM transaction on disposable PG16
         if: github.event_name != 'workflow_dispatch'
