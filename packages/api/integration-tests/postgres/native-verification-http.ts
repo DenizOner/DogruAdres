@@ -6,7 +6,7 @@ import { dirname, join } from "node:path"
 import { ApiLoader, expressLoader } from "@medusajs/framework/http"
 import { ContainerRegistrationKeys, getResolvedPlugins } from "@medusajs/framework/utils"
 import type { MedusaContainer } from "@medusajs/framework/types"
-import { verifyNativeBrowser } from "./native-verification-browser"
+import { verifyNativeBrowser, getFreePort } from "./native-verification-browser"
 
 // Reuse Medusa's installed Express dependency; do not add a project dependency.
 const express = require(require.resolve("express", { paths: [require.resolve("@medusajs/medusa/package.json")] }))
@@ -54,22 +54,21 @@ export async function verifyNativeHttp(container: MedusaContainer, message: stri
   const server = createServer(app)
   let shutdown: (() => Promise<void>) | undefined
   try {
-    // Same framework entrypoint primitives and source directories used by Medusa's
-    // real API loader. No handler imports, fake request/response or bypass middleware.
-    app.use((req: any, res: any, next: any) => {
-      res.setHeader("Access-Control-Allow-Origin", "*")
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept")
-      if (req.method === "OPTIONS") {
-        res.status(204).end()
-        return
-      }
-      req.scope = container.createScope()
-      req.requestId = "synthetic-verification"
-      next()
-    })
+    // Allocate loopback Storefront port and configure real Medusa authCors.
+    const storefrontPort = await getFreePort()
+    const storefrontOrigin = `http://127.0.0.1:${storefrontPort}`
+
+    // Standard Medusa Express scope initialization: NO test wildcard or manual OPTIONS bypass.
+    app.use((req: any, _res, next) => { req.scope = container.createScope(); req.requestId = "synthetic-verification"; next() })
     shutdown = (await expressLoader({ app, container })).shutdown
     const config = container.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
+    config.projectConfig.http.authCors = [config.projectConfig.http.authCors, storefrontOrigin].filter(Boolean).join(",")
+    try {
+      const { configManager } = require(require.resolve("@medusajs/framework/config", { paths: [require.resolve("@medusajs/framework/package.json")] }))
+      if (configManager?.config?.projectConfig?.http) {
+        configManager.config.projectConfig.http.authCors = config.projectConfig.http.authCors
+      }
+    } catch {}
     const plugins = await getResolvedPlugins(process.cwd(), config, true)
     const sourceDir = [join(dirname(require.resolve("@medusajs/medusa/package.json")), "dist/api"), ...plugins.map(plugin => join(plugin.resolve, "api"))]
     assert.ok(sourceDir.includes(join(process.cwd(), "src/api")), "Project API middleware must be part of native route discovery")
@@ -79,6 +78,32 @@ export async function verifyNativeHttp(container: MedusaContainer, message: stri
     const address = server.address()
     assert.ok(address && typeof address !== "string" && address.address === "127.0.0.1", "Native HTTP listener must be isolated loopback")
     const origin = `http://127.0.0.1:${address.port}`
+
+    // Real Medusa CORS preflight verification: loopback Storefront origin gets 204 with credentials; unauthorized origin denied.
+    const preflight = await fetch(origin + "/auth/verify-email", {
+      method: "OPTIONS",
+      headers: {
+        "Origin": storefrontOrigin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Content-Type",
+      },
+      signal: AbortSignal.timeout(5000),
+    })
+    assert.equal(preflight.status, 204, "Real Medusa CORS preflight must return 204")
+    assert.equal(preflight.headers.get("access-control-allow-origin"), storefrontOrigin, "Real Medusa CORS must authorize loopback Storefront origin")
+    assert.equal(preflight.headers.get("access-control-allow-credentials"), "true", "Real Medusa CORS must allow credentials")
+
+    const unauthorizedPreflight = await fetch(origin + "/auth/verify-email", {
+      method: "OPTIONS",
+      headers: {
+        "Origin": "http://unauthorized.example.invalid",
+        "Access-Control-Request-Method": "POST",
+      },
+      signal: AbortSignal.timeout(5000),
+    })
+    assert.notEqual(unauthorizedPreflight.headers.get("access-control-allow-origin"), "http://unauthorized.example.invalid", "Unauthorized origin must not receive Access-Control-Allow-Origin")
+    process.stdout.write("PASS verification CORS: real Medusa authCors enforcement, loopback Storefront origin authorized, unauthorized origin denied\n")
+
     let requests = 0
     async function request(method: string, value: string, expectedCode: number, expectedStatus: string) {
       const response = await fetch(origin + "/auth/verify-email" + (method === "GET" ? "?token=" + encodeURIComponent(value) : ""), {
@@ -116,6 +141,7 @@ export async function verifyNativeHttp(container: MedusaContainer, message: stri
     // Token is still pending; real Chrome performs the explicit single-use confirmation click.
     await verifyNativeBrowser({
       apiOrigin: origin,
+      storefrontPort,
       token,
       recipient,
       identityId,

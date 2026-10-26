@@ -30,7 +30,7 @@ function findChromeBinary(): string {
   throw Error("REFUSED: compatible Chrome/Chromium binary not found on runner")
 }
 
-function getFreePort(): Promise<number> {
+export function getFreePort(): Promise<number> {
   return new Promise((resolvePort, reject) => {
     const s = createServer()
     s.listen(0, "127.0.0.1", () => {
@@ -71,6 +71,7 @@ function killProcess(proc: ChildProcess | undefined) {
 
 export interface NativeBrowserParams {
   apiOrigin: string
+  storefrontPort?: number
   token: string
   recipient: string
   identityId: string
@@ -81,6 +82,7 @@ export interface NativeBrowserParams {
 
 export async function verifyNativeBrowser({
   apiOrigin,
+  storefrontPort: providedPort,
   token,
   recipient: _recipient,
   identityId: _identityId,
@@ -89,7 +91,7 @@ export async function verifyNativeBrowser({
   logs,
 }: NativeBrowserParams): Promise<void> {
   const chromePath = findChromeBinary()
-  const storefrontPort = await getFreePort()
+  const storefrontPort = providedPort ?? (await getFreePort())
   const cdpPort = await getFreePort()
   const storefrontDir = resolve(process.cwd(), "../../apps/storefront")
 
@@ -166,7 +168,9 @@ export async function verifyNativeBrowser({
     let rpcId = 1
     const pendingRpc = new Map<number, (res: any) => void>()
     const networkRequests: any[] = []
+    const rawRequestHeaders: any[] = []
     const networkResponses: any[] = []
+    const navigationUrls: string[] = []
 
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data.toString())
@@ -177,8 +181,17 @@ export async function verifyNativeBrowser({
       if (msg.method === "Network.requestWillBeSent") {
         networkRequests.push(msg.params)
       }
+      if (msg.method === "Network.requestWillBeSentExtraInfo") {
+        rawRequestHeaders.push(msg.params)
+      }
       if (msg.method === "Network.responseReceived") {
         networkResponses.push(msg.params)
+      }
+      if (msg.method === "Page.frameNavigated" && msg.params?.frame?.url) {
+        navigationUrls.push(msg.params.frame.url)
+      }
+      if (msg.method === "Page.navigatedWithinDocument" && msg.params?.url) {
+        navigationUrls.push(msg.params.url)
       }
     }
 
@@ -202,7 +215,7 @@ export async function verifyNativeBrowser({
     await cdpSend("Network.enable")
     await cdpSend("Runtime.enable")
 
-    // 3. Navigate Chrome to Next.js verification route with the actual token.
+    // 3. Navigate Chrome to Next.js verification route with the actual token (authorized bearer landing).
     const targetUrl = `http://127.0.0.1:${storefrontPort}/auth/verify-email?token=${encodeURIComponent(token)}`
     await cdpSend("Page.navigate", { url: targetUrl })
 
@@ -237,9 +250,9 @@ export async function verifyNativeBrowser({
     assert.ok(!dbRowBeforeClick.verified_at, "Native GET inspection unexpectedly mutated PostgreSQL verified_at")
     assert.equal(dbRowBeforeClick.provider_metadata.token_hash, initialRow.provider_metadata.token_hash, "Token hash altered during inspection")
 
-    // Check that NO POST request has been sent before user click.
-    const earlyPost = networkRequests.find(r => r.request.url.includes(`${apiOrigin}/auth/verify-email`) && r.request.method === "POST")
-    assert.ok(!earlyPost, "POST dispatched to API before explicit user confirmation click")
+    // Assert that NO POST request has been sent before user click.
+    const initialPostCount = networkRequests.filter(r => r.request.url.startsWith(`${apiOrigin}/auth/verify-email`) && r.request.method === "POST").length
+    assert.equal(initialPostCount, 0, "No POST dispatched to API before explicit user confirmation click")
     process.stdout.write("PASS browser native GET inspection: pending status displayed, PostgreSQL verified_at remains NULL, no POST before click\n")
 
     // 6. Real browser confirmation click and committed PostgreSQL verified_at.
@@ -251,10 +264,14 @@ export async function verifyNativeBrowser({
       return text.includes("E-posta Başarıyla Doğrulandı") || text.includes("Email Successfully Verified")
     }, 15000, "Confirmed UI state in browser DOM")
 
+    // Assert EXACTLY ONE verification POST was triggered by the click.
+    const postCountAfterClick = networkRequests.filter(r => r.request.url.startsWith(`${apiOrigin}/auth/verify-email`) && r.request.method === "POST").length
+    assert.equal(postCountAfterClick, 1, `Explicit click must trigger exactly one verification POST, found ${postCountAfterClick}`)
+
     // Verify committed verified_at in PostgreSQL via independent transaction.
     const confirmedRow = await pg("auth_verification").where({ id: initialRow.id }).first()
     assert.ok(confirmedRow.verified_at && Number.isFinite(new Date(confirmedRow.verified_at).getTime()), "PostgreSQL verified_at must be durably committed after Chrome click")
-    process.stdout.write("PASS browser explicit confirmation: real Chrome click, confirmed POST, committed verified_at in PostgreSQL\n")
+    process.stdout.write("PASS browser explicit confirmation: real Chrome click, exactly one confirmed POST, committed verified_at in PostgreSQL\n")
 
     // 7. Replay denial: reload page with token URL and check consumed state.
     await cdpSend("Page.navigate", { url: targetUrl })
@@ -277,15 +294,47 @@ export async function verifyNativeBrowser({
     assert.equal(duplicateStatus, 409, "Duplicate POST in browser context must return 409")
     process.stdout.write("PASS browser replay denial: consumed state on reload, duplicate POST rejected 409\n")
 
-    // 8. Privacy: no token leaked in Referer headers, rendered body, or test logs.
+    // 8. Error state inspection: navigate to invalid token URL to verify error DOM.
+    const invalidTargetUrl = `http://127.0.0.1:${storefrontPort}/auth/verify-email?token=invalid-synthetic-bearer`
+    await cdpSend("Page.navigate", { url: invalidTargetUrl })
+    await until(async () => {
+      const text = await evaluate<string>("document.body.innerText")
+      return text.includes("Geçersiz") || text.includes("Invalid")
+    }, 15000, "Error UI state in browser DOM")
+
+    // 9. Comprehensive privacy verification:
+    // a. Check all Referer headers from both requestWillBeSent and wire rawRequestHeaders.
     for (const req of networkRequests) {
       const referer = req.request.headers["Referer"] || req.request.headers["referer"] || ""
       assert.ok(!referer.includes(token), "Token leaked in HTTP Referer header")
     }
-    const finalBodyText = await evaluate<string>("document.body.innerText")
-    assert.ok(!finalBodyText.includes(token), "Token leaked into rendered DOM body")
+    for (const extra of rawRequestHeaders) {
+      const extraHeaders = extra.headers || {}
+      for (const [k, v] of Object.entries(extraHeaders)) {
+        if (k.toLowerCase().includes("referer")) {
+          assert.ok(!String(v).includes(token), "Token leaked in raw wire Referer header")
+        }
+      }
+    }
+
+    // b. Distinguish authorized initial/replay landing URLs from subsequent/secondary navigations.
+    const secondaryNavs = navigationUrls.filter(u => u !== targetUrl && u !== invalidTargetUrl)
+    for (const navUrl of secondaryNavs) {
+      assert.ok(!navUrl.includes(token), "Token leaked in secondary navigation URL")
+    }
+
+    // c. Relevant DOM states (confirmed, consumed, error) must not leak bearer secrets.
+    const errorDomHtml = await evaluate<string>("document.body.innerHTML")
+    assert.ok(!errorDomHtml.includes(token), "Bearer token leaked into error DOM HTML")
+    assert.ok(!errorDomHtml.includes("invalid-synthetic-bearer"), "Invalid bearer leaked into error DOM HTML")
+
+    // d. Task-owned Next dev logs must not leak bearer secrets.
+    assert.ok(!storefrontLogs.includes(token), "Bearer token leaked into Next dev server logs")
+
+    // e. Test logger captures must not leak bearer secrets.
     assert.ok(logs.every(line => !line.includes(token)), "Token leaked into captured test logs")
-    process.stdout.write("PASS browser privacy: no token in Referer, navigation, rendered errors or test logs\n")
+
+    process.stdout.write("PASS browser privacy: no token in Referer, secondary navigation, rendered DOM or Next logs\n")
   } finally {
     if (ws) {
       try { ws.close() } catch {}
