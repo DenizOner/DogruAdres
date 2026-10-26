@@ -24,8 +24,8 @@ if(typeof SQL!=="function")throw Error("Bun PostgreSQL driver unavailable")
 const scope = (process.env.PG_MFA_TEST_SCOPE ||
   process.argv.slice(2).find(arg => arg.startsWith("--scope="))?.split("=")[1] ||
   "all").toLowerCase()
-if (!["all", "mfa", "verification"].includes(scope))
-  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification`)
+if (!["all", "mfa", "verification", "b02"].includes(scope))
+  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b02`)
 
 const admin=new SQL(adminUrl.toString())
 const dbName="mfa_cli_ci_"+randomBytes(8).toString("hex")
@@ -99,6 +99,18 @@ async function run(){
       }
       // The harness readback session is a genuine foreign consumer to the child.
       await target.close()
+
+      if (scope === "b02") {
+        const b02=spawnSync(process.execPath,["run","medusa","exec",
+          "./integration-tests/postgres/b02-negatives.exec.ts"],{
+          cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
+        })
+        // Only explicit sanitized evidence is published; never native debug output.
+        const output=String(b02.stdout??"").split("\n").filter(line=>/^(B02_EVIDENCE |PASS B02 |BLOCKED B02 )/.test(line)).join("\n")
+        process.stdout.write(output+"\n")
+        if(b02.error||b02.status!==0)throw Error("B02 native execution failed; inspect sanitized evidence")
+        assert.ok(output.includes("PASS B02 bounded HTTP/SQL execution"),"Missing B02 execution evidence")
+      }
 
       if (scope === "all" || scope === "mfa") {
         // Reuse this already migrated disposable CI database; no additional DB/resource.

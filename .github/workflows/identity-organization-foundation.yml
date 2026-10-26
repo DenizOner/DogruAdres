@@ -1,6 +1,13 @@
 name: Identity Organization Foundation
 
 on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Authorized isolated acceptance scope
+        required: true
+        type: choice
+        options: [b02]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -9,11 +16,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   static:
+    if: github.event_name != 'workflow_dispatch'
     name: Foundation static checks
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -82,6 +90,7 @@ jobs:
         run: node --check integration-tests/http/dogruadres-foundation.native.test.mjs
 
   build:
+    if: github.event_name != 'workflow_dispatch'
     name: API backend build — test configuration
     needs: static
     runs-on: ubuntu-24.04
@@ -209,6 +218,7 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
       - name: Exercise MFA transactions and real migration ledger on same disposable PG16
+        if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
         env:
           CI: 'true'
@@ -219,6 +229,7 @@ jobs:
           bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
           bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
       - name: Full Medusa CLI module migration on disposable PG16
+        if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
         timeout-minutes: 7
         env:
@@ -227,7 +238,27 @@ jobs:
           PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
           PG_MFA_TEST_SCOPE: verification
         run: bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts
+      - name: B02-only native HTTP and SQL negatives
+        if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b02'
+        working-directory: packages/api
+        timeout-minutes: 7
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+          PG_MFA_TEST_SCOPE: b02
+        run: |
+          set -o pipefail
+          bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts | tee "$RUNNER_TEMP/b02-evidence.log"
+      - name: Preserve sanitized B02 execution evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.scope == 'b02'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: b02-native-http-sql
+          path: ${{ runner.temp }}/b02-evidence.log
+          if-no-files-found: error
       - name: Foundation native Medusa module / ORM transaction on disposable PG16
+        if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
         env:
           CI: 'true'
