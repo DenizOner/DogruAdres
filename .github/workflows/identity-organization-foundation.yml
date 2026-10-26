@@ -7,7 +7,7 @@ on:
         description: Authorized isolated acceptance scope
         required: true
         type: choice
-        options: [b02, b04, b04-ui, b05-ui]
+        options: [b02, b04, b04-ui, b05-ui, b06-ui]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -317,6 +317,38 @@ jobs:
         with:
           name: b05-ui-chrome-http-sql
           path: ${{ runner.temp }}/b05-ui-evidence.log
+          if-no-files-found: error
+      - name: B06-only role acceptance prerequisites
+        if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b06-ui'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libnss3-tools
+          command -v openssl
+          command -v certutil
+          command -v google-chrome
+      - name: B06-only real Chrome native MFA and role HTTP/SQL
+        if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b06-ui'
+        working-directory: packages/api
+        timeout-minutes: 14
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+          PG_MFA_TEST_SCOPE: b06-ui
+          B06_UI_DISPATCH_SCOPE: b06-ui
+          B06_EVIDENCE_DIR: ${{ runner.temp }}/b06-ui-evidence
+        run: |
+          set -o pipefail
+          echo "B06-UI source HEAD=$(git rev-parse HEAD) event=$GITHUB_EVENT_NAME scope=$B06_UI_DISPATCH_SCOPE"
+          bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts | tee "$RUNNER_TEMP/b06-ui-evidence.log"
+      - name: Preserve sanitized B06-only acceptance evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.scope == 'b06-ui'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: b06-ui-chrome-mfa-http-sql
+          path: |
+            ${{ runner.temp }}/b06-ui-evidence.log
+            ${{ runner.temp }}/b06-ui-evidence/
           if-no-files-found: error
       - name: Foundation native Medusa module / ORM transaction on disposable PG16
         if: github.event_name != 'workflow_dispatch'

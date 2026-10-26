@@ -24,12 +24,14 @@ if(typeof SQL!=="function")throw Error("Bun PostgreSQL driver unavailable")
 const scope = (process.env.PG_MFA_TEST_SCOPE ||
   process.argv.slice(2).find(arg => arg.startsWith("--scope="))?.split("=")[1] ||
   "all").toLowerCase()
-if (!["all", "mfa", "verification", "b02", "b04", "b04-ui", "b05-ui"].includes(scope))
+if (!["all", "mfa", "verification", "b02", "b04", "b04-ui", "b05-ui", "b06-ui"].includes(scope))
   throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b02, b04, b04-ui, b05-ui`)
 if (scope === "b04-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B04_UI_DISPATCH_SCOPE !== "b04-ui"))
   throw Error("REFUSED: B04-UI requires explicit workflow_dispatch scope=b04-ui")
 if (scope === "b05-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B05_UI_DISPATCH_SCOPE !== "b05-ui"))
   throw Error("REFUSED: B05-UI requires explicit workflow_dispatch scope=b05-ui")
+if (scope === "b06-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B06_UI_DISPATCH_SCOPE !== "b06-ui"))
+  throw Error("REFUSED: B06-UI requires explicit workflow_dispatch scope=b06-ui")
 
 const admin=new SQL(adminUrl.toString())
 const dbName="mfa_cli_ci_"+randomBytes(8).toString("hex")
@@ -147,6 +149,23 @@ async function run(){
         process.stdout.write(output + "\n")
         if (browser.error || browser.status !== 0) throw Error("B05-UI failed; sanitized evidence only; no retry")
         assert.ok(output.includes("PASS B05-UI real Chrome membership listing/refresh"), "Missing B05-UI evidence")
+      }
+
+      if (scope === "b06-ui") {
+        const suffix=randomBytes(8).toString('hex')
+        const b06Env={...nativeEnv,B06_EMAIL_A:`b06-a-${suffix}@example.invalid`,B06_EMAIL_B:`b06-b-${suffix}@example.invalid`,B06_PASSWORD_A:randomBytes(32).toString('base64url'),B06_PASSWORD_B:randomBytes(32).toString('base64url')}
+        const invoke=(script:string,env:NodeJS.ProcessEnv,activation=false)=>{
+          const child=spawnSync(activation?'node':process.execPath,activation?['-r','ts-node/register',script]:['run','medusa','exec',script],{cwd:process.cwd(),env,encoding:'utf8',timeout:360000,maxBuffer:4*1024*1024})
+          const output=String(child.stdout??'').split('\n').filter(line=>/^(B06_UI_EVIDENCE |PASS B06)/.test(line)).join('\n')
+          process.stdout.write(output+'\n')
+          if(child.error||child.status!==0)throw Error('B06 stage failed: '+(activation?'activation':env.B06_PREPARE==='true'?'synthetic setup':'Chrome acceptance')+'; sanitized evidence only; no retry')
+          return output
+        }
+        invoke('./integration-tests/postgres/b06-roles.exec.ts',{...b06Env,B06_PREPARE:'true'})
+        // Same database, no consumer during the existing signed activation CAS.
+        invoke('./integration-tests/postgres/b06-activation.pg16.ts',b06Env,true)
+        const output=invoke('./integration-tests/postgres/b06-roles.exec.ts',{...b06Env,DOGRUADRES_MFA_SETTINGS_ENABLED:'true',DOGRUADRES_MFA_ENROLLMENT_ENABLED:'true',DOGRUADRES_MFA_RUNTIME_ENABLED:'true'})
+        assert.ok(output.includes('PASS B06-UI real Chrome/native MFA/HTTP/SQL'))
       }
 
       if (scope === "all" || scope === "mfa") {
