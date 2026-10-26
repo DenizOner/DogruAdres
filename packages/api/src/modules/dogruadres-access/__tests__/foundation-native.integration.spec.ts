@@ -266,7 +266,7 @@ moduleIntegrationTestRunner<AccessService>({
 
       await q("insert into da_person(id, disabled_at, deleted_at) values (?, null, null) on conflict (id) do nothing", [staffPersonId])
       await q("insert into da_person_security(person_id, epoch) values (?, 0) on conflict (person_id) do nothing", [staffPersonId])
-      await q("insert into da_actor_mapping(id, actor_type, actor_id, person_id, created_by_actor_type, created_by_actor_id) values (?, 'user', ?, ?, 'user', ?) on conflict (actor_type, actor_id) do nothing",
+      await q("insert into da_actor_mapping(id, actor_type, actor_id, person_id, created_by_actor_type, created_by_actor_id) values (?, 'user', ?, ?, 'user', ?) on conflict (id) do nothing",
         ["map_" + staffUserId, staffUserId, staffPersonId, staffUserId])
       await q("insert into da_login_binding(auth_identity_id, person_id, actor_type, actor_id, verified_at, revoked_at) values (?, ?, 'user', ?, now(), null) on conflict (actor_type, actor_id) do nothing",
         [staffAuthId, staffPersonId, staffUserId])
@@ -284,7 +284,7 @@ moduleIntegrationTestRunner<AccessService>({
       const authId = "auth_" + actorId
       await q("insert into da_person(id, disabled_at, deleted_at) values (?, null, null) on conflict (id) do nothing", [personId])
       await q("insert into da_person_security(person_id, epoch) values (?, 0) on conflict (person_id) do nothing", [personId])
-      await q("insert into da_actor_mapping(id, actor_type, actor_id, person_id, created_by_actor_type, created_by_actor_id) values (?, ?, ?, ?, 'system', 'root') on conflict (actor_type, actor_id) do nothing",
+      await q("insert into da_actor_mapping(id, actor_type, actor_id, person_id, created_by_actor_type, created_by_actor_id) values (?, ?, ?, ?, 'system', 'root') on conflict (id) do nothing",
         ["map_" + actorId, actorType, actorId, personId])
       await q("insert into da_login_binding(auth_identity_id, person_id, actor_type, actor_id, verified_at, revoked_at) values (?, ?, ?, ?, now(), null) on conflict (actor_type, actor_id) do nothing",
         [authId, personId, actorType, actorId])
