@@ -160,10 +160,12 @@ async function run(){
           const smtpOutput = String(smtp.stdout ?? "")
           for (const marker of ["PASS SMTP native boot:", "PASS SMTP native event:", "PASS SMTP native runtime:",
             "PASS SMTP native failures:", "PASS SMTP native TLS:", "PASS SMTP native local-event failure:", "PASS SMTP native logs:", "PASS SMTP verification origin:",
-            "PASS verification HTTP GET:", "PASS verification HTTP negatives:", "PASS verification HTTP POST:", "PASS verification HTTP privacy:", "PASS verification scope:"])
-            assert.ok(smtpOutput.includes(marker), "Missing native SMTP acceptance marker")
+            "PASS verification HTTP GET:", "PASS verification HTTP negatives:",
+            "PASS browser Next middleware:", "PASS browser token preservation:", "PASS browser native GET inspection:", "PASS browser explicit confirmation:", "PASS browser replay denial:", "PASS browser privacy:",
+            "PASS verification HTTP POST:", "PASS verification HTTP privacy:", "PASS verification scope:"])
+            assert.ok(smtpOutput.includes(marker), "Missing native SMTP acceptance marker: " + marker)
           // Only fixed acceptance markers are published, never transport/message/secret data.
-          process.stdout.write(smtpOutput.split("\n").filter(line => /^(PASS|OBSERVED) (SMTP|verification) /.test(line)).join("\n") + "\n")
+          process.stdout.write(smtpOutput.split("\n").filter(line => /^(PASS|OBSERVED) (SMTP|verification|browser) /.test(line)).join("\n") + "\n")
         } finally {
           for (const file of readdirSync(smtpTemp)) unlinkSync(join(smtpTemp, file))
           rmdirSync(smtpTemp)

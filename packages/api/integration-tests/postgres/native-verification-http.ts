@@ -6,6 +6,7 @@ import { dirname, join } from "node:path"
 import { ApiLoader, expressLoader } from "@medusajs/framework/http"
 import { ContainerRegistrationKeys, getResolvedPlugins } from "@medusajs/framework/utils"
 import type { MedusaContainer } from "@medusajs/framework/types"
+import { verifyNativeBrowser } from "./native-verification-browser"
 
 // Reuse Medusa's installed Express dependency; do not add a project dependency.
 const express = require(require.resolve("express", { paths: [require.resolve("@medusajs/medusa/package.json")] }))
@@ -55,7 +56,18 @@ export async function verifyNativeHttp(container: MedusaContainer, message: stri
   try {
     // Same framework entrypoint primitives and source directories used by Medusa's
     // real API loader. No handler imports, fake request/response or bypass middleware.
-    app.use((req: any, _res, next) => { req.scope = container.createScope(); req.requestId = "synthetic-verification"; next() })
+    app.use((req: any, res: any, next: any) => {
+      res.setHeader("Access-Control-Allow-Origin", "*")
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept")
+      if (req.method === "OPTIONS") {
+        res.status(204).end()
+        return
+      }
+      req.scope = container.createScope()
+      req.requestId = "synthetic-verification"
+      next()
+    })
     shutdown = (await expressLoader({ app, container })).shutdown
     const config = container.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
     const plugins = await getResolvedPlugins(process.cwd(), config, true)
@@ -99,8 +111,20 @@ export async function verifyNativeHttp(container: MedusaContainer, message: stri
     await request("GET", token, 200, "pending")
     await unchanged(initial)
     process.stdout.write("PASS verification HTTP negatives: invalid GET/POST and prepared expired GET/POST rejected without confirmation or unintended writes\n")
-    // This is the test's explicit confirmation action; no GET can reach it.
-    await request("POST", token, 200, "confirmed")
+
+    // Real Chrome -> Next.js Storefront -> native Medusa verification -> PostgreSQL acceptance.
+    // Token is still pending; real Chrome performs the explicit single-use confirmation click.
+    await verifyNativeBrowser({
+      apiOrigin: origin,
+      token,
+      recipient,
+      identityId,
+      initialRow: initial,
+      pg,
+      logs,
+    })
+
+    // Chrome click consumed the token; verify committed state in PostgreSQL.
     const confirmed = await owned().first()
     assert.ok(confirmed.verified_at && Number.isFinite(new Date(confirmed.verified_at).getTime()), "Native POST must durably persist verified_at")
     // A separate SQL connection observes committed state, outside the Auth module's manager/cache.
@@ -111,14 +135,14 @@ export async function verifyNativeHttp(container: MedusaContainer, message: stri
     await request("GET", token, 200, "consumed")
     await request("POST", token, 409, "consumed")
     await unchanged(confirmed)
-    assert.ok(requests === 10, "Expected native HTTP acceptance request count")
+    assert.ok(requests === 9, "Expected native HTTP acceptance request count")
     assert.ok(Number((await pg("auth_verification").count("*").first())!.count) === verificationCount, "HTTP inspection/confirmation must not create extra verification records")
     assert.ok(JSON.stringify(await pg("auth_identity").orderBy("id")) === authBefore && JSON.stringify(await pg("provider_identity").orderBy("id")) === providersBefore, "HTTP verification changed identities/provider mappings")
     assert.ok(JSON.stringify(await pg("notification").orderBy("id")) === notificationsBefore, "HTTP inspection/confirmation sent another notification")
     assert.ok(JSON.stringify(await verificationBoundarySnapshot(pg)) === JSON.stringify(protectedBefore), "HTTP verification mutated domain identities/organizations/memberships/grants/audit")
     assert.ok([token, tokenHash, recipient, identityId, initial.id].every(secret => logs.every(line => !line.includes(secret))), "Private verification data entered native test logs")
     process.stdout.write("PASS verification HTTP POST: explicit confirmation, committed PostgreSQL verified_at readback, consumed GET and replay rejection, stable identity/domain/notification snapshots\n")
-    process.stdout.write("PASS verification HTTP privacy: ten real requests, no bearer/recipient/internal IDs in response or test logs; NODE_ENV=test HTTP logger disabled by framework\n")
+    process.stdout.write("PASS verification HTTP privacy: nine real requests, no bearer/recipient/internal IDs in response or test logs; NODE_ENV=test HTTP logger disabled by framework\n")
   } finally {
     server.closeAllConnections()
     if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()))
