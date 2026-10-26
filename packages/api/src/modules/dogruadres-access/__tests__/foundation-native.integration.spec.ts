@@ -242,22 +242,32 @@ moduleIntegrationTestRunner<AccessService>({
     })
 
     async function ensureSecurityTables() {
-      const tables = await q("select to_regclass('da_person_security') as b")
+      const tables = await q("select to_regclass('da_verified_actor_binding') as b")
       if (tables[0]?.b) {
         return
       }
       for (const MigrationCtor of [Migration20261020230000, Migration20261021231000, Migration20261021233000]) {
-        const migration = Reflect.construct(MigrationCtor, []) as any
-        const statements: string[] = []
-        migration.addSql = (sql: string) => statements.push(sql)
-        await migration.up()
-        for (const statement of statements) await q(statement)
+        try {
+          const migration = Reflect.construct(MigrationCtor, []) as any
+          const statements: string[] = []
+          migration.addSql = (sql: string) => statements.push(sql)
+          await migration.up()
+          for (const statement of statements) {
+            try {
+              await q(statement)
+            } catch (err: any) {
+              if (!err.message?.includes("already exists")) throw err
+            }
+          }
+        } catch (e: any) {
+          // ignore already existing structures
+        }
       }
     }
 
     async function setupStaffSession() {
       await ensureSecurityTables()
-      const staffToken = "staff_token_" + randomBytes(16).toString("hex").padEnd(43, "x").slice(0, 43)
+      const staffToken = randomBytes(32).toString("base64url")
       const staffHash = digest(staffToken)
       const staffPersonId = "daprs_staff_" + randomBytes(6).toString("hex")
       const staffUserId = "usr_staff_" + randomBytes(6).toString("hex")
@@ -334,6 +344,7 @@ moduleIntegrationTestRunner<AccessService>({
       const conflictMember = "mem_conf_" + randomBytes(6).toString("hex")
       const otherUser = "usr_other_" + randomBytes(6).toString("hex")
 
+      await q("insert into da_person(id, disabled_at, deleted_at) values (?, null, null) on conflict (id) do nothing", [personConflictB])
       await createVerifiedActor("member", conflictMember, personConflictA)
       await q(`insert into da_verified_actor_binding(id, person_id, auth_identity_id, actor_type, actor_id, verified_at, proof_reference, revoked_at)
                values (?, ?, ?, 'member', ?, now(), 'proof-conflict', null)`,
@@ -423,7 +434,7 @@ moduleIntegrationTestRunner<AccessService>({
       await q("insert into da_actor_mapping(id, actor_type, actor_id, person_id, created_by_actor_type, created_by_actor_id) values (?, 'member', ?, ?, 'system', 'root')",
         ["map_mem_" + raceMember, raceMember, personOwner])
 
-      const unlinkToken = "unlink_token_" + randomBytes(16).toString("hex").padEnd(43, "y").slice(0, 43)
+      const unlinkToken = randomBytes(32).toString("base64url")
       const unlinkHash = digest(unlinkToken)
       await q(`insert into da_browser_session(id, person_id, auth_identity_id, actor_type, actor_id, epoch, csrf_hash, status, created_at, last_activity_at, last_strong_auth_at)
                values (?, ?, ?, 'user', 'usr_dummy_'||?, 0, 'test_csrf', 'active', now(), now(), now())`,
