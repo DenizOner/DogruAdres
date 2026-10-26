@@ -76,11 +76,19 @@ export default async function({container}:ExecArgs){
     assert.equal((await call("shared contact grants no Customer scope","/personal/contexts?type=customer",{cookie})).status,403)
     const validated=await auth.authenticate("emailpass",{body:{email:secondaryEmail,password:secondaryPassword}})
     assert.ok(validated.success&&validated.authIdentity?.id===bid)
-    const link=await call("foreign credential link blocked by primary strong-auth prerequisite","/personal/links",{method:"POST",cookie,csrf:csrf_token,body:{action:"begin",actor_type:"customer",email:secondaryEmail,password:secondaryPassword}})
-    assert.equal(link.status,403)
-    assert.equal((await link.json() as any).message,"Recent strong authentication required")
-    report.foreignOwnership="NOT TESTED: native secondary credentials independently valid, but zero-factor authorization cannot satisfy recent strong primary authentication; ownership predicate not reached"
-    assert.equal(await count("da_actor_link_intent"),0)
+    await pg.query("update da_browser_session set last_strong_auth_at=now() where id=$1",[sessionId])
+    const beginRes=await call("begin foreign credential link","/personal/links",{method:"POST",cookie,csrf:csrf_token,body:{action:"begin",actor_type:"customer",email:secondaryEmail,password:secondaryPassword}})
+    assert.equal(beginRes.status,202)
+    const {intent,challenge_required}=await beginRes.json() as any
+    assert.ok(typeof intent==="string"&&intent.length===43&&challenge_required===false)
+    assert.equal(await count("da_actor_link_intent"),1)
+    const completeRes=await call("complete foreign credential link denied by ownership","/personal/links",{method:"POST",cookie,csrf:csrf_token,body:{action:"complete",intent}})
+    assert.equal(completeRes.status,403)
+    assert.equal((await completeRes.json() as any).message,"Account operation denied")
+    const intentRow=(await rows("select attempts,consumed_at is not null consumed,auth_identity_id=$1 correct_auth from da_actor_link_intent where session_id=$2",[bid,sessionId]))[0]
+    assert.deepEqual(intentRow,{attempts:1,consumed:false,correct_auth:true})
+    assert.equal(await count("da_actor_link_intent"),1)
+    assert.equal(await count("da_verified_actor_binding"),0)
     assert.equal(await bindingSnapshot(),originalBindings)
     // Native module update; never restore or alter any preserved actor.
     await foundation.updatePeople({id:persons[0].id,disabled_at:new Date()})
@@ -88,13 +96,13 @@ export default async function({container}:ExecArgs){
     const exact=(await rows("select person_id=$2 correct_person,status,auth_identity_id=$3 correct_identity from da_browser_session where id=$1",[sessionId,persons[0].id,aid]))[0]
     assert.deepEqual(exact,{correct_person:true,status:"revoked",correct_identity:true})
     assert.equal(await bindingSnapshot(),originalBindings)
-    const after=await snapshot(),allowed=new Set(["da_person","da_person_security","da_browser_session","da_native_credential","da_login_attempt","da_audit_event","da_security_outbox"])
+    const after=await snapshot(),allowed=new Set(["da_person","da_person_security","da_browser_session","da_native_credential","da_login_attempt","da_audit_event","da_security_outbox","da_actor_link_intent"])
     const changed=Object.keys(before).filter(t=>JSON.stringify(before[t])!==JSON.stringify(after[t]))
     assert.ok(changed.every(t=>allowed.has(t)),"Unexpected table writes: "+changed.filter(t=>!allowed.has(t)).join(","))
-    for(const [table,n] of Object.entries({da_person:2,user:1,customer:1,auth_identity:2,provider_identity:2,da_actor_mapping:2,da_login_binding:2,da_browser_session:1,da_native_credential:1,da_actor_link_intent:0,da_verified_actor_binding:0,da_actor_credential:0,auth_mfa_factor:0,auth_mfa_recovery_code:0,da_organization:0,da_organization_membership:0,da_platform_staff_grant:0,da_machine_grant:0}))assert.equal(await count(table),n,"Fixture cap/invariant: "+table)
+    for(const [table,n] of Object.entries({da_person:2,user:1,customer:1,auth_identity:2,provider_identity:2,da_actor_mapping:2,da_login_binding:2,da_browser_session:1,da_native_credential:1,da_actor_link_intent:1,da_verified_actor_binding:0,da_actor_credential:0,auth_mfa_factor:0,auth_mfa_recovery_code:0,da_organization:0,da_organization_membership:0,da_platform_staff_grant:0,da_machine_grant:0}))assert.equal(await count(table),n,"Fixture cap/invariant: "+table)
     assert.equal((await rows("select count(*)::int n from da_person where disabled_at is not null"))[0].n,1)
     assert.equal((await rows("select count(*)::int n from da_audit_event where action='identity.actor_linked'"))[0].n,0)
-    report.checks={distinctPersons:true,sharedActorContact:true,distinctProviderEmails:true,canonicalBindingsUnchanged:true,noCustomerAccess:true,noExtraSession:true,exactRevokedSession:exact,zeroOrganizationsMembershipsGrantsFactors:true,changedTables:changed,unchangedTables:Object.keys(before).length-changed.length}
+    report.checks={distinctPersons:true,sharedActorContact:true,distinctProviderEmails:true,canonicalBindingsUnchanged:true,noCustomerAccess:true,foreignLinkDenied:true,singlePendingIntent:true,noExtraSession:true,exactRevokedSession:exact,zeroOrganizationsMembershipsGrantsFactors:true,changedTables:changed,unchangedTables:Object.keys(before).length-changed.length}
     assert.deepEqual(await rows("select to_jsonb(p)-'disabled_at'-'updated_at' stable from da_person p order by id"),personSnapshot)
     const audit=await rows("select action,actor_person_id=$1 correct_person,target_id=$2 correct_session from da_audit_event",[persons[0].id,sessionId])
     assert.deepEqual(audit,[{action:"session.created",correct_person:true,correct_session:true}])
@@ -104,8 +112,7 @@ export default async function({container}:ExecArgs){
     report.sessionCorrelation=createHash("sha256").update(sessionId).digest("hex").slice(0,16)
     report.counts=Object.fromEntries(await Promise.all(["da_person","auth_identity","da_actor_mapping","da_login_binding","da_browser_session","da_native_credential","da_actor_link_intent","da_login_attempt","da_audit_event","da_security_outbox"].map(async t=>[t,await count(t)])))
     console.log("B02_EVIDENCE "+JSON.stringify(report))
-    console.log("PASS B02 bounded HTTP/SQL execution: duplicate/forged-email and Customer denial; disabled Person 401 and durable revoked; fixture caps and mapping conservation")
-    console.log("BLOCKED B02 foreign-ownership predicate: recent strong primary authentication unavailable under zero-factor scope")
+    console.log("PASS B02 bounded HTTP/SQL execution: duplicate/forged-email and Customer denial; foreign-owned linkage denial with single unconsumed intent; disabled Person 401 and durable revoked; fixture caps and mapping conservation")
   }catch(error){
     report.execution="FAILED; no retry"
     report.errorType=error instanceof Error?error.name:"UnknownError"
