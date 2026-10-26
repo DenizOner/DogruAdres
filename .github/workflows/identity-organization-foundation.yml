@@ -239,6 +239,7 @@ jobs:
           PG_MFA_TEST_SCOPE: verification
         run: bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts
       - name: B02-only native HTTP and SQL negatives
+        if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b02'
         working-directory: packages/api
         timeout-minutes: 7
         env:
@@ -250,7 +251,7 @@ jobs:
           set -o pipefail
           bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts | tee "$RUNNER_TEMP/b02-evidence.log"
       - name: Preserve sanitized B02 execution evidence
-        if: always()
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.scope == 'b02'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: b02-native-http-sql
