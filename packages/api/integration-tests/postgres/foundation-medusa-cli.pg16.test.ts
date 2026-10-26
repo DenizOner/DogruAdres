@@ -21,6 +21,12 @@ if(process.env.CI!=="true" ||
 const SQL=(globalThis as any).Bun?.SQL
 if(typeof SQL!=="function")throw Error("Bun PostgreSQL driver unavailable")
 
+const scope = (process.env.PG_MFA_TEST_SCOPE ||
+  process.argv.slice(2).find(arg => arg.startsWith("--scope="))?.split("=")[1] ||
+  "all").toLowerCase()
+if (!["all", "mfa", "verification"].includes(scope))
+  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification`)
+
 const admin=new SQL(adminUrl.toString())
 const dbName="mfa_cli_ci_"+randomBytes(8).toString("hex")
 const dbUrl=new URL(adminUrl)
@@ -93,72 +99,93 @@ async function run(){
       }
       // The harness readback session is a genuine foreign consumer to the child.
       await target.close()
-      // Reuse this already migrated disposable CI database; no additional DB/resource.
-      const fixture=spawnSync("node",["-r","ts-node/register","./integration-tests/postgres/native-fixture-entry.pg16.ts"],{
-        cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
-      })
-      if(fixture.error||fixture.status!==0)throw Error("R0-D native entry CI failed: "+
-        sanitized(String(fixture.error??"")+String(fixture.stderr??"")+String(fixture.stdout??"")))
-      assert.ok(String(fixture.stdout).includes("PASS R0-D native entry"))
-      process.stdout.write(String(fixture.stdout))
-      // TEST_FIXTURE / NOT_AUTHORITY: same existing disposable DB, no operator custody.
-      const r1=spawnSync("node",["-r","ts-node/register","./integration-tests/postgres/r1-activation.pg16.ts"],{
-        cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
-      })
-      if(r1.error||r1.status!==0)throw Error("R1 TEST_FIXTURE failed: "+sanitized(String(r1.error??"")+String(r1.stderr??"")+String(r1.stdout??"")))
-      assert.ok(String(r1.stdout).includes('PASS R1 TEST_FIXTURE / NOT_AUTHORITY'))
-      process.stdout.write(String(r1.stdout))
-      const native=spawnSync(process.execPath,["run","medusa","exec",
-        "./integration-tests/postgres/native-mfa-lifecycle.exec.ts"],{
-        cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
-      })
-      if(native.error||native.status!==0)
-        throw Error("Native Medusa MFA integration not accepted: "+
-          String(native.error??("exit "+native.status))+"; "+
-          sanitized(String(native.stderr??"")+"\n"+String(native.stdout??"")))
-      const passed=String(native.stdout??"")
-      for(const evidence of [
-        "PASS Medusa native MFA: synthetic password proof, TOTP start and verify",
-        "PASS Medusa native MFA: recovery code consumed exactly once",
-        "PASS Medusa native MFA: enabled factor cannot be disabled without fresh challenge",
-        "PASS Medusa native MFA challenge: TOTP, owner separation and completed-challenge replay rejection",
-        "PASS Medusa native MFA challenge: recovery code consumed and denied on a fresh challenge",
-        "PASS Medusa native MFA challenge: five failed attempts lock the challenge",
-      ])assert.ok(passed.includes(evidence),"Missing real native MFA acceptance evidence")
-      process.stdout.write("PASS exact-DB Medusa native MFA: TOTP, recovery, native challenges and attempt cap\n")
-      // Reuse this same disposable DB and real Medusa CLI boot for #241.
-      // The certificate is a temporary test CA; production TLS verification stays on.
-      const smtpTemp = mkdtempSync(join(tmpdir(), "dogruadres-smtp-ci-"))
-      try {
-        for (const name of ["trusted", "untrusted"]) {
-          const certificate = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes",
-            "-keyout", join(smtpTemp, name + ".key"), "-out", join(smtpTemp, name + ".crt"),
-            "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1"],
-            { encoding: "utf8", timeout: 15000 })
-          assert.ok(!certificate.error && certificate.status === 0, "Synthetic TLS certificate generation failed")
-        }
-        const smtp = spawnSync(process.execPath, ["run", "medusa", "exec",
-          "./integration-tests/postgres/native-smtp-notification.exec.ts"], {
-          cwd: process.cwd(), encoding: "utf8", timeout: 120000, maxBuffer: 2 * 1024 * 1024,
-          env: { ...nativeEnv, NODE_EXTRA_CA_CERTS: join(smtpTemp, "trusted.crt"),
-            SMTP_TEST_CERT: join(smtpTemp, "trusted.crt"), SMTP_TEST_KEY: join(smtpTemp, "trusted.key"),
-            SMTP_TEST_UNTRUSTED_CERT: join(smtpTemp, "untrusted.crt"), SMTP_TEST_UNTRUSTED_KEY: join(smtpTemp, "untrusted.key") },
+
+      if (scope === "all" || scope === "mfa") {
+        // Reuse this already migrated disposable CI database; no additional DB/resource.
+        const fixture=spawnSync("node",["-r","ts-node/register","./integration-tests/postgres/native-fixture-entry.pg16.ts"],{
+          cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
         })
-        if (smtp.error || smtp.status !== 0) throw Error("Native SMTP notification integration failed: " +
-          sanitized(String(smtp.error ?? "") + String(smtp.stderr ?? "") + String(smtp.stdout ?? "")))
-        const smtpOutput = String(smtp.stdout ?? "")
-        for (const marker of ["PASS SMTP native boot:", "PASS SMTP native event:", "PASS SMTP native runtime:",
-          "PASS SMTP native failures:", "PASS SMTP native TLS:", "PASS SMTP native local-event failure:", "PASS SMTP native logs:", "PASS SMTP verification origin:",
-          "PASS verification HTTP GET:", "PASS verification HTTP negatives:", "PASS verification HTTP POST:", "PASS verification HTTP privacy:", "PASS verification scope:"])
-          assert.ok(smtpOutput.includes(marker), "Missing native SMTP acceptance marker")
-        // Only fixed acceptance markers are published, never transport/message/secret data.
-        process.stdout.write(smtpOutput.split("\n").filter(line => /^(PASS|OBSERVED) (SMTP|verification) /.test(line)).join("\n") + "\n")
-      } finally {
-        for (const file of readdirSync(smtpTemp)) unlinkSync(join(smtpTemp, file))
-        rmdirSync(smtpTemp)
+        if(fixture.error||fixture.status!==0)throw Error("R0-D native entry CI failed: "+
+          sanitized(String(fixture.error??"")+String(fixture.stderr??"")+String(fixture.stdout??"")))
+        assert.ok(String(fixture.stdout).includes("PASS R0-D native entry"))
+        process.stdout.write(String(fixture.stdout))
+        // TEST_FIXTURE / NOT_AUTHORITY: same existing disposable DB, no operator custody.
+        const r1=spawnSync("node",["-r","ts-node/register","./integration-tests/postgres/r1-activation.pg16.ts"],{
+          cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
+        })
+        if(r1.error||r1.status!==0)throw Error("R1 TEST_FIXTURE failed: "+sanitized(String(r1.error??"")+String(r1.stderr??"")+String(r1.stdout??"")))
+        assert.ok(String(r1.stdout).includes('PASS R1 TEST_FIXTURE / NOT_AUTHORITY'))
+        process.stdout.write(String(r1.stdout))
+        const native=spawnSync(process.execPath,["run","medusa","exec",
+          "./integration-tests/postgres/native-mfa-lifecycle.exec.ts"],{
+          cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
+        })
+        if(native.error||native.status!==0)
+          throw Error("Native Medusa MFA integration not accepted: "+
+            String(native.error??("exit "+native.status))+"; "+
+            sanitized(String(native.stderr??"")+"\n"+String(native.stdout??"")))
+        const passed=String(native.stdout??"")
+        for(const evidence of [
+          "PASS Medusa native MFA: synthetic password proof, TOTP start and verify",
+          "PASS Medusa native MFA: recovery code consumed exactly once",
+          "PASS Medusa native MFA: enabled factor cannot be disabled without fresh challenge",
+          "PASS Medusa native MFA challenge: TOTP, owner separation and completed-challenge replay rejection",
+          "PASS Medusa native MFA challenge: recovery code consumed and denied on a fresh challenge",
+          "PASS Medusa native MFA challenge: five failed attempts lock the challenge",
+        ])assert.ok(passed.includes(evidence),"Missing real native MFA acceptance evidence")
+        process.stdout.write("PASS exact-DB Medusa native MFA: TOTP, recovery, native challenges and attempt cap\n")
+      }
+
+      if (scope === "all" || scope === "verification") {
+        // Reuse this same disposable DB and real Medusa CLI boot for #241.
+        // The certificate is a temporary test CA; production TLS verification stays on.
+        const smtpTemp = mkdtempSync(join(tmpdir(), "dogruadres-smtp-ci-"))
+        try {
+          for (const name of ["trusted", "untrusted"]) {
+            const certificate = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes",
+              "-keyout", join(smtpTemp, name + ".key"), "-out", join(smtpTemp, name + ".crt"),
+              "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1"],
+              { encoding: "utf8", timeout: 15000 })
+            assert.ok(!certificate.error && certificate.status === 0, "Synthetic TLS certificate generation failed")
+          }
+          const smtp = spawnSync(process.execPath, ["run", "medusa", "exec",
+            "./integration-tests/postgres/native-smtp-notification.exec.ts"], {
+            cwd: process.cwd(), encoding: "utf8", timeout: 120000, maxBuffer: 2 * 1024 * 1024,
+            env: { ...nativeEnv, NODE_EXTRA_CA_CERTS: join(smtpTemp, "trusted.crt"),
+              SMTP_TEST_CERT: join(smtpTemp, "trusted.crt"), SMTP_TEST_KEY: join(smtpTemp, "trusted.key"),
+              SMTP_TEST_UNTRUSTED_CERT: join(smtpTemp, "untrusted.crt"), SMTP_TEST_UNTRUSTED_KEY: join(smtpTemp, "untrusted.key") },
+          })
+          if (smtp.error || smtp.status !== 0) throw Error("Native SMTP notification integration failed: " +
+            sanitized(String(smtp.error ?? "") + String(smtp.stderr ?? "") + String(smtp.stdout ?? "")))
+          const smtpOutput = String(smtp.stdout ?? "")
+          for (const marker of ["PASS SMTP native boot:", "PASS SMTP native event:", "PASS SMTP native runtime:",
+            "PASS SMTP native failures:", "PASS SMTP native TLS:", "PASS SMTP native local-event failure:", "PASS SMTP native logs:", "PASS SMTP verification origin:",
+            "PASS verification HTTP GET:", "PASS verification HTTP negatives:", "PASS verification HTTP POST:", "PASS verification HTTP privacy:", "PASS verification scope:"])
+            assert.ok(smtpOutput.includes(marker), "Missing native SMTP acceptance marker")
+          // Only fixed acceptance markers are published, never transport/message/secret data.
+          process.stdout.write(smtpOutput.split("\n").filter(line => /^(PASS|OBSERVED) (SMTP|verification) /.test(line)).join("\n") + "\n")
+        } finally {
+          for (const file of readdirSync(smtpTemp)) unlinkSync(join(smtpTemp, file))
+          rmdirSync(smtpTemp)
+        }
+      }
+
+      if (scope === "verification") {
+        const audit = new SQL(dbUrl.toString())
+        try {
+          const authIdentities = Number((await audit.unsafe("select count(*)::int as n from auth_identity"))[0].n)
+          assert.equal(authIdentities, 1, `Scope violation: verification run expected 1 AuthIdentity in database, found ${authIdentities}`)
+          const persons = Number((await audit.unsafe("select count(*)::int as n from da_person"))[0].n)
+          assert.equal(persons, 0, `Scope violation: verification run expected 0 da_person rows, found ${persons}`)
+          const orgs = Number((await audit.unsafe("select count(*)::int as n from da_organization"))[0].n)
+          assert.equal(orgs, 0, `Scope violation: verification run expected 0 da_organization rows, found ${orgs}`)
+          process.stdout.write("PASS exact-DB scope: exactly 1 AuthIdentity and 0 domain fixture records across disposable database\n")
+        } finally {
+          await audit.close()
+        }
       }
     }finally{
-      await target.close()
+      try { await target.close() } catch {}
     }
   }finally{
     try{
