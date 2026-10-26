@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
-function findChromeBinary(): string {
+export function findChromeBinary(): string {
   if (process.env.CHROME_BIN && existsSync(process.env.CHROME_BIN)) return process.env.CHROME_BIN
   const candidates = process.platform === "win32"
     ? [
@@ -43,7 +43,7 @@ export function getFreePort(): Promise<number> {
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-async function until<T>(check: () => Promise<T | false | null | undefined>, timeoutMs = 30000, desc = "condition"): Promise<T> {
+export async function until<T>(check: () => Promise<T | false | null | undefined>, timeoutMs = 30000, desc = "condition"): Promise<T> {
   const deadline = Date.now() + timeoutMs
   let lastError: unknown
   while (Date.now() < deadline) {
@@ -58,7 +58,7 @@ async function until<T>(check: () => Promise<T | false | null | undefined>, time
   throw Error(`Timeout waiting for ${desc} (${timeoutMs}ms)${lastError ? `: ${lastError}` : ""}`)
 }
 
-function killProcess(proc: ChildProcess | undefined) {
+export function killProcess(proc: ChildProcess | undefined) {
   if (!proc || proc.killed) return
   try {
     if (process.platform === "win32" && proc.pid) {

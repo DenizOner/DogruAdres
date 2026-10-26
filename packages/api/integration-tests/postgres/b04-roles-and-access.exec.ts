@@ -9,8 +9,12 @@ import type { ExecArgs, IAuthModuleService, IUserModuleService } from "@medusajs
 import { Client } from "@medusajs/framework/pg"
 import Foundation from "../../src/modules/dogruadres-access/service"
 import { createPersonalHttpApp } from "../../src/scripts/personal-http-runtime"
+import { verifyB04Ui } from "./b04-ui-browser"
 
 export default async function({ container }: ExecArgs) {
+  const ui = process.env.PG_MFA_TEST_SCOPE === "b04-ui"
+  if (ui) assert.ok(process.env.GITHUB_EVENT_NAME === "workflow_dispatch" && process.env.B04_UI_DISPATCH_SCOPE === "b04-ui",
+    "REFUSED: B04-UI requires explicit workflow dispatch")
   const u = new URL(process.env.DATABASE_URL ?? "postgres://invalid/invalid")
   assert.ok(process.env.CI === "true" && process.env.PG_MFA_TEST_SENTINEL === "mfa-pg16-disposable-ci-v1" &&
     u.protocol === "postgres:" && u.hostname === "127.0.0.1" && u.port === "5432" && u.username === "mfa_test" &&
@@ -18,7 +22,7 @@ export default async function({ container }: ExecArgs) {
     process.env.PG_MFA_NATIVE_TEST_DATABASE === u.pathname.slice(1) && process.env.DOGRUADRES_IDENTITY_ENABLED === "true" &&
     process.env.DOGRUADRES_MFA_RUNTIME_ENABLED === "false", "REFUSED: wrong disposable B04 environment")
   const pg = new Client({ connectionString: u.toString() }); await pg.connect()
-  const report: any = { scope: "B04 native HTTP/SQL only; no Chrome", http: [], checks: {}, acceptance: "OPEN" }
+  const report: any = { scope: ui ? "B04 real Chrome UI/HTTP/SQL" : "B04 native HTTP/SQL only; no Chrome", http: [], checks: {}, acceptance: "OPEN" }
   let http: Awaited<ReturnType<typeof createPersonalHttpApp>> | undefined, server: any
   const rows = async (q: string, p: any[] = []) => (await pg.query(q, p)).rows
   const count = async (t: string) => Number((await rows(`select count(*)::int n from "${t}"`))[0].n)
@@ -104,6 +108,33 @@ export default async function({ container }: ExecArgs) {
     http = await createPersonalHttpApp(container)
     server = await new Promise<any>(resolve => { const s = http!.app.listen(0, "127.0.0.1", () => resolve(s)) })
     const origin = "http://127.0.0.1:" + server.address().port
+
+    if (ui) {
+      // The shipped UI submits same-origin credentials; configure its actual
+      // ephemeral listener before the first browser request, without proxying.
+      process.env.DOGRUADRES_PUBLIC_ORIGIN = origin
+      await verifyB04Ui({ origin, email: emailB, password: passwordB, personId: personB.id, org1, org2, report,
+        revoke: async () => {
+          const changed = await foundation.changeMembership({ organization_id: org1.id, membership_id: mAdminB.id,
+            actor_person_id: personA.id, actor_type: "user", actor_id: userA.id, status: "revoked" })
+          assert.equal(changed.status, "revoked", "Native revoke failed")
+        },
+        suspend: async () => {
+          const [changed] = await foundation.updateOrganizations([{ id: org2.id, status: "suspended" }])
+          assert.equal(changed.status, "suspended", "Native suspend failed")
+        },
+      })
+      assert.deepEqual((await rows("select role,status,protected_owner,revoked_at is not null has_revoked_at from da_organization_membership where id=$1", [mAdminB.id]))[0],
+        { role: "admin", status: "revoked", protected_owner: false, has_revoked_at: true }, "Revoked Admin SQL invariant")
+      assert.deepEqual((await rows("select role,status,protected_owner,revoked_at is null no_revoked_at from da_organization_membership where id=$1", [mMemberB.id]))[0],
+        { role: "member", status: "active", protected_owner: false, no_revoked_at: true }, "Unaffected Member SQL invariant")
+      assert.equal((await rows("select status from da_organization where id=$1", [org1.id]))[0].status, "active")
+      assert.equal((await rows("select status from da_organization where id=$1", [org2.id]))[0].status, "suspended")
+      assert.equal(await count("da_native_credential"), 1)
+      assert.deepEqual((await rows("select person_id=$1 correct_person,auth_identity_id=$2 correct_identity,actor_type='user' and actor_id=$3 correct_actor,status from da_browser_session", [personB.id, aidB, userB.id]))[0],
+        { correct_person: true, correct_identity: true, correct_actor: true, status: "active" }, "Exact Person B session invariant")
+      assert.equal((await rows("select count(*)::int n from da_native_credential n join da_browser_session s on s.id=n.session_id where n.retired_at is null and n.expires_at>now() and s.person_id=$1", [personB.id]))[0].n, 1)
+    } else {
 
     const call = async (label: string, path: string, options: { method?: string; body?: object; cookie?: string; csrf?: string } = {}) => {
       const response = await fetch(origin + path, {
@@ -252,6 +283,7 @@ export default async function({ container }: ExecArgs) {
     const chooserAfterSuspendData = await chooserAfterSuspend.json() as any
     assert.deepEqual(chooserAfterSuspendData, { person_id: personB.id, organizations: [] })
 
+    }
     // Step 6: Verify invariants and fixture caps
     // Both protected Owners of Person A remain active and protected
     const ownersState = await rows("select organization_id, role, status, protected_owner from da_organization_membership where person_id=$1 order by organization_id", [personA.id])
@@ -279,6 +311,12 @@ export default async function({ container }: ExecArgs) {
     assert.equal(await count("da_platform_staff_grant"), 0, "Exact 0 staff grants")
     assert.equal(await count("da_machine_grant"), 0, "Exact 0 machine grants")
     assert.equal(await count("auth_mfa_factor"), 0, "Exact 0 MFA factors")
+    if (ui) {
+      assert.equal(await count("customer"), 0)
+      assert.equal(await count("da_organization_invitation"), 0)
+      assert.equal(await count("provider_identity"), 2)
+      assert.equal(await count("auth_mfa_recovery_code"), 0)
+    }
 
     // Audit and outbox integrity
     const membershipAudit = await rows(
@@ -296,6 +334,13 @@ export default async function({ container }: ExecArgs) {
       "select o.id from da_security_outbox o join da_audit_event a on a.id=o.audit_event_id where a.action='organization.membership_changed'"
     )
     assert.equal(outboxPointers.length, 1)
+    if (ui) {
+      assert.equal((await rows("select count(*)::int n from da_audit_event where action='session.created' and actor_person_id=$1 and target_id=(select id from da_browser_session)", [personB.id]))[0].n, 1)
+      assert.equal((await rows("select count(*)::int n from da_security_outbox o left join da_audit_event a on a.id=o.audit_event_id where a.id is null"))[0].n, 0)
+      report.sql = { revokedAdmin: true, activeMember: true, activeOrg1: true, suspendedOrg2: true,
+        exactActivePersonBSessionAndCredential: true, protectedOwners: true, canonicalMappings: true,
+        membershipAuditActorTarget: true, membershipOutbox: true, sessionCreatedAudit: true, noOrphanSecurityOutbox: true }
+    }
 
     const after = await snapshot()
     const allowed = new Set([
@@ -331,14 +376,14 @@ export default async function({ container }: ExecArgs) {
       "da_native_credential", "da_audit_event", "da_security_outbox",
     ].map(async t => [t, await count(t)])))
 
-    console.log("B04_EVIDENCE " + JSON.stringify(report))
-    console.log("PASS B04 bounded HTTP/SQL execution: Admin/Member role access and privilege boundaries; revoked membership 403 and chooser concealment; suspended Organization 403 and private context clearing; protected Owner conservation and audit/outbox integrity")
+    console.log((ui ? "B04_UI_EVIDENCE " : "B04_EVIDENCE ") + JSON.stringify(report))
+    console.log(ui ? "PASS B04-UI real Chrome UI/HTTP/SQL; protected Owners and fixture caps; audit/outbox; Chrome cleanup verified" : "PASS B04 bounded HTTP/SQL execution: Admin/Member role access and privilege boundaries; revoked membership 403 and chooser concealment; suspended Organization 403 and private context clearing; protected Owner conservation and audit/outbox integrity")
   } catch (error) {
     report.execution = "FAILED; no retry"
     report.errorType = error instanceof Error ? error.name : "UnknownError"
-    report.errorMessage = error instanceof Error ? error.message : String(error)
-    console.log("B04_EVIDENCE " + JSON.stringify(report))
-    throw new Error("B04 native acceptance assertion failed; see sanitized evidence: " + (error instanceof Error ? error.stack : error))
+    report.errorMessage = ui ? "B04-UI assertion failed; no retry; inspect last sanitized phase" : error instanceof Error ? error.message : String(error)
+    console.log((ui ? "B04_UI_EVIDENCE " : "B04_EVIDENCE ") + JSON.stringify(report))
+    throw new Error(ui ? "B04-UI failed; see sanitized evidence; no retry" : "B04 native acceptance assertion failed; see sanitized evidence: " + (error instanceof Error ? error.stack : error))
   } finally {
     if (server) await new Promise<void>(resolve => server.close(() => resolve()))
     await http?.close()

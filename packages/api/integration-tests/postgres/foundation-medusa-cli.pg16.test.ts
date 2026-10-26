@@ -24,8 +24,10 @@ if(typeof SQL!=="function")throw Error("Bun PostgreSQL driver unavailable")
 const scope = (process.env.PG_MFA_TEST_SCOPE ||
   process.argv.slice(2).find(arg => arg.startsWith("--scope="))?.split("=")[1] ||
   "all").toLowerCase()
-if (!["all", "mfa", "verification", "b02", "b04"].includes(scope))
-  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b02, b04`)
+if (!["all", "mfa", "verification", "b02", "b04", "b04-ui"].includes(scope))
+  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b02, b04, b04-ui`)
+if (scope === "b04-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B04_UI_DISPATCH_SCOPE !== "b04-ui"))
+  throw Error("REFUSED: B04-UI requires explicit workflow_dispatch scope=b04-ui")
 
 const admin=new SQL(adminUrl.toString())
 const dbName="mfa_cli_ci_"+randomBytes(8).toString("hex")
@@ -121,6 +123,17 @@ async function run(){
         process.stdout.write(output+"\n")
         if(b04.error||b04.status!==0)throw Error("B04 native execution failed; inspect sanitized evidence")
         assert.ok(output.includes("PASS B04 bounded HTTP/SQL execution"),"Missing B04 execution evidence")
+      }
+
+      if (scope === "b04-ui") {
+        const browser = spawnSync(process.execPath, ["run", "medusa", "exec",
+          "./integration-tests/postgres/b04-roles-and-access.exec.ts"], {
+          cwd: process.cwd(), env: nativeEnv, encoding: "utf8", timeout: 240000, maxBuffer: 2*1024*1024,
+        })
+        const output = String(browser.stdout ?? "").split("\n").filter(line => /^(B04_UI_EVIDENCE |PASS B04-UI )/.test(line)).join("\n")
+        process.stdout.write(output + "\n")
+        if (browser.error || browser.status !== 0) throw Error("B04-UI execution failed; sanitized evidence only; no retry")
+        assert.ok(output.includes("PASS B04-UI real Chrome UI/HTTP/SQL"), "Missing B04-UI evidence")
       }
 
       if (scope === "all" || scope === "mfa") {
