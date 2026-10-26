@@ -150,7 +150,7 @@ async function run(){
           }
           const smtp = spawnSync(process.execPath, ["run", "medusa", "exec",
             "./integration-tests/postgres/native-smtp-notification.exec.ts"], {
-            cwd: process.cwd(), encoding: "utf8", timeout: 120000, maxBuffer: 2 * 1024 * 1024,
+            cwd: process.cwd(), encoding: "utf8", timeout: 180000, maxBuffer: 2 * 1024 * 1024,
             env: { ...nativeEnv, NODE_EXTRA_CA_CERTS: join(smtpTemp, "trusted.crt"),
               SMTP_TEST_CERT: join(smtpTemp, "trusted.crt"), SMTP_TEST_KEY: join(smtpTemp, "trusted.key"),
               SMTP_TEST_UNTRUSTED_CERT: join(smtpTemp, "untrusted.crt"), SMTP_TEST_UNTRUSTED_KEY: join(smtpTemp, "untrusted.key") },

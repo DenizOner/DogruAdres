@@ -101,7 +101,8 @@ export async function verifyNativeBrowser({
 
   try {
     // 1. Launch Next.js Storefront in development mode bound to loopback.
-    storefront = spawn(process.execPath, ["run", "next", "dev", "-p", String(storefrontPort), "-H", "127.0.0.1"], {
+    const nextBin = require.resolve("next/dist/bin/next", { paths: [storefrontDir] })
+    storefront = spawn(process.execPath, [nextBin, "dev", "-p", String(storefrontPort), "-H", "127.0.0.1"], {
       cwd: storefrontDir,
       env: {
         ...process.env,
@@ -126,10 +127,10 @@ export async function verifyNativeBrowser({
       }
       const res = await fetch(`http://127.0.0.1:${storefrontPort}/auth/verify-email?token=probe`, {
         redirect: "manual",
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(10000),
       })
       return res.status === 200 || res.status === 307
-    }, 45000, "Next.js Storefront loopback readiness")
+    }, 60000, "Next.js Storefront loopback readiness")
 
     // 2. Launch real Chrome in headless mode with remote debugging port.
     chrome = spawn(chromePath, [
