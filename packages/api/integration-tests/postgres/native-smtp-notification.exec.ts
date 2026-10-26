@@ -11,6 +11,7 @@ import assert from "node:assert/strict"
 import subscriber from "../../src/subscribers/auth-verification-requested"
 import { encryptSmtpPassword } from "../../src/modules/dogruadres-access/smtp-crypto"
 import type DogruAdresAccessModuleService from "../../src/modules/dogruadres-access/service"
+import { verificationBoundarySnapshot, verifyNativeHttp } from "./native-verification-http"
 
 export default async function({ container }: ExecArgs) {
   const target = new URL(process.env.DATABASE_URL || "postgres://invalid/invalid")
@@ -87,6 +88,8 @@ export default async function({ container }: ExecArgs) {
     const runtime = await access.getActiveSmtpConfig()
     assert.ok(runtime.password === secret && runtime.port === port, "Runtime settings must decrypt in native Access module")
     const auth: IAuthModuleService = container.resolve(Modules.AUTH)
+    const domainBefore = await verificationBoundarySnapshot(pg)
+    const identitiesBefore = Number((await pg("auth_identity").count("*").first())!.count)
     const registration = await auth.register("emailpass", { body: { email: recipient, password: randomBytes(32).toString("base64url") } })
     assert.ok(registration.success && registration.authIdentity?.id, "Synthetic native identity registration failed")
     await requestVerificationWorkflow(container).run({ input: { auth_identity_id: registration.authIdentity!.id, entity_id: recipient, entity_type: "email", code_provider: "token" } })
@@ -96,6 +99,12 @@ export default async function({ container }: ExecArgs) {
     const delivered = await pg("notification").where({ to: recipient, status: "success" }).first()
     assert.ok(delivered.provider_id === "notification-smtp" && delivered.external_id, "Native result must retain SMTP message id")
     process.stdout.write("PASS SMTP native event: requestVerificationWorkflow -> loaded subscriber -> Notification -> TLS SMTP; one message and persisted success/external_id\n")
+
+    await verifyNativeHttp(container, messages[0], recipient, registration.authIdentity!.id)
+    assert.ok(Number((await pg("auth_identity").count("*").first())!.count) === identitiesBefore + 1 &&
+      JSON.stringify(await verificationBoundarySnapshot(pg)) === JSON.stringify(domainBefore),
+      "Verification acceptance must create exactly one native identity and preserve existing domain records")
+    process.stdout.write("PASS verification scope: exactly one new synthetic AuthIdentity; all existing domain rows unchanged\n")
 
     await pg("da_platform_smtp_settings").where({ id: "current" }).update({ from_email: "second@example.invalid", version: 2 })
     await dispatch()
