@@ -114,16 +114,17 @@ export async function verifyB04Ui(p: {
     await send("Page.reload", { ignoreCache: true })
     await scoped(p.org2, "member"); await memberConcealment()
     observation("Actual Page.reload retained Org2 URL, Member role and concealed management DOM")
-    // One native revoke; reselect through the shipped visible access-check form.
+    // Reopen Admin private content before revocation, then use actual reload
+    // for revalidation. No dependence on the 5s observer leaving a form visible.
+    phase = "admin-before-revoke"
+    await select(p.org1); await scoped(p.org1, "admin")
     phase = "revoked"
     await p.revoke()
-    await input('#select-org input[name="organization"]', p.org1.id)
-    await click("#select-org button")
+    await send("Page.reload", { ignoreCache: true })
     await network("/personal/organizations?scope=Org1", 403)
     await wait(`document.getElementById('detail').textContent===''&&document.getElementById('memberships').textContent===''&&!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})&&location.search===''`, "revoked scope private DOM removal")
-    observation("Revoked Org1 selection returned 403 and removed private detail/membership/management DOM")
+    observation("Revoked Org1 reload returned 403 and removed previously displayed private detail/membership/management DOM")
     phase = "unaffected-member"
-    await send("Page.reload", { ignoreCache: true })
     await wait(`document.querySelectorAll('#organizations button').length===1&&document.querySelector('#organizations button').textContent===${JSON.stringify(p.org2.name + " — member")}`, "chooser hides revoked Org1")
     await select(p.org2); await scoped(p.org2, "member"); await memberConcealment()
     observation("Reloaded chooser hides revoked Org1; Org2 Member access unchanged")
