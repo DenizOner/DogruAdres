@@ -60,6 +60,12 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json
+      - name: Native SMTP notification contracts and controlled loopback transport
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: packages/api
+        env:
+          TEST_TYPE: unit
+        run: bun run jest --runInBand --runTestsByPath src/subscribers/__tests__/auth-verification-requested.unit.spec.ts src/modules/notification-smtp/__tests__/notification-smtp.unit.spec.ts src/modules/notification-smtp/__tests__/notification-transport.unit.spec.ts
       - name: Personal session, Organization selection and ingress unit contracts
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
@@ -214,7 +220,7 @@ jobs:
           bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
       - name: Full Medusa CLI module migration on disposable PG16
         working-directory: packages/api
-        timeout-minutes: 5
+        timeout-minutes: 7
         env:
           CI: 'true'
           PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1

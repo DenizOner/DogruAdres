@@ -1,6 +1,6 @@
 import { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
-import { AuthWorkflowEvents } from "@medusajs/framework/utils"
-import { sendSmtpEmail } from "../modules/dogruadres-access/smtp-client"
+import { AuthWorkflowEvents, Modules } from "@medusajs/framework/utils"
+import type { INotificationModuleService } from "@medusajs/framework/types"
 
 export interface AuthVerificationRequestedPayload {
   entity_id: string
@@ -87,6 +87,7 @@ export default async function authVerificationRequestedSubscriber({
     const subject = "DoğruAdres E-posta Doğrulama"
     const text = `Merhaba,\n\nDoğruAdres hesabınızı doğrulamak için lütfen aşağıdaki güvenli bağlantıyı tarayıcınızda açınız:\n${verificationUrl}\n\nGüvenlik Notu: ${expiryInfo.tr}\n\nEğer bu talebi siz yapmadıysanız, bu e-postayı güvenle yok sayabilirsiniz.\n\nDoğruAdres Platformu`
 
+    const safeVerificationUrl = escapeHtml(verificationUrl)
     const html = `<!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -109,7 +110,7 @@ export default async function authVerificationRequestedSubscriber({
       </p>
       
       <div style="text-align: center; margin: 32px 0;">
-        <a href="${verificationUrl}" style="background-color: #0e66c2; color: #ffffff; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-size: 15px; display: inline-block; min-height: 48px; box-sizing: border-box; line-height: 20px;">
+        <a href="${safeVerificationUrl}" style="background-color: #0e66c2; color: #ffffff; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-size: 15px; display: inline-block; min-height: 48px; box-sizing: border-box; line-height: 20px;">
           E-posta Adresimi Doğrula
         </a>
       </div>
@@ -124,7 +125,7 @@ export default async function authVerificationRequestedSubscriber({
         Buton çalışmıyorsa, aşağıdaki güvenli bağlantıyı tarayıcınızın adres çubuğuna kopyalayabilirsiniz:
       </p>
       <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; font-size: 12px; color: #0f172a; word-break: break-all;">
-        <a href="${verificationUrl}" style="color: #0e66c2; text-decoration: underline;">${verificationUrl}</a>
+        <a href="${safeVerificationUrl}" style="color: #0e66c2; text-decoration: underline;">${safeVerificationUrl}</a>
       </div>
 
       <p style="margin: 24px 0 0; font-size: 13px; line-height: 1.5; color: #64748b;">
@@ -140,34 +141,13 @@ export default async function authVerificationRequestedSubscriber({
 </body>
 </html>`
 
-    let runtimeOverride: any = undefined
-    try {
-      const access = (container as any).resolve("dogruadresAccess", { allowUnregistered: true })
-      if (access && typeof access.getActiveSmtpConfig === "function") {
-        const active = await access.getActiveSmtpConfig()
-        if (active) {
-          runtimeOverride = {
-            enabled: active.enabled,
-            host: active.host,
-            port: active.port,
-            security: active.security,
-            username: active.username || undefined,
-            password: active.password || undefined,
-            fromEmail: active.from_email,
-            fromName: active.from_name || undefined,
-          }
-        }
-      }
-    } catch {
-      // Fallback to static env configuration
-    }
-
-    if (runtimeOverride) {
-      await sendSmtpEmail({ to: data.entity_id, subject, text, html }, runtimeOverride)
-    } else {
-      await sendSmtpEmail({ to: data.entity_id, subject, text, html })
-    }
-
+    const notifications: INotificationModuleService = container.resolve(Modules.NOTIFICATION)
+    await notifications.createNotifications({
+      to: data.entity_id,
+      channel: "email",
+      template: "email-verification",
+      data: { subject, text, html },
+    })
     if (logger?.info) {
       logger.info(`[auth-verification-requested] Verification email accepted by SMTP transport`)
     }
@@ -175,6 +155,7 @@ export default async function authVerificationRequestedSubscriber({
     if (logger?.error) {
       logger.error(`[auth-verification-requested] Verification email dispatch failed`)
     }
+    throw new Error("Verification email dispatch failed")
   }
 }
 

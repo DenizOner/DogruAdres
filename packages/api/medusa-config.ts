@@ -51,6 +51,17 @@ module.exports = withMercur({
     seller_registration: true
   },
   modules: [
+    {
+      resolve: '@medusajs/medusa/notification',
+      dependencies: ['dogruadresAccess'],
+      options: {
+        providers: [{
+          resolve: './src/modules/notification-smtp',
+          id: 'notification-smtp',
+          options: { channels: ['email'] },
+        }],
+      },
+    },
     ...(process.env.DOGRUADRES_IDENTITY_ENABLED === 'true' ? [{
       resolve: '@medusajs/medusa/auth',
       options: {

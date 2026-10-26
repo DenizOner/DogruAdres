@@ -1,151 +1,52 @@
-import authVerificationRequestedSubscriber from "../auth-verification-requested"
-import { sendSmtpEmail } from "../../modules/dogruadres-access/smtp-client"
+import subscriber from "../auth-verification-requested"
+import { Modules } from "@medusajs/framework/utils"
 
-jest.mock("../../modules/dogruadres-access/smtp-client", () => ({
-  sendSmtpEmail: jest.fn(),
-}))
-
-describe("auth-verification-requested subscriber unit test", () => {
-  beforeEach(() => {
-    jest.clearAllMocks()
-  })
-
-  it("ignores events that are not of entity_type email", async () => {
-    const container = {
-      resolve: jest.fn().mockReturnValue(console),
+const payload = { entity_id: "recipient@example.invalid", entity_type: "email", code_provider: "token", auth_identity_id: "synthetic-auth", code: "synthetic-token/?&\"'<>" }
+function setup() {
+  const logger = { info: jest.fn(), error: jest.fn() }
+  const notifications = { createNotifications: jest.fn().mockResolvedValue({ id: "noti_test", status: "success" }) }
+  const container = { resolve: jest.fn((key: string) => key === Modules.NOTIFICATION ? notifications : logger) }
+  return { logger, notifications, args: { event: { name: "auth.verification_requested", data: payload }, container: container as any, pluginOptions: {} } }
+}
+describe("native verification notification dispatch", () => {
+  it("ignores incomplete and non-email events", async () => {
+    for (const data of [{ ...payload, entity_type: "phone" }, { ...payload, code: undefined }]) {
+      const { args, notifications } = setup()
+      await subscriber({ ...args, event: { ...args.event, data } })
+      expect(notifications.createNotifications).not.toHaveBeenCalled()
     }
-
-    await authVerificationRequestedSubscriber({
-      event: {
-        name: "auth.verification_requested",
-        data: {
-          entity_id: "phone-number",
-          entity_type: "phone",
-          code_provider: "token",
-          auth_identity_id: "authid_1",
-          code: "123456",
-        },
-      },
-      container: container as any,
-      pluginOptions: {},
-    })
-
-    expect(sendSmtpEmail).not.toHaveBeenCalled()
   })
-
-  it("dispatches email when entity_type is email with valid code", async () => {
-    ;(sendSmtpEmail as jest.Mock).mockResolvedValue({
-      messageId: "mock-id-123",
-      accepted: ["recipient@example.test"],
-    })
-
-    const container = {
-      resolve: jest.fn().mockReturnValue(console),
-    }
-
-    await authVerificationRequestedSubscriber({
-      event: {
-        name: "auth.verification_requested",
-        data: {
-          entity_id: "recipient@example.test",
-          entity_type: "email",
-          code_provider: "token",
-          auth_identity_id: "authid_test_gmail",
-          code: "654321",
-        },
-      },
-      container: container as any,
-      pluginOptions: {},
-    })
-
-    expect(sendSmtpEmail).toHaveBeenCalledTimes(1)
-    expect(sendSmtpEmail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "recipient@example.test",
-        subject: "DoğruAdres E-posta Doğrulama",
-        text: expect.stringContaining("654321"),
-      })
-    )
+  it("dispatches exactly once via the native email channel and preserves the Turkish template", async () => {
+    const { args, notifications } = setup()
+    await subscriber(args)
+    expect(notifications.createNotifications).toHaveBeenCalledTimes(1)
+    const sent = notifications.createNotifications.mock.calls[0][0]
+    expect(sent).toMatchObject({ to: payload.entity_id, channel: "email", template: "email-verification", data: { subject: "DoğruAdres E-posta Doğrulama" } })
+    expect(sent.data.text).toContain(`/auth/verify-email?token=${encodeURIComponent(payload.code)}`)
+    expect(sent.data.html).toContain("tek kullanımlıktır")
+    expect(sent.data.html).not.toContain(payload.code)
   })
-  it("does not log recipient details or downstream SMTP error contents", async () => {
-    const logger = { info: jest.fn(), error: jest.fn() }
-    const container = {
-      resolve: jest.fn().mockReturnValue(logger),
+  it("escapes recipient and operator-controlled URL in HTML", async () => {
+    const original = process.env.STOREFRONT_URL
+    try {
+      process.env.STOREFRONT_URL = 'https://example.invalid/\"<tag>&'
+      const { args, notifications } = setup()
+      await subscriber({ ...args, event: { ...args.event, data: { ...payload, entity_id: '<tag>&\"\'@example.invalid' } } })
+      const html = notifications.createNotifications.mock.calls[0][0].data.html
+      expect(html).toContain("&lt;tag&gt;&amp;&quot;&#039;")
+      expect(html).not.toContain('<tag>')
+      expect(html).not.toContain('href="https://example.invalid/\"')
+    } finally {
+      if (original === undefined) delete process.env.STOREFRONT_URL
+      else process.env.STOREFRONT_URL = original
     }
-    ;(sendSmtpEmail as jest.Mock).mockRejectedValue(
-      new Error("SMTP error containing recipient@example.test and a credential")
-    )
-
-    await authVerificationRequestedSubscriber({
-      event: {
-        name: "auth.verification_requested",
-        data: {
-          entity_id: "recipient@example.test",
-          entity_type: "email",
-          code_provider: "token",
-          auth_identity_id: "authid_synthetic",
-          code: "test-only-token",
-        },
-      },
-      container: container as any,
-      pluginOptions: {},
-    })
-
+  })
+  it("rejects notification errors without leaking downstream messages into errors or logs", async () => {
+    const { args, notifications, logger } = setup()
+    notifications.createNotifications.mockRejectedValue(new Error(`${payload.entity_id} ${payload.code} private-password`))
+    await expect(subscriber(args)).rejects.toThrow("Verification email dispatch failed")
+    expect(logger.info).not.toHaveBeenCalled()
     expect(logger.error).toHaveBeenCalledTimes(1)
-    const logged = JSON.stringify([logger.info.mock.calls, logger.error.mock.calls])
-    expect(logged).not.toContain("recipient@example.test")
-    expect(logged).not.toContain("test-only-token")
-    expect(logged).not.toContain("credential")
+    expect(JSON.stringify(logger.error.mock.calls)).not.toMatch(/recipient|synthetic-token|private-password/)
   })
-
-  it("uses dynamic runtime SMTP config when access service provides it", async () => {
-    ;(sendSmtpEmail as jest.Mock).mockResolvedValue({
-      messageId: "mock-id-456",
-      accepted: ["recipient@example.test"],
-    })
-
-    const mockAccess = {
-      getActiveSmtpConfig: jest.fn().mockResolvedValue({
-        enabled: true,
-        host: "smtp.sendgrid.net",
-        port: 465,
-        security: "ssl",
-        username: "apikey",
-        password: "decrypted-pass",
-        from_email: "notifications@dogruadres.com",
-        from_name: "DogruAdres Platform",
-      }),
-    }
-
-    const container = {
-      resolve: jest.fn().mockImplementation((key: string) => {
-        if (key === "dogruadresAccess") return mockAccess
-        return console
-      }),
-    }
-
-    await authVerificationRequestedSubscriber({
-      event: {
-        name: "auth.verification_requested",
-        data: {
-          entity_id: "recipient@example.test",
-          entity_type: "email",
-          code_provider: "token",
-          auth_identity_id: "authid_test_gmail",
-          code: "999888",
-        },
-      },
-      container: container as any,
-      pluginOptions: {},
-    })
-
-    expect(sendSmtpEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "recipient@example.test" }),
-      expect.objectContaining({
-        host: "smtp.sendgrid.net",
-        fromEmail: "notifications@dogruadres.com",
-        password: "decrypted-pass",
-      })
-    )
-  })
-});
+})
