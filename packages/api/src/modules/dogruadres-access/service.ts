@@ -478,27 +478,74 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const sql=securitySql(context.transactionManager)
     const staff=await new IdentitySessions(sql).staff(token,"organization.provision","platform")
     if(!staff)throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
+
+    for (const owner of input.initial_owners) {
+      if (!supportedActorTypes.has(owner?.actor_type) || !owner?.actor_id) {
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+      }
+    }
+
+    // Deterministic advisory lock ordering matching AccountLinking (da-actor-link)
+    // to serialize against concurrent linking/unlinking without deadlock.
+    const actorLinkKeys = [...new Set(input.initial_owners.map(o => `${o.actor_type}:${o.actor_id}`))].sort()
+    for (const key of actorLinkKeys) {
+      await sql.execute(`select pg_advisory_xact_lock(hashtext('da-actor-link'), hashtext(?))`, [key])
+    }
+
     const ownerPersonIds = new Set<string>()
     for (const owner of input.initial_owners) {
-      if (!supportedActorTypes.has(owner.actor_type) || !owner.actor_id) {
-        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
-      }
-      const verified = await sql.execute(
-        `select b.person_id from (
-          select person_id, actor_type, actor_id, verified_at, revoked_at from da_login_binding where actor_type=? and actor_id=?
-          union all
-          select person_id, actor_type, actor_id, verified_at, revoked_at from da_verified_actor_binding where actor_type=? and actor_id=?
-        ) b
-        join da_actor_mapping m on m.person_id=b.person_id and m.actor_type=b.actor_type and m.actor_id=b.actor_id and m.deleted_at is null
-        join da_person p on p.id=b.person_id and p.disabled_at is null and p.deleted_at is null
-        where b.verified_at is not null and b.revoked_at is null`,
-        [owner.actor_type, owner.actor_id, owner.actor_type, owner.actor_id]
+      // Step A: Inspect all active verified proofs with row-level shared locks.
+      // Do not join with da_actor_mapping or da_person yet to avoid masking conflicting proofs.
+      const loginProofs = await sql.execute(
+        `select person_id from da_login_binding
+         where actor_type=? and actor_id=? and verified_at is not null and revoked_at is null
+         for share`,
+        [owner.actor_type, owner.actor_id]
       )
-      if (verified.length !== 1) {
+      const secondaryProofs = await sql.execute(
+        `select person_id from da_verified_actor_binding
+         where actor_type=? and actor_id=? and verified_at is not null and revoked_at is null
+         for share`,
+        [owner.actor_type, owner.actor_id]
+      )
+
+      const proofRows = [...loginProofs, ...secondaryProofs]
+      if (proofRows.length === 0) {
         throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
       }
-      ownerPersonIds.add(verified[0].person_id)
+
+      const distinctProofPersonIds = [...new Set(proofRows.map((r: any) => r.person_id))]
+      if (distinctProofPersonIds.length !== 1) {
+        // Conflicting active proofs pointing to multiple distinct Persons
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+      }
+      const verifiedPersonId = distinctProofPersonIds[0]
+
+      // Step B: Ensure active actor mapping exists and agrees with the verified Person.
+      const mappings = await sql.execute(
+        `select person_id, deleted_at from da_actor_mapping
+         where actor_type=? and actor_id=?
+         for share`,
+        [owner.actor_type, owner.actor_id]
+      )
+      if (mappings.length !== 1 || mappings[0].deleted_at !== null || mappings[0].person_id !== verifiedPersonId) {
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+      }
+
+      // Step C: Ensure the canonical Person is active (not disabled or deleted).
+      const people = await sql.execute(
+        `select id, disabled_at, deleted_at from da_person
+         where id=?
+         for share`,
+        [verifiedPersonId]
+      )
+      if (people.length !== 1 || people[0].disabled_at !== null || people[0].deleted_at !== null) {
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+      }
+
+      ownerPersonIds.add(verifiedPersonId)
     }
+
     if (ownerPersonIds.size !== input.initial_owners.length) {
       throw new MedusaError(MedusaError.Types.INVALID_DATA, "Initial Owners must be distinct canonical Persons")
     }

@@ -12,9 +12,27 @@ describe("provisionPersonalOrganization - Verified Initial Owner Enforcement (B0
     else process.env.COOKIE_SECRET = previousSecret
   })
 
+  type ProofsConfig = {
+    login?: Array<{ person_id: string }>
+    secondary?: Array<{ person_id: string }>
+  }
+
+  type MappingConfig = {
+    person_id: string
+    deleted_at?: Date | null
+  }
+
+  type PersonConfig = {
+    id: string
+    disabled_at?: Date | null
+    deleted_at?: Date | null
+  }
+
   function setup(options: {
     staffGrant?: any[]
-    verifiedBindings?: (actorType: string, actorId: string) => any[]
+    proofs?: (actorType: string, actorId: string) => ProofsConfig
+    mappings?: (actorType: string, actorId: string) => MappingConfig[]
+    people?: (personId: string) => PersonConfig[]
   } = {}) {
     const staffRow = {
       id: "grant_123",
@@ -23,7 +41,11 @@ describe("provisionPersonalOrganization - Verified Initial Owner Enforcement (B0
       actor_id: "user_staff",
     }
 
+    const executedSql: Array<{ sql: string; params: unknown[] }> = []
+
     const queryMock = jest.fn(async (sql: string, params: unknown[] = []) => {
+      executedSql.push({ sql, params })
+
       if (sql.includes("from da_platform_staff_grant")) {
         return options.staffGrant !== undefined ? options.staffGrant : [staffRow]
       }
@@ -52,13 +74,43 @@ describe("provisionPersonalOrganization - Verified Initial Owner Enforcement (B0
           mfa_activated: "false",
         }]
       }
-      if (sql.includes("from da_login_binding") || sql.includes("from da_verified_actor_binding")) {
-        if (options.verifiedBindings) {
-          const actorType = params[0] as string
-          const actorId = params[1] as string
-          return options.verifiedBindings(actorType, actorId)
-        }
+      if (sql.includes("pg_advisory_xact_lock(hashtext('da-actor-link')")) {
         return []
+      }
+      if (sql.includes("from da_login_binding")) {
+        const actorType = params[0] as string
+        const actorId = params[1] as string
+        const cfg = options.proofs ? options.proofs(actorType, actorId) : undefined
+        return cfg?.login || []
+      }
+      if (sql.includes("from da_verified_actor_binding")) {
+        const actorType = params[0] as string
+        const actorId = params[1] as string
+        const cfg = options.proofs ? options.proofs(actorType, actorId) : undefined
+        return cfg?.secondary || []
+      }
+      if (sql.includes("from da_actor_mapping")) {
+        const actorType = params[0] as string
+        const actorId = params[1] as string
+        if (options.mappings) {
+          return options.mappings(actorType, actorId).map(m => ({
+            person_id: m.person_id,
+            deleted_at: m.deleted_at ?? null,
+          }))
+        }
+        // Default mapping matches actorId
+        return [{ person_id: `person_${actorId}`, deleted_at: null }]
+      }
+      if (sql.includes("from da_person")) {
+        const personId = params[0] as string
+        if (options.people) {
+          return options.people(personId).map(p => ({
+            id: p.id,
+            disabled_at: p.disabled_at ?? null,
+            deleted_at: p.deleted_at ?? null,
+          }))
+        }
+        return [{ id: personId, disabled_at: null, deleted_at: null }]
       }
       if (sql.includes("insert into da_security_outbox")) {
         return []
@@ -89,7 +141,7 @@ describe("provisionPersonalOrganization - Verified Initial Owner Enforcement (B0
       provisionOrganization: provisionOrgMock,
     })
 
-    return { service, context, queryMock, provisionOrgMock }
+    return { service, context, queryMock, provisionOrgMock, executedSql }
   }
 
   const token = "a".repeat(43)
@@ -102,7 +154,7 @@ describe("provisionPersonalOrganization - Verified Initial Owner Enforcement (B0
 
   it("denies unverified native actor without active binding", async () => {
     const { service, context, provisionOrgMock } = setup({
-      verifiedBindings: () => [],
+      proofs: () => ({ login: [], secondary: [] }),
     })
     await expect(service.provisionPersonalOrganization(token, defaultInput, context)).rejects.toThrow(
       new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
@@ -113,7 +165,7 @@ describe("provisionPersonalOrganization - Verified Initial Owner Enforcement (B0
   it("denies when binding is revoked (revoked_at IS NOT NULL)", async () => {
     // SQL query filters out revoked bindings (where b.revoked_at is null) -> returns []
     const { service, context, provisionOrgMock } = setup({
-      verifiedBindings: () => [],
+      proofs: () => ({ login: [], secondary: [] }),
     })
     await expect(service.provisionPersonalOrganization(token, defaultInput, context)).rejects.toThrow(
       new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
@@ -121,10 +173,61 @@ describe("provisionPersonalOrganization - Verified Initial Owner Enforcement (B0
     expect(provisionOrgMock).not.toHaveBeenCalled()
   })
 
-  it("denies when actor binding is ambiguous (multiple active rows)", async () => {
+  it("Finding 1: accepts multiple legitimate active verification proofs belonging to the SAME canonical Person", async () => {
+    // Actor has BOTH login binding AND verified actor binding, both pointing to the same canonical Person
     const { service, context, provisionOrgMock } = setup({
-      verifiedBindings: () => [{ person_id: "p1" }, { person_id: "p2" }],
+      proofs: (_type, _id) => ({
+        login: [{ person_id: "person_same" }],
+        secondary: [{ person_id: "person_same" }],
+      }),
+      mappings: () => [{ person_id: "person_same", deleted_at: null }],
+      people: () => [{ id: "person_same", disabled_at: null, deleted_at: null }],
     })
+
+    const result = await service.provisionPersonalOrganization(token, defaultInput, context)
+    expect(result.organization.name).toBe("Platform Org")
+    expect(provisionOrgMock).toHaveBeenCalled()
+  })
+
+  it("Finding 2: detects conflicting active proofs before joining against ActorMapping", async () => {
+    // Actor has login binding pointing to Person A, but secondary binding pointing to Person B.
+    // ActorMapping only points to Person A.
+    // If an INNER JOIN were used, Person B would be dropped and Person A would pass.
+    // With direct proof evaluation, the conflict is detected and fail-closed rejected!
+    const { service, context, provisionOrgMock } = setup({
+      proofs: (_type, _id) => ({
+        login: [{ person_id: "person_A" }],
+        secondary: [{ person_id: "person_B" }],
+      }),
+      mappings: () => [{ person_id: "person_A", deleted_at: null }],
+      people: () => [{ id: "person_A", disabled_at: null, deleted_at: null }],
+    })
+
+    await expect(service.provisionPersonalOrganization(token, defaultInput, context)).rejects.toThrow(
+      new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+    )
+    expect(provisionOrgMock).not.toHaveBeenCalled()
+  })
+
+  it("denies when active proof points to Person A, but actor mapping points to Person B", async () => {
+    const { service, context, provisionOrgMock } = setup({
+      proofs: () => ({ login: [{ person_id: "person_A" }] }),
+      mappings: () => [{ person_id: "person_B", deleted_at: null }],
+      people: () => [{ id: "person_A", disabled_at: null, deleted_at: null }],
+    })
+
+    await expect(service.provisionPersonalOrganization(token, defaultInput, context)).rejects.toThrow(
+      new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+    )
+    expect(provisionOrgMock).not.toHaveBeenCalled()
+  })
+
+  it("denies when actor mapping is deleted", async () => {
+    const { service, context, provisionOrgMock } = setup({
+      proofs: () => ({ login: [{ person_id: "person_A" }] }),
+      mappings: () => [{ person_id: "person_A", deleted_at: new Date() }],
+    })
+
     await expect(service.provisionPersonalOrganization(token, defaultInput, context)).rejects.toThrow(
       new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
     )
@@ -132,9 +235,10 @@ describe("provisionPersonalOrganization - Verified Initial Owner Enforcement (B0
   })
 
   it("denies when canonical Person is disabled or deleted", async () => {
-    // SQL query filters out disabled/deleted people -> returns []
     const { service, context, provisionOrgMock } = setup({
-      verifiedBindings: () => [],
+      proofs: () => ({ login: [{ person_id: "person_disabled" }] }),
+      mappings: () => [{ person_id: "person_disabled", deleted_at: null }],
+      people: () => [{ id: "person_disabled", disabled_at: new Date(), deleted_at: null }],
     })
     await expect(service.provisionPersonalOrganization(token, defaultInput, context)).rejects.toThrow(
       new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
@@ -144,7 +248,9 @@ describe("provisionPersonalOrganization - Verified Initial Owner Enforcement (B0
 
   it("denies duplicate initial owners resolving to the same canonical Person", async () => {
     const { service, context, provisionOrgMock } = setup({
-      verifiedBindings: () => [{ person_id: "person_common" }],
+      proofs: () => ({ login: [{ person_id: "person_common" }] }),
+      mappings: () => [{ person_id: "person_common", deleted_at: null }],
+      people: () => [{ id: "person_common", disabled_at: null, deleted_at: null }],
     })
 
     const duplicateInput = {
@@ -164,7 +270,7 @@ describe("provisionPersonalOrganization - Verified Initial Owner Enforcement (B0
   it("denies request without valid platform staff grant", async () => {
     const { service, context, provisionOrgMock } = setup({
       staffGrant: [],
-      verifiedBindings: () => [{ person_id: "p1" }],
+      proofs: () => ({ login: [{ person_id: "p1" }] }),
     })
 
     await expect(service.provisionPersonalOrganization(token, defaultInput, context)).rejects.toThrow(
@@ -173,13 +279,35 @@ describe("provisionPersonalOrganization - Verified Initial Owner Enforcement (B0
     expect(provisionOrgMock).not.toHaveBeenCalled()
   })
 
+  it("Finding 3: acquires advisory lock on da-actor-link in sorted order before proof reading", async () => {
+    const { service, context, executedSql } = setup({
+      proofs: (_type, id) => ({ login: [{ person_id: `person_${id}` }] }),
+      mappings: (_type, id) => [{ person_id: `person_${id}`, deleted_at: null }],
+      people: (id) => [{ id, disabled_at: null, deleted_at: null }],
+    })
+
+    const twoOwnersInput = {
+      name: "Dual Owner Org",
+      initial_owners: [
+        { actor_type: "user", actor_id: "usr_z_2" },
+        { actor_type: "user", actor_id: "usr_a_1" },
+      ],
+    }
+
+    await service.provisionPersonalOrganization(token, twoOwnersInput, context)
+
+    const lockCalls = executedSql.filter(e => e.sql.includes("da-actor-link"))
+    expect(lockCalls).toHaveLength(2)
+    // Must be in sorted order: user:usr_a_1 before user:usr_z_2
+    expect(lockCalls[0].params[0]).toBe("user:usr_a_1")
+    expect(lockCalls[1].params[0]).toBe("user:usr_z_2")
+  })
+
   it("successfully provisions when two distinct initial Owners are properly verified", async () => {
     const { service, context, queryMock, provisionOrgMock } = setup({
-      verifiedBindings: (_actorType: string, actorId: string) => {
-        if (actorId === "usr_1") return [{ person_id: "person_1" }]
-        if (actorId === "usr_2") return [{ person_id: "person_2" }]
-        return []
-      },
+      proofs: (_type, id) => ({ login: [{ person_id: `person_${id}` }] }),
+      mappings: (_type, id) => [{ person_id: `person_${id}`, deleted_at: null }],
+      people: (id) => [{ id, disabled_at: null, deleted_at: null }],
     })
 
     const twoOwnersInput = {
