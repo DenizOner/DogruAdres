@@ -84,3 +84,17 @@ test('observer header is forwarded only for exact GET organizations and value 1'
     const r=await fetch(origin+'/personal/organizations',{method:'POST',headers:{'x-da-observe':'1'}});assert.equal(r.status,401);await r.text();assert.equal(seen.length,6);
   }finally{front.closeAllConnections();upstream.closeAllConnections();await Promise.all([new Promise(r=>front.close(r)),new Promise(r=>upstream.close(r))]);}
 });
+
+test('browser-facing privacy policy is fixed at the public header boundary',async()=>{
+  const upstream=http.createServer((_req,res)=>{res.setHeader('Content-Type','text/html');res.setHeader('Referrer-Policy','unsafe-url');res.end('<!doctype html><title>synthetic privacy fixture</title>')});
+  upstream.listen(0,'127.0.0.1');await once(upstream,'listening');
+  const reservation=http.createServer();reservation.listen(0,'127.0.0.1');await once(reservation,'listening');const port=reservation.address().port;await new Promise(r=>reservation.close(r));
+  const origin='http://127.0.0.1:'+port;
+  const front=startFrontdoor({NODE_ENV:'test',DOGRUADRES_PUBLIC_ORIGIN:origin,DOGRUADRES_PRIVATE_API:'http://127.0.0.1:'+upstream.address().port,DOGRUADRES_FRONTDOOR_HOST:'127.0.0.1',DOGRUADRES_FRONTDOOR_PORT:String(port)});await once(front,'listening');
+  try{
+    for(const path of ['/personal?invitation_token=synthetic-fixture','/auth/verify-email?token=synthetic-fixture']){
+      const response=await fetch(origin+path);assert.equal(response.status,200);assert.equal(response.headers.get('referrer-policy'),'no-referrer');await response.text();
+    }
+    const denied=await fetch(origin+'/auth/verification/request',{method:'POST'});assert.equal(denied.status,401);assert.equal(denied.headers.get('referrer-policy'),'no-referrer');await denied.text();
+  }finally{front.closeAllConnections();upstream.closeAllConnections();await Promise.all([new Promise(r=>front.close(r)),new Promise(r=>upstream.close(r))]);}
+});

@@ -97,7 +97,7 @@ export default function VerifyEmailPage() {
   const [isPendingTransition, startTransition] = useTransition()
   const isTerminalRef = useRef(false)
 
-  const token = searchParams.get("token") || ""
+  const [token] = useState(() => searchParams.get("token") || "")
   const isRtl = currentLocale === "ar"
   const t = copy[currentLocale]
 
@@ -108,6 +108,13 @@ export default function VerifyEmailPage() {
 
   // 1. Safe GET inspection on mount
   useEffect(() => {
+    // Preserve the bearer in component memory across the router's URL update.
+    // Scrub before inspection fetch or user navigation, including invalid links.
+    const url = new URL(window.location.href)
+    if (url.searchParams.has("token")) {
+      url.searchParams.delete("token")
+      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash)
+    }
     if (isTerminalRef.current) return
     if (!token) {
       setState("invalid")
@@ -122,6 +129,7 @@ export default function VerifyEmailPage() {
           method: "GET",
           headers: { "Accept": "application/json" },
           cache: "no-store",
+          referrerPolicy: "no-referrer",
         })
 
         const data = await response.json()
@@ -167,6 +175,7 @@ export default function VerifyEmailPage() {
     try {
       const response = await fetch(`${backendUrl}/auth/verify-email`, {
         method: "POST",
+        referrerPolicy: "no-referrer",
         headers: {
           "Content-Type": "application/json",
           "Accept": "application/json",

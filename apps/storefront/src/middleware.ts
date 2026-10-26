@@ -121,9 +121,13 @@ export async function middleware(request: NextRequest) {
       const locale = DEFAULT_REGION || 'tr';
       const rewriteUrl = request.nextUrl.clone();
       rewriteUrl.pathname = `/${locale}${pathname}`;
-      return NextResponse.rewrite(rewriteUrl);
+      const response = NextResponse.rewrite(rewriteUrl);
+      response.headers.set('Referrer-Policy', 'no-referrer');
+      return response;
     }
-    return NextResponse.next();
+    const response = NextResponse.next();
+    response.headers.set('Referrer-Policy', 'no-referrer');
+    return response;
   }
 
   const cacheIdCookie = request.cookies.get('_medusa_cache_id');

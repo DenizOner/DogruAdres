@@ -31,6 +31,7 @@ export function startFrontdoor(env=process.env){
   const config=ingressConfig(env),upstream=config.privateOrigin
   const handler=async(req,res)=>{
     res.setHeader('Cache-Control','no-store')
+    res.setHeader('Referrer-Policy','no-referrer')
     if(config.tls)res.setHeader('Strict-Transport-Security','max-age=31536000')
     try{
       const raw=req.url??'',authority=new URL(config.publicOrigin).host

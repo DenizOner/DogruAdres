@@ -5,14 +5,17 @@ import subscriber from "../../../subscribers/auth-verification-requested"
 // Real loopback protocol transport, not a mocked sendSmtpEmail. The production
 // transport permits plaintext only for NODE_ENV=test + literal loopback.
 describe("SMTP provider controlled transport", () => {
+  const originalOrigin = process.env.STOREFRONT_URL
+  afterAll(() => { if (originalOrigin === undefined) delete process.env.STOREFRONT_URL; else process.env.STOREFRONT_URL = originalOrigin })
   let server: net.Server
   let config: any
   let mode: string
   let messages: string[]
   let attempts: number
   const sockets = new Set<net.Socket>()
-  const input = { to: "recipient@example.invalid", channel: "email", template: "email-verification", data: { subject: "Doğrulama", text: "synthetic text", html: "<p>safe</p>" } }
+  const input = { to: "recipient@example.invalid", channel: "email", template: "synthetic-test", data: { subject: "Doğrulama", text: "synthetic text", html: "<p>safe</p>" } }
   beforeEach(async () => {
+    process.env.STOREFRONT_URL = "http://localhost:8000"
     messages = []; attempts = 0; mode = "success"
     server = net.createServer(socket => {
       attempts++

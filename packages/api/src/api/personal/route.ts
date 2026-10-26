@@ -6,9 +6,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   if (!enabled()) return res.status(503).send("Kişisel çalışma alanı etkin değil")
   const nonce = randomBytes(18).toString("base64")
   res.setHeader("Cache-Control","no-store")
+  res.setHeader("Referrer-Policy","no-referrer")
   res.setHeader("X-Content-Type-Options","nosniff")
   res.setHeader("Content-Security-Policy",`default-src 'none'; script-src 'nonce-${nonce}'; connect-src 'self'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`)
   res.type("html").send(`<!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>DoğruAdres kişisel çalışma alanı</title>
+  <script nonce="${nonce}">
+  // Capture once before any subrequest; retain only in this page's memory.
+  let invitationToken=null;
+  {const url=new URL(location.href);invitationToken=url.searchParams.get('invitation_token');
+   if(url.searchParams.has('invitation_token')){url.searchParams.delete('invitation_token');history.replaceState(null,'',url.pathname+url.search+url.hash);}}
+  </script>
   <style nonce="${nonce}">
   :root{color-scheme:light;--ink:#243247;--muted:#506079;--line:#d6dfea;--accent:#1453a3}
   *{box-sizing:border-box}
@@ -280,11 +287,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }catch{}
   }
   async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();
-    const inviteToken=new URLSearchParams(location.search).get('invitation_token');
+    const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
     const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;el('invite-result').textContent='';
-    const inviteToken=new URLSearchParams(location.search).get('invitation_token');
+    const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
@@ -533,14 +540,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }finally{b.disabled=false}
   };
   el('accept-invitation-btn').onclick=async()=>{
-    const token=new URLSearchParams(location.search).get('invitation_token');
+    const token=invitationToken;
     if(!token)return;
     const btn=el('accept-invitation-btn');btn.disabled=true;
     el('invitation-result').textContent='Davet kabul ediliyor...';
     try{
       await api('invitations',{method:'POST',body:JSON.stringify({action:'accept',token})});
-      // Remove the consumed bearer token before refreshing session and organization data.
-      history.replaceState(null,'','/personal');
+      // Discard the consumed token from page memory before refreshing.
+      invitationToken=null;
       await load();
       status('Kuruluş üyeliğiniz başarıyla aktifleştirildi.');
     }catch(err){

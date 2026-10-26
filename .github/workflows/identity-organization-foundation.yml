@@ -60,12 +60,12 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json
-      - name: Native SMTP notification contracts and controlled loopback transport
+      - name: Token privacy and native SMTP notification regressions
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         env:
           TEST_TYPE: unit
-        run: bun run jest --runInBand --runTestsByPath src/subscribers/__tests__/auth-verification-requested.unit.spec.ts src/modules/notification-smtp/__tests__/notification-smtp.unit.spec.ts src/modules/notification-smtp/__tests__/notification-transport.unit.spec.ts
+        run: bun run jest --runInBand --runTestsByPath src/subscribers/__tests__/auth-verification-requested.unit.spec.ts src/modules/notification-smtp/__tests__/notification-smtp.unit.spec.ts src/modules/notification-smtp/__tests__/notification-transport.unit.spec.ts src/modules/notification-smtp/__tests__/verification-origin.unit.spec.ts src/api/personal/__tests__/token-privacy.unit.spec.ts
       - name: Personal session, Organization selection and ingress unit contracts
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api

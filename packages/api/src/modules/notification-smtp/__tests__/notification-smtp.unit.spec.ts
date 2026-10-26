@@ -3,7 +3,7 @@ import { sendSmtpEmail } from "../../dogruadres-access/smtp-client"
 
 jest.mock("../../dogruadres-access/smtp-client", () => ({ sendSmtpEmail: jest.fn() }))
 const send = sendSmtpEmail as jest.Mock
-const input = { to: "recipient@example.invalid", channel: "email", template: "email-verification", data: { subject: "Doğrulama", text: "synthetic body", html: "<p>safe</p>" } }
+const input = { to: "recipient@example.invalid", channel: "email", template: "synthetic-test", data: { subject: "Doğrulama", text: "synthetic body", html: "<p>safe</p>" } }
 describe("SMTP notification provider", () => {
   beforeEach(() => { send.mockReset(); send.mockResolvedValue({ messageId: "smtp-synthetic", accepted: [input.to] }) })
   it("exports the supported Notification Module provider definition", () => {

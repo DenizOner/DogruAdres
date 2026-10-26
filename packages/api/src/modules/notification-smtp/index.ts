@@ -4,6 +4,7 @@ import type {
   ProviderSendNotificationResultsDTO,
 } from "@medusajs/framework/types"
 import { sendSmtpEmail } from "../dogruadres-access/smtp-client"
+import { renderVerificationEmail } from "./verification-email"
 import type DogruAdresAccessModuleService from "../dogruadres-access/service"
 
 export class SmtpNotificationProviderService extends AbstractNotificationProviderService {
@@ -19,14 +20,21 @@ export class SmtpNotificationProviderService extends AbstractNotificationProvide
     try {
       // Medusa injects a cradle, not an Awilix container. Read on every send;
       // a settings/decryption failure must never fall back to stale env settings.
+      // Render/validate inside native dispatch so configuration rejection records
+      // Notification failure before settings access or any transport side effect.
+      const message = notification.template === "email-verification"
+        ? renderVerificationEmail({ entity_id: notification.to, code: notification.data?.code as string, expires_at: notification.data?.expires_at as string | undefined })
+        : {
+            subject: (notification.data?.subject as string) || "DogruAdres Bildirimi",
+            text: (notification.content?.text as string) || String(notification.data?.text || ""),
+            html: (notification.content?.html as string) || (notification.data?.html as string),
+          }
       const runtimeConfig = await this.container.dogruadresAccess.getActiveSmtpConfig()
 
       const result = await sendSmtpEmail(
         {
           to: notification.to,
-          subject: (notification.data?.subject as string) || "DogruAdres Bildirimi",
-          text: (notification.content?.text as string) || String(notification.data?.text || ""),
-          html: (notification.content?.html as string) || (notification.data?.html as string),
+          ...message,
         },
         runtimeConfig
           ? {

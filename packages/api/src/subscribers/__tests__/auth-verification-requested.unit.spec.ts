@@ -21,25 +21,8 @@ describe("native verification notification dispatch", () => {
     await subscriber(args)
     expect(notifications.createNotifications).toHaveBeenCalledTimes(1)
     const sent = notifications.createNotifications.mock.calls[0][0]
-    expect(sent).toMatchObject({ to: payload.entity_id, channel: "email", template: "email-verification", data: { subject: "DoğruAdres E-posta Doğrulama" } })
-    expect(sent.data.text).toContain(`/auth/verify-email?token=${encodeURIComponent(payload.code)}`)
-    expect(sent.data.html).toContain("tek kullanımlıktır")
-    expect(sent.data.html).not.toContain(payload.code)
-  })
-  it("escapes recipient and operator-controlled URL in HTML", async () => {
-    const original = process.env.STOREFRONT_URL
-    try {
-      process.env.STOREFRONT_URL = 'https://example.invalid/\"<tag>&'
-      const { args, notifications } = setup()
-      await subscriber({ ...args, event: { ...args.event, data: { ...payload, entity_id: '<tag>&\"\'@example.invalid' } } })
-      const html = notifications.createNotifications.mock.calls[0][0].data.html
-      expect(html).toContain("&lt;tag&gt;&amp;&quot;&#039;")
-      expect(html).not.toContain('<tag>')
-      expect(html).not.toContain('href="https://example.invalid/\"')
-    } finally {
-      if (original === undefined) delete process.env.STOREFRONT_URL
-      else process.env.STOREFRONT_URL = original
-    }
+    expect(sent).toMatchObject({ to: payload.entity_id, channel: "email", template: "email-verification", data: { code: payload.code } })
+    expect(sent.data).not.toHaveProperty("html")
   })
   it("rejects notification errors without leaking downstream messages into errors or logs", async () => {
     const { args, notifications, logger } = setup()
