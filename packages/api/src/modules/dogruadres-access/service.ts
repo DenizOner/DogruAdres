@@ -181,7 +181,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   async personalMemberships(token:string,org:string,@MedusaContext() context:Context={}) {
     const decision=await new IdentitySessions(securitySql(context.transactionManager)).organizations(token,org)
     if(!decision||!['owner','admin'].includes(decision.organizations[0].role))throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
-    return this.listMemberships({organization_id:org},{select:['id','person_id','role','status','protected_owner']},context)
+    return this.listMemberships({organization_id:org,status:'active'},{select:['id','person_id','role','status','protected_owner']},context)
   }
   @InjectTransactionManager()
   async personalRevokeMembership(token:string,org:string,membership:string,@MedusaContext() context:Context={}) {

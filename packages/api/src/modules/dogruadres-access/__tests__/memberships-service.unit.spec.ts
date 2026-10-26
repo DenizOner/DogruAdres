@@ -3,6 +3,28 @@ import { MedusaError } from "@medusajs/framework/utils"
 import AccessService from "../service"
 import { IdentitySessions } from "../identity-session"
 
+describe("B05 active membership listing service boundary (mock-only)", () => {
+  const service = Object.create(AccessService.prototype) as AccessService
+  const context = { transactionManager: { execute: jest.fn() } } as unknown as Context
+  afterEach(() => jest.restoreAllMocks())
+
+  it.each(["owner", "admin"])("authorizes %s and queries only active rows in the exact Organization with the approved projection", async role => {
+    const authorize = jest.spyOn(IdentitySessions.prototype, "organizations").mockResolvedValue({ person_id: "p", organizations: [{ id: "daorg_test", role }] } as any)
+    const list = jest.spyOn(service, "listMemberships").mockResolvedValue([])
+    await expect(service.personalMemberships("synthetic", "daorg_test", context)).resolves.toEqual([])
+    expect(authorize).toHaveBeenCalledWith("synthetic", "daorg_test")
+    expect(list).toHaveBeenCalledWith({ organization_id: "daorg_test", status: "active" },
+      { select: ["id", "person_id", "role", "status", "protected_owner"] }, context)
+  })
+
+  it.each([null, { person_id: "p", organizations: [{ id: "daorg_test", role: "member" }] }])("does not query any list after a denied identity/scope/role decision", async decision => {
+    jest.spyOn(IdentitySessions.prototype, "organizations").mockResolvedValue(decision as any)
+    const list = jest.spyOn(service, "listMemberships").mockResolvedValue([])
+    await expect(service.personalMemberships("synthetic", "daorg_test", context)).rejects.toThrow("Access denied")
+    expect(list).not.toHaveBeenCalled()
+  })
+})
+
 describe("M0 B06 personal membership role change service boundary", () => {
   const token = "da_test_session_token_12345678901234567890123"
   const orgId = "daorg_01M0TESTORGANIZATION123456"

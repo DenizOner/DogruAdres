@@ -31,6 +31,8 @@ describe('private workspace lifetime (script regression only)',()=>{
     await answer(h,'/personal/organizations',{person_id:'private-person',organizations:[{id:'A',name:'private-org',role:'owner'}]});await poll
     h.document.hidden=true;h.listeners.get('visibilitychange')!()
     expect(h.el('workspace').hidden).toBe(true);expect(h.el('person').textContent).toBe('');expect(h.el('organizations').children).toHaveLength(0)
+    expect(h.el('memberships-status').textContent).toBe('');expect(h.el('memberships').ariaBusy).toBe('false')
+    expect(h.el('memberships-refresh').hidden).toBe(true);expect(h.el('memberships-refresh').disabled).toBe(true)
     const count=h.pending.length;await h.listeners.get('poll')!();expect(h.pending).toHaveLength(count)
   })
   it('ignores a private response that completes after pagehide',async()=>{
@@ -38,6 +40,18 @@ describe('private workspace lifetime (script regression only)',()=>{
     h.listeners.get('pagehide')!()
     await answer(h,'/personal/organizations',{person_id:'private-person',organizations:[{id:'A',name:'old-secret',role:'owner'}]})
     expect(h.el('workspace').hidden).toBe(true);expect(h.el('organizations').children).toHaveLength(0);expect(h.el('person').textContent).toBe('')
+  })
+  it('cannot restore membership rows or list status after pagehide during a pending list read',async()=>{
+    const h=harness();await loaded(h)
+    runInContext('loadTimeline=async()=>{}',h.context)
+    const selection=runInContext("selectOrg('A')",h.context)
+    await answer(h,'/personal/organizations?id=A',{organizations:[{id:'A',role:'owner'}]})
+    expect(h.el('memberships').ariaBusy).toBe('true')
+    h.listeners.get('pagehide')!()
+    await answer(h,'/personal/memberships?organization=A',{memberships:[{id:'m',person_id:'old-private-person',role:'member',status:'active'}]})
+    await selection
+    expect(h.el('memberships').children).toHaveLength(0);expect(h.el('memberships-status').textContent).toBe('')
+    expect(h.el('memberships').ariaBusy).toBe('false');expect(h.el('memberships-refresh').hidden).toBe(true)
   })
   it('conceals before revalidating persisted browser history',async()=>{
     const h=harness();await loaded(h)
