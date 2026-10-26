@@ -255,17 +255,19 @@ export default async function({ container }: ExecArgs) {
     // Step 6: Verify invariants and fixture caps
     // Both protected Owners of Person A remain active and protected
     const ownersState = await rows("select organization_id, role, status, protected_owner from da_organization_membership where person_id=$1 order by organization_id", [personA.id])
-    assert.deepEqual(ownersState, [
+    const expectedOwners = [
       { organization_id: org1.id, role: "owner", status: "active", protected_owner: true },
       { organization_id: org2.id, role: "owner", status: "active", protected_owner: true },
-    ])
+    ].sort((a, b) => a.organization_id.localeCompare(b.organization_id))
+    assert.deepEqual(ownersState, expectedOwners)
 
     // Canonical Person mappings remain unchanged
     const canonicalMappings = await rows("select person_id, actor_type, actor_id from da_actor_mapping order by person_id")
-    assert.deepEqual(canonicalMappings, [
+    const expectedMappings = [
       { person_id: personA.id, actor_type: "user", actor_id: userA.id },
       { person_id: personB.id, actor_type: "user", actor_id: userB.id },
-    ])
+    ].sort((a, b) => a.person_id.localeCompare(b.person_id))
+    assert.deepEqual(canonicalMappings, expectedMappings)
 
     // Exact fixture caps
     assert.equal(await count("da_person"), 2, "Exact 2 Persons")
