@@ -241,12 +241,9 @@ moduleIntegrationTestRunner<AccessService>({
       expect(await q("select source_audit_event_id from da_audit_outbox where source_audit_event_id=?",[audits[0].id])).toHaveLength(1)
     })
 
-    let securityTablesMigrated = false
     async function ensureSecurityTables() {
-      if (securityTablesMigrated) return
-      const tables = await q("select to_regclass('da_login_binding') as b")
+      const tables = await q("select to_regclass('da_person_security') as b")
       if (tables[0]?.b) {
-        securityTablesMigrated = true
         return
       }
       for (const MigrationCtor of [Migration20261020230000, Migration20261021231000, Migration20261021233000]) {
@@ -256,7 +253,6 @@ moduleIntegrationTestRunner<AccessService>({
         await migration.up()
         for (const statement of statements) await q(statement)
       }
-      securityTablesMigrated = true
     }
 
     async function setupStaffSession() {
