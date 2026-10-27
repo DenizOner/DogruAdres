@@ -153,7 +153,9 @@ async function run(){
 
       if (scope === "b06-ui") {
         const suffix=randomBytes(8).toString('hex')
-        const b06Env={...nativeEnv,B06_EMAIL_A:`b06-a-${suffix}@example.invalid`,B06_EMAIL_B:`b06-b-${suffix}@example.invalid`,B06_PASSWORD_A:randomBytes(32).toString('base64url'),B06_PASSWORD_B:randomBytes(32).toString('base64url')}
+        // B06 MFA/challenge stays within one native Medusa process; no Redis service is provisioned in this CI job.
+        // Unlike non-interactive migration checks, live personal HTTP must not target the deliberate port-1 Redis sentinel.
+        const b06Env={...nativeEnv,REDIS_URL:undefined,B06_EMAIL_A:`b06-a-${suffix}@example.invalid`,B06_EMAIL_B:`b06-b-${suffix}@example.invalid`,B06_PASSWORD_A:randomBytes(32).toString('base64url'),B06_PASSWORD_B:randomBytes(32).toString('base64url')}
         const invoke=(script:string,env:NodeJS.ProcessEnv,activation=false)=>{
           const child=spawnSync(process.execPath,activation?[script]:['run','medusa','exec',script],{cwd:process.cwd(),env,encoding:'utf8',timeout:360000,maxBuffer:4*1024*1024})
           const output=String(child.stdout??'').split('\n').filter(line=>/^(B06_UI_EVIDENCE |PASS B06)/.test(line)).join('\n')
