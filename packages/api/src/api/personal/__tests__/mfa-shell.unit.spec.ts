@@ -16,4 +16,34 @@ describe('MFA settings shell contract (not browser acceptance)',()=>{
    expect(()=>new Function(code)).not.toThrow()
    expect(code).not.toContain("'+(data.secret||data.otpauth_url)")
  })
+ it('conceals the prior actor on both successful and uncertain logout',async()=>{
+   const res:any={setHeader:jest.fn(),type:jest.fn().mockReturnThis(),send:jest.fn()};
+   (enabled as jest.Mock).mockReturnValue(true);
+   await GET({} as any,res);
+   const html=res.send.mock.calls[0][0] as string;
+   const code=[...html.matchAll(/<script[^>]*>([\\s\\S]*?)<\\/script>/g)].map(m=>m[1]).join('\n');
+   const logoutSource=code.match(/async function logout\\(all\\)\\{[\\s\\S]*?\\n  \\}/)?.[0];
+   expect(logoutSource).toBeDefined();
+   expect(code).toContain("for(const form of el('workspace').querySelectorAll('form'))form.reset()");
+   const makeLogout=(api:any,conceal:any,history:any,load:any,status:any)=>
+     new Function('api','concealPrivateView','history','load','status',logoutSource+';return logout')(api,conceal,history,load,status) as (all:boolean)=>Promise<void>;
+   const sequence:string[]=[];
+   const api=jest.fn(async()=>{sequence.push('request')});
+   const conceal=jest.fn(()=>sequence.push('conceal'));
+   const history={replaceState:jest.fn(()=>sequence.push('history'))};
+   const load=jest.fn(async()=>{sequence.push('load')});
+   const status=jest.fn(()=>sequence.push('status'));
+   await makeLogout(api,conceal,history,load,status)(true);
+   expect(api).toHaveBeenCalledWith('session?all=true',{method:'DELETE'});
+   expect(history.replaceState).toHaveBeenCalledWith(null,'','/personal');
+   expect(sequence).toEqual(['request','conceal','history','load']);
+   sequence.length=0;api.mockClear();conceal.mockClear();load.mockClear();status.mockClear();
+   api.mockImplementationOnce(async()=>{sequence.push('request');throw new Error('network')});
+   await makeLogout(api,conceal,history,load,status)(false);
+   expect(api).toHaveBeenCalledWith('session',{method:'DELETE'});
+   expect(sequence).toEqual(['request','conceal','history','status']);
+   expect(load).not.toHaveBeenCalled();
+   expect(status).toHaveBeenCalledWith(expect.stringContaining('Çıkış doğrulanamadı'));
+ })
+
 })

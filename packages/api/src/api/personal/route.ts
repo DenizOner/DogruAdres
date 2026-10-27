@@ -451,7 +451,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     try{await api('mfa/manage',{method:'POST',body:JSON.stringify({action:'disable',...Object.fromEntries(new FormData(event.target))})});event.target.reset();clearMfaCodes();await load();status('Native faktör kaldırıldı; yeniden giriş yapın.');}
     catch(error){event.target.reset();status(error.message);if(!error.uncertain)button.disabled=false}
   };
-  async function logout(all){clearMfaCodes();smtpSettings=null;el('smtp-platform').hidden=true;try{await api('session'+(all?'?all=true':''),{method:'DELETE'});await load()}catch(e){status(e.message)}};
+  async function logout(all){
+    let error=null;
+    try{await api('session'+(all?'?all=true':''),{method:'DELETE'})}
+    catch(e){error=e}
+    finally{
+      // Conceal the outgoing actor's private data even if logout is uncertain.
+      concealPrivateView();
+      history.replaceState(null,'','/personal');
+    }
+    if(error){status('Çıkış doğrulanamadı. Sunucu oturumu hâlâ açık olabilir.');return}
+    await load()
+  }
   
   let smtpSettings=null;
   async function refreshSmtp(){
