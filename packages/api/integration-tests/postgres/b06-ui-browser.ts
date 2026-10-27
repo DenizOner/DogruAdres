@@ -79,5 +79,5 @@ export class B06Chrome {
   }
   async reload(role:string){await this.send('Page.reload',{ignoreCache:true});await this.wait(`JSON.parse(document.getElementById('detail').textContent||'{}').role===${JSON.stringify(role)}`);assert.ok(await this.eval("location.protocol==='https:'"))}
   async screenshot(file:string){const r=await this.send('Page.captureScreenshot',{format:'png'});writeFileSync(file,Buffer.from(r.data,'base64'))}
-  async close(){for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(Error('Closing'))}this.pending.clear();this.ws?.close();if(this.chrome)await killProcess(this.chrome);assert.ok(!this.chrome||this.chrome.exitCode!==null||this.chrome.signalCode!==null);rmSync(this.root,{recursive:true,force:true});assert.ok(!existsSync(this.root));this.cleanup=true}
+  async close(){for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(Error('Closing'))}this.pending.clear();this.ws?.close();if(this.chrome){killProcess(this.chrome);await until(async()=>this.chrome!.exitCode!==null||this.chrome!.signalCode!==null,8000,'B06 Chrome child termination')}rmSync(this.root,{recursive:true,force:true});assert.ok(!existsSync(this.root));this.cleanup=true}
 }
