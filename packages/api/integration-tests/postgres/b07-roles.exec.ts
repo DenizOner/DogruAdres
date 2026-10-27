@@ -11,7 +11,7 @@ import type {ExecArgs,IAuthModuleService,IUserModuleService} from '@medusajs/fra
 import Foundation from '../../src/modules/dogruadres-access/service'
 import {IdentitySessions} from '../../src/modules/dogruadres-access/identity-session'
 import {createPersonalHttpApp} from '../../src/scripts/personal-http-runtime'
-import {B06Chrome} from './b07-ui-browser'
+import {B06Chrome} from './b06-ui-browser'
 import {until} from './native-verification-browser'
 
 export default async function({container}:ExecArgs){
