@@ -138,6 +138,7 @@ export async function verifyNativeBrowser({
     chrome = spawn(chromePath, [
       "--headless=new",
       `--remote-debugging-port=${cdpPort}`,
+      "--remote-debugging-address=127.0.0.1",
       "--no-sandbox",
       "--disable-gpu",
       "--disable-dev-shm-usage",
@@ -147,8 +148,8 @@ export async function verifyNativeBrowser({
 
     // Wait for CDP readiness.
     await until(async () => {
-      if (chrome!.exitCode !== null) {
-        throw Error(`Chrome exited prematurely with code ${chrome!.exitCode}`)
+      if (chrome!.exitCode !== null || chrome!.signalCode !== null) {
+        throw Error(`Chrome exited prematurely (code ${chrome!.exitCode ?? "none"}, signal ${chrome!.signalCode ?? "none"})`)
       }
       const res = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, { signal: AbortSignal.timeout(2000) })
       return res.ok
