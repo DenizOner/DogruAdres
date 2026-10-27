@@ -21,9 +21,11 @@ describe('MFA settings shell contract (not browser acceptance)',()=>{
    (enabled as jest.Mock).mockReturnValue(true);
    await GET({} as any,res);
    const html=res.send.mock.calls[0][0] as string;
-   const code=[...html.matchAll(/<script[^>]*>([\\s\\S]*?)<\\/script>/g)].map(m=>m[1]).join('\n');
-   const logoutSource=code.match(/async function logout\\(all\\)\\{[\\s\\S]*?\\n  \\}/)?.[0];
-   expect(logoutSource).toBeDefined();
+   const code=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1]).join('\n')
+   const logoutStart=code.indexOf('async function logout(all){');
+   const logoutEnd=logoutStart>=0?code.indexOf('\n  }',logoutStart):-1;
+   const logoutSource=logoutStart>=0&&logoutEnd>logoutStart?code.slice(logoutStart,logoutEnd+4):'';
+   expect(logoutSource).not.toBe('');
    expect(code).toContain("for(const form of el('workspace').querySelectorAll('form'))form.reset()");
    const makeLogout=(api:any,conceal:any,history:any,load:any,status:any)=>
      new Function('api','concealPrivateView','history','load','status',logoutSource+';return logout')(api,conceal,history,load,status) as (all:boolean)=>Promise<void>;
