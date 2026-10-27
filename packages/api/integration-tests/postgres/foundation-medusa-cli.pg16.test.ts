@@ -24,8 +24,8 @@ if(typeof SQL!=="function")throw Error("Bun PostgreSQL driver unavailable")
 const scope = (process.env.PG_MFA_TEST_SCOPE ||
   process.argv.slice(2).find(arg => arg.startsWith("--scope="))?.split("=")[1] ||
   "all").toLowerCase()
-if (!["all", "mfa", "verification", "b02", "b04", "b04-ui", "b05-ui", "b06-ui", "b07-ui"].includes(scope))
-  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b02, b04, b04-ui, b05-ui, b06-ui, b07-ui`)
+if (!["all", "mfa", "verification", "b02", "b04", "b04-ui", "b05-ui", "b06-ui", "b07-ui", "b08-ui"].includes(scope))
+  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b02, b04, b04-ui, b05-ui, b06-ui, b07-ui, b08-ui`)
 if (scope === "b04-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B04_UI_DISPATCH_SCOPE !== "b04-ui"))
   throw Error("REFUSED: B04-UI requires explicit workflow_dispatch scope=b04-ui")
 if (scope === "b05-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B05_UI_DISPATCH_SCOPE !== "b05-ui"))
@@ -34,6 +34,8 @@ if (scope === "b06-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch"
   throw Error("REFUSED: B06-UI requires explicit workflow_dispatch scope=b06-ui")
 if (scope === "b07-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B07_UI_DISPATCH_SCOPE !== "b07-ui"))
   throw Error("REFUSED: B07-UI requires explicit workflow_dispatch scope=b07-ui")
+if (scope === "b08-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B08_UI_DISPATCH_SCOPE !== "b08-ui"))
+  throw Error("REFUSED: B08-UI requires explicit workflow_dispatch scope=b08-ui")
 
 const admin=new SQL(adminUrl.toString())
 const dbName="mfa_cli_ci_"+randomBytes(8).toString("hex")
@@ -195,6 +197,28 @@ async function run(){
         invoke('./integration-tests/postgres/b07-activation.pg16.ts',b06Env,true)
         const output=invoke('./integration-tests/postgres/b07-roles.exec.ts',{...b06Env,DOGRUADRES_MFA_SETTINGS_ENABLED:'true',DOGRUADRES_MFA_ENROLLMENT_ENABLED:'true',DOGRUADRES_MFA_RUNTIME_ENABLED:'true'})
         assert.ok(output.includes('PASS B07-UI real Chrome/native MFA/HTTP/SQL'))
+      }
+
+      if (scope === "b08-ui") {
+        const suffix=randomBytes(8).toString('hex')
+        // B08 MFA/challenge stays within one native Medusa process; no Redis service is provisioned in this CI job.
+        // Unlike non-interactive migration checks, live personal HTTP must not target the deliberate port-1 Redis sentinel.
+        const b06Env={...nativeEnv,REDIS_URL:undefined,B08_EMAIL_A:`b08-a-${suffix}@example.invalid`,B08_EMAIL_B:`b08-b-${suffix}@example.invalid`,B08_PASSWORD_A:randomBytes(32).toString('base64url'),B08_PASSWORD_B:randomBytes(32).toString('base64url')}
+        const invoke=(script:string,env:NodeJS.ProcessEnv,activation=false)=>{
+          const child=spawnSync(process.execPath,activation?[script]:['run','medusa','exec',script],{cwd:process.cwd(),env,encoding:'utf8',timeout:360000,maxBuffer:4*1024*1024})
+          const output=String(child.stdout??'').split('\n').filter(line=>/^(B08_UI_EVIDENCE |PASS B08)/.test(line)).join('\n')
+          process.stdout.write(output+'\n')
+          if(child.error||child.status!==0){
+            const cause=sanitized(String(child.error??'')+String(child.stderr??'')+String(child.stdout??''))
+            throw Error('B08 stage failed: '+(activation?'activation':env.B08_PREPARE==='true'?'synthetic setup':'Chrome acceptance')+'; '+cause+'; no retry')
+          }
+          return output
+        }
+        invoke('./integration-tests/postgres/b08-revoke-session.exec.ts',{...b06Env,B08_PREPARE:'true'})
+        // Same database, no consumer during the existing signed activation CAS.
+        invoke('./integration-tests/postgres/b08-activation.pg16.ts',b06Env,true)
+        const output=invoke('./integration-tests/postgres/b08-revoke-session.exec.ts',{...b06Env,DOGRUADRES_MFA_SETTINGS_ENABLED:'true',DOGRUADRES_MFA_ENROLLMENT_ENABLED:'true',DOGRUADRES_MFA_RUNTIME_ENABLED:'true'})
+        assert.ok(output.includes('PASS B08-UI real Chrome/native MFA/HTTP/SQL'))
       }
 
       if (scope === "all" || scope === "mfa") {
