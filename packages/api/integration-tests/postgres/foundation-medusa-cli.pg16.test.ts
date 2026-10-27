@@ -158,7 +158,10 @@ async function run(){
           const child=spawnSync(process.execPath,activation?[script]:['run','medusa','exec',script],{cwd:process.cwd(),env,encoding:'utf8',timeout:360000,maxBuffer:4*1024*1024})
           const output=String(child.stdout??'').split('\n').filter(line=>/^(B06_UI_EVIDENCE |PASS B06)/.test(line)).join('\n')
           process.stdout.write(output+'\n')
-          if(child.error||child.status!==0)throw Error('B06 stage failed: '+(activation?'activation':env.B06_PREPARE==='true'?'synthetic setup':'Chrome acceptance')+'; sanitized evidence only; no retry')
+          if(child.error||child.status!==0){
+            const cause=sanitized(String(child.error??'')+String(child.stderr??'')+String(child.stdout??''))
+            throw Error('B06 stage failed: '+(activation?'activation':env.B06_PREPARE==='true'?'synthetic setup':'Chrome acceptance')+'; '+cause+'; no retry')
+          }
           return output
         }
         invoke('./integration-tests/postgres/b06-roles.exec.ts',{...b06Env,B06_PREPARE:'true'})
