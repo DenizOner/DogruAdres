@@ -420,7 +420,7 @@ export class SmtpConnection {
       if (userReply.code !== 334) {
         throw new Error(`SMTP user authentication failed: ${userReply.code} ${userReply.message}`)
       }
-      const passB64 = Buffer.from(this.config.password.replace(/\s+/g, "")).toString("base64")
+      const passB64 = Buffer.from(this.config.password).toString("base64")
       const passReply = await this.sendCommand(passB64)
       if (passReply.code !== 235) {
         throw new Error(`SMTP password authentication failed: ${passReply.code} ${passReply.message}`)

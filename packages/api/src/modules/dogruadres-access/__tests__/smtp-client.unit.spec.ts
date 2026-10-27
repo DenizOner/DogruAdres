@@ -100,6 +100,10 @@ describe("smtp-client unit tests", () => {
           } else if (str.startsWith(Buffer.from("secretpass").toString("base64"))) {
             authenticated = true
             socket.write("235 2.7.0 Authentication successful\r\n")
+          } else if (str.startsWith(Buffer.from("abc def").toString("base64"))) {
+            // Accept only the byte-exact password; "abcdef" must not authenticate.
+            authenticated = true
+            socket.write("235 2.7.0 Authentication successful\r\n")
           } else if (str.startsWith("MAIL FROM:")) {
             socket.write("250 2.1.0 Sender OK\r\n")
           } else if (str.startsWith("RCPT TO:")) {
@@ -152,6 +156,32 @@ describe("smtp-client unit tests", () => {
 
       expect(result.accepted).toEqual(["recipient@example.com"])
       expect(result.messageId).toContain("@127.0.0.1")
+    })
+
+    it("preserves internal whitespace in SMTP AUTH LOGIN passwords", async () => {
+      const connection = new SmtpConnection({
+        enabled: true,
+        host: "127.0.0.1",
+        port: serverPort,
+        security: "none",
+        username: "testuser",
+        password: "abc def",
+        fromEmail: "sender@example.com",
+        connectionTimeoutMs: 3000,
+        socketTimeoutMs: 3000,
+      })
+
+      try {
+        await connection.connect()
+        const result = await connection.sendMail({
+          to: "recipient@example.com",
+          subject: "Whitespace Password Regression",
+          text: "Loopback test only",
+        })
+        expect(result.accepted).toEqual(["recipient@example.com"])
+      } finally {
+        connection.close()
+      }
     })
   })
   describe("security validations: CRLF injection, dot-stuffing and SSRF", () => {
