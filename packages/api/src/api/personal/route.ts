@@ -312,7 +312,6 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         el('audit-timeline-section').hidden=false;
         timelineCursor = null;
         await loadTimeline(id);
-        await pendingInvitations(id,request);
       }else{
         el('invite-member').hidden=true;
         clearPendingInvitations();
@@ -323,7 +322,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         el('audit-timeline-entries').replaceChildren();
         el('audit-timeline-status').textContent = '';
       }
-      await memberships(id,request);if(request===organizationRequest)status('Kuruluş erişimi doğrulandı');
+      await memberships(id,request);
+      if(request===organizationRequest&&currentOrg===id&&!el('pending-invitations-panel').hidden)
+        void pendingInvitations(id,request);
+      if(request===organizationRequest)status('Kuruluş erişimi doğrulandı');
     }catch(e){if(request!==organizationRequest)return;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('detail').textContent='';clearMemberships();clearPendingInvitations();el('memberships-status').textContent=membershipError(e);status(e.message)}
   }
   function clearMemberships(){
