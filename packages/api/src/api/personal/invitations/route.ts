@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { z } from "@medusajs/framework/zod"
 import { createInvitationWorkflow } from "../../../workflows/dogruadres-access/create-invitation"
 import { acceptInvitationWorkflow } from "../../../workflows/dogruadres-access/accept-invitation"
+import { revokeInvitationWorkflow } from "../../../workflows/dogruadres-access/revoke-invitation"
 import { deriveInvitationToken } from "../../../modules/dogruadres-access/security"
 import { sendSmtpEmail } from "../../../modules/dogruadres-access/smtp-client"
 import { verifiedEmailForActorContext } from "../../dogruadres/invitations/accept/route"
@@ -82,9 +83,35 @@ const accept = z.object({
   action: z.literal("accept"),
   token: z.string().min(1).max(256),
 }).strict()
-const body = z.discriminatedUnion("action", [create, accept])
+const revoke = z.object({
+  action: z.literal("revoke"),
+  organization_id: organization,
+  invitation_id: z.string().regex(/^dainv_[A-Za-z0-9_-]{1,80}$/),
+}).strict()
+const body = z.discriminatedUnion("action", [create, accept, revoke])
 
 export const AUTHENTICATE = false
+
+/** A separate read-only, session-scoped list: never expose token hashes or raw links. */
+export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
+  res.setHeader("Cache-Control", "no-store")
+  if (!enabled()) return res.status(503).json({ message: "Unavailable" })
+  const parsed = organization.safeParse(req.query.organization)
+  if (!parsed.success || Object.keys(req.query).length !== 1)
+    return res.status(400).json({ message: "Invalid input" })
+  const service = access(req)
+  const scoped = await service.personalOrganizations(sessionToken(req), parsed.data)
+  if (!scoped || scoped.organizations.length !== 1 ||
+      !["owner", "admin"].includes(scoped.organizations[0].role))
+    return res.status(403).json({ message: "Access denied" })
+  const invitations = await service.listInvitations(
+    { organization_id: parsed.data, status: "pending" },
+    { select: ["id", "recipient_email", "role", "status", "expires_at"], take: 100 }
+  )
+  const now = Date.now()
+  return res.json({ invitations: invitations.filter(item => item.expires_at.getTime() > now)
+    .map(({ id, recipient_email, role, status, expires_at }) => ({ id, recipient_email, role, status, expires_at })) })
+}
 
 /** Only the existing opaque personal session crosses the browser boundary.
  * The native invitation paths remain closed by nativeIngress. No bearer
@@ -170,6 +197,29 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       invitation: { id: result.id, role: result.role, status: result.status, expires_at: result.expires_at },
       delivery: { status: deliveryStatus },
     })
+  }
+
+  if (parsed.data.action === "revoke") {
+    const scoped = await service.personalOrganizations(token, parsed.data.organization_id)
+    if (!scoped || scoped.organizations.length !== 1 ||
+        !["owner", "admin"].includes(scoped.organizations[0].role))
+      return res.status(403).json({ message: "Access denied" })
+    try {
+      // The existing Foundation workflow verifies active membership and changes
+      // the invitation + audit/outbox atomically in its own database transaction.
+      const { result } = await revokeInvitationWorkflow(req.scope).run({
+        input: {
+          organization_id: parsed.data.organization_id,
+          invitation_id: parsed.data.invitation_id,
+          actor_person_id: principal.person_id,
+          actor_type: principal.actor_type,
+          actor_id: principal.actor_id,
+        },
+      })
+      return res.json({ invitation: { id: result.id, status: result.status, revoked_at: result.revoked_at } })
+    } catch {
+      return res.status(403).json({ message: "Davet iptal edilemiyor. Durumunu yeniden kontrol edin." })
+    }
   }
 
   // Email ownership is proved by the *native* AuthVerification module, not TOTP,

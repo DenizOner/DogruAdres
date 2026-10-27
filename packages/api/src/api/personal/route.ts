@@ -146,6 +146,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button>Üyelik Daveti Oluştur</button>
   </form>
   <p id="invite-result" role="status" aria-live="polite"></p>
+  <section id="pending-invitations-panel" hidden>
+    <h3>Bekleyen kuruluş davetleri</h3>
+    <p id="pending-invitations-status" role="status" aria-live="polite"></p>
+    <div id="pending-invitations"></div>
+    <button id="pending-invitations-refresh" type="button">Davetleri yenile</button>
+  </section>
   <button id="staff">Platform yetkisini kontrol et</button>
   <h2>Kuruluş oluşturma</h2><p>Bu işlem açık platform görevi ve güncel güçlü doğrulama gerektirir. İlk iki Owner sunucuda doğrulanır.</p>
   <form id="provision"><label>Yeni kuruluş adı<input name="name" maxlength="200" required></label><label>Birinci Owner türü<select name="type1"><option>user</option><option>member</option><option>customer</option></select></label><label>Birinci Owner kimliği<input name="owner1" required></label><label>İkinci Owner türü<select name="type2"><option>user</option><option>member</option><option>customer</option></select></label><label>İkinci Owner kimliği<input name="owner2" required></label><button>Kuruluş oluştur</button></form><pre id="provision-result"></pre>
@@ -244,19 +250,72 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   async function links(){el('bindings').replaceChildren();const data=await api('links');for(const item of data.bindings){const p=document.createElement('p');p.textContent=item.actor_type+' '+item.actor_id+' — '+(item.revoked_at?'revoked':'active');el('bindings').append(p);if(!item.revoked_at){const b=document.createElement('button');b.textContent='Bağı kaldır '+item.id;b.onclick=async()=>{b.disabled=true;try{await api('links',{method:'POST',body:JSON.stringify({action:'unlink',binding_id:item.id})});await links();el('actor-result').textContent='';status('Hesap bağı kaldırıldı')}catch(e){status(e.message);if(!e.uncertain)b.disabled=false}};el('bindings').append(b)}}}
+  function clearPendingInvitations(){
+    el('pending-invitations-panel').hidden=true;
+    el('pending-invitations').replaceChildren();
+    el('pending-invitations-status').textContent='';
+  }
+  async function pendingInvitations(org,request){
+    if(request!==organizationRequest||currentOrg!==org)return;
+    const root=el('pending-invitations');
+    root.replaceChildren();
+    el('pending-invitations-status').textContent='Davetler yükleniyor…';
+    try{
+      const data=await api('invitations?organization='+encodeURIComponent(org));
+      if(request!==organizationRequest||currentOrg!==org)return;
+      if(!Array.isArray(data.invitations))throw new Error('Invalid invitation response');
+      for(const invite of data.invitations){
+        const p=document.createElement('p');
+        p.textContent=invite.recipient_email+' — '+invite.role+' — '+invite.status;
+        const button=document.createElement('button');
+        button.type='button';
+        button.textContent='Daveti iptal et';
+        button.onclick=async()=>{
+          if(request!==organizationRequest||currentOrg!==org)return;
+          button.disabled=true;
+          try{
+            const outcome=await api('invitations',{method:'POST',body:JSON.stringify({
+              action:'revoke',organization_id:org,invitation_id:invite.id
+            })});
+            if(request!==organizationRequest||currentOrg!==org)return;
+            if(outcome.invitation?.id!==invite.id||outcome.invitation?.status!=='revoked')
+              throw new Error('Davet durumu doğrulanamadı');
+            await pendingInvitations(org,request);
+            status('Davet iptal edildi.');
+          }catch(e){
+            if(request!==organizationRequest||currentOrg!==org)return;
+            status(e.uncertain?'Davet sonucu belirsiz. Yenilemeden işlemi tekrar göndermeyin.':e.message);
+            if(!e.uncertain)button.disabled=false;
+          }
+        };
+        root.append(p,button);
+      }
+      el('pending-invitations-status').textContent=data.invitations.length?'Bekleyen davetler güncellendi.':'Bekleyen davet yok.';
+    }catch(e){
+      if(request!==organizationRequest||currentOrg!==org)return;
+      root.replaceChildren();
+      el('pending-invitations-status').textContent='Davetler görüntülenemiyor. Yeniden yükleyin.';
+    }
+  }
+  el('pending-invitations-refresh').onclick=async()=>{
+    if(currentOrg)await pendingInvitations(currentOrg,organizationRequest);
+  };
   async function selectOrg(id){
-    const request=++organizationRequest;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('invite-member').hidden=true;el('invite-result').textContent='';el('detail').textContent='';clearMemberships();history.replaceState(null,'','/personal');
+    const request=++organizationRequest;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('invite-member').hidden=true;el('invite-result').textContent='';clearPendingInvitations();el('detail').textContent='';clearMemberships();history.replaceState(null,'','/personal');
     el('memberships').ariaBusy='true';el('memberships-status').textContent='Üyelikler yükleniyor…';
     try{const result=await api('organizations?id='+encodeURIComponent(id));if(request!==organizationRequest)return;
       currentOrg=id;el('detail').textContent=JSON.stringify(result.organizations[0],null,2);history.replaceState(null,'','/personal?organization='+encodeURIComponent(id));
       if(['owner','admin'].includes(result.organizations[0]?.role)){
         el('memberships-refresh').hidden=false;
         el('invite-member').hidden=false;
+        el('pending-invitations-panel').hidden=false;
         el('audit-timeline-section').hidden=false;
         timelineCursor = null;
         await loadTimeline(id);
+        await pendingInvitations(id,request);
       }else{
         el('invite-member').hidden=true;
+        clearPendingInvitations();
         el('audit-timeline-section').hidden=true;
         timelineCursor = null;
         timelineOrg = '';
@@ -265,7 +324,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         el('audit-timeline-status').textContent = '';
       }
       await memberships(id,request);if(request===organizationRequest)status('Kuruluş erişimi doğrulandı');
-    }catch(e){if(request!==organizationRequest)return;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('detail').textContent='';clearMemberships();el('memberships-status').textContent=membershipError(e);status(e.message)}
+    }catch(e){if(request!==organizationRequest)return;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('detail').textContent='';clearMemberships();clearPendingInvitations();el('memberships-status').textContent=membershipError(e);status(e.message)}
   }
   function clearMemberships(){
     el('memberships').replaceChildren();el('memberships').ariaBusy='false';el('memberships-status').textContent='';
@@ -321,7 +380,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
-    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;el('invite-result').textContent='';
+    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPendingInvitations();el('invite-result').textContent='';
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
@@ -578,6 +637,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         status('Kuruluş üyelik daveti oluşturuldu');
       }
       e.target.reset();
+      await pendingInvitations(orgId,organizationRequest);
     }catch(err){
       el('invite-result').textContent='Davet oluşturulamadı: '+err.message;
       status(err.message);
@@ -605,7 +665,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // belong to a view epoch and cannot repopulate a concealed private workspace.
   function concealPrivateView(){
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
-    el('workspace').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();
+    el('workspace').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearPendingInvitations();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');

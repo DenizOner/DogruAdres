@@ -10,9 +10,9 @@ test('closed public method/path contract never exposes native login or refresh',
   for(const path of ['/auth/token/refresh','/auth/session','/auth/verification/request','/vendor/members/me','/store/customers/me','/hooks/private','/cloud/users','/plugin/private'])
     for(const method of ['GET','POST'])assert.equal(allowedPublicRequest(method,path),false)
 })
-test('B08 personal invitation adapter has a single exact public POST exception',()=>{
-  assert.equal(allowedPublicRequest('POST','/personal/invitations'),true)
-  for(const method of ['GET','PUT','PATCH','DELETE','OPTIONS','HEAD'])
+test('B10 invitation adapter exposes only exact scoped GET and POST',()=>{
+  for(const method of ['GET','POST'])assert.equal(allowedPublicRequest(method,'/personal/invitations'),true)
+  for(const method of ['PUT','PATCH','DELETE','OPTIONS','HEAD'])
     assert.equal(allowedPublicRequest(method,'/personal/invitations'),false)
   for(const path of [
     '/personal/invitations/',

@@ -1,7 +1,8 @@
-import { POST } from "../invitations/route"
+import { GET, POST } from "../invitations/route"
 import { access, csrf, enabled, sessionToken } from "../security"
 import { createInvitationWorkflow } from "../../../workflows/dogruadres-access/create-invitation"
 import { acceptInvitationWorkflow } from "../../../workflows/dogruadres-access/accept-invitation"
+import { revokeInvitationWorkflow } from "../../../workflows/dogruadres-access/revoke-invitation"
 import { verifiedEmailForActorContext } from "../../dogruadres/invitations/accept/route"
 import { sendSmtpEmail } from "../../../modules/dogruadres-access/smtp-client"
 
@@ -13,6 +14,9 @@ jest.mock("../../../workflows/dogruadres-access/create-invitation", () => ({
 }))
 jest.mock("../../../workflows/dogruadres-access/accept-invitation", () => ({
   acceptInvitationWorkflow: jest.fn(),
+}))
+jest.mock("../../../workflows/dogruadres-access/revoke-invitation", () => ({
+  revokeInvitationWorkflow: jest.fn(),
 }))
 jest.mock("../../dogruadres/invitations/accept/route", () => ({
   verifiedEmailForActorContext: jest.fn(),
@@ -44,9 +48,11 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
   const service = {
     personalLinkPrimary: jest.fn(),
     personalOrganizations: jest.fn(),
+    listInvitations: jest.fn(),
   }
   const mockCreateRun = jest.fn()
   const mockAcceptRun = jest.fn()
+  const mockRevokeRun = jest.fn()
   const scope = { resolve: jest.fn() }
 
   beforeEach(() => {
@@ -62,6 +68,9 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     })
     ;(createInvitationWorkflow as unknown as jest.Mock).mockReturnValue({ run: mockCreateRun })
     ;(acceptInvitationWorkflow as unknown as jest.Mock).mockReturnValue({ run: mockAcceptRun })
+    ;(revokeInvitationWorkflow as unknown as jest.Mock).mockReturnValue({ run: mockRevokeRun })
+    mockRevokeRun.mockResolvedValue({ result: { id: "dainv_new", status: "revoked", revoked_at: new Date() } })
+    service.listInvitations.mockResolvedValue([])
     mockCreateRun.mockResolvedValue({
       result: { id: "dainv_new", role: "member", status: "pending", expires_at: new Date("2026-11-01T00:00:00Z") },
     })
@@ -78,8 +87,88 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     return res
   }
 
+  async function invokeGet(query: Record<string,unknown>) {
+    const res: any = {
+      setHeader: jest.fn(), status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis(),
+    }
+    await GET({ query, scope, headers: {} } as any, res)
+    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store")
+    return res
+  }
+
   const createBody = { action: "create", organization_id: "daorg_allowed", email: " member@example.invalid ", role: "member" }
   const acceptBody = { action: "accept", token: "invitation-secret" }
+  const revokeBody = { action: "revoke", organization_id: "daorg_allowed", invitation_id: "dainv_new" }
+
+  it("lists only scoped unexpired pending invitation metadata without bearer secrets", async () => {
+    service.listInvitations.mockResolvedValue([
+      { id:"dainv_new", recipient_email:"recipient@example.invalid", role:"member", status:"pending",
+        expires_at:new Date(Date.now()+60000), token_hash:"private-secret" },
+      { id:"dainv_expired", recipient_email:"old@example.invalid", role:"admin", status:"pending",
+        expires_at:new Date(Date.now()-60000), token_hash:"old-secret" },
+    ])
+    const res = await invokeGet({ organization:"daorg_allowed" })
+    expect(service.listInvitations).toHaveBeenCalledWith(
+      { organization_id:"daorg_allowed", status:"pending" },
+      { select:["id","recipient_email","role","status","expires_at"], take:100 }
+    )
+    const payload = JSON.stringify(res.json.mock.calls)
+    expect(payload).toContain("dainv_new")
+    expect(payload).not.toContain("dainv_expired")
+    expect(payload).not.toContain("private-secret")
+    expect(payload).not.toContain("token_hash")
+  })
+  it.each([
+    { organization:"wrong" },
+    { organization:"daorg_allowed", extra:"x" },
+    {},
+  ])("refuses malformed or additional invitation list selectors: %p", async query => {
+    const res = await invokeGet(query)
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(service.listInvitations).not.toHaveBeenCalled()
+  })
+  it.each([null,{ organizations:[{ id:"daorg_allowed",role:"member" }] },
+    { organizations:[{ id:"daorg_allowed",role:"admin" },{ id:"daorg_allowed",role:"owner" }] }])
+    ("denies invitation listing without exactly one authorized Organization: %p", async scoped => {
+      service.personalOrganizations.mockResolvedValue(scoped)
+      const res = await invokeGet({ organization:"daorg_allowed" })
+      expect(res.status).toHaveBeenCalledWith(403)
+      expect(service.listInvitations).not.toHaveBeenCalled()
+    })
+  it("uses the native revocation workflow and only server-resolved actor identity", async () => {
+    const res=await invoke(revokeBody)
+    expect(revokeInvitationWorkflow).toHaveBeenCalledWith(scope)
+    expect(mockRevokeRun).toHaveBeenCalledWith({ input:{
+      organization_id:"daorg_allowed",invitation_id:"dainv_new",actor_person_id:"person_owner",
+      actor_type:"user",actor_id:"user_owner"
+    }})
+    expect(res.json).toHaveBeenCalledWith({ invitation:expect.objectContaining({id:"dainv_new",status:"revoked"}) })
+    expect(sendSmtpEmail).not.toHaveBeenCalled()
+  })
+  it("rejects unauthorized and forged revocation before any workflow call", async () => {
+    service.personalOrganizations.mockResolvedValue({organizations:[{id:"daorg_allowed",role:"member"}]})
+    const denied=await invoke(revokeBody)
+    expect(denied.status).toHaveBeenCalledWith(403)
+    expect(mockRevokeRun).not.toHaveBeenCalled()
+    const invalid=await invoke({...revokeBody, actor_id:"injected"})
+    expect(invalid.status).toHaveBeenCalledWith(400)
+    expect(mockRevokeRun).not.toHaveBeenCalled()
+  })
+  it("denies revoked/accepted/expired invitation workflow failures without internal detail", async () => {
+    mockRevokeRun.mockRejectedValueOnce(new Error("private token or recipient secret"))
+    const res=await invoke(revokeBody)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(JSON.stringify(res.json.mock.calls)).not.toContain("private token")
+  })
+  it("never revokes after CSRF denial or absent real primary identity", async () => {
+    ;(csrf as jest.Mock).mockResolvedValueOnce(false)
+    const csrfDenied=await invoke(revokeBody)
+    expect(csrfDenied.status).toHaveBeenCalledWith(403)
+    service.personalLinkPrimary.mockResolvedValueOnce(null)
+    const identityDenied=await invoke(revokeBody)
+    expect(identityDenied.status).toHaveBeenCalledWith(403)
+    expect(mockRevokeRun).not.toHaveBeenCalled()
+  })
 
   it.each(["feature disabled", "CSRF denied"])("blocks both invitation mutations when %s", async reason => {
     if (reason === "feature disabled") (enabled as jest.Mock).mockReturnValue(false)
