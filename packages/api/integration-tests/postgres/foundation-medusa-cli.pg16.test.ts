@@ -155,7 +155,7 @@ async function run(){
         const suffix=randomBytes(8).toString('hex')
         const b06Env={...nativeEnv,B06_EMAIL_A:`b06-a-${suffix}@example.invalid`,B06_EMAIL_B:`b06-b-${suffix}@example.invalid`,B06_PASSWORD_A:randomBytes(32).toString('base64url'),B06_PASSWORD_B:randomBytes(32).toString('base64url')}
         const invoke=(script:string,env:NodeJS.ProcessEnv,activation=false)=>{
-          const child=spawnSync(activation?'node':process.execPath,activation?['-r','ts-node/register',script]:['run','medusa','exec',script],{cwd:process.cwd(),env,encoding:'utf8',timeout:360000,maxBuffer:4*1024*1024})
+          const child=spawnSync(process.execPath,activation?[script]:['run','medusa','exec',script],{cwd:process.cwd(),env,encoding:'utf8',timeout:360000,maxBuffer:4*1024*1024})
           const output=String(child.stdout??'').split('\n').filter(line=>/^(B06_UI_EVIDENCE |PASS B06)/.test(line)).join('\n')
           process.stdout.write(output+'\n')
           if(child.error||child.status!==0)throw Error('B06 stage failed: '+(activation?'activation':env.B06_PREPARE==='true'?'synthetic setup':'Chrome acceptance')+'; sanitized evidence only; no retry')
