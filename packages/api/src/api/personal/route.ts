@@ -142,6 +142,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <form id="invite-member" hidden style="margin-top: 16px; padding: 14px; border: 1px solid #c1c6d4; border-radius: 8px; background: #f2f3fb;">
     <h3 style="margin-top: 0; font-size: 14px;">Kuruluşa Yeni Üye Davet Et</h3>
     <label>Davet edilecek e-posta adresi<input name="email" type="email" required maxlength="320" placeholder="yeni.uye@alanadi.invalid"></label>
+    <label>Davet edilecek rol<select name="role" required><option value="member">Üye</option><option value="admin">Yönetici</option></select></label>
     <button>Üyelik Daveti Oluştur</button>
   </form>
   <p id="invite-result" role="status" aria-live="polite"></p>
@@ -551,8 +552,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const b=e.target.querySelector('button');b.disabled=true;
     el('invite-result').textContent='Davet oluşturuluyor ve e-posta iletiliyor...';
     try{
-      const email=new FormData(e.target).get('email');
-      const res=await api('invitations',{method:'POST',body:JSON.stringify({action:'create',organization_id:orgId,email,role:'member'})});
+      const inviteData=new FormData(e.target);
+      const email=inviteData.get('email');
+      const role=inviteData.get('role');
+      const res=await api('invitations',{method:'POST',body:JSON.stringify({action:'create',organization_id:orgId,email,role})});
       if(res.delivery?.status==='sent'){
         el('invite-result').textContent='Davet oluşturuldu. E-posta gönderim için kabul edildi.';
         status('Davet e-postası gönderim için kabul edildi');

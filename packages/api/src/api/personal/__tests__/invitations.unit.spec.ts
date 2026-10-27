@@ -90,7 +90,7 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     expect(mockCreateRun).not.toHaveBeenCalled()
   })
   it.each([
-    { ...createBody, role: "admin" },
+    { ...createBody, role: "owner" },
     { ...createBody, actor_id: "user_attack" },
     { ...createBody, protected_owner: true },
     { ...createBody, organization_id: "another_org" },
@@ -137,6 +137,36 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     )
     expect(mockAcceptRun).not.toHaveBeenCalled()
   })
+  it.each(["owner", "admin"] as const)("allows %s to invite a verified-target Admin without exposing the secret to the inviter", async actorRole => {
+    service.personalOrganizations.mockResolvedValue({
+      person_id: principal.person_id,
+      organizations: [{ id: "daorg_allowed", role: actorRole }],
+    })
+    mockCreateRun.mockResolvedValueOnce({
+      result: { id: "dainv_admin", role: "admin", status: "pending", expires_at: new Date("2026-11-01T00:00:00Z") },
+    })
+    const res = await invoke({ ...createBody, role: "admin" })
+    expect(mockCreateRun).toHaveBeenCalledWith({ input: {
+      organization_id: "daorg_allowed", email: "member@example.invalid",
+      role: "admin", actor_person_id: "person_owner", actor_type: "user", actor_id: "user_owner",
+    } })
+    expect(res.status).toHaveBeenCalledWith(201)
+    const response = JSON.stringify(res.json.mock.calls)
+    expect(response).toContain('"role":"admin"')
+    expect(response).not.toContain("invitation_token")
+    expect(response).not.toContain("unit-only-")
+    expect(sendSmtpEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "member@example.invalid", subject: "DoğruAdres Kuruluş Üyelik Daveti" })
+    )
+  })
+
+  it("never permits Owner invitation through the personal API", async () => {
+    const res = await invoke({ ...createBody, role: "owner" })
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(mockCreateRun).not.toHaveBeenCalled()
+    expect(sendSmtpEmail).not.toHaveBeenCalled()
+  })
+
   it("preserves previous invitations if creating a new invitation fails", async () => {
     mockCreateRun.mockRejectedValueOnce(new Error("synthetic write failure"))
     await expect(invoke(createBody)).rejects.toThrow("synthetic write failure")

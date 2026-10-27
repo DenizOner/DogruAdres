@@ -76,7 +76,7 @@ const create = z.object({
   action: z.literal("create"),
   organization_id: organization,
   email: z.string().trim().email().max(320),
-  role: z.literal("member"),
+  role: z.enum(["member", "admin"]),
 }).strict()
 const accept = z.object({
   action: z.literal("accept"),
@@ -123,7 +123,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     const { result } = await createInvitationWorkflow(req.scope).run({
       input: {
         organization_id: input.organization_id, email: input.email,
-        role: "member", actor_person_id: principal.person_id,
+        role: input.role, actor_person_id: principal.person_id,
         actor_type: principal.actor_type, actor_id: principal.actor_id,
       },
     })
