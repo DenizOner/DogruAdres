@@ -159,7 +159,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   async function api(path,options={}){const epoch=viewEpoch;let r;try{r=await fetch('/personal/'+path,{credentials:'same-origin',...options,headers:{'Content-Type':'application/json','x-csrf-token':csrf,...options.headers}})}catch{const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');e.uncertain=true;throw e}const data=await r.json();if(epoch!==viewEpoch)throw new Error('Görünüm yenilendi');if(!r.ok){const e=new Error(data.message||'İşlem reddedildi');e.httpStatus=r.status;e.uncertain=r.status>=500;throw e}return data}
   let recoveryCodes=[];
   function clearMfaCodes(){recoveryCodes=[];el("mfa-codes-value").textContent="";el("mfa-codes-value").hidden=true;el("mfa-codes").hidden=true}
-  let currentOrg='',linkIntent='',organizationRequest=0,mfaState=null,timelineCursor=null,timelineOrg='',timelineRequest=0;
+  let currentOrg='',currentPersonId='',linkIntent='',organizationRequest=0,mfaState=null,timelineCursor=null,timelineOrg='',timelineRequest=0;
   async function loadTimeline(org, cursor = null, append = false) {
     if (!org) return;
     const reqId = ++timelineRequest;
@@ -276,6 +276,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('memberships').ariaBusy='true';el('memberships-status').textContent='Üyelikler yükleniyor…';el('memberships-refresh').disabled=true;
     try{const data=await api('memberships?organization='+encodeURIComponent(org));if(request!==organizationRequest||currentOrg!==org)return;
       if(!Array.isArray(data.memberships))throw new Error('Invalid membership response');
+      const canManageOwners=data.memberships.some(m=>m.person_id===currentPersonId&&m.role==='owner'&&m.protected_owner===true&&m.status==='active');
       for(const m of data.memberships){const p=document.createElement('p');p.textContent=m.person_id+' — '+m.role+' — '+m.status;el('memberships').append(p);
         if(m.status==='active'){
           if(!m.protected_owner&&m.role!=='owner'){
@@ -288,6 +289,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)rb.disabled=false}
             };
             el('memberships').append(sel,rb);
+          }
+          if(canManageOwners && ((m.protected_owner&&m.role==='owner')||(!m.protected_owner&&m.role!=='owner'))){
+            const ownerRole=m.protected_owner?'admin':'owner';
+            const ob=document.createElement('button');ob.textContent=(ownerRole==='owner'?'Korumalı Owner yap ':'Owner rolünü Admin yap ')+m.id;
+            ob.onclick=async()=>{
+              if(request!==organizationRequest||currentOrg!==org)return;ob.disabled=true;
+              try{await api('memberships',{method:'POST',body:JSON.stringify({action:'protected_owner',organization_id:org,membership_id:m.id,role:ownerRole})});if(request!==organizationRequest)return;await selectOrg(org);status('Owner üyeliği güncellendi')}
+              catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)ob.disabled=false}
+            };
+            el('memberships').append(ob);
           }
           const b=document.createElement('button');b.textContent='Üyeliği iptal et '+m.id;b.onclick=async()=>{
             if(request!==organizationRequest||currentOrg!==org)return;b.disabled=true;
@@ -305,11 +316,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
-    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;organizationRequest++;csrf='';currentOrg='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;el('invite-result').textContent='';
+    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;el('invite-result').textContent='';
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}

@@ -176,3 +176,84 @@ describe("M0 B06 personal membership role change service boundary", () => {
     expect(changeMembershipSpy).not.toHaveBeenCalled()
   })
 })
+
+describe("M0 B07 protected Owner session gateway (mock-only)", () => {
+  const token = "da_test_session_token_12345678901234567890123"
+  const orgId = "daorg_01M0TESTORGANIZATION123456"
+  const membershipId = "daomem_01M0TESTMEMBERSHIP12345"
+  const service = Object.create(AccessService.prototype) as AccessService
+  const context = { transactionManager: { execute: jest.fn(async () => []) } } as unknown as Context
+  const identity = { person_id: "daprs_owner", actor_type: "user", actor_id: "user_owner" } as any
+  const ownerDecision = { organizations: [{ id: orgId, role: "owner" }] } as any
+  const activeMember = { id: membershipId, person_id: "daprs_member", role: "member", status: "active", protected_owner: false } as any
+  const protectedOwner = { ...activeMember, role: "owner", protected_owner: true }
+
+  let current: jest.SpyInstance
+  let orgs: jest.SpyInstance
+  let target: jest.SpyInstance
+  let change: jest.SpyInstance
+
+  beforeEach(() => {
+    current = jest.spyOn(IdentitySessions.prototype, "current").mockResolvedValue(identity)
+    orgs = jest.spyOn(IdentitySessions.prototype, "organizations").mockResolvedValue(ownerDecision)
+    target = jest.spyOn(service as any, "getMembershipInOrganization").mockResolvedValue(activeMember)
+    change = jest.spyOn(service as any, "changeMembership").mockResolvedValue({
+      id: membershipId, role: "owner", status: "active", protected_owner: true,
+    })
+  })
+  afterEach(() => jest.restoreAllMocks())
+
+  it("routes promotion of an existing active member through the existing transactional owner policy", async () => {
+    await expect(service.personalManageProtectedOwner(token, orgId, membershipId, "owner", context))
+      .resolves.toEqual({ id: membershipId, role: "owner", status: "active", protected_owner: true })
+    expect(current).toHaveBeenCalledWith(token, true)
+    expect(orgs).toHaveBeenCalledWith(token, orgId)
+    expect(target).toHaveBeenCalledWith(membershipId, orgId, context)
+    expect(change).toHaveBeenCalledWith({
+      organization_id: orgId, membership_id: membershipId, actor_person_id: "daprs_owner",
+      actor_type: "user", actor_id: "user_owner", role: "owner",
+    }, context)
+  })
+
+  it("routes protected Owner demotion through existing last-owner invariant rather than bypassing it", async () => {
+    target.mockResolvedValue(protectedOwner)
+    change.mockResolvedValue({ id: membershipId, role: "admin", status: "active", protected_owner: false })
+    await expect(service.personalManageProtectedOwner(token, orgId, membershipId, "admin", context))
+      .resolves.toMatchObject({ role: "admin", protected_owner: false })
+    expect(change).toHaveBeenCalledWith(expect.objectContaining({ role: "admin" }), context)
+  })
+
+  it.each(["admin", "member"])("denies %s actors before touching the target", async role => {
+    orgs.mockResolvedValue({ organizations: [{ id: orgId, role }] })
+    await expect(service.personalManageProtectedOwner(token, orgId, membershipId, "owner", context))
+      .rejects.toThrow("Access denied")
+    expect(target).not.toHaveBeenCalled()
+    expect(change).not.toHaveBeenCalled()
+  })
+
+  it("denies stale strong sessions and foreign targets without writing", async () => {
+    current.mockResolvedValue(null)
+    await expect(service.personalManageProtectedOwner(token, orgId, membershipId, "owner", context))
+      .rejects.toThrow("Access denied")
+    expect(change).not.toHaveBeenCalled()
+    current.mockResolvedValue(identity)
+    target.mockResolvedValue(null)
+    await expect(service.personalManageProtectedOwner(token, orgId, membershipId, "owner", context))
+      .rejects.toThrow("Membership not found")
+    expect(change).not.toHaveBeenCalled()
+  })
+
+  it("denies revoked, duplicate promotion, non-owner demotion and arbitrary role", async () => {
+    for (const entry of [{ ...activeMember, status: "revoked" }, protectedOwner]) {
+      target.mockResolvedValue(entry)
+      await expect(service.personalManageProtectedOwner(token, orgId, membershipId, "owner", context))
+        .rejects.toThrow("Owner operation denied")
+    }
+    target.mockResolvedValue(activeMember)
+    await expect(service.personalManageProtectedOwner(token, orgId, membershipId, "admin", context))
+      .rejects.toThrow("Owner operation denied")
+    await expect(service.personalManageProtectedOwner(token, orgId, membershipId, "member" as any, context))
+      .rejects.toThrow("Invalid Owner operation")
+    expect(change).not.toHaveBeenCalled()
+  })
+})

@@ -18,7 +18,15 @@ const roleChangeInput = z.object({
   role: z.enum(['member', 'admin']),
 }).strict()
 
-const input = z.union([roleChangeInput, revokeInput])
+// B07 uses an explicit action; ordinary B06 can never assign Owner.
+const protectedOwnerInput = z.object({
+  action: z.literal('protected_owner'),
+  organization_id: org,
+  membership_id: membershipId,
+  role: z.enum(['owner', 'admin']),
+}).strict()
+
+const input = z.union([protectedOwnerInput, roleChangeInput, revokeInput])
 
 export const AUTHENTICATE = false
 
@@ -40,6 +48,15 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   if (!parsed.success) return res.status(400).json({ message: 'Invalid input' })
   const service = access(req)
   const token = sessionToken(req)
+  if (parsed.data.action === 'protected_owner') {
+    const membership = await service.personalManageProtectedOwner(
+      token,
+      parsed.data.organization_id,
+      parsed.data.membership_id,
+      parsed.data.role
+    )
+    return res.json({ membership })
+  }
   if ('role' in parsed.data && parsed.data.role) {
     const membership = await service.personalChangeMembershipRole(
       token,

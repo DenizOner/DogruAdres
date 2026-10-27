@@ -33,6 +33,7 @@ describe("personal memberships route", () => {
       ]),
       personalRevokeMembership: jest.fn().mockResolvedValue({ id: memberId, status: "revoked" }),
       personalChangeMembershipRole: jest.fn().mockResolvedValue({ id: memberId, role: "admin", status: "active" }),
+      personalManageProtectedOwner: jest.fn().mockResolvedValue({ id: memberId, role: "owner", status: "active", protected_owner: true }),
       personalSession: jest.fn().mockResolvedValue({ person_id: "daprs_owner" }),
     }
     ;(access as jest.Mock).mockReturnValue(mockService)
@@ -151,6 +152,37 @@ describe("personal memberships route", () => {
       })
     })
 
+    it("uses a separate explicit action for promotion to protected Owner", async () => {
+      req.body = { action: "protected_owner", organization_id: orgId, membership_id: memberId, role: "owner" }
+      await POST(req, res)
+      expect(mockService.personalManageProtectedOwner).toHaveBeenCalledWith(token, orgId, memberId, "owner")
+      expect(mockService.personalChangeMembershipRole).not.toHaveBeenCalled()
+      expect(res.json).toHaveBeenCalledWith({
+        membership: { id: memberId, role: "owner", status: "active", protected_owner: true },
+      })
+    })
+
+    it("rejects forged Owner action with extra actor or status fields", async () => {
+      req.body = { action: "protected_owner", organization_id: orgId, membership_id: memberId,
+        role: "owner", actor_person_id: "forged" }
+      await POST(req, res)
+      expect(res.status).toHaveBeenCalledWith(400)
+      expect(mockService.personalManageProtectedOwner).not.toHaveBeenCalled()
+      req.body = { action: "protected_owner", organization_id: orgId, membership_id: memberId,
+        role: "owner", status: "revoked" }
+      await POST(req, res)
+      expect(res.status).toHaveBeenCalledWith(400)
+      expect(mockService.personalManageProtectedOwner).not.toHaveBeenCalled()
+    })
+
+    it("checks CSRF before any protected Owner operation", async () => {
+      ;(csrf as jest.Mock).mockResolvedValue(false)
+      req.body = { action: "protected_owner", organization_id: orgId, membership_id: memberId, role: "admin" }
+      await POST(req, res)
+      expect(res.status).toHaveBeenCalledWith(403)
+      expect(mockService.personalManageProtectedOwner).not.toHaveBeenCalled()
+    })
+
     it("rejects unauthorized role value 'owner'", async () => {
       req.body = { organization_id: orgId, membership_id: memberId, role: "owner" }
       await POST(req, res)
@@ -261,6 +293,40 @@ describe("personal memberships route", () => {
       await settle()
       return { done, read: h.state.pending.filter(p => p.path === `memberships?organization=${id}`).at(-1)! }
     }
+
+    it("only shows protected Owner controls to the active protected Owner and submits the explicit action", async () => {
+      const h = createUiHarness()
+      runInContext("currentPersonId='p_owner'", h.context)
+      const { done, read } = await selection(h, orgId, "owner")
+      read.resolve({ memberships: [
+        { id: "mem_owner", person_id: "p_owner", role: "owner", status: "active", protected_owner: true },
+        ordinary,
+      ] })
+      await done
+      const promote = h.el("memberships").children.find((x: any) => x.textContent === "Korumalı Owner yap mem_ordinary")
+      expect(promote).toBeDefined()
+      const click = promote.onclick()
+      await settle()
+      const post = h.state.pending.find(p => p.path === "memberships" && p.options?.method === "POST")
+      expect(JSON.parse(post!.options!.body)).toEqual({
+        action: "protected_owner", organization_id: orgId, membership_id: "mem_ordinary", role: "owner",
+      })
+      post!.reject(Object.assign(new Error("Access denied"), { httpStatus: 403 }))
+      await click
+      expect(promote.disabled).toBe(false)
+
+      const denied = createUiHarness()
+      runInContext("currentPersonId='p_admin'", denied.context)
+      const next = await selection(denied, orgId, "admin")
+      next.read.resolve({ memberships: [
+        { id: "mem_admin", person_id: "p_admin", role: "admin", status: "active", protected_owner: false },
+        { id: "mem_owner", person_id: "p_owner", role: "owner", status: "active", protected_owner: true },
+        ordinary,
+      ] })
+      await next.done
+      expect(denied.el("memberships").children.some((x: any) =>
+        typeof x.textContent === "string" && (x.textContent.startsWith("Korumalı Owner yap") || x.textContent.startsWith("Owner rolünü Admin yap")))).toBe(false)
+    })
 
     it("announces pending, populated and genuinely empty results separately", async () => {
       const h = createUiHarness()

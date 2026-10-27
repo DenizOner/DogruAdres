@@ -214,6 +214,54 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     },context)
     return {id:result.id,role:result.role,status:result.status}
   }
+
+  /**
+   * B07: an existing active member can become a protected Owner, and an
+   * existing protected Owner can return to Admin only when another protected
+   * Owner remains. All invariant checks and audit/outbox writes remain in the
+   * existing transaction-bound changeMembership implementation.
+   */
+  @InjectTransactionManager()
+  async personalManageProtectedOwner(
+    token: string,
+    org: string,
+    membership: string,
+    role: 'owner' | 'admin',
+    @MedusaContext() context: Context = {}
+  ) {
+    if (role !== 'owner' && role !== 'admin') {
+      throw new MedusaError(MedusaError.Types.INVALID_DATA, 'Invalid Owner operation')
+    }
+    const sql = securitySql(context.transactionManager)
+    await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`, [org])
+    const sessions = new IdentitySessions(sql)
+    const identity = await sessions.current(token, true)
+    const decision = identity ? await sessions.organizations(token, org) : null
+    if (!identity || decision?.organizations[0]?.role !== 'owner') {
+      throw new MedusaError(MedusaError.Types.FORBIDDEN, 'Access denied')
+    }
+    const target = await this.getMembershipInOrganization(membership, org, context)
+    if (!target) {
+      throw new MedusaError(MedusaError.Types.NOT_FOUND, 'Membership not found in the selected Organization')
+    }
+    // Explicit B07 operation states, not a backdoor to revoked membership
+    // reactivation or ordinary B06 role controls.
+    if (target.status !== 'active' ||
+        (role === 'owner' && (target.protected_owner || target.role === 'owner')) ||
+        (role === 'admin' && (!target.protected_owner || target.role !== 'owner'))) {
+      throw new MedusaError(MedusaError.Types.FORBIDDEN, 'Owner operation denied')
+    }
+    const result = await this.changeMembership({
+      organization_id: org,
+      membership_id: membership,
+      actor_person_id: identity.person_id,
+      actor_type: identity.actor_type,
+      actor_id: identity.actor_id,
+      role,
+    }, context)
+    return { id: result.id, role: result.role, status: result.status, protected_owner: result.protected_owner }
+  }
+
   @InjectTransactionManager()
   async personalMachineGrant(apiKeyId:string,method:string,resource:string,@MedusaContext() context:Context={}) {
     const rows=await securitySql(context.transactionManager).execute(`select id from da_machine_grant where api_key_id=? and method=? and resource=? and revoked_at is null`,[apiKeyId,method,resource])
