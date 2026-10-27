@@ -367,11 +367,11 @@ jobs:
           PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
           PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
           PG_MFA_TEST_SCOPE: b07-ui
-          B06_UI_DISPATCH_SCOPE: b07-ui
-          B06_EVIDENCE_DIR: ${{ runner.temp }}/b07-ui-evidence
+          B07_UI_DISPATCH_SCOPE: b07-ui
+          B07_EVIDENCE_DIR: ${{ runner.temp }}/b07-ui-evidence
         run: |
           set -o pipefail
-          echo "B07-UI source HEAD=$(git rev-parse HEAD) event=$GITHUB_EVENT_NAME scope=$B06_UI_DISPATCH_SCOPE"
+          echo "B07-UI source HEAD=$(git rev-parse HEAD) event=$GITHUB_EVENT_NAME scope=$B07_UI_DISPATCH_SCOPE"
           bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts | tee "$RUNNER_TEMP/b07-ui-evidence.log"
       - name: Preserve sanitized B07-only acceptance evidence
         if: always() && github.event_name == 'workflow_dispatch' && inputs.scope == 'b07-ui'

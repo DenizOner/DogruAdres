@@ -16,16 +16,16 @@ import {until} from './native-verification-browser'
 
 export default async function({container}:ExecArgs){
  const u=new URL(process.env.DATABASE_URL??'postgres://invalid/invalid')
- assert.ok(process.env.CI==='true'&&process.env.GITHUB_EVENT_NAME==='workflow_dispatch'&&process.env.B06_UI_DISPATCH_SCOPE==='b07-ui'&&process.env.PG_MFA_TEST_SCOPE==='b07-ui'&&process.env.PG_MFA_TEST_SENTINEL==='mfa-pg16-disposable-ci-v1'&&u.hostname==='127.0.0.1'&&u.port==='5432'&&u.username==='mfa_test'&&u.password==='ci-disposable-only-not-a-real-secret'&&/^\/mfa_cli_ci_[a-f0-9]{16}$/.test(u.pathname)&&process.env.PG_MFA_NATIVE_TEST_DATABASE===u.pathname.slice(1),'REFUSED: exact B07 disposable dispatch boundary')
+ assert.ok(process.env.CI==='true'&&process.env.GITHUB_EVENT_NAME==='workflow_dispatch'&&process.env.B07_UI_DISPATCH_SCOPE==='b07-ui'&&process.env.PG_MFA_TEST_SCOPE==='b07-ui'&&process.env.PG_MFA_TEST_SENTINEL==='mfa-pg16-disposable-ci-v1'&&u.hostname==='127.0.0.1'&&u.port==='5432'&&u.username==='mfa_test'&&u.password==='ci-disposable-only-not-a-real-secret'&&/^\/mfa_cli_ci_[a-f0-9]{16}$/.test(u.pathname)&&process.env.PG_MFA_NATIVE_TEST_DATABASE===u.pathname.slice(1),'REFUSED: exact B07 disposable dispatch boundary')
  const pg=new Client({connectionString:u.toString()});await pg.connect()
  const q=async(sql:string,args:any[]=[]) => (await pg.query(sql,args)).rows
  const count=async(t:string)=>Number((await q(`select count(*)::int n from "${t}"`))[0].n)
  const auth:IAuthModuleService=container.resolve('auth'),users:IUserModuleService=container.resolve('user'),f:Foundation=container.resolve('dogruadresAccess')
- if(process.env.B06_PREPARE==='true'){
+ if(process.env.B07_PREPARE==='true'){
   try{
    for(const t of ['da_person','user','auth_identity','provider_identity','da_actor_mapping','da_login_binding','da_organization','da_organization_membership','auth_mfa_factor','da_browser_session','da_platform_staff_grant'])assert.equal(await count(t),0,'Nonempty fixture table '+t)
    for(const label of ['A','B']){
-    const email=process.env['B06_EMAIL_'+label]!,password=process.env['B06_PASSWORD_'+label]!
+    const email=process.env['B07_EMAIL_'+label]!,password=process.env['B07_PASSWORD_'+label]!
     assert.match(email,/^b07-[ab]-[a-f0-9]+@example.invalid$/);assert.ok(password.length>=40)
     const user=await users.createUsers({email}),r=await auth.register('emailpass',{body:{email,password}});assert.ok(r.success&&r.authIdentity)
     await auth.updateAuthIdentities({id:r.authIdentity!.id,app_metadata:{user_id:user.id}})
@@ -41,7 +41,7 @@ export default async function({container}:ExecArgs){
   return
  }
  const report:any={scope:'B07 REAL CHROME / NATIVE HTTP / PG16',binding:'SYNTHETIC TEST BINDING — NOT RECIPIENT OWNERSHIP PROOF',run:process.env.GITHUB_RUN_ID,head:process.env.GITHUB_SHA,checks:[],browsers:[],cleanup:{},status:'INCOMPLETE'}
- const output=process.env.B06_EVIDENCE_DIR!;assert.ok(output&&output.startsWith(process.env.RUNNER_TEMP!+'/'));mkdirSync(output,{recursive:true})
+ const output=process.env.B07_EVIDENCE_DIR!;assert.ok(output&&output.startsWith(process.env.RUNNER_TEMP!+'/'));mkdirSync(output,{recursive:true})
  const temp=mkdtempSync(join(tmpdir(),'b07-tls-')),browsers:B06Chrome[]=[]
  let app:Awaited<ReturnType<typeof createPersonalHttpApp>>|undefined,server:ReturnType<typeof createServer>|undefined
  const challenges:any[]=[]
@@ -51,7 +51,7 @@ export default async function({container}:ExecArgs){
   assert.match((await q('show server_version_num'))[0].server_version_num,/^16\d{4}$/)
   assert.equal((await q("select mfa_activated from da_session_policy where id='current'"))[0].mfa_activated,true)
   const actors:any[]=[]
-  for(const label of ['A','B']){const rows=await q("select u.id actor,b.person_id person,b.auth_identity_id identity from public.user u join da_login_binding b on b.actor_id=u.id and b.actor_type='user' where u.email=$1 and b.verified_at is not null",[process.env['B06_EMAIL_'+label]]);assert.equal(rows.length,1);actors.push(rows[0])}
+  for(const label of ['A','B']){const rows=await q("select u.id actor,b.person_id person,b.auth_identity_id identity from public.user u join da_login_binding b on b.actor_id=u.id and b.actor_type='user' where u.email=$1 and b.verified_at is not null",[process.env['B07_EMAIL_'+label]]);assert.equal(rows.length,1);actors.push(rows[0])}
   const orgs=await f.createOrganizations([{name:'B07 Org1',status:'active'},{name:'B07 Org2',status:'active'}])
   const members=await f.createMemberships(orgs.flatMap(o=>actors.map((a,i)=>({organization_id:o.id,person_id:a.person,role:i===0?'owner' as const:'member' as const,status:'active' as const,protected_owner:i===0}))))
   const [owner1,b1,owner2,b2]=members
@@ -65,7 +65,7 @@ export default async function({container}:ExecArgs){
   report.tls={trustedCaAndIpSan:true,defaultUntrustedRejected:true,wrongHostnameRejected:true,certificateSha256:createHash('sha256').update(ca).digest('hex'),bypass:false}
   const sql={execute:async(s:string,args:any[]=[])=>{let i=0;return q(s.replace(/\?/g,()=>'$'+(++i)),args)}}
   const strong=async(c:B06Chrome)=>{const token=await c.token();assert.ok(token);await q('begin');try{const s=await new IdentitySessions(sql).current(token,true);assert.ok(s&&s.mfa_purpose==='full');const a=actors[c.actor==='A'?0:1];assert.equal(s!.person_id,a.person);assert.equal(s!.auth_identity_id,a.identity);assert.equal(s!.actor_id,a.actor);const ch=challenges.filter(r=>r.identity===a.identity);assert.equal(ch.length,1);assert.equal(new Date(s!.last_strong_auth_at).getTime(),new Date(ch[0].completed).getTime());await q('commit');report.checks.push({actor:c.actor,phase:c.phase,currentSensitive:true,nativeChallengeCompleted:true,sessionRef:createHash('sha256').update(s!.id).digest('hex').slice(0,16)});return s!}catch(e){await q('rollback');throw e}}
-  for(const [i,label]of ['A','B'].entries()){const c=new B06Chrome(origin,label as 'A'|'B');browsers.push(c);await c.start(cert);await c.login(process.env['B06_EMAIL_'+label]!,process.env['B06_PASSWORD_'+label]!,actors[i].person);await strong(c)}
+  for(const [i,label]of ['A','B'].entries()){const c=new B06Chrome(origin,label as 'A'|'B');browsers.push(c);await c.start(cert);await c.login(process.env['B07_EMAIL_'+label]!,process.env['B07_PASSWORD_'+label]!,actors[i].person);await strong(c)}
   const [a,b]=browsers
   const domain=async()=>{const result:any={};for(const t of ['da_organization_membership','da_audit_event','da_audit_outbox','da_security_outbox'])result[t]=(await q(`select count(*)::int n,md5(coalesce(string_agg(to_jsonb(r)::text,E'\\n' order by to_jsonb(r)::text),'')) hash from "${t}" r`))[0];return result}
   const denied=async(c:B06Chrome,name:string,body:object,status:number,bad=false)=>{c.phase=name;await strong(c);const before=await domain();assert.equal((await c.post(body,bad)).status,status);assert.deepEqual(await domain(),before);report.checks.push({phase:name,actor:c.actor,http:status,zeroDomainAuditOutbox:true,evidence:'REAL CHROME FETCH / NATIVE HTTP / SQL; denied POST, not a visible role control'})}
@@ -146,7 +146,7 @@ export default async function({container}:ExecArgs){
   writeFileSync(join(output,'evidence.json'),JSON.stringify(report,null,2))
   const hashes=readdirSync(output).filter(n=>n!=='SHA256SUMS').map(n=>createHash('sha256').update(readFileSync(join(output,n))).digest('hex')+'  '+n)
   writeFileSync(join(output,'SHA256SUMS'),hashes.join('\n')+'\n')
-  console.log('B06_UI_EVIDENCE '+JSON.stringify(report))
+  console.log('B07_UI_EVIDENCE '+JSON.stringify(report))
  }
  assert.equal(report.status,'PASS pending independent exact-HEAD acceptance');console.log('PASS B07-UI real Chrome/native MFA/HTTP/SQL')
 }

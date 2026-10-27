@@ -179,18 +179,18 @@ async function run(){
         const suffix=randomBytes(8).toString('hex')
         // B07 MFA/challenge stays within one native Medusa process; no Redis service is provisioned in this CI job.
         // Unlike non-interactive migration checks, live personal HTTP must not target the deliberate port-1 Redis sentinel.
-        const b06Env={...nativeEnv,REDIS_URL:undefined,B06_EMAIL_A:`b07-a-${suffix}@example.invalid`,B06_EMAIL_B:`b07-b-${suffix}@example.invalid`,B06_PASSWORD_A:randomBytes(32).toString('base64url'),B06_PASSWORD_B:randomBytes(32).toString('base64url')}
+        const b06Env={...nativeEnv,REDIS_URL:undefined,B07_EMAIL_A:`b07-a-${suffix}@example.invalid`,B07_EMAIL_B:`b07-b-${suffix}@example.invalid`,B07_PASSWORD_A:randomBytes(32).toString('base64url'),B07_PASSWORD_B:randomBytes(32).toString('base64url')}
         const invoke=(script:string,env:NodeJS.ProcessEnv,activation=false)=>{
           const child=spawnSync(process.execPath,activation?[script]:['run','medusa','exec',script],{cwd:process.cwd(),env,encoding:'utf8',timeout:360000,maxBuffer:4*1024*1024})
-          const output=String(child.stdout??'').split('\n').filter(line=>/^(B06_UI_EVIDENCE |PASS B07)/.test(line)).join('\n')
+          const output=String(child.stdout??'').split('\n').filter(line=>/^(B07_UI_EVIDENCE |PASS B07)/.test(line)).join('\n')
           process.stdout.write(output+'\n')
           if(child.error||child.status!==0){
             const cause=sanitized(String(child.error??'')+String(child.stderr??'')+String(child.stdout??''))
-            throw Error('B07 stage failed: '+(activation?'activation':env.B06_PREPARE==='true'?'synthetic setup':'Chrome acceptance')+'; '+cause+'; no retry')
+            throw Error('B07 stage failed: '+(activation?'activation':env.B07_PREPARE==='true'?'synthetic setup':'Chrome acceptance')+'; '+cause+'; no retry')
           }
           return output
         }
-        invoke('./integration-tests/postgres/b07-roles.exec.ts',{...b06Env,B06_PREPARE:'true'})
+        invoke('./integration-tests/postgres/b07-roles.exec.ts',{...b06Env,B07_PREPARE:'true'})
         // Same database, no consumer during the existing signed activation CAS.
         invoke('./integration-tests/postgres/b07-activation.pg16.ts',b06Env,true)
         const output=invoke('./integration-tests/postgres/b07-roles.exec.ts',{...b06Env,DOGRUADRES_MFA_SETTINGS_ENABLED:'true',DOGRUADRES_MFA_ENROLLMENT_ENABLED:'true',DOGRUADRES_MFA_RUNTIME_ENABLED:'true'})
