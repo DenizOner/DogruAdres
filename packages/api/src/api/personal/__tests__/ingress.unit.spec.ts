@@ -1,4 +1,5 @@
 import { nativeIngress, trustedOrigin } from "../security"
+import middlewareConfig from "../../middlewares"
 import { GET as organizationsGet } from "../organizations/route"
 describe("personal ingress (unit contract only)",()=>{
   beforeEach(()=>{process.env.DOGRUADRES_IDENTITY_ENABLED="true";process.env.DOGRUADRES_PUBLIC_ORIGIN="https://example.invalid"})
@@ -110,4 +111,29 @@ describe("personal ingress (unit contract only)",()=>{
     expect(res.status).toHaveBeenCalledWith(403)
   })
 
+})
+
+describe("personal HTTP error handling (unit contract)", () => {
+  const handle = (middlewareConfig as unknown as { errorHandler: (error: any, req: any, res: any, next: any) => void }).errorHandler
+
+  it.each([
+    { type: "not_found", status: 404, message: "Not found" },
+    { type: "forbidden", status: 403, message: "Access denied" },
+    { type: "invalid_data", status: 400, message: "Invalid input" },
+    { type: "unauthorized", status: 401, message: "Access denied" },
+    { type: "unexpected_error", status: 503, message: "Service unavailable" },
+  ])("maps $type to a safe HTTP $status without disclosing the underlying error", ({ type, status, message }) => {
+    const res: any = {
+      setHeader: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn().mockReturnThis(),
+    }
+    const next = jest.fn()
+    handle({ type, message: "Private identity, organization and DB details" }, { path: "/personal/memberships" }, res, next)
+    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store")
+    expect(res.status).toHaveBeenCalledWith(status)
+    expect(res.json).toHaveBeenCalledWith({ message })
+    expect(JSON.stringify(res.json.mock.calls)).not.toContain("Private identity")
+    expect(next).not.toHaveBeenCalled()
+  })
 })
