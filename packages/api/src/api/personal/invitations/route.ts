@@ -218,7 +218,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       })
       return res.json({ invitation: { id: result.id, status: result.status, revoked_at: result.revoked_at } })
     } catch {
-      return res.status(403).json({ message: "Davet iptal edilemiyor. Durumunu yeniden kontrol edin." })
+      // A workflow/transport failure can have an uncertain commit outcome.
+      // Never present it as a definite refusal that invites an unsafe retry.
+      return res.status(503).json({ message: "Davet sonucu belirsiz. Durumunu yenileyin; işlemi tekrar göndermeyin." })
     }
   }
 

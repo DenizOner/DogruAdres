@@ -157,7 +157,7 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
   it("denies revoked/accepted/expired invitation workflow failures without internal detail", async () => {
     mockRevokeRun.mockRejectedValueOnce(new Error("private token or recipient secret"))
     const res=await invoke(revokeBody)
-    expect(res.status).toHaveBeenCalledWith(403)
+    expect(res.status).toHaveBeenCalledWith(503)
     expect(JSON.stringify(res.json.mock.calls)).not.toContain("private token")
   })
   it("never revokes after CSRF denial or absent real primary identity", async () => {
