@@ -54,7 +54,7 @@ describe('MFA settings shell contract (not browser acceptance)',()=>{
    const html=res.send.mock.calls[0][0] as string;
    expect(html).toContain('<header id="personal-header">');
    expect(html).toContain('id="session-lock" type="button" hidden');
-   const script=[...html.matchAll(/<script[^>]*>([\\s\\S]*?)<\\/script>/g)].map(match=>match[1]).join('\n');
+   const script=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1]).join('\n')
    const start=script.indexOf('async function lockCurrentSession(){');
    const end=start>=0?script.indexOf('\n  }',start):-1;
    const source=start>=0&&end>start?script.slice(start,end+4):'';
