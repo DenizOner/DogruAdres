@@ -496,11 +496,28 @@ export default async function ({ container }: any) {
       )
 
       // Space → grab, ArrowDown → move to pos 2, Space → drop (triggers saveLauncherOrder async)
+      // Focus the handle via CDP DOM.focus (browser-level focus, no eval/selector interpolation).
       await chromeA.click(kbSel)
+      await chromeA.focusElement(kbSel)
+      // Clear launcher-status to avoid stale 'kaydedildi' match from prior touch-drag-persist test.
+      await chromeA.evalWithArg(
+        'function(id){var el=document.getElementById(id);if(el)el.textContent=""}',
+        'launcher-status'
+      )
+      // Space -> grab item; verify grab via aria-pressed attribute (let variables not on window)
       await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
       await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+      // After grab, aria-pressed becomes 'true' on the handle
+      await chromeA.wait(
+        "document.querySelector('#launcher-list li:first-child .launcher-handle')?.getAttribute('aria-pressed') === 'true'",
+        3000
+      )
+      // ArrowDown -> move item down one position
       await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
       await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
+      // Wait for position status text (non-empty means ArrowDown was processed)
+      await chromeA.wait("document.getElementById('launcher-status').textContent.length > 0", 3000)
+      // Space -> drop and trigger saveLauncherOrder
       await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
       await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
 
@@ -509,6 +526,7 @@ export default async function ({ container }: any) {
         "document.getElementById('launcher-status').textContent.includes('kaydedildi')||document.getElementById('launcher-status').textContent.includes('iptal')",
         8000
       )
+
       const afterKbOrder: string[] = await chromeA.eval(
         `[...document.getElementById('launcher-list').children].map(li=>li.getAttribute('data-id'))`
       )
@@ -567,10 +585,15 @@ export default async function ({ container }: any) {
       )
       if (escHandleFound) {
         await chromeA.click(kbSelAfter)
-        // Space (grab)
+        await chromeA.focusElement(kbSelAfter)
+        // Space (grab) - verify via aria-pressed
         await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
         await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
-        // ArrowDown (move without committing)
+        await chromeA.wait(
+          "document.querySelector('#launcher-list li:first-child .launcher-handle')?.getAttribute('aria-pressed') === 'true'",
+          3000
+        ).catch(() => { /* if grab didn't fire, Escape still restores; test proceeds */ })
+        // ArrowDown (move without committing)        // ArrowDown (move without committing)
         await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
         await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
         // Escape (cancel: calls renderLauncher() which restores pre-drag DOM order)

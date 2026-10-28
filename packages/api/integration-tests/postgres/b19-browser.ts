@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict'
+import assert from 'node:assert/strict'
 import { writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHmac } from 'node:crypto'
@@ -218,6 +218,15 @@ export class B19Chrome {
       await this.send('Emulation.setTouchEmulationEnabled', { enabled: false })
     }
   }
+  /** Focus an element via CDP DOM.focus (no eval, no selector interpolation in JS). */
+  async focusElement(sel: string): Promise<void> {
+    const doc = await this.send('DOM.getDocument', { depth: 0 })
+    const found = await this.send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: sel })
+    assert.ok(found.nodeId, `${this.label} focusElement: missing ${sel}`)
+    await this.send('DOM.scrollIntoViewIfNeeded', { nodeId: found.nodeId })
+    await this.send('DOM.focus', { nodeId: found.nodeId })
+  }
+
   /** Call a JS function via CDP Runtime.callFunctionOn, passing arg as a CDP value (no string interpolation). */
   async evalWithArg(fn: string, arg: unknown): Promise<any> {
     const global = await this.send('Runtime.evaluate', { expression: 'window', returnByValue: false })
