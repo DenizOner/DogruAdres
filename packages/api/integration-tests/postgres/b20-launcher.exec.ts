@@ -355,6 +355,11 @@ export default async function ({ container }: any) {
     assert.equal(resetPref.body.collapsed_ids.length, 0, 'B20_RESET_NO_COLLAPSED')
     results['reset-preference'] = { status: 'PASS', afterVersion: resetPref.body.version }
 
+    // Wait for loadLauncher() — it is void-called from load() so workspace is visible
+    // before the launcher section is populated. Must await section becoming visible
+    // before asserting launch links are present in the DOM.
+    await chromeA.wait("!document.getElementById('launcher-section').hidden")
+
     // ── Launch links present in DOM ───────────────────────────────────────────
     // Each available app must have a real navigable <a> launch link in the DOM.
     // The link must have a non-empty href and rel=noopener.
