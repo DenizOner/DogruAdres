@@ -1,4 +1,4 @@
-import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
+﻿import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
 import type { OutboxClaim, DeliveryErrorCode } from "./audit-delivery-policy"
 import { hasRecentMfaProof } from "./mfa-management"
 import {
@@ -10,7 +10,7 @@ import {
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
 import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
-import { randomBytes } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
 import { IdentitySessions, securitySql, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced } from "./identity-session"
 import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
@@ -1134,5 +1134,91 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         fromName: testFromName || undefined,
       }
     )
+  }
+
+  // ---------------------------------------------------------------------------
+  // B20: per-Person persistent launcher preference
+  // ---------------------------------------------------------------------------
+  // KNOWN_APP_IDS: closed server allowlist of the two launcher targets approved
+  // under B20 PO decision (issue #203 comment 6470700012).
+  // Storefront is always present. Vendor Panel shown only for verified Sellers.
+  // Unknown IDs are silently dropped; no entitlement is ever produced.
+  static readonly KNOWN_APP_IDS: ReadonlySet<string> = new Set(['storefront', 'vendor'])
+
+  @InjectTransactionManager()
+  async getLauncherPreference(token: string, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const session = await new IdentitySessions(sql).current(token)
+    if (!session) return null
+    const rows = await sql.execute(
+      `select app_ids,collapsed_ids,version from da_launcher_preference where person_id=?`,
+      [session.person_id]
+    ) as Array<{app_ids: unknown; collapsed_ids: unknown; version: number}>
+    const row = rows[0]
+    const parseJsonb = (v: unknown): string[] => {
+      if (Array.isArray(v)) return v as string[]
+      if (typeof v === 'string') { try { return JSON.parse(v) } catch { return [] } }
+      return []
+    }
+    return {
+      person_id: session.person_id,
+      app_ids: row ? parseJsonb(row.app_ids) : [],
+      collapsed_ids: row ? parseJsonb(row.collapsed_ids) : [],
+      version: row ? row.version : 0,
+    }
+  }
+
+  @InjectTransactionManager()
+  async saveLauncherPreference(
+    token: string,
+    rawAppIds: string[],
+    rawCollapsedIds: string[],
+    expectedVersion: number,
+    @MedusaContext() context: Context = {}
+  ) {
+    const sql = securitySql(context.transactionManager)
+    const session = await new IdentitySessions(sql).current(token, true)
+    if (!session) throw new MedusaError(MedusaError.Types.UNAUTHORIZED, 'Session required')
+    const known = DogruAdresAccessModuleService.KNOWN_APP_IDS
+    const seen = new Set<string>()
+    const appIds = rawAppIds.filter(id => {
+      if (typeof id !== 'string' || !known.has(id) || seen.has(id)) return false
+      seen.add(id); return true
+    })
+    const collSeen = new Set<string>()
+    const collapsedIds = rawCollapsedIds.filter(id => {
+      if (typeof id !== 'string' || !known.has(id) || collSeen.has(id)) return false
+      collSeen.add(id); return true
+    })
+    if (expectedVersion < 0 || !Number.isInteger(expectedVersion)) {
+      throw new MedusaError(MedusaError.Types.INVALID_DATA, 'Invalid version')
+    }
+    const personId = session.person_id
+    if (expectedVersion === 0) {
+      await sql.execute(
+        `insert into da_launcher_preference(id,person_id,app_ids,collapsed_ids,version,updated_at)
+         values(?,?,?,?,1,now())
+         on conflict(person_id) do nothing`,
+        [randomUUID(), personId, JSON.stringify(appIds), JSON.stringify(collapsedIds)]
+      )
+      const stored = await sql.execute(
+        `select app_ids,collapsed_ids,version from da_launcher_preference where person_id=?`,
+        [personId]
+      ) as Array<{app_ids: unknown; collapsed_ids: unknown; version: number}>
+      const pa = (v: unknown): string[] => Array.isArray(v) ? v as string[] : typeof v==='string' ? (() => { try { return JSON.parse(v) } catch { return [] } })() : []
+      return { app_ids: pa(stored[0].app_ids), collapsed_ids: pa(stored[0].collapsed_ids), version: stored[0].version }
+    }
+    const updated = await sql.execute(
+      `update da_launcher_preference
+         set app_ids=?,collapsed_ids=?,version=version+1,updated_at=now()
+         where person_id=? and version=?
+         returning app_ids,collapsed_ids,version`,
+      [JSON.stringify(appIds), JSON.stringify(collapsedIds), personId, expectedVersion]
+    ) as Array<{app_ids: unknown; collapsed_ids: unknown; version: number}>
+    if (!updated.length) {
+      throw new MedusaError(MedusaError.Types.CONFLICT, 'Launcher preference version conflict — reload and retry')
+    }
+    const pu2 = (v: unknown): string[] => Array.isArray(v) ? v as string[] : typeof v==='string' ? (() => { try { return JSON.parse(v) } catch { return [] } })() : []
+    return { app_ids: pu2(updated[0].app_ids), collapsed_ids: pu2(updated[0].collapsed_ids), version: updated[0].version }
   }
 }

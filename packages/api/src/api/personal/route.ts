@@ -1,4 +1,4 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+﻿import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { randomBytes } from "node:crypto"
 import { enabled } from "./security"
 export const AUTHENTICATE = false
@@ -53,6 +53,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
    #verification-status h2{font-size:1.2rem;margin:0 0 .5rem}
    #verification-status p{margin:.4rem 0;overflow-wrap:anywhere}
   fieldset{border:1px solid var(--line);border-radius:.6rem;padding:1rem} fieldset label{display:flex;align-items:center;gap:.65rem;margin:.5rem 0} input[type=radio],input[type=checkbox]{width:auto;min-height:auto}
+  #launcher-list li{display:flex;align-items:center;gap:.5rem;padding:.6rem .8rem;border:1px solid var(--line);border-radius:.6rem;background:white;cursor:default;user-select:none}
+  #launcher-list li[aria-grabbed="true"]{opacity:.5;border-style:dashed}
+  #launcher-list li.drag-over{border-color:var(--accent);background:#eaf1fa}
+  .launcher-handle{touch-action:none;cursor:grab;padding:.2rem .4rem;border:1px solid #c8d4e3;border-radius:.35rem;background:#f0f4fa;font-size:1.1rem;line-height:1;color:var(--muted);flex-shrink:0}
+  .launcher-handle:focus{outline:3px solid #4c91e5;outline-offset:2px;cursor:grabbing}
+  .launcher-name{flex:1;font-weight:600}
+  .launcher-toggle{font-size:.85rem;padding:.3rem .6rem;min-height:auto}
   @media(max-width:700px){body{padding:0 .75rem 2rem}#personal-header{margin-top:1.5rem}#workspace{grid-template-columns:minmax(0,1fr)}}
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
   </style>
@@ -151,6 +158,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
   <p id="memberships-status" role="status" aria-live="polite" aria-atomic="true"></p><button id="memberships-refresh" type="button" hidden disabled>Üye listesini yenile</button>
   <div id="memberships" aria-describedby="memberships-status" aria-busy="false"></div>
+  <section id="launcher-section" hidden aria-labelledby="launcher-heading" style="grid-column:1/-1;margin-top:1rem;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white">
+    <h2 id="launcher-heading">Uygulamalarım</h2>
+    <p id="launcher-desc" style="margin:0 0 .5rem;color:var(--muted);font-size:.9rem">Uygulamaları sürükle-bırak veya klavyeyle yeniden sırala. Kapat/Aç düğmesiyle bölümü daralt. Sıralama ve kapat/aç durumu sunucuda kişiye özel saklanır; yeniden girişte de korunur.</p>
+    <p id="launcher-status" role="status" aria-live="polite" style="min-height:1.2em;font-size:.9rem;margin:.25rem 0"></p>
+    <ul id="launcher-list" role="listbox" aria-label="Uygulama sırası" style="list-style:none;padding:0;margin:.5rem 0;display:flex;flex-direction:column;gap:.5rem"></ul>
+    <button id="launcher-reset" type="button" style="margin-top:.5rem">Varsayılan sıraya dön</button>
+  </section>
   <section id="audit-timeline-section" hidden style="margin-top: 16px; padding: 14px; border: 1px solid #c1c6d4; border-radius: 8px; background: #f8f9fa;">
     <h3 style="margin-top: 0; font-size: 14px;">Kurulus Denetim Zaman Cizelgesi</h3>
     <p style="font-size: 12px; color: #555; margin-bottom: 8px;">Projeksiyon durumu: Nihai tutarlilik (eventual), tamlik garantilenmemistir (not_guaranteed).</p>
@@ -465,7 +479,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();void loadLauncher();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
@@ -775,12 +789,152 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       status('Bu bağlantıyla mevcut oturumda devam edilemiyor.');
     }finally{btn.disabled=false}
   };
+  // ---------------------------------------------------------------------------
+  // B20: Launcher preference -- drag/touch/keyboard reorder + expand/collapse
+  // ---------------------------------------------------------------------------
+  const APP_LABELS={storefront:'Alici Magazasi',vendor:'Satici Paneli'};
+  let launcherState={app_ids:[],collapsed_ids:[],available_ids:[],version:0};
+  let launcherSaving=false,launcherDragSrc=null,launcherDragOver=null;
+  let launcherKeyHandle=null;
+  async function loadLauncher(){
+    try{
+      const data=await api('launcher');
+      launcherState=data;
+      renderLauncher();
+      el('launcher-section').hidden=false;
+    }catch(e){
+      if([401,403].includes(e.httpStatus)){concealPrivateView();el('login').hidden=false;return}
+      el('launcher-status').textContent='Baslatic\u0131 yuklenemedi.';
+    }
+  }
+  function clearLauncher(){
+    el('launcher-section').hidden=true;
+    el('launcher-list').replaceChildren();
+    el('launcher-status').textContent='';
+    launcherState={app_ids:[],collapsed_ids:[],available_ids:[],version:0};
+    launcherDragSrc=null;launcherDragOver=null;launcherKeyHandle=null;launcherSaving=false;
+  }
+  function renderLauncher(){
+    const list=el('launcher-list');list.replaceChildren();
+    const ids=launcherState.app_ids.length?launcherState.app_ids:[...launcherState.available_ids];
+    for(const id of ids){
+      const li=document.createElement('li');
+      li.setAttribute('role','option');li.setAttribute('aria-selected','false');
+      li.setAttribute('data-id',id);li.setAttribute('draggable','true');
+      li.setAttribute('aria-grabbed','false');
+      const handle=document.createElement('span');
+      handle.className='launcher-handle';handle.setAttribute('tabindex','0');
+      handle.setAttribute('role','button');handle.setAttribute('aria-pressed','false');
+      const appName=(APP_LABELS[id]||id);
+      handle.setAttribute('aria-label',appName+' -- Space/Enter ile tut, ok tuslariyla tasi, Space/Enter ile birak, Esc ile iptal');
+      handle.textContent='\u283f';
+      const collapsed=launcherState.collapsed_ids.includes(id);
+      const toggle=document.createElement('button');
+      toggle.className='launcher-toggle';toggle.type='button';
+      toggle.textContent=collapsed?'Ac':'Kapat';
+      toggle.setAttribute('aria-label',appName+' bolumu '+(collapsed?'ac':'kapat'));
+      toggle.setAttribute('aria-expanded',String(!collapsed));
+      const name=document.createElement('span');name.className='launcher-name';
+      name.textContent=appName;
+      li.append(handle,name,toggle);
+      // Pointer/touch drag events
+      li.addEventListener('dragstart',e=>{
+        launcherDragSrc=li;li.setAttribute('aria-grabbed','true');
+        e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',id);
+      });
+      li.addEventListener('dragend',()=>{
+        li.setAttribute('aria-grabbed','false');
+        list.querySelectorAll('li').forEach(r=>r.classList.remove('drag-over'));
+        launcherDragSrc=null;launcherDragOver=null;
+      });
+      li.addEventListener('dragover',e=>{
+        if(!launcherDragSrc||launcherDragSrc===li)return;
+        e.preventDefault();e.dataTransfer.dropEffect='move';
+        if(launcherDragOver!==li){
+          list.querySelectorAll('li').forEach(r=>r.classList.remove('drag-over'));
+          li.classList.add('drag-over');launcherDragOver=li;
+        }
+      });
+      li.addEventListener('dragleave',()=>li.classList.remove('drag-over'));
+      li.addEventListener('drop',e=>{
+        e.preventDefault();if(!launcherDragSrc||launcherDragSrc===li)return;
+        li.classList.remove('drag-over');
+        const items=[...list.children];
+        const fromIdx=items.indexOf(launcherDragSrc),toIdx=items.indexOf(li);
+        if(fromIdx<0||toIdx<0)return;
+        if(fromIdx<toIdx)li.after(launcherDragSrc);else li.before(launcherDragSrc);
+        void saveLauncherOrder();
+      });
+      // Keyboard drag
+      handle.addEventListener('keydown',async e=>{
+        if(e.key==='Escape'&&launcherKeyHandle){
+          e.preventDefault();launcherKeyHandle=null;
+          handle.setAttribute('aria-pressed','false');
+          el('launcher-status').textContent='Tasima iptal edildi.';
+          renderLauncher();return;
+        }
+        if((e.key===' '||e.key==='Enter')&&!launcherKeyHandle){
+          e.preventDefault();launcherKeyHandle=handle;
+          handle.setAttribute('aria-pressed','true');
+          el('launcher-status').textContent=appName+' tutuldu. Ok tuslariyla tasi, Space/Enter birak, Esc iptal.';return;
+        }
+        if((e.key===' '||e.key==='Enter')&&launcherKeyHandle===handle){
+          e.preventDefault();launcherKeyHandle=null;
+          handle.setAttribute('aria-pressed','false');
+          el('launcher-status').textContent=appName+' yeni konumuna birakild.i';
+          await saveLauncherOrder();return;
+        }
+        if((e.key==='ArrowUp'||e.key==='ArrowDown')&&launcherKeyHandle===handle){
+          e.preventDefault();
+          const items=[...list.children];const idx=items.indexOf(li);
+          if(e.key==='ArrowUp'&&idx>0)items[idx-1].before(li);
+          else if(e.key==='ArrowDown'&&idx<items.length-1)items[idx+1].after(li);
+          const newIdx=[...list.children].indexOf(li);
+          el('launcher-status').textContent=appName+' '+(newIdx+1)+'. siraya tasindi.';
+          li.querySelector('.launcher-handle').focus();
+        }
+      });
+      toggle.addEventListener('click',async()=>{
+        const cur=launcherState.collapsed_ids;
+        const next=cur.includes(id)?cur.filter(x=>x!==id):[...cur,id];
+        launcherState.collapsed_ids=next;
+        toggle.textContent=next.includes(id)?'Ac':'Kapat';
+        toggle.setAttribute('aria-expanded',String(!next.includes(id)));
+        toggle.setAttribute('aria-label',appName+' bolumu '+(next.includes(id)?'ac':'kapat'));
+        await saveLauncherOrder();
+      });
+      list.append(li);
+    }
+  }
+  async function saveLauncherOrder(){
+    if(launcherSaving)return;
+    launcherSaving=true;el('launcher-status').textContent='Kaydediliyor...';
+    try{
+      const items=[...el('launcher-list').children];
+      const appIds=items.map(li=>li.getAttribute('data-id')).filter(Boolean);
+      const result=await api('launcher',{method:'POST',body:JSON.stringify({
+        app_ids:appIds,collapsed_ids:launcherState.collapsed_ids,version:launcherState.version
+      })});
+      launcherState.app_ids=result.app_ids;
+      launcherState.collapsed_ids=result.collapsed_ids;
+      launcherState.version=result.version;
+      el('launcher-status').textContent='Tercih kaydedildi.';
+    }catch(e){
+      if(e.httpStatus===409){el('launcher-status').textContent='Catisma: baska oturumda degisiklik. Yenileniyor...';await loadLauncher();}
+      else if([401,403].includes(e.httpStatus)){concealPrivateView();el('login').hidden=false;}
+      else el('launcher-status').textContent=e.uncertain?'Kayit sonucu belirsiz; yenileyip kontrol edin.':'Tercih kaydedilemedi.';
+    }finally{launcherSaving=false;}
+  }
+  el('launcher-reset').onclick=async()=>{
+    launcherState.app_ids=[];launcherState.collapsed_ids=[];
+    await saveLauncherOrder();await loadLauncher();
+  };
   // Conceal before browser history or hidden-page restoration; pending reads
   // belong to a view epoch and cannot repopulate a concealed private workspace.
   function concealPrivateView(){
     clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
-    el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearPendingInvitations();
+    el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearPendingInvitations();clearLauncher();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');
