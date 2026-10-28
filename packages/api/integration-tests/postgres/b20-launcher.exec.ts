@@ -89,12 +89,22 @@ async function makeSellerForPerson(
   const f = container.resolve('dogruadresAccess')
   const sellers = container.resolve('seller') as {
     createSellers(rows: object[]): Promise<any[]>
+    updateSellers(rows: object[]): Promise<any[]>
     createMembers(rows: object[]): Promise<any[]>
     createSellerMembers(rows: object[]): Promise<any[]>
   }
 
-  // Create native Seller
-  const [seller] = await sellers.createSellers([{ name: `B20-${label}-seller` }])
+  // Create native Seller. Mercur Seller requires: name, email, currency_code.
+  // Default status is 'pending_approval'; updateSellers sets it to 'open' so that
+  // the triple-check in launcher/route.ts (listSellers({id, status:'open'})) passes.
+  const sellerEmail = `b20-${label}-seller-${personId.slice(-8)}@example.invalid`
+  const [seller] = await sellers.createSellers([{
+    name: `B20-${label}-seller`,
+    email: sellerEmail,
+    currency_code: 'try',  // Turkish Lira — synthetic test seller
+  }])
+  // Open the seller account so vendor appears in available_ids for this Person.
+  await sellers.updateSellers([{ id: seller.id, status: 'open' }])
 
   // Create native Member (email matches Person A's user email — safe unique string)
   const memberEmail = `b20-${label}-member-${personId.slice(-8)}@example.invalid`
