@@ -25,6 +25,7 @@ import {
   type SmtpAuditActor,
 } from "./smtp-settings"
 import { sendSmtpEmail } from "./smtp-client"
+import { PersonalNotifications } from "./personal-notifications"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -378,6 +379,21 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async closePersonalSession(token: string, all: boolean, @MedusaContext() context: Context = {}) {
     return new IdentitySessions(securitySql(context.transactionManager)).logout(token, all)
+  }
+
+  @InjectTransactionManager()
+  async lockPersonalSession(token: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).logout(token, false, true)
+  }
+
+  @InjectTransactionManager()
+  async personalNotifications(token: string, offset: number, organization?: string, @MedusaContext() context: Context = {}) {
+    return new PersonalNotifications(securitySql(context.transactionManager)).list(token, offset, organization)
+  }
+
+  @InjectTransactionManager()
+  async readPersonalNotification(token: string, id: string, organization?: string, @MedusaContext() context: Context = {}) {
+    return new PersonalNotifications(securitySql(context.transactionManager)).read(token, id, organization)
   }
 
   @InjectTransactionManager()

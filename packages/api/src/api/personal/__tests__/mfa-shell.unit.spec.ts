@@ -59,7 +59,9 @@ describe('MFA settings shell contract (not browser acceptance)',()=>{
    expect(html).toContain("'x-csrf-token':requestCsrf");
    expect(html).toContain('locked=result&&result.success===true');
    expect(html).toContain('Kilitleme doğrulanamadı.');
-   expect(html).not.toContain('id="notification-bell"');
+   expect(html).toContain('id="notification-bell"');
+   expect(html).toContain('aria-controls="notification-panel"');
+   expect(html).toContain("fetch('/personal/session?action=lock'");
  })
 
 })

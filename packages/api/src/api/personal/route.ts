@@ -27,6 +27,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   body>p{margin-top:.15rem;color:var(--muted)}
   #status{min-height:2.5rem;margin-top:1rem;margin-bottom:1rem;padding:.65rem 1rem;border-left:3px solid var(--accent);background:#eaf1fa;border-radius:.35rem}
   #login,#challenge{max-width:30rem;margin-top:1.25rem;padding:1.25rem;border:1px solid var(--line);border-radius:1rem;background:white}
+  #notification-panel{max-width:60rem;margin:1rem auto;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white}
+  #notification-list{padding-left:1.5rem;overflow-wrap:anywhere}
+  #notification-list li{margin-bottom:1.5rem}
+  #personal-header>div{display:flex;flex-wrap:wrap;gap:.5rem;justify-content:flex-end}
   #workspace{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;align-items:start}
   #workspace>h2{grid-column:1/-1;margin:1.5rem 0 0;font-size:1.4rem}
   #workspace>h2+p{grid-column:1/-1;margin:0;color:var(--muted)}
@@ -52,7 +56,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   @media(max-width:700px){body{padding:0 .75rem 2rem}#personal-header{margin-top:1.5rem}#workspace{grid-template-columns:minmax(0,1fr)}}
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
   </style>
-  <header id="personal-header"><h1>DoğruAdres</h1><button id="session-lock" type="button" hidden>Oturumu kilitle</button></header><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
+  <header id="personal-header"><h1>DoğruAdres</h1><div><button id="notification-bell" type="button" aria-expanded="false" aria-controls="notification-panel" hidden><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg> Bildirimler <span id="notification-count"></span></button> <button id="session-lock" type="button" hidden>Oturumu kilitle</button></div></header>
+  <section id="notification-panel" aria-labelledby="notification-heading" hidden>
+    <h2 id="notification-heading">Bildirimler</h2><p>Kişisel hesabınıza ait oturum bildirimleri</p>
+    <p id="notification-status" role="status" aria-live="polite"></p>
+    <ul id="notification-list"></ul>
+    <button id="notification-refresh" type="button">Bildirimleri yenile</button>
+    <button id="notification-next" type="button" hidden>Sonraki bildirimler</button>
+    <button id="notification-close" type="button">Bildirimleri kapat</button>
+  </section><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
   <section id="invitation-section" hidden style="margin-bottom: 24px; padding: 20px; border: 1px solid #c1c6d4; border-radius: 12px; background: #f9f9ff;">
     <h2 style="margin-top: 0; color: #004e99;">Kuruluş Üyelik Daveti</h2>
     <div id="invitation-mismatch-banner" hidden role="alert" style="padding: 14px 18px; background: #ffdad6; border: 1px solid #ba1a1a; border-radius: 8px; margin-bottom: 16px;">
@@ -177,6 +189,67 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   let csrf=''; const el=id=>document.getElementById(id); const status=t=>el('status').textContent=t;
   async function api(path,options={}){const epoch=viewEpoch;let r;try{r=await fetch('/personal/'+path,{credentials:'same-origin',...options,headers:{'Content-Type':'application/json','x-csrf-token':csrf,...options.headers}})}catch{const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');e.uncertain=true;throw e}const data=await r.json();if(epoch!==viewEpoch)throw new Error('Görünüm yenilendi');if(!r.ok){const e=new Error(data.message||'İşlem reddedildi');e.httpStatus=r.status;e.uncertain=r.status>=500;throw e}return data}
   let recoveryCodes=[];
+  let notificationRequest=0,notificationOffset=0,notificationNext=null;
+  function clearNotifications(){
+    notificationRequest++;notificationOffset=0;notificationNext=null;
+    el('notification-bell').hidden=true;el('notification-bell').setAttribute('aria-expanded','false');
+    el('notification-panel').hidden=true;el('notification-list').replaceChildren();
+    el('notification-count').textContent='';el('notification-status').textContent='';
+    el('notification-next').hidden=true;
+  }
+  async function notifications(offset=0){
+    const request=++notificationRequest;
+    const organization=new URLSearchParams(location.search).get('organization');
+    const notificationPath='notifications'+(organization?'?organization='+encodeURIComponent(organization):'');
+    el('notification-list').replaceChildren();el('notification-list').setAttribute('aria-busy','true');
+    el('notification-status').textContent='Bildirimler yükleniyor…';el('notification-count').textContent='';
+    el('notification-next').hidden=true;
+    try{
+      const data=await api(notificationPath+(organization?'&':'?')+'offset='+offset);
+      if(request!==notificationRequest)return;
+      notificationOffset=offset;notificationNext=data.next_offset;
+      el('notification-count').textContent='('+data.unread_count+' okunmamış)';
+      el('notification-next').hidden=notificationNext===null;
+      for(const item of data.notifications){
+        const row=document.createElement('li'),heading=document.createElement('h3'),text=document.createElement('p'),time=document.createElement('time'),state=document.createElement('p');
+        heading.textContent=item.title;text.textContent=item.context+' — '+item.description;
+        time.dateTime=new Date(item.created_at).toISOString();time.textContent=new Date(item.created_at).toLocaleString('tr-TR');
+        state.textContent=item.read_at?'Okundu':'Okunmadı';row.append(heading,text,time,state);
+        if(!item.read_at){
+          const button=document.createElement('button');button.type='button';button.textContent='Okundu işaretle';
+          button.setAttribute('aria-label',item.title+' — okundu işaretle');
+          button.onclick=async()=>{
+            if(request!==notificationRequest)return;button.disabled=true;
+            try{
+              await api(notificationPath,{method:'POST',body:JSON.stringify({id:item.id})});
+              if(request!==notificationRequest)return;
+              el('notification-refresh').focus();await notifications(notificationOffset);
+            }catch(e){
+              if(request!==notificationRequest)return;
+              if([401,403].includes(e.httpStatus)){concealPrivateView();el('login').hidden=false;status('Giriş gerekli');return}
+              el('notification-status').textContent=e.uncertain?'Okundu sonucu belirsiz. Yenile ile sunucudaki durumu kontrol edin.':'Bildirim güncellenemedi. Yenileyin.';
+              // Never automatically resubmit an uncertain mutation.
+            }
+          };row.append(button);
+        }
+        el('notification-list').append(row);
+      }
+      el('notification-status').textContent=data.notifications.length?'Bildirimler güncellendi.':'Henüz bildirim yok.';
+    }catch(e){
+      if(request!==notificationRequest)return;
+      if([401,403].includes(e.httpStatus)){concealPrivateView();el('login').hidden=false;status('Giriş gerekli');return}
+      el('notification-status').textContent='Bildirimler yüklenemedi. Yenileyin.';
+    }finally{if(request===notificationRequest)el('notification-list').setAttribute('aria-busy','false')}
+  }
+  function closeNotifications(){el('notification-panel').hidden=true;el('notification-bell').setAttribute('aria-expanded','false');el('notification-bell').focus()}
+  el('notification-bell').onclick=()=>{
+    if(!el('notification-panel').hidden){closeNotifications();return}
+    el('notification-panel').hidden=false;el('notification-bell').setAttribute('aria-expanded','true');void notifications();
+  };
+  el('notification-refresh').onclick=()=>notifications();
+  el('notification-next').onclick=()=>{if(notificationNext!==null)void notifications(notificationNext)};
+  el('notification-close').onclick=closeNotifications;
+  el('notification-panel').onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();closeNotifications()}};
   function clearMfaCodes(){recoveryCodes=[];el("mfa-codes-value").textContent="";el("mfa-codes-value").hidden=true;el("mfa-codes").hidden=true}
   let currentOrg='',currentPersonId='',linkIntent='',organizationRequest=0,mfaState=null,timelineCursor=null,timelineOrg='',timelineRequest=0;
   async function loadTimeline(org, cursor = null, append = false) {
@@ -313,10 +386,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(currentOrg)await pendingInvitations(currentOrg,organizationRequest);
   };
   async function selectOrg(id){
+    clearNotifications();
     const request=++organizationRequest;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('invite-member').hidden=true;el('invite-result').textContent='';clearPendingInvitations();el('detail').textContent='';clearMemberships();history.replaceState(null,'','/personal');
     el('memberships').ariaBusy='true';el('memberships-status').textContent='Üyelikler yükleniyor…';
     try{const result=await api('organizations?id='+encodeURIComponent(id));if(request!==organizationRequest)return;
       currentOrg=id;el('detail').textContent=JSON.stringify(result.organizations[0],null,2);history.replaceState(null,'','/personal?organization='+encodeURIComponent(id));
+      el('notification-bell').hidden=false;void notifications();
       if(['owner','admin'].includes(result.organizations[0]?.role)){
         el('memberships-refresh').hidden=false;
         el('invite-member').hidden=false;
@@ -390,11 +465,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
-    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPendingInvitations();el('invite-result').textContent='';
+    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;clearNotifications();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPendingInvitations();el('invite-result').textContent='';
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
@@ -549,7 +624,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     history.replaceState(null,'','/personal');
     let locked=false;
     try{
-      const response=await fetch('/personal/session',{
+      const response=await fetch('/personal/session?action=lock',{
         method:'DELETE',credentials:'same-origin',
         headers:{'Content-Type':'application/json','x-csrf-token':requestCsrf}
       });
@@ -703,6 +778,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Conceal before browser history or hidden-page restoration; pending reads
   // belong to a view epoch and cannot repopulate a concealed private workspace.
   function concealPrivateView(){
+    clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
     el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearPendingInvitations();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();

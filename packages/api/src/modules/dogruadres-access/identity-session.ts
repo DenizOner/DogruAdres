@@ -48,6 +48,7 @@ export class IdentitySessions {
       values (?,?,?,?,?,'dogruadres-access','identity-session',?,clock_timestamp(),now(),now())`,
     [id, person, actorType, actorId, action, target])
     await this.db.execute(`insert into da_security_outbox(id,audit_event_id,created_at) values (?,?,now())`, [randomUUID(), id])
+    return id
   }
 
   async create(
@@ -164,14 +165,17 @@ export class IdentitySessions {
       mfa_purpose:s.mfa_purpose }
   }
 
-  async logout(token: string, all: boolean) {
+  async logout(token: string, all: boolean, lock = false) {
+    if (lock && all) throw new IdentityAccessDenied()
     const s = mfaRuntimeEnforced()
       ? (await this.current(token,false,false)) ?? (await this.enrollment(token))
       : await this.current(token,false,false)
     if (!s) return
     if (all) await this.db.execute(`update da_person_security set epoch=epoch+1 where person_id=?`,[s.person_id])
     await this.db.execute(`update da_browser_session set status='revoked' where status='active' and ${all ? "person_id" : "id"}=?`,[all?s.person_id:s.id])
-    await this.audit(s.person_id,s.actor_type,s.actor_id,all?"session.all_revoked":"session.revoked",s.id)
+    const event = await this.audit(s.person_id,s.actor_type,s.actor_id,lock?"session.locked":all?"session.all_revoked":"session.revoked",s.id)
+    if (lock) await this.db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id) values (?,?,?)`,
+      [`danot_${randomUUID()}`,s.person_id,event])
   }
 
   async organizations(token: string, organizationId?: string, touch = true) {

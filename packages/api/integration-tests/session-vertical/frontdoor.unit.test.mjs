@@ -4,6 +4,13 @@ import http from 'node:http'
 import {once} from 'node:events'
 import {allowedPublicRequest,startFrontdoor} from '../../scripts/personal-frontdoor.mjs'
 
+test('B19 notifications exposes only exact personal GET and POST',()=>{
+  for(const method of ['GET','POST'])assert.equal(allowedPublicRequest(method,'/personal/notifications'),true)
+  for(const method of ['PUT','PATCH','DELETE','OPTIONS','HEAD'])assert.equal(allowedPublicRequest(method,'/personal/notifications'),false)
+  for(const path of ['/personal/notifications/','/personal/notifications/extra','/admin/notifications'])
+    assert.equal(allowedPublicRequest('GET',path),false)
+})
+
 test('closed public method/path contract never exposes native login or refresh',()=>{
   for(const actor of ['user','member','customer'])for(const method of ['GET','POST'])
     assert.equal(allowedPublicRequest(method,`/auth/${actor}/emailpass`),false)

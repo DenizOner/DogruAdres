@@ -7,7 +7,7 @@ function harness() {
   const source=readFileSync(join(__dirname,'../route.ts'),'utf8')
   const nodes=new Map<string,any>(),listeners=new Map<string,Function>(),pending:any[]=[]
   const el=(id:string)=>{
-    if(!nodes.has(id))nodes.set(id,{textContent:'',value:'',hidden:id==='workspace',children:[],elements:{method:{}},replaceChildren(){this.textContent='';this.children=[]},append(x:any){this.children.push(x)},querySelectorAll(){return []},reset(){},querySelector(){return {disabled:false}}})
+    if(!nodes.has(id))nodes.set(id,{textContent:'',value:'',hidden:id==='workspace',children:[],elements:{method:{}},setAttribute(){},focus(){},replaceChildren(){this.textContent='';this.children=[]},append(x:any){this.children.push(x)},querySelectorAll(){return []},reset(){},querySelector(){return {disabled:false}}})
     return nodes.get(id)
   }
   const document={hidden:false,getElementById:el,createElement:()=>({textContent:''}),addEventListener:(n:string,f:Function)=>listeners.set(n,f)}
@@ -15,7 +15,7 @@ function harness() {
   const scripts=[...source.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1])
   // Execute the early token capture too; workspace lifetime keeps its original assertions.
   for(const script of scripts)runInContext(script,context)
-  runInContext('links=async()=>{};refreshMfa=async()=>{};refreshSmtp=async()=>{}',context)
+  runInContext('links=async()=>{};refreshMfa=async()=>{};refreshSmtp=async()=>{};notifications=async()=>{}',context)
   return {context,el,pending,listeners,document}
 }
 const tick=()=>new Promise<void>(r=>setImmediate(r))
@@ -77,13 +77,15 @@ describe('private workspace lifetime (script regression only)',()=>{
     const request=h.el('session-lock').onclick()
     expect(h.el('workspace').hidden).toBe(true)
     expect(h.el('session-lock').hidden).toBe(true)
+    expect(h.el('notification-bell').hidden).toBe(true)
+    expect(h.el('notification-list').children).toHaveLength(0)
     expect(h.el('person').textContent).toBe('')
     expect(h.el('login').hidden).toBe(false)
-    const sent=h.pending.find(p=>p.path==='/personal/session'&&!p.answered)!
+    const sent=h.pending.find(p=>p.path==='/personal/session?action=lock'&&!p.answered)!
     expect(sent.options.method).toBe('DELETE')
     expect(sent.options.credentials).toBe('same-origin')
     expect(sent.options.headers['x-csrf-token']).toBe('csrf')
-    await answer(h,'/personal/session',{success:true})
+    await answer(h,'/personal/session?action=lock',{success:true})
     await request
     expect(h.el('status').textContent).toContain('Oturum kilitlendi.')
     expect(h.el('workspace').hidden).toBe(true)
@@ -91,7 +93,7 @@ describe('private workspace lifetime (script regression only)',()=>{
   it('does not claim a completed lock after a rejected native revoke',async()=>{
     const h=harness();await loaded(h)
     const request=h.el('session-lock').onclick()
-    await answer(h,'/personal/session',{message:'Access denied'},false)
+    await answer(h,'/personal/session?action=lock',{message:'Access denied'},false)
     await request
     expect(h.el('workspace').hidden).toBe(true)
     expect(h.el('person').textContent).toBe('')

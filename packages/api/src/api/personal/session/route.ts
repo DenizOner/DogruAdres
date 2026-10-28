@@ -118,7 +118,14 @@ export const DELETE = async (req: MedusaRequest, res: MedusaResponse) => {
   if(!authorized)return res.status(403).json({message:"Access denied"})
   if(req.query.all!==undefined && req.query.all!=="true")
     return res.status(400).json({message:"Invalid input"})
-  try{await access(req).closePersonalSession(token,req.query.all==="true")}
+  if(Object.keys(req.query).some(k=>k!=="all"&&k!=="action") ||
+    (req.query.action!==undefined && req.query.action!=="lock") ||
+    (req.query.action==="lock" && req.query.all!==undefined))
+    return res.status(400).json({message:"Invalid input"})
+  try{
+    if(req.query.action==="lock")await access(req).lockPersonalSession(token)
+    else await access(req).closePersonalSession(token,req.query.all==="true")
+  }
   catch{return res.status(503).json({message:"Service unavailable"})}
   res.clearCookie("da_session",{httpOnly:true,secure:secureCookies(),sameSite:"strict",path:"/"})
   return res.json({success:true})
