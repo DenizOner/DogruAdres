@@ -334,6 +334,8 @@ Apply risk-appropriate testing at the relevant layer, including as applicable:
 - E2E tests
 - security regression tests
 
+**Evidence boundaries and execution choice:** Unit tests verify isolated rules (sometimes using mocks); smoke tests establish only application startup and basic reachability. Neither alone proves a real authorized transaction or persisted result. Where a Mercur/Medusa integration assumption is unverified, prioritize the smallest **authorized test of the actual platform runtime**—module initialization, API/middleware, workflow/provider, database writes and side effects as relevant—before relying on isolated assertions. Here, *native* describes the real execution path of an integration/contract test, not an additional mandatory test layer. Select and sequence tests by changed behavior, risk and valid prior evidence; do not mechanically demand every layer or introduce test infrastructure without demonstrated need. See the [approved testing clarification for M0](https://github.com/DenizOner/DogruAdres/issues/147#issuecomment-6464818515).
+
 The project should focus on high-value rules such as seller isolation, offer ownership, price integrity, order behavior, commission boundaries, payment/payout boundaries, and automotive fitment correctness.
 
 The active M0/Vehicle acceptance and evidence requirements in §§12–13 remain binding. This paragraph is a layer-selection guide, not a separate test strategy or a reason to postpone existing required checks.
