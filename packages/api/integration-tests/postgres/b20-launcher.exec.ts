@@ -132,7 +132,7 @@ async function makeSellerForPerson(
   await pg.query(
     `insert into da_verified_actor_binding(id,auth_identity_id,person_id,actor_type,actor_id,verified_at,proof_reference)
      values('b20-vab-'||gen_random_uuid()::text,$1,$2,'member',$3,now(),$4)
-     on conflict(actor_type,actor_id) do nothing`,
+     on conflict(actor_type,actor_id) where revoked_at is null do nothing`,
     [authIdentityId, personId, member.id, proofRef]
   )
 
