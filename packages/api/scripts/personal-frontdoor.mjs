@@ -16,6 +16,7 @@ export function allowedPublicRequest(method,path){
     '/personal/links':['GET','POST'],
     '/personal/audit-timeline':['GET'],
     '/personal/notifications':['GET','POST'],
+    '/personal/launcher':['GET','POST'],
   }
   if(personal[path]?.includes(method))return true
   // Installed public read-only Store route classes; customer/cart/order writers

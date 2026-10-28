@@ -29,7 +29,7 @@ async function makeActor(
   container: any,
   pg: InstanceType<typeof Client>,
   label: string
-): Promise<{ email: string; password: string; secret: string; personId: string }> {
+): Promise<{ email: string; password: string; secret: string; personId: string; authIdentityId: string }> {
   const f = container.resolve('dogruadresAccess')
   const auth = container.resolve('auth')
   const users = container.resolve('user')
@@ -66,7 +66,67 @@ async function makeActor(
     35000,
     `fresh TOTP for ${label}`
   )
-  return { email, password, secret: setup.secret, personId: p.id }
+  return { email, password, secret: setup.secret, personId: p.id, authIdentityId: a.authIdentity.id }
+}
+
+/**
+ * Provision a Member+Seller binding for an existing Person (Person A only).
+ * Creates: native Seller, native Member, native SellerMember association,
+ * and a 'member' actor mapping + da_verified_actor_binding row.
+ * The Person must already exist (created by makeActor).
+ * Returns the seller_id for assertion use.
+ *
+ * All native objects are created through the Mercur-owned 'seller' module
+ * resolved from the Awilix container — no direct DB inserts for native tables.
+ */
+async function makeSellerForPerson(
+  container: any,
+  pg: InstanceType<typeof Client>,
+  personId: string,
+  authIdentityId: string,
+  label: string
+): Promise<{ sellerId: string; memberId: string }> {
+  const f = container.resolve('dogruadresAccess')
+  const sellers = container.resolve('seller') as {
+    createSellers(rows: object[]): Promise<any[]>
+    createMembers(rows: object[]): Promise<any[]>
+    createSellerMembers(rows: object[]): Promise<any[]>
+  }
+
+  // Create native Seller
+  const [seller] = await sellers.createSellers([{ name: `B20-${label}-seller` }])
+
+  // Create native Member (email matches Person A's user email — safe unique string)
+  const memberEmail = `b20-${label}-member-${personId.slice(-8)}@example.invalid`
+  const [member] = await sellers.createMembers([{
+    email: memberEmail,
+    first_name: 'B20',
+    last_name: label,
+  }])
+
+  // Associate Member with Seller
+  await sellers.createSellerMembers([{ seller_id: seller.id, member_id: member.id }])
+
+  // Create a 'member' actor mapping for the Person
+  await f.createActorMappings([{
+    actor_type: 'member',
+    actor_id: member.id,
+    person_id: personId,
+    created_by_actor_type: 'member',
+    created_by_actor_id: member.id,
+  }])
+
+  // Insert da_verified_actor_binding. proof_reference is NOT NULL (length > 0).
+  // Use a synthetic test reference — no secrets, just test-fixture identity.
+  const proofRef = `b20-test-seller-fixture:${member.id}`
+  await pg.query(
+    `insert into da_verified_actor_binding(id,auth_identity_id,person_id,actor_type,actor_id,verified_at,proof_reference)
+     values('b20-vab-'||gen_random_uuid()::text,$1,$2,'member',$3,now(),$4)
+     on conflict(actor_type,actor_id) do nothing`,
+    [authIdentityId, personId, member.id, proofRef]
+  )
+
+  return { sellerId: seller.id, memberId: member.id }
 }
 
 export default async function ({ container }: any) {
@@ -101,7 +161,15 @@ export default async function ({ container }: any) {
     // ── Provision two independent synthetic Persons ─────────────────────────
     const actorA = await makeActor(container, pg, 'personA')
     const actorB = await makeActor(container, pg, 'personB')
-    record('actors-manifest', { personA: actorA.personId, personB: actorB.personId })
+    // Provision Member+Seller for Person A so 'vendor' appears in available_ids.
+    // Person B intentionally has no Member/Seller — used for vendor-negative test.
+    const sellerA = await makeSellerForPerson(
+      container, pg, actorA.personId, actorA.authIdentityId, 'personA'
+    )
+    record('actors-manifest', {
+      personA: actorA.personId, personB: actorB.personId,
+      sellerA: sellerA.sellerId, memberA: sellerA.memberId,
+    })
 
     // ── Helper: authenticate a Chrome instance and return the csrf token ────
     async function loginChrome(chrome: B19Chrome, actor: typeof actorA): Promise<string> {
@@ -127,6 +195,7 @@ export default async function ({ container }: any) {
     assert.equal(initPref.status, 200, 'B20_LAUNCHER_GET_200')
     assert.ok(Array.isArray(initPref.body.app_ids), 'B20_APP_IDS_ARRAY')
     assert.ok(initPref.body.available_ids.includes('storefront'), 'B20_STOREFRONT_AVAILABLE')
+    assert.ok(initPref.body.available_ids.includes('vendor'), 'B20_VENDOR_AVAILABLE_FOR_SELLER')
     assert.equal(initPref.body.version, 0, 'B20_INITIAL_VERSION_ZERO')
     results['launcher-init-personA'] = { status: 'PASS', data: initPref.body }
 
@@ -184,7 +253,7 @@ export default async function ({ container }: any) {
     results['invalid-app-id'] = { status: 'PASS', stored: invalidId.body.app_ids }
 
     // ── Person A: save real preference (reorder + collapse) ─────────────────
-    const orderedIds = ['storefront']  // storefront always available
+    const orderedIds = ['vendor', 'storefront']  // vendor first — tests reorder persisted
     const saveResult: any = await chromeA.eval(
       `(async()=>{const r=await fetch('/personal/launcher',{method:'POST',credentials:'same-origin',
         headers:{'Content-Type':'application/json','x-csrf-token':'${csrfA}'},
@@ -356,12 +425,50 @@ export default async function ({ container }: any) {
       })()
     `)
     if (touchDragTest.skipped) {
-      // Only one app available — touch drag not testable; record informational.
-      results['touch-drag-reorder'] = { status: 'PASS', note: touchDragTest.reason }
+      // Fewer than 2 apps — touch drag reorder is NOT testable with this fixture.
+      // TA requirement: SKIPPED must be reported as NOT_TESTED, never PASS.
+      results['touch-drag-reorder'] = { status: 'NOT_TESTED', note: touchDragTest.reason }
     } else {
       assert.ok(!touchDragTest.error, 'B20_TOUCH_DRAG_ERROR: ' + touchDragTest.error)
       // After simulated pointer events, DOM order should have changed.
       results['touch-drag-reorder'] = { status: 'PASS', detail: touchDragTest }
+    }
+
+    // ── Touch-drag reorder + POST persistence ─────────────────────────────────
+    // After simulated drag reorder, POST the new DOM order and verify DB reflects it.
+    // Only runs if we have 2+ apps (same condition as touch-drag above).
+    if (!touchDragTest.skipped && !touchDragTest.error && touchDragTest.reordered) {
+      // Read current DOM order
+      const draggedOrder: string[] = await chromeA.eval(`
+        (() => {
+          const list = document.getElementById('launcher-list');
+          return [...list.children].map(li => li.getAttribute('data-id'));
+        })()
+      `)
+      // POST the reordered list using the reset pref version (after reset = version 3)
+      // We need current version — re-fetch first
+      const currentPref2: any = await chromeA.eval(
+        "(async()=>{const r=await fetch('/personal/launcher',{credentials:'same-origin'});return {status:r.status,body:await r.json()}})()"
+      )
+      const dragSave: any = await chromeA.eval(
+        `(async()=>{const r=await fetch('/personal/launcher',{method:'POST',credentials:'same-origin',
+          headers:{'Content-Type':'application/json','x-csrf-token':'${csrfA2}'},
+          body:JSON.stringify({app_ids:${JSON.stringify(draggedOrder)},collapsed_ids:[],version:${currentPref2.body.version}})});
+        return {status:r.status,body:await r.json()}})()`
+      )
+      assert.equal(dragSave.status, 200, 'B20_DRAG_SAVE_200')
+      // Verify PG reflects the dragged order
+      const dbRowDrag = await q(
+        `select app_ids from da_launcher_preference where person_id=$1`,
+        [actorA.personId]
+      )
+      assert.ok(
+        JSON.stringify(dbRowDrag[0].app_ids) === JSON.stringify(draggedOrder.filter((id: string) => ['storefront','vendor'].includes(id))),
+        'B20_DRAG_ORDER_PERSISTED_IN_DB'
+      )
+      results['touch-drag-persist'] = { status: 'PASS', savedOrder: draggedOrder, dbVersion: dragSave.body.version }
+    } else {
+      results['touch-drag-persist'] = { status: 'NOT_TESTED', note: 'drag reorder not executed or no reorder detected' }
     }
 
     // ── Revoked session rejection ─────────────────────────────────────────────
@@ -377,7 +484,10 @@ export default async function ({ container }: any) {
     results['revoked-session'] = { status: 'PASS', got: 401 }
 
     // ── Permission invariant ──────────────────────────────────────────────────
-    // Verify no new actor bindings or memberships were created by launcher operations.
+    // Snapshot actor bindings AFTER fixture setup but AFTER all launcher operations.
+    // The count for Person A is 2 (user + member from makeSellerForPerson fixture).
+    // The count for Person B is 1 (user only).
+    // Launcher GET/POST must NOT have added any further bindings.
     const bindingsNow = await q(
       `select count(*)::int c from da_verified_actor_binding where person_id in ($1,$2)`,
       [actorA.personId, actorB.personId]
@@ -386,11 +496,15 @@ export default async function ({ container }: any) {
       `select count(*)::int c from da_organization_membership where person_id in ($1,$2) and status='active'`,
       [actorA.personId, actorB.personId]
     )
+    // Expected: 3 total (user+member for A, user for B); 2 org memberships (one each).
+    // Launcher operations must not have created any additional entitlement rows.
+    assert.equal(bindingsNow[0].c, 3, 'B20_BINDINGS_FIXTURE_ONLY')
+    assert.equal(membersNow[0].c, 2, 'B20_MEMBERSHIPS_FIXTURE_ONLY')
     results['permission-invariant'] = {
       status: 'PASS',
       bindings: bindingsNow[0].c,
       memberships: membersNow[0].c,
-      note: 'No new actor bindings or memberships created by launcher operations',
+      note: 'Fixture: 2+1 bindings, 2 org memberships. No new bindings created by launcher operations.',
     }
 
     // ── Vendor entitlement negative — user-actor-only Person sees no vendor ──
@@ -418,7 +532,7 @@ export default async function ({ container }: any) {
       head: process.env.B20_HEAD,
       status: 'PASS',
       results,
-      note: 'All B20 launcher acceptance criteria executed against real Chrome/HTTPS/PG16.',
+      note: 'B20 launcher acceptance criteria executed against real Chrome/HTTPS/PG16. Skipped tests reported as NOT_TESTED.',
     })
   } finally {
     await chromeA?.close()
