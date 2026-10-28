@@ -21,8 +21,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   *{box-sizing:border-box}
   [hidden]{display:none!important}
   body{margin:0;padding:0 1rem 3rem;background:#f6f8fb;color:var(--ink);font:16px/1.5 system-ui,-apple-system,sans-serif}
-  body>h1,body>p,body>#status,body>form,body>#workspace{max-width:60rem;margin-left:auto;margin-right:auto}
-  body>h1{margin-top:2.5rem;margin-bottom:.1rem;font-size:clamp(1.8rem,4vw,2.5rem)}
+  body>#personal-header,body>p,body>#status,body>form,body>#workspace{max-width:60rem;margin-left:auto;margin-right:auto}
+  #personal-header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.75rem;margin-top:2.5rem;margin-bottom:.1rem}
+  #personal-header h1{margin:0;font-size:clamp(1.8rem,4vw,2.5rem)}
   body>p{margin-top:.15rem;color:var(--muted)}
   #status{min-height:2.5rem;margin-top:1rem;margin-bottom:1rem;padding:.65rem 1rem;border-left:3px solid var(--accent);background:#eaf1fa;border-radius:.35rem}
   #login,#challenge{max-width:30rem;margin-top:1.25rem;padding:1.25rem;border:1px solid var(--line);border-radius:1rem;background:white}
@@ -48,10 +49,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
    #verification-status h2{font-size:1.2rem;margin:0 0 .5rem}
    #verification-status p{margin:.4rem 0;overflow-wrap:anywhere}
   fieldset{border:1px solid var(--line);border-radius:.6rem;padding:1rem} fieldset label{display:flex;align-items:center;gap:.65rem;margin:.5rem 0} input[type=radio],input[type=checkbox]{width:auto;min-height:auto}
-  @media(max-width:700px){body{padding:0 .75rem 2rem}body>h1{margin-top:1.5rem}#workspace{grid-template-columns:minmax(0,1fr)}}
+  @media(max-width:700px){body{padding:0 .75rem 2rem}#personal-header{margin-top:1.5rem}#workspace{grid-template-columns:minmax(0,1fr)}}
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
   </style>
-  <h1>DoğruAdres</h1><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
+  <header id="personal-header"><h1>DoğruAdres</h1><button id="session-lock" type="button" hidden>Oturumu kilitle</button></header><p>Kişisel çalışma alanı</p><p id="status" role="status" aria-live="polite"></p>
   <section id="invitation-section" hidden style="margin-bottom: 24px; padding: 20px; border: 1px solid #c1c6d4; border-radius: 12px; background: #f9f9ff;">
     <h2 style="margin-top: 0; color: #004e99;">Kuruluş Üyelik Daveti</h2>
     <div id="invitation-mismatch-banner" hidden role="alert" style="padding: 14px 18px; background: #ffdad6; border: 1px solid #ba1a1a; border-radius: 8px; margin-bottom: 16px;">
@@ -389,11 +390,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
-    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPendingInvitations();el('invite-result').textContent='';
+    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPendingInvitations();el('invite-result').textContent='';
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
@@ -534,6 +535,31 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
     if(error){status('Çıkış doğrulanamadı. Sunucu oturumu hâlâ açık olabilir.');return}
     await load()
+  }
+  // Existing server-side single-session revocation is the lock authority.
+  // api() checks viewEpoch, so this call must remain independent: the private
+  // workspace is concealed before any response or old request can repaint it.
+  async function lockCurrentSession(){
+    const button=el('session-lock');
+    if(button.hidden||button.disabled)return;
+    const requestCsrf=csrf;
+    button.disabled=true;
+    concealPrivateView();
+    el('login').reset();el('login').hidden=false;
+    history.replaceState(null,'','/personal');
+    let locked=false;
+    try{
+      const response=await fetch('/personal/session',{
+        method:'DELETE',credentials:'same-origin',
+        headers:{'Content-Type':'application/json','x-csrf-token':requestCsrf}
+      });
+      if(response.ok){const result=await response.json();locked=result&&result.success===true}
+    }catch{
+      // An uncertain revoke must never be reported as a completed lock.
+    }
+    status(locked
+      ?'Oturum kilitlendi. Yeniden açmak için parola ve ikinci faktörle giriş yapın.'
+      :'Kilitleme doğrulanamadı. Sunucu oturumu hâlâ açık olabilir; yeniden giriş yapıp oturumu sonlandırın.');
   }
   
   let smtpSettings=null;
@@ -678,7 +704,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // belong to a view epoch and cannot repopulate a concealed private workspace.
   function concealPrivateView(){
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
-    el('workspace').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearPendingInvitations();
+    el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearPendingInvitations();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');
@@ -701,6 +727,6 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('audit-timeline-refresh').onclick=async()=>{timelineCursor=null;await loadTimeline(currentOrg);};
   el('audit-timeline-next').onclick=async()=>{if(timelineCursor&&currentOrg)await loadTimeline(currentOrg,timelineCursor,true);};
   el('select-org').onsubmit=async e=>{e.preventDefault();await selectOrg(new FormData(e.target).get('organization'))};
-  el('logout').onclick=()=>logout(false);el('logout-all').onclick=()=>logout(true);el('staff').onclick=async()=>{try{await api('platform');status('Platform görevi için izin var')}catch(e){status(e.message)}};load();
+  el('session-lock').onclick=lockCurrentSession;el('logout').onclick=()=>logout(false);el('logout-all').onclick=()=>logout(true);el('staff').onclick=async()=>{try{await api('platform');status('Platform görevi için izin var')}catch(e){status(e.message)}};load();
   </script></html>`)
 }
