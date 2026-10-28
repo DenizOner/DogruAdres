@@ -809,8 +809,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Null-prototype map prevents __proto__/constructor property pollution reads.
   const APP_LABELS=Object.assign(Object.create(null),{storefront:'Al\u0131c\u0131 Ma\u011fazas\u0131',vendor:'Sat\u0131c\u0131 Paneli'});
   // App launch URLs: server-embedded from trusted process config at render time.
-  const APP_URLS=Object.assign(Object.create(null),{storefront:'${storefrontOrigin}',vendor:'${vendorOrigin}/seller'});
-  let launcherState={app_ids:[],collapsed_ids:[],available_ids:[],version:0};
+  // Only include vendor URL when a valid vendor origin is configured (fail-closed).
+  const APP_URLS=Object.assign(Object.create(null),{storefront:'${storefrontOrigin}'},('${vendorOrigin}'?{vendor:'${vendorOrigin}/seller'}:{}));
   let launcherSaving=false,launcherDragSrc=null,launcherDragOver=null;
   let launcherKeyHandle=null;
   async function loadLauncher(){

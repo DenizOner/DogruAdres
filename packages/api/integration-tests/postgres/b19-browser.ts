@@ -183,6 +183,41 @@ export class B19Chrome {
     await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: tx, y: ty, button: 'left', clickCount: 1 })
   }
 
+
+  /** Enable mobile viewport emulation and perform a real touch drag using CDP Input.dispatchTouchEvent. */
+  async touchDrag(fromSel: string, toSel: string, viewportWidth = 390, viewportHeight = 844): Promise<void> {
+    await this.send('Emulation.setDeviceMetricsOverride', {
+      width: viewportWidth, height: viewportHeight, deviceScaleFactor: 2, mobile: true,
+    })
+    await this.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+    try {
+      const doc = await this.send('DOM.getDocument', { depth: 0 })
+      const fromNode = await this.send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: fromSel })
+      const toNode = await this.send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: toSel })
+      assert.ok(fromNode.nodeId && toNode.nodeId, `${this.label} touchDrag: elements missing (${fromSel} -> ${toSel})`)
+      await this.send('DOM.scrollIntoViewIfNeeded', { nodeId: fromNode.nodeId })
+      const fromBox = await this.send('DOM.getBoxModel', { nodeId: fromNode.nodeId })
+      const toBox = await this.send('DOM.getBoxModel', { nodeId: toNode.nodeId })
+      assert.ok(fromBox.model && toBox.model, `${this.label} touchDrag: getBoxModel failed`)
+      const fx = (fromBox.model.content[0] + fromBox.model.content[4]) / 2
+      const fy = (fromBox.model.content[1] + fromBox.model.content[5]) / 2
+      const tx = (toBox.model.content[0] + toBox.model.content[4]) / 2
+      const ty = (toBox.model.content[1] + toBox.model.content[5]) / 2
+      const pt = (x: number, y: number) => [{ x, y, radiusX: 10, radiusY: 10, rotationAngle: 0, force: 1, id: 1 }]
+      await this.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: pt(fx, fy) })
+      const steps = 14
+      for (let i = 1; i <= steps; i++) {
+        await this.send('Input.dispatchTouchEvent', {
+          type: 'touchMove',
+          touchPoints: pt(fx + (tx - fx) * i / steps, fy + (ty - fy) * i / steps),
+        })
+      }
+      await this.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    } finally {
+      await this.send('Emulation.clearDeviceMetricsOverride', {})
+      await this.send('Emulation.setTouchEmulationEnabled', { enabled: false })
+    }
+  }
   /** Call a JS function via CDP Runtime.callFunctionOn, passing arg as a CDP value (no string interpolation). */
   async evalWithArg(fn: string, arg: unknown): Promise<any> {
     const global = await this.send('Runtime.evaluate', { expression: 'window', returnByValue: false })

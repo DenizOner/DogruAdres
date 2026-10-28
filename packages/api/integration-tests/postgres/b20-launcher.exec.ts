@@ -386,6 +386,15 @@ export default async function ({ container }: any) {
     )
     results['launch-links'] = { status: 'PASS', links: launchLinks.items, note: 'Link structure verified (href, noopener). Actual app navigation NOT_TESTED in isolated PG16 env -- no real Storefront or Vendor Panel running.' }
 
+    results['real-app-navigation'] = {
+      status: 'NOT_TESTED',
+      note: 'Real Next.js Buyer Storefront and Mercur Vendor Panel not running in isolated PG16 env. ' +
+            'Link href structure verified: vendor=http://localhost:7001/seller (from MERCUR_VENDOR_URL), ' +
+            'storefront=http://localhost:3000 (from DOGRUADRES_STOREFRONT_URL). ' +
+            'Actual Chrome navigation, catalog rendering, and protected API operations cannot be verified without live apps. ' +
+            'Vendor link is omitted (fail-closed) when MERCUR_VENDOR_URL is unset or empty.',
+    }
+
     // ── Expand/collapse content section ──────────────────────────────────────
     // Toggle the first app's collapse button; content div must hide/show.
     const collapseTest: any = await chromeA.eval(`
@@ -408,89 +417,181 @@ export default async function ({ container }: any) {
     assert.ok(collapseTest.toggled, 'B20_COLLAPSE_TOGGLE_WORKS')
     results['collapse-content-section'] = { status: 'PASS', detail: collapseTest }
 
-    // ── CDP mouse drag reorder (real Chrome pointer input, not synthetic DOM dispatch) ──────────────────────────
-    // Uses B19Chrome.drag() which issues Input.dispatchMouseEvent via CDP — real Chrome input pipeline.
-    // The launcher uses pointer events (pointerdown/pointermove/pointerup); CDP mouse events synthesize them.
-    // If headless geometry prevents pointer capture, DOM order may not change; report as NOT_TESTED, not PASS.
-    const beforeOrderItems: string[] = await chromeA.eval(
+    // ── Mobile touch drag reorder (real CDP Input.dispatchTouchEvent) ────────────────────
+    // Uses B19Chrome.touchDrag(): enables Emulation.setDeviceMetricsOverride + setTouchEmulationEnabled,
+    // then dispatches touchStart, 14x touchMove, touchEnd. The launcher pointerdown/pointermove/pointerup
+    // handlers fire via browser touch-to-pointer translation; pointerup calls saveLauncherOrder().
+    const beforeTouchOrder: string[] = await chromeA.eval(
       `(() => {
         const list = document.getElementById('launcher-list');
         return list ? [...list.children].map(li => li.getAttribute('data-id')) : [];
       })()`
     )
-    if (beforeOrderItems.length < 2) {
+    if (beforeTouchOrder.length < 2) {
       results['touch-drag-reorder'] = { status: 'NOT_TESTED', note: 'fewer than 2 apps in launcher list' }
-      results['touch-drag-persist'] = { status: 'NOT_TESTED', note: 'fewer than 2 apps in launcher list' }
-      results['keyboard-drag-reorder'] = { status: 'NOT_TESTED', note: 'fewer than 2 apps in launcher list' }
+      results['touch-drag-persist'] = { status: 'NOT_TESTED', note: 'fewer than 2 apps' }
     } else {
-      // Real CDP mouse drag from first item handle to second item
-      const fromSel = `#launcher-list li[data-id="${beforeOrderItems[0]}"] .launcher-handle`
-      const toSel = `#launcher-list li[data-id="${beforeOrderItems[1]}"]`
-      await chromeA.drag(fromSel, toSel)
-      // Allow DOM to settle after pointer events
-      await new Promise<void>(r => setTimeout(r, 500))
-      const afterOrderItems: string[] = await chromeA.eval(
+      const touchFromSel = `#launcher-list li[data-id="${beforeTouchOrder[0]}"] .launcher-handle`
+      const touchToSel = `#launcher-list li[data-id="${beforeTouchOrder[1]}"]`
+      await chromeA.touchDrag(touchFromSel, touchToSel)
+      await new Promise<void>(r => setTimeout(r, 600))
+      const afterTouchOrder: string[] = await chromeA.eval(
         `(() => {
           const list = document.getElementById('launcher-list');
           return list ? [...list.children].map(li => li.getAttribute('data-id')) : [];
         })()`
       )
-      const reordered = afterOrderItems.length >= 2 && afterOrderItems[0] !== beforeOrderItems[0]
-      if (!reordered) {
-        // CDP drag was executed (real input pipeline) but headless viewport geometry may prevent
-        // pointer capture from reaching the target. Report as NOT_TESTED — not a silent PASS.
+      const touchReordered = afterTouchOrder.length >= 2 && afterTouchOrder[0] !== beforeTouchOrder[0]
+      if (!touchReordered) {
+        // Touch events dispatched (real CDP touch pipeline) but pointer capture may not have fired
+        // pointermove over target in headless viewport. Report NOT_TESTED — not a false PASS.
         results['touch-drag-reorder'] = {
           status: 'NOT_TESTED',
-          note: 'CDP drag executed (real Chrome Input.dispatchMouseEvent) but DOM order unchanged; ' +
-                'headless pointer capture may not fire pointermove over target. Gesture confirmed, DOM order unchanged.',
-          detail: { beforeOrder: beforeOrderItems, afterOrder: afterOrderItems, reordered: false },
+          note: 'CDP touchStart/touchMove/touchEnd dispatched on mobile viewport (390x844) but DOM order unchanged; ' +
+                'headless pointer capture geometry may prevent launcherDragOver from being set.',
+          detail: { beforeOrder: beforeTouchOrder, afterOrder: afterTouchOrder, mobile: true },
         }
-        results['touch-drag-persist'] = { status: 'NOT_TESTED', note: 'drag did not produce DOM reorder' }
+        results['touch-drag-persist'] = { status: 'NOT_TESTED', note: 'touch drag did not reorder' }
       } else {
-        results['touch-drag-reorder'] = {
-          status: 'PASS',
-          detail: { beforeOrder: beforeOrderItems, afterOrder: afterOrderItems, reordered: true },
-        }
-        // POST the new order and verify PG persistence
-        const currentPref2: any = await chromeA.eval(
+        // Wait for saveLauncherOrder() triggered by pointerup
+        await chromeA.wait("document.getElementById('launcher-status').textContent.includes('kaydedildi')||document.getElementById('launcher-status').textContent.includes('Tercih')", 8000)
+        const touchPrefAfter: any = await chromeA.eval(
           "(async()=>{const r=await fetch('/personal/launcher',{credentials:'same-origin'});return {status:r.status,body:await r.json()}})()"
         )
-        const dragSave: any = await chromeA.eval(
-          `(async()=>{const r=await fetch('/personal/launcher',{method:'POST',credentials:'same-origin',` +
-          `headers:{'Content-Type':'application/json','x-csrf-token':'${csrfA2}'},` +
-          `body:JSON.stringify({app_ids:${JSON.stringify(afterOrderItems)},collapsed_ids:[],version:${currentPref2.body.version}})});` +
-          `return {status:r.status,body:await r.json()}})()`
-        )
-        assert.equal(dragSave.status, 200, 'B20_DRAG_SAVE_200')
-        const dbRowDrag = await q(
+        const dbRowTouch = await q(
           `select app_ids from da_launcher_preference where person_id=$1`,
           [actorA.personId]
         )
         const validIds = ['storefront', 'vendor']
-        const expectedOrder = afterOrderItems.filter((id: string) => validIds.includes(id))
-        assert.deepEqual(dbRowDrag[0].app_ids, expectedOrder, 'B20_DRAG_ORDER_PERSISTED_IN_DB')
-        results['touch-drag-persist'] = { status: 'PASS', savedOrder: afterOrderItems, dbVersion: dragSave.body.version }
+        const expectedTouch = afterTouchOrder.filter((id: string) => validIds.includes(id))
+        assert.deepEqual(dbRowTouch[0].app_ids, expectedTouch, 'B20_TOUCH_DRAG_ORDER_PERSISTED_IN_DB')
+        results['touch-drag-reorder'] = {
+          status: 'PASS',
+          detail: { beforeOrder: beforeTouchOrder, afterOrder: afterTouchOrder, reordered: true, mobile: true, viewport: '390x844' },
+        }
+        results['touch-drag-persist'] = {
+          status: 'PASS',
+          savedOrder: afterTouchOrder,
+          dbVersion: touchPrefAfter.body.version,
+          note: 'pointerup auto-save triggered by real touch gesture',
+        }
+      }
+    }
+
+    // ── Keyboard drag: full acceptance — Space/ArrowDown/Space + DOM + PG + reload + Escape cancel ──
+    const kbHandleFound: boolean = await chromeA.eval(
+      `!!document.querySelector('#launcher-list li:first-child .launcher-handle')`
+    )
+    const kbListCount: number = await chromeA.eval(
+      `(document.getElementById('launcher-list')?.children.length ?? 0)`
+    )
+    if (!kbHandleFound || kbListCount < 2) {
+      results['keyboard-drag-reorder'] = { status: 'NOT_TESTED', note: 'no handle or fewer than 2 items' }
+      results['keyboard-drag-persist'] = { status: 'NOT_TESTED', note: 'no handle or fewer than 2 items' }
+      results['keyboard-escape-cancel'] = { status: 'NOT_TESTED', note: 'no handle or fewer than 2 items' }
+    } else {
+      const kbSel = '#launcher-list li:first-child .launcher-handle'
+      const beforeKbOrder: string[] = await chromeA.eval(
+        `[...document.getElementById('launcher-list').children].map(li=>li.getAttribute('data-id'))`
+      )
+
+      // Space → grab, ArrowDown → move to pos 2, Space → drop (triggers saveLauncherOrder async)
+      await chromeA.click(kbSel)
+      await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+      await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+      await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
+      await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
+      await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+      await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+
+      // Wait for save to complete (status shows save result)
+      await chromeA.wait(
+        "document.getElementById('launcher-status').textContent.includes('kaydedildi')||document.getElementById('launcher-status').textContent.includes('iptal')",
+        8000
+      )
+      const afterKbOrder: string[] = await chromeA.eval(
+        `[...document.getElementById('launcher-list').children].map(li=>li.getAttribute('data-id'))`
+      )
+      const kbStatus: string = await chromeA.eval(`document.getElementById('launcher-status').textContent`)
+
+      const kbReordered = afterKbOrder.length >= 2 && afterKbOrder[0] !== beforeKbOrder[0]
+      if (!kbReordered) {
+        results['keyboard-drag-reorder'] = {
+          status: 'NOT_TESTED',
+          note: 'CDP key events delivered but DOM order unchanged — keyboard drag handler may not have received focus.',
+          detail: { beforeOrder: beforeKbOrder, afterOrder: afterKbOrder, status: kbStatus },
+        }
+        results['keyboard-drag-persist'] = { status: 'NOT_TESTED', note: 'keyboard drag did not reorder' }
+      } else {
+        // PG readback
+        const dbRowKb = await q(
+          `select app_ids from da_launcher_preference where person_id=$1`,
+          [actorA.personId]
+        )
+        const validIds = ['storefront', 'vendor']
+        const expectedKb = afterKbOrder.filter((id: string) => validIds.includes(id))
+        assert.deepEqual(dbRowKb[0].app_ids, expectedKb, 'B20_KB_ORDER_PERSISTED_IN_DB')
+
+        // Reload page and verify order persists (session still valid at this point)
+        const preReloadOrder = [...afterKbOrder]
+        await chromeA.send('Page.navigate', { url: origin + '/personal' })
+        await chromeA.wait("!document.getElementById('workspace').hidden", 20000)
+        await chromeA.wait("!document.getElementById('launcher-section').hidden", 20000)
+        const afterReloadOrder: string[] = await chromeA.eval(
+          `[...document.getElementById('launcher-list').children].map(li=>li.getAttribute('data-id'))`
+        )
+        assert.deepEqual(afterReloadOrder, preReloadOrder, 'B20_KB_ORDER_PERSISTS_AFTER_RELOAD')
+        // Refresh csrfA2 token after reload
+        const csrfA2r: string = await chromeA.eval('csrf')
+
+        results['keyboard-drag-reorder'] = {
+          status: 'PASS',
+          detail: { beforeOrder: beforeKbOrder, afterOrder: afterKbOrder, reordered: true },
+        }
+        results['keyboard-drag-persist'] = {
+          status: 'PASS',
+          dbOrder: dbRowKb[0].app_ids,
+          afterReloadOrder,
+          note: 'DOM order matches PG and persists after page reload',
+        }
+        void csrfA2r // captured for completeness
       }
 
-      // ── Keyboard drag (Space/ArrowDown/Space) ──────────────────────────────
-      // Exercises keyboard accessibility of launcher reorder — Space to grab, ArrowDown, Space to drop.
-      const kbSel = '#launcher-list li:first-child .launcher-handle'
-      const kbHandleFound: boolean = await chromeA.eval(
+      // ── Escape cancel test (grab + ArrowDown + Escape = no change) ──
+      const beforeEscOrder: string[] = await chromeA.eval(
+        `[...document.getElementById('launcher-list').children].map(li=>li.getAttribute('data-id'))`
+      )
+      const kbSelAfter = '#launcher-list li:first-child .launcher-handle'
+      const escHandleFound: boolean = await chromeA.eval(
         `!!document.querySelector('#launcher-list li:first-child .launcher-handle')`
       )
-      if (kbHandleFound) {
-        await chromeA.click(kbSel)
-        for (const [key, code, vk] of [
-          [' ', 'Space', 32] as const,
-          ['ArrowDown', 'ArrowDown', 40] as const,
-          [' ', 'Space', 32] as const,
-        ]) {
-          await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: vk })
-          await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk })
+      if (escHandleFound) {
+        await chromeA.click(kbSelAfter)
+        // Space (grab)
+        await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+        await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+        // ArrowDown (move without committing)
+        await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
+        await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
+        // Escape (cancel: calls renderLauncher() which restores pre-drag DOM order)
+        await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+        await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+        await new Promise<void>(r => setTimeout(r, 300))
+        const afterEscOrder: string[] = await chromeA.eval(
+          `[...document.getElementById('launcher-list').children].map(li=>li.getAttribute('data-id'))`
+        )
+        const escStatus: string = await chromeA.eval(`document.getElementById('launcher-status').textContent`)
+        // After Escape, renderLauncher() restores the last-saved order
+        assert.deepEqual(afterEscOrder, beforeEscOrder, 'B20_KB_ESCAPE_RESTORES_ORDER')
+        results['keyboard-escape-cancel'] = {
+          status: 'PASS',
+          beforeOrder: beforeEscOrder,
+          afterEscOrder,
+          statusText: escStatus,
+          note: 'Escape called renderLauncher() — DOM restored to last-saved order; no POST made',
         }
-        results['keyboard-drag-reorder'] = { status: 'PASS', note: 'CDP keyboard Space/ArrowDown/Space delivered to launcher handle' }
       } else {
-        results['keyboard-drag-reorder'] = { status: 'NOT_TESTED', note: 'no .launcher-handle on first item' }
+        results['keyboard-escape-cancel'] = { status: 'NOT_TESTED', note: 'no handle found for Escape test' }
       }
     }
     // ── Revoked session rejection ─────────────────────────────────────────────
@@ -557,7 +658,7 @@ export default async function ({ container }: any) {
       head: process.env.B20_HEAD,
       status: 'PASS',
       results,
-      note: 'B20 launcher acceptance criteria executed against real Chrome/HTTPS/PG16. Skipped tests reported as NOT_TESTED.',
+      note: 'B20 launcher acceptance criteria at 688aac1c+. Real CDP touch (mobile viewport) and full keyboard Space/Arrow/Space + Escape tested. Skipped tests reported as NOT_TESTED. Real app navigation NOT_TESTED in isolated env.',
     })
   } finally {
     await chromeA?.close()
