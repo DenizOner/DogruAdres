@@ -25,11 +25,24 @@ describe("personal ingress (unit contract only)",()=>{
   })
   it("does not deny every public authentication operation",async()=>expect((await probe("/auth/customer/emailpass","POST")).next).toHaveBeenCalled())
   it("preserves an explicit native machine read, not arbitrary Basic mutations",async()=>{expect((await probe("/admin/api-keys","GET","Basic valid")).next).toHaveBeenCalled();expect((await probe("/admin/api-keys","POST","Basic valid")).res.status).toHaveBeenCalledWith(401)})
-  it("permits only the purpose-built personal invitation POST with its own CSRF guard",async()=>{
-    expect((await probe("/personal/invitations","POST")).next).toHaveBeenCalled()
-    expect((await probe("/personal/invitations","GET")).res.status).toHaveBeenCalledWith(401)
-    expect((await probe("/personal/invitations/accept","POST")).res.status).toHaveBeenCalledWith(401)
-    expect((await probe("/personal/invitations","OPTIONS")).res.status).toHaveBeenCalledWith(401)
+  it("permits only exact personal invitation GET/POST, leaving role/session and CSRF checks to the route",async()=>{
+    for(const method of ["GET","POST"]){
+      const {next,res}=await probe("/personal/invitations",method)
+      expect(next).toHaveBeenCalledTimes(1)
+      expect(res.status).not.toHaveBeenCalled()
+    }
+    for(const [path,method] of [
+      ["/personal/invitations","PUT"],
+      ["/personal/invitations","DELETE"],
+      ["/personal/invitations","PATCH"],
+      ["/personal/invitations","OPTIONS"],
+      ["/personal/invitations/accept","POST"],
+      ["/personal/invitations/extra","GET"],
+    ]){
+      const {next,res}=await probe(path,method)
+      expect(next).not.toHaveBeenCalled()
+      expect(res.status).toHaveBeenCalledWith(401)
+    }
   })
   it.each(["/dogruadres/organizations/daorg_test/invitations","/dogruadres/invitations/accept"])(
     "keeps native invitation mutations closed even for live ledger credentials: %s",async path=>{
