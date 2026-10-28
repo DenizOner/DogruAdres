@@ -79,6 +79,17 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
     expect(result.status).toHaveBeenCalledWith(503)
     expect(bindServerActor).not.toHaveBeenCalled()
   })
+  // The normal GET response signs its CSRF token; only these synthetic success
+  // fixtures need a temporary test key, never a production secret.
+  async function withB16TestCookieSecret<T>(run:()=>Promise<T>):Promise<T>{
+    const before=process.env.COOKIE_SECRET
+    process.env.COOKIE_SECRET="unit-b16-"+"x".repeat(48)
+    try{return await run()}
+    finally{
+      if(before===undefined)delete process.env.COOKIE_SECRET
+      else process.env.COOKIE_SECRET=before
+    }
+  }
   it.each([
     ["verified","confirmed@example.invalid"],
     ["not_verified",null],
@@ -88,7 +99,7 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
       person_id:"daprs_private",auth_identity_id:"auth_self",actor_type:"user",actor_id:"user_self",
     })
     ;(verifiedEmailForActorContext as jest.Mock).mockResolvedValue(email)
-    const res=await callRead("GET")
+    const res=await withB16TestCookieSecret(()=>callRead("GET"))
     expect(verifiedEmailForActorContext).toHaveBeenCalledWith(expect.anything(),{
       actor_type:"user",actor_id:"user_self",auth_identity_id:"auth_self",
       auth_provider:"emailpass",user_metadata:{},
@@ -104,11 +115,11 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
       person_id:"daprs_private",auth_identity_id:"auth_self",actor_type:"user",actor_id:"user_self",
     })
     ;(verifiedEmailForActorContext as jest.Mock).mockRejectedValue(Error("private provider error"))
-    const res=await callRead("GET")
+    const res=await withB16TestCookieSecret(()=>callRead("GET"))
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({email_verification:"unavailable"}))
     expect(JSON.stringify(res.json.mock.calls)).not.toContain("private provider error")
   })
-    it("denies unauthenticated logout without a database call",async()=>{
+  it("denies unauthenticated logout without a database call",async()=>{
     const result=await callRead("DELETE")
     expect(result.status).toHaveBeenCalledWith(403)
     expect(csrf).not.toHaveBeenCalled()
