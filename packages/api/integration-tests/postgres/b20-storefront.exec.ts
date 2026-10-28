@@ -2,10 +2,11 @@
 import assert from 'node:assert/strict'
 import {createRequire} from 'node:module'
 import {createHash,randomBytes} from 'node:crypto'
-import {readFileSync,writeFileSync,mkdirSync,symlinkSync,openSync,closeSync} from 'node:fs'
+import {readFileSync,writeFileSync,mkdirSync,symlinkSync,openSync,closeSync,cpSync} from 'node:fs'
 import {join,resolve,dirname} from 'node:path'
 import {spawn,type ChildProcess} from 'node:child_process'
 import {createServer} from 'node:http'
+import {request as httpsRequest} from 'node:https'
 import {Client} from '@medusajs/framework/pg'
 import {ApiLoader,expressLoader} from '@medusajs/framework/http'
 import {createRegionsWorkflow,createSalesChannelsWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createProductsWorkflow} from '@medusajs/medusa/core-flows'
@@ -50,12 +51,14 @@ export default async function({container}:any){
       if(path.startsWith('/store/products'))assert.ok(data.products.some((p:any)=>p.id===product.id))
     }
     record('native-catalog',{status:'PASS',requests,region:region.id,product:product.id,sql:(await pg.query('select id,title,status from product where id=$1',[product.id])).rows})
-    // A task-only Next runtime root uses junctions to existing source/dependencies.
+    // A task-only Next runtime root snapshots project source and reuses existing dependencies.
     // Next can generate its own tsconfig/next-env/cache without touching the source checkout's originals.
     const nextRoot=join(dir,'storefront-runtime');mkdirSync(nextRoot)
-    for(const name of ['src','public','node_modules'])symlinkSync(join(storefront,name),join(nextRoot,name),'junction')
+    // Next's route discovery must see a real task-owned source tree, not an app-root junction.
+    cpSync(join(storefront,'src'),join(nextRoot,'src'),{recursive:true,errorOnExist:true})
+    for(const name of ['public','node_modules'])symlinkSync(join(storefront,name),join(nextRoot,name),'junction')
     for(const name of ['package.json','tsconfig.json','next-env.d.ts','postcss.config.mjs','tailwind.config.ts'])writeFileSync(join(nextRoot,name),readFileSync(join(storefront,name)))
-    writeFileSync(join(nextRoot,'next.config.js'),'module.exports={reactStrictMode:true,images:{unoptimized:true},typescript:{ignoreBuildErrors:true}}')
+    writeFileSync(join(nextRoot,'next.config.js'),'module.exports={outputFileTracingRoot:__dirname,reactStrictMode:true,images:{unoptimized:true},typescript:{ignoreBuildErrors:true}}')
     const tlsRoot='D:/DogruAdres/.worktrees/m0-vertical-evidence-20261020-a7f1/chrome-recovery-tls-20261021'
     const child=join(dir,'storefront-server.cjs')
     writeFileSync(child,`
@@ -71,6 +74,12 @@ const close=async()=>{server.close();await app.close();process.exit(0)};process.
     nextProcess=spawn(process.execPath,[child],{cwd:nextRoot,env:{...process.env,NODE_ENV:'development',MEDUSA_BACKEND_URL:backend,NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY:key.token,NEXT_PUBLIC_DEFAULT_REGION:'de',NEXT_PUBLIC_VENDOR_URL:backend+'/seller',NEXT_PUBLIC_SITE_NAME:'B20 isolated Storefront',NEXT_TELEMETRY_DISABLED:'1',B20_TLS_CERT:join(tlsRoot,'server.pem'),B20_TLS_KEY:join(tlsRoot,'server-key.private.pem'),B20_NEXT_READY:ready},stdio:['ignore',log,log],windowsHide:true})
     const state=await until(async()=>{assert.equal(nextProcess!.exitCode,null,'Next runtime exited');try{return JSON.parse(readFileSync(ready,'utf8'))}catch{return false}},60000,'task Next ready')
     const origin='https://127.0.0.1:'+state.port
+    // Compile the genuine Next page before the shared browser helper's 25s CDP navigation deadline.
+    const rendered=await new Promise<{status:number;hasPage:boolean}>((resolve,reject)=>{
+      const r=httpsRequest(origin+'/de',{ca:readFileSync(join(tlsRoot,'server.pem'))},res=>{let body='';res.on('data',b=>body+=b);res.on('end',()=>resolve({status:res.statusCode!,hasPage:body.includes('Snag your style in a flash')}))})
+      r.setTimeout(180000,()=>r.destroy(Error('Storefront compilation/render timeout')));r.on('error',reject);r.end()
+    })
+    record('storefront-http-render',rendered);assert.equal(rendered.status,200);assert.ok(rendered.hasPage)
     chrome=new B19Chrome(origin,'B20 actual Storefront');await chrome.start()
     await chrome.send('Network.setBlockedURLs',{urls:['*vendor.mercurjs.com*','*i.imgur.com*','*fonts.googleapis.com*','*fonts.gstatic.com*']})
     await chrome.send('Page.navigate',{url:origin+'/de'})
@@ -79,6 +88,9 @@ const close=async()=>{server.close();await app.close();process.exit(0)};process.
     assert.equal(ui.externalDemoLinks,0)
     await chrome.screenshot(join(dir,'storefront-render.png'))
     record('storefront-result',{head:process.env.B20_HEAD,status:'TEST EXECUTED AND PASSED',origin,ui,http:chrome.http,limitation:'Storefront render and native synthetic catalog only; Vendor authorized action blocked by token-storage conflict; B20 launcher NOT IMPLEMENTED/NOT TESTED.'})
+  }catch(error){
+    record('storefront-failure',{message:error instanceof Error?error.message:String(error),http:chrome?.http??[],nextExit:nextProcess?.exitCode})
+    throw error
   }finally{
     await chrome?.close();if(nextProcess){nextProcess.kill();await until(async()=>nextProcess!.exitCode!==null||nextProcess!.signalCode!==null,10000,'task Next exit')}
     if(log!==undefined)closeSync(log)
