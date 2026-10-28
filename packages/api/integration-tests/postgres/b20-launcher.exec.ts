@@ -499,9 +499,9 @@ export default async function ({ container }: any) {
     results['revoked-session'] = { status: 'PASS', got: 401 }
 
     // ── Permission invariant ──────────────────────────────────────────────────
-    // Snapshot actor bindings AFTER fixture setup but AFTER all launcher operations.
-    // The count for Person A is 2 (user + member from makeSellerForPerson fixture).
-    // The count for Person B is 1 (user only).
+    // Snapshot da_verified_actor_binding rows for both Persons after all launcher ops.
+    // da_verified_actor_binding holds only secondary actor (member/customer) bindings.
+    // User actors go to da_login_binding. Person A has 1 (member); Person B has 0.
     // Launcher GET/POST must NOT have added any further bindings.
     const bindingsNow = await q(
       `select count(*)::int c from da_verified_actor_binding where person_id in ($1,$2)`,
@@ -511,15 +511,18 @@ export default async function ({ container }: any) {
       `select count(*)::int c from da_organization_membership where person_id in ($1,$2) and status='active'`,
       [actorA.personId, actorB.personId]
     )
-    // Expected: 3 total (user+member for A, user for B); 2 org memberships (one each).
-    // Launcher operations must not have created any additional entitlement rows.
-    assert.equal(bindingsNow[0].c, 3, 'B20_BINDINGS_FIXTURE_ONLY')
+    // da_verified_actor_binding stores only secondary actor bindings (member/customer).
+    // User actors use da_login_binding, not da_verified_actor_binding.
+    // Expected: 1 total (member binding for Person A only from makeSellerForPerson).
+    // Person B has no secondary actor binding. Launcher operations must not add any.
+    // 2 org memberships: one for each Person from makeActor's createMemberships call.
+    assert.equal(bindingsNow[0].c, 1, 'B20_BINDINGS_FIXTURE_ONLY')
     assert.equal(membersNow[0].c, 2, 'B20_MEMBERSHIPS_FIXTURE_ONLY')
     results['permission-invariant'] = {
       status: 'PASS',
       bindings: bindingsNow[0].c,
       memberships: membersNow[0].c,
-      note: 'Fixture: 2+1 bindings, 2 org memberships. No new bindings created by launcher operations.',
+      note: 'Fixture: 1 member binding for Person A, 0 for B. 2 org memberships. No new bindings from launcher.',
     }
 
     // ── Vendor entitlement negative — user-actor-only Person sees no vendor ──
