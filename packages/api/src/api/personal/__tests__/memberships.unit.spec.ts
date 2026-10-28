@@ -270,6 +270,10 @@ describe("personal memberships route", () => {
       }
       const context = createContext({
         el,
+        // Notification transport has its own real-browser coverage; this VM
+        // isolates membership response ordering and must provide its boundary.
+        clearNotifications: () => { el('notification-list').replaceChildren(); el('notification-bell').hidden = true },
+        notifications: async () => {},
         status: (s: string) => { state.status = s },
         history: { replaceState: (_: unknown, __: unknown, url: string) => { state.url = url } },
         document: doc,

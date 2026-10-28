@@ -12,7 +12,7 @@ function harness() {
   const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{textContent:'',children:[],replaceChildren(){this.children=[]},append(x:any){this.children.push(x)}});return nodes.get(id)}
   const pending:Array<{path:string;resolve:(x:any)=>void;reject:(e:Error)=>void}>=[]
   const state={status:'',url:'/personal',pending,el}
-  const context=createContext({el,status:(s:string)=>{state.status=s},history:{replaceState:(_:unknown,__:unknown,url:string)=>{state.url=url}},document:{createElement:()=>({textContent:''})},api:(path:string)=>new Promise((resolve,reject)=>pending.push({path,resolve,reject}))})
+  const context=createContext({el,clearNotifications:()=>{el('notification-list').replaceChildren();el('notification-bell').hidden=true},notifications:async()=>{},status:(s:string)=>{state.status=s},history:{replaceState:(_:unknown,__:unknown,url:string)=>{state.url=url}},document:{createElement:()=>({textContent:''})},api:(path:string)=>new Promise((resolve,reject)=>pending.push({path,resolve,reject}))})
   runInContext(source.slice(begin,end),context)
   return {...state,context,state,select:(id:string)=>runInContext(`selectOrg(${JSON.stringify(id)})`,context)}
 }
