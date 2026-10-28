@@ -1,18 +1,24 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+﻿import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { randomBytes } from "node:crypto"
 import { enabled } from "./security"
-// storefrontOrigin is read directly from DOGRUADRES_PUBLIC_ORIGIN (no listener-config validation needed for link embed)
+// storefrontOrigin from DOGRUADRES_STOREFRONT_URL/STOREFRONT_URL; vendorOrigin from MERCUR_VENDOR_URL
 export const AUTHENTICATE = false
 export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   if (!enabled()) return res.status(503).send("Kişisel çalışma alanı etkin değil")
   const nonce = randomBytes(18).toString("base64")
-  // Resolve Storefront URL from trusted process env only.
-  // Direct env read avoids listener-config TLS validation (cert/key not needed for link embed).
+  // Resolve Storefront and Vendor URL from trusted process env only.
+  // DOGRUADRES_STOREFRONT_URL or STOREFRONT_URL for the real Next.js Buyer Storefront.
+  // MERCUR_VENDOR_URL for the Mercur Vendor Panel origin (appended with /seller).
   let storefrontOrigin = ""
   try {
-    const raw = process.env.DOGRUADRES_PUBLIC_ORIGIN
-    if (raw) { const u = new URL(raw); if (u.origin === raw) storefrontOrigin = u.origin }
-  } catch { /* malformed or unset — launcher degrades gracefully, no launch links shown */ }
+    const rawSf = process.env.DOGRUADRES_STOREFRONT_URL ?? process.env.STOREFRONT_URL
+    if (rawSf) { const u = new URL(rawSf); storefrontOrigin = u.origin }
+  } catch { /* malformed or unset -- launcher degrades gracefully, no storefront link shown */ }
+  let vendorOrigin = ""
+  try {
+    const rawVn = process.env.MERCUR_VENDOR_URL ?? process.env.DOGRUADRES_VENDOR_URL
+    if (rawVn) { const u = new URL(rawVn); vendorOrigin = u.origin }
+  } catch { /* malformed or unset -- vendor link omitted gracefully */ }
   res.setHeader("Cache-Control","no-store")
   res.setHeader("Referrer-Policy","no-referrer")
   res.setHeader("X-Content-Type-Options","nosniff")
@@ -803,7 +809,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Null-prototype map prevents __proto__/constructor property pollution reads.
   const APP_LABELS=Object.assign(Object.create(null),{storefront:'Al\u0131c\u0131 Ma\u011fazas\u0131',vendor:'Sat\u0131c\u0131 Paneli'});
   // App launch URLs: server-embedded from trusted process config at render time.
-  const APP_URLS=Object.assign(Object.create(null),{storefront:'${storefrontOrigin}',vendor:'/seller'});
+  const APP_URLS=Object.assign(Object.create(null),{storefront:'${storefrontOrigin}',vendor:'${vendorOrigin}/seller'});
   let launcherState={app_ids:[],collapsed_ids:[],available_ids:[],version:0};
   let launcherSaving=false,launcherDragSrc=null,launcherDragOver=null;
   let launcherKeyHandle=null;

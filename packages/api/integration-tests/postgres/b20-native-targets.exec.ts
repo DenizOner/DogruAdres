@@ -1,4 +1,4 @@
-/** Decisive B20 prerequisite: real session does not make native applications reachable. */
+﻿/** Decisive B20 prerequisite: real session does not make native applications reachable. */
 import assert from 'node:assert/strict'
 import {randomBytes} from 'node:crypto'
 import {readFileSync,writeFileSync} from 'node:fs'
@@ -39,7 +39,7 @@ export default async function({container}:any){
     await chrome.input('#challenge input[name=code]',otp(setup.secret));await chrome.click('#challenge button');await chrome.wait("!document.getElementById('workspace').hidden")
     // Real Chrome fetches through the real native API middleware with its authenticated cookie.
     for(const path of ['/personal/session','/personal/organizations','/admin/users/me','/admin/products','/vendor/members/me','/vendor/products','/store/customers/me','/seller']){
-      const result=await chrome.eval(`(async()=>{const r=await fetch(${JSON.stringify(path)},{credentials:'same-origin'});return {status:r.status}})()`)
+      const result=await chrome.evalWithArg('async function(path){const r=await fetch(path,{credentials:"same-origin"});return {status:r.status}}',path)
       http.push({path,status:result.status})
       writeFileSync(join(dir,'http-observations.json'),JSON.stringify(http,null,2))
       // Store's native publishable-key validator precedes project middleware.

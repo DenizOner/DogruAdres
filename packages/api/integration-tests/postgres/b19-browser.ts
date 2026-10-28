@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import { writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHmac } from 'node:crypto'
@@ -143,11 +143,59 @@ export class B19Chrome {
   }
 
   async click(sel: string): Promise<void> {
-    const p = await this.eval(`(()=>{const e=document.querySelector(${JSON.stringify(sel)});if(!e)return null;e.scrollIntoView();const r=e.getBoundingClientRect();return r.width&&r.height?{x:r.x+r.width/2,y:r.y+r.height/2}:null})()`)
-    assert.ok(p, `${this.label} missing: ${sel}`)
-    for (const type of ['mousePressed', 'mouseReleased']) await this.send('Input.dispatchMouseEvent', { type, ...p, button: 'left', clickCount: 1 })
+    // Use DOM CDP methods instead of eval with interpolated selector (avoids js/bad-code-sanitization)
+    const doc = await this.send('DOM.getDocument', { depth: 0 })
+    const found = await this.send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: sel })
+    assert.ok(found.nodeId, `${this.label} missing: ${sel}`)
+    await this.send('DOM.scrollIntoViewIfNeeded', { nodeId: found.nodeId })
+    const box = await this.send('DOM.getBoxModel', { nodeId: found.nodeId })
+    assert.ok(box.model, `${this.label} no box: ${sel}`)
+    const cx = (box.model.content[0] + box.model.content[4]) / 2
+    const cy = (box.model.content[1] + box.model.content[5]) / 2
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await this.send('Input.dispatchMouseEvent', { type, x: cx, y: cy, button: 'left', clickCount: 1 })
+    }
   }
 
+  /** Drag from one element to another using real CDP mouse events (not synthetic DOM dispatch). */
+  async drag(fromSel: string, toSel: string): Promise<void> {
+    const doc = await this.send('DOM.getDocument', { depth: 0 })
+    const fromNode = await this.send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: fromSel })
+    const toNode = await this.send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: toSel })
+    assert.ok(fromNode.nodeId && toNode.nodeId, `${this.label} drag: elements missing (${fromSel} -> ${toSel})`)
+    await this.send('DOM.scrollIntoViewIfNeeded', { nodeId: fromNode.nodeId })
+    const fromBox = await this.send('DOM.getBoxModel', { nodeId: fromNode.nodeId })
+    const toBox = await this.send('DOM.getBoxModel', { nodeId: toNode.nodeId })
+    assert.ok(fromBox.model && toBox.model, `${this.label} drag: getBoxModel failed`)
+    const fx = (fromBox.model.content[0] + fromBox.model.content[4]) / 2
+    const fy = (fromBox.model.content[1] + fromBox.model.content[5]) / 2
+    const tx = (toBox.model.content[0] + toBox.model.content[4]) / 2
+    const ty = (toBox.model.content[1] + toBox.model.content[5]) / 2
+    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: fx, y: fy, button: 'left', clickCount: 1 })
+    const steps = 12
+    for (let i = 1; i <= steps; i++) {
+      await this.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved', button: 'left',
+        x: fx + (tx - fx) * i / steps,
+        y: fy + (ty - fy) * i / steps,
+      })
+    }
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: tx, y: ty, button: 'left', clickCount: 1 })
+  }
+
+  /** Call a JS function via CDP Runtime.callFunctionOn, passing arg as a CDP value (no string interpolation). */
+  async evalWithArg(fn: string, arg: unknown): Promise<any> {
+    const global = await this.send('Runtime.evaluate', { expression: 'window', returnByValue: false })
+    const res = await this.send('Runtime.callFunctionOn', {
+      objectId: global.result.objectId,
+      functionDeclaration: fn,
+      arguments: [{ value: arg }],
+      returnByValue: true,
+      awaitPromise: true,
+    })
+    if (res.exceptionDetails) throw Error(`${this.label} evalWithArg: ${res.exceptionDetails?.text}`)
+    return res.result?.value
+  }
   async input(sel: string, value: string): Promise<void> {
     await this.click(sel); await this.send('Input.insertText', { text: value })
   }

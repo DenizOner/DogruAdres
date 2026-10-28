@@ -56,7 +56,9 @@ const tlsConnect=tls.connect;tls.connect=function(...args){check(args);return tl
     DOGRUADRES_IDENTITY_ENABLED:'true',DOGRUADRES_MFA_RUNTIME_ENABLED:'true',DOGRUADRES_MFA_ENROLLMENT_ENABLED:'true',DOGRUADRES_MFA_SETTINGS_ENABLED:'true',
     DOGRUADRES_PUBLIC_ORIGIN:'http://127.0.0.1:19872',DOGRUADRES_PRIVATE_API:'http://127.0.0.1:19873',DOGRUADRES_FRONTDOOR_HOST:'127.0.0.1',DOGRUADRES_FRONTDOOR_PORT:'19872',
     STORE_CORS:'http://127.0.0.1',ADMIN_CORS:'http://127.0.0.1',VENDOR_CORS:'http://127.0.0.1',AUTH_CORS:'http://127.0.0.1',SMTP_ENABLED:'false',
-    B20_DIR:dir,B19_DIR:dir,B20_HEAD:head,B20_DATABASE:'b20_'+id};
+    B20_DIR:dir,B19_DIR:dir,B20_HEAD:head,B20_DATABASE:'b20_'+id,
+    // Placeholder URLs for isolated test — real Storefront/Vendor not running; link structure only
+    DOGRUADRES_STOREFRONT_URL:'http://localhost:3000',MERCUR_VENDOR_URL:'http://localhost:7001'};
   const cli=path.join(path.dirname(req.resolve('@medusajs/cli/package.json')),'cli.js');
   const probe=process.env.B20_LAUNCHER==='true'
     ?'integration-tests/postgres/b20-launcher.exec.ts'
