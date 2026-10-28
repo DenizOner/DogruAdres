@@ -2,12 +2,14 @@ import { POST,GET,DELETE } from "../session/route"
 import { access,enabled,sessionToken,trustedOrigin,secureCookies,csrf,csrfEnrollment } from "../security"
 import { bindServerActor } from "../server-actor"
 import { readNativeMfaSummary } from "../../../modules/dogruadres-access/native-mfa-summary"
+import { verifiedEmailForActorContext } from "../../dogruadres/invitations/accept/route"
 
 jest.mock("../security",()=>({
   access:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn(),trustedOrigin:jest.fn(),
   secureCookies:jest.fn(()=>true),csrf:jest.fn(),csrfEnrollment:jest.fn(),
 }))
 jest.mock("../server-actor",()=>({bindServerActor:jest.fn()}))
+jest.mock("../../dogruadres/invitations/accept/route",()=>({verifiedEmailForActorContext:jest.fn()}))
 jest.mock("../../../modules/dogruadres-access/native-mfa-summary",()=>({
   readNativeMfaSummary:jest.fn(),
 }))
@@ -32,6 +34,7 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
     ;(access as jest.Mock).mockReturnValue(service)
     ;(sessionToken as jest.Mock).mockReturnValue("")
     ;(bindServerActor as jest.Mock).mockResolvedValue(true)
+    ;(verifiedEmailForActorContext as jest.Mock).mockResolvedValue(null)
     service.personalSession.mockResolvedValue(null)
     service.personalLoginAttempt.mockResolvedValue(true)
     service.personalMfaRuntimeActivation.mockResolvedValue(true)
@@ -76,7 +79,36 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
     expect(result.status).toHaveBeenCalledWith(503)
     expect(bindServerActor).not.toHaveBeenCalled()
   })
-  it("denies unauthenticated logout without a database call",async()=>{
+  it.each([
+    ["verified","confirmed@example.invalid"],
+    ["not_verified",null],
+  ])("returns %s only from native actor-bound email proof",async(expected,email)=>{
+    ;(sessionToken as jest.Mock).mockReturnValue("S".repeat(43))
+    service.personalSession.mockResolvedValue({
+      person_id:"daprs_private",auth_identity_id:"auth_self",actor_type:"user",actor_id:"user_self",
+    })
+    ;(verifiedEmailForActorContext as jest.Mock).mockResolvedValue(email)
+    const res=await callRead("GET")
+    expect(verifiedEmailForActorContext).toHaveBeenCalledWith(expect.anything(),{
+      actor_type:"user",actor_id:"user_self",auth_identity_id:"auth_self",
+      auth_provider:"emailpass",user_metadata:{},
+    })
+    expect(res.json).toHaveBeenCalledWith({
+      person_id:"daprs_private",csrf_token:expect.any(String),email_verification:expected,
+    })
+    expect(JSON.stringify(res.json.mock.calls)).not.toContain("confirmed@example.invalid")
+  })
+  it("reports unavailable rather than verified if native proof read fails",async()=>{
+    ;(sessionToken as jest.Mock).mockReturnValue("S".repeat(43))
+    service.personalSession.mockResolvedValue({
+      person_id:"daprs_private",auth_identity_id:"auth_self",actor_type:"user",actor_id:"user_self",
+    })
+    ;(verifiedEmailForActorContext as jest.Mock).mockRejectedValue(Error("private provider error"))
+    const res=await callRead("GET")
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({email_verification:"unavailable"}))
+    expect(JSON.stringify(res.json.mock.calls)).not.toContain("private provider error")
+  })
+    it("denies unauthenticated logout without a database call",async()=>{
     const result=await callRead("DELETE")
     expect(result.status).toHaveBeenCalledWith(403)
     expect(csrf).not.toHaveBeenCalled()

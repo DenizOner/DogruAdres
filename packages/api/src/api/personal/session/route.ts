@@ -5,6 +5,7 @@ import { csrfToken, digest, mfaRuntimeEnforced } from "../../../modules/dogruadr
 import { readNativeMfaSummary } from "../../../modules/dogruadres-access/native-mfa-summary"
 import { z } from "@medusajs/framework/zod"
 import { bindServerActor } from "../server-actor"
+import { verifiedEmailForActorContext } from "../../dogruadres/invitations/accept/route"
 const credentials = z.object({email:z.string().email().max(254),password:z.string().min(1).max(1024)}).strict()
 
 export const AUTHENTICATE = false
@@ -24,7 +25,18 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     if(!await bindServerActor(req,token))
       return res.status(401).json({message:"Access denied"})
   }catch{return res.status(503).json({message:"Service unavailable"})}
-  return res.json({person_id:s.person_id,csrf_token:csrfToken(token)})
+  // Native email proof is distinct from password/MFA and real-world identity.
+  let emailVerification: "verified" | "not_verified" | "unavailable" = "unavailable"
+  try {
+    emailVerification = await verifiedEmailForActorContext(req, {
+      actor_type: s.actor_type, actor_id: s.actor_id,
+      auth_identity_id: s.auth_identity_id, auth_provider: "emailpass",
+      user_metadata: {},
+    }) ? "verified" : "not_verified"
+  } catch {
+    // Never assert verification or expose provider details on a failed read.
+  }
+  return res.json({person_id:s.person_id,csrf_token:csrfToken(token),email_verification:emailVerification})
 }
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   res.setHeader("Cache-Control","no-store")
