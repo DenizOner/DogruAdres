@@ -22,12 +22,19 @@ const protectedBefore=protectedPaths.flatMap(digestTree);
 record('manifest.private',{owner:'B20 /root sole writer',root,api,head,commonDir:run('git',['rev-parse','--git-common-dir']).trim(),baseline,container:name,expiry:'Retire after decisive probe; retain evidence',protectedBefore});
 const password=crypto.randomBytes(32).toString('hex');
 let containerId;
+function assertOwnedTmpfs(c){
+  assert.equal(c.Id,containerId);assert.equal(c.Name,'/'+name);
+  assert.equal(c.Config.Labels['org.dogruadres.owner'],id);
+  assert.deepEqual(c.HostConfig.Tmpfs,{'/var/lib/postgresql/data':'rw'});
+  assert.ok(c.Mounts.every(m=>m.Type==='tmpfs'&&m.Destination==='/var/lib/postgresql/data'));
+}
 try{
   containerId=run('docker',['run','-d','--name',name,'--label','org.dogruadres.task=B20','--label','org.dogruadres.owner='+id,'--memory','512m','--cpus','1','--tmpfs','/var/lib/postgresql/data:rw','-p','127.0.0.1::5432','-e','POSTGRES_USER=b20_test','-e','POSTGRES_DB=b20_'+id,'-e','POSTGRES_PASSWORD='+password,'postgres:16-alpine']).trim();
   const c=JSON.parse(run('docker',['inspect',containerId]))[0];
-  assert.equal(c.Config.Labels['org.dogruadres.owner'],id);assert.ok(c.Mounts.every(m=>m.Type==='tmpfs'));
+  assertOwnedTmpfs(c);
   const binding=c.NetworkSettings.Ports['5432/tcp'][0];assert.equal(binding.HostIp,'127.0.0.1');
-  record('container',{id:containerId,name,mounts:c.Mounts,port:binding,db:'b20_'+id});
+  const filesystem=run('docker',['exec',containerId,'stat','-f','-c','%T','/var/lib/postgresql/data']).trim();assert.equal(filesystem,'tmpfs');
+  record('container',{id:containerId,name,mounts:c.Mounts,tmpfs:c.HostConfig.Tmpfs,filesystem,port:binding,db:'b20_'+id});
   let ready=false;for(let i=0;i<40;i++){const r=spawnSync('docker',['exec',containerId,'pg_isready','-U','b20_test','-d','b20_'+id],{encoding:'utf8',windowsHide:true});if(r.status===0){ready=true;break;}Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,250);}assert.ok(ready);
   // ts-node's supported compiler option avoids every historical SWC cache.
   const project=path.join(dir,'tsconfig.json');fs.writeFileSync(project,JSON.stringify({extends:path.join(api,'tsconfig.json'), 'ts-node':{swc:false,transpileOnly:true}}));
@@ -58,7 +65,7 @@ const tlsConnect=tls.connect;tls.connect=function(...args){check(args);return tl
     assert.equal(result.status,0,label+' failed; see private '+dir);
   }
 }finally{
-  if(containerId){const c=JSON.parse(run('docker',['inspect',containerId]))[0];assert.equal(c.Config.Labels['org.dogruadres.owner'],id);assert.equal(c.Name,'/'+name);assert.ok(c.Mounts.every(m=>m.Type==='tmpfs'));run('docker',['stop',containerId]);run('docker',['rm',containerId]);record('cleanup',{containerId,removed:true,taskOwnedTmpfsOnly:true});}
+  if(containerId){const c=JSON.parse(run('docker',['inspect',containerId]))[0];assertOwnedTmpfs(c);run('docker',['stop',containerId]);run('docker',['rm',containerId]);record('cleanup',{containerId,removed:true,taskOwnedTmpfsOnly:true});}
   assert.deepEqual(protectedPaths.flatMap(digestTree),protectedBefore);record('protected-readback',{unchanged:true,files:protectedBefore.length});
   console.log('B20 private evidence: '+dir);
 }

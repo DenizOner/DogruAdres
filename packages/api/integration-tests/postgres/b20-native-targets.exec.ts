@@ -13,6 +13,8 @@ export default async function({container}:any){
   const q=async(sql:string,p:any[]=[]) => (await pg.query(sql,p)).rows
   assert.equal((await q('select current_database() db'))[0].db,process.env.B20_DATABASE)
   assert.match((await q('select version() v'))[0].v,/PostgreSQL 16\./)
+  const dataDirectory=(await q('show data_directory'))[0].data_directory
+  assert.equal(dataDirectory,'/var/lib/postgresql/data')
   const tls='D:/DogruAdres/.worktrees/m0-vertical-evidence-20261020-a7f1/chrome-recovery-tls-20261021'
   const cert=readFileSync(join(tls,'server.pem')),key=readFileSync(join(tls,'server-key.private.pem'))
   const app=await createPersonalHttpApp(container),server=createServer({cert,key,minVersion:'TLSv1.2'},app.app)
@@ -45,6 +47,6 @@ export default async function({container}:any){
     }
     const readback=await q("select s.person_id,s.status,b.actor_type from da_browser_session s join da_login_binding b on b.person_id=s.person_id where s.person_id=$1",[p.id]);assert.ok(readback.some(r=>r.status==='active'&&r.actor_type==='user'))
     await chrome.screenshot(join(dir,'native-targets-preflight.png'))
-    writeFileSync(join(dir,'native-targets-result.json'),JSON.stringify({head:process.env.B20_HEAD||'e507534f8f354aa114d1d44c24ba075155792705',status:'ARCHITECTURE BLOCKED',nativeRuntime:true,postgres16:true,chrome:true,origin,pid:process.pid,http,sessionReadback:readback,limitation:'Native API middleware probe, not full dashboard frontend acceptance. No accessible second application established; no entitlements invented. B20 interactions NOT TESTED.'},null,2),{flag:'wx'})
+    writeFileSync(join(dir,'native-targets-result.json'),JSON.stringify({head:process.env.B20_HEAD,status:'ARCHITECTURE BLOCKED',nativeRuntime:true,postgres16:true,dataDirectory,chrome:true,origin,pid:process.pid,http,sessionReadback:readback,limitation:'Native API middleware probe, not full dashboard frontend acceptance. No two genuinely usable approved application targets were established; no entitlements invented. B20 interactions NOT TESTED.'},null,2),{flag:'wx'})
   }finally{await chrome.close();await new Promise<void>(r=>server.close(()=>r()));await app.close();await pg.end()}
 }
