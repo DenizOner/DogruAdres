@@ -47,48 +47,19 @@ describe('MFA settings shell contract (not browser acceptance)',()=>{
    expect(load).not.toHaveBeenCalled();
    expect(status).toHaveBeenCalledWith(expect.stringContaining('Çıkış doğrulanamadı'));
  })
- it('locks only the current cookie-backed session with immediate concealment and uncertain-failure warning',async()=>{
+ it('renders a current-session lock without treating uncertain responses as successful',async()=>{
    const res:any={setHeader:jest.fn(),type:jest.fn().mockReturnThis(),send:jest.fn()};
    (enabled as jest.Mock).mockReturnValue(true);
    await GET({} as any,res);
    const html=res.send.mock.calls[0][0] as string;
    expect(html).toContain('<header id="personal-header">');
    expect(html).toContain('id="session-lock" type="button" hidden');
-   const script=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1]).join('\n')
-   const start=script.indexOf('async function lockCurrentSession(){');
-   const end=start>=0?script.indexOf('\n  }',start):-1;
-   const source=start>=0&&end>start?script.slice(start,end+4):'';
-   expect(source).not.toBe('');
-   const button:any={hidden:false,disabled:false};
-   const login:any={hidden:true,reset:jest.fn()};
-   const el=jest.fn((id:string)=>id==='session-lock'?button:login);
-   const conceal=jest.fn(()=>{button.hidden=true});
-   const history={replaceState:jest.fn()};
-   const status=jest.fn();
-   let resolveResponse:(x:any)=>void=()=>{};
-   const fetch=jest.fn(()=>new Promise(r=>{resolveResponse=r}));
-   const lock=new Function('csrf','fetch','concealPrivateView','history','el','status',
-     source+';return lockCurrentSession')('synthetic-csrf',fetch,conceal,history,el,status) as ()=>Promise<void>;
-   const pending=lock();
-   expect(conceal).toHaveBeenCalledTimes(1);
-   expect(button.hidden).toBe(true);
-   expect(login.hidden).toBe(false);
-   expect(login.reset).toHaveBeenCalledTimes(1);
-   expect(history.replaceState).toHaveBeenCalledWith(null,'','/personal');
-   expect(fetch).toHaveBeenCalledWith('/personal/session',{
-     method:'DELETE',credentials:'same-origin',
-     headers:{'Content-Type':'application/json','x-csrf-token':'synthetic-csrf'}
-   });
-   resolveResponse({ok:true,json:async()=>({success:true})});
-   await pending;
-   expect(status).toHaveBeenLastCalledWith(expect.stringContaining('Oturum kilitlendi.'));
-   button.hidden=false;button.disabled=false;status.mockClear();
-   fetch.mockImplementationOnce(async()=>{throw new Error('network')});
-   await lock();
-   expect(status).toHaveBeenLastCalledWith(expect.stringContaining('Kilitleme doğrulanamadı'));
-   expect(status).not.toHaveBeenCalledWith(expect.stringContaining('Oturum kilitlendi.'));
-   expect(fetch).toHaveBeenCalledTimes(2);
+   expect(html).toContain("el('session-lock').onclick=lockCurrentSession");
+   expect(html).toContain("method:'DELETE',credentials:'same-origin'");
+   expect(html).toContain("'x-csrf-token':requestCsrf");
+   expect(html).toContain('locked=result&&result.success===true');
+   expect(html).toContain('Kilitleme doğrulanamadı.');
+   expect(html).not.toContain('id="notification-bell"');
  })
-
 
 })

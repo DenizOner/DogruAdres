@@ -72,4 +72,31 @@ describe('private workspace lifetime (script regression only)',()=>{
     expect(h.el('person').textContent).toBe('')
   })
 
+  it('locks the current browser through native session DELETE and conceals before completion',async()=>{
+    const h=harness();await loaded(h)
+    const request=h.el('session-lock').onclick()
+    expect(h.el('workspace').hidden).toBe(true)
+    expect(h.el('session-lock').hidden).toBe(true)
+    expect(h.el('person').textContent).toBe('')
+    expect(h.el('login').hidden).toBe(false)
+    const sent=h.pending.find(p=>p.path==='/personal/session'&&!p.answered)!
+    expect(sent.options.method).toBe('DELETE')
+    expect(sent.options.credentials).toBe('same-origin')
+    expect(sent.options.headers['x-csrf-token']).toBe('csrf')
+    await answer(h,'/personal/session',{success:true})
+    await request
+    expect(h.el('status').textContent).toContain('Oturum kilitlendi.')
+    expect(h.el('workspace').hidden).toBe(true)
+  })
+  it('does not claim a completed lock after a rejected native revoke',async()=>{
+    const h=harness();await loaded(h)
+    const request=h.el('session-lock').onclick()
+    await answer(h,'/personal/session',{message:'Access denied'},false)
+    await request
+    expect(h.el('workspace').hidden).toBe(true)
+    expect(h.el('person').textContent).toBe('')
+    expect(h.el('status').textContent).toContain('Kilitleme doğrulanamadı.')
+    expect(h.el('status').textContent).not.toContain('Oturum kilitlendi.')
+  })
+
 })
