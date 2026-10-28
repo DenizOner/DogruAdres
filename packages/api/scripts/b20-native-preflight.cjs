@@ -58,9 +58,10 @@ const tlsConnect=tls.connect;tls.connect=function(...args){check(args);return tl
     STORE_CORS:'http://127.0.0.1',ADMIN_CORS:'http://127.0.0.1',VENDOR_CORS:'http://127.0.0.1',AUTH_CORS:'http://127.0.0.1',SMTP_ENABLED:'false',
     B20_DIR:dir,B19_DIR:dir,B20_HEAD:head,B20_DATABASE:'b20_'+id};
   const cli=path.join(path.dirname(req.resolve('@medusajs/cli/package.json')),'cli.js');
-  for(const [label,args] of [['migrate',['db:migrate']],['probe',['exec','integration-tests/postgres/b20-native-targets.exec.ts']]]){
+  const probe=process.env.B20_STOREFRONT_ONLY==='true'?'integration-tests/postgres/b20-storefront.exec.ts':'integration-tests/postgres/b20-native-targets.exec.ts';
+  for(const [label,args] of [['migrate',['db:migrate']],['probe',['exec',probe]]]){
     const log=fs.openSync(path.join(dir,label+'.log'),'wx');let result;
-    try{result=spawnSync(process.execPath,[cli,...args],{cwd:api,env,stdio:['ignore',log,log],timeout:180000,windowsHide:true});}finally{fs.closeSync(log);}
+    try{result=spawnSync(process.execPath,[cli,...args],{cwd:api,env,stdio:['ignore',log,log],timeout:process.env.B20_STOREFRONT_ONLY==='true'?360000:180000,windowsHide:true});}finally{fs.closeSync(log);}
     record(label+'-exit',{status:result.status,error:result.error?.message});
     assert.equal(result.status,0,label+' failed; see private '+dir);
   }
