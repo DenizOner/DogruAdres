@@ -1,10 +1,18 @@
-﻿import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { randomBytes } from "node:crypto"
 import { enabled } from "./security"
+// storefrontOrigin is read directly from DOGRUADRES_PUBLIC_ORIGIN (no listener-config validation needed for link embed)
 export const AUTHENTICATE = false
 export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   if (!enabled()) return res.status(503).send("Kişisel çalışma alanı etkin değil")
   const nonce = randomBytes(18).toString("base64")
+  // Resolve Storefront URL from trusted process env only.
+  // Direct env read avoids listener-config TLS validation (cert/key not needed for link embed).
+  let storefrontOrigin = ""
+  try {
+    const raw = process.env.DOGRUADRES_PUBLIC_ORIGIN
+    if (raw) { const u = new URL(raw); if (u.origin === raw) storefrontOrigin = u.origin }
+  } catch { /* malformed or unset — launcher degrades gracefully, no launch links shown */ }
   res.setHeader("Cache-Control","no-store")
   res.setHeader("Referrer-Policy","no-referrer")
   res.setHeader("X-Content-Type-Options","nosniff")
@@ -792,7 +800,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // ---------------------------------------------------------------------------
   // B20: Launcher preference -- drag/touch/keyboard reorder + expand/collapse
   // ---------------------------------------------------------------------------
-  const APP_LABELS={storefront:'Alici Magazasi',vendor:'Satici Paneli'};
+  // Null-prototype map prevents __proto__/constructor property pollution reads.
+  const APP_LABELS=Object.assign(Object.create(null),{storefront:'Al\u0131c\u0131 Ma\u011fazas\u0131',vendor:'Sat\u0131c\u0131 Paneli'});
+  // App launch URLs: server-embedded from trusted process config at render time.
+  const APP_URLS=Object.assign(Object.create(null),{storefront:'${storefrontOrigin}',vendor:'/seller'});
   let launcherState={app_ids:[],collapsed_ids:[],available_ids:[],version:0};
   let launcherSaving=false,launcherDragSrc=null,launcherDragOver=null;
   let launcherKeyHandle=null;
@@ -804,7 +815,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('launcher-section').hidden=false;
     }catch(e){
       if([401,403].includes(e.httpStatus)){concealPrivateView();el('login').hidden=false;return}
-      el('launcher-status').textContent='Baslatic\u0131 yuklenemedi.';
+      el('launcher-status').textContent='Ba\u015flat\u0131c\u0131 y\u00fcklenemedi.';
     }
   }
   function clearLauncher(){
@@ -826,22 +837,57 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       handle.className='launcher-handle';handle.setAttribute('tabindex','0');
       handle.setAttribute('role','button');handle.setAttribute('aria-pressed','false');
       const appName=(APP_LABELS[id]||id);
-      handle.setAttribute('aria-label',appName+' -- Space/Enter ile tut, ok tuslariyla tasi, Space/Enter ile birak, Esc ile iptal');
+      handle.setAttribute('aria-label',appName+' \u2014 Space/Enter ile tut, ok tu\u015flar\u0131yla ta\u015f\u0131, Space/Enter ile b\u0131rak, Esc ile iptal');
       handle.textContent='\u283f';
       const collapsed=launcherState.collapsed_ids.includes(id);
       const toggle=document.createElement('button');
       toggle.className='launcher-toggle';toggle.type='button';
-      toggle.textContent=collapsed?'Ac':'Kapat';
-      toggle.setAttribute('aria-label',appName+' bolumu '+(collapsed?'ac':'kapat'));
+      toggle.textContent=collapsed?'A\u00e7':'Kapat';
+      toggle.setAttribute('aria-label',appName+' bolumu '+(collapsed?'a\u00e7':'kapat'));
       toggle.setAttribute('aria-expanded',String(!collapsed));
       const name=document.createElement('span');name.className='launcher-name';
       name.textContent=appName;
-      li.append(handle,name,toggle);
-      // Pointer/touch drag events
+      // Launch link — navigates to real app in new tab.
+      // URL is server-embedded from process config; null-prototype map prevents prototype reads.
+      const launchUrl=Object.prototype.hasOwnProperty.call(APP_URLS,id)?APP_URLS[id]:null;
+      const launchLink=document.createElement('a');
+      if(launchUrl){launchLink.href=launchUrl;launchLink.target='_blank';launchLink.rel='noopener noreferrer';
+        launchLink.textContent=appName+' \u2192';launchLink.style.cssText='display:inline-block;margin-top:.5rem;font-size:.95rem;font-weight:500;color:var(--accent);text-decoration:none;padding:.3rem .7rem;border:1px solid var(--accent);border-radius:.4rem';}
+      // Collapsible content section — shows/hides launch link. Does not affect entitlement.
+      const content=document.createElement('div');
+      content.id='launcher-content-'+id;
+      content.setAttribute('role','region');content.setAttribute('aria-label',appName);
+      content.hidden=collapsed;
+      content.style.cssText='padding:.25rem 0 0 0';
+      if(launchUrl)content.append(launchLink);
+      li.append(handle,name,toggle,content);
+      // HTML5 drag (mouse/trackpad)
       li.addEventListener('dragstart',e=>{
         launcherDragSrc=li;li.setAttribute('aria-grabbed','true');
         e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',id);
       });
+      // Pointer/touch drag (mobile) — supplementary to HTML5 drag events
+      let ptId=null,ptStartY=0,ptClone=null;
+      li.addEventListener('pointerdown',e=>{if(e.target!==handle)return;e.preventDefault();
+        ptId=e.pointerId;ptStartY=e.clientY;li.setPointerCapture(e.pointerId);
+        li.setAttribute('aria-grabbed','true');
+        ptClone=li.cloneNode(true);const r=li.getBoundingClientRect();
+        ptClone.style.cssText='position:fixed;opacity:.55;pointer-events:none;width:'+li.offsetWidth+'px;left:'+r.left+'px;top:'+r.top+'px;z-index:9999;background:white;border:1px dashed var(--accent);border-radius:.6rem';
+        document.body.appendChild(ptClone);});
+      li.addEventListener('pointermove',e=>{if(e.pointerId!==ptId||!ptClone)return;e.preventDefault();
+        ptClone.style.top=(parseFloat(ptClone.style.top)+(e.clientY-ptStartY))+'px';ptStartY=e.clientY;
+        const items=[...list.children];const target=items.find(r=>r!==li&&r.getBoundingClientRect)&&items.find(r=>{if(r===li)return false;const rb=r.getBoundingClientRect();return e.clientY>=rb.top&&e.clientY<=rb.bottom;});
+        items.forEach(r=>r.classList.remove('drag-over'));if(target){target.classList.add('drag-over');launcherDragOver=target;}else launcherDragOver=null;});
+      li.addEventListener('pointerup',e=>{if(e.pointerId!==ptId)return;
+        li.setAttribute('aria-grabbed','false');
+        if(ptClone){document.body.removeChild(ptClone);ptClone=null;}ptId=null;
+        if(launcherDragOver&&launcherDragOver!==li){const items=[...list.children];const fi=items.indexOf(li),ti=items.indexOf(launcherDragOver);
+          if(fi<ti)launcherDragOver.after(li);else launcherDragOver.before(li);
+          list.querySelectorAll('li').forEach(r=>r.classList.remove('drag-over'));launcherDragOver=null;void saveLauncherOrder();}});
+      li.addEventListener('pointercancel',e=>{if(e.pointerId!==ptId)return;
+        li.setAttribute('aria-grabbed','false');
+        if(ptClone){document.body.removeChild(ptClone);ptClone=null;}ptId=null;
+        list.querySelectorAll('li').forEach(r=>r.classList.remove('drag-over'));launcherDragOver=null;});
       li.addEventListener('dragend',()=>{
         li.setAttribute('aria-grabbed','false');
         list.querySelectorAll('li').forEach(r=>r.classList.remove('drag-over'));
@@ -870,18 +916,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         if(e.key==='Escape'&&launcherKeyHandle){
           e.preventDefault();launcherKeyHandle=null;
           handle.setAttribute('aria-pressed','false');
-          el('launcher-status').textContent='Tasima iptal edildi.';
+          el('launcher-status').textContent='Ta\u015f\u0131ma iptal edildi.';
           renderLauncher();return;
         }
         if((e.key===' '||e.key==='Enter')&&!launcherKeyHandle){
           e.preventDefault();launcherKeyHandle=handle;
           handle.setAttribute('aria-pressed','true');
-          el('launcher-status').textContent=appName+' tutuldu. Ok tuslariyla tasi, Space/Enter birak, Esc iptal.';return;
+          el('launcher-status').textContent=appName+' tutuldu. Ok tu\u015flar\u0131yla ta\u015f\u0131, Space/Enter b\u0131rak, Esc iptal.';return;
         }
         if((e.key===' '||e.key==='Enter')&&launcherKeyHandle===handle){
           e.preventDefault();launcherKeyHandle=null;
           handle.setAttribute('aria-pressed','false');
-          el('launcher-status').textContent=appName+' yeni konumuna birakild.i';
+          el('launcher-status').textContent=appName+' yeni konumuna b\u0131rak\u0131ld\u0131.';
           await saveLauncherOrder();return;
         }
         if((e.key==='ArrowUp'||e.key==='ArrowDown')&&launcherKeyHandle===handle){
@@ -890,7 +936,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           if(e.key==='ArrowUp'&&idx>0)items[idx-1].before(li);
           else if(e.key==='ArrowDown'&&idx<items.length-1)items[idx+1].after(li);
           const newIdx=[...list.children].indexOf(li);
-          el('launcher-status').textContent=appName+' '+(newIdx+1)+'. siraya tasindi.';
+          el('launcher-status').textContent=appName+' '+(newIdx+1)+'. s\u0131raya ta\u015f\u0131nd\u0131.';
           li.querySelector('.launcher-handle').focus();
         }
       });
@@ -898,9 +944,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const cur=launcherState.collapsed_ids;
         const next=cur.includes(id)?cur.filter(x=>x!==id):[...cur,id];
         launcherState.collapsed_ids=next;
-        toggle.textContent=next.includes(id)?'Ac':'Kapat';
-        toggle.setAttribute('aria-expanded',String(!next.includes(id)));
-        toggle.setAttribute('aria-label',appName+' bolumu '+(next.includes(id)?'ac':'kapat'));
+        const nowCollapsed=next.includes(id);
+        toggle.textContent=nowCollapsed?'A\u00e7':'Kapat';
+        toggle.setAttribute('aria-expanded',String(!nowCollapsed));
+        toggle.setAttribute('aria-label',appName+' b\u00f6l\u00fcm\u00fc '+(nowCollapsed?'a\u00e7':'kapat'));
+        // Show/hide real content section
+        const contentEl=document.getElementById('launcher-content-'+id);
+        if(contentEl)contentEl.hidden=nowCollapsed;
         await saveLauncherOrder();
       });
       list.append(li);

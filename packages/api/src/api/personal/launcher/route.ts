@@ -26,12 +26,30 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
   // Determine which apps this Person can actually reach right now.
   // Storefront: always present — public catalog with no personal entitlement.
-  // Vendor: only if the Person has at least one active non-revoked member
-  //   actor binding (Mercur seller membership). Never auto-create this.
+  // Vendor: only if the Person has an active non-revoked member actor binding
+  //   AND the native Seller module confirms: active SellerMember + active Member
+  //   + open Seller account. Same triple-check used by /personal/contexts.
+  //   Never auto-create entitlements.
   const availableIds: string[] = ["storefront"]
   try {
     const binding = await svc.personalActorBinding(token, "member")
-    if (binding && !binding.revoked_at) availableIds.push("vendor")
+    if (binding && !binding.revoked_at) {
+      // Verify live Seller membership — mirrors contexts/route.ts lines 17-19.
+      const sellers = req.scope.resolve<{
+        listSellerMembers(f: object): Promise<any[]>
+        listMembers(f: object): Promise<any[]>
+        listSellers(f: object): Promise<any[]>
+      }>("seller")
+      const [memberships, members] = await Promise.all([
+        sellers.listSellerMembers({ member_id: binding.actor_id }),
+        sellers.listMembers({ id: binding.actor_id, is_active: true }),
+      ])
+      if (memberships.length > 0 && members.length > 0) {
+        const sellerIds = (memberships as any[]).map(m => m.seller_id).filter(Boolean)
+        const accounts = sellerIds.length ? await sellers.listSellers({ id: sellerIds }) : []
+        if ((accounts as any[]).some((a: any) => a.status === "open")) availableIds.push("vendor")
+      }
+    }
   } catch { /* live check failed — omit vendor rather than error */ }
 
   // Normalise stored order against actually-available apps.
