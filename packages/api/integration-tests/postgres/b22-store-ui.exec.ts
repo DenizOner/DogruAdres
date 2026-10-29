@@ -270,32 +270,40 @@ export default async function({container}:any){
     assert.equal(ownerApprovalDenied,403)
     assert.equal((await get("/personal/platform/stores")).status,403)
     assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
-    // Pagination is NOT yet implemented: prove the existing reviewer can
-    // still approve a NEW application after >30 older task-only records.
-    // Historical rows below intentionally lack native Sellers and confer
-    // no authority. Everything is in this disposable CI database.
+    // One isolated historical Origin fixture has a real native pending
+    // Seller; 30 older records have no native Seller and convey no access.
+    // This tests approval of an older page without a second linkage approval.
+    const [olderPending]=await native.createSellers([{
+      name:"B22 older pending "+rand,
+      email:"b22-older-pending-"+rand+"@example.invalid",currency_code:"try"
+    }])
+    assert.equal(olderPending.status,"pending_approval")
+    assert.equal(olderPending.approved_at,null)
+    await native.createSellerMembers([{seller_id:olderPending.id,
+      member_id:member.id,is_owner:true}])
+    assert.deepEqual((await get(selected(organizations[0].id))).body.stores,[])
     await q(`insert into da_store_application
       (id,organization_id,person_id,member_actor_id,member_auth_identity_id,
        request_fingerprint,status,seller_id,created_at)
       select 'daapp_'||md5('b22-history-'||$1||':'||g.n::text),
         $2,$3,$4,$5,repeat('b',64),'created',
-        'sel_b22_history_'||g.n::text||'_'||$1,
+        case when g.n=0 then $7 else 'sel_b22_history_'||g.n::text||'_'||$1 end,
         (select created_at from da_store_application where id=$6)-interval '1 hour'
           +g.n*interval '1 millisecond'
       from generate_series(0,30) g(n)`,
-      [rand,organizations[0].id,A.person,member.id,reg.authIdentity.id,applicationId])
+      [rand,organizations[0].id,A.person,member.id,reg.authIdentity.id,applicationId,olderPending.id])
     await q(`insert into da_audit_event
       (id,actor_person_id,actor_type,actor_id,organization_id,action,module,
        resource,target_id,new_values,occurred_at)
       select 'daaud_b22_history_'||g.n::text||'_'||$1,
         $2,'user',$3,$4,'organization.store_application_created',
         'dogruadres-access','store-application',
-        'sel_b22_history_'||g.n::text||'_'||$1,
+        case when g.n=0 then $5 else 'sel_b22_history_'||g.n::text||'_'||$1 end,
         jsonb_build_object('application_id',
           'daapp_'||md5('b22-history-'||$1||':'||g.n::text),
           'status','pending_approval'),clock_timestamp()
       from generate_series(0,30) g(n)`,
-      [rand,A.person,A.actor,organizations[0].id])
+      [rand,A.person,A.actor,organizations[0].id,olderPending.id])
     await q(`insert into da_audit_outbox(id,source_audit_event_id,source_module,envelope)
       select 'daaob_b22_history_'||g.n::text||'_'||$1,
         'daaud_b22_history_'||g.n::text||'_'||$1,
@@ -303,9 +311,9 @@ export default async function({container}:any){
     await q(`insert into da_organization_seller_ownership
       (id,organization_id,seller_id,verification_audit_event_id,verified_at)
       select 'daown_b22_history_'||g.n::text||'_'||$1,$2,
-        'sel_b22_history_'||g.n::text||'_'||$1,
+        case when g.n=0 then $3 else 'sel_b22_history_'||g.n::text||'_'||$1 end,
         'daaud_b22_history_'||g.n::text||'_'||$1,clock_timestamp()
-      from generate_series(0,30) g(n)`,[rand,organizations[0].id])
+      from generate_series(0,30) g(n)`,[rand,organizations[0].id,olderPending.id])
     assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
       [organizations[0].id]))[0].n,32)
     // TEST-ONLY disposable scope: an explicit store.approve grant belongs to
@@ -323,13 +331,26 @@ export default async function({container}:any){
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
     await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
-    // Real staff Chrome can page beyond 30 older Origin records without
-    // granting those synthetic historical rows native Seller authority.
+    // Real staff Chrome can approve a native pending Seller on page 2;
+    // the remaining 30 fake Seller IDs confer no lifecycle or authority.
     assert.equal(await reviewer.eval("document.getElementById('store-approval-older').hidden"),false)
     await reviewer.click("#store-approval-older")
     await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('sayfa 2') || document.getElementById('store-approval-status').textContent.includes('Bu sayfada')")
     assert.equal(await reviewer.eval("document.getElementById('store-approval-newer').hidden"),false)
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),false)
+    await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
+    assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(olderPending.name)})`),true)
+    await reviewer.click("#store-approval-list button")
+    await until(async()=>{
+      const rows=await native.listSellers({id:olderPending.id})
+      return rows.length===1&&rows[0].status==="open"&&!!rows[0].approved_at
+    },19000,"B22 older native pending Seller approval from page 2")
+    // Suspend only this older task-owned Seller so the pre-existing Owner
+    // and new Seller positive/negative expectations remain independent.
+    await suspendSellerWorkflow(container).run({input:{
+      seller_id:olderPending.id,reason:"B22 task-only older Store suspension"
+    }})
+    assert.equal((await native.listSellers({id:olderPending.id}))[0].status,"suspended")
     await reviewer.click("#store-approval-newer")
     await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
@@ -504,7 +525,7 @@ export default async function({container}:any){
     const hidden=await browser.eval("({store:document.getElementById('org-stores').textContent,selection:document.getElementById('detail').textContent,local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
     assert.equal(hidden.store,"");assert.equal(hidden.selection,"")
     assert.deepEqual(hidden.local,[]);assert.deepEqual(hidden.session,[])
-    process.stdout.write("PASS B22 Chrome: newest Owner Store stays reviewable with 31 older synthetic records; no pagination claim\n")
+    process.stdout.write("PASS B22 Chrome: native pending Seller on page 2 approved, newer Owner Store separately approved, 30 older non-native records fail closed\n")
     process.stdout.write("PASS B22 Chrome: two Person browsers, platform staff-approved native Seller, Owner sees only approved Store; revoked staff denied\n")
     process.stdout.write("PASS B22 Chrome: Owner Store application creates pending native Seller and direct Organization link, replay deduped and foreign Organization denied\n")
     process.stdout.write("PASS B22 Chrome: native suspension hides only affected Store; unrelated Organization unaffected; approved Store reopens through native workflow\n")
