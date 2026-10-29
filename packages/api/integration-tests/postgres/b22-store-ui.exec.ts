@@ -314,7 +314,28 @@ export default async function({container}:any){
     await reviewer.wait("!document.getElementById('store-approval-next').hidden")
     assert.equal(await reviewer.eval("document.querySelectorAll('#store-approval-list button').length"),0)
     await reviewer.click("#store-approval-next")
-    await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
+    try{
+      await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
+    }catch{
+      // Record only UI categories and HTTP statuses. No people, tokens,
+      // applicant names, Store IDs or private payloads enter CI logs.
+      const diagnostics=await reviewer.eval(`({
+        visible:!document.getElementById('workspace').hidden,
+        approvalPanel:!document.getElementById('store-approval-panel').hidden,
+        nextVisible:!document.getElementById('store-approval-next').hidden,
+        buttons:document.querySelectorAll('#store-approval-list button').length,
+        statusCategory:(()=>{
+          const t=document.getElementById('store-approval-status').textContent;
+          return t.includes('güvenli biçimde okunamadı')?'read-error':
+            t.includes('eski kayıtlara')?'next-page':t.includes('bekleyen mağaza yok')?'empty':
+            t.includes('Mağazalar kontrol ediliyor')?'loading':'other'
+        })()
+      })`)
+      const pageHttp=reviewer.http.filter((x:any)=>x.path==="/personal/platform/stores"&&x.method==="GET")
+        .map((x:any)=>x.status)
+      throw Error("B22 platform page progression: "+JSON.stringify(diagnostics)+
+        ",getStatuses="+pageHttp.join(","))
+    }
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
     // The real browser button invokes the project-owned staff-only adapter,
     // which reuses Mercur's native pending→open approval workflow.
