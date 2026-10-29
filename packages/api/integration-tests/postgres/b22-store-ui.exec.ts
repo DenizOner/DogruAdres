@@ -14,7 +14,7 @@ import {tmpdir} from "node:os"
 import {spawnSync} from "node:child_process"
 import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
-import {approveSellerWorkflow} from "@mercurjs/core/workflows"
+import {approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow} from "@mercurjs/core/workflows"
 import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
 
@@ -213,6 +213,31 @@ export default async function({container}:any){
     assert.equal(alpha.body.stores.some((store:any)=>store.id===unapprovedStore.id),false,
       "Unapproved Seller must stay hidden even with platform association and Member link")
     assert.equal(await browser.eval(`document.getElementById('org-stores').textContent.includes(${JSON.stringify(unapprovedStore.name)})`),false)
+    // Native Store suspension must independently remove ONLY its own Store
+    // without revoking Person, Organization membership or platform association.
+    await suspendSellerWorkflow(container).run({input:{
+      seller_id:stores[0].id,reason:"B22 task-only suspension negative"
+    }})
+    const suspended=await native.listSellers({id:stores[0].id})
+    assert.equal(suspended.length,1)
+    assert.equal(suspended[0].status,"suspended")
+    assert.ok(suspended[0].approved_at,"Suspension must retain historical native approval")
+    const alphaSuspended=await get(selected(organizations[0].id))
+    assert.equal(alphaSuspended.status,200)
+    assert.deepEqual(alphaSuspended.body.stores.map((x:any)=>x.id),[stores[1].id])
+    assert.deepEqual((await get(selected(organizations[1].id))).body.stores.map((x:any)=>x.id),[stores[2].id],
+      "Independent Organization Store visibility must survive Alpha suspension")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("document.querySelectorAll('#org-stores p').length===1")
+    assert.equal(await browser.eval(`document.getElementById('org-stores').textContent.includes(${JSON.stringify(stores[0].name)})`),false)
+    await unsuspendSellerWorkflow(container).run({input:{seller_id:stores[0].id}})
+    const reopened=await native.listSellers({id:stores[0].id})
+    assert.equal(reopened.length,1);assert.equal(reopened[0].status,"open")
+    assert.ok(reopened[0].approved_at)
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("document.querySelectorAll('#org-stores p').length===2")
+    assert.deepEqual((await get(selected(organizations[0].id))).body.stores.map((x:any)=>x.id).sort(),
+      stores.slice(0,2).map(x=>x.id).sort())
     await browser.select(organizations[1].name,"admin")
     await browser.wait("document.querySelectorAll('#org-stores p').length===1")
     const beta=await get(selected(organizations[1].id))
@@ -267,6 +292,7 @@ export default async function({container}:any){
     const hidden=await browser.eval("({store:document.getElementById('org-stores').textContent,selection:document.getElementById('detail').textContent,local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
     assert.equal(hidden.store,"");assert.equal(hidden.selection,"")
     assert.deepEqual(hidden.local,[]);assert.deepEqual(hidden.session,[])
+    process.stdout.write("PASS B22 Chrome: native suspension hides only affected Store; unrelated Organization unaffected; approved Store reopens through native workflow\n")
     process.stdout.write("PASS B22 Chrome: native OPEN Seller with no approved_at remains hidden despite platform association and Member link\n")
     process.stdout.write("PASS B22 Chrome: locked personal session clears Store UI, old opaque cookie rejected and PG16 session revoked\n")
     process.stdout.write("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes; approved synthetic Store fixtures read and revoked access denied\n")
