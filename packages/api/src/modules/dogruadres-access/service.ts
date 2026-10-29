@@ -1248,7 +1248,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
           and x.deleted_at is null)
         ${target?"and a.id=? and a.seller_id=?":""}
-      order by a.created_at desc limit 31`,
+      -- Newest 30 valid Origin records only. Do not fail all reviews
+      -- merely because historical applications exceed this bound.
+      order by a.created_at desc limit 30`,
       target?[target.application_id,target.seller_id]:[])
     if(!Array.isArray(rows)||rows.length>30 ||
        rows.some(r=>typeof r.application_id!=="string" ||

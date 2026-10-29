@@ -270,6 +270,44 @@ export default async function({container}:any){
     assert.equal(ownerApprovalDenied,403)
     assert.equal((await get("/personal/platform/stores")).status,403)
     assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
+    // Pagination is NOT yet implemented: prove the existing reviewer can
+    // still approve a NEW application after >30 older task-only records.
+    // Historical rows below intentionally lack native Sellers and confer
+    // no authority. Everything is in this disposable CI database.
+    await q(`insert into da_store_application
+      (id,organization_id,person_id,member_actor_id,member_auth_identity_id,
+       request_fingerprint,status,seller_id,created_at)
+      select 'daapp_'||md5('b22-history-'||$1||':'||g.n::text),
+        $2,$3,$4,$5,repeat('b',64),'created',
+        'sel_b22_history_'||g.n::text||'_'||$1,
+        (select created_at from da_store_application where id=$6)-interval '1 hour'
+          +g.n*interval '1 millisecond'
+      from generate_series(0,30) g(n)`,
+      [rand,organizations[0].id,A.person,member.id,reg.authIdentity.id,applicationId])
+    await q(`insert into da_audit_event
+      (id,actor_person_id,actor_type,actor_id,organization_id,action,module,
+       resource,target_id,new_values,occurred_at)
+      select 'daaud_b22_history_'||g.n::text||'_'||$1,
+        $2,'user',$3,$4,'organization.store_application_created',
+        'dogruadres-access','store-application',
+        'sel_b22_history_'||g.n::text||'_'||$1,
+        jsonb_build_object('application_id',
+          'daapp_'||md5('b22-history-'||$1||':'||g.n::text),
+          'status','pending_approval'),clock_timestamp()
+      from generate_series(0,30) g(n)`,
+      [rand,A.person,A.actor,organizations[0].id])
+    await q(`insert into da_audit_outbox(id,source_audit_event_id,source_module,envelope)
+      select 'daaob_b22_history_'||g.n::text||'_'||$1,
+        'daaud_b22_history_'||g.n::text||'_'||$1,
+        'dogruadres-access','{}'::jsonb from generate_series(0,30) g(n)`,[rand])
+    await q(`insert into da_organization_seller_ownership
+      (id,organization_id,seller_id,verification_audit_event_id,verified_at)
+      select 'daown_b22_history_'||g.n::text||'_'||$1,$2,
+        'sel_b22_history_'||g.n::text||'_'||$1,
+        'daaud_b22_history_'||g.n::text||'_'||$1,clock_timestamp()
+      from generate_series(0,30) g(n)`,[rand,organizations[0].id])
+    assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n,32)
     // TEST-ONLY disposable scope: an explicit store.approve grant belongs to
     // another Person. It is never inferred from B's native User/Org roles.
     const grantId="da_staff_b22_"+rand
@@ -452,6 +490,7 @@ export default async function({container}:any){
     const hidden=await browser.eval("({store:document.getElementById('org-stores').textContent,selection:document.getElementById('detail').textContent,local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
     assert.equal(hidden.store,"");assert.equal(hidden.selection,"")
     assert.deepEqual(hidden.local,[]);assert.deepEqual(hidden.session,[])
+    process.stdout.write("PASS B22 Chrome: newest Owner Store stays reviewable with 31 older synthetic records; no pagination claim\n")
     process.stdout.write("PASS B22 Chrome: two Person browsers, platform staff-approved native Seller, Owner sees only approved Store; revoked staff denied\n")
     process.stdout.write("PASS B22 Chrome: Owner Store application creates pending native Seller and direct Organization link, replay deduped and foreign Organization denied\n")
     process.stdout.write("PASS B22 Chrome: native suspension hides only affected Store; unrelated Organization unaffected; approved Store reopens through native workflow\n")
