@@ -4,6 +4,7 @@
  * Runs once; existing MikroORM ledger tests cover late-add and replay.
  */
 import assert from "node:assert/strict"
+import { verifyB22OwnedSellerConstraints } from "./b22-ownership.pg16.test"
 import { randomBytes } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { mkdtempSync, readdirSync, unlinkSync, rmdirSync } from "node:fs"
@@ -308,6 +309,14 @@ async function run(){
         } finally {
           await audit.close()
         }
+      }
+
+      if (scope === "all") {
+        // Execute B22 against the exact native Medusa-migrated disposable DB,
+        // after all existing MFA/SMTP fixtures; no new database or cleanup path.
+        const legalDb = new SQL(dbUrl.toString())
+        try { await verifyB22OwnedSellerConstraints(legalDb, dbName) }
+        finally { await legalDb.close() }
       }
     }finally{
       try { await target.close() } catch {}
