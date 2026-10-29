@@ -322,6 +322,16 @@ export default async function({container}:any){
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
     await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
+    // Real staff Chrome can page beyond 30 older Origin records without
+    // granting those synthetic historical rows native Seller authority.
+    assert.equal(await reviewer.eval("document.getElementById('store-approval-older').hidden"),false)
+    await reviewer.click("#store-approval-older")
+    await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('sayfa 2') || document.getElementById('store-approval-status').textContent.includes('Bu sayfada')")
+    assert.equal(await reviewer.eval("document.getElementById('store-approval-newer').hidden"),false)
+    assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),false)
+    await reviewer.click("#store-approval-newer")
+    await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
+    assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
     // The real browser button invokes the project-owned staff-only adapter,
     // which reuses Mercur's native pending→open approval workflow.
     await reviewer.click("#store-approval-list button")
