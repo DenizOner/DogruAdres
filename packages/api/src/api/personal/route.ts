@@ -280,7 +280,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('notification-close').onclick=closeNotifications;
   el('notification-panel').onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();closeNotifications()}};
   function clearMfaCodes(){recoveryCodes=[];el("mfa-codes-value").textContent="";el("mfa-codes-value").hidden=true;el("mfa-codes").hidden=true}
-  let currentOrg='',currentPersonId='',linkIntent='',organizationRequest=0,mfaState=null,timelineCursor=null,timelineOrg='',timelineRequest=0;
+  let currentOrg='',currentPersonId='',linkIntent='',organizationRequest=0,storeRequest=0,mfaState=null,timelineCursor=null,timelineOrg='',timelineRequest=0;
   async function loadTimeline(org, cursor = null, append = false) {
     if (!org) return;
     const reqId = ++timelineRequest;
@@ -446,6 +446,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }catch(e){if(request!==organizationRequest)return;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('detail').textContent='';clearMemberships();clearOrganizationStores();clearPendingInvitations();el('memberships-status').textContent=membershipError(e);status(e.message)}
   }
   function clearOrganizationStores(){
+    storeRequest++;
     el('org-stores-panel').hidden=true;
     el('org-stores').replaceChildren();
     el('org-stores-status').textContent='';
@@ -453,13 +454,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   async function organizationStores(org,request){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+    const seq=++storeRequest;
     const target=el('org-stores'),message=el('org-stores-status');
     el('org-stores-panel').hidden=false;
     target.replaceChildren();message.textContent='Mağazalar kontrol ediliyor…';
     el('org-stores-refresh').hidden=false;
     try{
       const data=await api('organization-stores?organization='+encodeURIComponent(org));
-      if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+      if(request!==organizationRequest||seq!==storeRequest||currentOrg!==org||document.hidden)return;
       if(data.organization_id!==org||!Array.isArray(data.stores)||
           data.stores.some(s=>typeof s?.id!=='string'||!/^sel_[A-Za-z0-9_-]+$/.test(s.id)||typeof s.name!=='string')||
           new Set(data.stores.map(s=>s.id)).size!==data.stores.length)throw new Error('Mağaza yanıtı doğrulanamadı');
@@ -470,7 +472,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       message.textContent=data.stores.length?'Yetkili mağazalar güncellendi.':'Bu kuruluşta görüntülenebilir onaylı mağaza bulunmuyor.';
     }catch(e){
-      if(request!==organizationRequest||currentOrg!==org)return;
+      if(request!==organizationRequest||seq!==storeRequest||currentOrg!==org)return;
       target.replaceChildren();
       if(e.httpStatus===401){concealPrivateView();el('login').hidden=false;return}
       message.textContent=[403,404].includes(e.httpStatus)?'Bu kuruluşun mağazalarına erişim izniniz yok.':'Mağazalar doğrulanamadı. Yeniden deneyin.';

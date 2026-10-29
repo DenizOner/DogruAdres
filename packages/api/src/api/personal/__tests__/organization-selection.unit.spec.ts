@@ -59,3 +59,53 @@ describe('Organization selection response ordering (UI-only)',()=>{
     expect(h.state.url).toBe('/personal?organization=B')
   })
 })
+
+describe('B22 selected Organization Store presentation (UI scheduling, not API authority)',()=>{
+  const finishSelection=async(h:ReturnType<typeof harness>,id:string,call:Promise<unknown>)=>{
+    h.pending.find(p=>p.path==='organizations?id='+id)!.resolve(org(id))
+    await settle()
+    h.pending.find(p=>p.path==='memberships?organization='+id)!.resolve({memberships:[]})
+    await call
+  }
+
+  it('shows only the selected Organization response and ignores an earlier Organization response',async()=>{
+    const h=harness()
+    const a=h.select('A');await finishSelection(h,'A',a)
+    const pendingA=h.pending.find(p=>p.path==='organization-stores?organization=A')!
+    const b=h.select('B')
+    expect(h.el('org-stores-panel').hidden).toBe(true)
+    expect(h.el('org-stores').children).toHaveLength(0)
+    await finishSelection(h,'B',b)
+    const pendingB=h.pending.find(p=>p.path==='organization-stores?organization=B')!
+    pendingB.resolve({organization_id:'B',stores:[{id:'sel_B',name:'B Mağazası'}]})
+    await settle()
+    pendingA.resolve({organization_id:'A',stores:[{id:'sel_A',name:'A Özel Mağazası'}]})
+    await settle()
+    expect(h.el('org-stores').children).toHaveLength(1)
+    expect(h.el('org-stores').children[0].textContent).toContain('B Mağazası')
+    expect(h.el('org-stores').children[0].textContent).not.toContain('A Özel')
+  })
+
+  it('clears the previous Store view immediately on a denied Organization switch',async()=>{
+    const h=harness(),a=h.select('A')
+    await finishSelection(h,'A',a)
+    h.pending.find(p=>p.path==='organization-stores?organization=A')!.resolve({organization_id:'A',stores:[{id:'sel_A',name:'Özel A'}]})
+    await settle()
+    expect(h.el('org-stores').children).toHaveLength(1)
+    const failed=h.select('foreign')
+    expect(h.el('org-stores').children).toHaveLength(0)
+    expect(h.el('org-stores-panel').hidden).toBe(true)
+    h.pending.find(p=>p.path==='organizations?id=foreign')!.reject(new Error('Access denied'))
+    await failed
+    expect(h.el('org-stores').children).toHaveLength(0)
+  })
+
+  it('fails closed on malformed Store response and never renders private fields',async()=>{
+    const h=harness(),a=h.select('A');await finishSelection(h,'A',a)
+    const pending=h.pending.find(p=>p.path==='organization-stores?organization=A')!
+    pending.resolve({organization_id:'A',stores:[{id:'sel_A',name:'A',privateEmail:'hidden@example.invalid'},{id:'sel_A',name:'duplicate'}]})
+    await settle()
+    expect(h.el('org-stores').children).toHaveLength(0)
+    expect(h.el('org-stores-status').textContent).toContain('doğrulanamadı')
+  })
+})
