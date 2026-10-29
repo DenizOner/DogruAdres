@@ -311,7 +311,7 @@ async function run(){
         }
       }
 
-      if (scope === "all") {
+      if (scope === "all" || scope === "verification") {
         // Execute B22 against the exact native Medusa-migrated disposable DB,
         // after all existing MFA/SMTP fixtures; no new database or cleanup path.
         const legalDb = new SQL(dbUrl.toString())
