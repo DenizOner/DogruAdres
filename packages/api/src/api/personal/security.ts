@@ -60,6 +60,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/challenge" && req.method==="POST") ||
       (path==="/personal/organizations" && req.method==="GET") ||
       (path==="/personal/contexts" && req.method==="GET") ||
+      (path==="/personal/organization-stores" && req.method==="GET") ||
       (path==="/personal/audit-timeline" && req.method==="GET") ||
       (path==="/personal/launcher" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/notifications" && ["GET","POST"].includes(req.method)) ||

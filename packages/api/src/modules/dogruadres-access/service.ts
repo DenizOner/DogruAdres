@@ -26,6 +26,7 @@ import {
 } from "./smtp-settings"
 import { sendSmtpEmail } from "./smtp-client"
 import { PersonalNotifications } from "./personal-notifications"
+import { authorizedLegalSellerIds } from "./legal-store-ownership"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -1134,6 +1135,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         fromName: testFromName || undefined,
       }
     )
+  }
+
+  // B22: legal ownership candidates are NOT a grant, and never leave this
+  // module without separately verified live native Seller/Member authority.
+  @InjectTransactionManager()
+  async personalLegalSellerIds(token: string, organizationId: string,
+    @MedusaContext() context: Context = {}) {
+    return authorizedLegalSellerIds(securitySql(context.transactionManager), token, organizationId)
   }
 
   // ---------------------------------------------------------------------------
