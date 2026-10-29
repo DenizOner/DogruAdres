@@ -480,13 +480,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(submit)submit.disabled=false;
     applicationKey='';
   }
-  async function storeApplications(org,request,role){
+  async function storeApplications(org,request,role,keepOutcome=false){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
     const sequence=++applicationRequest;
     const panel=el('store-application-panel'),list=el('store-application-list'),message=el('store-application-status');
     panel.hidden=false;
     el('store-application-form').hidden=role!=='owner';
-    list.replaceChildren();message.textContent='Başvurular kontrol ediliyor…';
+    list.replaceChildren();if(!keepOutcome)message.textContent='Başvurular kontrol ediliyor…';
     try{
       const result=await api('store-applications?organization_id='+encodeURIComponent(org));
       if(request!==organizationRequest||sequence!==applicationRequest||currentOrg!==org||document.hidden)return;
@@ -500,12 +500,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           ' — '+a.id+(a.seller_id?' — '+a.seller_id:'');
         list.append(line);
       }
-      message.textContent=result.applications.length?'Başvurular güncellendi; mağaza onayı ayrı yürütülür.':'Henüz mağaza başvurusu bulunmuyor.';
+      if(!keepOutcome)message.textContent=result.applications.length?'Başvurular güncellendi; mağaza onayı ayrı yürütülür.':'Henüz mağaza başvurusu bulunmuyor.';
     }catch(e){
       if(request!==organizationRequest||sequence!==applicationRequest||currentOrg!==org)return;
       list.replaceChildren();
       if(e.httpStatus===401){concealPrivateView();el('login').hidden=false;return}
-      message.textContent='Başvurular güvenli biçimde okunamadı.';
+      message.textContent=keepOutcome?message.textContent+' Başvuru listesi şu anda yenilenemedi.':'Başvurular güvenli biçimde okunamadı.';
     }
   }
   let applicationRequest=0,applicationKey='';
@@ -531,7 +531,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         throw new Error('Başvuru sonucu doğrulanamadı');
       applicationKey='';form.reset();button.disabled=false;
       el('store-application-status').textContent='Başvuru kaydedildi. Mağazanın açılması platform yöneticisinin onayını bekliyor.';
-      void storeApplications(org,request,'owner');
+      // Refresh the list without replacing the confirmed submission outcome.
+      void storeApplications(org,request,'owner',true);
     }catch(e){
       if(request!==organizationRequest||currentOrg!==org)return;
       el('store-application-status').textContent=e.uncertain?
