@@ -77,7 +77,7 @@ export default async function({container}:any){
     const secondaryEnrolledCounter=Math.floor(Date.now()/30000)
     await auth.verifyAuthMfa({id:secondaryMfa.mfa.id,auth_identity_id:reg.authIdentity.id,
       code:otp(secondaryMfa.secret)})
-    const stores=[]
+    const stores: Array<{id:string;name:string}>=[]
     for(let n=0;n<3;n++){
       const [store]=await native.createSellers([{name:"B22 Store "+(n+1)+" "+rand,
         email:"b22-store-"+n+"-"+rand+"@example.invalid",currency_code:"eur",status:"open"}])
