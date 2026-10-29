@@ -287,29 +287,23 @@ export default async function({container}:any){
     // The real browser button invokes the project-owned staff-only adapter,
     // which reuses Mercur's native pending→open approval workflow.
     await reviewer.click("#store-approval-list button")
-    let approvalMessage=""
-    try{
-      await until(async()=>{
-        approvalMessage=String(await reviewer.eval("document.getElementById('store-approval-status').textContent"))
-        return approvalMessage.includes("Mağaza onaylandı") ||
-          approvalMessage.includes("Mağaza onaylanamadı") ||
-          approvalMessage.includes("Onay sonucu belirsiz")
-      },19000,"B22 platform reviewer approval response")
-    }catch{
-      const httpStatus=reviewer.http.filter((x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST").map((x:any)=>x.status)
+    // Verify the real browser network action AND native committed Seller state.
+    // A temporary status message is not a durable success contract: the
+    // privacy epoch may conceal an inactive browser while the POST completes.
+    await until(async()=>{
+      const http=reviewer.http.filter((x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST")
       const current=await native.listSellers({id:ownerStoreId})
-      // Only status codes/lifecycle categories; no Person, email, token or ID.
-      throw Error("B22 approval result not visible: postStatuses="+httpStatus.join(",")+
-        ",nativeStatus="+(current[0]?.status??"absent")+
-        ",uiCategory="+(approvalMessage.includes("gönderiliyor")?"sending":"other"))
-    }
-    if(!approvalMessage.includes("Mağaza onaylandı")){
-      const httpStatus=reviewer.http.filter((x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST").map((x:any)=>x.status)
-      const current=await native.listSellers({id:ownerStoreId})
-      throw Error("B22 approval rejected/uncertain: postStatuses="+httpStatus.join(",")+
-        ",nativeStatus="+(current[0]?.status??"absent")+
-        ",uiCategory="+(approvalMessage.includes("belirsiz")?"uncertain":"denied"))
-    }
+      return http.some((x:any)=>x.status===200)&&current.length===1&&
+        current[0].status==="open"&&!!current[0].approved_at
+    },19000,"B22 reviewer HTTP200 and native approval")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    await reviewer.send("Page.reload",{ignoreCache:true})
+    await reviewer.wait("!document.getElementById('workspace').hidden")
+    await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+    await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Onay bekleyen mağaza yok.')")
+    assert.equal(await reviewer.eval("document.querySelectorAll('#store-approval-list button').length"),0,
+      "Approved Store must disappear from the reviewer pending list on reload")
     const afterReview=await native.listSellers({id:ownerStoreId})
     assert.equal(afterReview.length,1)
     assert.equal(afterReview[0].status,"open")
