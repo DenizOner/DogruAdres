@@ -154,7 +154,12 @@ export default async function({container}:any){
     }
     const selected=(org:string)=>"/personal/organization-stores?organization="+encodeURIComponent(org)
     // Native SellerMember is NOT a verified human association. Nothing visible.
-    await browser.eval("window.__b22_ui_error='';window.addEventListener('error',event=>{window.__b22_ui_error=String(event.message).slice(0,90)})")
+    await browser.eval("window.__b22_ui_error='';window.addEventListener('error',event=>{window.__b22_ui_error=String(event.message).slice(0,90)});window.__b22_events=[];['pagehide','visibilitychange','popstate'].forEach(name=>window.addEventListener(name,()=>window.__b22_events.push({type:name,hidden:document.hidden})))")
+    // A headless Chrome tab is not entitled to a visible workspace while
+    // backgrounded. Bring the actual tab forward; do not bypass its privacy
+    // event handlers or fake an active session.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
     try {
       await browser.select(organizations[0].name,"owner")
     } catch (error) {
@@ -164,7 +169,11 @@ export default async function({container}:any){
         applicationFormExists:!!document.getElementById('store-application-form'),
         applicationRequestReady:typeof applicationRequest==='number',
         sessionStatus:document.getElementById('status').textContent.slice(0,70),
-        uiError:String(window.__b22_ui_error||'').replace(/[A-Za-z0-9_-]{20,}/g,'[masked]')
+        uiError:String(window.__b22_ui_error||'').replace(/[A-Za-z0-9_-]{20,}/g,'[masked]'),
+        visibility:document.visibilityState,
+        events:(window.__b22_events||[]).slice(-8),
+        selectionForm:(document.querySelector('#organizations button')?.closest('form')?.id||null),
+        pathIsPersonal:location.pathname==='/personal'
       })`)
       throw Error("B22 Organization select contract failed: "+JSON.stringify(info))
     }
