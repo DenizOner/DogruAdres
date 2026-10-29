@@ -16,6 +16,8 @@ import {B19Chrome,until} from './b19-browser'
 export default async function({container}:any){
   const dir=process.env.B20_DIR!,api=process.cwd(),root=resolve(api,'../..'),storefront=join(root,'apps/storefront')
   const record=(n:string,v:any)=>writeFileSync(join(dir,n+'.json'),JSON.stringify(v,null,2),{flag:'wx'})
+  // A boundary-only probe needs no frontend dependency or native token storage.
+  if(process.env.B20_NATIVE_BOUNDARY_ONLY==='true')return nativeBoundary(container,record)
   const projectRequire=createRequire(join('D:/DogruAdres/apps/vendor/package.json'))
   const vendorRoot=dirname(projectRequire.resolve('@mercurjs/vendor'))
   const sourceFiles=['chunk-UKLW4VDE.js','chunk-3JFOBIRE.js','index.d.ts']
@@ -204,5 +206,61 @@ const close=async()=>{server.close();await app.close();process.exit(0)};process.
     if(nativeServer.listening)await new Promise<void>(r=>nativeServer.close(()=>r()));await runtime.shutdown();await pg.end()
     assert.deepEqual(protectedFiles.map(p=>({path:p,hash:createHash('sha256').update(readFileSync(p)).digest('hex')})),before)
     record('storefront-protected-readback',{unchanged:true,files:before})
+  }
+}
+
+/** Exercise the installed native contract without changing the ingress policy. */
+async function nativeBoundary(container:any,record:(name:string,value:any)=>void){
+  const pg=new Client({connectionString:process.env.DATABASE_URL})
+  await pg.connect()
+  let runtime:any,server:ReturnType<typeof createServer>|undefined
+  try{
+    assert.equal((await pg.query('select current_database() db')).rows[0].db,process.env.B20_DATABASE)
+    assert.match((await pg.query('select version() v')).rows[0].v,/PostgreSQL 16\./)
+    const fReq=createRequire(require.resolve('@medusajs/framework')),app=fReq('express')()
+    app.use((req:any,_res:any,next:any)=>{req.scope=container.createScope();next()})
+    runtime=await expressLoader({app,container})
+    await new ApiLoader({app,container,sourceDir:[join(dirname(require.resolve('@medusajs/medusa')),'api'),join(dirname(require.resolve('@mercurjs/core')),'api'),join(process.cwd(),'src/api')]}).load()
+    server=createServer(app)
+    await new Promise<void>(r=>server!.listen(0,'127.0.0.1',r))
+    const origin='http://127.0.0.1:'+(server.address() as any).port
+    const seller=container.resolve('seller'),auth=container.resolve('auth')
+    const email='b20-native-'+randomBytes(8).toString('hex')+'@example.invalid',password=randomBytes(32).toString('base64url')
+    const [member]=await seller.createMembers([{email,first_name:'Synthetic',last_name:'B20',is_active:true}])
+    const [account]=await seller.createSellers([{name:'B20 boundary synthetic seller',email,currency_code:'eur'}])
+    await seller.updateSellers([{id:account.id,status:'open'}])
+    await seller.createSellerMembers([{seller_id:account.id,member_id:member.id}])
+    const identity=await auth.register('emailpass',{body:{email,password}})
+    assert.ok(identity.success)
+    await auth.updateAuthIdentities({id:identity.authIdentity.id,app_metadata:{member_id:member.id}})
+    const login=await fetch(origin+'/auth/member/emailpass',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,password})})
+    assert.equal(login.status,200,'Native Member authentication must execute successfully')
+    const loginData=await login.json();assert.ok(loginData.token)
+    // Check only safe actor metadata; never persist or print the credential.
+    const actor=JSON.parse(Buffer.from(loginData.token.split('.')[1],'base64url').toString('utf8'))
+    assert.equal(actor.actor_type,'member');assert.equal(actor.actor_id,member.id)
+    const observations:Array<{path:string;status:number;message?:string}>=[]
+    for(const path of ['/vendor/members/me','/vendor/sellers/me']){
+      const response=await fetch(origin+path,{headers:{authorization:'Bearer '+loginData.token}})
+      const body=await response.json()
+      observations.push({path,status:response.status,message:body.message})
+    }
+    const anonymous=await fetch(origin+'/vendor/sellers/me')
+    const state={members:await seller.listMembers({id:member.id,is_active:true}),memberships:await seller.listSellerMembers({member_id:member.id}),sellers:await seller.listSellers({id:account.id,status:'open'})}
+    assert.equal(state.members.length,1);assert.equal(state.memberships.length,1);assert.equal(state.sellers.length,1)
+    const blocked=observations.some(r=>r.status!==200)
+    record('native-boundary-result',{head:process.env.B20_HEAD,status:blocked?'BLOCKED':'PASS',nativeLoginStatus:login.status,
+      actorClass:'native active Member with open Seller membership',nativeActorMatches:true,memberId:member.id,sellerId:account.id,
+      verifiedNativeState:{activeMembers:state.members.length,memberships:state.memberships.length,openSellers:state.sellers.length},
+      observations,anonymousStatus:anonymous.status,
+      source:'src/api/personal/security.ts nativeIngress',
+      frontend:'NOT TESTED - native protected API prerequisite',
+      conclusion:blocked?'Native login succeeds; existing project ingress denies the legitimate protected operation. No ingress or credential bypass applied.':'Native API prerequisite passed; frontend journey still NOT TESTED'})
+    assert.equal(anonymous.status,401)
+    assert.ok(!blocked,'B20_NATIVE_INGRESS_BOUNDARY_BLOCKED: see native-boundary-result.json')
+  }finally{
+    if(server?.listening)await new Promise<void>(r=>server!.close(()=>r()))
+    if(runtime)await runtime.shutdown()
+    await pg.end()
   }
 }

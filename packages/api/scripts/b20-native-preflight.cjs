@@ -60,7 +60,9 @@ const tlsConnect=tls.connect;tls.connect=function(...args){check(args);return tl
     // Placeholder URLs for isolated test — real Storefront/Vendor not running; link structure only
     DOGRUADRES_STOREFRONT_URL:'http://localhost:3000',MERCUR_VENDOR_URL:'http://localhost:7001'};
   const cli=path.join(path.dirname(req.resolve('@medusajs/cli/package.json')),'cli.js');
-  const probe=process.env.B20_LAUNCHER==='true'
+  const probe=process.env.B20_NATIVE_BOUNDARY_ONLY==='true'
+    ?'integration-tests/postgres/b20-storefront.exec.ts'
+    :process.env.B20_LAUNCHER==='true'
     ?'integration-tests/postgres/b20-launcher.exec.ts'
     :process.env.B20_STOREFRONT_ONLY==='true'
     ?'integration-tests/postgres/b20-storefront.exec.ts'
