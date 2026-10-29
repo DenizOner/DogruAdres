@@ -53,6 +53,31 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         final.seller_ids.length !== decision.seller_ids.length ||
         final.seller_ids.some((id,i) => id !== decision.seller_ids[i]))
       return res.status(403).json({ message: "Access denied" })
+
+    // Native Member/Seller status can change independently of Foundation.
+    // Recheck the actor and every about-to-be-returned Store at the response
+    // boundary; never treat a past native read as a durable access grant.
+    // This is a read-only, two-module revalidation, NOT an atomic cross-module
+    // revocation guarantee (that requires separate full-runtime acceptance).
+    const lastBinding = await svc.personalActorBinding(token, "member")
+    if (!lastBinding || lastBinding.revoked_at ||
+        lastBinding.person_id !== decision.person_id ||
+        lastBinding.actor_id !== binding.actor_id)
+      return res.status(403).json({ message: "Access denied" })
+    const lastMember = await native.listMembers({ id: binding.actor_id, is_active: true })
+    if (lastMember.length !== 1 || lastMember[0].id !== binding.actor_id)
+      return res.status(403).json({ message: "Access denied" })
+    for (const item of sellers) {
+      const [lastRelation,lastSeller] = await Promise.all([
+        native.listSellerMembers({ member_id: binding.actor_id, seller_id: item.id }),
+        native.listSellers({ id: item.id })
+      ])
+      if (lastRelation.length !== 1 || lastSeller.length !== 1 ||
+          lastRelation[0].member_id !== binding.actor_id ||
+          lastRelation[0].seller_id !== item.id ||
+          lastSeller[0].id !== item.id || lastSeller[0].status !== "open")
+        return res.status(403).json({ message: "Access denied" })
+    }
     return res.status(200).json({ organization_id: organization, stores: sellers })
   } catch (e) {
     if (e instanceof IdentityAccessDenied) return res.status(403).json({ message: "Access denied" })

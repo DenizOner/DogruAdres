@@ -90,6 +90,33 @@ describe("B22 platform-approved Organization Store read (route boundary, mock-on
     expect(res.json).not.toHaveBeenCalledWith(expect.objectContaining({stores:expect.any(Array)}))
   })
 
+  it("denies a Store read when native Member is revoked during final revalidation",async()=>{
+    native.listMembers.mockResolvedValueOnce([{id:member,is_active:true}]).mockResolvedValueOnce([])
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(res.json).not.toHaveBeenCalledWith(expect.objectContaining({stores:expect.any(Array)}))
+  })
+
+  it("denies Store response when SellerMember relation is revoked after the initial read",async()=>{
+    native.listSellerMembers.mockResolvedValueOnce([{member_id:member,seller_id:"sel_A"}]).mockResolvedValueOnce([])
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+  })
+
+  it("denies Store response when the native Seller is suspended after the initial read",async()=>{
+    native.listSellers.mockResolvedValueOnce([{id:"sel_A",name:"A Store",status:"open"}])
+      .mockResolvedValueOnce([{id:"sel_A",name:"A Store",status:"suspended"}])
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+  })
+
+  it("denies when the verified native Member binding is revoked during the read",async()=>{
+    svc.personalActorBinding.mockResolvedValueOnce({person_id:person,actor_id:member,revoked_at:null})
+      .mockResolvedValueOnce(null)
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+  })
+
   it("returns no Store data when native module cannot be queried",async()=>{
     native.listMembers.mockRejectedValue(new Error("backend unavailable"))
     await GET(req,res)
