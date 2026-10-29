@@ -336,6 +336,42 @@ async function run(){
         process.stdout.write(marker+"\n")
         process.stdout.write("NOT TESTED B22 native HTTP: real MFA/Chrome, verified Member link, approved Store assignment, authorized Store list\n")
       }
+
+      // B22 only after the existing verification/SMPP scope gate and negative
+      // test. The R1 activation protocol is reused with ephemeral task-only
+      // signing material. No production operator key / protected database.
+      if(scope==="verification"){
+        const activationEnv:NodeJS.ProcessEnv={
+          ...nativeEnv,REDIS_URL:undefined,PG_MFA_TEST_SCOPE:"verification",
+          B06_EVIDENCE_DIR:join(process.env.RUNNER_TEMP??"/not-authorized","b22-ui-fixture"),
+        }
+        const activate=spawnSync(process.execPath,["./integration-tests/postgres/b06-activation.pg16.ts"],{
+          cwd:process.cwd(),env:activationEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
+        })
+        if(activate.error||activate.status!==0||
+           !String(activate.stdout??"").includes("PASS B06 disposable native activation"))
+          throw Error("B22 task-only R1 activation failed: "+
+            sanitized(String(activate.error??"exit "+activate.status)+"\n"+
+            String(activate.stderr??"")+"\n"+String(activate.stdout??"")))
+        process.stdout.write("PASS B22 task-only R1 activation via existing audited CAS; TEST_FIXTURE NOT_AUTHORITY\n")
+        const b22Env:NodeJS.ProcessEnv={
+          ...activationEnv,DOGRUADRES_MFA_SETTINGS_ENABLED:"true",
+          DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true",DOGRUADRES_MFA_RUNTIME_ENABLED:"true",
+        }
+        const chrome=spawnSync(process.execPath,["run","medusa","exec",
+          "./integration-tests/postgres/b22-store-ui.exec.ts"],{
+          cwd:process.cwd(),env:b22Env,encoding:"utf8",timeout:210000,maxBuffer:2*1024*1024,
+        })
+        const output=String(chrome.stdout??"").split("\n")
+          .filter(line=>line.startsWith("PASS B22 Chrome:")||
+            line.startsWith("NOT TESTED B22 Chrome:")).join("\n")
+        if(chrome.error||chrome.status!==0||
+           !output.includes("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes"))
+          throw Error("B22 Chrome acceptance failed; "+
+            sanitized(String(chrome.error??("exit "+chrome.status))+"\n"+
+            String(chrome.stderr??"")+"\n"+String(chrome.stdout??"")))
+        process.stdout.write(output+"\n")
+      }
     }finally{
       try { await target.close() } catch {}
     }

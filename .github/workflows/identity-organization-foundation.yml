@@ -228,6 +228,16 @@ jobs:
           bun integration-tests/postgres/mfa-persistence.pg16.test.ts
           bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
           bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
+      - name: Existing Chrome task CA support for B22 scoped browser acceptance
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          if ! command -v certutil >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y libnss3-tools
+          fi
+          command -v openssl
+          command -v certutil
+          command -v google-chrome
       - name: Full Medusa CLI module migration on disposable PG16
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
