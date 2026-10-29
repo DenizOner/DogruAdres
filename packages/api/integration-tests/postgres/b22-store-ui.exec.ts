@@ -319,7 +319,7 @@ export default async function({container}:any){
     // Revoking a staff task immediately denies further platform approval
     // access; an Organization Owner cannot gain this permission implicitly.
     await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[grantId])
-    assert.equal(await reviewer.eval(`(await fetch('/personal/platform/stores')).status`),403)
+    assert.equal(await reviewer.eval(`(async()=> (await fetch('/personal/platform/stores')).status)()`),403)
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.wait("!document.getElementById('workspace').hidden")
