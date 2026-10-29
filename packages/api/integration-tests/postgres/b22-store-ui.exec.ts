@@ -203,7 +203,22 @@ export default async function({container}:any){
     await browser.input("#store-application-form input[name=name]",applicationName)
     await browser.input("#store-application-form input[name=email]",applicationEmail)
     await browser.click("#store-application-form button")
-    await browser.wait("document.getElementById('store-application-status').textContent.includes('Başvuru kaydedildi')")
+    let observed=""
+    await until(async()=>{
+      observed=String(await browser.eval("document.getElementById('store-application-status').textContent"))
+      return observed.includes("Başvuru kaydedildi") ||
+        observed.includes("Başvuru reddedildi") || observed.includes("Sonuç belirsiz")
+    },19000,"B22 Owner Store application outcome")
+    if(!observed.includes("Başvuru kaydedildi")){
+      const state=await q(`select status,seller_id is not null as seller_created
+        from da_store_application where organization_id=$1 and person_id=$2`,
+        [organizations[0].id,A.person])
+      // Never log credentials, Member IDs, application keys or Seller details.
+      throw Error("B22 application incomplete: ui_category="+
+        (observed.includes("Sonuç belirsiz")?"uncertain":"denied")+
+        ",rows="+state.length+",state="+state.map((row:any)=>row.status).join(",")+
+        ",seller_written="+state.some((row:any)=>row.seller_created))
+    }
     const createdList=await get("/personal/store-applications?organization_id="+encodeURIComponent(organizations[0].id))
     assert.equal(createdList.status,200)
     const ownApplications=createdList.body.applications
