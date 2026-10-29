@@ -18,7 +18,7 @@ describe("B22 platform Store approval guard",()=>{
       id:candidate.seller_id,name:"Store",status:"pending_approval",approved_at:null
     }])}
     run=jest.fn().mockResolvedValue({})
-    ;(approveSellerWorkflow as jest.Mock).mockReturnValue({run})
+    ;(approveSellerWorkflow as unknown as jest.Mock).mockReturnValue({run})
     ;(access as jest.Mock).mockReturnValue(service)
     ;(csrf as jest.Mock).mockResolvedValue(true)
     ;(enabled as jest.Mock).mockReturnValue(true)

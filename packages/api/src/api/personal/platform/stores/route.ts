@@ -23,7 +23,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     const candidates=await service.personalReviewableStoreApplications(token)
     if(!candidates)return res.status(403).json({message:"Access denied"})
     const native=req.scope.resolve<{listSellers(filter:object):Promise<any[]>}>("seller")
-    const pending=[]
+    const pending:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string}>=[]
     for(const item of candidates){
       const sellers=await native.listSellers({id:item.seller_id})
       if(sellers.length!==1||sellers[0].id!==item.seller_id)continue
