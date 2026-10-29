@@ -318,6 +318,24 @@ async function run(){
         try { await verifyB22OwnedSellerConstraints(legalDb, dbName) }
         finally { await legalDb.close() }
       }
+      if (scope === "verification") {
+        // B22 restricted negative-only integration. Reuses the current native
+        // Medusa runtime and disposable database, after the exact-DB empty
+        // domain attestation and physical schema tests. NEVER inserts a
+        // verified secondary Member binding or an approved Store assignment.
+        const negative=spawnSync(process.execPath,["run","medusa","exec",
+          "./integration-tests/postgres/b22-native-denial.exec.ts"],{
+          cwd:process.cwd(),env:nativeEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
+        })
+        const marker="PASS B22 native HTTP negative: real personal password session, native SellerMember without verified Member binding denied"
+        if(negative.error||negative.status!==0||
+           !String(negative.stdout??"").includes(marker))
+          throw Error("B22 native HTTP negative failed; " +
+            sanitized(String(negative.error??("exit "+negative.status))+"\n"+
+             String(negative.stderr??"")+"\n"+String(negative.stdout??"")))
+        process.stdout.write(marker+"\n")
+        process.stdout.write("NOT TESTED B22 native HTTP: real MFA/Chrome, verified Member link, approved Store assignment, authorized Store list\n")
+      }
     }finally{
       try { await target.close() } catch {}
     }
