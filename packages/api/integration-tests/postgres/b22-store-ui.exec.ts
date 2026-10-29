@@ -350,10 +350,10 @@ export default async function({container}:any){
     await reviewer.send("Page.reload",{ignoreCache:true})
     await reviewer.wait("!document.getElementById('workspace').hidden")
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
-    // After adding pagination an empty CURRENT page is displayed as
-    // "Bu sayfada onay bekleyen mağaza yok." while older pages can exist.
-    // Verify the durable empty pending state, not one exact Turkish phrase.
-    await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===0 && document.getElementById('store-approval-status').textContent.toLocaleLowerCase('tr').includes('onay bekleyen mağaza yok.')")
+    // Owner Store was approved, but the 31 historical Origin rows still
+    // exist on older pages. Empty CURRENT page must offer older navigation,
+    // not falsely imply the whole review backlog is empty.
+    await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===0 && document.getElementById('store-approval-status').textContent.includes('önceki başvurulara bakın.') && !document.getElementById('store-approval-older').hidden")
     assert.equal(await reviewer.eval("document.querySelectorAll('#store-approval-list button').length"),0,
       "Approved Store must disappear from the reviewer pending list on reload")
     const afterReview=await native.listSellers({id:ownerStoreId})
