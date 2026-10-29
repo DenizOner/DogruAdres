@@ -1,4 +1,4 @@
-﻿/**
+/**
  * B20 acceptance: per-Person persistent launcher preference.
  * Tests: reorder, collapse, reset, second-Person isolation, revoked-session,
  * CSRF/Origin, invalid app IDs, refresh/re-login persistence, no permission change.
@@ -576,6 +576,12 @@ export default async function ({ container }: any) {
       }
 
       // ── Escape cancel test (grab + ArrowDown + Escape = no change) ──
+      // Read DB version before escape test — must not increment after cancel.
+      const dbRowBeforeEsc = await q(
+        `select version from da_launcher_preference where person_id=$1`,
+        [actorA.personId]
+      )
+      const versionBeforeEsc: number = dbRowBeforeEsc[0]?.version ?? -1
       const beforeEscOrder: string[] = await chromeA.eval(
         `[...document.getElementById('launcher-list').children].map(li=>li.getAttribute('data-id'))`
       )
@@ -586,32 +592,51 @@ export default async function ({ container }: any) {
       if (escHandleFound) {
         await chromeA.click(kbSelAfter)
         await chromeA.focusElement(kbSelAfter)
-        // Space (grab) - verify via aria-pressed
+        // Space (grab) — grab state MUST be verified; if aria-pressed not set, record NOT_TESTED
         await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
         await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
-        await chromeA.wait(
+        const escGrabbed: boolean = await chromeA.wait(
           "document.querySelector('#launcher-list li:first-child .launcher-handle')?.getAttribute('aria-pressed') === 'true'",
           3000
-        ).catch(() => { /* if grab didn't fire, Escape still restores; test proceeds */ })
-        // ArrowDown (move without committing)        // ArrowDown (move without committing)
-        await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
-        await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
-        // Escape (cancel: calls renderLauncher() which restores pre-drag DOM order)
-        await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-        await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-        await new Promise<void>(r => setTimeout(r, 300))
-        const afterEscOrder: string[] = await chromeA.eval(
-          `[...document.getElementById('launcher-list').children].map(li=>li.getAttribute('data-id'))`
-        )
-        const escStatus: string = await chromeA.eval(`document.getElementById('launcher-status').textContent`)
-        // After Escape, renderLauncher() restores the last-saved order
-        assert.deepEqual(afterEscOrder, beforeEscOrder, 'B20_KB_ESCAPE_RESTORES_ORDER')
-        results['keyboard-escape-cancel'] = {
-          status: 'PASS',
-          beforeOrder: beforeEscOrder,
-          afterEscOrder,
-          statusText: escStatus,
-          note: 'Escape called renderLauncher() — DOM restored to last-saved order; no POST made',
+        ).then(() => true).catch(() => false)
+        if (!escGrabbed) {
+          results['keyboard-escape-cancel'] = {
+            status: 'NOT_TESTED',
+            note: 'Grab did not occur (aria-pressed not set to true after Space) — Escape assertion skipped to avoid vacuous pass',
+          }
+        } else {
+          // ArrowDown (move without committing)
+          await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
+          await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
+          // Escape (cancel: calls renderLauncher() which restores pre-drag DOM order without POST)
+          await chromeA.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+          await chromeA.send('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+          await new Promise<void>(r => setTimeout(r, 400))
+          const afterEscOrder: string[] = await chromeA.eval(
+            `[...document.getElementById('launcher-list').children].map(li=>li.getAttribute('data-id'))`
+          )
+          const escStatus: string = await chromeA.eval(`document.getElementById('launcher-status').textContent`)
+          // DB version must not have changed — Escape must not trigger a POST
+          const dbRowAfterEsc = await q(
+            `select version from da_launcher_preference where person_id=$1`,
+            [actorA.personId]
+          )
+          const versionAfterEsc: number = dbRowAfterEsc[0]?.version ?? -1
+          const dbVersionUnchanged = versionAfterEsc === versionBeforeEsc
+          // Joint assertions: DOM restored + status text cancellation + no DB write
+          assert.deepEqual(afterEscOrder, beforeEscOrder, 'B20_KB_ESCAPE_RESTORES_ORDER')
+          assert.ok(escStatus.includes('iptal') || escStatus.includes('cancel') || escStatus.includes('Cancel'), `B20_KB_ESCAPE_STATUS: "${escStatus}"`)
+          assert.ok(dbVersionUnchanged, `B20_KB_ESCAPE_NO_DB_WRITE: version changed ${versionBeforeEsc} → ${versionAfterEsc}`)
+          results['keyboard-escape-cancel'] = {
+            status: 'PASS',
+            grabbed: true,
+            beforeOrder: beforeEscOrder,
+            afterEscOrder,
+            statusText: escStatus,
+            dbVersionBeforeEsc: versionBeforeEsc,
+            dbVersionAfterEsc: versionAfterEsc,
+            note: 'Grab verified (aria-pressed=true), ArrowDown moved, Escape restored DOM, no DB write',
+          }
         }
       } else {
         results['keyboard-escape-cancel'] = { status: 'NOT_TESTED', note: 'no handle found for Escape test' }

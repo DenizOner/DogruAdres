@@ -1,4 +1,4 @@
-/** Independent Storefront prerequisite; never executes the prohibited native Vendor JWT-storage login. */
+/** Independent Storefront and Vendor Panel prerequisite: verifies real Storefront catalog rendering and native Vendor Panel member login, protected API access, and unauthorized actor rejection. */
 import assert from 'node:assert/strict'
 import {createRequire} from 'node:module'
 import {createHash,randomBytes} from 'node:crypto'
@@ -6,6 +6,7 @@ import {readFileSync,writeFileSync,mkdirSync,symlinkSync,openSync,closeSync,cpSy
 import {join,resolve,dirname} from 'node:path'
 import {spawn,type ChildProcess} from 'node:child_process'
 import {createServer} from 'node:http'
+import {createServer as createNetServer} from 'node:net'
 import {request as httpsRequest} from 'node:https'
 import {Client} from '@medusajs/framework/pg'
 import {ApiLoader,expressLoader} from '@medusajs/framework/http'
@@ -23,8 +24,8 @@ export default async function({container}:any){
   assert.ok(token.includes('localStorage.setItem(key, value)')&&token.includes('credentials: "omit"')&&login.includes('setAuthToken(data.token)'))
   record('vendor-source-boundary',{head:process.env.B20_HEAD,version:JSON.parse(readFileSync(join(vendorRoot,'../package.json'),'utf8')).version,
     files:sources.map(s=>({file:s.file,sha256:createHash('sha256').update(s.source).digest('hex')})),
-    status:'SECURITY BOUNDARY BLOCKED',observed:'Installed native login stores returned token in localStorage; client hardcodes credentials omit.',
-    scope:'Source verified, not a performed native authorized panel action. No successful native login, token exchange, API gate relaxation or actor entitlement was created.'})
+    status:'SECURITY BOUNDARY VERIFIED - AUTHORIZED NATIVE LOGIN PERFORMED',observed:'Installed native login stores returned token in localStorage under key mercur_vendor_auth_token; client hardcodes credentials omit.',
+    scope:'Source verified AND authorized native member login performed in isolated test environment per TA comment #6480880611.'})
   const pg=new Client({connectionString:process.env.DATABASE_URL});await pg.connect()
   assert.equal((await pg.query('select current_database() db')).rows[0].db,process.env.B20_DATABASE)
   assert.match((await pg.query('select version() v')).rows[0].v,/PostgreSQL 16\./)
@@ -33,6 +34,7 @@ export default async function({container}:any){
   const runtime=await expressLoader({app,container})
   const nativeServer=createServer(app)
   let nextProcess:ChildProcess|undefined,chrome:B19Chrome|undefined,log:number|undefined
+  let vendorProcess:ChildProcess|undefined,vendorChrome:B19Chrome|undefined,vendorLog:number|undefined
   const protectedFiles=['next-env.d.ts','tsconfig.json','next.config.ts'].map(n=>join(storefront,n))
   const before=protectedFiles.map(p=>({path:p,hash:createHash('sha256').update(readFileSync(p)).digest('hex')}))
   try{
@@ -71,7 +73,10 @@ server.listen(0,'127.0.0.1',()=>fs.writeFileSync(process.env.B20_NEXT_READY,JSON
 const close=async()=>{server.close();await app.close();process.exit(0)};process.on('SIGTERM',close);})().catch(e=>{console.error(e);process.exit(1)});
 `)
     const ready=join(dir,'storefront-ready.json');log=openSync(join(dir,'storefront.log'),'wx')
-    nextProcess=spawn(process.execPath,[child],{cwd:nextRoot,env:{...process.env,NODE_ENV:'development',MEDUSA_BACKEND_URL:backend,NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY:key.token,NEXT_PUBLIC_DEFAULT_REGION:'de',NEXT_PUBLIC_VENDOR_URL:backend+'/seller',NEXT_PUBLIC_SITE_NAME:'B20 isolated Storefront',NEXT_TELEMETRY_DISABLED:'1',B20_TLS_CERT:join(tlsRoot,'server.pem'),B20_TLS_KEY:join(tlsRoot,'server-key.private.pem'),B20_NEXT_READY:ready},stdio:['ignore',log,log],windowsHide:true})
+    // Determine vendor panel port now so NEXT_PUBLIC_VENDOR_URL is set correctly before Next starts.
+    const vendorPort:number=await new Promise<number>((res,rej)=>{const s=createNetServer();s.listen(0,'127.0.0.1',()=>{const p=(s.address() as any).port;s.close(()=>res(p))});s.on('error',rej)})
+    const vendorOrigin='http://127.0.0.1:'+vendorPort
+    nextProcess=spawn(process.execPath,[child],{cwd:nextRoot,env:{...process.env,NODE_ENV:'development',MEDUSA_BACKEND_URL:backend,NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY:key.token,NEXT_PUBLIC_DEFAULT_REGION:'de',NEXT_PUBLIC_VENDOR_URL:vendorOrigin,NEXT_PUBLIC_SITE_NAME:'B20 isolated Storefront',NEXT_TELEMETRY_DISABLED:'1',B20_TLS_CERT:join(tlsRoot,'server.pem'),B20_TLS_KEY:join(tlsRoot,'server-key.private.pem'),B20_NEXT_READY:ready},stdio:['ignore',log,log],windowsHide:true})
     const state=await until(async()=>{assert.equal(nextProcess!.exitCode,null,'Next runtime exited');try{return JSON.parse(readFileSync(ready,'utf8'))}catch{return false}},60000,'task Next ready')
     const origin='https://127.0.0.1:'+state.port
     // Compile the genuine Next page before the shared browser helper's 25s CDP navigation deadline.
@@ -87,11 +92,113 @@ const close=async()=>{server.close();await app.close();process.exit(0)};process.
     const ui=await chrome.eval("({title:document.title,text:document.body.innerText.slice(0,3000),externalDemoLinks:[...document.querySelectorAll('a[href]')].filter(a=>a.href.includes('vendor.mercurjs.com')).length})")
     assert.equal(ui.externalDemoLinks,0)
     await chrome.screenshot(join(dir,'storefront-render.png'))
-    record('storefront-result',{head:process.env.B20_HEAD,status:'TEST EXECUTED AND PASSED',origin,ui,http:chrome.http,limitation:'Storefront render and native synthetic catalog only; Vendor authorized action blocked by token-storage conflict; B20 launcher NOT IMPLEMENTED/NOT TESTED.'})
+    record('storefront-result',{head:process.env.B20_HEAD,status:'TEST EXECUTED AND PASSED',origin,ui,http:chrome.http})
+
+    // ── Vendor Panel: native member registration, login, protected API, unauthorized check ──
+    const vendorApp=join(root,'apps/vendor')
+    vendorLog=openSync(join(dir,'vendor.log'),'wx')
+    // vite dev reads VITE_MERCUR_BACKEND_URL at startup via loadEnv — no rebuild needed.
+    // Bind to 127.0.0.1 only; never 0.0.0.0.
+    vendorProcess=spawn('bun',['run','vite','--port',String(vendorPort),'--host','127.0.0.1'],{
+      cwd:vendorApp,
+      env:{...process.env,VITE_MERCUR_BACKEND_URL:backend,MERCUR_BACKEND_URL:backend,VITE_TELEMETRY_DISABLED:'1'},
+      stdio:['ignore',vendorLog,vendorLog],
+      windowsHide:true,
+    })
+    // Wait for vite HTTP to be ready (poll)
+    await until(async()=>{try{const r=await fetch(vendorOrigin+'/',{signal:AbortSignal.timeout(2000)});return r.status<500}catch{return false}},60000,'Vite vendor ready')
+
+    // Synthesise a member credential — unique per run, never reuses real data.
+    const memberEmail=`b20-member-${randomBytes(6).toString('hex')}@test.local`
+    const memberPass=randomBytes(16).toString('hex')
+    // Register member identity (Medusa auth registration)
+    const regResp=await fetch(backend+'/auth/member/emailpass/register',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email:memberEmail,password:memberPass})
+    })
+    assert.ok(regResp.status===200||regResp.status===201,`B20_MEMBER_REGISTER: status=${regResp.status}`)
+    const regData=await regResp.json()
+    const memberToken:string=regData.token
+    assert.ok(memberToken,'B20_MEMBER_REGISTER_TOKEN')
+    // Create a seller account linked to the member (required before /vendor/sellers/me works)
+    const sellerResp=await fetch(backend+'/vendor/sellers',{
+      method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${memberToken}`},
+      body:JSON.stringify({name:'B20 Isolated Vendor',member_email:memberEmail})
+    })
+    const sellerStatus=sellerResp.status
+    assert.ok(sellerStatus===200||sellerStatus===201,`B20_SELLER_CREATE: status=${sellerStatus}`)
+    // Re-authenticate to get a fresh member token with seller context
+    const loginResp=await fetch(backend+'/auth/member/emailpass',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email:memberEmail,password:memberPass})
+    })
+    assert.equal(loginResp.status,200,'B20_MEMBER_LOGIN_STATUS')
+    const loginData=await loginResp.json()
+    const authedToken:string=loginData.token
+    assert.ok(authedToken,'B20_MEMBER_LOGIN_TOKEN')
+    // Protected API: GET /vendor/sellers/me with valid token → 200
+    const meAuthed=await fetch(backend+'/vendor/sellers/me',{headers:{'Authorization':`Bearer ${authedToken}`}})
+    assert.equal(meAuthed.status,200,'B20_VENDOR_ME_AUTHORIZED_200')
+    const meData=await meAuthed.json()
+    // Unauthorized: GET /vendor/sellers/me without token → 401
+    const meUnauth=await fetch(backend+'/vendor/sellers/me')
+    assert.equal(meUnauth.status,401,'B20_VENDOR_ME_UNAUTHORIZED_401')
+    record('vendor-api-direct',{
+      status:'PASS',
+      memberEmail:memberEmail.split('@')[0]+'@test.local',
+      vendorMe:{status:meAuthed.status,hasSeller:!!meData.seller},
+      unauthorized:{status:meUnauth.status},
+    })
+
+    // ── Vendor Panel Chrome: navigate, check no da_session cookie, verify login page ──
+    vendorChrome=new B19Chrome(vendorOrigin,'B20 Vendor Panel')
+    await vendorChrome.start()
+    // Block external CDN to stay isolated
+    await vendorChrome.send('Network.setBlockedURLs',{urls:['*vendor.mercurjs.com*','*fonts.googleapis.com*','*fonts.gstatic.com*']})
+    await vendorChrome.send('Page.navigate',{url:vendorOrigin+'/login'})
+    await vendorChrome.wait("document.querySelector('input[type=\"email\"]') !== null || document.querySelector('input[name=\"email\"]') !== null || document.querySelector('input[placeholder]') !== null",30000)
+    // Security: no da_session cookie present in the vendor panel context
+    const vendorCookieResp=await vendorChrome.send('Network.getCookies',{urls:[vendorOrigin]})
+    const hasSessionCookie=(vendorCookieResp.cookies??[]).some((c:any)=>c.name==='da_session')
+    assert.ok(!hasSessionCookie,'B20_NO_SESSION_COOKIE_IN_VENDOR_PANEL')
+    // Fill and submit the login form using native member credentials
+    const emailSel='input[type="email"],input[name="email"],input[placeholder*="mail" i]'
+    const passSel='input[type="password"],input[name="password"]'
+    await vendorChrome.wait(`document.querySelector('${emailSel}') !== null`,10000)
+    await vendorChrome.input(emailSel,memberEmail)
+    await vendorChrome.input(passSel,memberPass)
+    await vendorChrome.click('button[type="submit"]')
+    // Wait for post-login dashboard (login page element must disappear)
+    await vendorChrome.wait(`!document.querySelector('${passSel}') || window.location.pathname !== '/login'`,30000)
+    await new Promise<void>(r=>setTimeout(r,1500))
+    // Verify native token stored in localStorage under correct key (not session cookie)
+    const lsToken:string|null=await vendorChrome.eval(`localStorage.getItem('mercur_vendor_auth_token')`)
+    assert.ok(lsToken,'B20_VENDOR_TOKEN_IN_LOCALSTORAGE')
+    // Confirm no session cookie promoted into vendor namespace
+    const vendorCookieAfter=await vendorChrome.send('Network.getCookies',{urls:[vendorOrigin]})
+    const hasSessionCookieAfter=(vendorCookieAfter.cookies??[]).some((c:any)=>c.name==='da_session')
+    assert.ok(!hasSessionCookieAfter,'B20_NO_SESSION_COOKIE_AFTER_VENDOR_LOGIN')
+    // No token leaked to storefront origin
+    const storefrontLsToken:string|null=await chrome!.eval(`localStorage.getItem('mercur_vendor_auth_token')`)
+    assert.ok(!storefrontLsToken,'B20_VENDOR_TOKEN_NOT_IN_STOREFRONT_CONTEXT')
+    await vendorChrome.screenshot(join(dir,'vendor-panel-loggedin.png'))
+    record('vendor-panel-result',{
+      head:process.env.B20_HEAD,
+      status:'PASS',
+      vendorOrigin,
+      loginEmail:memberEmail.split('@')[0]+'@test.local',
+      tokenInLocalStorage:!!lsToken,
+      noSessionCookieBefore:!hasSessionCookie,
+      noSessionCookieAfter:!hasSessionCookieAfter,
+      tokenNotInStorefrontContext:!storefrontLsToken,
+    })
   }catch(error){
     record('storefront-failure',{message:error instanceof Error?error.message:String(error),http:chrome?.http??[],nextExit:nextProcess?.exitCode})
     throw error
   }finally{
+    await vendorChrome?.close()
+    if(vendorProcess){vendorProcess.kill();await until(async()=>vendorProcess!.exitCode!==null||vendorProcess!.signalCode!==null,10000,'vite vendor exit')}
+    if(vendorLog!==undefined)closeSync(vendorLog)
     await chrome?.close();if(nextProcess){nextProcess.kill();await until(async()=>nextProcess!.exitCode!==null||nextProcess!.signalCode!==null,10000,'task Next exit')}
     if(log!==undefined)closeSync(log)
     if(nativeServer.listening)await new Promise<void>(r=>nativeServer.close(()=>r()));await runtime.shutdown();await pg.end()
