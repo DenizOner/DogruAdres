@@ -316,32 +316,10 @@ export default async function({container}:any){
       values($1,$2,'store.approve','platform',$2,'B22 disposable CI platform reviewer fixture')`,[grantId,B.person])
     const reviewer=new B06Chrome(host,"B");browsers.push(reviewer)
     await reviewer.start(crt)
-    // Apply the same foreground privacy rule as the already verified Owner A.
+    await reviewer.login(B.email,B.password,B.person)
+    reviewer.phase="platform-store-review"
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
-    try{
-      await reviewer.login(B.email,B.password,B.person)
-    }catch{
-      const category=await reviewer.eval(`({
-        visible:document.visibilityState==='visible',
-        login:!document.getElementById('login').hidden,
-        challenge:!document.getElementById('challenge').hidden,
-        workspace:!document.getElementById('workspace').hidden,
-        statusKind:(()=>{
-          const t=document.getElementById('status').textContent.toLowerCase()
-          return t.includes('kod')?'code':t.includes('oturum')?'session':
-            t.includes('giriş')?'login':t.includes('erişim')?'access':'other'
-        })()
-      })`).catch(()=>({unavailable:true}))
-      // No credentials, TOTP values, tokens, names or Person identifiers.
-      const transport=reviewer.http.filter((x:any)=>
-        x.path.startsWith('/auth/') ||
-        x.path==='/personal/session' || x.path==='/personal/challenge')
-        .slice(-8).map((x:any)=>({method:x.method,
-          category:x.path.startsWith('/auth/')?'auth':'personal',status:x.status}))
-      throw Error("B22 reviewer native MFA did not reach workspace: ui="+
-        JSON.stringify(category)+",http="+JSON.stringify(transport))
-    }
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
     await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
@@ -372,7 +350,10 @@ export default async function({container}:any){
     await reviewer.send("Page.reload",{ignoreCache:true})
     await reviewer.wait("!document.getElementById('workspace').hidden")
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
-    await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Onay bekleyen mağaza yok.')")
+    // After adding pagination an empty CURRENT page is displayed as
+    // "Bu sayfada onay bekleyen mağaza yok." while older pages can exist.
+    // Verify the durable empty pending state, not one exact Turkish phrase.
+    await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===0 && document.getElementById('store-approval-status').textContent.toLocaleLowerCase('tr').includes('onay bekleyen mağaza yok.')")
     assert.equal(await reviewer.eval("document.querySelectorAll('#store-approval-list button').length"),0,
       "Approved Store must disappear from the reviewer pending list on reload")
     const afterReview=await native.listSellers({id:ownerStoreId})
