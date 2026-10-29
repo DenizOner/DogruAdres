@@ -1,5 +1,5 @@
 /**
- * B22 physical ownership constraints against the SAME native Medusa CLI
+ * B22 physical platform-association constraints against the SAME native Medusa CLI
  * freshly migrated task-owned database. Caller verifies its CI identity and
  * handles all cleanup. No production or protected DB is ever touched.
  */
@@ -34,21 +34,21 @@ export async function verifyB22OwnedSellerConstraints(db: Sql, databaseName: str
     db.unsafe(`insert into da_organization_seller_ownership
       (id,organization_id,seller_id,verification_audit_event_id,verified_at)
       values ('daown_b22_conflict','daorg_b22_beta','sel_b22_one','daaud_b22_owner_b',clock_timestamp())`),
-    /duplicate key|unique/i, "Concurrent legal owners must be rejected")
+    /duplicate key|unique/i, "Concurrent Store assignments to different Organizations must be rejected")
   await assert.rejects(
     db.unsafe(`insert into da_organization_seller_ownership
       (id,organization_id,seller_id,verification_audit_event_id,verified_at)
       values ('daown_b22_unproved','daorg_b22_beta','sel_b22_unproved','daaud_missing',clock_timestamp())`),
-    /foreign key/i, "Missing canonical ownership evidence must be rejected")
+    /foreign key/i, "Missing canonical platform approval audit must be rejected")
 
   // A synthetic SQL history fixture tests the partial-unique index;
-  // it does NOT approve or exercise real legal-ownership transfer workflows.
+  // it does NOT approve or exercise real Store reassignment review workflows.
   await db.unsafe("update da_organization_seller_ownership set revoked_at=clock_timestamp() where id='daown_b22_a'")
   await db.unsafe(`insert into da_organization_seller_ownership
     (id,organization_id,seller_id,verification_audit_event_id,verified_at)
     values ('daown_b22_transfer_fixture','daorg_b22_beta','sel_b22_one','daaud_b22_owner_b',clock_timestamp())`)
   const current=await db.unsafe("select organization_id from da_organization_seller_ownership where seller_id='sel_b22_one' and revoked_at is null")
   assert.deepEqual(current.map(r=>r.organization_id),["daorg_b22_beta"])
-  process.stdout.write("PASS B22 real Medusa CLI PG16: multiple Seller stores per legal Org, unique current owner, evidence FK, retained history\n")
-  process.stdout.write("NOT TESTED: real ownership verification/transfer, browser Store scope, Buyer Organization checkout\n")
+  process.stdout.write("PASS B22 real Medusa CLI PG16: multiple Seller stores per Organization, unique current assignment, audit FK, retained history\n")
+  process.stdout.write("NOT TESTED: real platform review/reassignment, browser Store scope, Buyer Organization checkout\n")
 }

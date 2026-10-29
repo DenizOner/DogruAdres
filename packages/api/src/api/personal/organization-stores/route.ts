@@ -5,9 +5,9 @@ import { IdentityAccessDenied } from "../../../modules/dogruadres-access/identit
 export const AUTHENTICATE = false
 
 /**
- * B22 initial read-only legal Organization -> marketplace Seller view.
+ * B22 initial read-only platform-approved Organization -> marketplace Seller view.
  * No native JWT leaves the server. Never use a native SellerMember join as
- * proof of legal ownership. No purchase, Store mutation or grant is exposed.
+ * proof of the approved Organization→Store association. No purchase, Store mutation or grant is exposed.
  */
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   res.setHeader("Cache-Control", "no-store")
@@ -46,7 +46,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
           accounts[0].id !== id || accounts[0].status !== "open") continue
       sellers.push({ id, name: String(accounts[0].name ?? "") })
     }
-    // Revocation, Organization switch, ownership reassignment and session
+    // Revocation, Organization switch, association reassignment and session
     // expiry between module reads must not reveal a stale scope.
     const final = await svc.personalLegalSellerIds(token, organization)
     if (!final || final.person_id !== decision.person_id ||

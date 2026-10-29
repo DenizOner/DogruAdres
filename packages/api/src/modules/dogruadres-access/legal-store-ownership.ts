@@ -1,7 +1,7 @@
 import { IdentityAccessDenied, IdentitySessions, type SecuritySql } from "./identity-session"
 
 /**
- * Foundation authoritative read. This never creates ownership or grants.
+ * Foundation read of platform-approved Organization→Seller association. Never creates a grant.
  * The returned IDs are INTERNAL CANDIDATES, not client entitlements. A caller
  * must still verify native Member/SellerMember + live Seller for each ID.
  */
@@ -19,7 +19,7 @@ export async function authorizedLegalSellerIds(
        where organization_id=? and revoked_at is null
        order by seller_id`, [organizationId]
   ) as { seller_id: unknown }[]
-  // A broken projection or unbounded legal mapping fails closed, not truncated.
+  // A broken projection or unbounded platform association fails closed, not truncated.
   if (rows.length > 50 || rows.some(r => typeof r.seller_id !== "string" ||
         !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id as string)) ||
       new Set(rows.map(r => r.seller_id)).size !== rows.length)

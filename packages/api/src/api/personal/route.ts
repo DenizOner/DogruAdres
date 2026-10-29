@@ -164,6 +164,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="smtp-test-result" role="status" aria-live="polite"></p>
   </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
+  <section id="org-stores-panel" hidden aria-labelledby="org-stores-title" style="grid-column:1/-1">
+    <h3 id="org-stores-title">Seçili kuruluşun mağazaları</h3>
+    <p>Yalnızca kuruluşla platformda onaylı bağı bulunan ve erişim yetkiniz bulunan mağazalar listelenir. Bu görünüm satın alma veya satış işlemi yetkisi vermez.</p>
+    <p id="org-stores-status" role="status" aria-live="polite"></p>
+    <div id="org-stores"></div>
+    <button id="org-stores-refresh" type="button" hidden>Mağazaları yenile</button>
+  </section>
   <p id="memberships-status" role="status" aria-live="polite" aria-atomic="true"></p><button id="memberships-refresh" type="button" hidden disabled>Üye listesini yenile</button>
   <div id="memberships" aria-describedby="memberships-status" aria-busy="false"></div>
   <section id="launcher-section" hidden aria-labelledby="launcher-heading" style="grid-column:1/-1;margin-top:1rem;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white">
@@ -409,7 +416,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   };
   async function selectOrg(id){
     clearNotifications();
-    const request=++organizationRequest;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('invite-member').hidden=true;el('invite-result').textContent='';clearPendingInvitations();el('detail').textContent='';clearMemberships();history.replaceState(null,'','/personal');
+    const request=++organizationRequest;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('invite-member').hidden=true;el('invite-result').textContent='';clearPendingInvitations();el('detail').textContent='';clearMemberships();clearOrganizationStores();history.replaceState(null,'','/personal');
     el('memberships').ariaBusy='true';el('memberships-status').textContent='Üyelikler yükleniyor…';
     try{const result=await api('organizations?id='+encodeURIComponent(id));if(request!==organizationRequest)return;
       currentOrg=id;el('detail').textContent=JSON.stringify(result.organizations[0],null,2);history.replaceState(null,'','/personal?organization='+encodeURIComponent(id));
@@ -432,10 +439,42 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         el('audit-timeline-status').textContent = '';
       }
       await memberships(id,request);
+      if(request===organizationRequest&&currentOrg===id)void organizationStores(id,request);
       if(request===organizationRequest&&currentOrg===id&&!el('pending-invitations-panel').hidden)
         void pendingInvitations(id,request);
       if(request===organizationRequest)status('Kuruluş erişimi doğrulandı');
-    }catch(e){if(request!==organizationRequest)return;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('detail').textContent='';clearMemberships();clearPendingInvitations();el('memberships-status').textContent=membershipError(e);status(e.message)}
+    }catch(e){if(request!==organizationRequest)return;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('detail').textContent='';clearMemberships();clearOrganizationStores();clearPendingInvitations();el('memberships-status').textContent=membershipError(e);status(e.message)}
+  }
+  function clearOrganizationStores(){
+    el('org-stores-panel').hidden=true;
+    el('org-stores').replaceChildren();
+    el('org-stores-status').textContent='';
+    el('org-stores-refresh').hidden=true;
+  }
+  async function organizationStores(org,request){
+    if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+    const target=el('org-stores'),message=el('org-stores-status');
+    el('org-stores-panel').hidden=false;
+    target.replaceChildren();message.textContent='Mağazalar kontrol ediliyor…';
+    el('org-stores-refresh').hidden=false;
+    try{
+      const data=await api('organization-stores?organization='+encodeURIComponent(org));
+      if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+      if(data.organization_id!==org||!Array.isArray(data.stores)||
+          data.stores.some(s=>typeof s?.id!=='string'||!/^sel_[A-Za-z0-9_-]+$/.test(s.id)||typeof s.name!=='string')||
+          new Set(data.stores.map(s=>s.id)).size!==data.stores.length)throw new Error('Mağaza yanıtı doğrulanamadı');
+      for(const store of data.stores){
+        const line=document.createElement('p');
+        line.textContent=store.name+' — '+store.id;
+        target.append(line);
+      }
+      message.textContent=data.stores.length?'Yetkili mağazalar güncellendi.':'Bu kuruluşta görüntülenebilir onaylı mağaza bulunmuyor.';
+    }catch(e){
+      if(request!==organizationRequest||currentOrg!==org)return;
+      target.replaceChildren();
+      if(e.httpStatus===401){concealPrivateView();el('login').hidden=false;return}
+      message.textContent=[403,404].includes(e.httpStatus)?'Bu kuruluşun mağazalarına erişim izniniz yok.':'Mağazalar doğrulanamadı. Yeniden deneyin.';
+    }
   }
   function clearMemberships(){
     el('memberships').replaceChildren();el('memberships').ariaBusy='false';el('memberships-status').textContent='';
@@ -487,6 +526,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
+  el('org-stores-refresh').onclick=()=>{if(currentOrg)void organizationStores(currentOrg,organizationRequest)};
   async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();void loadLauncher();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
@@ -495,7 +535,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
-    clearMemberships();for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
+    clearMemberships();clearOrganizationStores();for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
   async function updateMfaForm(form,body){
     const button=form.querySelector('button');button.disabled=true;
     let uncertain=false;
@@ -986,7 +1026,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   function concealPrivateView(){
     clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
-    el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearPendingInvitations();clearLauncher();
+    el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearPendingInvitations();clearLauncher();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');
