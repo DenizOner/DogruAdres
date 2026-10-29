@@ -14,12 +14,15 @@ export async function verifyB22OwnedSellerConstraints(db: Sql, databaseName: str
   assert.match(identity.v, /^16\d{4}$/)
   assert.equal((await db.unsafe("select to_regclass('da_organization_seller_ownership') as name"))[0].name,
     "da_organization_seller_ownership", "Native Medusa module migration must be present")
+  // The canonical Foundation audit FK requires a real Person row; do not
+  // bypass this integrity rule or point at another test principal.
+  await db.unsafe("insert into da_person(id) values ('daprs_b22_fixture')")
   await db.unsafe("insert into da_organization(id,name,status) values ('daorg_b22_alpha','B22 fixture A','active'),('daorg_b22_beta','B22 fixture B','active')")
   await db.unsafe(`insert into da_audit_event
     (id,actor_person_id,actor_type,actor_id,module,action,resource,occurred_at)
-    values ('daaud_b22_owner_a','synthetic_person_b22','user','synthetic_actor_b22',
+    values ('daaud_b22_owner_a','daprs_b22_fixture','user','synthetic_actor_b22',
             'dogruadres-access','organization.store_ownership_verified','legal_ownership',clock_timestamp()),
-           ('daaud_b22_owner_b','synthetic_person_b22','user','synthetic_actor_b22',
+           ('daaud_b22_owner_b','daprs_b22_fixture','user','synthetic_actor_b22',
             'dogruadres-access','organization.store_ownership_verified','legal_ownership',clock_timestamp())`)
   await db.unsafe(`insert into da_organization_seller_ownership
     (id,organization_id,seller_id,verification_audit_event_id,verified_at)
