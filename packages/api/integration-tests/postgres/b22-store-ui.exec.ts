@@ -154,7 +154,20 @@ export default async function({container}:any){
     }
     const selected=(org:string)=>"/personal/organization-stores?organization="+encodeURIComponent(org)
     // Native SellerMember is NOT a verified human association. Nothing visible.
-    await browser.select(organizations[0].name,"owner")
+    await browser.eval("window.__b22_ui_error='';window.addEventListener('error',event=>{window.__b22_ui_error=String(event.message).slice(0,90)})")
+    try {
+      await browser.select(organizations[0].name,"owner")
+    } catch (error) {
+      const info=await browser.eval(`({
+        detailValid:(()=>{try{return !!JSON.parse(document.getElementById('detail').textContent).role}catch{return false}})(),
+        workspaceVisible:!document.getElementById('workspace').hidden,
+        applicationFormExists:!!document.getElementById('store-application-form'),
+        applicationRequestReady:typeof applicationRequest==='number',
+        sessionStatus:document.getElementById('status').textContent.slice(0,70),
+        uiError:String(window.__b22_ui_error||'').replace(/[A-Za-z0-9_-]{20,}/g,'[masked]')
+      })`)
+      throw Error("B22 Organization select contract failed: "+JSON.stringify(info))
+    }
     await browser.wait("document.getElementById('org-stores-status').textContent.includes('erişim izniniz yok')")
     assert.equal((await get(selected(organizations[0].id))).status,403)
     assert.equal((await q("select count(*)::int n from da_verified_actor_binding where person_id=$1",[A.person]))[0].n,0)
