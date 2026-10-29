@@ -1203,6 +1203,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       new_values:{application_id:input.application_id,status:"pending_approval"},
       occurred_at:new Date()
     }],context)
+    // The Medusa createAuditEvents/createAuditOutboxes calls stage ORM writes.
+    // Flush on this SAME transaction manager before the raw SQL FK insert;
+    // do not commit or open an independent transaction.
+    await (context.transactionManager as {flush():Promise<void>}).flush()
     await db.execute(`insert into da_organization_seller_ownership
       (id,organization_id,seller_id,verification_audit_event_id,verified_at)
       values(?,?,?,?,clock_timestamp())`,[
