@@ -25,8 +25,8 @@ if(typeof SQL!=="function")throw Error("Bun PostgreSQL driver unavailable")
 const scope = (process.env.PG_MFA_TEST_SCOPE ||
   process.argv.slice(2).find(arg => arg.startsWith("--scope="))?.split("=")[1] ||
   "all").toLowerCase()
-if (!["all", "mfa", "verification", "b02", "b04", "b04-ui", "b05-ui", "b06-ui", "b07-ui", "b08-ui"].includes(scope))
-  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b02, b04, b04-ui, b05-ui, b06-ui, b07-ui, b08-ui`)
+if (!["all", "mfa", "verification", "b22-ui", "b02", "b04", "b04-ui", "b05-ui", "b06-ui", "b07-ui", "b08-ui"].includes(scope))
+  throw Error(`REFUSED: invalid PG_MFA_TEST_SCOPE: "${scope}". Allowed: all, mfa, verification, b22-ui, b02, b04, b04-ui, b05-ui, b06-ui, b07-ui, b08-ui`)
 if (scope === "b04-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B04_UI_DISPATCH_SCOPE !== "b04-ui"))
   throw Error("REFUSED: B04-UI requires explicit workflow_dispatch scope=b04-ui")
 if (scope === "b05-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B05_UI_DISPATCH_SCOPE !== "b05-ui"))
@@ -37,6 +37,10 @@ if (scope === "b07-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch"
   throw Error("REFUSED: B07-UI requires explicit workflow_dispatch scope=b07-ui")
 if (scope === "b08-ui" && (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.B08_UI_DISPATCH_SCOPE !== "b08-ui"))
   throw Error("REFUSED: B08-UI requires explicit workflow_dispatch scope=b08-ui")
+
+if (scope === "b22-ui" && (process.env.GITHUB_EVENT_NAME !== "pull_request" ||
+    process.env.B22_UI_AUTO_SCOPE !== "b22-ui"))
+  throw Error("REFUSED: task-owned B22 UI only from approved PR workflow")
 
 const admin=new SQL(adminUrl.toString())
 const dbName="mfa_cli_ci_"+randomBytes(8).toString("hex")
@@ -111,6 +115,37 @@ async function run(){
       }
       // The harness readback session is a genuine foreign consumer to the child.
       await target.close()
+
+      if(scope==="b22-ui"){
+        // R1 requires two primary identities, zero factors and an exclusive
+        // clean latch. Another disposable child is mandatory because the
+        // verification child has pre-existing SMTP/negative test fixtures.
+        const suffix=randomBytes(8).toString("hex")
+        const task:NodeJS.ProcessEnv={...nativeEnv,REDIS_URL:undefined,
+          B22_UI_EMAIL_A:"b22-a-"+suffix+"@example.invalid",
+          B22_UI_EMAIL_B:"b22-b-"+suffix+"@example.invalid",
+          B22_UI_PASSWORD_A:randomBytes(32).toString("base64url"),
+          B22_UI_PASSWORD_B:randomBytes(32).toString("base64url"),
+          B06_EVIDENCE_DIR:join(process.env.RUNNER_TEMP??"/not-authorized","b22-ui-r1-evidence")
+        }
+        function invoke(file:string,env:NodeJS.ProcessEnv,direct=false){
+          const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
+            cwd:process.cwd(),env,encoding:"utf8",timeout:210000,maxBuffer:3*1024*1024})
+          const valid=String(child.stdout??"").split("\n")
+            .filter(x=>/^PASS B22 Chrome:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
+          if(child.error||child.status!==0)
+            throw Error("B22 dedicated task-only child stage failed: "+sanitized(
+              String(child.error??"exit "+child.status)+"\n"+String(child.stderr??"")+"\n"+String(child.stdout??"")))
+          process.stdout.write(valid+"\n")
+          return valid
+        }
+        const script="./integration-tests/postgres/b22-store-ui.exec.ts"
+        assert.ok(invoke(script,{...task,B22_UI_PREPARE:"true"}).includes("PASS B22 test fixture:"))
+        assert.ok(invoke("./integration-tests/postgres/b06-activation.pg16.ts",task,true).includes("PASS B06 disposable native activation"))
+        const result=invoke(script,{...task,DOGRUADRES_MFA_RUNTIME_ENABLED:"true",
+          DOGRUADRES_MFA_SETTINGS_ENABLED:"true",DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true"})
+        assert.ok(result.includes("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes"))
+      }
 
       if (scope === "b02") {
         const b02=spawnSync(process.execPath,["run","medusa","exec",
@@ -337,41 +372,7 @@ async function run(){
         process.stdout.write("NOT TESTED B22 native HTTP: real MFA/Chrome, verified Member link, approved Store assignment, authorized Store list\n")
       }
 
-      // B22 only after the existing verification/SMPP scope gate and negative
-      // test. The R1 activation protocol is reused with ephemeral task-only
-      // signing material. No production operator key / protected database.
-      if(scope==="verification"){
-        const activationEnv:NodeJS.ProcessEnv={
-          ...nativeEnv,REDIS_URL:undefined,PG_MFA_TEST_SCOPE:"verification",
-          B06_EVIDENCE_DIR:join(process.env.RUNNER_TEMP??"/not-authorized","b22-ui-fixture"),
-        }
-        const activate=spawnSync(process.execPath,["./integration-tests/postgres/b06-activation.pg16.ts"],{
-          cwd:process.cwd(),env:activationEnv,encoding:"utf8",timeout:120000,maxBuffer:2*1024*1024,
-        })
-        if(activate.error||activate.status!==0||
-           !String(activate.stdout??"").includes("PASS B06 disposable native activation"))
-          throw Error("B22 task-only R1 activation failed: "+
-            sanitized(String(activate.error??"exit "+activate.status)+"\n"+
-            String(activate.stderr??"")+"\n"+String(activate.stdout??"")))
-        process.stdout.write("PASS B22 task-only R1 activation via existing audited CAS; TEST_FIXTURE NOT_AUTHORITY\n")
-        const b22Env:NodeJS.ProcessEnv={
-          ...activationEnv,DOGRUADRES_MFA_SETTINGS_ENABLED:"true",
-          DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true",DOGRUADRES_MFA_RUNTIME_ENABLED:"true",
-        }
-        const chrome=spawnSync(process.execPath,["run","medusa","exec",
-          "./integration-tests/postgres/b22-store-ui.exec.ts"],{
-          cwd:process.cwd(),env:b22Env,encoding:"utf8",timeout:210000,maxBuffer:2*1024*1024,
-        })
-        const output=String(chrome.stdout??"").split("\n")
-          .filter(line=>line.startsWith("PASS B22 Chrome:")||
-            line.startsWith("NOT TESTED B22 Chrome:")).join("\n")
-        if(chrome.error||chrome.status!==0||
-           !output.includes("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes"))
-          throw Error("B22 Chrome acceptance failed; "+
-            sanitized(String(chrome.error??("exit "+chrome.status))+"\n"+
-            String(chrome.stderr??"")+"\n"+String(chrome.stdout??"")))
-        process.stdout.write(output+"\n")
-      }
+
     }finally{
       try { await target.close() } catch {}
     }

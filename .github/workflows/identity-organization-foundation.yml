@@ -185,7 +185,7 @@ jobs:
   mfa-postgres16:
     name: MFA migration and transaction — isolated PostgreSQL 16
     runs-on: ubuntu-24.04
-    timeout-minutes: 14
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16.15
@@ -424,6 +424,17 @@ jobs:
             ${{ runner.temp }}/b08-ui-evidence.log
             ${{ runner.temp }}/b08-ui-evidence/
           if-no-files-found: error
+      - name: B22 real Chrome after signed R1 activation on separate disposable database
+        if: github.event_name != 'workflow_dispatch'
+        working-directory: packages/api
+        timeout-minutes: 10
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+          PG_MFA_TEST_SCOPE: b22-ui
+          B22_UI_AUTO_SCOPE: b22-ui
+        run: bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts
       - name: Foundation native Medusa module / ORM transaction on disposable PG16
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api

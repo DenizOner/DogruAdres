@@ -19,16 +19,19 @@ import {otp,until} from "./b19-browser"
 
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
+  const preparing=process.env.B22_UI_PREPARE==="true"
   assert.ok(process.env.GITHUB_ACTIONS==="true"&&process.env.CI==="true"&&
-    process.env.PG_MFA_TEST_SCOPE==="verification"&&
+    process.env.GITHUB_EVENT_NAME==="pull_request"&&process.env.B22_UI_AUTO_SCOPE==="b22-ui"&&
+    process.env.PG_MFA_TEST_SCOPE==="b22-ui"&&
     process.env.PG_MFA_TEST_SENTINEL==="mfa-pg16-disposable-ci-v1"&&
     process.env.PG_MFA_NATIVE_TEST_DATABASE===u.pathname.slice(1)&&
     u.protocol==="postgres:"&&u.hostname==="127.0.0.1"&&u.port==="5432"&&
     u.username==="mfa_test"&&u.password==="ci-disposable-only-not-a-real-secret"&&
     /^\/mfa_cli_ci_[0-9a-f]{16}$/.test(u.pathname)&&
-    ["DOGRUADRES_IDENTITY_ENABLED","DOGRUADRES_MFA_RUNTIME_ENABLED",
-     "DOGRUADRES_MFA_SETTINGS_ENABLED","DOGRUADRES_MFA_ENROLLMENT_ENABLED"]
-      .every(k=>process.env[k]==="true"),"REFUSED: B22 browser scope only disposable native CI")
+    (preparing?process.env.DOGRUADRES_MFA_RUNTIME_ENABLED==="false":
+      ["DOGRUADRES_IDENTITY_ENABLED","DOGRUADRES_MFA_RUNTIME_ENABLED",
+       "DOGRUADRES_MFA_SETTINGS_ENABLED","DOGRUADRES_MFA_ENROLLMENT_ENABLED"]
+      .every(k=>process.env[k]==="true")),"REFUSED: B22 browser scope only disposable native CI")
   const pg=new Client({connectionString:u.toString()});await pg.connect()
   const q=async(sql:string,args:unknown[]=[]) => (await pg.query(sql,args)).rows
   let app:Awaited<ReturnType<typeof createPersonalHttpApp>>|undefined
@@ -37,12 +40,14 @@ export default async function({container}:any){
   const temp=mkdtempSync(join(tmpdir(),"b22-task-ca-"))
   try{
     assert.equal((await q("select current_database() db"))[0].db,u.pathname.slice(1))
-    assert.equal((await q("select mfa_activated from da_session_policy where id='current'"))[0].mfa_activated,true)
+    assert.equal((await q("select mfa_activated from da_session_policy where id='current'"))[0].mfa_activated,!preparing)
     const rand=randomBytes(8).toString("hex"),auth=container.resolve("auth")
     const users=container.resolve("user"),foundation=container.resolve("dogruadresAccess")
     const native=container.resolve("seller")
-    const primary=async(label:string)=>{
-      const email="b22-"+label+"-"+rand+"@example.invalid",password=randomBytes(32).toString("base64url")
+    const primary=async(label:"A"|"B")=>{
+      const email=process.env["B22_UI_EMAIL_"+label]!,password=process.env["B22_UI_PASSWORD_"+label]!
+      assert.match(email,/^b22-[ab]-[0-9a-f]{16}@example.invalid$/)
+      assert.ok(password.length>=40)
       const user=await users.createUsers({email})
       const reg=await auth.register("emailpass",{body:{email,password}})
       assert.ok(reg.success&&reg.authIdentity?.id)
@@ -56,7 +61,25 @@ export default async function({container}:any){
         [reg.authIdentity.id,person.id,user.id])
       return {email,password,person:person.id,actor:user.id}
     }
-    const A=await primary("a"),B=await primary("b")
+    if(preparing){
+      for(const table of ["public.user","auth_identity","da_person","da_actor_mapping","da_login_binding","auth_mfa_factor"])
+        assert.equal((await q("select count(*)::int n from "+table))[0].n,0,"R1 clean fixture "+table)
+      await primary("A");await primary("B")
+      for(const table of ["public.user","auth_identity","da_person","da_actor_mapping","da_login_binding"])
+        assert.equal((await q("select count(*)::int n from "+table))[0].n,2,"R1 prepared "+table)
+      assert.equal((await q("select count(*)::int n from auth_mfa_factor"))[0].n,0)
+      process.stdout.write("PASS B22 test fixture: two native primary identities prepared for existing signed R1 preflight\n")
+      return
+    }
+    const readActor=async(label:"A"|"B")=>{
+      const email=process.env["B22_UI_EMAIL_"+label]!,password=process.env["B22_UI_PASSWORD_"+label]!
+      const result=await q(`select u.id actor,b.person_id person from public.user u
+        join da_login_binding b on b.actor_id=u.id and b.actor_type='user'
+        where u.email=$1 and b.verified_at is not null and b.revoked_at is null`,[email])
+      assert.equal(result.length,1)
+      return {email,password,person:result[0].person as string,actor:result[0].actor as string}
+    }
+    const A=await readActor("A"),B=await readActor("B")
     const organizations=await foundation.createOrganizations([
       {name:"B22 Alpha "+rand,status:"active"},{name:"B22 Beta "+rand,status:"active"},
       {name:"B22 Foreign "+rand,status:"active"},
