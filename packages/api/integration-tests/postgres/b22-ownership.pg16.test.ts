@@ -48,7 +48,7 @@ export async function verifyB22OwnedSellerConstraints(db: Sql, databaseName: str
   const owned = await db.unsafe("select seller_id from da_organization_seller_ownership where organization_id='daorg_b22_alpha' and revoked_at is null order by seller_id")
   assert.deepEqual(owned.map(r=>r.seller_id),["sel_b22_one","sel_b22_two"])
   const adapter={execute:async (sql:string,params:unknown[]=[])=>{
-    let n=0;const query=sql.replace(/\\?/g,()=>"$"+(++n))
+    let n=0;const query=sql.replace(/\?/g,()=>"$"+(++n))
     assert.equal(n,params.length)
     return db.unsafe(query,params)
   }}
