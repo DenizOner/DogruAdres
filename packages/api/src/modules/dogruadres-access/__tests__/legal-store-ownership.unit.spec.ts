@@ -13,7 +13,11 @@ describe("B22 legal Organization ownership candidate gate (SQL-mock, NOT Postgre
   it("only returns explicitly recorded current ownership, never SellerMember or an implicit default",async()=>{
     const { execute,run }=setup(allowed,[{seller_id:"sel_1"},{seller_id:"sel_2"}])
     await expect(run()).resolves.toEqual({person_id:"person_A",organization_id:org,seller_ids:["sel_1","sel_2"]})
-    expect(execute.mock.calls).toEqual([[expect.stringContaining("revoked_at is null"),[org]]])
+    expect(execute).toHaveBeenCalledWith(
+      expect.stringContaining("e.action='organization.store_association_approved'"),[org])
+    expect(execute.mock.calls[0][0]).toContain("da_audit_outbox")
+    expect(execute.mock.calls[0][0]).toContain("e.organization_id=o.organization_id")
+    expect(execute.mock.calls[0][0]).toContain("e.target_id=o.seller_id")
   })
   it.each([null,{person_id:"person_B",organizations:[]},{person_id:"person_A",organizations:[{id:org,role:"member"}]}])(
     "denies untrusted, foreign or non-manager Organization membership before ownership read",async scope=>{

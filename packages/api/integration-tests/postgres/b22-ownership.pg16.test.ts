@@ -4,6 +4,7 @@
  * handles all cleanup. No production or protected DB is ever touched.
  */
 import assert from "node:assert/strict"
+import { platformApprovedSellerIds } from "../../src/modules/dogruadres-access/legal-store-ownership"
 
 type Sql = { unsafe(statement: string, params?: readonly unknown[]): Promise<any[]> }
 
@@ -18,22 +19,54 @@ export async function verifyB22OwnedSellerConstraints(db: Sql, databaseName: str
   // bypass this integrity rule or point at another test principal.
   await db.unsafe("insert into da_person(id) values ('daprs_b22_fixture')")
   await db.unsafe("insert into da_organization(id,name,status) values ('daorg_b22_alpha','B22 fixture A','active'),('daorg_b22_beta','B22 fixture B','active')")
+  // Every Store assignment requires its OWN platform-approved event, scoped
+  // to the exact Store and Organization, plus the canonical atomic source outbox.
   await db.unsafe(`insert into da_audit_event
-    (id,actor_person_id,actor_type,actor_id,module,action,resource,occurred_at)
-    values ('daaud_b22_owner_a','daprs_b22_fixture','user','synthetic_actor_b22',
-            'dogruadres-access','organization.store_ownership_verified','legal_ownership',clock_timestamp()),
-           ('daaud_b22_owner_b','daprs_b22_fixture','user','synthetic_actor_b22',
-            'dogruadres-access','organization.store_ownership_verified','legal_ownership',clock_timestamp())`)
+    (id,actor_person_id,actor_type,actor_id,organization_id,action,module,resource,target_id,occurred_at)
+    values
+      ('daaud_b22_a1','daprs_b22_fixture','user','synthetic_actor_b22','daorg_b22_alpha',
+       'organization.store_association_approved','dogruadres-access','store-association','sel_b22_one',clock_timestamp()),
+      ('daaud_b22_a2','daprs_b22_fixture','user','synthetic_actor_b22','daorg_b22_alpha',
+       'organization.store_association_approved','dogruadres-access','store-association','sel_b22_two',clock_timestamp()),
+      ('daaud_b22_b1','daprs_b22_fixture','user','synthetic_actor_b22','daorg_b22_beta',
+       'organization.store_association_approved','dogruadres-access','store-association','sel_b22_one',clock_timestamp()),
+      ('daaud_b22_unpublished','daprs_b22_fixture','user','synthetic_actor_b22','daorg_b22_alpha',
+       'organization.store_association_approved','dogruadres-access','store-association','sel_b22_unpublished',clock_timestamp()),
+      ('daaud_b22_wrong_action','daprs_b22_fixture','user','synthetic_actor_b22','daorg_b22_alpha',
+       'organization.store_association_requested','dogruadres-access','store-association','sel_b22_pending',clock_timestamp())`)
+  await db.unsafe(`insert into da_audit_outbox
+    (id,source_audit_event_id,source_module,envelope)
+    values
+      ('daaob_b22_a1','daaud_b22_a1','dogruadres-access','{}'::jsonb),
+      ('daaob_b22_a2','daaud_b22_a2','dogruadres-access','{}'::jsonb),
+      ('daaob_b22_b1','daaud_b22_b1','dogruadres-access','{}'::jsonb),
+      ('daaob_b22_wrong_action','daaud_b22_wrong_action','dogruadres-access','{}'::jsonb)`)
   await db.unsafe(`insert into da_organization_seller_ownership
     (id,organization_id,seller_id,verification_audit_event_id,verified_at)
-    values ('daown_b22_a','daorg_b22_alpha','sel_b22_one','daaud_b22_owner_a',clock_timestamp()),
-           ('daown_b22_b','daorg_b22_alpha','sel_b22_two','daaud_b22_owner_a',clock_timestamp())`)
+    values ('daown_b22_a','daorg_b22_alpha','sel_b22_one','daaud_b22_a1',clock_timestamp()),
+           ('daown_b22_b','daorg_b22_alpha','sel_b22_two','daaud_b22_a2',clock_timestamp())`)
   const owned = await db.unsafe("select seller_id from da_organization_seller_ownership where organization_id='daorg_b22_alpha' and revoked_at is null order by seller_id")
   assert.deepEqual(owned.map(r=>r.seller_id),["sel_b22_one","sel_b22_two"])
+  const adapter={execute:async (sql:string,params:unknown[]=[])=>{
+    let n=0;const query=sql.replace(/\\?/g,()=>"$"+(++n))
+    assert.equal(n,params.length)
+    return db.unsafe(query,params)
+  }}
+  assert.deepEqual(await platformApprovedSellerIds(adapter,"daorg_b22_alpha"),["sel_b22_one","sel_b22_two"])
+  // The FK alone cannot confer approval: mismatched Store or unpublished,
+  // pending-request events must not yield any Store candidate.
+  await db.unsafe(`insert into da_organization_seller_ownership
+    (id,organization_id,seller_id,verification_audit_event_id,verified_at)
+    values
+      ('daown_b22_wrong_target','daorg_b22_alpha','sel_b22_foreign','daaud_b22_a1',clock_timestamp()),
+      ('daown_b22_unpublished','daorg_b22_alpha','sel_b22_unpublished','daaud_b22_unpublished',clock_timestamp()),
+      ('daown_b22_pending','daorg_b22_alpha','sel_b22_pending','daaud_b22_wrong_action',clock_timestamp())`)
+  assert.deepEqual(await platformApprovedSellerIds(adapter,"daorg_b22_alpha"),["sel_b22_one","sel_b22_two"],
+    "Unmatched, uncommitted or unapproved audit events must never grant Store visibility")
   await assert.rejects(
     db.unsafe(`insert into da_organization_seller_ownership
       (id,organization_id,seller_id,verification_audit_event_id,verified_at)
-      values ('daown_b22_conflict','daorg_b22_beta','sel_b22_one','daaud_b22_owner_b',clock_timestamp())`),
+      values ('daown_b22_conflict','daorg_b22_beta','sel_b22_one','daaud_b22_b1',clock_timestamp())`),
     /duplicate key|unique/i, "Concurrent Store assignments to different Organizations must be rejected")
   await assert.rejects(
     db.unsafe(`insert into da_organization_seller_ownership
@@ -46,9 +79,12 @@ export async function verifyB22OwnedSellerConstraints(db: Sql, databaseName: str
   await db.unsafe("update da_organization_seller_ownership set revoked_at=clock_timestamp() where id='daown_b22_a'")
   await db.unsafe(`insert into da_organization_seller_ownership
     (id,organization_id,seller_id,verification_audit_event_id,verified_at)
-    values ('daown_b22_transfer_fixture','daorg_b22_beta','sel_b22_one','daaud_b22_owner_b',clock_timestamp())`)
+    values ('daown_b22_transfer_fixture','daorg_b22_beta','sel_b22_one','daaud_b22_b1',clock_timestamp())`)
   const current=await db.unsafe("select organization_id from da_organization_seller_ownership where seller_id='sel_b22_one' and revoked_at is null")
   assert.deepEqual(current.map(r=>r.organization_id),["daorg_b22_beta"])
-  process.stdout.write("PASS B22 real Medusa CLI PG16: multiple Seller stores per Organization, unique current assignment, audit FK, retained history\n")
+  assert.deepEqual(await platformApprovedSellerIds(adapter,"daorg_b22_beta"),["sel_b22_one"],
+    "Only the newly approved active Organization may see this Store")
+  assert.deepEqual(await platformApprovedSellerIds(adapter,"daorg_b22_alpha"),["sel_b22_two"])
+  process.stdout.write("PASS B22 real Medusa CLI PG16: multiple Seller stores per Organization, unique current assignment, exact approval event/outbox, audit FK, retained history\n")
   process.stdout.write("NOT TESTED: real platform review/reassignment, browser Store scope, Buyer Organization checkout\n")
 }

@@ -1,9 +1,38 @@
 import { IdentityAccessDenied, IdentitySessions, type SecuritySql } from "./identity-session"
 
 /**
- * Foundation read of platform-approved Organization→Seller association. Never creates a grant.
- * The returned IDs are INTERNAL CANDIDATES, not client entitlements. A caller
- * must still verify native Member/SellerMember + live Seller for each ID.
+ * Physical approval read only. Do not trust a row's "verified_at" or an arbitrary
+ * audit FK as platform approval: the canonical event must match the SAME
+ * Organization, Seller and approved action, with an atomic source outbox row.
+ * This read is NOT a Person permission grant or a legal ownership judgment.
+ */
+export async function platformApprovedSellerIds(db: SecuritySql, organizationId: string): Promise<string[]> {
+  const rows = await db.execute(
+    `select o.seller_id
+       from da_organization_seller_ownership o
+       join da_audit_event e
+         on e.id=o.verification_audit_event_id
+         and e.deleted_at is null
+         and e.organization_id=o.organization_id and e.target_id=o.seller_id
+         and e.action='organization.store_association_approved'
+         and e.module='dogruadres-access' and e.resource='store-association'
+       where o.organization_id=? and o.revoked_at is null
+         and exists (select 1 from da_audit_outbox x
+           where x.source_audit_event_id=e.id
+             and x.source_module='dogruadres-access' and x.deleted_at is null)
+       order by o.seller_id`, [organizationId]
+  ) as { seller_id: unknown }[]
+  if (rows.length>50 || rows.some(r=>typeof r.seller_id!=="string" ||
+      !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id as string)) ||
+      new Set(rows.map(r=>r.seller_id)).size!==rows.length)
+    throw new IdentityAccessDenied()
+  return rows.map(r=>r.seller_id as string)
+}
+
+/**
+ * Foundation Person/Organization authority THEN physical platform approval.
+ * These are INTERNAL CANDIDATES, not native Seller operation permissions.
+ * A caller must additionally verify live native Member/SellerMember + Seller.
  */
 export async function authorizedLegalSellerIds(
   db: SecuritySql,
@@ -14,16 +43,6 @@ export async function authorizedLegalSellerIds(
   const result = await new IdentitySessions(db).organizations(token, organizationId)
   if (!result || result.organizations.length !== 1 ||
       !["owner","admin"].includes(result.organizations[0].role)) return null
-  const rows = await db.execute(
-    `select seller_id from da_organization_seller_ownership
-       where organization_id=? and revoked_at is null
-       order by seller_id`, [organizationId]
-  ) as { seller_id: unknown }[]
-  // A broken projection or unbounded platform association fails closed, not truncated.
-  if (rows.length > 50 || rows.some(r => typeof r.seller_id !== "string" ||
-        !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id as string)) ||
-      new Set(rows.map(r => r.seller_id)).size !== rows.length)
-    throw new IdentityAccessDenied()
-  return { person_id: result.person_id, organization_id: organizationId,
-    seller_ids: rows.map(r => r.seller_id as string) }
+  const seller_ids = await platformApprovedSellerIds(db, organizationId)
+  return { person_id: result.person_id, organization_id: organizationId, seller_ids }
 }
