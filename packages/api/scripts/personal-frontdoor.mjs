@@ -13,6 +13,8 @@ export function allowedPublicRequest(method,path){
     '/personal/platform':['GET','POST'], '/personal/platform/smtp':['GET','POST'], '/personal/memberships':['GET','POST'],
     '/personal/invitations':['GET','POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
     '/personal/contexts':['GET'],
+    '/personal/organization-stores':['GET'],
+    '/personal/store-applications':['GET','POST'],
     '/personal/links':['GET','POST'],
     '/personal/audit-timeline':['GET'],
     '/personal/notifications':['GET','POST'],

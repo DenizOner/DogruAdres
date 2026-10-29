@@ -7,6 +7,24 @@ describe("personal ingress (unit contract only)",()=>{
   async function probe(path:string,method="GET",authorization?:string,bound=false){const next=jest.fn();const res:any={status:jest.fn().mockReturnThis(),json:jest.fn()};await nativeIngress({originalUrl:path,method,headers:{authorization},...(authorization?.startsWith('Basic ')?{auth_context:{actor_type:'api-key',actor_id:'key'}}:{}),scope:{resolve:()=>({personalNativeCredential:async()=>bound?{}:null,personalMachineGrant:async()=>true})}} as any,res,next);return {next,res}}
   it.each(["/admin/users/me","/vendor/products","/store/customers/me","/auth/token/refresh","/auth/session","/admin/workflows-executions/a/run"])("rejects unbound native actor credentials: %s",async path=>{const {next,res}=await probe(path,"GET","Bearer native-token");expect(next).not.toHaveBeenCalled();expect(res.status).toHaveBeenCalledWith(401)})
   it.each(["/store/regions","/store/products","/personal","/personal/session"])("preserves allowed surface %s",async path=>expect((await probe(path)).next).toHaveBeenCalled())
+  it("admits only B22 scoped Store application GET/POST and Store read GET (not native Seller mutations)",async()=>{
+    for(const method of ["GET","POST"]){
+      const {next}=await probe("/personal/store-applications",method)
+      expect(next).toHaveBeenCalledTimes(1)
+    }
+    expect((await probe("/personal/organization-stores","GET")).next).toHaveBeenCalledTimes(1)
+    for(const [path,method] of [
+      ["/personal/store-applications","PATCH"],["/personal/store-applications","DELETE"],
+      ["/personal/store-applications","OPTIONS"],["/personal/store-applications","HEAD"],
+      ["/personal/store-applications/another","POST"],["/personal/store-applications/","PUT"],
+      ["/personal/organization-stores","POST"],["/personal/organization-stores","DELETE"],
+      ["/vendor/sellers","POST"],["/admin/sellers/sel_synthetic/approve","POST"]
+    ]){
+      const {next,res}=await probe(path,method,"Bearer malicious")
+      expect(next).not.toHaveBeenCalled()
+      expect(res.status).toHaveBeenCalledWith(401)
+    }
+  })
   it("allows only exact MFA settings GET/POST, never native or nested variants",async()=>{
     for(const method of ["GET","POST"])expect((await probe("/personal/mfa",method)).next).toHaveBeenCalled()
     for(const [path,method] of [["/personal/mfa","OPTIONS"],["/personal/mfa","DELETE"],["/personal/mfa/admin","POST"]]){

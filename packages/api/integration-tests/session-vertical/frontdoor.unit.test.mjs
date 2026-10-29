@@ -4,6 +4,18 @@ import http from 'node:http'
 import {once} from 'node:events'
 import {allowedPublicRequest,startFrontdoor} from '../../scripts/personal-frontdoor.mjs'
 
+test("B22 Store applications and active Store read have exact public method/path contracts",()=>{
+  for(const method of ["GET","POST"])
+    assert.equal(allowedPublicRequest(method,"/personal/store-applications"),true)
+  assert.equal(allowedPublicRequest("GET","/personal/organization-stores"),true)
+  for(const [path,method] of [
+    ["/personal/store-applications","PATCH"],["/personal/store-applications","DELETE"],
+    ["/personal/store-applications","OPTIONS"],["/personal/store-applications","HEAD"],
+    ["/personal/store-applications/other","POST"],["/personal/organization-stores","POST"],
+    ["/vendor/sellers","POST"],["/admin/sellers/sel_synthetic/approve","POST"]])
+    assert.equal(allowedPublicRequest(method,path),false)
+})
+
 test('B19 notifications exposes only exact personal GET and POST',()=>{
   for(const method of ['GET','POST'])assert.equal(allowedPublicRequest(method,'/personal/notifications'),true)
   for(const method of ['PUT','PATCH','DELETE','OPTIONS','HEAD'])assert.equal(allowedPublicRequest(method,'/personal/notifications'),false)
