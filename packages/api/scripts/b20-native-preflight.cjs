@@ -19,7 +19,12 @@ const baseline=run('git',['status','--porcelain=v1']);
 const protectedPaths=['evidence-b09','evidence-b16'].map(p=>path.join(api,p));
 function digestTree(p){const rows=[];function walk(p){for(const d of fs.readdirSync(p,{withFileTypes:true})){const f=path.join(p,d.name);assert.ok(!d.isSymbolicLink());if(d.isDirectory())walk(f);else rows.push([path.relative(api,f),crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex')]);}}walk(p);return rows;}
 const protectedBefore=protectedPaths.flatMap(digestTree);
-record('manifest.private',{owner:'B20 /root sole writer',root,api,head,commonDir:run('git',['rev-parse','--git-common-dir']).trim(),baseline,container:name,expiry:'Retire after decisive probe; retain evidence',protectedBefore});
+const historicalLauncherFiles=fs.readdirSync(path.join(api,'.cache'),{withFileTypes:true}).filter(d=>d.isDirectory()&&d.name.startsWith('da-b20-')).flatMap(d=>['b20-launcher-acceptance.json','b20-launcher-personA.png','b20-launcher-personB.png'].map(n=>path.join(api,'.cache',d.name,n))).filter(p=>fs.existsSync(p));
+const launcherEvidenceHashes=()=>historicalLauncherFiles.map(p=>({path:path.relative(api,p),hash:crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')}));
+const launcherEvidenceBefore=launcherEvidenceHashes();
+const sourcePaths=['scripts/b20-native-preflight.cjs','integration-tests/postgres/b20-single-login.exec.ts','integration-tests/postgres/b20-storefront.exec.ts','src/api/personal/contexts/route.ts','src/api/personal/security.ts','src/api/personal/route.ts'];
+const sourceHashes=sourcePaths.filter(p=>fs.existsSync(path.join(api,p))).map(p=>({path:p,gitBlob:run('git',['hash-object','--',p]).trim()}));
+record('manifest.private',{owner:'B20 /root sole writer',root,api,head,commonDir:run('git',['rev-parse','--git-common-dir']).trim(),baseline,sourceHashes,container:name,expiry:'Retire after decisive probe; retain evidence',protectedBefore,launcherEvidenceBefore});
 const password=crypto.randomBytes(32).toString('hex');
 let containerId;
 function assertOwnedTmpfs(c){
@@ -60,14 +65,16 @@ const tlsConnect=tls.connect;tls.connect=function(...args){check(args);return tl
     // Placeholder URLs for isolated test — real Storefront/Vendor not running; link structure only
     DOGRUADRES_STOREFRONT_URL:'http://localhost:3000',MERCUR_VENDOR_URL:'http://localhost:7001'};
   const cli=path.join(path.dirname(req.resolve('@medusajs/cli/package.json')),'cli.js');
-  const probe=process.env.B20_NATIVE_BOUNDARY_ONLY==='true'
+  const probe=process.env.B20_SINGLE_LOGIN==='true'
+    ?'integration-tests/postgres/b20-single-login.exec.ts'
+    :process.env.B20_NATIVE_BOUNDARY_ONLY==='true'
     ?'integration-tests/postgres/b20-storefront.exec.ts'
     :process.env.B20_LAUNCHER==='true'
     ?'integration-tests/postgres/b20-launcher.exec.ts'
     :process.env.B20_STOREFRONT_ONLY==='true'
     ?'integration-tests/postgres/b20-storefront.exec.ts'
     :'integration-tests/postgres/b20-native-targets.exec.ts';
-  const timeout=process.env.B20_LAUNCHER==='true'?300000:process.env.B20_STOREFRONT_ONLY==='true'?360000:180000;
+  const timeout=process.env.B20_SINGLE_LOGIN==='true'||process.env.B20_LAUNCHER==='true'?300000:process.env.B20_STOREFRONT_ONLY==='true'?360000:180000;
   for(const [label,args] of [['migrate',['db:migrate']],['probe',['exec',probe]]]){
     const log=fs.openSync(path.join(dir,label+'.log'),'wx');let result;
     try{result=spawnSync(process.execPath,[cli,...args],{cwd:api,env,stdio:['ignore',log,log],timeout,windowsHide:true});}finally{fs.closeSync(log);}
@@ -77,5 +84,6 @@ const tlsConnect=tls.connect;tls.connect=function(...args){check(args);return tl
 }finally{
   if(containerId){const c=JSON.parse(run('docker',['inspect',containerId]))[0];assertOwnedTmpfs(c);run('docker',['stop',containerId]);run('docker',['rm',containerId]);record('cleanup',{containerId,removed:true,taskOwnedTmpfsOnly:true});}
   assert.deepEqual(protectedPaths.flatMap(digestTree),protectedBefore);record('protected-readback',{unchanged:true,files:protectedBefore.length});
+  assert.deepEqual(launcherEvidenceHashes(),launcherEvidenceBefore);record('launcher-evidence-readback',{unchanged:true,files:launcherEvidenceBefore.length});
   console.log('B20 private evidence: '+dir);
 }

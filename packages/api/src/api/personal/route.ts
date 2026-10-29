@@ -1,24 +1,18 @@
 ﻿import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { randomBytes } from "node:crypto"
 import { enabled } from "./security"
-// storefrontOrigin from DOGRUADRES_STOREFRONT_URL/STOREFRONT_URL; vendorOrigin from MERCUR_VENDOR_URL
+// Storefront origin is trusted configuration; native Vendor transport is not ready for Option A.
 export const AUTHENTICATE = false
 export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   if (!enabled()) return res.status(503).send("Kişisel çalışma alanı etkin değil")
   const nonce = randomBytes(18).toString("base64")
-  // Resolve Storefront and Vendor URL from trusted process env only.
+  // Resolve Storefront URL from trusted process env only.
   // DOGRUADRES_STOREFRONT_URL or STOREFRONT_URL for the real Next.js Buyer Storefront.
-  // MERCUR_VENDOR_URL for the Mercur Vendor Panel origin (appended with /seller).
   let storefrontOrigin = ""
   try {
     const rawSf = process.env.DOGRUADRES_STOREFRONT_URL ?? process.env.STOREFRONT_URL
     if (rawSf) { const u = new URL(rawSf); storefrontOrigin = u.origin }
   } catch { /* malformed or unset -- launcher degrades gracefully, no storefront link shown */ }
-  let vendorOrigin = ""
-  try {
-    const rawVn = process.env.MERCUR_VENDOR_URL ?? process.env.DOGRUADRES_VENDOR_URL
-    if (rawVn) { const u = new URL(rawVn); vendorOrigin = u.origin }
-  } catch { /* malformed or unset -- vendor link omitted gracefully */ }
   res.setHeader("Cache-Control","no-store")
   res.setHeader("Referrer-Policy","no-referrer")
   res.setHeader("X-Content-Type-Options","nosniff")
@@ -809,8 +803,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Null-prototype map prevents __proto__/constructor property pollution reads.
   const APP_LABELS=Object.assign(Object.create(null),{storefront:'Al\u0131c\u0131 Ma\u011fazas\u0131',vendor:'Sat\u0131c\u0131 Paneli'});
   // App launch URLs: server-embedded from trusted process config at render time.
-  // Only include vendor URL when a valid vendor origin is configured (fail-closed).
-  const APP_URLS=Object.assign(Object.create(null),{storefront:'${storefrontOrigin}'},('${vendorOrigin}'?{vendor:'${vendorOrigin}/seller'}:{}));
+  // Native Vendor App 2.3.7 has no verified opaque-session transport seam.
+  // Binding eligibility does not make its separate native login an Option A launch target.
+  const APP_URLS=Object.assign(Object.create(null),{storefront:'${storefrontOrigin}'});
   let launcherSaving=false,launcherDragSrc=null,launcherDragOver=null;
   let launcherKeyHandle=null;
   async function loadLauncher(){
@@ -866,6 +861,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       content.hidden=collapsed;
       content.style.cssText='padding:.25rem 0 0 0';
       if(launchUrl)content.append(launchLink);
+      else if(id==='vendor'){const unavailable=document.createElement('p');unavailable.textContent='Vendor Panel tek oturumla henüz kullanılamıyor.';content.append(unavailable);}
       li.append(handle,name,toggle,content);
       // HTML5 drag (mouse/trackpad)
       li.addEventListener('dragstart',e=>{

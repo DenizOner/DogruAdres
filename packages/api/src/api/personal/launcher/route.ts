@@ -24,7 +24,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   }
   if (!pref) return res.status(401).json({ message: "Session required" })
 
-  // Determine which apps this Person can actually reach right now.
+  // Determine native actor eligibility. Frontend launch readiness is separate;
+  // the workspace must not offer a launch control for an unsupported transport.
   // Storefront: always present — public catalog with no personal entitlement.
   // Vendor: only if the Person has an active non-revoked member actor binding
   //   AND the native Seller module confirms: active SellerMember + active Member
