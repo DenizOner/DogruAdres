@@ -61,9 +61,15 @@ describe("B22 platform Store approval guard",()=>{
     expect(res.status).toHaveBeenCalledWith(403)
     expect(native.listSellers).not.toHaveBeenCalled()
   })
+  it("rejects invalid page before staff and native reads",async()=>{
+    req.query={page:"-1"}
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(service.personalReviewableStoreApplications).not.toHaveBeenCalled()
+  })
   it("lists only native pending Stores to authorized reviewer",async()=>{
     await GET(req,res)
     expect(res.status).toHaveBeenCalledWith(200)
-    expect(res.json).toHaveBeenCalledWith({pending:[{...candidate,name:"Store"}]})
+    expect(res.json).toHaveBeenCalledWith({pending:[{...candidate,name:"Store"}],page:0,has_more:true})
   })
 })

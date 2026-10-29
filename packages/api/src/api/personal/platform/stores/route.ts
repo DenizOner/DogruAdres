@@ -16,11 +16,12 @@ const approval=z.object({
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Cache-Control","no-store")
   if(!enabled())return res.status(503).json({message:"Unavailable"})
-  if(Object.keys(req.query||{}).length||req.headers["x-seller-id"]!==undefined)
+  const parsed=z.object({page:z.coerce.number().int().min(0).max(1000).optional()}).strict().safeParse(req.query)
+  if(!parsed.success||req.headers["x-seller-id"]!==undefined)
     return res.status(400).json({message:"Invalid input"})
-  const service=access(req),token=sessionToken(req)
+  const page=parsed.data.page??0,service=access(req),token=sessionToken(req)
   try{
-    const candidates=await service.personalReviewableStoreApplications(token)
+    const candidates=await service.personalReviewableStoreApplications(token,undefined,{},page)
     if(!candidates)return res.status(403).json({message:"Access denied"})
     const native=req.scope.resolve<{listSellers(filter:object):Promise<any[]>}>("seller")
     const pending:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string}>=[]
@@ -30,12 +31,15 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       if(sellers[0].status==="pending_approval"&&!sellers[0].approved_at)
         pending.push({...item,name:String(sellers[0].name??"")})
     }
-    const final=await service.personalReviewableStoreApplications(token)
+    const final=await service.personalReviewableStoreApplications(token,undefined,{},page)
     if(!final||final.length!==candidates.length||
        final.some((row,i)=>row.application_id!==candidates[i].application_id||
          row.seller_id!==candidates[i].seller_id))
       return res.status(403).json({message:"Access denied"})
-    return res.status(200).json({pending})
+    const next=page<1000?
+      await service.personalReviewableStoreApplications(token,undefined,{},page+1):[]
+    if(!next)return res.status(403).json({message:"Access denied"})
+    return res.status(200).json({pending,page,has_more:next.length>0})
   }catch{return res.status(503).json({message:"Unavailable"})}
 }
 

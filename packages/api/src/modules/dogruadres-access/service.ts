@@ -1224,7 +1224,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalReviewableStoreApplications(token:string,
     target?:{application_id:string;seller_id:string},
-    @MedusaContext() context:Context={}) {
+    @MedusaContext() context:Context={},
+    page=0) {
+    if(!Number.isSafeInteger(page)||page<0||page>1000)throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager)
     const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
     if(!staff)return null
@@ -1248,11 +1250,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
           and x.deleted_at is null)
         ${target?"and a.id=? and a.seller_id=?":""}
-      -- Newest 30 valid Origin records only. Do not fail all reviews
-      -- merely because historical applications exceed this bound.
-      order by a.created_at desc limit 30`,
+      -- Stable id tie-break and bounded pages expose older pending records.
+      -- Exact-target POST stays independent of list page.
+      order by a.created_at desc,a.id desc limit ${target?1:31} offset ${target?0:page*30}`,
       target?[target.application_id,target.seller_id]:[])
-    if(!Array.isArray(rows)||rows.length>30 ||
+    if(!Array.isArray(rows)||rows.length>(target?1:31) ||
        rows.some(r=>typeof r.application_id!=="string" ||
          !/^daapp_[0-9a-f]{32}$/.test(r.application_id) ||
          typeof r.seller_id!=="string" ||
@@ -1262,7 +1264,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
          typeof r.organization_name!=="string") ||
        new Set(rows.map(r=>r.seller_id)).size!==rows.length)
       throw new IdentityAccessDenied()
-    return rows as Array<{application_id:string;seller_id:string;
+    return (target?rows:rows.slice(0,30)) as Array<{application_id:string;seller_id:string;
       organization_id:string;organization_name:string}>
   }
 
