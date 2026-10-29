@@ -1148,10 +1148,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   // ---------------------------------------------------------------------------
   // B20: per-Person persistent launcher preference
   // ---------------------------------------------------------------------------
-  // KNOWN_APP_IDS: closed server allowlist of the two launcher targets approved
-  // under B20 PO decision (issue #203 comment 6470700012).
-  // Storefront is always present. Vendor Panel shown only for verified Sellers.
-  // Unknown IDs are silently dropped; no entitlement is ever produced.
+  // Retain historic B20 app IDs non-destructively. B22 deprecates
+  // the vendor app as a separate end-user commercial panel. Only public
+  // catalog discovery is shown by launcher GET at present.
+  // A stored preference is not a commercial permission or Store entitlement.
   static readonly KNOWN_APP_IDS: ReadonlySet<string> = new Set(['storefront', 'vendor'])
 
   @InjectTransactionManager()
