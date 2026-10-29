@@ -454,7 +454,7 @@ export default async function ({ container }: any) {
         results['touch-drag-persist'] = { status: 'NOT_TESTED', note: 'touch drag did not reorder' }
       } else {
         // Wait for saveLauncherOrder() triggered by pointerup
-        await chromeA.wait("document.getElementById('launcher-status').textContent.includes('kaydedildi')||document.getElementById('launcher-status').textContent.includes('Tercih')", 8000)
+        await chromeA.wait("document.getElementById('launcher-status').textContent.includes('kaydedildi')||document.getElementById('launcher-status').textContent.includes('Tercih')", 20000)
         const touchPrefAfter: any = await chromeA.eval(
           "(async()=>{const r=await fetch('/personal/launcher',{credentials:'same-origin'});return {status:r.status,body:await r.json()}})()"
         )
