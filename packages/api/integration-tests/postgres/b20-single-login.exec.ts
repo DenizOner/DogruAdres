@@ -158,11 +158,17 @@ export default async function({container}:any){
     for(const [path,method] of [['/vendor/members/me','GET'],['/auth/token/refresh','POST']])assert.equal((await fetch(backend+path,{method,headers:{authorization:'Bearer '+lockCredential,'x-seller-id':b.seller}})).status,401)
     results['locked-session-denied']={status:'PASS',http:lockedDenied.status,activeBindingRetained:true,nativeReplay:401}
     assert.equal((await call(context(b.seller),{cookie:sb.cookie})).status,200)
-    await q("update da_browser_session set last_activity_at=clock_timestamp()-interval '1801 seconds' where id=$1",[sessionHash])
+    // Stop this page's normal activity polling. Model a valid old session,
+    // not activity before creation (which the policy correctly rejects as invalid).
+    await sb.chrome.send('Page.navigate',{url:'about:blank'})
+    const expiryCredential=decrypt((await q('select ciphertext from da_actor_credential where session_id=$1 and retired_at is null',[sessionHash]))[0].ciphertext)
+    await q("update da_browser_session set created_at=clock_timestamp()-interval '2000 seconds',last_activity_at=clock_timestamp()-interval '1801 seconds' where id=$1",[sessionHash])
     const expiredDenied=await call(context(b.seller),{cookie:sb.cookie})
     assert.ok([401,403].includes(expiredDenied.status),'An expired session cannot return protected data')
     assert.equal((await q('select status from da_browser_session where id=$1',[sessionHash]))[0].status,'expired')
-    results['expired-session-denied']={status:'PASS',http:expiredDenied.status}
+    assert.equal((await fetch(backend+'/vendor/members/me',{headers:{authorization:'Bearer '+expiryCredential,'x-seller-id':b.seller}})).status,401)
+    await sb.chrome.send('Page.navigate',{url:origin+'/personal'});await sb.chrome.wait("!document.getElementById('login').hidden")
+    results['expired-session-denied']={status:'PASS',http:expiredDenied.status,sql:'expired',nativeReplay:401,browser:'login required'}
     record('single-login-result',{head:process.env.B20_HEAD,status:'PASS',scope:'personal MFA + dual ownership + existing server-only native Member adapter; NOT full Vendor frontend',origin,backend,results,privateHttp,browserHttp:browsers.map(b=>b.http),fullB20:'BLOCKED - native Vendor frontend integration not established'})
   }catch(e){record('single-login-failure',{message:e instanceof Error?e.message:String(e),results,privateHttp,browserHttp:browsers.map(b=>b.http)});throw e}
   finally{
