@@ -313,6 +313,8 @@ export default async function({container}:any){
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
     await reviewer.wait("!document.getElementById('store-approval-next').hidden")
     assert.equal(await reviewer.eval("document.querySelectorAll('#store-approval-list button').length"),0)
+    const firstCursor=await reviewer.eval("nextStoreApprovalPage")
+    assert.match(firstCursor,/^daapp_[0-9a-f]{32}$/)
     await reviewer.click("#store-approval-next")
     try{
       await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
@@ -333,8 +335,18 @@ export default async function({container}:any){
       })`)
       const pageHttp=reviewer.http.filter((x:any)=>x.path==="/personal/platform/stores"&&x.method==="GET")
         .map((x:any)=>x.status)
+      const currentCursor=await reviewer.eval("nextStoreApprovalPage")
+      // Probe the same cursor directly without recording the cursor or
+      // any user/Store identity in the CI log.
+      const directPage=await reviewer.eval(`(async()=>{
+        const response=await fetch('/personal/platform/stores?before='+encodeURIComponent(${JSON.stringify(firstCursor)}))
+        const data=await response.json()
+        return {status:response.status,count:Array.isArray(data.pending)?data.pending.length:null,
+          hasMore:!!data.next_before}
+      })()`)
       throw Error("B22 platform page progression: "+JSON.stringify(diagnostics)+
-        ",getStatuses="+pageHttp.join(","))
+        ",cursorUnchanged="+(firstCursor===currentCursor)+
+        ",directPage="+JSON.stringify(directPage)+",getStatuses="+pageHttp.join(","))
     }
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
     // The real browser button invokes the project-owned staff-only adapter,
