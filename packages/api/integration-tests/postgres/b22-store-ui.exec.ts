@@ -172,7 +172,54 @@ export default async function({container}:any){
     await browser.wait("document.getElementById('status').textContent==='Hesap bağlantısı tamamlandı'")
     const verified=await q("select proof_reference from da_verified_actor_binding where person_id=$1 and actor_type='member' and revoked_at is null",[A.person])
     assert.equal(verified.length,1);assert.match(verified[0].proof_reference,/^dual-proof:/)
-    // No platform-approved Store yet; even the genuine verified actor grants none.
+    // The real Owner UI submits via native Mercur createSellerAccountWorkflow.
+    // No extra Store-to-Organization approval or native dashboard login.
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("!document.getElementById('store-application-form').hidden")
+    const applicationName="B22 Owner application "+rand
+    const applicationEmail="b22-owner-app-"+rand+"@example.invalid"
+    await browser.input("#store-application-form input[name=name]",applicationName)
+    await browser.input("#store-application-form input[name=email]",applicationEmail)
+    await browser.click("#store-application-form button")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('Başvuru kaydedildi')")
+    const createdList=await get("/personal/store-applications?organization_id="+encodeURIComponent(organizations[0].id))
+    assert.equal(createdList.status,200)
+    const ownApplications=createdList.body.applications
+    assert.equal(ownApplications.length,1)
+    assert.equal(ownApplications[0].status,"created")
+    const applicationId=ownApplications[0].id,ownerStoreId=ownApplications[0].seller_id
+    assert.match(applicationId,/^daapp_[0-9a-f]{32}$/)
+    assert.match(ownerStoreId,/^sel_[A-Za-z0-9_-]+$/)
+    const newNative=await native.listSellers({id:ownerStoreId})
+    assert.equal(newNative.length,1)
+    assert.equal(newNative[0].status,"pending_approval")
+    assert.equal(newNative[0].approved_at,null)
+    const linked=await q(`select o.organization_id,e.action,e.actor_person_id,
+      x.id outbox_id from da_organization_seller_ownership o
+      join da_audit_event e on e.id=o.verification_audit_event_id
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where o.seller_id=$1`,[ownerStoreId])
+    assert.equal(linked.length,1)
+    assert.equal(linked[0].organization_id,organizations[0].id)
+    assert.equal(linked[0].actor_person_id,A.person)
+    assert.equal(linked[0].action,"organization.store_application_created")
+    const submit=async(payload:Record<string,string>)=>browser.eval(`(async()=>{
+      const csrf=await (await fetch('/personal/session')).json()
+      const response=await fetch('/personal/store-applications',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':csrf.csrf_token},
+        body:JSON.stringify(${JSON.stringify(payload)})})
+      return {status:response.status,body:await response.json()}
+    })()`)
+    const data={organization_id:organizations[0].id,application_id:applicationId,
+      name:applicationName,email:applicationEmail,currency_code:"try"}
+    const replay=await submit(data)
+    assert.equal(replay.status,200);assert.equal(replay.body.seller_id,ownerStoreId)
+    assert.equal((await submit({...data,name:applicationName+" changed"})).status,403)
+    assert.equal((await submit({...data,organization_id:organizations[2].id,
+      application_id:"daapp_"+randomBytes(16).toString("hex")})).status,403)
+    assert.equal((await q("select count(*)::int n from da_store_application where person_id=$1",[A.person]))[0].n,1)
+    // The Origin link is created at Owner submission, but Seller approval is
+    // STILL mandatory. A pending Seller must never enter the active Store list.
     assert.deepEqual((await get(selected(organizations[0].id))).body.stores,[])
     // ONLY SYNTHETIC isolated fixture records: approved action + matching
     // Organization/Store + canonical source outbox. No production reviewer,
@@ -292,6 +339,7 @@ export default async function({container}:any){
     const hidden=await browser.eval("({store:document.getElementById('org-stores').textContent,selection:document.getElementById('detail').textContent,local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
     assert.equal(hidden.store,"");assert.equal(hidden.selection,"")
     assert.deepEqual(hidden.local,[]);assert.deepEqual(hidden.session,[])
+    process.stdout.write("PASS B22 Chrome: Owner Store application creates pending native Seller and direct Organization link, replay deduped and foreign Organization denied\n")
     process.stdout.write("PASS B22 Chrome: native suspension hides only affected Store; unrelated Organization unaffected; approved Store reopens through native workflow\n")
     process.stdout.write("PASS B22 Chrome: native OPEN Seller with no approved_at remains hidden despite platform association and Member link\n")
     process.stdout.write("PASS B22 Chrome: locked personal session clears Store UI, old opaque cookie rejected and PG16 session revoked\n")
