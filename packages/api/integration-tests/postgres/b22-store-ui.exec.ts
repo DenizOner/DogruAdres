@@ -320,13 +320,13 @@ export default async function({container}:any){
     // actual visible-page and hit-target attestations; no mocked HTTP.
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
-    const hit=await reviewer.eval(`(()=>{
+    const firstNextHit=await reviewer.eval(`(()=>{
       const b=document.getElementById('store-approval-next');b.scrollIntoView();
       const r=b.getBoundingClientRect();
       return {pointerTarget:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===b,
         visible:!document.hidden,handler:typeof b.onclick==='function'}
     })()`)
-    assert.ok(hit.visible&&hit.handler,"Visible reviewer must have a bound native button")
+    assert.ok(firstNextHit.visible&&firstNextHit.handler,"Visible reviewer must have a bound native button")
     // This proves the browser DOM handler, NOT a physical pointer acceptance.
     await reviewer.eval("document.getElementById('store-approval-next').click()")
     try{
@@ -387,13 +387,13 @@ export default async function({container}:any){
     // actual visible-page and hit-target attestations; no mocked HTTP.
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
-    const hit=await reviewer.eval(`(()=>{
+    const secondNextHit=await reviewer.eval(`(()=>{
       const b=document.getElementById('store-approval-next');b.scrollIntoView();
       const r=b.getBoundingClientRect();
       return {pointerTarget:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===b,
         visible:!document.hidden,handler:typeof b.onclick==='function'}
     })()`)
-    assert.ok(hit.visible&&hit.handler,"Visible reviewer must have a bound native button")
+    assert.ok(secondNextHit.visible&&secondNextHit.handler,"Visible reviewer must have a bound native button")
     // This proves the browser DOM handler, NOT a physical pointer acceptance.
     await reviewer.eval("document.getElementById('store-approval-next').click()")
     await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Onay bekleyen mağaza yok.')")
