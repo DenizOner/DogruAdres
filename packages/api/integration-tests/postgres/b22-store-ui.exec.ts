@@ -119,6 +119,16 @@ export default async function({container}:any){
       await native.createSellerMembers([{seller_id:store.id,member_id:member.id,is_owner:true}])
       stores.push(store)
     }
+    // Deliberately inconsistent TEST-ONLY Seller: status OPEN was written
+    // without Mercur approveSellerWorkflow, so approved_at remains absent.
+    // Even a platform association + verified Member must never expose it.
+    const [unapprovedStore]=await native.createSellers([{name:"B22 approval-negative "+rand,
+      email:"b22-unapproved-"+rand+"@example.invalid",currency_code:"eur",status:"open"}])
+    const unapprovedNative=await native.listSellers({id:unapprovedStore.id})
+    assert.equal(unapprovedNative.length,1)
+    assert.equal(unapprovedNative[0].status,"open")
+    assert.equal(unapprovedNative[0].approved_at,null)
+    await native.createSellerMembers([{seller_id:unapprovedStore.id,member_id:member.id,is_owner:true}])
 
     const crt=join(temp,"ca.pem"),key=join(temp,"key.pem")
     const certificate=spawnSync("openssl",["req","-x509","-newkey","rsa:2048","-nodes",
@@ -181,11 +191,28 @@ export default async function({container}:any){
         values($1,$2,$3,$4,now())`,
         ["daown_b22_ui_"+n+"_"+rand,org.id,stores[n].id,event])
     }
+    // A platform association does not replace the separate native approval.
+    const unapprovedAudit="daaud_b22_unapproved_"+rand
+    await q(`insert into da_audit_event
+      (id,actor_person_id,actor_type,actor_id,organization_id,action,module,resource,target_id,occurred_at)
+      values($1,$2,'user',$3,$4,'organization.store_association_approved',
+        'dogruadres-access','store-association',$5,now())`,
+      [unapprovedAudit,A.person,A.actor,organizations[0].id,unapprovedStore.id])
+    await q(`insert into da_audit_outbox(id,source_audit_event_id,source_module,envelope)
+      values($1,$2,'dogruadres-access','{}'::jsonb)`,
+      ["daaob_b22_unapproved_"+rand,unapprovedAudit])
+    await q(`insert into da_organization_seller_ownership
+      (id,organization_id,seller_id,verification_audit_event_id,verified_at)
+      values($1,$2,$3,$4,now())`,
+      ["daown_b22_unapproved_"+rand,organizations[0].id,unapprovedStore.id,unapprovedAudit])
     await browser.select(organizations[0].name,"owner")
     await browser.wait("document.querySelectorAll('#org-stores p').length===2")
     const alpha=await get(selected(organizations[0].id))
     assert.equal(alpha.status,200)
     assert.deepEqual(alpha.body.stores.map((s:any)=>s.id).sort(),stores.slice(0,2).map(s=>s.id).sort())
+    assert.equal(alpha.body.stores.some((store:any)=>store.id===unapprovedStore.id),false,
+      "Unapproved Seller must stay hidden even with platform association and Member link")
+    assert.equal(await browser.eval(`document.getElementById('org-stores').textContent.includes(${JSON.stringify(unapprovedStore.name)})`),false)
     await browser.select(organizations[1].name,"admin")
     await browser.wait("document.querySelectorAll('#org-stores p').length===1")
     const beta=await get(selected(organizations[1].id))
@@ -240,6 +267,7 @@ export default async function({container}:any){
     const hidden=await browser.eval("({store:document.getElementById('org-stores').textContent,selection:document.getElementById('detail').textContent,local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
     assert.equal(hidden.store,"");assert.equal(hidden.selection,"")
     assert.deepEqual(hidden.local,[]);assert.deepEqual(hidden.session,[])
+    process.stdout.write("PASS B22 Chrome: native OPEN Seller with no approved_at remains hidden despite platform association and Member link\n")
     process.stdout.write("PASS B22 Chrome: locked personal session clears Store UI, old opaque cookie rejected and PG16 session revoked\n")
     process.stdout.write("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes; approved synthetic Store fixtures read and revoked access denied\n")
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
