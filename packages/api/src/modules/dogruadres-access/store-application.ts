@@ -31,8 +31,8 @@ export async function readStoreApplications(db:SecuritySql,token:string,org:stri
   if(!current||current.organizations.length!==1||
     !["owner","admin"].includes(current.organizations[0].role))return null
   const rows=await db.execute(`select id,status,seller_id,created_at
-    from da_store_application where organization_id=? and person_id=?
-    order by created_at desc limit 30`,[org,current.person_id])
+    from da_store_application where organization_id=?
+    order by created_at desc limit 30`,[org])
   if(!Array.isArray(rows)||rows.length>30)throw new IdentityAccessDenied()
   return rows.map(r=>({id:r.id,status:r.status,seller_id:r.seller_id,created_at:r.created_at}))
 }

@@ -164,9 +164,23 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="smtp-test-result" role="status" aria-live="polite"></p>
   </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
+
+  <section id="store-application-panel" hidden style="grid-column:1/-1">
+    <h3>Kuruluşun mağaza başvuruları</h3>
+    <p>Kuruluş Owner'ı yeni mağaza başvurusu oluşturur. Mağaza doğrudan bu kuruluşa bağlanır; faaliyete geçmesi için platform yöneticisinin ayrıca mağazayı onaylaması gerekir.</p>
+    <p id="store-application-status" role="status" aria-live="polite"></p>
+    <div id="store-application-list"></div>
+    <form id="store-application-form" hidden>
+      <label>Mağaza adı<input name="name" required minlength="2" maxlength="120"></label>
+      <label>Mağaza iletişim e-postası<input name="email" type="email" required maxlength="254"></label>
+      <label>Para birimi (3 harf)<input name="currency_code" pattern="[a-z]{3}" maxlength="3" value="try" required></label>
+      <button type="submit">Mağaza başvurusu oluştur</button>
+    </form>
+    <button id="store-applications-refresh" type="button">Başvuruları yenile</button>
+  </section>
   <section id="org-stores-panel" hidden aria-labelledby="org-stores-title" style="grid-column:1/-1">
     <h3 id="org-stores-title">Seçili kuruluşun mağazaları</h3>
-    <p>Yalnızca kuruluşla platformda onaylı bağı bulunan ve erişim yetkiniz bulunan mağazalar listelenir. Bu görünüm satın alma veya satış işlemi yetkisi vermez.</p>
+    <p>Yalnızca bu kuruluşta oluşturulmuş, Mercur tarafından ayrıca onaylanmış ve erişim yetkiniz bulunan faal mağazalar listelenir. Bu görünüm satın alma veya satış işlemi yetkisi vermez.</p>
     <p id="org-stores-status" role="status" aria-live="polite"></p>
     <div id="org-stores"></div>
     <button id="org-stores-refresh" type="button" hidden>Mağazaları yenile</button>
@@ -421,7 +435,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     try{const result=await api('organizations?id='+encodeURIComponent(id));if(request!==organizationRequest)return;
       currentOrg=id;el('detail').textContent=JSON.stringify(result.organizations[0],null,2);history.replaceState(null,'','/personal?organization='+encodeURIComponent(id));
       el('notification-bell').hidden=false;void notifications();
-      if(['owner','admin'].includes(result.organizations[0]?.role)){
+      const managerRole=result.organizations[0]?.role;
+      if(['owner','admin'].includes(managerRole)){
         el('memberships-refresh').hidden=false;
         el('invite-member').hidden=false;
         el('pending-invitations-panel').hidden=false;
@@ -439,7 +454,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         el('audit-timeline-status').textContent = '';
       }
       await memberships(id,request);
-      if(request===organizationRequest&&currentOrg===id)void organizationStores(id,request);
+      if(request===organizationRequest&&currentOrg===id){
+        if(['owner','admin'].includes(managerRole))void storeApplications(id,request,managerRole);
+        void organizationStores(id,request);
+      }
       if(request===organizationRequest&&currentOrg===id&&!el('pending-invitations-panel').hidden)
         void pendingInvitations(id,request);
       if(request===organizationRequest)status('Kuruluş erişimi doğrulandı');
@@ -451,7 +469,74 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('org-stores').replaceChildren();
     el('org-stores-status').textContent='';
     el('org-stores-refresh').hidden=true;
+    applicationRequest++;
+    el('store-application-panel').hidden=true;
+    el('store-application-list').replaceChildren();
+    el('store-application-status').textContent='';
+    el('store-application-form').hidden=true;
+    el('store-application-form').reset();
+    el('store-application-form').querySelector('button').disabled=false;
+    applicationKey='';
   }
+  async function storeApplications(org,request,role){
+    if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+    const sequence=++applicationRequest;
+    const panel=el('store-application-panel'),list=el('store-application-list'),message=el('store-application-status');
+    panel.hidden=false;
+    el('store-application-form').hidden=role!=='owner';
+    list.replaceChildren();message.textContent='Başvurular kontrol ediliyor…';
+    try{
+      const result=await api('store-applications?organization_id='+encodeURIComponent(org));
+      if(request!==organizationRequest||sequence!==applicationRequest||currentOrg!==org||document.hidden)return;
+      if(!Array.isArray(result.applications)||result.applications.length>30||
+        result.applications.some(a=>!/^daapp_[a-f0-9]{32}$/.test(a?.id)||!['reserved','creating','created'].includes(a?.status)||
+          !(a.seller_id===null||a.seller_id===undefined||typeof a.seller_id==='string')))
+        throw new Error('Başvuru yanıtı doğrulanamadı');
+      for(const a of result.applications){
+        const line=document.createElement('p');
+        line.textContent=(a.status==='created'?'Mağaza başvurusu kaydedildi':'Başvuru işlem sonucu kontrol edilmeli')+
+          ' — '+a.id+(a.seller_id?' — '+a.seller_id:'');
+        list.append(line);
+      }
+      message.textContent=result.applications.length?'Başvurular güncellendi; mağaza onayı ayrı yürütülür.':'Henüz mağaza başvurusu bulunmuyor.';
+    }catch(e){
+      if(request!==organizationRequest||sequence!==applicationRequest||currentOrg!==org)return;
+      list.replaceChildren();
+      if(e.httpStatus===401){concealPrivateView();el('login').hidden=false;return}
+      message.textContent='Başvurular güvenli biçimde okunamadı.';
+    }
+  }
+  let applicationRequest=0,applicationKey='';
+  el('store-applications-refresh').onclick=()=>{
+    if(currentOrg)void storeApplications(currentOrg,organizationRequest,'owner');
+  };
+  el('store-application-form').onsubmit=async event=>{
+    event.preventDefault();
+    const org=currentOrg,request=organizationRequest,form=event.currentTarget;
+    if(!org||document.hidden)return;
+    const button=form.querySelector('button');button.disabled=true;
+    if(!applicationKey)applicationKey='daapp_'+crypto.randomUUID().replace(/-/g,'');
+    const v=new FormData(form);
+    try{
+      const data=await api('store-applications',{method:'POST',body:JSON.stringify({
+        organization_id:org,application_id:applicationKey,
+        name:String(v.get('name')||'').trim(),email:String(v.get('email')||''),
+        currency_code:String(v.get('currency_code')||'').toLowerCase()
+      })});
+      if(request!==organizationRequest||currentOrg!==org)return;
+      if(data.application_id!==applicationKey||data.status!=='pending_approval')
+        throw new Error('Başvuru sonucu doğrulanamadı');
+      applicationKey='';form.reset();button.disabled=false;
+      el('store-application-status').textContent='Başvuru kaydedildi. Mağazanın açılması platform yöneticisinin onayını bekliyor.';
+      void storeApplications(org,request,'owner');
+    }catch(e){
+      if(request!==organizationRequest||currentOrg!==org)return;
+      el('store-application-status').textContent=e.uncertain?
+        'Sonuç belirsiz; yeni başvuru göndermeyin. Başvuru listesinden durumu kontrol edin.':
+        'Başvuru reddedildi: '+e.message;
+      if(!e.uncertain){applicationKey='';button.disabled=false}
+    }
+  };
   async function organizationStores(org,request){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
     const seq=++storeRequest;
