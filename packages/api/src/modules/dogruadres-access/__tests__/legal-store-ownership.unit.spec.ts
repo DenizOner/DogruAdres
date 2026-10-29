@@ -24,10 +24,13 @@ describe("B22 legal Organization ownership candidate gate (SQL-mock, NOT Postgre
   it("an Organization with no verified ownership has zero Stores rather than inferred native rights",async()=>{
     await expect(setup(allowed,[]).run()).resolves.toMatchObject({seller_ids:[]})
   })
-  it.each([[{seller_id:"sel_a"},{seller_id:"sel_a"}],[{seller_id:"other"}],Array.from({length:51},(_,i)=>({seller_id:"sel_"+i}))])(
-    "denies ambiguous, malformed or unbounded ownership data",async rows=>{
-      await expect(setup(allowed,rows).run()).rejects.toBeInstanceOf(IdentityAccessDenied)
-    })
+  it.each([
+    { label: "duplicate", rows: [{seller_id:"sel_a"},{seller_id:"sel_a"}] },
+    { label: "malformed", rows: [{seller_id:"other"}] },
+    { label: "unbounded", rows: Array.from({length:51},(_,i)=>({seller_id:"sel_"+i})) }
+  ])("denies $label ownership data",async ({rows})=>{
+    await expect(setup(allowed,rows).run()).rejects.toBeInstanceOf(IdentityAccessDenied)
+  })
   it("rejects malformed Organization IDs before touching any DB",async()=>{
     const execute=jest.fn()
     await expect(authorizedLegalSellerIds({execute},token,"invalid")).rejects.toBeInstanceOf(IdentityAccessDenied)

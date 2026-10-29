@@ -238,6 +238,15 @@ jobs:
           PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
           PG_MFA_TEST_SCOPE: verification
         run: bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts
+      - name: B22 legal-owner uniqueness on isolated PostgreSQL 16 (schema only)
+        if: github.event_name != 'workflow_dispatch'
+        working-directory: packages/api
+        timeout-minutes: 3
+        env:
+          CI: 'true'
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+        run: bun integration-tests/postgres/b22-ownership.pg16.test.ts
       - name: B02-only native HTTP and SQL negatives
         if: github.event_name == 'workflow_dispatch' && inputs.scope == 'b02'
         working-directory: packages/api
