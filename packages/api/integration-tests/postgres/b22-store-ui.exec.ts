@@ -315,7 +315,12 @@ export default async function({container}:any){
     assert.equal(await reviewer.eval("document.querySelectorAll('#store-approval-list button').length"),0)
     const firstCursor=await reviewer.eval("nextStoreApprovalPage")
     assert.match(firstCursor,/^daapp_[0-9a-f]{32}$/)
-    await reviewer.click("#store-approval-next")
+    // A keyboard-activated native button must navigate as well as pointer
+    // input; this avoids an ambiguous CDP mouse target in the long form.
+    await reviewer.eval("document.getElementById('store-approval-next').focus()")
+    assert.equal(await reviewer.eval("document.activeElement.id"),"store-approval-next")
+    await reviewer.send("Input.dispatchKeyEvent",{type:"keyDown",key:"Enter",code:"Enter"})
+    await reviewer.send("Input.dispatchKeyEvent",{type:"keyUp",key:"Enter",code:"Enter"})
     try{
       await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
     }catch{
@@ -367,7 +372,12 @@ export default async function({container}:any){
     await reviewer.wait("!document.getElementById('workspace').hidden")
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
     await reviewer.wait("!document.getElementById('store-approval-next').hidden")
-    await reviewer.click("#store-approval-next")
+    // A keyboard-activated native button must navigate as well as pointer
+    // input; this avoids an ambiguous CDP mouse target in the long form.
+    await reviewer.eval("document.getElementById('store-approval-next').focus()")
+    assert.equal(await reviewer.eval("document.activeElement.id"),"store-approval-next")
+    await reviewer.send("Input.dispatchKeyEvent",{type:"keyDown",key:"Enter",code:"Enter"})
+    await reviewer.send("Input.dispatchKeyEvent",{type:"keyUp",key:"Enter",code:"Enter"})
     await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Onay bekleyen mağaza yok.')")
     assert.equal(await reviewer.eval("document.querySelectorAll('#store-approval-list button').length"),0,
       "Approved Store must disappear from the reviewer pending list on reload")
