@@ -335,7 +335,8 @@ export default async function({container}:any){
       })`).catch(()=>({unavailable:true}))
       // No credentials, TOTP values, tokens, names or Person identifiers.
       const transport=reviewer.http.filter((x:any)=>
-        /^\\/(?:auth|personal\\/(?:session|challenge))/.test(x.path))
+        x.path.startsWith('/auth/') ||
+        x.path==='/personal/session' || x.path==='/personal/challenge')
         .slice(-8).map((x:any)=>({method:x.method,
           category:x.path.startsWith('/auth/')?'auth':'personal',status:x.status}))
       throw Error("B22 reviewer native MFA did not reach workspace: ui="+
