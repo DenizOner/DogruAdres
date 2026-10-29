@@ -74,6 +74,7 @@ export default async function({container}:any){
     await auth.updateAuthIdentities({id:reg.authIdentity.id,app_metadata:{member_id:member.id}})
     const secondaryMfa=await auth.startAuthMfa({auth_identity_id:reg.authIdentity.id,
       provider:"totp",issuer:"B22 isolated verified Member"})
+    const secondaryEnrolledCounter=Math.floor(Date.now()/30000)
     await auth.verifyAuthMfa({id:secondaryMfa.mfa.id,auth_identity_id:reg.authIdentity.id,
       code:otp(secondaryMfa.secret)})
     const stores=[]
@@ -117,7 +118,10 @@ export default async function({container}:any){
     await browser.input("#link-account input[name=password]",memberPassword)
     await browser.click("#link-account button")
     await browser.wait("!document.getElementById('link-confirm').hidden")
-    await until(async()=>Math.floor(Date.now()/30000)>Math.floor(new Date(secondaryMfa.mfa.created_at??0).getTime()/30000)||true,500,"secondary challenge ready")
+    // Primary Chrome MFA login has advanced the TOTP counter. Never reuse
+    // the just-consumed secondary enrollment code within the same window.
+    assert.ok(Math.floor(Date.now()/30000)>secondaryEnrolledCounter,
+      "Secondary TOTP challenge must not reuse its enrollment window")
     await browser.input("#link-confirm input[name=code]",otp(secondaryMfa.secret))
     await browser.click("#link-confirm button")
     await browser.wait("document.getElementById('status').textContent==='Hesap bağlantısı tamamlandı'")
