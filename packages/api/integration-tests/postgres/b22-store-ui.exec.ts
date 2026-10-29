@@ -258,6 +258,66 @@ export default async function({container}:any){
     // The Origin link is created at Owner submission, but Seller approval is
     // STILL mandatory. A pending Seller must never enter the active Store list.
     assert.deepEqual((await get(selected(organizations[0].id))).body.stores,[])
+    // The Owner cannot impersonate a platform reviewer, even though the
+    // workflow created SellerMember.is_owner for this Store.
+    const ownerApprovalDenied=await browser.eval(`(async()=>{
+      const session=await (await fetch('/personal/session')).json()
+      const response=await fetch('/personal/platform/stores',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify(${JSON.stringify({application_id:applicationId,seller_id:ownerStoreId})})})
+      return response.status
+    })()`)
+    assert.equal(ownerApprovalDenied,403)
+    assert.equal((await get("/personal/platform/stores")).status,403)
+    assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
+    // TEST-ONLY disposable scope: an explicit store.approve grant belongs to
+    // another Person. It is never inferred from B's native User/Org roles.
+    const grantId="da_staff_b22_"+rand
+    await q(`insert into da_platform_staff_grant
+      (id,person_id,task,resource,granted_by_person_id,reason)
+      values($1,$2,'store.approve','platform',$2,'B22 disposable CI platform reviewer fixture')`,[grantId,B.person])
+    const reviewer=new B06Chrome(host,"B");browsers.push(reviewer)
+    await reviewer.start(crt)
+    await reviewer.login(B.email,B.password,B.person)
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+    await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
+    assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
+    // The real browser button invokes the project-owned staff-only adapter,
+    // which reuses Mercur's native pending→open approval workflow.
+    await reviewer.click("#store-approval-list button")
+    await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Mağaza onaylandı')")
+    const afterReview=await native.listSellers({id:ownerStoreId})
+    assert.equal(afterReview.length,1)
+    assert.equal(afterReview[0].status,"open")
+    assert.ok(afterReview[0].approved_at)
+    const replayApprove=await reviewer.eval(`(async()=>{
+      const session=await (await fetch('/personal/session')).json()
+      const response=await fetch('/personal/platform/stores',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify(${JSON.stringify({application_id:applicationId,seller_id:ownerStoreId})})})
+      return response.status
+    })()`)
+    assert.equal(replayApprove,409,"Native approval must not execute twice")
+    // Revoking a staff task immediately denies further platform approval
+    // access; an Organization Owner cannot gain this permission implicitly.
+    await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[grantId])
+    assert.equal(await reviewer.eval(`(await fetch('/personal/platform/stores')).status`),403)
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.wait("!document.getElementById('workspace').hidden")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("document.querySelectorAll('#org-stores p').length===1")
+    assert.equal((await get(selected(organizations[0].id))).body.stores[0].id,ownerStoreId)
+    assert.equal(await browser.eval(`document.getElementById('org-stores').textContent.includes(${JSON.stringify(applicationName)})`),true)
+    assert.deepEqual((await get(selected(organizations[1].id))).body.stores,[])
+    // Keep the later existing fixture expectations intact: native suspension
+    // hides this reviewed Store without altering the Owner→Org link.
+    await suspendSellerWorkflow(container).run({input:{seller_id:ownerStoreId,reason:"B22 task-only native suspend"}})
+    assert.deepEqual((await get(selected(organizations[0].id))).body.stores,[])
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("document.getElementById('org-stores-status').textContent.includes('görüntülenebilir onaylı mağaza bulunmuyor')")
     // ONLY SYNTHETIC isolated fixture records: approved action + matching
     // Organization/Store + canonical source outbox. No production reviewer,
     // document decision, operator grant or actual Store ownership is inferred.
@@ -376,6 +436,7 @@ export default async function({container}:any){
     const hidden=await browser.eval("({store:document.getElementById('org-stores').textContent,selection:document.getElementById('detail').textContent,local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
     assert.equal(hidden.store,"");assert.equal(hidden.selection,"")
     assert.deepEqual(hidden.local,[]);assert.deepEqual(hidden.session,[])
+    process.stdout.write("PASS B22 Chrome: two Person browsers, platform staff-approved native Seller, Owner sees only approved Store; revoked staff denied\n")
     process.stdout.write("PASS B22 Chrome: Owner Store application creates pending native Seller and direct Organization link, replay deduped and foreign Organization denied\n")
     process.stdout.write("PASS B22 Chrome: native suspension hides only affected Store; unrelated Organization unaffected; approved Store reopens through native workflow\n")
     process.stdout.write("PASS B22 Chrome: native OPEN Seller with no approved_at remains hidden despite platform association and Member link\n")

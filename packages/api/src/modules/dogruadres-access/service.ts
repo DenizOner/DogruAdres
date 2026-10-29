@@ -1218,6 +1218,52 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {seller_id:sellerId}
   }
 
+  // B22: a separate and explicitly granted platform task reviews only
+  // persisted Owner-submitted applications. This is not native User access,
+  // not an Organization Owner entitlement and not a separate link approval.
+  @InjectTransactionManager()
+  async personalReviewableStoreApplications(token:string,
+    target?:{application_id:string;seller_id:string},
+    @MedusaContext() context:Context={}) {
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
+    if(!staff)return null
+    const rows=await db.execute(`select a.id application_id,a.seller_id,
+        a.organization_id,d.name organization_name
+      from da_store_application a
+      join da_organization d on d.id=a.organization_id
+        and d.status='active' and d.deleted_at is null
+      join da_organization_seller_ownership o on o.organization_id=a.organization_id
+        and o.seller_id=a.seller_id and o.revoked_at is null
+      join da_audit_event e on e.id=o.verification_audit_event_id
+        and e.module='dogruadres-access'
+        and e.action='organization.store_application_created'
+        and e.resource='store-application'
+        and e.actor_person_id=a.person_id
+        and e.organization_id=a.organization_id
+        and e.target_id=a.seller_id
+        and e.new_values->>'application_id'=a.id and e.deleted_at is null
+      where a.status='created' and a.seller_id is not null
+        and exists(select 1 from da_audit_outbox x where
+          x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+          and x.deleted_at is null)
+        ${target?"and a.id=? and a.seller_id=?":""}
+      order by a.created_at desc limit 31`,
+      target?[target.application_id,target.seller_id]:[])
+    if(!Array.isArray(rows)||rows.length>30 ||
+       rows.some(r=>typeof r.application_id!=="string" ||
+         !/^daapp_[0-9a-f]{32}$/.test(r.application_id) ||
+         typeof r.seller_id!=="string" ||
+         !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id) ||
+         typeof r.organization_id!=="string" ||
+         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(r.organization_id) ||
+         typeof r.organization_name!=="string") ||
+       new Set(rows.map(r=>r.seller_id)).size!==rows.length)
+      throw new IdentityAccessDenied()
+    return rows as Array<{application_id:string;seller_id:string;
+      organization_id:string;organization_name:string}>
+  }
+
   // B22: legal ownership candidates are NOT a grant, and never leave this
   // module without separately verified live native Seller/Member authority.
   @InjectTransactionManager()
