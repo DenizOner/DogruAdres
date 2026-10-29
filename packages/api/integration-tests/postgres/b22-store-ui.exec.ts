@@ -270,6 +270,35 @@ export default async function({container}:any){
     assert.equal(ownerApprovalDenied,403)
     assert.equal((await get("/personal/platform/stores")).status,403)
     assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
+    // B22 pagination regression: 31 later test-only Foundation records
+    // with no matching native Seller. A recent-only 30-row query would hide
+    // the legitimate older pending Owner application forever. These are NOT
+    // real Seller approvals, ownership grants or production data.
+    for(let n=0;n<31;n++){
+      const backlogApp="daapp_"+createHash("sha256").update("b22-backlog-"+rand+n).digest("hex").slice(0,32)
+      const backlogSeller="sel_b22_backlog_"+n+"_"+rand
+      const backlogAudit="daaud_b22_backlog_"+n+"_"+rand
+      await q(`insert into da_store_application
+        (id,organization_id,person_id,member_actor_id,member_auth_identity_id,
+         request_fingerprint,status,seller_id,created_at)
+        values($1,$2,$3,$4,$5,$6,'created',$7,clock_timestamp()+($8*interval '1 millisecond'))`,
+        [backlogApp,organizations[0].id,A.person,member.id,reg.authIdentity.id,
+          createHash("sha256").update(backlogApp).digest("hex"),backlogSeller,n+1])
+      await q(`insert into da_audit_event
+        (id,actor_person_id,actor_type,actor_id,organization_id,action,module,resource,
+         target_id,new_values,occurred_at)
+        values($1,$2,'user',$3,$4,'organization.store_application_created',
+          'dogruadres-access','store-application',$5,$6::jsonb,clock_timestamp())`,
+        [backlogAudit,A.person,A.actor,organizations[0].id,backlogSeller,
+          JSON.stringify({application_id:backlogApp,status:"pending_approval"})])
+      await q(`insert into da_audit_outbox(id,source_audit_event_id,source_module,envelope)
+        values($1,$2,'dogruadres-access','{}'::jsonb)`,
+        ["daaob_b22_backlog_"+n+"_"+rand,backlogAudit])
+      await q(`insert into da_organization_seller_ownership
+        (id,organization_id,seller_id,verification_audit_event_id,verified_at)
+        values($1,$2,$3,$4,clock_timestamp())`,
+        ["daown_b22_backlog_"+n+"_"+rand,organizations[0].id,backlogSeller,backlogAudit])
+    }
     // TEST-ONLY disposable scope: an explicit store.approve grant belongs to
     // another Person. It is never inferred from B's native User/Org roles.
     const grantId="da_staff_b22_"+rand
@@ -282,6 +311,9 @@ export default async function({container}:any){
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+    await reviewer.wait("!document.getElementById('store-approval-next').hidden")
+    assert.equal(await reviewer.eval("document.querySelectorAll('#store-approval-list button').length"),0)
+    await reviewer.click("#store-approval-next")
     await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
     // The real browser button invokes the project-owned staff-only adapter,
@@ -301,6 +333,8 @@ export default async function({container}:any){
     await reviewer.send("Page.reload",{ignoreCache:true})
     await reviewer.wait("!document.getElementById('workspace').hidden")
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+    await reviewer.wait("!document.getElementById('store-approval-next').hidden")
+    await reviewer.click("#store-approval-next")
     await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Onay bekleyen mağaza yok.')")
     assert.equal(await reviewer.eval("document.querySelectorAll('#store-approval-list button').length"),0,
       "Approved Store must disappear from the reviewer pending list on reload")
@@ -452,6 +486,7 @@ export default async function({container}:any){
     const hidden=await browser.eval("({store:document.getElementById('org-stores').textContent,selection:document.getElementById('detail').textContent,local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
     assert.equal(hidden.store,"");assert.equal(hidden.selection,"")
     assert.deepEqual(hidden.local,[]);assert.deepEqual(hidden.session,[])
+    process.stdout.write("PASS B22 Chrome: 31 newer isolated history rows cannot hide older pending Owner Store from paged reviewer; native approval and revoke guards PASS\n")
     process.stdout.write("PASS B22 Chrome: two Person browsers, platform staff-approved native Seller, Owner sees only approved Store; revoked staff denied\n")
     process.stdout.write("PASS B22 Chrome: Owner Store application creates pending native Seller and direct Organization link, replay deduped and foreign Organization denied\n")
     process.stdout.write("PASS B22 Chrome: native suspension hides only affected Store; unrelated Organization unaffected; approved Store reopens through native workflow\n")

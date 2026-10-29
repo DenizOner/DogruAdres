@@ -13,7 +13,9 @@ describe("B22 platform Store approval guard",()=>{
   let service:any,native:any,req:any,res:any,run:any
   beforeEach(()=>{
     jest.resetAllMocks()
-    service={personalReviewableStoreApplications:jest.fn().mockResolvedValue([candidate])}
+    service={personalReviewableStoreApplications:jest.fn().mockResolvedValue({
+      applications:[candidate],next_before:null
+    })}
     native={listSellers:jest.fn().mockResolvedValue([{
       id:candidate.seller_id,name:"Store",status:"pending_approval",approved_at:null
     }])}
@@ -61,9 +63,22 @@ describe("B22 platform Store approval guard",()=>{
     expect(res.status).toHaveBeenCalledWith(403)
     expect(native.listSellers).not.toHaveBeenCalled()
   })
+  it("rejects malformed page cursors before consulting staff or Seller",async()=>{
+    req.query={before:"daapp_invalid"}
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(service.personalReviewableStoreApplications).not.toHaveBeenCalled()
+  })
+  it("passes a bounded page cursor through the same staff policy",async()=>{
+    req.query={before:candidate.application_id}
+    await GET(req,res)
+    expect(service.personalReviewableStoreApplications).toHaveBeenCalledWith(
+      "opaque",{before:candidate.application_id})
+    expect(res.status).toHaveBeenCalledWith(200)
+  })
   it("lists only native pending Stores to authorized reviewer",async()=>{
     await GET(req,res)
     expect(res.status).toHaveBeenCalledWith(200)
-    expect(res.json).toHaveBeenCalledWith({pending:[{...candidate,name:"Store"}]})
+    expect(res.json).toHaveBeenCalledWith({pending:[{...candidate,name:"Store"}],next_before:null})
   })
 })
