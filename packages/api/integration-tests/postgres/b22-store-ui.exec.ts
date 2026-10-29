@@ -6,8 +6,8 @@
  * No protected writes, credentials or real documents are stored in evidence.
  */
 import assert from "node:assert/strict"
-import {randomBytes} from "node:crypto"
-import {createServer as tlsServer} from "node:https"
+import {randomBytes,createHash} from "node:crypto"
+import {createServer as tlsServer,request as tlsRequest} from "node:https"
 import {mkdtempSync,readFileSync,rmSync} from "node:fs"
 import {join} from "node:path"
 import {tmpdir} from "node:os"
@@ -206,6 +206,31 @@ export default async function({container}:any){
     // No actor-native JWT or personal details should reach the page.
     const privateView=await browser.eval("({jwt:/eyJ[A-Za-z0-9_-]+\\.eyJ/.test(document.body.innerText),local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
     assert.equal(privateView.jwt,false);assert.deepEqual(privateView.local,[]);assert.deepEqual(privateView.session,[])
+    // Last active Organization must still work before the session is locked;
+    // a false success due to the previously revoked Beta scope is unacceptable.
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("document.querySelectorAll('#org-stores p').length===2")
+    assert.equal((await get(selected(organizations[0].id))).status,200)
+    await browser.click("#session-lock")
+    await browser.wait("document.getElementById('login').hidden===false && document.getElementById('workspace').hidden===true && document.getElementById('org-stores-panel').hidden===true && document.getElementById('org-stores').children.length===0")
+    await browser.wait("document.getElementById('status').textContent.includes('Oturum kilitlendi')")
+    // The cookie is no longer set in Chrome. Probe the OLD exact opaque
+    // credential explicitly over task-owned HTTPS to rule out UI-only hiding.
+    const denied=await new Promise<number>((resolve,reject)=>{
+      const req=tlsRequest(host+selected(organizations[0].id),{
+        method:"GET",ca:readFileSync(crt),headers:{cookie:"da_session="+cookie}
+      },res=>{res.resume();res.on("end",()=>resolve(res.statusCode??0))})
+      req.on("error",reject);req.setTimeout(10000,()=>req.destroy(Error("B22 locked replay timeout")));req.end()
+    })
+    assert.ok([401,403].includes(denied),"Locked session's old cookie must never read Store data")
+    const sessionHash=createHash("sha256").update(cookie).digest("hex")
+    const locked=await q("select status from da_browser_session where id=$1",[sessionHash])
+    assert.equal(locked.length,1)
+    assert.equal(locked[0].status,"revoked","Real PG16 confirms session lock")
+    const hidden=await browser.eval("({store:document.getElementById('org-stores').textContent,selection:document.getElementById('detail').textContent,local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
+    assert.equal(hidden.store,"");assert.equal(hidden.selection,"")
+    assert.deepEqual(hidden.local,[]);assert.deepEqual(hidden.session,[])
+    process.stdout.write("PASS B22 Chrome: locked personal session clears Store UI, old opaque cookie rejected and PG16 session revoked\\n")
     process.stdout.write("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes; approved synthetic Store fixtures read and revoked access denied\n")
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
   }finally{
