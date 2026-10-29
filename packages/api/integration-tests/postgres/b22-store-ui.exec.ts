@@ -84,11 +84,13 @@ export default async function({container}:any){
       {name:"B22 Alpha "+rand,status:"active"},{name:"B22 Beta "+rand,status:"active"},
       {name:"B22 Foreign "+rand,status:"active"},
     ])
-    await foundation.createMemberships([
+    const memberships=await foundation.createMemberships([
       {organization_id:organizations[0].id,person_id:A.person,role:"owner",status:"active",protected_owner:true},
-      {organization_id:organizations[1].id,person_id:A.person,role:"owner",status:"active",protected_owner:true},
+      {organization_id:organizations[1].id,person_id:B.person,role:"owner",status:"active",protected_owner:true},
+      {organization_id:organizations[1].id,person_id:A.person,role:"admin",status:"active",protected_owner:false},
       {organization_id:organizations[2].id,person_id:B.person,role:"owner",status:"active",protected_owner:true},
     ])
+    const betaAdminMembership=memberships[2]
     const memberEmail="b22-secondary-"+rand+"@example.invalid"
     const [member]=await native.createMembers([{email:memberEmail,is_active:true}])
     const memberPassword=randomBytes(32).toString("base64url")
@@ -174,7 +176,7 @@ export default async function({container}:any){
     const alpha=await get(selected(organizations[0].id))
     assert.equal(alpha.status,200)
     assert.deepEqual(alpha.body.stores.map((s:any)=>s.id).sort(),stores.slice(0,2).map(s=>s.id).sort())
-    await browser.select(organizations[1].name,"owner")
+    await browser.select(organizations[1].name,"admin")
     await browser.wait("document.querySelectorAll('#org-stores p').length===1")
     const beta=await get(selected(organizations[1].id))
     assert.equal(beta.status,200);assert.deepEqual(beta.body.stores.map((s:any)=>s.id),[stores[2].id])
@@ -186,6 +188,21 @@ export default async function({container}:any){
     assert.deepEqual((await get(selected(organizations[1].id))).body.stores,[])
     await native.updateMembers([{id:member.id,is_active:false}])
     assert.equal((await get(selected(organizations[0].id))).status,403)
+    await native.updateMembers([{id:member.id,is_active:true}])
+    // An authorized protected Owner revokes only A's unprotected Admin
+    // membership in Beta via the supported Foundation service. Native
+    // SellerMember and Person's active session remain intact.
+    const revoked=await foundation.changeMembership({
+      organization_id:organizations[1].id,membership_id:betaAdminMembership.id,
+      actor_person_id:B.person,actor_type:"user",actor_id:B.actor,status:"revoked",
+    })
+    assert.equal(revoked.status,"revoked")
+    assert.equal((await get(selected(organizations[1].id))).status,403,
+      "Revoked Organization Admin cannot retain Store access")
+    assert.equal((await q("select status from da_organization_membership where id=$1",
+      [betaAdminMembership.id]))[0].status,"revoked")
+    assert.equal((await get(selected(organizations[0].id))).status,200,
+      "Unrelated active Organization must survive Beta revocation")
     // No actor-native JWT or personal details should reach the page.
     const privateView=await browser.eval("({jwt:/eyJ[A-Za-z0-9_-]+\\.eyJ/.test(document.body.innerText),local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
     assert.equal(privateView.jwt,false);assert.deepEqual(privateView.local,[]);assert.deepEqual(privateView.session,[])
