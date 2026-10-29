@@ -474,8 +474,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-application-list').replaceChildren();
     el('store-application-status').textContent='';
     el('store-application-form').hidden=true;
-    el('store-application-form').reset();
-    el('store-application-form').querySelector('button').disabled=false;
+    const form=el('store-application-form');
+    if(typeof form.reset==='function')form.reset();
+    const submit=typeof form.querySelector==='function'?form.querySelector('button'):null;
+    if(submit)submit.disabled=false;
     applicationKey='';
   }
   async function storeApplications(org,request,role){
@@ -508,7 +510,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   let applicationRequest=0,applicationKey='';
   el('store-applications-refresh').onclick=()=>{
-    if(currentOrg)void storeApplications(currentOrg,organizationRequest,'owner');
+    if(currentOrg)void storeApplications(currentOrg,organizationRequest,
+      el('store-application-form').hidden?'admin':'owner');
   };
   el('store-application-form').onsubmit=async event=>{
     event.preventDefault();
