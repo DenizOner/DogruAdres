@@ -27,6 +27,7 @@ import {
 import { sendSmtpEmail } from "./smtp-client"
 import { PersonalNotifications } from "./personal-notifications"
 import { authorizedLegalSellerIds } from "./legal-store-ownership"
+import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -1135,6 +1136,82 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         fromName: testFromName || undefined,
       }
     )
+  }
+
+  // B22 initial Store application: Organization Owner creates an application
+  // and a direct Organization reference; only Mercur Admin approves Seller.
+  @InjectTransactionManager()
+  async personalStoreApplications(token:string,org:string,@MedusaContext() context:Context={}){
+    return readStoreApplications(securitySql(context.transactionManager),token,org)
+  }
+
+  @InjectTransactionManager()
+  async reserveStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}){
+    const db=securitySql(context.transactionManager),actor=await eligibleOwner(db,token,input.organization_id)
+    if(!actor)return null
+    const fingerprint=storeRequestFingerprint(input)
+    await db.execute(`select pg_advisory_xact_lock(hashtext('b22-store-application'),hashtext(?))`,
+      [input.application_id])
+    const prior=await db.execute(`select * from da_store_application where id=? for update`,[input.application_id])
+    if(prior.length>1)throw new IdentityAccessDenied()
+    if(prior.length){
+      const r=prior[0]
+      if(r.organization_id!==input.organization_id||r.person_id!==actor.person_id||
+         r.member_actor_id!==actor.member_id||r.request_fingerprint!==fingerprint)
+        throw new IdentityAccessDenied()
+      return {status:r.status as string,seller_id:r.seller_id as string|null}
+    }
+    await db.execute(`insert into da_store_application
+      (id,organization_id,person_id,member_actor_id,member_auth_identity_id,request_fingerprint,status)
+      values(?,?,?,?,?,?,'reserved')`,[input.application_id,input.organization_id,actor.person_id,
+      actor.member_id,actor.member_auth_identity_id,fingerprint])
+    return {status:"reserved" as const,seller_id:null}
+  }
+
+  @InjectTransactionManager()
+  async claimStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}){
+    const db=securitySql(context.transactionManager),actor=await eligibleOwner(db,token,input.organization_id)
+    if(!actor)return null
+    const rows=await db.execute(`update da_store_application
+      set status='creating',updated_at=clock_timestamp()
+      where id=? and organization_id=? and person_id=? and member_actor_id=?
+        and member_auth_identity_id=? and request_fingerprint=? and status='reserved'
+      returning member_actor_id,member_auth_identity_id`,[
+      input.application_id,input.organization_id,actor.person_id,actor.member_id,
+      actor.member_auth_identity_id,storeRequestFingerprint(input)])
+    if(rows.length!==1)return null
+    return {member_id:rows[0].member_actor_id as string,
+      member_auth_identity_id:rows[0].member_auth_identity_id as string}
+  }
+
+  @InjectTransactionManager()
+  async finishStoreApplication(token:string,input:StoreRequest,sellerId:string,
+    @MedusaContext() context:Context={}){
+    const db=securitySql(context.transactionManager),actor=await eligibleOwner(db,token,input.organization_id)
+    if(!actor||!/^sel_[A-Za-z0-9_-]+$/.test(sellerId))return null
+    const pending=await db.execute(`select id from da_store_application
+      where id=? and organization_id=? and person_id=? and member_actor_id=?
+        and request_fingerprint=? and status='creating' for update`,[
+      input.application_id,input.organization_id,actor.person_id,actor.member_id,
+      storeRequestFingerprint(input)])
+    if(pending.length!==1)return null
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
+      role_context:"owner",organization_id:input.organization_id,
+      action:"organization.store_application_created",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-application",target_id:sellerId,
+      new_values:{application_id:input.application_id,status:"pending_approval"},
+      occurred_at:new Date()
+    }],context)
+    await db.execute(`insert into da_organization_seller_ownership
+      (id,organization_id,seller_id,verification_audit_event_id,verified_at)
+      values(?,?,?,?,clock_timestamp())`,[
+      "daown_"+randomUUID(),input.organization_id,sellerId,audit.id])
+    const finish=await db.execute(`update da_store_application set seller_id=?,
+      status='created',updated_at=clock_timestamp()
+      where id=? and status='creating' returning id`,[sellerId,input.application_id])
+    if(finish.length!==1)throw new IdentityAccessDenied()
+    return {seller_id:sellerId}
   }
 
   // B22: legal ownership candidates are NOT a grant, and never leave this

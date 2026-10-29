@@ -1,9 +1,10 @@
 import { IdentityAccessDenied, IdentitySessions, type SecuritySql } from "./identity-session"
 
 /**
- * Physical approval read only. Do not trust a row's "verified_at" or an arbitrary
- * audit FK as platform approval: the canonical event must match the SAME
- * Organization, Seller and approved action, with an atomic source outbox row.
+ * Store-to-Organization origin read. New applications are connected during
+ * Owner submission, NEVER via an extra staff approval. Native Seller approval
+ * remains separate. Preserve historical already-recorded association events
+ * without backfilling or widening access. All events need source outbox.
  * This read is NOT a Person permission grant or a legal ownership judgment.
  */
 export async function platformApprovedSellerIds(db: SecuritySql, organizationId: string): Promise<string[]> {
@@ -14,8 +15,15 @@ export async function platformApprovedSellerIds(db: SecuritySql, organizationId:
          on e.id=o.verification_audit_event_id
          and e.deleted_at is null
          and e.organization_id=o.organization_id and e.target_id=o.seller_id
-         and e.action='organization.store_association_approved'
-         and e.module='dogruadres-access' and e.resource='store-association'
+         and e.module='dogruadres-access'
+         and ((e.action='organization.store_application_created'
+           and e.resource='store-application'
+           and exists (select 1 from da_store_application a
+             where a.id=(e.new_values->>'application_id')
+               and a.organization_id=o.organization_id and a.seller_id=o.seller_id
+               and a.status='created' and a.person_id=e.actor_person_id))
+          or (e.action='organization.store_association_approved'
+           and e.resource='store-association'))
        where o.organization_id=? and o.revoked_at is null
          and exists (select 1 from da_audit_outbox x
            where x.source_audit_event_id=e.id
@@ -30,7 +38,7 @@ export async function platformApprovedSellerIds(db: SecuritySql, organizationId:
 }
 
 /**
- * Foundation Person/Organization authority THEN physical platform approval.
+ * Foundation Person/Organization authority THEN direct Store origin.
  * These are INTERNAL CANDIDATES, not native Seller operation permissions.
  * A caller must additionally verify live native Member/SellerMember + Seller.
  */
