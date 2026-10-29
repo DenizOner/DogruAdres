@@ -4,6 +4,7 @@
  * This is schema acceptance, NOT browser legal registration or commerce PASS.
  */
 import assert from "node:assert/strict"
+import { Migration20261029120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261029120000"
 
 const url = new URL(process.env.PG_MFA_TEST_URL ?? "postgres://bad/invalid")
 if (process.env.CI !== "true" ||
@@ -21,8 +22,16 @@ async function main() {
     const info = (await db.unsafe("select current_database() as n, current_setting('server_version_num') as v"))[0]
     assert.equal(info.n, "mfa_ci_ephemeral")
     assert.match(info.v, /^16\d{4}$/)
+    // The CLI's earlier Medusa migration test uses another disposable child DB,
+    // which is retired after its native checks. Test DDL here on this scoped CI DB.
+    assert.equal((await db.unsafe("select to_regclass('da_organization_seller_ownership') as name"))[0].name,null)
+    const migration = new Migration20261029120000(), statements: string[] = []
+    ;(migration as any).addSql = (statement: string) => statements.push(statement)
+    await migration.up()
+    assert.equal(statements.length,3,"Unexpected B22 schema expansion")
+    for (const statement of statements) await db.unsafe(statement)
     assert.equal((await db.unsafe("select to_regclass('da_organization_seller_ownership') as name"))[0].name,
-      "da_organization_seller_ownership", "M0 module migration must install the new table")
+      "da_organization_seller_ownership")
 
     // Synthetic identities, intentionally never corresponding to actual Mercur Sellers.
     await db.unsafe("insert into da_organization(id,name,status) values ('daorg_b22_alpha','B22 fixture A','active'),('daorg_b22_beta','B22 fixture B','active')")

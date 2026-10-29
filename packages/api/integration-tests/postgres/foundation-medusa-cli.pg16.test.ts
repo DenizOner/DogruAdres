@@ -87,10 +87,11 @@ async function run(){
     // Independent DB observation, not CLI output matching.
     const target=new SQL(dbUrl.toString())
     try{
-      const rows=await target.unsafe("select to_regclass('da_audit_event') as audit,to_regclass('da_audit_outbox') as outbox,to_regclass('da_organization_membership') as membership")
+      const rows=await target.unsafe("select to_regclass('da_audit_event') as audit,to_regclass('da_audit_outbox') as outbox,to_regclass('da_organization_membership') as membership,to_regclass('da_organization_seller_ownership') as legal_ownership")
       assert.ok(rows[0].audit,"Medusa CLI did not discover Foundation audit migration")
       assert.ok(rows[0].outbox,"Medusa CLI did not discover canonical outbox migration")
       assert.ok(rows[0].membership,"Medusa CLI did not discover Foundation membership migration")
+      assert.ok(rows[0].legal_ownership,"Medusa CLI did not discover B22 legal ownership migration")
       const ledger=await target.unsafe("select count(*)::int as n from mikro_orm_migrations where name like 'Migration2026102%'")
       assert.ok(Number(ledger[0].n)>=1,"No Foundation migration history from Medusa CLI")
       process.stdout.write("PASS Medusa 2.21.2 CLI db:migrate: Foundation discovered and ledger recorded on disposable PG16\n")
