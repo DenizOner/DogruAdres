@@ -64,4 +64,5 @@ async function main() {
     await db.close()
   }
 }
-await main()
+// Explicit process exit status without CommonJS-forbidden top-level await.
+void main().catch(error => { console.error(error); process.exitCode = 1 })
