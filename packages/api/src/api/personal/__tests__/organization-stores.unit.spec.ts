@@ -22,7 +22,7 @@ describe("B22 platform-approved Organization Store read (route boundary, mock-on
     native={
       listMembers:jest.fn().mockResolvedValue([{id:member,is_active:true}]),
       listSellerMembers:jest.fn().mockResolvedValue([{member_id:member,seller_id:"sel_A"}]),
-      listSellers:jest.fn().mockResolvedValue([{id:"sel_A",name:"A Store",status:"open",email:"private@example.invalid"}])
+      listSellers:jest.fn().mockResolvedValue([{id:"sel_A",name:"A Store",status:"open",approved_at:"2026-10-29T00:00:00Z",email:"private@example.invalid"}])
     }
     ;(access as jest.Mock).mockReturnValue(svc)
     req={query:{organization},headers:{},scope:{resolve:jest.fn((key:string)=>{
@@ -78,9 +78,25 @@ describe("B22 platform-approved Organization Store read (route boundary, mock-on
   it("excludes inactive/suspended or inaccessible Stores",async()=>{
     svc.personalLegalSellerIds.mockResolvedValue(permit(["sel_A","sel_B"]))
     native.listSellerMembers.mockImplementation(async ({seller_id}:any)=>seller_id==="sel_A"?[{member_id:member,seller_id}]:[])
-    native.listSellers.mockImplementation(async ({id}:any)=>id==="sel_A"?[{id,name:"A",status:"open"}]:[{id,name:"B",status:"suspended"}])
+    native.listSellers.mockImplementation(async ({id}:any)=>id==="sel_A"?[{id,name:"A",status:"open",approved_at:"2026-10-29T00:00:00Z"}]:[{id,name:"B",status:"suspended"}])
     await GET(req,res)
     expect(res.json).toHaveBeenCalledWith({organization_id:organization,stores:[{id:"sel_A",name:"A"}]})
+  })
+
+  it("never renders Store whose status is OPEN but native approval was never recorded",async()=>{
+    native.listSellers.mockResolvedValue([{id:"sel_A",name:"Unapproved",status:"open",approved_at:null}])
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({organization_id:organization,stores:[]})
+    expect(JSON.stringify(res.json.mock.calls)).not.toContain("Unapproved")
+  })
+
+  it("rejects Store response if approval is cleared between initial and final native checks",async()=>{
+    native.listSellers.mockResolvedValueOnce([{id:"sel_A",name:"A Store",status:"open",approved_at:"2026-10-29T00:00:00Z"}])
+      .mockResolvedValueOnce([{id:"sel_A",name:"A Store",status:"open",approved_at:null}])
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(res.json).not.toHaveBeenCalledWith(expect.objectContaining({stores:expect.any(Array)}))
   })
 
   it("rejects when Organization association changes before final response",async()=>{
@@ -104,8 +120,8 @@ describe("B22 platform-approved Organization Store read (route boundary, mock-on
   })
 
   it("denies Store response when the native Seller is suspended after the initial read",async()=>{
-    native.listSellers.mockResolvedValueOnce([{id:"sel_A",name:"A Store",status:"open"}])
-      .mockResolvedValueOnce([{id:"sel_A",name:"A Store",status:"suspended"}])
+    native.listSellers.mockResolvedValueOnce([{id:"sel_A",name:"A Store",status:"open",approved_at:"2026-10-29T00:00:00Z"}])
+      .mockResolvedValueOnce([{id:"sel_A",name:"A Store",status:"suspended",approved_at:"2026-10-29T00:00:00Z"}])
     await GET(req,res)
     expect(res.status).toHaveBeenCalledWith(403)
   })

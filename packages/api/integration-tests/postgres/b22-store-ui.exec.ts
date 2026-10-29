@@ -14,6 +14,7 @@ import {tmpdir} from "node:os"
 import {spawnSync} from "node:child_process"
 import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
+import {approveSellerWorkflow} from "@mercurjs/core/workflows"
 import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
 
@@ -104,8 +105,17 @@ export default async function({container}:any){
       code:otp(secondaryMfa.secret)})
     const stores: Array<{id:string;name:string}>=[]
     for(let n=0;n<3;n++){
+      // Mercur's own Store workflow is authoritative for its native approval.
+      // Never forge status=open or approved_at with a direct service write.
       const [store]=await native.createSellers([{name:"B22 Store "+(n+1)+" "+rand,
-        email:"b22-store-"+n+"-"+rand+"@example.invalid",currency_code:"eur",status:"open"}])
+        email:"b22-store-"+n+"-"+rand+"@example.invalid",currency_code:"eur"}])
+      const before=await native.listSellers({id:store.id})
+      assert.equal(before.length,1);assert.equal(before[0].status,"pending_approval")
+      assert.equal(before[0].approved_at,null)
+      await approveSellerWorkflow(container).run({input:{seller_id:store.id}})
+      const after=await native.listSellers({id:store.id})
+      assert.equal(after.length,1);assert.equal(after[0].status,"open")
+      assert.ok(after[0].approved_at,"Mercur native approval timestamp required")
       await native.createSellerMembers([{seller_id:store.id,member_id:member.id,is_owner:true}])
       stores.push(store)
     }

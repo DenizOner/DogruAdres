@@ -41,9 +41,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         native.listSellerMembers({ member_id: binding.actor_id, seller_id: id }),
         native.listSellers({ id })
       ])
-      // A current native SellerMember is technical access, not legal owner proof.
+      // Both Mercur approval (approved_at) and OPEN lifecycle state are required.
+      // A current native SellerMember grants neither Store approval nor platform assignment.
       if (relations.length !== 1 || accounts.length !== 1 ||
-          accounts[0].id !== id || accounts[0].status !== "open") continue
+          accounts[0].id !== id || accounts[0].status !== "open" ||
+          !accounts[0].approved_at) continue
       sellers.push({ id, name: String(accounts[0].name ?? "") })
     }
     // Revocation, Organization switch, association reassignment and session
@@ -75,7 +77,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       if (lastRelation.length !== 1 || lastSeller.length !== 1 ||
           lastRelation[0].member_id !== binding.actor_id ||
           lastRelation[0].seller_id !== item.id ||
-          lastSeller[0].id !== item.id || lastSeller[0].status !== "open")
+          lastSeller[0].id !== item.id || lastSeller[0].status !== "open" ||
+          !lastSeller[0].approved_at)
         return res.status(403).json({ message: "Access denied" })
     }
     return res.status(200).json({ organization_id: organization, stores: sellers })
