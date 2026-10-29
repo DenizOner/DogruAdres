@@ -277,8 +277,10 @@ export default async function({container}:any){
       name:"B22 older pending "+rand,
       email:"b22-older-pending-"+rand+"@example.invalid",currency_code:"try"
     }])
-    assert.equal(olderPending.status,"pending_approval")
-    assert.equal(olderPending.approved_at,null)
+    const nativeBeforeOlder=await native.listSellers({id:olderPending.id})
+    assert.equal(nativeBeforeOlder.length,1)
+    assert.equal(nativeBeforeOlder[0].status,"pending_approval")
+    assert.equal(nativeBeforeOlder[0].approved_at,null)
     await native.createSellerMembers([{seller_id:olderPending.id,
       member_id:member.id,is_owner:true}])
     assert.deepEqual((await get(selected(organizations[0].id))).body.stores,[])
