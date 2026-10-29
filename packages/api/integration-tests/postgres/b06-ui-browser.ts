@@ -62,7 +62,9 @@ export class B06Chrome {
     this.phase='native-challenge-login'
     await this.input('#login input[name=email]',email);await this.input('#login input[name=password]',password);await this.click('#login button')
     await this.wait("!document.getElementById('challenge').hidden")
-    // Medusa verifies the code; the test generator only holds its newly issued seed in memory.
+    // Issue one native challenge response with enough of its FIRST TOTP
+    // window remaining. Never retry a rejected code or bypass native MFA.
+    await until(async()=>Date.now()%30000<10000,35000,'B06 fresh native TOTP window')
     await this.input('#challenge input[name=code]',otp(seed));seed='';await this.click('#challenge button')
     await this.wait(`!document.getElementById('workspace').hidden&&document.getElementById('person').textContent===${JSON.stringify('Person: '+person)}`)
   }
