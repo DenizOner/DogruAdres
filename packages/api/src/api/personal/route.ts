@@ -171,7 +171,6 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="store-approval-status" role="status" aria-live="polite"></p>
     <div id="store-approval-list"></div>
     <button id="store-approval-refresh" type="button">Bekleyen mağazaları yenile</button>
-    <button id="store-approval-next" type="button" hidden>Daha eski başvurular</button>
   </section>
   <section id="store-application-panel" hidden style="grid-column:1/-1">
     <h3>Kuruluşun mağaza başvuruları</h3>
@@ -494,31 +493,23 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-approval-panel').hidden=true;
     el('store-approval-list').replaceChildren();
     el('store-approval-status').textContent='';
-    el('store-approval-next').hidden=true;
-    nextStoreApprovalPage=null;
   }
-  let nextStoreApprovalPage=null;
-  async function refreshStoreApprovals(keepOutcome=false,before=null){
+  async function refreshStoreApprovals(keepOutcome=false){
     if(document.hidden||el('workspace').hidden)return;
     const seq=++storeApprovalRequest,epoch=viewEpoch;
     const panel=el('store-approval-panel'),list=el('store-approval-list'),message=el('store-approval-status');
     if(!keepOutcome)message.textContent='Mağazalar kontrol ediliyor…';
     try{
-      const data=await api('platform/stores'+(before?'?before='+encodeURIComponent(before):''));
+      const data=await api('platform/stores');
       if(seq!==storeApprovalRequest||epoch!==viewEpoch||document.hidden)return;
-      if(!(data.next_before===null||/^daapp_[a-f0-9]{32}$/.test(data.next_before))||
-         (before&&data.next_before===before)||
-         !Array.isArray(data.pending)||data.pending.length>30||
+      if(!Array.isArray(data.pending)||data.pending.length>30||
          data.pending.some(row=>!/^daapp_[a-f0-9]{32}$/.test(row?.application_id)||
            !/^sel_[A-Za-z0-9_-]+$/.test(row?.seller_id)||
            !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row?.organization_id)||
            typeof row?.organization_name!=='string'||typeof row?.name!=='string'))
         throw new Error('Onay listesi doğrulanamadı');
       panel.hidden=false;list.replaceChildren();
-      nextStoreApprovalPage=data.next_before;
-      el('store-approval-next').hidden=!nextStoreApprovalPage;
-      if(!keepOutcome)message.textContent=data.pending.length?'Onay bekleyen mağazalar:':
-        nextStoreApprovalPage?'Bu sayfada bekleyen mağaza yok; eski kayıtlara geçin.':'Onay bekleyen mağaza yok.';
+      if(!keepOutcome)message.textContent=data.pending.length?'Onay bekleyen mağazalar:':'Onay bekleyen mağaza yok.';
       for(const entry of data.pending){
         const line=document.createElement('p'),button=document.createElement('button');
         line.textContent=entry.organization_name+' — '+entry.name+' — '+entry.seller_id+' ';
@@ -534,7 +525,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               throw new Error('Onay sonucu doğrulanamadı');
             if(epoch!==viewEpoch||document.hidden)return;
             message.textContent='Mağaza onaylandı. Kuruluş yetkileri ayrıca denetlenir.';
-            void refreshStoreApprovals(true,before);
+            void refreshStoreApprovals(true);
           }catch(e){
             if(epoch!==viewEpoch||document.hidden)return;
             message.textContent=e.uncertain?
@@ -553,9 +544,6 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   el('store-approval-refresh').onclick=()=>void refreshStoreApprovals();
-  el('store-approval-next').onclick=()=>{
-    if(nextStoreApprovalPage)void refreshStoreApprovals(false,nextStoreApprovalPage);
-  };
   async function storeApplications(org,request,role,keepOutcome=false){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
     const sequence=++applicationRequest;

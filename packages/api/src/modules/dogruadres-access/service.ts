@@ -1223,14 +1223,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   // not an Organization Owner entitlement and not a separate link approval.
   @InjectTransactionManager()
   async personalReviewableStoreApplications(token:string,
-    selection?:{application_id:string;seller_id:string}|{before:string},
+    target?:{application_id:string;seller_id:string},
     @MedusaContext() context:Context={}) {
     const db=securitySql(context.transactionManager)
     const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
     if(!staff)return null
-    const target=selection&&"application_id" in selection?selection:null
-    const before=selection&&"before" in selection?selection.before:null
-    if(before&&!/^daapp_[0-9a-f]{32}$/.test(before))throw new IdentityAccessDenied()
     const rows=await db.execute(`select a.id application_id,a.seller_id,
         a.organization_id,d.name organization_name
       from da_store_application a
@@ -1251,10 +1248,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
           and x.deleted_at is null)
         ${target?"and a.id=? and a.seller_id=?":""}
-        ${before?"and (a.created_at,a.id)<(select created_at,id from da_store_application where id=?)":""}
-      order by a.created_at desc,a.id desc limit 31`,
-      target?[target.application_id,target.seller_id]:before?[before]:[])
-    if(!Array.isArray(rows)||rows.length>31 ||
+      order by a.created_at desc limit 31`,
+      target?[target.application_id,target.seller_id]:[])
+    if(!Array.isArray(rows)||rows.length>30 ||
        rows.some(r=>typeof r.application_id!=="string" ||
          !/^daapp_[0-9a-f]{32}$/.test(r.application_id) ||
          typeof r.seller_id!=="string" ||
@@ -1264,10 +1260,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
          typeof r.organization_name!=="string") ||
        new Set(rows.map(r=>r.seller_id)).size!==rows.length)
       throw new IdentityAccessDenied()
-    const page=rows as Array<{application_id:string;seller_id:string;
+    return rows as Array<{application_id:string;seller_id:string;
       organization_id:string;organization_name:string}>
-    return {applications:page.slice(0,30),
-      next_before:page.length===31?page[29].application_id:null}
   }
 
   // B22: legal ownership candidates are NOT a grant, and never leave this
