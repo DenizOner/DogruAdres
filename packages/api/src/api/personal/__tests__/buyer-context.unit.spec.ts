@@ -8,7 +8,8 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
   let req:any,res:any,svc:any
   beforeEach(()=>{
     jest.resetAllMocks()
-    svc={personalBuyerCartAttribution:jest.fn().mockResolvedValue(false),
+    svc={personalStoreBuyerBlockDecision:jest.fn().mockResolvedValue({blocked:false}),
+      personalBuyerCartAttribution:jest.fn().mockResolvedValue(false),
       personalClaimBuyerCart:jest.fn().mockResolvedValue({
         status:"attributed",organization_id:"daorg_a"
       }),
@@ -181,7 +182,9 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
     expect(res.status).toHaveBeenCalledWith(200)
     expect(res.json).toHaveBeenCalledWith({organization_id:"daorg_a",
       status:"seller_scope_mapped",seller_count:2,
-      seller_block_verified:false,checkout_ready:false})
+      seller_block_verified:true,checkout_ready:false})
+    expect(svc.personalStoreBuyerBlockDecision).toHaveBeenCalledWith(
+      "opaque","daorg_a",expect.arrayContaining(["sel_a","sel_b"]))
     expect(sellerRead).toHaveBeenCalledWith({id:"sel_a"})
     expect(sellerRead).toHaveBeenCalledWith({id:"sel_b"})
     nativeStates.set("sel_b","suspended")
@@ -189,6 +192,19 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
     expect(res.status).toHaveBeenLastCalledWith(403)
     expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
     nativeStates.set("sel_b","pending_approval")
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    nativeStates.set("sel_b","open")
+    svc.personalStoreBuyerBlockDecision.mockResolvedValue({blocked:true})
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+    svc.personalStoreBuyerBlockDecision.mockResolvedValue(null)
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    svc.personalStoreBuyerBlockDecision.mockResolvedValue({blocked:false})
+    svc.personalStoreBuyerBlockDecision.mockResolvedValueOnce({blocked:false})
+      .mockResolvedValueOnce({blocked:true})
     await GET(req,res)
     expect(res.status).toHaveBeenLastCalledWith(403)
   })

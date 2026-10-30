@@ -720,11 +720,14 @@ export default async function({container}:any){
     // Mercur 2.3.7 createOffersWorkflow's seller-inventory step obtains
     // its Seller from offers[0], so use one run per Seller, not a mixed batch.
     const offerRows:Array<{id:string;seller_id:string}>=[]
+    // Use a REAL Store applied for by Alpha Owner and approved by platform,
+    // plus a second independently approved native Seller.
+    const cartStoreIds=[ownerStoreId,stores[1].id]
     for(let i=0;i<2;i++){
       const sku="B22-TWO-STORE-"+i+"-"+rand
       const {result:[offer]}=await createOffersWorkflow(container).run({
         input:{offers:[{
-          seller_id:stores[i].id,created_by:member.id,
+          seller_id:cartStoreIds[i],created_by:member.id,
           sku,variant_id:variant.id,shipping_profile_id:b22Profile.id,
           inventory_items:[{sku,stock_levels:[]}],
           prices:[{amount:1000+i*100,currency_code:"eur"}],
@@ -732,7 +735,7 @@ export default async function({container}:any){
         }]}
       })
       assert.match(offer.id,/^offer_[A-Za-z0-9_-]+$/)
-      assert.equal(offer.seller_id,stores[i].id)
+      assert.equal(offer.seller_id,cartStoreIds[i])
       offerRows.push(offer)
     }
     // Use a task-only sales channel and region for native cart pricing.
@@ -768,7 +771,7 @@ export default async function({container}:any){
     assert.equal(graphTwoStore[0].items.length,2)
     assert.deepEqual(
       new Set(graphTwoStore[0].items.map((line:any)=>line.offer?.seller_id)),
-      new Set(stores.slice(0,2).map(s=>s.id))
+      new Set(cartStoreIds)
     )
     assert.deepEqual(
       new Set(graphTwoStore[0].items.map((line:any)=>line.offer?.id)),
@@ -779,10 +782,44 @@ export default async function({container}:any){
     assert.equal(twoStoreScope.status,200)
     assert.deepEqual(twoStoreScope.body,{
       organization_id:organizations[0].id,status:"seller_scope_mapped",
-      seller_count:2,seller_block_verified:false,checkout_ready:false
+      seller_count:2,seller_block_verified:true,checkout_ready:false
     })
     assert.equal((await readNativeCart(buyerCart(organizations[1].id,
       customerCart.id)+"&seller_scope=inspect")).status,403)
+    // B22 #76: strong Foundation Owner A has the actual platform-approved
+    // Store association. B is only Alpha buyer/member and cannot issue Store
+    // policy. Native Member/SellerMember alone is not the issuer grant.
+    const changeStoreBlock=async(action:"block"|"unblock")=>browser.eval(`(async()=>{
+      const s=await(await fetch('/personal/session')).json()
+      const r=await fetch('/personal/store-buyer-blocks',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify(${JSON.stringify({action,organization_id:organizations[0].id,
+          seller_id:ownerStoreId,buyer_organization_id:organizations[0].id})})
+      })
+      return {status:r.status,body:await r.json()}
+    })()`)
+    assert.equal((await changeStoreBlock("block")).status,200)
+    assert.equal((await changeStoreBlock("block")).status,200,
+      "Replay must not write another active block")
+    assert.equal((await q(`select count(*)::int n from da_store_buyer_organization_block
+      where seller_id=$1 and buyer_organization_id=$2 and revoked_at is null`,
+      [ownerStoreId,organizations[0].id]))[0].n,1)
+    const blockedScope=await readNativeCart(
+      buyerCart(organizations[0].id,customerCart.id)+"&seller_scope=inspect")
+    assert.equal(blockedScope.status,403)
+    assert.deepEqual(blockedScope.body,{message:"Access denied"})
+    assert.equal((await cartService.retrieveCart(customerCart.id,{
+      relations:["items"]
+    })).items?.length,2)
+    assert.equal((await changeStoreBlock("unblock")).status,200)
+    assert.equal((await changeStoreBlock("unblock")).status,200,
+      "Replay must not erase revocation history")
+    assert.equal((await q(`select count(*)::int n from da_store_buyer_organization_block
+      where seller_id=$1 and buyer_organization_id=$2 and revoked_at is null`,
+      [ownerStoreId,organizations[0].id]))[0].n,0)
+    assert.equal((await readNativeCart(
+      buyerCart(organizations[0].id,customerCart.id)+"&seller_scope=inspect")).status,200)
+    process.stdout.write("PASS B22 audited Owner Store Buyer Organization block: two-Store scope 403 if one blocked, idempotent unblock restores 200; no checkout\\n")
     // One native Seller suspended means NO partially authorized two-Store
     // scope. The native workflow restores the task's prior approved state.
     await suspendSellerWorkflow(container).run({input:{

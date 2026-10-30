@@ -187,6 +187,15 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
           return res.status(403).json({message:"Access denied"})
       }
       if(remaining.size!==0)return res.status(403).json({message:"Access denied"})
+      // Per-Store Buyer Organization block is Foundation-owned and never
+      // derived from Medusa Customer or Mercur SellerCustomerGroup.
+      const unblocked=async()=>{
+        const result=await svc.personalStoreBuyerBlockDecision(
+          token,parsed.data.organization_id,[...sellers])
+        return result?.blocked===false
+      }
+      if(!await unblocked())
+        return res.status(403).json({message:"Access denied"})
       const last=await svc.personalBuyerOrganization(token,parsed.data.organization_id)
       const currentBinding=await svc.personalActorBinding(token,"customer")
       const finalAttribution=await svc.personalBuyerCartAttribution(
@@ -195,13 +204,14 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
          !currentBinding||currentBinding.revoked_at||
          currentBinding.person_id!==checked.person_id||
          currentBinding.actor_id!==customerActorId||
-         finalAttribution!==true||!await allSellersLive())
+         finalAttribution!==true||!await allSellersLive()||
+         !await unblocked())
         return res.status(403).json({message:"Access denied"})
       return res.status(200).json({
         organization_id:checked.organization_id,
         status:sellers.size?"seller_scope_mapped":"seller_scope_empty",
         seller_count:sellers.size,
-        seller_block_verified:false,
+        seller_block_verified:sellers.size>0,
         checkout_ready:false
       })
     }
