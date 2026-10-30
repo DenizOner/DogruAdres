@@ -10,7 +10,7 @@ import {
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
 import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
-import { randomBytes, randomUUID } from "node:crypto"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
 import { IdentitySessions, securitySql, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced } from "./identity-session"
 import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
@@ -26,7 +26,7 @@ import {
 } from "./smtp-settings"
 import { sendSmtpEmail } from "./smtp-client"
 import { PersonalNotifications } from "./personal-notifications"
-import { authorizedLegalSellerIds, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
+import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
@@ -1393,6 +1393,139 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        typeof g.seller_id!=="string"||!/^sel_[A-Za-z0-9_-]+$/.test(g.seller_id)))
       throw new IdentityAccessDenied()
     return rows as Array<{id:string;person_id:string;seller_id:string}>
+  }
+
+
+  // B22 product draft: Foundation-owned intent ledger, not another product
+  // service. Never interpret a reserved/uncertain native outcome as retryable.
+  @InjectTransactionManager()
+  async personalProductDraftScope(
+    token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}
+  ){
+    const db=securitySql(context.transactionManager),s=new IdentitySessions(db)
+    const current=await s.current(token,true,false)
+    if(!current)return null
+    const scope=await authorizedProductEditScope(db,token,organizationId,sellerId)
+    return scope?.person_id===current.person_id?scope:null
+  }
+
+  @InjectTransactionManager()
+  async personalProductDraftCandidates(
+    token:string,organizationId:string,@MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const member=await sessions.organizations(token,organizationId,false)
+    if(!member||member.person_id!==current.person_id||
+       member.organizations.length!==1)return null
+    const stores=await platformApprovedSellerIds(db,organizationId)
+    const allowed:string[]=[]
+    for(const id of stores){
+      if(await verifiedStoreProductEditGrant(db,current.person_id,organizationId,id))
+        allowed.push(id)
+    }
+    return {person_id:current.person_id,organization_id:organizationId,seller_ids:allowed}
+  }
+
+  @InjectTransactionManager()
+  async personalReserveProductDraft(
+    token:string,input:{request_id:string;organization_id:string;seller_id:string;title:string},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^dapd_[0-9a-f]{32}$/.test(input.request_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       typeof input.title!=="string"||input.title.trim()!==input.title||
+       input.title.length<2||input.title.length>120)throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const decision=await authorizedProductEditScope(db,token,input.organization_id,input.seller_id)
+    if(!decision||decision.person_id!==current.person_id)return null
+    const fingerprint=createHash("sha256").update(JSON.stringify([
+      input.organization_id,input.seller_id,input.title
+    ])).digest("hex")
+    // PK locks simultaneous attempts across processes. A second request
+    // cannot proceed to Mercur, even if the first native result is uncertain.
+    const added=await db.execute(`insert into da_product_draft_request
+      (id,person_id,organization_id,seller_id,request_fingerprint)
+      values (?,?,?,?,?) on conflict (id) do nothing returning id`,
+      [input.request_id,current.person_id,input.organization_id,input.seller_id,fingerprint])
+    if(added.length>1)throw new IdentityAccessDenied()
+    if(added.length===1)return {status:"reserved" as const,person_id:current.person_id}
+    const existing=await db.execute(`select person_id,organization_id,seller_id,
+      request_fingerprint,status,product_id,completion_audit_event_id
+      from da_product_draft_request where id=? for update`,[input.request_id])
+    if(existing.length!==1)throw new IdentityAccessDenied()
+    const row=existing[0]
+    if(row.person_id!==current.person_id||
+       row.organization_id!==input.organization_id||
+       row.seller_id!==input.seller_id||
+       row.request_fingerprint!==fingerprint)throw new IdentityAccessDenied()
+    if(row.status==="reserved")return {status:"uncertain" as const,person_id:current.person_id}
+    if(row.status!=="created"||typeof row.product_id!=="string")
+      throw new IdentityAccessDenied()
+    const proof=await db.execute(`select e.id from da_audit_event e
+      where e.id=? and e.actor_person_id=? and e.organization_id=?
+        and e.target_id=? and e.action='organization.product_draft_created'
+        and e.module='dogruadres-access' and e.resource='product-draft'
+        and e.new_values->>'request_id'=?
+        and e.new_values->>'product_id'=?
+        and e.deleted_at is null
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+            and x.deleted_at is null)`,
+      [row.completion_audit_event_id,current.person_id,input.organization_id,
+       input.seller_id,input.request_id,row.product_id])
+    if(proof.length!==1)throw new IdentityAccessDenied()
+    return {status:"created" as const,person_id:current.person_id,product_id:row.product_id as string}
+  }
+
+  @InjectTransactionManager()
+  async personalCompleteProductDraft(
+    token:string,input:{request_id:string;organization_id:string;seller_id:string;title:string},
+    productId:string,@MedusaContext() context:Context={}
+  ){
+    if(!/^dapd_[0-9a-f]{32}$/.test(input.request_id)||
+       !/^prod_[A-Za-z0-9_-]+$/.test(productId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,false,false)
+    if(!current)return null
+    const rows=await db.execute(`select person_id,organization_id,seller_id,
+       request_fingerprint,status,product_id from da_product_draft_request
+       where id=? for update`,[input.request_id])
+    const fingerprint=createHash("sha256").update(JSON.stringify([
+      input.organization_id,input.seller_id,input.title
+    ])).digest("hex")
+    if(rows.length!==1||rows[0].person_id!==current.person_id||
+       rows[0].organization_id!==input.organization_id||
+       rows[0].seller_id!==input.seller_id||
+       rows[0].request_fingerprint!==fingerprint)throw new IdentityAccessDenied()
+    if(rows[0].status==="created"){
+      if(rows[0].product_id!==productId)throw new IdentityAccessDenied()
+      return {status:"created" as const,product_id:productId}
+    }
+    if(rows[0].status!=="reserved")throw new IdentityAccessDenied()
+    const [event]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
+      organization_id:input.organization_id,
+      action:"organization.product_draft_created",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"product-draft",target_id:input.seller_id,
+      new_values:{request_id:input.request_id,product_id:productId,status:"draft"},
+      occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const changed=await db.execute(`update da_product_draft_request
+      set status='created',product_id=?,completion_audit_event_id=?,
+          completed_at=clock_timestamp()
+      where id=? and status='reserved' returning id`,
+      [productId,event.id,input.request_id])
+    if(changed.length!==1)throw new IdentityAccessDenied()
+    return {status:"created" as const,product_id:productId}
   }
 
   // ---------------------------------------------------------------------------
