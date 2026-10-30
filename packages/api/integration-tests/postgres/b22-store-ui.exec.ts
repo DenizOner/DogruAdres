@@ -570,6 +570,78 @@ export default async function({container}:any){
     assert.equal(receiptProduct.status,200)
     assert.equal(receiptProduct.body.status,"created")
     assert.equal(receiptProduct.body.product_id,written.id)
+    // Real CI PG16 "native committed, Foundation outcome lost" fixture:
+    // reserve once, run the *actual Mercur* workflow with deterministic ID,
+    // intentionally omit the Foundation completion, then recover through
+    // the authenticated browser without a second native create.
+    const recoveryKey="dapd_"+randomBytes(16).toString("hex")
+    const recoveryId="prod_"+recoveryKey.slice(5)
+    const recoveryTitle="B22 interrupted native draft "+rand
+    const fingerprint=createHash("sha256").update(JSON.stringify([
+      organizations[0].id,ownerStoreId,recoveryTitle
+    ])).digest("hex")
+    await q(`insert into da_product_draft_request
+      (id,person_id,organization_id,seller_id,request_fingerprint)
+      values ($1,$2,$3,$4,$5)`,[recoveryKey,A.person,organizations[0].id,ownerStoreId,fingerprint])
+    const {result:recoveredNative}=await createProductsWorkflow(container).run({
+      input:{products:[{
+        id:recoveryId,title:recoveryTitle,status:"draft",seller_ids:[ownerStoreId],
+        metadata:{dogruadres_draft_request_id:recoveryKey}
+      }],created_by:ownerStoreId}
+    })
+    assert.equal(recoveredNative.length,1)
+    assert.equal(recoveredNative[0].id,recoveryId,"Installed Mercur must preserve caller ID")
+    const recoveryBefore=await get('/personal/product-drafts?organization_id='+
+      encodeURIComponent(organizations[0].id)+'&seller_id='+
+      encodeURIComponent(ownerStoreId)+'&request_id='+encodeURIComponent(recoveryKey))
+    assert.equal(recoveryBefore.status,200)
+    assert.equal(recoveryBefore.body.status,"review_required",
+      "Native draft alone must not fabricate Foundation completion")
+    const reconcile=async(payload:Record<string,string>)=>browser.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      const r=await fetch('/personal/product-drafts',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify(${JSON.stringify(payload)})
+      });return {status:r.status,body:await r.json()}
+    })()`)
+    const reconcilePayload={...productRequest,request_id:recoveryKey,
+      title:recoveryTitle,action:"reconcile"}
+    const recoveredOnce=await reconcile(reconcilePayload)
+    assert.equal(recoveredOnce.status,200)
+    assert.deepEqual(recoveredOnce.body,{status:"created",product_id:recoveryId})
+    const recoveredAgain=await reconcile(reconcilePayload)
+    assert.equal(recoveredAgain.status,200)
+    assert.deepEqual(recoveredAgain.body,{status:"created",product_id:recoveryId})
+    const [recoveredLedger]=await q(`select status,product_id,completion_audit_event_id
+      from da_product_draft_request where id=$1`,[recoveryKey])
+    assert.equal(recoveredLedger.status,"created")
+    assert.equal(recoveredLedger.product_id,recoveryId)
+    const nativeCount=await q(`select count(*)::int n from product
+      where id=$1 and title=$2 and metadata->>'dogruadres_draft_request_id'=$3`,
+      [recoveryId,recoveryTitle,recoveryKey])
+    assert.equal(nativeCount[0].n,1,"Reconcile must not create another product")
+    assert.deepEqual((await q("select seller_id from product_seller where product_id=$1",[recoveryId]))
+      .map((x:any)=>x.seller_id),[ownerStoreId])
+    const proofCount=await q(`select count(*)::int n from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.id=$1 and e.action='organization.product_draft_created'
+        and e.new_values->>'request_id'=$2 and e.new_values->>'product_id'=$3`,
+      [recoveredLedger.completion_audit_event_id,recoveryKey,recoveryId])
+    assert.equal(proofCount[0].n,1,"Reconciled outcome needs canonical audit/outbox")
+    // A reserved request with no native product must NOT be turned into a
+    // false success or trigger a product create on a reconcile-only request.
+    const absentKey="dapd_"+randomBytes(16).toString("hex")
+    await q(`insert into da_product_draft_request
+      (id,person_id,organization_id,seller_id,request_fingerprint)
+      values($1,$2,$3,$4,$5)`,[absentKey,A.person,organizations[0].id,ownerStoreId,
+      createHash("sha256").update(JSON.stringify([organizations[0].id,ownerStoreId,recoveryTitle])).digest("hex")])
+    const absent=await reconcile({...reconcilePayload,request_id:absentKey})
+    assert.equal(absent.status,200)
+    assert.equal(absent.body.status,"review_required")
+    assert.equal((await q("select status from da_product_draft_request where id=$1",[absentKey]))[0].status,"reserved")
+    assert.equal((await q("select count(*)::int n from product where id=$1",
+      ["prod_"+absentKey.slice(5)]))[0].n,0)
+    process.stdout.write("PASS B22 native reconciliation confirmed: real Mercur draft already committed, Foundation reserved, authenticated Chrome repair with canonical audit/outbox and zero duplicate products; absent native record stays reserved\\n")
     assert.equal((await draftPost({...productRequest,title:draftTitle+" changed"})).status,403)
     assert.equal((await draftPost({...productRequest,organization_id:organizations[1].id})).status,403)
     assert.equal((await q("select count(*)::int n from product where title=$1",[draftTitle]))[0].n,1)
