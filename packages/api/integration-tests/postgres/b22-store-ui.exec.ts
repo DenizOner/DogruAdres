@@ -708,8 +708,15 @@ export default async function({container}:any){
         variants:[{title:"One size",sku:"B22-NATIVE-"+rand}]
       }]}
     })
-    const variant=sellableProduct.variants?.[0]
-    assert.match(variant?.id??"",/^variant_[A-Za-z0-9_-]+$/)
+    // Mercur's product workflow result is the master product projection;
+    // variants are not guaranteed populated. Read the ACTUAL persisted
+    // native Medusa Product module, never infer a variant from output shape.
+    const persistedVariants=await container.resolve("product").listProductVariants({
+      product_id:sellableProduct.id
+    })
+    assert.equal(persistedVariants.length,1)
+    const variant=persistedVariants[0]
+    assert.match(variant.id,/^variant_[A-Za-z0-9_-]+$/)
     // Mercur 2.3.7 createOffersWorkflow's seller-inventory step obtains
     // its Seller from offers[0], so use one run per Seller, not a mixed batch.
     const offerRows:Array<{id:string;seller_id:string}>=[]
