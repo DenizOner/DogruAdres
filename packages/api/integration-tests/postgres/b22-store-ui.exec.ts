@@ -45,7 +45,9 @@ export default async function({container}:any){
     assert.equal(preparing,false)
     assert.equal(process.env.DOGRUADRES_B22_PG_LOCK_TEST,"true")
     assert.match(secondaryCartId,/^cart_[A-Za-z0-9_-]+$/)
+    process.stdout.write("B22_SECONDARY_SCOPE_READY\\n")
     const locking=container.resolve("locking")
+    process.stdout.write("B22_SECONDARY_PROVIDER_READY\\n")
     let acquired=false
     try{
       await locking.acquire(secondaryCartId)
@@ -2043,7 +2045,27 @@ export default async function({container}:any){
         [concurrentCart.id]))[0].n,1,
         "First Medusa process must own the PostgreSQL Cart lock at L")
       let output=""
+      let stderr=""
       let started=false
+      const classifiedStartupFailure=()=>{
+        // Logs can contain secrets; never echo them to CI or GitHub. Report
+        // only a bounded, predefined diagnostic label and process phase.
+        const source=(output+"\\n"+stderr).toLowerCase()
+        const phase=output.includes("B22_SECONDARY_NATIVE_INVOKED")
+          ?"native-invoked":output.includes("B22_SECONDARY_PG_LOCK_CONFLICT")
+          ?"lock-confirmed":output.includes("B22_SECONDARY_PROVIDER_READY")
+          ?"provider-ready":output.includes("B22_SECONDARY_SCOPE_READY")
+          ?"scope-ready":"before-script"
+        const cause=/eaddrinuse|address already in use/i.test(source)
+          ?"port-conflict":/cannot find module|module not found|module resolution/i.test(source)
+          ?"module-resolution":/permission denied|eacces/i.test(source)
+          ?"process-permission":/relation .*does not exist|migration/i.test(source)
+          ?"database-schema":/failed to acquire lock|already locked/i.test(source)
+          ?"lock-conflict":/connection refused|econnrefused/i.test(source)
+          ?"connection-refused":/error running script|assertionerror/i.test(source)
+          ?"script-error":"unclassified"
+        return "phase="+phase+"; category="+cause
+      }
       let resolveStarted!:()=>void
       let rejectStarted!:(reason:Error)=>void
       const secondInvoked=new Promise<void>((resolve,reject)=>{
@@ -2066,14 +2088,20 @@ export default async function({container}:any){
             resolveStarted()
           }
         })
-        // Never publish native Medusa logs or the child process environment.
-        secondary.stderr?.on("data",()=>{})
+        // Keep any native Medusa diagnostics only in process-local memory.
+        // Report a fixed classification, never raw logs or environment.
+        secondary.stderr?.on("data",(chunk:Buffer)=>{
+          stderr=(stderr+String(chunk)).slice(-16000)
+        })
         secondary.on("error",(error:Error)=>{
           if(!started)rejectStarted(Error("B22 secondary Medusa process could not start"))
           resolve({code:null,output})
         })
         secondary.on("close",(code:number|null)=>{
-          if(!started)rejectStarted(Error("B22 secondary process did not reach native workflow"))
+          if(!started)rejectStarted(Error(
+            "B22 secondary process did not reach native workflow; exit="+
+            String(code)+"; "+classifiedStartupFailure()
+          ))
           resolve({code,output})
         })
       })
