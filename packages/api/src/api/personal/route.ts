@@ -491,8 +491,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('product-grants-panel').hidden=true;
     el('product-grants-list').replaceChildren();
     el('product-grants-status').textContent='';
-    for(const select of el('product-grants-form').querySelectorAll('select'))select.replaceChildren();
-    for(const button of el('product-grants-form').querySelectorAll('button'))button.disabled=true;
+    const form=el('product-grants-form');
+    // Fake DOMs in non-browser unit contracts may not implement querySelectorAll.
+    if(typeof form.querySelectorAll==='function'){
+      for(const select of form.querySelectorAll('select'))select.replaceChildren();
+      for(const button of form.querySelectorAll('button'))button.disabled=true;
+    }
   }
   function clearOrganizationStores(){
     clearProductPermissions();

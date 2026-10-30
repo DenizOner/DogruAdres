@@ -41,7 +41,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     if(data.action==="grant"){
       // Platform approval is independent of Foundation Organization assignment.
       // The native module is never asked to authorize on behalf of a Person.
-      const native=req.scope.resolve<{listSellers(f:object):Promise<any[]}>("seller")
+      const native=req.scope.resolve<{listSellers(f:object):Promise<any[]>}>("seller")
       const before=await native.listSellers({id:data.seller_id})
       if(before.length!==1||before[0].id!==data.seller_id||
         before[0].status!=="open"||!before[0].approved_at)
