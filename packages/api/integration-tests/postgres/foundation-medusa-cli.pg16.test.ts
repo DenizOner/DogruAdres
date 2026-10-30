@@ -132,7 +132,7 @@ async function run(){
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
             cwd:process.cwd(),env,encoding:"utf8",timeout:210000,maxBuffer:3*1024*1024})
           const valid=String(child.stdout??"").split("\n")
-            .filter(x=>/^PASS B22 Chrome:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 native Mercur product workflow:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
+            .filter(x=>/^PASS B22 Chrome:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 native Mercur product workflow:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
           if(child.error||child.status!==0)
             throw Error("B22 dedicated task-only child stage failed: "+sanitized(
               String(child.error??"exit "+child.status)+"\n"+String(child.stderr??"")+"\n"+String(child.stdout??"")))
@@ -154,6 +154,7 @@ async function run(){
         assert.ok(result.includes("PASS B22 native completed Cart retry: second Mercur split-order invocation denied; original OrderGroup/Order and single system-provider capture unchanged"),"Missing native completed Cart retry without duplicate Order/payment evidence")
         assert.ok(result.includes("PASS B22 native payment denial: pre-authorized system-provider Cart blocked by real Store Owner before L; Mercur rejected with zero OrderGroup/Order/capture and preserved immutable Buyer attribution"),"Missing authorized paid Cart reject-before-capture PG16/Chrome evidence")
         assert.ok(result.includes("PASS B22 post-L cutoff: native OrderGroup INSERT waited after validate L, real Chrome Store block committed during wait; checkout persisted one OrderGroup/Order with unchanged Buyer and zero payment; later L denied"),"Missing real post-L Owner Store block commit/accepted OrderGroup evidence")
+        assert.ok(result.includes("PASS B22 concurrent native Cart checkout: second invocation overlapped first after L at PG16 OrderGroup INSERT barrier; one completed Cart, one OrderGroup/Order, zero payment, unchanged Buyer attribution"),"Missing native concurrent Cart no-duplicate order evidence")
         assert.ok(result.includes("PASS B22 real Mercur validate: fully attributed Beta Cart + approved Gamma Store passed L before revoke; after actual Owner revoke workflow denies before OrderGroup/Order/payment writes and preserves native Cart"),"Missing post-revocation Mercur validate denial evidence")
       }
 
