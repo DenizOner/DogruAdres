@@ -584,8 +584,20 @@ export default async function({container}:any){
       return r.status
     })()`)
     assert.equal(forgedCustomer,400)
+    // Dual-proof linking updates the active privacy epoch. If the Organization
+    // workspace was concealed, restore it via a real Chrome navigation and
+    // server-validated Organization selection. Never fake document.hidden.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    if(!await reviewer.eval("!document.getElementById('workspace').hidden && !document.getElementById('buyer-context-panel').hidden")){
+      await reviewer.send("Page.reload",{ignoreCache:true})
+      await reviewer.wait("document.getElementById('workspace').hidden===false")
+      await reviewer.select(organizations[0].name,"member")
+      await reviewer.wait("!document.getElementById('buyer-context-panel').hidden")
+    }
     await reviewer.click('#buyer-customer-check')
     await reviewer.wait("document.getElementById('buyer-customer-status').textContent.includes('Kuruluş izni ve mevcut müşteri bağınız doğrulandı')")
+    process.stdout.write("PASS B22 linked Customer profile reload and buyer Organization privacy-safe UI check\\n")
     assert.equal((await q(`select count(*)::int n from da_verified_actor_binding
       where person_id=$1 and actor_type='customer' and revoked_at is null`,
       [B.person]))[0].n,1)
