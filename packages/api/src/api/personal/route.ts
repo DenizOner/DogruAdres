@@ -193,6 +193,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="org-stores-status" role="status" aria-live="polite"></p>
     <div id="org-stores"></div>
     <button id="org-stores-refresh" type="button" hidden>Mağazaları yenile</button>
+    <section id="store-block-panel" hidden aria-labelledby="store-block-title">
+      <h3 id="store-block-title">Mağazanın alıcı kuruluş engelleri</h3>
+      <p>Bu mağazanın bağlı olduğu kuruluşun Owner'ı, belirli bir alıcı kuruluşun bu mağazadan yeni satın alma uygunluğunu engelleyebilir veya engeli kaldırabilir. Diğer mağazalar etkilenmez. Bu işlem geçmiş siparişleri değiştirmez.</p>
+      <p id="store-block-status" role="status" aria-live="polite"></p>
+      <form id="store-block-form">
+        <label>Onaylı mağaza<select name="seller_id" required></select></label>
+        <label>Alıcı kuruluş kimliği<input name="buyer_organization_id" type="text" pattern="daorg_[A-Za-z0-9_-]{1,80}" required autocomplete="off" placeholder="daorg_..." /></label>
+        <button type="submit" name="action" value="block">Kuruluşu bu mağazada engelle</button>
+        <button type="submit" name="action" value="unblock">Engeli kaldır</button>
+      </form>
+    </section>
     <section id="product-grants-panel" hidden aria-labelledby="product-grants-title">
       <h3 id="product-grants-title">Mağaza ürün düzenleme yetkileri</h3>
       <p>Yalnız kuruluş Owner'ı, aktif üyeye kendi kuruluşunun onaylı mağazası için ayrı ürün düzenleme izni verebilir veya iptal edebilir. Hiçbir üyeye otomatik izin atanmaz.</p>
@@ -515,6 +526,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         void buyerContext(id,request);
         if(managerRole==='owner')void productPermissions(id,request);
         if(managerRole==='owner')void buyerPermissions(id,request);
+        if(managerRole==='owner')void storeBlockStores(id,request);
       }
       if(request===organizationRequest&&currentOrg===id&&!el('pending-invitations-panel').hidden)
         void pendingInvitations(id,request);
@@ -534,6 +546,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   function clearOrganizationStores(){
+    clearStoreBlock();
     clearProductPermissions();
     clearBuyerPermissions();
     clearBuyerContext();
@@ -684,6 +697,93 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(!e.uncertain){applicationKey='';button.disabled=false}
     }
   };
+  // Store Buyer Organization policy remains separate from member permissions.
+  // Only this selected legal Organization's Owner sees the controls; the
+  // server independently checks fresh Owner, verified Store origin and native
+  // Seller/Member before every write. Visibility is NOT authorization.
+  let storeBlockRequest=0;
+  function clearStoreBlock(){
+    storeBlockRequest++;
+    const panel=el('store-block-panel'),form=el('store-block-form');
+    if(panel)panel.hidden=true;
+    const msg=el('store-block-status');if(msg)msg.textContent='';
+    if(form&&typeof form.querySelectorAll==='function'){
+      for(const select of form.querySelectorAll('select'))select.replaceChildren();
+      for(const button of form.querySelectorAll('button'))button.disabled=true;
+      if(typeof form.reset==='function')form.reset();
+    }
+  }
+  async function storeBlockStores(org,request){
+    if(request!==organizationRequest||currentOrg!==org||
+      document.hidden||el('workspace').hidden)return;
+    const seq=++storeBlockRequest,panel=el('store-block-panel');
+    const form=el('store-block-form'),msg=el('store-block-status');
+    if(!panel||!form||!form.elements)return;
+    panel.hidden=true;msg.textContent='Mağaza izinleri kontrol ediliyor…';
+    try{
+      const data=await api('organization-stores?organization='+encodeURIComponent(org));
+      if(seq!==storeBlockRequest||request!==organizationRequest||
+         currentOrg!==org||document.hidden)return;
+      if(data.organization_id!==org||!Array.isArray(data.stores)||
+         data.stores.length>50||
+         data.stores.some(s=>typeof s.id!=='string'||
+           !/^sel_[A-Za-z0-9_-]+$/.test(s.id)||typeof s.name!=='string')||
+         new Set(data.stores.map(s=>s.id)).size!==data.stores.length)
+        throw new Error('Mağazalar doğrulanamadı');
+      const select=form.elements.namedItem('seller_id');
+      select.replaceChildren();
+      for(const store of data.stores){
+        const option=document.createElement('option');
+        option.value=store.id;option.textContent=store.name;select.append(option);
+      }
+      for(const button of form.querySelectorAll('button'))
+        button.disabled=data.stores.length===0;
+      panel.hidden=data.stores.length===0;
+      msg.textContent=data.stores.length?
+        'Yalnız kendi mağazanız için alıcı kuruluş engeli koyabilirsiniz.':
+        'Onaylı mağaza bulunamadı.';
+    }catch(e){
+      if(seq!==storeBlockRequest||request!==organizationRequest||currentOrg!==org)return;
+      panel.hidden=true;
+      msg.textContent='Mağaza politikası yönetme izniniz doğrulanamadı.';
+    }
+  }
+  const storeBlockForm=el('store-block-form');
+  if(storeBlockForm)storeBlockForm.onsubmit=async event=>{
+    event.preventDefault();
+    if(document.hidden||el('workspace').hidden)return;
+    const request=organizationRequest,org=currentOrg,form=event.currentTarget;
+    const action=event.submitter?.value;
+    if(!org||!['block','unblock'].includes(action))return;
+    const seller_id=form.elements.namedItem('seller_id')?.value;
+    const buyer_organization_id=String(
+      form.elements.namedItem('buyer_organization_id')?.value||'').trim();
+    if(!/^sel_[A-Za-z0-9_-]+$/.test(seller_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyer_organization_id))return;
+    const msg=el('store-block-status');
+    for(const button of form.querySelectorAll('button'))button.disabled=true;
+    msg.textContent='Mağaza politikası sunucuda doğrulanıyor…';
+    try{
+      const result=await api('store-buyer-blocks',{method:'POST',body:JSON.stringify({
+        action,organization_id:org,seller_id,buyer_organization_id
+      })});
+      if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+      if(result.status!==(action==='block'?'blocked':'unblocked'))
+        throw new Error('Yanıt doğrulanamadı');
+      msg.textContent=action==='block'?
+        'Alıcı kuruluş bu mağazada engellendi.':
+        'Bu mağazadaki alıcı kuruluş engeli kaldırıldı.';
+    }catch(e){
+      if(request!==organizationRequest||currentOrg!==org)return;
+      msg.textContent=e.uncertain?
+        'Sonuç belirsiz. Yeniden işlem göndermeden önce yetkili kayıt kontrolü gerekli.':
+        'İşlem reddedildi; mağaza politikasını değiştiremediniz.';
+    }finally{
+      if(request===organizationRequest&&currentOrg===org&&!document.hidden)
+        for(const button of form.querySelectorAll('button'))button.disabled=false;
+    }
+  };
+
   async function organizationStores(org,request){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
     const seq=++storeRequest;
