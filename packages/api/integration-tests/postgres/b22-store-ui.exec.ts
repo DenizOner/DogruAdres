@@ -2046,11 +2046,14 @@ export default async function({container}:any){
         [expiredProbeKey]))[0].n,1,
         "Expired provider row persists without an explicit release")
     }finally{
-      assert.equal(await locking.release(expiredProbeKey),true,
-        "Only this exact task-owned expired probe lock is released")
+      // In Medusa 2.21.2 release() deletes an expired row but returns false
+      // because its TTL has elapsed. Verify actual deletion below instead.
+      assert.equal(await locking.release(expiredProbeKey),false,
+        "Expired scoped lock release reports elapsed lease")
     }
     assert.equal((await q("select count(*)::int n from locking where id=$1",
-      [expiredProbeKey]))[0].n,0)
+      [expiredProbeKey]))[0].n,0,
+      "Only the task-owned expired probe row is deleted")
     process.stdout.write("\nPASS B22 PostgreSQL expired lock behavior: task-owned one-second lock remained after expiration and rejected reacquisition; only explicit scoped release cleared it; crash recovery is NOT proven\n")
     type NativeCartAttempt={run?:any;error?:string}
     const startCartAttempt=():Promise<NativeCartAttempt>=>
