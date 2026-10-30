@@ -510,6 +510,96 @@ export default async function({container}:any){
       [A.person,organizations[0].id,ownerStoreId])
     assert.equal(revokeAudit[0].n,1,"Revocation requires canonical outbox")
     process.stdout.write("PASS B22 Chrome: Owner grants active Member scoped products.edit, retry idempotent, foreign Member/staff 403, Owner revokes with PG16 audit/outbox\\n")
+    // B22 actual visitor draft writer: Owner may grant THEMSELVES an explicit
+    // permission but protected Owner alone still confers no product privilege.
+    assert.equal((await get('/personal/product-drafts?organization_id='+organizations[0].id)).status,200)
+    assert.deepEqual((await get('/personal/product-drafts?organization_id='+organizations[0].id)).body.stores,[])
+    await browser.wait("!document.getElementById('product-grants-panel').hidden")
+    await browser.eval(`(()=>{
+      const f=document.getElementById('product-grants-form')
+      f.elements.namedItem('seller_id').value=${JSON.stringify(ownerStoreId)}
+      f.elements.namedItem('membership_id').value=${JSON.stringify(memberships[0].id)}
+    })()`)
+    await browser.click('#product-grants-form button[value="grant"]')
+    await browser.wait("!document.getElementById('product-draft-panel').hidden")
+    const draftTitle="B22 browser product draft "+rand
+    await browser.input("#product-draft-form input[name=title]",draftTitle)
+    await browser.eval(`document.querySelector('#product-draft-form select[name=seller_id]').value=${JSON.stringify(ownerStoreId)}`)
+    await browser.click("#product-draft-form button[type=submit]")
+    await until(async()=>{
+      const result=await q("select id,status from product where title=$1",[draftTitle])
+      return result.length===1&&result[0].status==="draft"
+    },19000,"B22 actual personal draft native PG16 persistence")
+    await browser.wait("document.getElementById('product-draft-status').textContent.includes('Ürün taslağı kaydedildi')")
+    const [written]=await q("select id,status,metadata from product where title=$1",[draftTitle])
+    assert.match(written.id,/^prod_[A-Za-z0-9_-]+$/)
+    assert.equal(written.status,"draft")
+    const requestId=written.metadata?.dogruadres_draft_request_id
+    assert.match(requestId,/^dapd_[0-9a-f]{32}$/)
+    assert.deepEqual((await q("select seller_id from product_seller where product_id=$1",[written.id]))
+      .map((row:any)=>row.seller_id),[ownerStoreId])
+    const [intent]=await q(`select status,person_id,organization_id,seller_id,product_id,
+      completion_audit_event_id from da_product_draft_request where id=$1`,[requestId])
+    assert.equal(intent.status,"created")
+    assert.equal(intent.person_id,A.person)
+    assert.equal(intent.organization_id,organizations[0].id)
+    assert.equal(intent.seller_id,ownerStoreId)
+    assert.equal(intent.product_id,written.id)
+    const audit=await q(`select e.id from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.id=$1 and e.action='organization.product_draft_created'
+        and e.actor_person_id=$2 and e.organization_id=$3 and e.target_id=$4
+        and e.new_values->>'request_id'=$5 and e.new_values->>'product_id'=$6`,
+      [intent.completion_audit_event_id,A.person,organizations[0].id,ownerStoreId,requestId,written.id])
+    assert.equal(audit.length,1,"Real product draft and canonical outbox must correspond")
+    const productRequest={request_id:requestId,organization_id:organizations[0].id,
+      seller_id:ownerStoreId,title:draftTitle}
+    const draftPost=async(payload:Record<string,string>)=>browser.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json();
+      const response=await fetch('/personal/product-drafts',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify(${JSON.stringify(payload)})
+      });return {status:response.status,body:await response.json()}
+    })()`)
+    const replayProduct=await draftPost(productRequest)
+    assert.equal(replayProduct.status,200)
+    assert.equal(replayProduct.body.product_id,written.id)
+    assert.equal((await draftPost({...productRequest,title:draftTitle+" changed"})).status,403)
+    assert.equal((await draftPost({...productRequest,organization_id:organizations[1].id})).status,403)
+    assert.equal((await q("select count(*)::int n from product where title=$1",[draftTitle]))[0].n,1)
+    assert.equal((await q("select count(*)::int n from da_product_draft_request where id=$1",[requestId]))[0].n,1)
+    // A different Alpha Member, even a Beta Owner/platform reviewer, cannot
+    // use A's intent or product without the independent products.edit grant.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    const memberCannotWrite=await reviewer.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json();
+      const response=await fetch('/personal/product-drafts',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify(${JSON.stringify({...productRequest,request_id:"dapd_"+randomBytes(16).toString("hex")})})
+      });return response.status
+    })()`)
+    assert.equal(memberCannotWrite,403)
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.wait("!document.getElementById('product-grants-panel').hidden")
+    await browser.eval(`(()=>{
+      const f=document.getElementById('product-grants-form')
+      f.elements.namedItem('seller_id').value=${JSON.stringify(ownerStoreId)}
+      f.elements.namedItem('membership_id').value=${JSON.stringify(memberships[0].id)}
+    })()`)
+    await browser.click('#product-grants-form button[value="revoke"]')
+    await until(async()=>{
+      const rows=await q(`select count(*)::int n from da_store_product_permission
+        where person_id=$1 and organization_id=$2 and seller_id=$3
+          and permission='products.edit' and revoked_at is null`,
+        [A.person,organizations[0].id,ownerStoreId])
+      return rows[0].n===0
+    },19000,"B22 product permission revoke invalidates writer")
+    assert.equal((await draftPost(productRequest)).status,403,
+      "Even a completed intent cannot disclose its old product after revoke")
+    assert.equal((await q("select count(*)::int n from product where title=$1",[draftTitle]))[0].n,1)
+    process.stdout.write("PASS B22 Chrome: personally authorized native draft, PG16 product_seller and canonical audit/outbox, exact replay no duplicate, conflicting key/foreign Member/revoked permission denied\\n")
     // Native Member context now requires the SAME live legal Organization
     // used by the personal Store list; SellerMember alone is insufficient.
     const storeContext=(org:string,seller:string)=>
