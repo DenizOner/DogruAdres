@@ -1148,10 +1148,11 @@ export default async function({container}:any){
     assert.equal((await native.listSellers({id:gammaSellerId}))[0].status,"open")
     assert.equal((await get(selected(sellerGamma.id))).body.stores[0].id,
       gammaSellerId)
-    assert.deepEqual((await get(selected(organizations[0].id))).body.stores
-      .map((store:any)=>store.id).sort(),
-      [ownerStoreId,secondOwnerStoreId].sort(),
-      "Gamma ownership must not leak into Alpha")
+    const alphaAfterGamma=(await get(selected(organizations[0].id))).body.stores
+    assert.deepEqual(alphaAfterGamma.map((store:any)=>store.id),
+      [ownerStoreId],
+      "Gamma must not enter Alpha; previously suspended second Alpha Store stays excluded")
+    assert.equal(alphaAfterGamma.some((store:any)=>store.id===gammaSellerId),false)
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
