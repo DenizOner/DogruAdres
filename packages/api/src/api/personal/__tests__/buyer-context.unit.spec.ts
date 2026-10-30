@@ -100,6 +100,8 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
     })
   })
   it("POST attributes only with CSRF, dual-proof Customer and live native Cart",async()=>{
+    // A completed Foundation claim must be readable with matching audit/outbox.
+    svc.personalBuyerCartAttribution.mockResolvedValue(true)
     await POST(req,res)
     expect(svc.personalClaimBuyerCart).toHaveBeenCalledWith(
       "opaque","daorg_a","cart_a","cus_a")
