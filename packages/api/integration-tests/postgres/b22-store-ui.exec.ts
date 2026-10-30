@@ -1245,7 +1245,9 @@ export default async function({container}:any){
     for(const actor of [reviewer,browser]){
       const denied=await tryNativeCompletion(actor)
       assert.equal(denied.status,401,
-        "A valid personal session is not native checkout authority")
+        "Checkout returned "+denied.status+"; denial body="+
+        JSON.stringify(denied.body).slice(0,380)+
+        "; a pre-route 400 is NOT proof that native ingress ran")
       assert.deepEqual(denied.body,{
         message:"Personal session ingress required"
       })
