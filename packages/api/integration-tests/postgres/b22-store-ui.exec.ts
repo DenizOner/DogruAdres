@@ -16,6 +16,7 @@ import {tmpdir} from "node:os"
 import {spawnSync} from "node:child_process"
 import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
+import {ingressConfig} from "../../src/utils/ingress-config"
 import {approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow} from "@mercurjs/core/workflows"
 import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
@@ -41,6 +42,9 @@ export default async function({container}:any){
   let server:ReturnType<typeof tlsServer>|undefined
   let privateServer:ReturnType<typeof plainServer>|undefined
   const previousPrivateOrigin=process.env.DOGRUADRES_PRIVATE_API
+  const previousTlsCert=process.env.DOGRUADRES_TLS_CERT
+  const previousTlsKey=process.env.DOGRUADRES_TLS_KEY
+  const previousListenerPort=process.env.DOGRUADRES_FRONTDOOR_PORT
   const browsers:B06Chrome[]=[]
   const temp=mkdtempSync(join(tmpdir(),"b22-task-ca-"))
   try{
@@ -157,6 +161,12 @@ export default async function({container}:any){
     await new Promise<void>((resolve,reject)=>{server!.once("error",reject);server!.listen(0,"127.0.0.1",resolve)})
     const host="https://127.0.0.1:"+(server.address() as any).port
     process.env.DOGRUADRES_PUBLIC_ORIGIN=host
+    process.env.DOGRUADRES_TLS_CERT=crt
+    process.env.DOGRUADRES_TLS_KEY=key
+    process.env.DOGRUADRES_FRONTDOOR_PORT=(server.address() as {port:number}).port.toString()
+    const topology=ingressConfig(process.env)
+    assert.equal(topology.privateOrigin,process.env.DOGRUADRES_PRIVATE_API)
+    assert.equal(topology.publicOrigin,host)
     const browser=new B06Chrome(host,"A");browsers.push(browser)
     await browser.start(crt)
     await browser.login(A.email,A.password,A.person)
@@ -405,7 +415,10 @@ export default async function({container}:any){
       '/personal/contexts?type=member&organization='+encodeURIComponent(org)+
       '&seller='+encodeURIComponent(seller)
     const authorizedContext=await get(storeContext(organizations[0].id,ownerStoreId))
-    assert.equal(authorizedContext.status,200)
+    assert.equal(authorizedContext.status,200,
+      "B22 native Member context response category: "+
+      (typeof authorizedContext.body?.message==="string"?
+        authorizedContext.body.message.slice(0,50):"unavailable"))
     assert.equal(authorizedContext.body.organization_id,organizations[0].id)
     assert.equal(authorizedContext.body.seller.id,ownerStoreId)
     assert.equal((await get(storeContext(organizations[1].id,ownerStoreId))).status,403)
@@ -569,6 +582,12 @@ export default async function({container}:any){
     if(privateServer)await new Promise<void>(r=>privateServer!.close(()=>r()))
     if(previousPrivateOrigin===undefined)delete process.env.DOGRUADRES_PRIVATE_API
     else process.env.DOGRUADRES_PRIVATE_API=previousPrivateOrigin
+    if(previousTlsCert===undefined)delete process.env.DOGRUADRES_TLS_CERT
+    else process.env.DOGRUADRES_TLS_CERT=previousTlsCert
+    if(previousTlsKey===undefined)delete process.env.DOGRUADRES_TLS_KEY
+    else process.env.DOGRUADRES_TLS_KEY=previousTlsKey
+    if(previousListenerPort===undefined)delete process.env.DOGRUADRES_FRONTDOOR_PORT
+    else process.env.DOGRUADRES_FRONTDOOR_PORT=previousListenerPort
     if(app)await app.close()
     await pg.end()
     rmSync(temp,{recursive:true,force:true})
