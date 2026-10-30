@@ -1411,10 +1411,102 @@ export default async function({container}:any){
       da_buyer_cart_attribution where cart_id=$1`,
       [betaTwoSellerCart.id]))[0].organization_id,organizations[1].id)
     process.stdout.write("PASS B22 Alpha/Gamma separate legal Seller Organizations and Beta legal Buyer: two native Offers/Cart, two platform-approved Owner-origin links, wrong issuer 403, each Store block denies full scope, cross-Buyer isolation, independent unblock and audit history, checkout closed\\n")
+    // Prepare a real, fully authorized Beta cart against Gamma while Beta buyer.purchase is still active.
+    // The same cart will be completed only after the subsequent real Owner revocation.
+    const hookProbeSku="B22-HOOK-REVOKED-GRANT-"+rand
+    const {result:[hookProbeOffer]}=await createOffersWorkflow(container).run({
+      input:{offers:[{
+        seller_id:gammaSellerId,created_by:member.id,sku:hookProbeSku,
+        variant_id:variant.id,shipping_profile_id:b22Profile.id,
+        inventory_items:[{sku:hookProbeSku,stock_levels:[]}],
+        prices:[{amount:0,currency_code:"eur"}],
+        manage_inventory:false,allow_backorder:true
+      }]}
+    })
+    assert.match(hookProbeOffer.id,/^offer_[A-Za-z0-9_-]+$/)
+    assert.equal(hookProbeOffer.seller_id,gammaSellerId)
+    const hookProbeSeller=await native.listSellers({id:gammaSellerId})
+    assert.equal(hookProbeSeller.length,1)
+    assert.equal(hookProbeSeller[0].status,"open")
+    assert.ok(hookProbeSeller[0].approved_at)
+    const hookProbeCart=await cartService.createCarts({
+      currency_code:"eur",customer_id:nativeCustomer.id
+    })
+    await cartService.updateCarts(hookProbeCart.id,{
+      region_id:region.id,sales_channel_id:market.id
+    })
+    await addToCartWorkflow(container).run({input:{
+      cart_id:hookProbeCart.id,
+      items:[{variant_id:variant.id,offer_id:hookProbeOffer.id,quantity:1,
+        requires_shipping:true,metadata:{offer_id:hookProbeOffer.id}} as any]
+    }})
+    const {data:hookProbeBefore}=await query.graph({
+      entity:"cart",fields:["id","total","completed_at","customer.id",
+        "items.id","items.offer.id","items.offer.seller_id"],
+      filters:{id:hookProbeCart.id}
+    })
+    assert.equal(hookProbeBefore.length,1)
+    assert.equal(hookProbeBefore[0].customer?.id,nativeCustomer.id)
+    assert.equal(Number(hookProbeBefore[0].total),0)
+    assert.equal(hookProbeBefore[0].completed_at,null)
+    assert.equal(hookProbeBefore[0].items.length,1)
+    assert.equal(hookProbeBefore[0].items[0].offer?.id,hookProbeOffer.id)
+    assert.equal(hookProbeBefore[0].items[0].offer?.seller_id,gammaSellerId)
+    const hookProbeClaim=await claimCart(organizations[1].id,hookProbeCart.id)
+    assert.equal(hookProbeClaim.status,200)
+    assert.equal(hookProbeClaim.body.organization_id,organizations[1].id)
+    assert.equal(hookProbeClaim.body.checkout_ready,false)
+    const hookProbeAttribution=await q(`select a.person_id,a.customer_id,a.organization_id,
+      e.action,x.id as outbox_id from da_buyer_cart_attribution a
+      join da_audit_event e on e.id=a.source_audit_event_id
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where a.cart_id=$1`,[hookProbeCart.id])
+    assert.equal(hookProbeAttribution.length,1)
+    assert.equal(hookProbeAttribution[0].person_id,B.person)
+    assert.equal(hookProbeAttribution[0].customer_id,nativeCustomer.id)
+    assert.equal(hookProbeAttribution[0].organization_id,organizations[1].id)
+    assert.equal(hookProbeAttribution[0].action,"organization.buyer_cart_attributed")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
+    ),true,"Before revocation L must allow the exact attributed Beta→Gamma cart")
+    process.stdout.write("PASS B22 pre-revocation control: real Customer + immutable Beta Cart attribution + approved Gamma Store + active buyer.purchase passes Foundation L; zero-value Cart remains open\\n")
     assert.equal((await betaPermission("revoke")).status,200)
     assert.equal((await readNativeCart(betaScopeUrl)).status,403,
       "Revoked buyer.purchase must remove Beta access even after both sellers unblock")
     process.stdout.write("PASS B22 explicit Beta grant cannot reassign Alpha Cart: both Organization buyer permissions tested; canonical audit ownership unchanged\\n")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
+    ),false,"Committed Beta buyer.purchase revocation before L must deny the fully valid Cart")
+    const hookRun=await completeCartWithSplitOrdersWorkflow(container).run({
+      input:{cart_id:hookProbeCart.id},throwOnError:false
+    })
+    const hookErrorText=(hookRun.errors??[]).map((entry:any)=>
+      String(entry.error?.message??entry.error??entry.message??"")).join("\n")
+    assert.match(hookErrorText,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
+      "Mercur validate must deny a fully attributed, otherwise-valid Cart after buyer.purchase revocation")
+    assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",[hookProbeCart.id]))[0].n,0)
+    const {data:hookOrderLinks}=await query.graph({
+      entity:"order_cart",fields:["order_id"],filters:{cart_id:hookProbeCart.id}
+    })
+    assert.equal(hookOrderLinks.length,0)
+    const {data:hookPaymentLinks}=await query.graph({
+      entity:"cart_payment_collection",fields:["payment_collection_id"],
+      filters:{cart_id:hookProbeCart.id}
+    })
+    assert.equal(hookPaymentLinks.length,0)
+    const {data:hookCartAfter}=await query.graph({
+      entity:"cart",fields:["id","total","completed_at","customer.id","items.id",
+        "items.offer.id","items.offer.seller_id"],filters:{id:hookProbeCart.id}
+    })
+    assert.equal(hookCartAfter.length,1)
+    assert.equal(Number(hookCartAfter[0].total),0)
+    assert.equal(hookCartAfter[0].completed_at,null)
+    assert.equal(hookCartAfter[0].customer?.id,nativeCustomer.id)
+    assert.equal(hookCartAfter[0].items.length,1)
+    assert.equal(hookCartAfter[0].items[0].offer?.id,hookProbeOffer.id)
+    assert.equal(hookCartAfter[0].items[0].offer?.seller_id,gammaSellerId)
+    process.stdout.write("PASS B22 real Mercur validate: fully attributed Beta Cart + approved Gamma Store passed L before revoke; after actual Owner revoke workflow denies before OrderGroup/Order/payment writes and preserves native Cart\\n")
+    process.stdout.write("NOT TESTED B22: successful order placement, authorization/capture with a real payment provider, post-L overlap orchestration, independent exact-PR acceptance\\n")
 
     const forgedBuyer=await reviewer.eval(`(async()=>{
       const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}&actor_id=cus_forged')
@@ -1944,85 +2036,6 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes; approved synthetic Store fixtures read and revoked access denied\n")
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
 
-    // Exercise the actual project-owned authorization hook with a valid
-    // native Customer, approved/open Seller and real Offer-backed Cart line.
-    // The only deliberately missing fact is immutable legal Buyer attribution,
-    // so the hook must reach Foundation's final authorization SELECT (L).
-    const hookProbeSku="B22-HOOK-FOUNDATION-"+rand
-    const {result:[hookProbeOffer]}=await createOffersWorkflow(container).run({
-      input:{offers:[{
-        seller_id:stores[1].id,created_by:member.id,sku:hookProbeSku,
-        variant_id:variant.id,shipping_profile_id:b22Profile.id,
-        inventory_items:[{sku:hookProbeSku,stock_levels:[]}],
-        prices:[{amount:0,currency_code:"eur"}],
-        manage_inventory:false,allow_backorder:true
-      }]}
-    })
-    assert.match(hookProbeOffer.id,/^offer_[A-Za-z0-9_-]+$/)
-    const hookProbeSeller=await native.listSellers({id:stores[1].id})
-    assert.equal(hookProbeSeller.length,1)
-    assert.equal(hookProbeSeller[0].status,"open")
-    assert.ok(hookProbeSeller[0].approved_at)
-
-    const hookProbeCart=await cartService.createCarts({
-      currency_code:"eur",customer_id:nativeCustomer.id
-    })
-    await cartService.updateCarts(hookProbeCart.id,{
-      region_id:region.id,sales_channel_id:market.id
-    })
-    await addToCartWorkflow(container).run({input:{
-      cart_id:hookProbeCart.id,
-      items:[{
-        variant_id:variant.id,offer_id:hookProbeOffer.id,quantity:1,
-        requires_shipping:true,metadata:{offer_id:hookProbeOffer.id}
-      } as any]
-    }})
-    const {data:hookProbeRows}=await query.graph({
-      entity:"cart",
-      fields:["id","total","credit_line_total","completed_at","customer.id",
-        "items.id","items.offer.id","items.offer.seller_id"],
-      filters:{id:hookProbeCart.id}
-    })
-    assert.equal(hookProbeRows.length,1)
-    assert.equal(hookProbeRows[0].id,hookProbeCart.id)
-    assert.equal(hookProbeRows[0].customer?.id,nativeCustomer.id)
-    assert.equal(Number(hookProbeRows[0].total),0)
-    assert.ok(Number(hookProbeRows[0].credit_line_total??0)>=0)
-    assert.equal(hookProbeRows[0].completed_at,null)
-    assert.equal(hookProbeRows[0].items.length,1)
-    assert.equal(hookProbeRows[0].items[0].offer?.id,hookProbeOffer.id)
-    assert.equal(hookProbeRows[0].items[0].offer?.seller_id,stores[1].id)
-    assert.equal((await q("select count(*)::int n from da_buyer_cart_attribution where cart_id=$1",
-      [hookProbeCart.id]))[0].n,0,
-      "The real Cart must have no legal Buyer attribution before the hook test")
-
-    const hookRun=await completeCartWithSplitOrdersWorkflow(container).run({
-      input:{cart_id:hookProbeCart.id},throwOnError:false
-    })
-    const hookErrorText=(hookRun.errors??[]).map((entry:any)=>
-      String(entry.error?.message??entry.error??entry.message??"")).join("\n")
-    assert.match(hookErrorText,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
-      "A valid Customer/Offer/Seller Cart must reach Foundation L and be denied only because legal Buyer attribution is absent")
-    assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
-      [hookProbeCart.id]))[0].n,0)
-    const {data:hookOrderLinks}=await query.graph({
-      entity:"order_cart",fields:["order_id"],filters:{cart_id:hookProbeCart.id}
-    })
-    assert.equal(hookOrderLinks.length,0)
-    const {data:hookPaymentLinks}=await query.graph({
-      entity:"cart_payment_collection",fields:["payment_collection_id"],
-      filters:{cart_id:hookProbeCart.id}
-    })
-    assert.equal(hookPaymentLinks.length,0)
-    const {data:hookCartAfter}=await query.graph({
-      entity:"cart",fields:["id","completed_at","items.id"],
-      filters:{id:hookProbeCart.id}
-    })
-    assert.equal(hookCartAfter.length,1)
-    assert.equal(hookCartAfter[0].completed_at,null)
-    assert.equal(hookCartAfter[0].items.length,1,
-      "Foundation denial must leave the real native Cart line unchanged")
-    process.stdout.write("PASS B22 Chrome: valid native Customer + open approved Seller + real Offer-backed zero-value Cart reach Mercur validate and Foundation L; absent legal Buyer attribution denies before OrderGroup/Order/payment writes; Cart and line stay unchanged; no payment writer\n")
   }finally{
     for(const b of browsers)await b.close()
     if(server)await new Promise<void>(r=>server!.close(()=>r()))
