@@ -132,7 +132,7 @@ async function run(){
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
             cwd:process.cwd(),env,encoding:"utf8",timeout:210000,maxBuffer:3*1024*1024})
           const valid=String(child.stdout??"").split("\n")
-            .filter(x=>/^PASS B22 Chrome:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native Mercur product workflow:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
+            .filter(x=>/^PASS B22 Chrome:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native Mercur product workflow:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
           if(child.error||child.status!==0)
             throw Error("B22 dedicated task-only child stage failed: "+sanitized(
               String(child.error??"exit "+child.status)+"\n"+String(child.stderr??"")+"\n"+String(child.stdout??"")))
