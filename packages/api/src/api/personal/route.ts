@@ -207,6 +207,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <button id="product-grants-refresh" type="button">İzinleri yenile</button>
     </section>
   </section>
+  <section id="buyer-context-panel" hidden aria-labelledby="buyer-context-title" style="grid-column:1/-1">
+    <h3 id="buyer-context-title">Bu kuruluş adına alışveriş</h3>
+    <p>Satın alma yetkiniz sunucuda doğrulanır. Bu doğrulama tek başına sepet, sipariş veya ödeme yetkisi vermez.</p>
+    <p id="buyer-context-status" role="status" aria-live="polite"></p>
+    <button id="buyer-context-refresh" type="button">Satın alma yetkimi yeniden denetle</button>
+  </section>
   <section id="buyer-grants-panel" hidden aria-labelledby="buyer-grants-title" style="grid-column:1/-1">
     <h3 id="buyer-grants-title">Kuruluş satın alma izinleri</h3>
     <p>Kuruluş Owner'ı, bu kuruluşun aktif üyesine ayrı satın alma izni verir veya iptal eder. Owner rolü veya kişisel müşteri hesabı kendiliğinden satın alma yetkisi vermez. Bu ekrandan sipariş veya ödeme yapılamaz.</p>
@@ -504,6 +510,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         if(['owner','admin'].includes(managerRole))void storeApplications(id,request,managerRole);
         void organizationStores(id,request);
         void productDraftStores(id,request);
+        void buyerContext(id,request);
         if(managerRole==='owner')void productPermissions(id,request);
         if(managerRole==='owner')void buyerPermissions(id,request);
       }
@@ -527,6 +534,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   function clearOrganizationStores(){
     clearProductPermissions();
     clearBuyerPermissions();
+    clearBuyerContext();
     clearProductDraft();
     storeRequest++;
     el('org-stores-panel').hidden=true;
@@ -702,6 +710,43 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
 
 
+
+  let buyerContextRequest=0;
+  function clearBuyerContext(){
+    buyerContextRequest++;
+    const panel=el('buyer-context-panel');
+    if(panel)panel.hidden=true;
+    const statusEl=el('buyer-context-status');
+    if(statusEl)statusEl.textContent='';
+  }
+  async function buyerContext(org,request){
+    if(request!==organizationRequest||currentOrg!==org||
+       document.hidden||el('workspace').hidden)return;
+    const panel=el('buyer-context-panel'),statusEl=el('buyer-context-status');
+    // Historical unit DOM stubs may not carry this new section.
+    if(!panel||!statusEl)return;
+    const seq=++buyerContextRequest;
+    panel.hidden=true;
+    statusEl.textContent='';
+    try{
+      const data=await api('buyer-context?organization_id='+encodeURIComponent(org));
+      if(seq!==buyerContextRequest||request!==organizationRequest||
+         currentOrg!==org||document.hidden||el('workspace').hidden)return;
+      if(data.organization_id!==org||
+         data.status!=='buyer_permission_verified'||data.checkout_ready!==false)
+        throw new Error('Kuruluş satın alma yetkisi doğrulanamadı');
+      statusEl.textContent='Bu kuruluş adına satın alma izniniz doğrulandı. Sepet ve ödeme henüz kullanıma açık değil.';
+      panel.hidden=false;
+    }catch(e){
+      if(seq!==buyerContextRequest||request!==organizationRequest||
+         currentOrg!==org)return;
+      statusEl.textContent='';
+      panel.hidden=true;
+    }
+  }
+  el('buyer-context-refresh').onclick=()=>{
+    if(currentOrg)void buyerContext(currentOrg,organizationRequest);
+  };
   let buyerPermissionRequest=0;
   function clearBuyerPermissions(){
     buyerPermissionRequest++;
@@ -786,6 +831,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('buyer-grants-status').textContent=action==='grant'?
         'Satın alma izni kaydedildi.':'Satın alma izni iptal edildi.';
       void buyerPermissions(org,request,true);
+      void buyerContext(org,request);
     }catch(e){
       if(request!==organizationRequest||currentOrg!==org)return;
       el('buyer-grants-status').textContent=e.uncertain?
