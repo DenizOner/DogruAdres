@@ -5,14 +5,18 @@ import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-
 
 export const AUTHENTICATE=false
 const org=z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/)
-/** Read-only, live Organization candidate selection. This is never a native
- * Customer login, checkout token, cart authorization or persisted buyer grant.
+/** Read-only live Organization/Customer/Cart candidate checks. A native cart
+ * belonging to a Customer is NOT yet a legal Organization-attributed cart.
+ * No checkout token, cart writer, cart line item, or persisted buyer grant.
  */
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Cache-Control","no-store")
   if(!enabled())return res.status(503).json({message:"Unavailable"})
-  const parsed=z.object({organization_id:org,customer:z.literal("verified").optional()}).strict().safeParse(req.query)
-  if(!parsed.success||req.headers["x-seller-id"]!==undefined)
+  const parsed=z.object({organization_id:org,customer:z.literal("verified").optional(),
+    cart_id:z.string().regex(/^cart_[A-Za-z0-9_-]{1,123}$/).optional()
+  }).strict().safeParse(req.query)
+  if(!parsed.success||req.headers["x-seller-id"]!==undefined||
+     (parsed.success&&parsed.data.cart_id&&parsed.data.customer!=="verified"))
     return res.status(400).json({message:"Invalid context"})
   const svc=access(req),token=sessionToken(req)
   try{
@@ -38,6 +42,24 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
         return res.status(403).json({message:"Access denied"})
       customerActorId=binding.actor_id
     }
+    // Medusa Cart Module has a native, indexed Customer-to-Cart relation.
+    // Verify ownership without exposing Cart contents. A Person-verified
+    // Customer can act for multiple Organizations: this does NOT attribute
+    // a native Cart to the selected legal Organization or authorize checkout.
+    const cartId=parsed.data.cart_id??null
+    let cartForCustomer=false
+    const carts=req.scope.resolve<{
+      listCarts(filter:{id:string;customer_id:string}):Promise<
+        Array<{id:string;customer_id?:string|null;completed_at?:Date|string|null}>>
+    }>("cart")
+    if(cartId&&customerActorId){
+      const nativeCarts=await carts.listCarts({id:cartId,customer_id:customerActorId})
+      if(nativeCarts.length!==1||nativeCarts[0].id!==cartId||
+         nativeCarts[0].customer_id!==customerActorId||
+         nativeCarts[0].completed_at!=null)
+        return res.status(403).json({message:"Access denied"})
+      cartForCustomer=true
+    }
     // A second live read before returning avoids advertising revoked access
     // across a remote query boundary. It is NOT a cross-module checkout lock.
     const current=await svc.personalBuyerOrganization(token,parsed.data.organization_id)
@@ -54,11 +76,20 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
         ("customer").listCustomers({id:customerActorId})
       if(freshCustomers.length!==1||freshCustomers[0].id!==customerActorId)
         return res.status(403).json({message:"Access denied"})
+      if(cartForCustomer&&cartId){
+        const freshCarts=await carts.listCarts({id:cartId,customer_id:customerActorId})
+        if(freshCarts.length!==1||freshCarts[0].id!==cartId||
+           freshCarts[0].customer_id!==customerActorId||
+           freshCarts[0].completed_at!=null)
+          return res.status(403).json({message:"Access denied"})
+      }
     }
     return res.status(200).json({
       organization_id:checked.organization_id,
-      status:customerActorId?"buyer_customer_verified":"buyer_permission_verified",
-      checkout_ready:false
+      status:cartForCustomer?"native_customer_cart_verified":
+        customerActorId?"buyer_customer_verified":"buyer_permission_verified",
+      checkout_ready:false,
+      ...(cartForCustomer?{organization_attributed:false}: {})
     })
   }catch(e){
     return res.status(e instanceof IdentityAccessDenied?403:503)

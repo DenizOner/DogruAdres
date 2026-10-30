@@ -17,7 +17,9 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
     ;(sessionToken as jest.Mock).mockReturnValue("opaque")
     ;(access as jest.Mock).mockReturnValue(svc)
     req={query:{organization_id:"daorg_a"},headers:{},
-      scope:{resolve:jest.fn(()=>({listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}))}}
+      scope:{resolve:jest.fn((key:string)=>key==="customer"?
+        {listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}:
+        {listCarts:jest.fn().mockResolvedValue([{id:"cart_a",customer_id:"cus_a",completed_at:null}])})}}
     res={status:jest.fn(),json:jest.fn(),setHeader:jest.fn()}
     res.status.mockReturnValue(res);res.json.mockReturnValue(res)
   })
@@ -39,6 +41,46 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
     expect(res.json).toHaveBeenCalledWith({
       organization_id:"daorg_a",status:"buyer_customer_verified",checkout_ready:false
     })
+  })
+  it("reads native Customer-owned open cart without attributing it to legal Organization",async()=>{
+    req.query.customer="verified";req.query.cart_id="cart_a"
+    await GET(req,res)
+    expect(req.scope.resolve).toHaveBeenCalledWith("cart")
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({
+      organization_id:"daorg_a",status:"native_customer_cart_verified",
+      checkout_ready:false,organization_attributed:false
+    })
+    expect(svc.personalBuyerOrganization).toHaveBeenCalledTimes(2)
+    expect(svc.personalActorBinding).toHaveBeenCalledTimes(2)
+  })
+  it("rejects foreign, anonymous, completed and missing native carts, no details leaked",async()=>{
+    req.query.customer="verified";req.query.cart_id="cart_a"
+    for(const rows of [[{id:"cart_a",customer_id:"cus_other",completed_at:null}],
+      [{id:"cart_a",customer_id:null,completed_at:null}],
+      [{id:"cart_a",customer_id:"cus_a",completed_at:"2026-10-30T00:00:00Z"}],[]]){
+      req.scope.resolve=jest.fn((key:string)=>key==="customer"?
+        {listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}:
+        {listCarts:jest.fn().mockResolvedValue(rows)})
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(403)
+      expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+    }
+  })
+  it("rejects cart selector without verified Customer proof or forged cart metadata",async()=>{
+    req.query.cart_id="cart_a"
+    await GET(req,res);expect(res.status).toHaveBeenCalledWith(400)
+    req.query.customer="verified";req.query.seller_id="sel_a"
+    await GET(req,res);expect(res.status).toHaveBeenLastCalledWith(400)
+    delete req.query.seller_id;req.query.cart_id="invalid"
+    await GET(req,res);expect(res.status).toHaveBeenLastCalledWith(400)
+  })
+  it("denies Customer cart when Organization buyer permission disappears",async()=>{
+    req.query.customer="verified";req.query.cart_id="cart_a"
+    svc.personalBuyerOrganization.mockResolvedValueOnce({
+      person_id:"daprs_a",organization_id:"daorg_a"
+    }).mockResolvedValueOnce(null)
+    await GET(req,res);expect(res.status).toHaveBeenCalledWith(403)
   })
   it("fails closed for missing, revoked, wrong-Person and stale Customer bindings",async()=>{
     req.query.customer="verified"
