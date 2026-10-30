@@ -453,7 +453,9 @@ export default async function({container}:any){
     }})
     assert.equal((await native.listSellers({id:olderPending.id}))[0].status,"suspended")
     await reviewer.click("#store-approval-newer")
-    await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
+    // Both pages expose one button: only page-1 Store identity proves the
+    // asynchronous page switch completed before approval.
+    await reviewer.wait(`document.querySelectorAll('#store-approval-list button').length===1 && document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`)
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
     // The real browser button invokes the project-owned staff-only adapter,
     // which reuses Mercur's native pending→open approval workflow.
