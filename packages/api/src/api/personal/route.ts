@@ -212,6 +212,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p>Satın alma yetkiniz sunucuda doğrulanır. Bu doğrulama tek başına sepet, sipariş veya ödeme yetkisi vermez.</p>
     <p id="buyer-context-status" role="status" aria-live="polite"></p>
     <button id="buyer-context-refresh" type="button">Satın alma yetkimi yeniden denetle</button>
+    <button id="buyer-customer-check" type="button">Doğrulanmış müşteri bağımı kontrol et</button>
+    <p id="buyer-customer-status" role="status" aria-live="polite"></p>
   </section>
   <section id="buyer-grants-panel" hidden aria-labelledby="buyer-grants-title" style="grid-column:1/-1">
     <h3 id="buyer-grants-title">Kuruluş satın alma izinleri</h3>
@@ -718,6 +720,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(panel)panel.hidden=true;
     const statusEl=el('buyer-context-status');
     if(statusEl)statusEl.textContent='';
+    const nativeStatus=el('buyer-customer-status');
+    if(nativeStatus)nativeStatus.textContent='';
   }
   async function buyerContext(org,request){
     if(request!==organizationRequest||currentOrg!==org||
@@ -746,6 +750,25 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   el('buyer-context-refresh').onclick=()=>{
     if(currentOrg)void buyerContext(currentOrg,organizationRequest);
+  };
+  el('buyer-customer-check').onclick=async()=>{
+    const org=currentOrg,request=organizationRequest;
+    const statusEl=el('buyer-customer-status');
+    if(!org||document.hidden||el('workspace').hidden||
+       el('buyer-context-panel').hidden)return;
+    statusEl.textContent='Müşteri bağı kontrol ediliyor…';
+    try{
+      const result=await api('buyer-context?organization_id='+
+        encodeURIComponent(org)+'&customer=verified');
+      if(org!==currentOrg||request!==organizationRequest||
+         document.hidden||el('workspace').hidden)return;
+      if(result.organization_id!==org||result.status!=='buyer_customer_verified'||
+         result.checkout_ready!==false)throw new Error('Müşteri bağı doğrulanamadı');
+      statusEl.textContent='Kuruluş izni ve mevcut müşteri bağınız doğrulandı. Sepet ve ödeme hâlâ kapalı.';
+    }catch(e){
+      if(org===currentOrg&&request===organizationRequest)
+        statusEl.textContent='Müşteri bağı doğrulanamadı. Bu kuruluş adına alışverişe geçilemiyor.';
+    }
   };
   let buyerPermissionRequest=0;
   function clearBuyerPermissions(){

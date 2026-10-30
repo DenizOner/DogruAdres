@@ -10,11 +10,14 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
     jest.resetAllMocks()
     svc={personalBuyerOrganization:jest.fn().mockResolvedValue({
       person_id:"daprs_a",organization_id:"daorg_a"
+    }),personalActorBinding:jest.fn().mockResolvedValue({
+      id:"dabind_a",person_id:"daprs_a",actor_id:"cus_a",revoked_at:null
     })}
     ;(enabled as jest.Mock).mockReturnValue(true)
     ;(sessionToken as jest.Mock).mockReturnValue("opaque")
     ;(access as jest.Mock).mockReturnValue(svc)
-    req={query:{organization_id:"daorg_a"},headers:{}}
+    req={query:{organization_id:"daorg_a"},headers:{},
+      scope:{resolve:jest.fn(()=>({listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}))}}
     res={status:jest.fn(),json:jest.fn(),setHeader:jest.fn()}
     res.status.mockReturnValue(res);res.json.mockReturnValue(res)
   })
@@ -26,6 +29,47 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
     expect(res.json).toHaveBeenCalledWith({organization_id:"daorg_a",
       status:"buyer_permission_verified",checkout_ready:false})
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","no-store")
+  })
+  it("requires dual-proof Customer binding and native existence for selected Organization",async()=>{
+    req.query.customer="verified"
+    await GET(req,res)
+    expect(svc.personalBuyerOrganization).toHaveBeenCalledTimes(2)
+    expect(svc.personalActorBinding).toHaveBeenCalledTimes(2)
+    expect(req.scope.resolve).toHaveBeenCalledWith("customer")
+    expect(res.json).toHaveBeenCalledWith({
+      organization_id:"daorg_a",status:"buyer_customer_verified",checkout_ready:false
+    })
+  })
+  it("fails closed for missing, revoked, wrong-Person and stale Customer bindings",async()=>{
+    req.query.customer="verified"
+    for(const invalid of [null,{person_id:"daprs_a",actor_id:"cus_a",revoked_at:"y"},
+      {person_id:"daprs_foreign",actor_id:"cus_a",revoked_at:null},
+      {person_id:"daprs_a",actor_id:"mem_a",revoked_at:null}]){
+      svc.personalActorBinding.mockResolvedValue(invalid)
+      await GET(req,res);expect(res.status).toHaveBeenLastCalledWith(403)
+    }
+    svc.personalActorBinding.mockResolvedValue({
+      id:"binding",person_id:"daprs_a",actor_id:"cus_a",revoked_at:null
+    }).mockResolvedValueOnce({person_id:"daprs_a",actor_id:"cus_a",revoked_at:null})
+      .mockResolvedValueOnce(null)
+    await GET(req,res);expect(res.status).toHaveBeenLastCalledWith(403)
+  })
+  it("rejects missing native Customer, or purchase grant revoked between reads",async()=>{
+    req.query.customer="verified"
+    req.scope.resolve=jest.fn(()=>({listCustomers:jest.fn().mockResolvedValue([])}))
+    await GET(req,res);expect(res.status).toHaveBeenCalledWith(403)
+    req.scope.resolve=jest.fn(()=>({listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}))
+    svc.personalBuyerOrganization.mockResolvedValueOnce({
+      person_id:"daprs_a",organization_id:"daorg_a"
+    }).mockResolvedValueOnce(null)
+    await GET(req,res);expect(res.status).toHaveBeenLastCalledWith(403)
+  })
+  it("rejects caller-supplied native customer ID or invalid customer proof selector",async()=>{
+    req.query.customer="cus_a"
+    await GET(req,res);expect(res.status).toHaveBeenCalledWith(400)
+    req.query.customer="verified";req.query.customer_id="cus_a"
+    await GET(req,res);expect(res.status).toHaveBeenLastCalledWith(400)
+    expect(svc.personalActorBinding).not.toHaveBeenCalled()
   })
   it("denies revoked or absent buyer.purchase and foreign organization",async()=>{
     svc.personalBuyerOrganization.mockResolvedValue(null)
