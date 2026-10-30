@@ -429,6 +429,95 @@ export default async function({container}:any){
     assert.equal(afterReview.length,1)
     assert.equal(afterReview[0].status,"open")
     assert.ok(afterReview[0].approved_at)
+
+    // B22 buyer.purchase is Organization-scoped and NEVER inferred from
+    // Owner/Member roles, native Customer or Store product permission.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("!document.getElementById('buyer-grants-panel').hidden")
+    const buyerBefore=await get('/personal/buyer-permissions?organization_id='+organizations[0].id)
+    assert.equal(buyerBefore.status,200)
+    assert.deepEqual(buyerBefore.body.grants,[],"Owner has no automatic buyer.purchase permission")
+    assert.equal((await q(`select count(*)::int n from da_organization_buyer_permission
+      where organization_id=$1`,[organizations[0].id]))[0].n,0)
+    await browser.eval(`document.querySelector('#buyer-grants-form select[name=membership_id]').value=${JSON.stringify(alphaMember.id)}`)
+    await browser.click('#buyer-grants-form button[value="grant"]')
+    await until(async()=>{
+      const rows=await q(`select id from da_organization_buyer_permission
+        where person_id=$1 and organization_id=$2 and permission='buyer.purchase'
+          and revoked_at is null`,[B.person,organizations[0].id])
+      return rows.length===1
+    },19000,"B22 real Chrome buyer permission issued")
+    const [buyerGrant]=await q(`select id,source_audit_event_id,issued_by_person_id
+      from da_organization_buyer_permission where person_id=$1
+        and organization_id=$2 and revoked_at is null`,
+      [B.person,organizations[0].id])
+    assert.equal(buyerGrant.issued_by_person_id,A.person)
+    assert.match(buyerGrant.id,/^dabpg_[A-Za-z0-9_-]+$/)
+    const buyerProof=await q(`select e.action,e.actor_person_id,e.organization_id,
+      e.target_id,x.id as outbox_id from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.id=$1 and e.new_values->>'grant_id'=$2
+        and e.new_values->>'person_id'=$3
+        and e.new_values->>'permission'='buyer.purchase'`,
+      [buyerGrant.source_audit_event_id,buyerGrant.id,B.person])
+    assert.equal(buyerProof.length,1)
+    assert.equal(buyerProof[0].action,"organization.buyer_permission_granted")
+    assert.equal(buyerProof[0].actor_person_id,A.person)
+    assert.equal(buyerProof[0].organization_id,organizations[0].id)
+    assert.equal(buyerProof[0].target_id,B.person)
+    const buyerRequest={action:"grant",organization_id:organizations[0].id,
+      membership_id:alphaMember.id}
+    const repeatBuyer=await browser.eval(`(async()=>{
+      const s=await(await fetch('/personal/session')).json()
+      const response=await fetch('/personal/buyer-permissions',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify(${JSON.stringify(buyerRequest)})
+      });return {status:response.status,body:await response.json()}
+    })()`)
+    assert.equal(repeatBuyer.status,200)
+    assert.equal(repeatBuyer.body.grant_id,buyerGrant.id)
+    assert.equal((await q(`select count(*)::int n from da_organization_buyer_permission
+      where person_id=$1 and organization_id=$2`,
+      [B.person,organizations[0].id]))[0].n,1)
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    const rejectedBuyer=await reviewer.eval(`(async()=>{
+      const s=await(await fetch('/personal/session')).json()
+      const response=await fetch('/personal/buyer-permissions',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify(${JSON.stringify(buyerRequest)})
+      });return response.status
+    })()`)
+    assert.equal(rejectedBuyer,403,
+      "Other Org Owner / platform staff cannot issue buyer.purchase in Alpha")
+    const foreignBuyer=await reviewer.eval(`(async()=>{
+      const response=await fetch('/personal/buyer-permissions?organization_id=${encodeURIComponent(organizations[0].id)}')
+      return response.status
+    })()`)
+    assert.equal(foreignBuyer,403,"Non-Owner cannot enumerate buyer grants")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.wait("!document.getElementById('buyer-grants-panel').hidden")
+    await browser.eval(`document.querySelector('#buyer-grants-form select[name=membership_id]').value=${JSON.stringify(alphaMember.id)}`)
+    await browser.click('#buyer-grants-form button[value="revoke"]')
+    await until(async()=>{
+      const rows=await q(`select revoked_at from da_organization_buyer_permission
+        where id=$1`,[buyerGrant.id])
+      return rows.length===1&&!!rows[0].revoked_at
+    },19000,"B22 Chrome Owner revokes explicit buyer.purchase")
+    const buyerRevoked=await q(`select count(*)::int n from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.action='organization.buyer_permission_revoked'
+        and e.actor_person_id=$1 and e.organization_id=$2
+        and e.target_id=$3 and e.previous_values->>'grant_id'=$4`,
+      [A.person,organizations[0].id,B.person,buyerGrant.id])
+    assert.equal(buyerRevoked[0].n,1,"Revocation must emit canonical outbox")
+    assert.equal((await q(`select count(*)::int n from da_organization_buyer_permission
+      where person_id=$1 and organization_id=$2 and revoked_at is null`,
+      [B.person,organizations[0].id]))[0].n,0)
+    process.stdout.write("PASS B22 Chrome: Organization Owner grants and revokes buyer.purchase for active Alpha Member, audit/outbox PG16, idempotent replay, foreign Org Owner/staff 403 and no automatic Owner permission; no checkout writer\\n")
     // The Organization Owner may explicitly grant AND revoke products.edit
     // for an active member; platform staff status is not sufficient.
     const [alphaMember]=await foundation.createMemberships([{
