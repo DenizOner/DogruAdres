@@ -1487,7 +1487,7 @@ export default async function({container}:any){
       )
       pendingBuyerRevoke=betaPermission("revoke").then(
         (response:any)=>({status:response.status as number}),
-        (error:unknown)=>({error:String(error)})
+        (error:unknown)=>({status:0,error:String(error)})
       )
       // Prove that the actual browser-driven mutation is already waiting on
       // this exact lock; merely starting a Promise would not prove overlap.
