@@ -1951,7 +1951,7 @@ export default async function({container}:any){
     const hookProbeSku="B22-HOOK-FOUNDATION-"+rand
     const {result:[hookProbeOffer]}=await createOffersWorkflow(container).run({
       input:{offers:[{
-        seller_id:ownerStoreId,created_by:member.id,sku:hookProbeSku,
+        seller_id:stores[1].id,created_by:member.id,sku:hookProbeSku,
         variant_id:variant.id,shipping_profile_id:b22Profile.id,
         inventory_items:[{sku:hookProbeSku,stock_levels:[]}],
         prices:[{amount:0,currency_code:"eur"}],
@@ -1959,7 +1959,7 @@ export default async function({container}:any){
       }]}
     })
     assert.match(hookProbeOffer.id,/^offer_[A-Za-z0-9_-]+$/)
-    const hookProbeSeller=await native.listSellers({id:ownerStoreId})
+    const hookProbeSeller=await native.listSellers({id:stores[1].id})
     assert.equal(hookProbeSeller.length,1)
     assert.equal(hookProbeSeller[0].status,"open")
     assert.ok(hookProbeSeller[0].approved_at)
@@ -1991,7 +1991,7 @@ export default async function({container}:any){
     assert.equal(hookProbeRows[0].completed_at,null)
     assert.equal(hookProbeRows[0].items.length,1)
     assert.equal(hookProbeRows[0].items[0].offer?.id,hookProbeOffer.id)
-    assert.equal(hookProbeRows[0].items[0].offer?.seller_id,ownerStoreId)
+    assert.equal(hookProbeRows[0].items[0].offer?.seller_id,stores[1].id)
     assert.equal((await q("select count(*)::int n from da_buyer_cart_attribution where cart_id=$1",
       [hookProbeCart.id]))[0].n,0,
       "The real Cart must have no legal Buyer attribution before the hook test")
