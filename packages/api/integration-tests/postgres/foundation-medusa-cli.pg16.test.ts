@@ -81,6 +81,7 @@ async function run(){
       DOGRUADRES_MFA_RUNTIME_ENABLED:"false",
       DOGRUADRES_MFA_ENROLLMENT_ENABLED:"false",
       DOGRUADRES_MFA_SETTINGS_ENABLED:"false",
+      ...(scope==="b22-ui"?{DOGRUADRES_B22_PG_LOCK_TEST:"true"}:{}),
     }
     const result=spawnSync(process.execPath,["run","medusa",...flags],{
       cwd:process.cwd(),env,encoding:"utf8",timeout:180000,maxBuffer:2*1024*1024,
@@ -97,6 +98,10 @@ async function run(){
       assert.ok(rows[0].outbox,"Medusa CLI did not discover canonical outbox migration")
       assert.ok(rows[0].membership,"Medusa CLI did not discover Foundation membership migration")
       assert.ok(rows[0].legal_ownership,"Medusa CLI did not discover B22 legal ownership migration")
+      if(scope==="b22-ui"){
+        const locks=await target.unsafe("select to_regclass('public.locking') as table_name")
+        assert.ok(locks[0].table_name,"Missing official PostgreSQL locking provider migration in disposable B22 CI database")
+      }
       const ledger=await target.unsafe("select count(*)::int as n from mikro_orm_migrations where name like 'Migration2026102%'")
       assert.ok(Number(ledger[0].n)>=1,"No Foundation migration history from Medusa CLI")
       process.stdout.write("PASS Medusa 2.21.2 CLI db:migrate: Foundation discovered and ledger recorded on disposable PG16\n")
