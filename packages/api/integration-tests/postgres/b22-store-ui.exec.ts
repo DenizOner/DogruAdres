@@ -111,6 +111,33 @@ export default async function({container}:any){
     const secondaryEnrolledCounter=Math.floor(Date.now()/30000)
     await auth.verifyAuthMfa({id:secondaryMfa.mfa.id,auth_identity_id:reg.authIdentity.id,
       code:otp(secondaryMfa.secret)})
+    // Medusa's installed Customer Module creates this task-only native actor.
+    // This Customer is NOT itself a legal Organization or purchase grant.
+    const customerEmail="b22-customer-"+rand+"@example.invalid"
+    const customerService=container.resolve("customer")
+    const [nativeCustomer]=await customerService.createCustomers([{
+      email:customerEmail
+    }])
+    assert.match(nativeCustomer.id,/^cus_[A-Za-z0-9_-]+$/)
+    const customerPassword=randomBytes(32).toString("base64url")
+    const customerReg=await auth.register("emailpass",{
+      body:{email:customerEmail,password:customerPassword}
+    })
+    assert.ok(customerReg.success&&customerReg.authIdentity?.id)
+    await auth.updateAuthIdentities({
+      id:customerReg.authIdentity.id,
+      app_metadata:{customer_id:nativeCustomer.id}
+    })
+    const customerMfa=await auth.startAuthMfa({
+      auth_identity_id:customerReg.authIdentity.id,
+      provider:"totp",issuer:"B22 isolated verified Customer"
+    })
+    const customerEnrollCounter=Math.floor(Date.now()/30000)
+    await auth.verifyAuthMfa({
+      id:customerMfa.mfa.id,
+      auth_identity_id:customerReg.authIdentity.id,
+      code:otp(customerMfa.secret)
+    })
     const stores: Array<{id:string;name:string}>=[]
     for(let n=0;n<3;n++){
       // Mercur's own Store workflow is authoritative for its native approval.
@@ -506,6 +533,63 @@ export default async function({container}:any){
       return response.status
     })()`)
     assert.equal(foreignBuyer,403,"Non-Owner cannot enumerate buyer grants")
+    // Before secondary dual proof the Alpha buyer grant is not sufficient
+    // to establish which current native Customer belongs to Person B.
+    const customerContext=(org:string)=>'/personal/buyer-context?organization_id='+
+      encodeURIComponent(org)+'&customer=verified'
+    const unlinkedCustomer=await reviewer.eval(`(async()=>{
+      const r=await fetch(${JSON.stringify(customerContext(organizations[0].id))})
+      return r.status
+    })()`)
+    assert.equal(unlinkedCustomer,403,
+      "buyer.purchase must not infer Customer from email, native registration or role")
+    // Real primary Chrome session + real native secondary password/TOTP
+    // via the existing supported dual-proof personal account link.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    await reviewer.eval("document.querySelector('#link-account select[name=actor_type]').value='customer'")
+    await reviewer.input("#link-account input[name=email]",customerEmail)
+    await reviewer.input("#link-account input[name=password]",customerPassword)
+    await reviewer.click("#link-account button")
+    await reviewer.wait("!document.getElementById('link-confirm').hidden")
+    await until(async()=>Math.floor(Date.now()/30000)>customerEnrollCounter,
+      45000,"Customer TOTP challenge must not reuse enrollment window")
+    await reviewer.input("#link-confirm input[name=code]",otp(customerMfa.secret))
+    await reviewer.click("#link-confirm button")
+    await reviewer.wait("document.getElementById('status').textContent==='Hesap bağlantısı tamamlandı'")
+    const verifiedCustomerBinding=await q(`select actor_id,proof_reference
+      from da_verified_actor_binding
+      where person_id=$1 and actor_type='customer' and revoked_at is null`,
+      [B.person])
+    assert.equal(verifiedCustomerBinding.length,1)
+    assert.equal(verifiedCustomerBinding[0].actor_id,nativeCustomer.id)
+    assert.match(verifiedCustomerBinding[0].proof_reference,/^dual-proof:/)
+    const readyCustomer=await reviewer.eval(`(async()=>{
+      const r=await fetch(${JSON.stringify(customerContext(organizations[0].id))})
+      return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}
+    })()`)
+    assert.equal(readyCustomer.status,200)
+    assert.deepEqual(readyCustomer.body,{
+      organization_id:organizations[0].id,
+      status:"buyer_customer_verified",checkout_ready:false
+    })
+    assert.match(readyCustomer.cache,/no-store/)
+    const wrongCustomerOrg=await reviewer.eval(`(async()=>{
+      const r=await fetch(${JSON.stringify(customerContext(organizations[1].id))})
+      return r.status
+    })()`)
+    assert.equal(wrongCustomerOrg,403)
+    const forgedCustomer=await reviewer.eval(`(async()=>{
+      const r=await fetch(${JSON.stringify(customerContext(organizations[0].id)+"&customer_id=cus_foreign")})
+      return r.status
+    })()`)
+    assert.equal(forgedCustomer,400)
+    await reviewer.click('#buyer-customer-check')
+    await reviewer.wait("document.getElementById('buyer-customer-status').textContent.includes('Kuruluş izni ve mevcut müşteri bağınız doğrulandı')")
+    assert.equal((await q(`select count(*)::int n from da_verified_actor_binding
+      where person_id=$1 and actor_type='customer' and revoked_at is null`,
+      [B.person]))[0].n,1)
+    process.stdout.write("PASS B22 Chrome: live Customer dual-proof binding + Alpha buyer.purchase / native Customer module, wrong Buyer Org 403, forged Customer 400, no JWT/checkout writer\\n")
     // B is Alpha Member and Beta Owner, but the selected legal buyer must
     // always be Alpha when Alpha's explicit buyer.purchase is granted.
     const verifiedBuyer=await reviewer.eval(`(async()=>{
@@ -559,6 +643,11 @@ export default async function({container}:any){
       return r.status
     })()`)
     assert.equal(deniedAfterRevoke,403,"Server rechecks revoked buyer.purchase")
+    assert.equal(await reviewer.eval(`(async()=>{
+      const r=await fetch(${JSON.stringify(customerContext(organizations[0].id))})
+      return r.status
+    })()`),403,"Revoked buyer.purchase denies even a valid native Customer")
+
     await reviewer.click('#buyer-context-refresh')
     await reviewer.wait("document.getElementById('buyer-context-panel').hidden===true")
     await browser.send("Page.bringToFront")
