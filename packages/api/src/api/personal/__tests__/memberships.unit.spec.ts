@@ -462,7 +462,7 @@ describe("personal memberships route", () => {
 
       // Test clicking the save button to change to admin
       selects[0].value = "admin"
-      saveButtons[0].onclick()
+      const roleChange = saveButtons[0].onclick()
 
       // Verify the POST request sent
       const postReq = h.state.pending.find(p => p.path === "memberships" && p.options?.method === "POST")
@@ -488,7 +488,7 @@ describe("personal memberships route", () => {
       const memRefresh = h.state.pending.find(p => p.path === `memberships?organization=${orgId}` && p !== h.state.pending[1])
       expect(memRefresh).toBeDefined()
       memRefresh!.resolve({ memberships: [{ id: "mem_ordinary", person_id: "p_ordinary", role: "admin", status: "active", protected_owner: false }] })
-      await settle()
+      await roleChange
 
       expect(h.state.status).toBe("Rol güncellendi")
     })
