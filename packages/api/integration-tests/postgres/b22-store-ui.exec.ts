@@ -1512,6 +1512,39 @@ export default async function({container}:any){
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Before revocation L must allow the exact attributed Beta→Gamma cart")
     process.stdout.write("PASS B22 pre-revocation control: real Customer + immutable Beta Cart attribution + approved Gamma Store + active buyer.purchase passes Foundation L; zero-value Cart remains open\\n")
+    // A real Owner's Store-specific Buyer Organization block must deny the
+    // native Mercur completion at L, not only the read-only Seller scope.
+    // Restore only this task-owned block before the separate permission race.
+    const gammaBlock=await betaSellerBlock("block",sellerGamma.id,gammaSellerId)
+    assert.equal(gammaBlock.status,200,"Gamma Owner Store block via authenticated Chrome")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
+    ),false,"Store Buyer Organization block committed before L must deny")
+    const storeBlockRun=await completeCartWithSplitOrdersWorkflow(container).run({
+      input:{cart_id:hookProbeCart.id},throwOnError:false
+    })
+    const storeBlockError=(storeBlockRun.errors??[]).map((entry:any)=>
+      String(entry.error?.message??entry.error??entry.message??"")).join("\n")
+    assert.match(storeBlockError,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
+      "Native Mercur validate must reject blocked Buyer before OrderGroup creation")
+    assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
+      [hookProbeCart.id]))[0].n,0)
+    const {data:blockOrderLinks}=await query.graph({
+      entity:"order_cart",fields:["order_id"],filters:{cart_id:hookProbeCart.id}
+    })
+    const {data:blockPaymentLinks}=await query.graph({
+      entity:"cart_payment_collection",fields:["payment_collection_id"],
+      filters:{cart_id:hookProbeCart.id}
+    })
+    assert.equal(blockOrderLinks.length,0)
+    assert.equal(blockPaymentLinks.length,0)
+    assert.equal((await cartService.retrieveCart(hookProbeCart.id)).completed_at,
+      null,"Blocked Store cannot complete previously valid Cart")
+    assert.equal((await betaSellerBlock("unblock",sellerGamma.id,gammaSellerId)).status,200)
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
+    ),true,"Unblock restores L eligibility only while buyer.purchase remains valid")
+    process.stdout.write("PASS B22 real Mercur validate: real Chrome Gamma Store Buyer block denies attributed Beta Cart before OrderGroup/Order/payment writes; unblock restores L without completing Cart\\n")
     // Deterministic L/commit race using the production buyer-permission
     // advisory lock and the real Chrome Owner mutation. No successful Cart
     // completion, OrderGroup or payment is exercised in this test.
