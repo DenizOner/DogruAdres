@@ -1331,6 +1331,48 @@ export default async function({container}:any){
       "A denied native checkout must not damage valid read-only Buyer scope")
     process.stdout.write("PASS B22 Mercur native split-order POST ingress: real Buyer/Owner/forged Bearer 401, zero OrderGroups, unchanged two-item Cart; no payment or checkout writer\\n")
 
+    // Mercur 2.3.7 processPaymentWorkflow can capture BEFORE the split-order
+    // validate hook. Verify the active native HTTP callback boundary itself
+    // (not only the public frontdoor), without a provider session or money.
+    const callbackPath="/hooks/payment/pp_system_default"
+    const callbackOrigin="http://127.0.0.1:"+nativePort
+    for(const authorization of [undefined,"Bearer b22-untrusted-not-a-token"]){
+      const callbackResponse=await fetch(callbackOrigin+callbackPath,{
+        method:"POST",headers:{"content-type":"application/json",
+          ...(authorization?{authorization}:{})},
+        body:JSON.stringify({b22_disposable_probe:true}),
+        signal:AbortSignal.timeout(15000)
+      })
+      assert.equal(callbackResponse.status,403,
+        "Native payment callback must fail closed before provider/workflow dispatch")
+      assert.deepEqual(await callbackResponse.json(),
+        {message:"Payment callback is not enabled"})
+    }
+    const chromeCallback=await reviewer.eval(`(async()=>{
+      const response=await fetch('/hooks/payment/pp_system_default',{
+        method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({b22_disposable_probe:true})
+      })
+      return {status:response.status,body:await response.json()}
+    })()`)
+    assert.equal(chromeCallback.status,403,
+      "Signed-in Chrome must not enable the native payment callback")
+    assert.deepEqual(chromeCallback.body,
+      {message:"Payment callback is not enabled"})
+    assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
+      [betaTwoSellerCart.id]))[0].n,0,
+      "Denied callback cannot create an OrderGroup")
+    const {data:callbackPaymentLinks}=await query.graph({
+      entity:"cart_payment_collection",fields:["payment_collection_id"],
+      filters:{cart_id:betaTwoSellerCart.id}
+    })
+    assert.equal(callbackPaymentLinks.length,0,
+      "Denied callback cannot attach a Cart payment collection")
+    assert.equal((await cartService.retrieveCart(betaTwoSellerCart.id)).completed_at,
+      null,"Denied callback must preserve the native open Cart")
+    process.stdout.write("PASS B22 Chrome: native private HTTP and signed-in HTTPS payment callbacks return 403; Cart open, zero OrderGroup and payment links; no provider/capture\\n")
+
+
     const betaSellerBlock=async(action:"block"|"unblock",
       sellerOrg:string,sellerId:string)=>browser.eval(`(async()=>{
         const session=await(await fetch('/personal/session')).json()
