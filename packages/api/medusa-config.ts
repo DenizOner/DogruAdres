@@ -7,6 +7,25 @@ import {ingressConfig} from './src/utils/ingress-config'
 
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
 
+// Official Medusa locking provider is enabled ONLY inside the previously
+// authorized B22 disposable PostgreSQL acceptance database. Production,
+// protected data, and every other runtime keep their existing configuration.
+const b22DisposablePgLock=process.env.DOGRUADRES_B22_PG_LOCK_TEST==="true"
+if(b22DisposablePgLock){
+  const db=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
+  if(process.env.CI!=="true"||process.env.GITHUB_ACTIONS!=="true"||
+      process.env.GITHUB_EVENT_NAME!=="pull_request"||
+      process.env.PG_MFA_TEST_SCOPE!=="b22-ui"||
+      process.env.PG_MFA_TEST_SENTINEL!=="mfa-pg16-disposable-ci-v1"||
+      process.env.NODE_ENV!=="test"||
+      db.protocol!=="postgres:"||db.hostname!=="127.0.0.1"||
+      db.port!=="5432"||db.username!=="mfa_test"||
+      db.password!=="ci-disposable-only-not-a-real-secret"||
+      !/^\/mfa_cli_ci_[0-9a-f]{16}$/.test(db.pathname))
+    throw new Error("REFUSED: B22 PostgreSQL locking only on an exact task-owned disposable CI database")
+}
+
+
 // Fail closed even when Medusa evaluates configuration during a production build.
 const httpSecrets = resolveHttpSecrets(process.env)
 if (process.env.DOGRUADRES_IDENTITY_ENABLED === 'true') {
@@ -51,6 +70,14 @@ module.exports = withMercur({
     seller_registration: true
   },
   modules: [
+    ...(b22DisposablePgLock ? [{
+      resolve: "@medusajs/medusa/locking",
+      options: { providers: [{
+        resolve: "@medusajs/medusa/locking-postgres",
+        id: "locking-postgres",
+        is_default: true,
+      }] },
+    }] : []),
     {
       resolve: '@medusajs/medusa/notification',
       dependencies: ['dogruadresAccess'],
