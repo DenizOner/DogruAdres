@@ -429,6 +429,87 @@ export default async function({container}:any){
     assert.equal(afterReview.length,1)
     assert.equal(afterReview[0].status,"open")
     assert.ok(afterReview[0].approved_at)
+    // The Organization Owner may explicitly grant AND revoke products.edit
+    // for an active member; platform staff status is not sufficient.
+    const [alphaMember]=await foundation.createMemberships([{
+      organization_id:organizations[0].id,person_id:B.person,role:"member",
+      status:"active",protected_owner:false
+    }])
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("!document.getElementById('product-grants-panel').hidden")
+    await browser.eval(`(()=>{
+      const f=document.getElementById('product-grants-form');
+      f.elements.namedItem('seller_id').value=${JSON.stringify(ownerStoreId)};
+      f.elements.namedItem('membership_id').value=${JSON.stringify(alphaMember.id)};
+    })()`)
+    await browser.click('#product-grants-form button[value="grant"]')
+    await until(async()=>{
+      const rows=await q(`select g.id from da_store_product_permission g
+        where g.person_id=$1 and g.organization_id=$2 and g.seller_id=$3
+          and g.permission='products.edit' and g.revoked_at is null`,
+        [B.person,organizations[0].id,ownerStoreId])
+      return rows.length===1
+    },19000,"B22 Chrome Owner actual products.edit permission")
+    const [issued]=await q(`select g.id,g.source_audit_event_id from da_store_product_permission g
+      where g.person_id=$1 and g.organization_id=$2 and g.seller_id=$3
+        and g.revoked_at is null`,[B.person,organizations[0].id,ownerStoreId])
+    const auditGrant=await q(`select e.action,e.actor_person_id,e.organization_id,e.target_id,x.id outbox_id
+      from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.id=$1 and e.new_values->>'grant_id'=$2`,[issued.source_audit_event_id,issued.id])
+    assert.equal(auditGrant.length,1)
+    assert.equal(auditGrant[0].action,"organization.store_product_permission_granted")
+    assert.equal(auditGrant[0].actor_person_id,A.person)
+    assert.equal(auditGrant[0].organization_id,organizations[0].id)
+    assert.equal(auditGrant[0].target_id,ownerStoreId)
+    // Repeating the exact grant cannot create a second event or grant.
+    const sameRequest={action:"grant",organization_id:organizations[0].id,
+      seller_id:ownerStoreId,membership_id:alphaMember.id}
+    const replayGrant=await browser.eval(`(async()=>{
+      const s=await(await fetch('/personal/session')).json();
+      const response=await fetch('/personal/store-product-permissions',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify(${JSON.stringify(sameRequest)})
+      });return {status:response.status,body:await response.json()}
+    })()`)
+    assert.equal(replayGrant.status,200)
+    assert.equal(replayGrant.body.grant_id,issued.id)
+    assert.equal((await q(`select count(*)::int n from da_store_product_permission
+      where person_id=$1 and organization_id=$2 and seller_id=$3`,
+      [B.person,organizations[0].id,ownerStoreId]))[0].n,1)
+    // A Person who is only a MEMBER of Alpha cannot grant products.edit,
+    // even if that Person has an unrelated Beta Owner and platform staff role.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    const forbiddenGrant=await reviewer.eval(`(async()=>{
+      const s=await(await fetch('/personal/session')).json();
+      const response=await fetch('/personal/store-product-permissions',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify(${JSON.stringify(sameRequest)})
+      });return response.status
+    })()`)
+    assert.equal(forbiddenGrant,403,"Other Organization Owner / platform staff cannot grant Alpha")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.wait("!document.getElementById('product-grants-panel').hidden")
+    await browser.eval(`(()=>{
+      const f=document.getElementById('product-grants-form');
+      f.elements.namedItem('seller_id').value=${JSON.stringify(ownerStoreId)};
+      f.elements.namedItem('membership_id').value=${JSON.stringify(alphaMember.id)};
+    })()`)
+    await browser.click('#product-grants-form button[value="revoke"]')
+    await until(async()=>{
+      const rows=await q(`select revoked_at from da_store_product_permission where id=$1`,[issued.id])
+      return rows.length===1&&!!rows[0].revoked_at
+    },19000,"B22 Chrome Owner actual products.edit revocation")
+    const revokeAudit=await q(`select count(*)::int n from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.action='organization.store_product_permission_revoked'
+        and e.actor_person_id=$1 and e.organization_id=$2 and e.target_id=$3`,
+      [A.person,organizations[0].id,ownerStoreId])
+    assert.equal(revokeAudit[0].n,1,"Revocation requires canonical outbox")
+    process.stdout.write("PASS B22 Chrome: Owner grants active Member scoped products.edit, retry idempotent, foreign Member/staff 403, Owner revokes with PG16 audit/outbox\\n")
     // Native Member context now requires the SAME live legal Organization
     // used by the personal Store list; SellerMember alone is insufficient.
     const storeContext=(org:string,seller:string)=>
