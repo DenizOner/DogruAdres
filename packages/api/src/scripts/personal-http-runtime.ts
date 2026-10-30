@@ -6,7 +6,10 @@ import type {MedusaContainer} from "@medusajs/framework"
  * Does not call Medusa application loaders, defaults, plugins, jobs or subscribers.
  * A runtime launcher must verify committed R1/flags and resources BEFORE binding.
  */
-export async function createPersonalHttpApp(container:MedusaContainer) {
+export async function createPersonalHttpApp(
+  container:MedusaContainer,
+  extraApiSourceDirs:readonly string[]=[]
+) {
   const frameworkRequire=createRequire(require.resolve("@medusajs/framework"))
   const express=frameworkRequire("express")
   const {ApiLoader,expressLoader}=await import("@medusajs/framework/http")
@@ -16,7 +19,9 @@ export async function createPersonalHttpApp(container:MedusaContainer) {
   const http=await expressLoader({app,container})
   try {
     const nativeApi=path.join(path.dirname(require.resolve("@medusajs/medusa")),"api")
-    await new ApiLoader({app,container,sourceDir:[path.join(process.cwd(),"src/api"),nativeApi]}).load()
+    await new ApiLoader({app,container,sourceDir:[
+      path.join(process.cwd(),"src/api"),nativeApi,...extraApiSourceDirs
+    ]}).load()
     return {app,close:http.shutdown}
   }catch(error){await http.shutdown();throw error}
 }

@@ -8,6 +8,8 @@
 import assert from "node:assert/strict"
 import {randomBytes,createHash} from "node:crypto"
 import {createServer as tlsServer,request as tlsRequest} from "node:https"
+import {createServer as plainServer} from "node:http"
+import {dirname} from "node:path"
 import {mkdtempSync,readFileSync,rmSync} from "node:fs"
 import {join} from "node:path"
 import {tmpdir} from "node:os"
@@ -37,6 +39,8 @@ export default async function({container}:any){
   const q=async(sql:string,args:unknown[]=[]) => (await pg.query(sql,args)).rows
   let app:Awaited<ReturnType<typeof createPersonalHttpApp>>|undefined
   let server:ReturnType<typeof tlsServer>|undefined
+  let privateServer:ReturnType<typeof plainServer>|undefined
+  const previousPrivateOrigin=process.env.DOGRUADRES_PRIVATE_API
   const browsers:B06Chrome[]=[]
   const temp=mkdtempSync(join(tmpdir(),"b22-task-ca-"))
   try{
@@ -136,7 +140,19 @@ export default async function({container}:any){
       "-addext","subjectAltName=DNS:localhost,IP:127.0.0.1",
       "-addext","basicConstraints=critical,CA:TRUE"],{stdio:"ignore",timeout:20000})
     assert.equal(certificate.status,0,"Task-only CA generation")
-    app=await createPersonalHttpApp(container)
+    // B22 now also validates the server-only native Member context. Use
+    // the already-supported real Mercur loader from B20's runtime, and an
+    // ephemeral HTTP listener bound strictly to loopback. No external API,
+    // no mock route or browser-visible native credential is introduced.
+    const mercurApi=join(dirname(require.resolve("@mercurjs/core")),"api")
+    app=await createPersonalHttpApp(container,[mercurApi])
+    privateServer=plainServer(app.app)
+    await new Promise<void>((resolve,reject)=>{
+      privateServer!.once("error",reject)
+      privateServer!.listen(0,"127.0.0.1",resolve)
+    })
+    const nativePort=(privateServer.address() as {port:number}).port
+    process.env.DOGRUADRES_PRIVATE_API="http://127.0.0.1:"+nativePort
     server=tlsServer({cert:readFileSync(crt),key:readFileSync(key),minVersion:"TLSv1.2"},app.app)
     await new Promise<void>((resolve,reject)=>{server!.once("error",reject);server!.listen(0,"127.0.0.1",resolve)})
     const host="https://127.0.0.1:"+(server.address() as any).port
@@ -550,6 +566,9 @@ export default async function({container}:any){
   }finally{
     for(const b of browsers)await b.close()
     if(server)await new Promise<void>(r=>server!.close(()=>r()))
+    if(privateServer)await new Promise<void>(r=>privateServer!.close(()=>r()))
+    if(previousPrivateOrigin===undefined)delete process.env.DOGRUADRES_PRIVATE_API
+    else process.env.DOGRUADRES_PRIVATE_API=previousPrivateOrigin
     if(app)await app.close()
     await pg.end()
     rmSync(temp,{recursive:true,force:true})
