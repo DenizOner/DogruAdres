@@ -1370,7 +1370,7 @@ export default async function({container}:any){
       "Denied callback cannot attach a Cart payment collection")
     assert.equal((await cartService.retrieveCart(betaTwoSellerCart.id)).completed_at,
       null,"Denied callback must preserve the native open Cart")
-    process.stdout.write("PASS B22 Chrome: native private HTTP and signed-in HTTPS payment callbacks return 403; Cart open, zero OrderGroup and payment links; no provider/capture\\n")
+    process.stdout.write("\nPASS B22 Chrome: native private HTTP and signed-in HTTPS payment callbacks return 403; Cart open, zero OrderGroup and payment links; no provider/capture\n")
 
 
     const betaSellerBlock=async(action:"block"|"unblock",
