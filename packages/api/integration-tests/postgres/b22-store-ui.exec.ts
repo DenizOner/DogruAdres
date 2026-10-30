@@ -146,7 +146,7 @@ export default async function({container}:any){
     // A native product workflow does not by itself prove a human's product
     // permission, nor grant the other Seller/Organization access.
     assert.ok(!actualLinks.some(x=>x.seller_id===stores[1].id))
-    process.stdout.write("PASS B22 native Mercur product workflow: draft persisted, only selected Seller linked; no visitor writer/permission claim\\n")
+    process.stdout.write("PASS B22 native Mercur product workflow: draft persisted, only selected Seller linked; no visitor writer/permission claim\n")
     // Deliberately inconsistent TEST-ONLY Seller: status OPEN was written
     // without Mercur approveSellerWorkflow, so approved_at remains absent.
     // Even a platform association + verified Member must never expose it.
