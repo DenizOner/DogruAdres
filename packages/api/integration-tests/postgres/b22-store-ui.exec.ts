@@ -1225,6 +1225,51 @@ export default async function({container}:any){
       organization_id:organizations[1].id,status:"seller_scope_mapped",
       seller_count:2,seller_block_verified:true,checkout_ready:false
     })
+    // B22 native checkout ingress boundary: Mercur 2.3.7 overrides
+    // POST /store/carts/:id/complete with its split-order writer. Before
+    // any financial/provider or order flow is authorized, the existing
+    // personal ingress must reject this native route, even for a valid
+    // signed-in Buyer, a Store Owner and a forged native Bearer.
+    // No payment session is created; a nonzero two-Offer Cart remains open.
+    const nativeCompletePath="/store/carts/"+
+      encodeURIComponent(betaTwoSellerCart.id)+"/complete"
+    assert.equal((await q(`select count(*)::int n from order_group
+      where cart_id=$1`,[betaTwoSellerCart.id]))[0].n,0)
+    const tryNativeCompletion=async(actor:B06Chrome,
+      additionalHeaders:Record<string,string>={})=>actor.eval(`(async()=>{
+      const response=await fetch(${JSON.stringify(nativeCompletePath)},{
+        method:"POST",headers:${JSON.stringify(additionalHeaders)}
+      })
+      return {status:response.status,body:await response.json()}
+    })()`)
+    for(const actor of [reviewer,browser]){
+      const denied=await tryNativeCompletion(actor)
+      assert.equal(denied.status,401,
+        "A valid personal session is not native checkout authority")
+      assert.deepEqual(denied.body,{
+        message:"Personal session ingress required"
+      })
+    }
+    const forgedNative=await tryNativeCompletion(reviewer,{
+      authorization:"Bearer b22-untrusted-not-a-token"
+    })
+    assert.equal(forgedNative.status,401,
+      "An unverified native credential cannot enter the order writer")
+    assert.deepEqual(forgedNative.body,{
+      message:"Personal session ingress required"
+    })
+    assert.equal((await q(`select count(*)::int n from order_group
+      where cart_id=$1`,[betaTwoSellerCart.id]))[0].n,0,
+      "No OrderGroup is created by a denied checkout attempt")
+    const afterDenied=await cartService.retrieveCart(betaTwoSellerCart.id,{
+      relations:["items"]
+    })
+    assert.equal(afterDenied.completed_at,null)
+    assert.equal(afterDenied.items?.length,2)
+    assert.equal((await readNativeCart(betaScopeUrl)).status,200,
+      "A denied native checkout must not damage valid read-only Buyer scope")
+    process.stdout.write("PASS B22 Mercur native split-order POST ingress: real Buyer/Owner/forged Bearer 401, zero OrderGroups, unchanged two-item Cart; no payment or checkout writer\\n")
+
     const betaSellerBlock=async(action:"block"|"unblock",
       sellerOrg:string,sellerId:string)=>browser.eval(`(async()=>{
         const session=await(await fetch('/personal/session')).json()
