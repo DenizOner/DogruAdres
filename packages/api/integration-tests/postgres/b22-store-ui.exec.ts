@@ -1475,7 +1475,7 @@ export default async function({container}:any){
     // completion, OrderGroup or payment is exercised in this test.
     const buyerRevokeBarrier=new Client({connectionString:u.toString()})
     await buyerRevokeBarrier.connect()
-    let pendingBuyerRevoke:Promise<{status:number}|{error:string}>|undefined
+    let pendingBuyerRevoke:Promise<{status:number;error?:string}>|undefined
     try{
       await buyerRevokeBarrier.query("BEGIN")
       const barrierPid=(await buyerRevokeBarrier.query(
