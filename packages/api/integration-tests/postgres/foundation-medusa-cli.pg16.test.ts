@@ -150,6 +150,7 @@ async function run(){
         assert.ok(result.includes("PASS B22 pre-revocation control: real Customer + immutable Beta Cart attribution + approved Gamma Store + active buyer.purchase passes Foundation L; zero-value Cart remains open"),"Missing pre-revocation Foundation L allow evidence")
         assert.ok(result.includes("PASS B22 real Mercur validate: real Chrome Gamma Store Buyer block denies attributed Beta Cart before OrderGroup/Order/payment writes; unblock restores L without completing Cart"),"Missing real Store block at Mercur validate evidence")
         assert.ok(result.includes("PASS B22 Chrome: authorized zero-value native Mercur split-order persisted one OrderGroup/Order and completed Cart with immutable Beta attribution; no payment or visitor checkout"),"Missing authorized native zero-value positive OrderGroup persistence evidence")
+        assert.ok(result.includes("PASS B22 native payment simulation: system provider authorized before L/order; native Mercur persisted single OrderGroup/Order; only then system capture recorded; no external payment, callback or visitor checkout"),"Missing native preauthorized synthetic provider order/capture sequence evidence")
         assert.ok(result.includes("PASS B22 real Mercur validate: fully attributed Beta Cart + approved Gamma Store passed L before revoke; after actual Owner revoke workflow denies before OrderGroup/Order/payment writes and preserves native Cart"),"Missing post-revocation Mercur validate denial evidence")
       }
 
