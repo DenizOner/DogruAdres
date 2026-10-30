@@ -1544,7 +1544,7 @@ export default async function({container}:any){
     assert.equal(await foundation.authorizeBuyerCheckout(
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Unblock restores L eligibility only while buyer.purchase remains valid")
-    process.stdout.write("PASS B22 real Mercur validate: real Chrome Gamma Store Buyer block denies attributed Beta Cart before OrderGroup/Order/payment writes; unblock restores L without completing Cart\\n")
+    process.stdout.write("\nPASS B22 real Mercur validate: real Chrome Gamma Store Buyer block denies attributed Beta Cart before OrderGroup/Order/payment writes; unblock restores L without completing Cart\n")
     // Deterministic L/commit race using the production buyer-permission
     // advisory lock and the real Chrome Owner mutation. No successful Cart
     // completion, OrderGroup or payment is exercised in this test.
