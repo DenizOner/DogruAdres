@@ -1208,9 +1208,15 @@ export default async function({container}:any){
     assert.equal(betaAttribution.length,1)
     assert.equal(betaAttribution[0].organization_id,organizations[1].id)
     assert.equal(betaAttribution[0].action,"organization.buyer_cart_attributed")
+    const alphaPreflight=await readNativeCart(
+      buyerCart(organizations[0].id,betaTwoSellerCart.id))
+    assert.equal(alphaPreflight.status,200,
+      "Native Customer preflight is not a Cart ownership or checkout grant")
+    assert.equal(alphaPreflight.body.organization_attributed,false)
     assert.equal((await readNativeCart(
-      buyerCart(organizations[0].id,betaTwoSellerCart.id))).status,403,
-      "Explicit Alpha grant cannot seize Beta's separately attributed Cart")
+      buyerCart(organizations[0].id,betaTwoSellerCart.id)+
+      "&seller_scope=inspect")).status,403,
+      "Explicit Alpha buyer grant cannot inspect Beta's attributed Seller Cart")
     const betaScopeUrl=buyerCart(organizations[1].id,betaTwoSellerCart.id)+
       "&seller_scope=inspect"
     const betaOpenScope=await readNativeCart(betaScopeUrl)
