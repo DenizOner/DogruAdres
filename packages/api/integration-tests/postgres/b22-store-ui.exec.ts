@@ -798,9 +798,43 @@ export default async function({container}:any){
       })
       return {status:r.status,body:await r.json()}
     })()`)
-    assert.equal((await changeStoreBlock("block")).status,200)
+    // Native Chrome Owner control, not merely an HTTP request through CDP.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("!document.getElementById('workspace').hidden")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("!document.getElementById('store-block-panel').hidden")
+    await browser.eval(`document.querySelector('#store-block-form select[name=seller_id]').value=${JSON.stringify(ownerStoreId)}`)
+    await browser.input('#store-block-form input[name=buyer_organization_id]',
+      organizations[0].id)
+    await browser.click('#store-block-form button[value="block"]')
+    await browser.wait("document.getElementById('store-block-status').textContent.includes('engellendi')")
+    assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-buyer-blocks"&&
+      x.method==="POST"&&x.status===200),"Owner's visible policy form must POST 200")
     assert.equal((await changeStoreBlock("block")).status,200,
       "Replay must not write another active block")
+    // Admin of the other Organization cannot use the same native member
+    // association to manage Alpha's Store, nor can SellerMember alone.
+    const wrongOwner=await browser.eval(`(async()=>{
+      const token=(await(await fetch('/personal/session')).json()).csrf_token
+      const r=await fetch('/personal/store-buyer-blocks',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':token},
+        body:JSON.stringify(${JSON.stringify({action:"block",
+          organization_id:organizations[1].id,seller_id:ownerStoreId,
+          buyer_organization_id:organizations[0].id})})
+      });return r.status
+    })()`)
+    assert.equal(wrongOwner,403)
+    const noBlockCsrf=await browser.eval(`(async()=>{
+      const r=await fetch('/personal/store-buyer-blocks',{
+        method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify(${JSON.stringify({action:"unblock",
+          organization_id:organizations[0].id,seller_id:ownerStoreId,
+          buyer_organization_id:organizations[0].id})})
+      });return r.status
+    })()`)
+    assert.equal(noBlockCsrf,403)
     assert.equal((await q(`select count(*)::int n from da_store_buyer_organization_block
       where seller_id=$1 and buyer_organization_id=$2 and revoked_at is null`,
       [ownerStoreId,organizations[0].id]))[0].n,1)
@@ -811,7 +845,8 @@ export default async function({container}:any){
     assert.equal((await cartService.retrieveCart(customerCart.id,{
       relations:["items"]
     })).items?.length,2)
-    assert.equal((await changeStoreBlock("unblock")).status,200)
+    await browser.click('#store-block-form button[value="unblock"]')
+    await browser.wait("document.getElementById('store-block-status').textContent.includes('kaldırıldı')")
     assert.equal((await changeStoreBlock("unblock")).status,200,
       "Replay must not erase revocation history")
     assert.equal((await q(`select count(*)::int n from da_store_buyer_organization_block
