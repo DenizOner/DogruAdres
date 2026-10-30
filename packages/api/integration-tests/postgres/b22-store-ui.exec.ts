@@ -1470,7 +1470,54 @@ export default async function({container}:any){
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Before revocation L must allow the exact attributed Beta→Gamma cart")
     process.stdout.write("PASS B22 pre-revocation control: real Customer + immutable Beta Cart attribution + approved Gamma Store + active buyer.purchase passes Foundation L; zero-value Cart remains open\\n")
-    assert.equal((await betaPermission("revoke")).status,200)
+    // Deterministic L/commit race using the production buyer-permission
+    // advisory lock and the real Chrome Owner mutation. No successful Cart
+    // completion, OrderGroup or payment is exercised in this test.
+    const buyerRevokeBarrier=new Client({connectionString:u.toString()})
+    await buyerRevokeBarrier.connect()
+    let pendingBuyerRevoke:Promise<{status:number}|{error:string}>|undefined
+    try{
+      await buyerRevokeBarrier.query("BEGIN")
+      const barrierPid=(await buyerRevokeBarrier.query(
+        "select pg_backend_pid()::int as pid"
+      )).rows[0].pid as number
+      await buyerRevokeBarrier.query(
+        "select pg_advisory_xact_lock(hashtext('b22-buyer-purchase'),hashtext($1))",
+        [organizations[1].id+":"+B.person]
+      )
+      pendingBuyerRevoke=betaPermission("revoke").then(
+        (response:any)=>({status:response.status as number}),
+        (error:unknown)=>({error:String(error)})
+      )
+      // Prove that the actual browser-driven mutation is already waiting on
+      // this exact lock; merely starting a Promise would not prove overlap.
+      await until(async()=>{
+        const waiting=await q(`select count(*)::int n from pg_locks held
+          join pg_locks waiting
+            on waiting.locktype='advisory'
+           and waiting.database=held.database
+           and waiting.classid=held.classid
+           and waiting.objid=held.objid
+           and waiting.objsubid=held.objsubid
+           and waiting.pid<>held.pid
+           and waiting.granted=false
+          where held.pid=$1 and held.locktype='advisory'
+            and held.granted=true`,[barrierPid])
+        return waiting[0].n===1
+      },19000,"B22 real Chrome Owner revoke waits on existing grant lock")
+      assert.equal(await foundation.authorizeBuyerCheckout(
+        hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
+      ),true,"L before the concurrent Owner revoke commits must see the prior grant")
+    } finally {
+      try{await buyerRevokeBarrier.query("ROLLBACK")}
+      finally{await buyerRevokeBarrier.end()}
+    }
+    assert.ok(pendingBuyerRevoke,"Expected a real in-flight browser revocation")
+    assert.equal((await pendingBuyerRevoke).status,200)
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
+    ),false,"Next L must deny after the overlapped Owner revoke commits")
+    process.stdout.write("PASS B22 pre-revocation control: PG16 advisory barrier proved real Chrome Owner revoke waiting; L allowed before commit, subsequent L denied after commit; no successful checkout or payment\\n")
     assert.equal((await readNativeCart(betaScopeUrl)).status,403,
       "Revoked buyer.purchase must remove Beta access even after both sellers unblock")
     process.stdout.write("PASS B22 explicit Beta grant cannot reassign Alpha Cart: both Organization buyer permissions tested; canonical audit ownership unchanged\\n")
