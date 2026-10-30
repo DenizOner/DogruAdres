@@ -26,7 +26,7 @@ import {
 } from "./smtp-settings"
 import { sendSmtpEmail } from "./smtp-client"
 import { PersonalNotifications } from "./personal-notifications"
-import { authorizedLegalSellerIds } from "./legal-store-ownership"
+import { authorizedLegalSellerIds, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
@@ -1274,6 +1274,125 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   async personalLegalSellerIds(token: string, organizationId: string,
     @MedusaContext() context: Context = {}) {
     return authorizedLegalSellerIds(securitySql(context.transactionManager), token, organizationId)
+  }
+
+
+  // B22: Only a currently authenticated Organization Owner may change one
+  // independently assigned products.edit grant for a member of THAT same Org.
+  // Atomic Foundation audit/outbox is authoritative, not Mercur is_owner.
+  // Native Seller status is additionally checked by the public POST adapter.
+  @InjectTransactionManager()
+  async personalChangeStoreProductPermission(
+    token:string,input:{action:"grant"|"revoke";organization_id:string;seller_id:string;membership_id:string},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
+       !["grant","revoke"].includes(input.action))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const owner=await sessions.organizations(token,input.organization_id,false)
+    if(!owner||owner.person_id!==current.person_id||owner.organizations.length!==1||
+       owner.organizations[0].role!=="owner")return null
+    // Serialize with Foundation membership mutations and other grant requests.
+    const issuer=await db.execute(`select id from da_organization_membership
+      where organization_id=? and person_id=? and role='owner'
+        and status='active' and deleted_at is null for share`,
+      [input.organization_id,current.person_id])
+    if(issuer.length!==1)throw new IdentityAccessDenied()
+    const target=await db.execute(`select m.person_id from da_organization_membership m
+      join da_person p on p.id=m.person_id
+      where m.id=? and m.organization_id=? and m.deleted_at is null
+        and p.disabled_at is null and p.deleted_at is null
+        ${input.action==="grant"?"and m.status='active'":""}
+      for share of m,p`,[input.membership_id,input.organization_id])
+    if(target.length!==1||typeof target[0].person_id!=="string"||
+       !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
+    const targetPerson=target[0].person_id as string
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-products-edit'),hashtext(?))`,
+      [input.organization_id+":"+input.seller_id+":"+targetPerson])
+    const active=await db.execute(`select id from da_store_product_permission
+      where person_id=? and organization_id=? and seller_id=?
+        and permission='products.edit' and revoked_at is null for update`,
+      [targetPerson,input.organization_id,input.seller_id])
+    if(active.length>1)throw new IdentityAccessDenied()
+    if(input.action==="grant"){
+      const authorized=await platformApprovedSellerIds(db,input.organization_id)
+      if(!authorized.includes(input.seller_id))return null
+      if(active.length){
+        if(!await verifiedStoreProductEditGrant(db,targetPerson,input.organization_id,input.seller_id))
+          throw new IdentityAccessDenied()
+        return {status:"active" as const,grant_id:active[0].id as string}
+      }
+      const id="daspg_"+randomUUID()
+      const [audit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
+        role_context:"owner",organization_id:input.organization_id,
+        action:"organization.store_product_permission_granted",module:DOGRUADRES_AUDIT_MODULE,
+        resource:"store-product-permission",target_id:input.seller_id,
+        new_values:{grant_id:id,person_id:targetPerson,permission:"products.edit"},
+        occurred_at:new Date()
+      }],context)
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      await db.execute(`insert into da_store_product_permission
+        (id,person_id,organization_id,seller_id,permission,issued_by_person_id,source_audit_event_id)
+        values (?,?,?,?,'products.edit',?,?)`,
+        [id,targetPerson,input.organization_id,input.seller_id,current.person_id,audit.id])
+      return {status:"active" as const,grant_id:id}
+    }
+    if(active.length===0)return {status:"revoked" as const,grant_id:null}
+    const grantId=active[0].id as string
+    const [event]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
+      role_context:"owner",organization_id:input.organization_id,
+      action:"organization.store_product_permission_revoked",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-product-permission",target_id:input.seller_id,
+      previous_values:{grant_id:grantId,person_id:targetPerson,permission:"products.edit"},
+      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const result=await db.execute(`update da_store_product_permission
+      set revoked_at=clock_timestamp() where id=? and revoked_at is null
+      returning id`,[grantId])
+    if(result.length!==1||!event.id)throw new IdentityAccessDenied()
+    return {status:"revoked" as const,grant_id:grantId}
+  }
+
+  @InjectTransactionManager()
+  async personalListStoreProductPermissions(token:string,organizationId:string,
+    @MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),s=new IdentitySessions(db)
+    const current=await s.organizations(token,organizationId,false)
+    if(!current||current.organizations.length!==1||
+       current.organizations[0].role!=="owner")return null
+    const rows=await db.execute(`select g.id,g.person_id,g.seller_id
+      from da_store_product_permission g
+      join da_audit_event e on e.id=g.source_audit_event_id
+       and e.deleted_at is null and e.module='dogruadres-access'
+       and e.actor_person_id=g.issued_by_person_id
+       and e.organization_id=g.organization_id and e.target_id=g.seller_id
+       and e.action='organization.store_product_permission_granted'
+       and e.resource='store-product-permission'
+       and e.new_values->>'grant_id'=g.id
+       and e.new_values->>'person_id'=g.person_id
+       and e.new_values->>'permission'=g.permission
+      where g.organization_id=? and g.permission='products.edit'
+       and g.revoked_at is null and (g.expires_at is null or g.expires_at>statement_timestamp())
+       and exists(select 1 from da_audit_outbox x
+         where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+         and x.deleted_at is null)
+      order by g.id limit 101`,[organizationId])
+    if(rows.length>100||rows.some(g=>typeof g.id!=="string"||
+       !/^daspg_[A-Za-z0-9_-]+$/.test(g.id)||typeof g.person_id!=="string"||
+       !/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)||
+       typeof g.seller_id!=="string"||!/^sel_[A-Za-z0-9_-]+$/.test(g.seller_id)))
+      throw new IdentityAccessDenied()
+    return rows as Array<{id:string;person_id:string;seller_id:string}>
   }
 
   // ---------------------------------------------------------------------------
