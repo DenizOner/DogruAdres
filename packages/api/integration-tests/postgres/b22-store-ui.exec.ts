@@ -17,7 +17,7 @@ import {spawnSync} from "node:child_process"
 import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
-import {approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow} from "@mercurjs/core/workflows"
+import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
@@ -1902,6 +1902,54 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Chrome: locked personal session clears Store UI, old opaque cookie rejected and PG16 session revoked\n")
     process.stdout.write("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes; approved synthetic Store fixtures read and revoked access denied\n")
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
+
+    // Exercise Mercur's documented workflow extension in the real Medusa
+    // runtime without a payment session, payment provider call or order write.
+    // validateCartPaymentsStep explicitly skips payment only for a zero-value
+    // cart; the intentional hook rejection must happen before order creation.
+    const hookProbeCart=await cartService.createCarts({currency_code:"eur"})
+    const {data:hookProbeRows}=await query.graph({
+      entity:"cart",fields:["id","total","credit_line_total","completed_at"],
+      filters:{id:hookProbeCart.id}
+    })
+    assert.equal(hookProbeRows.length,1)
+    assert.equal(hookProbeRows[0].id,hookProbeCart.id)
+    assert.equal(Number(hookProbeRows[0].total),0)
+    assert.ok(Number(hookProbeRows[0].credit_line_total??0)>=0)
+    assert.equal(hookProbeRows[0].completed_at,null)
+    let validateHookCalls=0
+    const validateHookSentinel="B22_EXPECTED_VALIDATE_HOOK_DENIAL"
+    completeCartWithSplitOrdersWorkflow.hooks.validate(({cart}:any)=>{
+      if(cart?.id!==hookProbeCart.id)return
+      validateHookCalls++
+      throw new Error(validateHookSentinel)
+    })
+    const hookRun=await completeCartWithSplitOrdersWorkflow(container).run({
+      input:{cart_id:hookProbeCart.id},throwOnError:false
+    })
+    assert.equal(validateHookCalls,1,
+      "Mercur's actual validate hook must run in the installed workflow runtime")
+    const hookErrorText=(hookRun.errors??[]).map((entry:any)=>
+      String(entry.error?.message??entry.error??entry.message??"")).join("\n")
+    assert.match(hookErrorText,/B22_EXPECTED_VALIDATE_HOOK_DENIAL/,
+      "Intentional validate-hook denial must be the workflow failure")
+    assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
+      [hookProbeCart.id]))[0].n,0)
+    const {data:hookOrderLinks}=await query.graph({
+      entity:"order_cart",fields:["order_id"],filters:{cart_id:hookProbeCart.id}
+    })
+    assert.equal(hookOrderLinks.length,0)
+    const {data:hookPaymentLinks}=await query.graph({
+      entity:"cart_payment_collection",fields:["payment_collection_id"],
+      filters:{cart_id:hookProbeCart.id}
+    })
+    assert.equal(hookPaymentLinks.length,0)
+    const {data:hookCartAfter}=await query.graph({
+      entity:"cart",fields:["id","completed_at"],filters:{id:hookProbeCart.id}
+    })
+    assert.equal(hookCartAfter.length,1)
+    assert.equal(hookCartAfter[0].completed_at,null)
+    process.stdout.write("PASS B22 Mercur 2.3.7 real validate hook: zero-value disposable Cart invokes the hook; intentional denial leaves zero OrderGroup/Order/payment collections and Cart open; no payment or checkout writer\n")
   }finally{
     for(const b of browsers)await b.close()
     if(server)await new Promise<void>(r=>server!.close(()=>r()))
