@@ -1944,26 +1944,65 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes; approved synthetic Store fixtures read and revoked access denied\n")
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
 
-    // Exercise the actual project-owned authorization hook on the installed
-    // Mercur workflow. This zero-value task Cart has no legal Buyer attribution,
-    // so denial must happen before any OrderGroup/order/payment side effect.
-    const hookProbeCart=await cartService.createCarts({currency_code:"eur"})
+    // Exercise the actual project-owned authorization hook with a valid
+    // native Customer, approved/open Seller and real Offer-backed Cart line.
+    // The only deliberately missing fact is immutable legal Buyer attribution,
+    // so the hook must reach Foundation's final authorization SELECT (L).
+    const hookProbeSku="B22-HOOK-FOUNDATION-"+rand
+    const {result:[hookProbeOffer]}=await createOffersWorkflow(container).run({
+      input:{offers:[{
+        seller_id:ownerStoreId,created_by:member.id,sku:hookProbeSku,
+        variant_id:variant.id,shipping_profile_id:b22Profile.id,
+        inventory_items:[{sku:hookProbeSku,stock_levels:[]}],
+        prices:[{amount:0,currency_code:"eur"}],
+        manage_inventory:false,allow_backorder:true
+      }]}
+    })
+    assert.match(hookProbeOffer.id,/^offer_[A-Za-z0-9_-]+$/)
+    const hookProbeSeller=await native.listSellers({id:ownerStoreId})
+    assert.equal(hookProbeSeller.length,1)
+    assert.equal(hookProbeSeller[0].status,"open")
+    assert.ok(hookProbeSeller[0].approved_at)
+
+    const hookProbeCart=await cartService.createCarts({
+      currency_code:"eur",customer_id:nativeCustomer.id
+    })
+    await cartService.updateCarts(hookProbeCart.id,{
+      region_id:region.id,sales_channel_id:market.id
+    })
+    await addToCartWorkflow(container).run({input:{
+      cart_id:hookProbeCart.id,
+      items:[{
+        variant_id:variant.id,offer_id:hookProbeOffer.id,quantity:1,
+        requires_shipping:true,metadata:{offer_id:hookProbeOffer.id}
+      } as any]
+    }})
     const {data:hookProbeRows}=await query.graph({
-      entity:"cart",fields:["id","total","credit_line_total","completed_at"],
+      entity:"cart",
+      fields:["id","total","credit_line_total","completed_at","customer.id",
+        "items.id","items.offer.id","items.offer.seller_id"],
       filters:{id:hookProbeCart.id}
     })
     assert.equal(hookProbeRows.length,1)
     assert.equal(hookProbeRows[0].id,hookProbeCart.id)
+    assert.equal(hookProbeRows[0].customer?.id,nativeCustomer.id)
     assert.equal(Number(hookProbeRows[0].total),0)
     assert.ok(Number(hookProbeRows[0].credit_line_total??0)>=0)
     assert.equal(hookProbeRows[0].completed_at,null)
+    assert.equal(hookProbeRows[0].items.length,1)
+    assert.equal(hookProbeRows[0].items[0].offer?.id,hookProbeOffer.id)
+    assert.equal(hookProbeRows[0].items[0].offer?.seller_id,ownerStoreId)
+    assert.equal((await q("select count(*)::int n from da_buyer_cart_attribution where cart_id=$1",
+      [hookProbeCart.id]))[0].n,0,
+      "The real Cart must have no legal Buyer attribution before the hook test")
+
     const hookRun=await completeCartWithSplitOrdersWorkflow(container).run({
       input:{cart_id:hookProbeCart.id},throwOnError:false
     })
     const hookErrorText=(hookRun.errors??[]).map((entry:any)=>
       String(entry.error?.message??entry.error??entry.message??"")).join("\n")
     assert.match(hookErrorText,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
-      "The real installed Mercur validate hook must fail closed for a Cart without legal Buyer/Customer/Store proof")
+      "A valid Customer/Offer/Seller Cart must reach Foundation L and be denied only because legal Buyer attribution is absent")
     assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
       [hookProbeCart.id]))[0].n,0)
     const {data:hookOrderLinks}=await query.graph({
@@ -1976,12 +2015,14 @@ export default async function({container}:any){
     })
     assert.equal(hookPaymentLinks.length,0)
     const {data:hookCartAfter}=await query.graph({
-      entity:"cart",fields:["id","completed_at"],filters:{id:hookProbeCart.id}
+      entity:"cart",fields:["id","completed_at","items.id"],
+      filters:{id:hookProbeCart.id}
     })
     assert.equal(hookCartAfter.length,1)
     assert.equal(hookCartAfter[0].completed_at,null)
-    process.stdout.write("PASS B22 Chrome: Mercur 2.3.7 real validate hook invokes the project-owned Foundation authorization; an unattributed zero-value Cart is denied before OrderGroup/Order/payment writes and remains open; no payment writer\n")
-  }finally{
+    assert.equal(hookCartAfter[0].items.length,1,
+      "Foundation denial must leave the real native Cart line unchanged")
+    process.stdout.write("PASS B22 Chrome: valid native Customer + open approved Seller + real Offer-backed zero-value Cart reach Mercur validate and Foundation L; absent legal Buyer attribution denies before OrderGroup/Order/payment writes; Cart and line stay unchanged; no payment writer\\n")  }finally{
     for(const b of browsers)await b.close()
     if(server)await new Promise<void>(r=>server!.close(()=>r()))
     if(privateServer)await new Promise<void>(r=>privateServer!.close(()=>r()))
