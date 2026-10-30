@@ -13,7 +13,7 @@ import {dirname} from "node:path"
 import {mkdtempSync,readFileSync,rmSync} from "node:fs"
 import {join} from "node:path"
 import {tmpdir} from "node:os"
-import {spawnSync} from "node:child_process"
+import {spawn,spawnSync} from "node:child_process"
 import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
@@ -37,7 +37,47 @@ export default async function({container}:any){
       ["DOGRUADRES_IDENTITY_ENABLED","DOGRUADRES_MFA_RUNTIME_ENABLED",
        "DOGRUADRES_MFA_SETTINGS_ENABLED","DOGRUADRES_MFA_ENROLLMENT_ENABLED"]
       .every(k=>process.env[k]==="true")),"REFUSED: B22 browser scope only disposable native CI")
-  const pg=new Client({connectionString:u.toString()});await pg.connect()
+  // An independent real Medusa process uses the same task-owned Cart
+  // while the primary process is past L and paused before OrderGroup INSERT.
+  // Reject any attempt to run this mode outside the strict CI sentinel above.
+  const secondaryCartId=process.env.B22_SECOND_PROCESS_CART_ID
+  if(secondaryCartId){
+    assert.equal(preparing,false)
+    assert.equal(process.env.DOGRUADRES_B22_PG_LOCK_TEST,"true")
+    assert.match(secondaryCartId,/^cart_[A-Za-z0-9_-]+$/)
+    const locking=container.resolve("locking")
+    let acquired=false
+    try{
+      await locking.acquire(secondaryCartId)
+      acquired=true
+    }catch(error){
+      assert.match(String(error),/Failed to acquire lock/i,
+        "Independent Medusa process must observe the primary's real PG lock")
+    }finally{
+      if(acquired)await locking.release(secondaryCartId)
+    }
+    assert.equal(acquired,false,
+      "Independent process cannot acquire a Cart lock held by another process")
+    process.stdout.write("B22_SECONDARY_PG_LOCK_CONFLICT\n")
+    const secondWorkflow=completeCartWithSplitOrdersWorkflow(container).run({
+      input:{cart_id:secondaryCartId},throwOnError:false
+    })
+    process.stdout.write("B22_SECONDARY_NATIVE_INVOKED\n")
+    const result=await secondWorkflow
+    const errors=(result.errors??[]).map((entry:any)=>
+      String(entry.error?.message??entry.error??entry.message??"")).join("\n")
+    if(errors){
+      assert.match(errors,
+        /B22_CHECKOUT_AUTHORIZATION_DENIED|cart.*(already|completed)|Failed to acquire lock|lock.*(acquire|timeout|busy)/i,
+        "Second native checkout must fail with a recognized safe reason")
+      process.stdout.write("B22_SECONDARY_NATIVE_DENIED\n")
+    }else{
+      assert.match(String(result.result?.order_group_id??""),/^og_[A-Za-z0-9_-]+$/)
+      process.stdout.write("B22_SECONDARY_NATIVE_SUCCESS\n")
+    }
+    return
+  }
+    const pg=new Client({connectionString:u.toString()});await pg.connect()
   const q=async(sql:string,args:unknown[]=[]) => (await pg.query(sql,args)).rows
   let app:Awaited<ReturnType<typeof createPersonalHttpApp>>|undefined
   let server:ReturnType<typeof tlsServer>|undefined
@@ -1963,6 +2003,15 @@ export default async function({container}:any){
     assert.equal(await foundation.authorizeBuyerCheckout(
       concurrentCart.id,nativeCustomer.id,[gammaSellerId]
     ),true)
+    assert.equal(process.env.DOGRUADRES_B22_PG_LOCK_TEST,"true")
+    const locking=container.resolve("locking")
+    const probeKey="b22-pg-lock-probe:"+rand
+    await locking.acquire(probeKey)
+    assert.equal((await q("select count(*)::int n from locking where id=$1",
+      [probeKey]))[0].n,1,"Native Medusa must use persisted Postgres locking")
+    assert.equal(await locking.release(probeKey),true)
+    assert.equal((await q("select count(*)::int n from locking where id=$1",
+      [probeKey]))[0].n,0,"Task-only provider probe lock must be released")
     type NativeCartAttempt={run?:any;error?:string}
     const startCartAttempt=():Promise<NativeCartAttempt>=>
       completeCartWithSplitOrdersWorkflow(container).run({
@@ -1972,8 +2021,9 @@ export default async function({container}:any){
     await concurrentBarrier.connect()
     let concurrentBarrierHeld=false
     let firstConcurrentAttempt:Promise<NativeCartAttempt>|undefined
-    let secondConcurrentAttempt:Promise<NativeCartAttempt>|undefined
-    let concurrentResults:NativeCartAttempt[]=[]
+    let secondaryProcessDone:Promise<{code:number|null;output:string}>|undefined
+    let primaryAttempt:NativeCartAttempt|undefined
+    let secondaryOutcome:{code:number|null;output:string}|undefined
     try{
       await concurrentBarrier.query("BEGIN")
       concurrentBarrierHeld=true
@@ -1988,32 +2038,78 @@ export default async function({container}:any){
             and l.mode='RowExclusiveLock' and l.granted=false
             and l.pid<>$1`,[concurrentBarrierPid])
         return rows[0].n===1
-      },19000,"B22 first concurrent native Cart passed L, waiting on OrderGroup INSERT")
-      secondConcurrentAttempt=startCartAttempt()
+      },19000,"B22 first native process passed L and waits on OrderGroup INSERT")
+      assert.equal((await q("select count(*)::int n from locking where id=$1",
+        [concurrentCart.id]))[0].n,1,
+        "First Medusa process must own the PostgreSQL Cart lock at L")
+      let output=""
+      let started=false
+      let resolveStarted!:()=>void
+      let rejectStarted!:(reason:Error)=>void
+      const secondInvoked=new Promise<void>((resolve,reject)=>{
+        resolveStarted=resolve;rejectStarted=reject
+      })
+      const secondary=spawn(process.execPath,[
+        "run","medusa","exec","./integration-tests/postgres/b22-store-ui.exec.ts"
+      ],{
+        cwd:process.cwd(),
+        env:{...process.env,B22_SECOND_PROCESS_CART_ID:concurrentCart.id},
+        stdio:["ignore","pipe","pipe"],
+        signal:AbortSignal.timeout(60000)
+      })
+      secondaryProcessDone=new Promise(resolve=>{
+        secondary.stdout?.on("data",(chunk:Buffer)=>{
+          output=(output+String(chunk)).slice(-16000)
+          if(!started && output.includes("B22_SECONDARY_PG_LOCK_CONFLICT") &&
+              output.includes("B22_SECONDARY_NATIVE_INVOKED")){
+            started=true
+            resolveStarted()
+          }
+        })
+        // Never publish native Medusa logs or the child process environment.
+        secondary.stderr?.on("data",()=>{})
+        secondary.on("error",(error:Error)=>{
+          if(!started)rejectStarted(Error("B22 secondary Medusa process could not start"))
+          resolve({code:null,output})
+        })
+        secondary.on("close",(code:number|null)=>{
+          if(!started)rejectStarted(Error("B22 secondary process did not reach native workflow"))
+          resolve({code,output})
+        })
+      })
+      await secondInvoked
       assert.equal((await q(
         "select count(*)::int n from order_group where cart_id=$1",
         [concurrentCart.id]
-      ))[0].n,0,"Neither attempt may write while the barrier is held")
+      ))[0].n,0,"Both processes must overlap before the first OrderGroup write")
       await concurrentBarrier.query("ROLLBACK")
       concurrentBarrierHeld=false
-      concurrentResults=await Promise.all([
-        firstConcurrentAttempt,secondConcurrentAttempt
-      ])
+      primaryAttempt=await firstConcurrentAttempt
+      secondaryOutcome=await secondaryProcessDone
     }finally{
       if(concurrentBarrierHeld)await concurrentBarrier.query("ROLLBACK")
       await concurrentBarrier.end()
       if(firstConcurrentAttempt)await firstConcurrentAttempt
-      if(secondConcurrentAttempt)await secondConcurrentAttempt
+      if(secondaryProcessDone)await secondaryProcessDone
     }
+    assert.equal(primaryAttempt?.error,undefined)
+    assert.equal(primaryAttempt?.run?.errors?.length??0,0,
+      "First native process must complete its authorized Cart")
+    assert.equal(secondaryOutcome?.code,0,
+      "Independent native Medusa process must complete its safe retry")
+    assert.ok(secondaryOutcome?.output.includes("B22_SECONDARY_NATIVE_DENIED")||
+      secondaryOutcome?.output.includes("B22_SECONDARY_NATIVE_SUCCESS"),
+      "Independent native process must return a classified safe result")
     const concurrentGroups=await q(
       "select id from order_group where cart_id=$1",[concurrentCart.id])
     assert.equal(concurrentGroups.length,1,
-      "Two concurrent native completions must persist exactly one OrderGroup")
+      "Independent native Medusa processes must persist exactly one OrderGroup")
+    assert.equal(primaryAttempt?.run?.result?.order_group_id,concurrentGroups[0].id)
     const {data:concurrentOrderLinks}=await query.graph({
       entity:"order_cart",fields:["order_id"],filters:{cart_id:concurrentCart.id}
     })
     assert.equal(concurrentOrderLinks.length,1,
-      "Two concurrent completions must persist exactly one Order")
+      "Independent processes must persist exactly one Order")
     assert.ok((await cartService.retrieveCart(concurrentCart.id)).completed_at)
     const {data:concurrentPaymentLinks}=await query.graph({
       entity:"cart_payment_collection",fields:["payment_collection_id"],
@@ -2026,24 +2122,8 @@ export default async function({container}:any){
     assert.equal(concurrentAttribution.length,1)
     assert.equal(concurrentAttribution[0].organization_id,organizations[1].id)
     assert.equal(concurrentAttribution[0].customer_id,nativeCustomer.id)
-    assert.equal(concurrentResults.length,2)
-    let successfulConcurrentAttempts=0
-    for(const attempt of concurrentResults){
-      const messages=(attempt.run?.errors??[]).map((entry:any)=>
-        String(entry.error?.message??entry.error??entry.message??"")).join("\n")
-      if(!attempt.error && !messages){
-        successfulConcurrentAttempts++
-        assert.equal(attempt.run?.result?.order_group_id,concurrentGroups[0].id,
-          "Successful concurrent attempt must refer to the same existing Group")
-      }else{
-        assert.match(attempt.error??messages,
-          /B22_CHECKOUT_AUTHORIZATION_DENIED|cart.*(already|completed)|lock.*(acquire|timeout|busy)/i,
-          "Rejected concurrent attempt must fail for a recognized safe reason")
-      }
-    }
-    assert.ok(successfulConcurrentAttempts>=1,
-      "At least one concurrent native checkout must complete successfully")
-    process.stdout.write("\nPASS B22 concurrent native Cart checkout: second invocation overlapped first after L at PG16 OrderGroup INSERT barrier; one completed Cart, one OrderGroup/Order, zero payment, unchanged Buyer attribution\n")
+    process.stdout.write("\nPASS B22 concurrent native Cart checkout: two separate Medusa processes observed shared PostgreSQL Cart lock after L at PG16 OrderGroup INSERT barrier; one completed Cart, one OrderGroup/Order, zero payment, unchanged Buyer attribution\n")
+
     // Deterministic L/commit race using the production buyer-permission
     // advisory lock and the real Chrome Owner mutation. No successful Cart
     // completion, OrderGroup or payment is exercised in this test.
