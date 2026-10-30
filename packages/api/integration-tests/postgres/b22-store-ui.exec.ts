@@ -1719,6 +1719,38 @@ export default async function({container}:any){
     assert.equal(paidAttribution[0].customer_id,nativeCustomer.id)
     process.stdout.write("\nPASS B22 native payment simulation: system provider authorized before L/order; native Mercur persisted single OrderGroup/Order; only then system capture recorded; no external payment, callback or visitor checkout\n")
 
+    // Mercur stores the split-cart workflow with idempotent:false. Prove that
+    // another native invocation cannot create a second order or charge an
+    // already-completed Cart. This is serial retry, not concurrent callback
+    // replay; the simulated provider has no external financial side effect.
+    const replayCompletedPaidCart=await completeCartWithSplitOrdersWorkflow(
+      container).run({input:{cart_id:paidCart.id},throwOnError:false})
+    const replayCompletedErrors=(replayCompletedPaidCart.errors??[]).map(
+      (entry:any)=>String(entry.error?.message??entry.error??entry.message??"")
+    ).join("\n")
+    assert.match(replayCompletedErrors,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
+      "Completed Cart must be rejected by the native B22 validate hook")
+    const repeatedGroups=await q(
+      "select id from order_group where cart_id=$1",[paidCart.id])
+    assert.equal(repeatedGroups.length,1,"Completed Cart replay cannot add Group")
+    assert.equal(repeatedGroups[0].id,payableGroups[0].id)
+    const {data:repeatedOrderLinks}=await query.graph({
+      entity:"order_cart",fields:["order_id"],filters:{cart_id:paidCart.id}
+    })
+    assert.equal(repeatedOrderLinks.length,1,
+      "Completed Cart replay cannot add a duplicate native Order")
+    assert.equal(repeatedOrderLinks[0].order_id,payableOrderLinks[0].order_id)
+    const replayedPayment=await paymentService.retrievePayment(
+      simulatedAuthorization.id,{relations:["captures"]}
+    )
+    assert.equal(replayedPayment.captures?.length,1,
+      "Completed Cart retry must leave exactly one prior capture")
+    assert.equal(replayedPayment.captured_at?.valueOf(),
+      afterCapture.captured_at?.valueOf())
+    assert.ok((await cartService.retrieveCart(paidCart.id)).completed_at)
+    process.stdout.write("\nPASS B22 native completed Cart retry: second Mercur split-order invocation denied; original OrderGroup/Order and single system-provider capture unchanged\n")
+
+
     // Pre-authorized but NOT capturable: the real Chrome Gamma Owner blocks
     // Beta before Mercur's L. The system provider has no external effects.
     // This is the paid-cart negative counterpart of the positive sequence.
