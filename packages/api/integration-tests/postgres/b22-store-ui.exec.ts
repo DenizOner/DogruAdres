@@ -980,6 +980,27 @@ export default async function({container}:any){
     assert.equal(await foundation.authorizeBuyerCheckout(
       customerCart.id,nativeCustomer.id,cartStoreIds
     ),true,"B22 final checkout snapshot must allow the exact current legal Buyer scope")
+
+    // A current grant and active membership do not revive a disabled or
+    // soft-deleted canonical Person. Exercise both guards against real PG16.
+    await q("update da_person set disabled_at=clock_timestamp() where id=$1",[B.person])
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds
+    ),false,"A disabled canonical Person must be denied at checkout L")
+    await q("update da_person set disabled_at=null where id=$1",[B.person])
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds
+    ),true,"Re-enabled synthetic Person restores only its otherwise-current valid scope")
+
+    await q("update da_person set deleted_at=clock_timestamp() where id=$1",[B.person])
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds
+    ),false,"A soft-deleted canonical Person must be denied at checkout L")
+    await q("update da_person set deleted_at=null where id=$1",[B.person])
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds
+    ),true,"Restored synthetic Person still requires the same live grant and Store scope")
+
     assert.equal(await foundation.authorizeBuyerCheckout(
       foreignCart.id,nativeCustomer.id,cartStoreIds
     ),false,"A foreign native Cart has no Alpha legal attribution")

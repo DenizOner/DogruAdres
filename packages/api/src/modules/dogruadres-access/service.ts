@@ -1828,6 +1828,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const rows=await db.execute(`
       select a.cart_id
       from da_buyer_cart_attribution a
+      join da_person person
+        on person.id=a.person_id
+       and person.disabled_at is null
+       and person.deleted_at is null
       join da_organization buyer
         on buyer.id=a.organization_id
        and buyer.status='active' and buyer.deleted_at is null
