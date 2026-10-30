@@ -193,6 +193,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="org-stores-status" role="status" aria-live="polite"></p>
     <div id="org-stores"></div>
     <button id="org-stores-refresh" type="button" hidden>Mağazaları yenile</button>
+    <section id="product-grants-panel" hidden aria-labelledby="product-grants-title">
+      <h3 id="product-grants-title">Mağaza ürün düzenleme yetkileri</h3>
+      <p>Yalnız kuruluş Owner'ı, aktif üyeye kendi kuruluşunun onaylı mağazası için ayrı ürün düzenleme izni verebilir veya iptal edebilir. Hiçbir üyeye otomatik izin atanmaz.</p>
+      <p id="product-grants-status" role="status" aria-live="polite"></p>
+      <form id="product-grants-form">
+        <label>Onaylı mağaza<select name="seller_id" required></select></label>
+        <label>Aktif kuruluş üyesi<select name="membership_id" required></select></label>
+        <button type="submit" name="action" value="grant">Ürün düzenleme izni ver</button>
+        <button type="submit" name="action" value="revoke">Ürün düzenleme iznini iptal et</button>
+      </form>
+      <div id="product-grants-list"></div>
+      <button id="product-grants-refresh" type="button">İzinleri yenile</button>
+    </section>
   </section>
   <p id="memberships-status" role="status" aria-live="polite" aria-atomic="true"></p><button id="memberships-refresh" type="button" hidden disabled>Üye listesini yenile</button>
   <div id="memberships" aria-describedby="memberships-status" aria-busy="false"></div>
@@ -466,13 +479,23 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(request===organizationRequest&&currentOrg===id){
         if(['owner','admin'].includes(managerRole))void storeApplications(id,request,managerRole);
         void organizationStores(id,request);
+        if(managerRole==='owner')void productPermissions(id,request);
       }
       if(request===organizationRequest&&currentOrg===id&&!el('pending-invitations-panel').hidden)
         void pendingInvitations(id,request);
       if(request===organizationRequest)status('Kuruluş erişimi doğrulandı');
     }catch(e){if(request!==organizationRequest)return;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('detail').textContent='';clearMemberships();clearOrganizationStores();clearPendingInvitations();el('memberships-status').textContent=membershipError(e);status(e.message)}
   }
+  function clearProductPermissions(){
+    productPermissionRequest++;
+    el('product-grants-panel').hidden=true;
+    el('product-grants-list').replaceChildren();
+    el('product-grants-status').textContent='';
+    for(const select of el('product-grants-form').querySelectorAll('select'))select.replaceChildren();
+    for(const button of el('product-grants-form').querySelectorAll('button'))button.disabled=true;
+  }
   function clearOrganizationStores(){
+    clearProductPermissions();
     storeRequest++;
     el('org-stores-panel').hidden=true;
     el('org-stores').replaceChildren();
@@ -645,6 +668,102 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       message.textContent=[403,404].includes(e.httpStatus)?'Bu kuruluşun mağazalarına erişim izniniz yok.':'Mağazalar doğrulanamadı. Yeniden deneyin.';
     }
   }
+
+  let productPermissionRequest=0;
+  async function productPermissions(org,request,keepOutcome=false){
+    if(request!==organizationRequest||currentOrg!==org||document.hidden||el('workspace').hidden)return;
+    const seq=++productPermissionRequest,statusEl=el('product-grants-status');
+    const form=el('product-grants-form'),grantList=el('product-grants-list');
+    el('product-grants-panel').hidden=true;
+    if(!keepOutcome)statusEl.textContent='İzinler doğrulanıyor…';
+    try{
+      const [stores,members,grants]=await Promise.all([
+        api('organization-stores?organization='+encodeURIComponent(org)),
+        api('memberships?organization='+encodeURIComponent(org)),
+        api('store-product-permissions?organization_id='+encodeURIComponent(org))
+      ]);
+      if(seq!==productPermissionRequest||request!==organizationRequest||currentOrg!==org||document.hidden)return;
+      if(stores.organization_id!==org||!Array.isArray(stores.stores)||
+         !Array.isArray(members.memberships)||!Array.isArray(grants.grants)||
+         grants.grants.length>100||members.memberships.length>100||
+         stores.stores.length>50)throw new Error('İzin kapsamı doğrulanamadı');
+      const allowedStores=stores.stores.filter(s=>typeof s?.id==='string'&&
+        /^sel_[A-Za-z0-9_-]+$/.test(s.id)&&typeof s.name==='string');
+      const active=members.memberships.filter(m=>m.status==='active'&&
+        typeof m.id==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(m.id)&&
+        typeof m.person_id==='string'&&/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id));
+      if(allowedStores.length!==stores.stores.length||
+         new Set(allowedStores.map(s=>s.id)).size!==allowedStores.length||
+         new Set(active.map(m=>m.id)).size!==active.length||
+         grants.grants.some(g=>typeof g.id!=='string'||
+           !/^daspg_[A-Za-z0-9_-]+$/.test(g.id)||
+           !allowedStores.some(s=>s.id===g.seller_id)||
+           typeof g.person_id!=='string'||
+           !/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)))
+        throw new Error('İzin listesi doğrulanamadı');
+      const storeSelect=form.elements.namedItem('seller_id');
+      const memberSelect=form.elements.namedItem('membership_id');
+      const previousStore=storeSelect.value,previousMember=memberSelect.value;
+      storeSelect.replaceChildren();memberSelect.replaceChildren();
+      for(const store of allowedStores){
+        const option=document.createElement('option');option.value=store.id;
+        option.textContent=store.name;storeSelect.append(option);
+      }
+      for(const member of active){
+        const option=document.createElement('option');option.value=member.id;
+        option.textContent=member.person_id+' — '+member.role;memberSelect.append(option);
+      }
+      if(allowedStores.some(s=>s.id===previousStore))storeSelect.value=previousStore;
+      if(active.some(m=>m.id===previousMember))memberSelect.value=previousMember;
+      grantList.replaceChildren();
+      for(const grant of grants.grants){
+        const line=document.createElement('p');
+        line.textContent=grant.person_id+' — '+grant.seller_id+' — products.edit';
+        grantList.append(line);
+      }
+      for(const button of form.querySelectorAll('button'))button.disabled=!allowedStores.length||!active.length;
+      el('product-grants-panel').hidden=false;
+      if(!keepOutcome)statusEl.textContent=grants.grants.length?
+        'Aktif ürün düzenleme izinleri gösteriliyor.':'Aktif ürün düzenleme izni bulunmuyor.';
+    }catch(e){
+      if(seq!==productPermissionRequest||request!==organizationRequest||currentOrg!==org)return;
+      grantList.replaceChildren();
+      el('product-grants-panel').hidden=true;
+      statusEl.textContent='İzinler doğrulanamadı. Yeniden deneyin.';
+    }
+  }
+  el('product-grants-refresh').onclick=()=>{
+    if(currentOrg)void productPermissions(currentOrg,organizationRequest);
+  };
+  el('product-grants-form').onsubmit=async event=>{
+    event.preventDefault();
+    if(document.hidden||el('workspace').hidden)return;
+    const request=organizationRequest,org=currentOrg,form=event.currentTarget;
+    const action=event.submitter?.value;
+    if(!org||!['grant','revoke'].includes(action))return;
+    const buttons=Array.from(form.querySelectorAll('button'));
+    for(const button of buttons)button.disabled=true;
+    const seller_id=form.elements.namedItem('seller_id').value;
+    const membership_id=form.elements.namedItem('membership_id').value;
+    try{
+      const outcome=await api('store-product-permissions',{method:'POST',body:JSON.stringify({
+        action,organization_id:org,seller_id,membership_id
+      })});
+      if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+      if(!['active','revoked'].includes(outcome.status)||
+         outcome.status!==(action==='grant'?'active':'revoked'))
+        throw new Error('İzin sonucu doğrulanamadı');
+      el('product-grants-status').textContent=action==='grant'?
+        'Ürün düzenleme izni kaydedildi.':'Ürün düzenleme izni iptal edildi.';
+      void productPermissions(org,request,true);
+    }catch(e){
+      if(request!==organizationRequest||currentOrg!==org)return;
+      el('product-grants-status').textContent=e.uncertain?
+        'Sonuç belirsiz. Yeniden göndermeden önce izin listesini yenileyin.':
+        'İzin işlemi reddedildi: '+e.message;
+      if(!e.uncertain)for(const button of buttons)button.disabled=false;
+    }
+  };
   function clearMemberships(){
     el('memberships').replaceChildren();el('memberships').ariaBusy='false';el('memberships-status').textContent='';
     el('memberships-refresh').hidden=true;el('memberships-refresh').disabled=true;
