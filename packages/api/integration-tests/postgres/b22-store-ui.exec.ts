@@ -1545,6 +1545,78 @@ export default async function({container}:any){
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Unblock restores L eligibility only while buyer.purchase remains valid")
     process.stdout.write("\nPASS B22 real Mercur validate: real Chrome Gamma Store Buyer block denies attributed Beta Cart before OrderGroup/Order/payment writes; unblock restores L without completing Cart\n")
+
+    // Positive native split-order proof ONLY inside this pre-authorized
+    // disposable CI database. Zero-value, non-shipping, no provider or payment
+    // collection. Do not expose the native checkout writer to a visitor.
+    const zeroOrderCart=await cartService.createCarts({
+      currency_code:"eur",customer_id:nativeCustomer.id
+    })
+    await cartService.updateCarts(zeroOrderCart.id,{
+      region_id:region.id,sales_channel_id:market.id
+    })
+    await addToCartWorkflow(container).run({input:{
+      cart_id:zeroOrderCart.id,
+      items:[{variant_id:variant.id,offer_id:hookProbeOffer.id,
+        quantity:1,requires_shipping:false,
+        metadata:{offer_id:hookProbeOffer.id}} as any]
+    }})
+    const {data:zeroCartBefore}=await query.graph({
+      entity:"cart",fields:["id","total","completed_at","customer.id",
+        "items.id","items.requires_shipping","items.offer.id",
+        "items.offer.seller_id"],
+      filters:{id:zeroOrderCart.id}
+    })
+    assert.equal(zeroCartBefore.length,1)
+    assert.equal(Number(zeroCartBefore[0].total),0)
+    assert.equal(zeroCartBefore[0].completed_at,null)
+    assert.equal(zeroCartBefore[0].customer?.id,nativeCustomer.id)
+    assert.equal(zeroCartBefore[0].items.length,1)
+    assert.equal(zeroCartBefore[0].items[0].requires_shipping,false,
+      "Task-only no-shipping Cart cannot silently require shipping")
+    assert.equal(zeroCartBefore[0].items[0].offer?.id,hookProbeOffer.id)
+    assert.equal(zeroCartBefore[0].items[0].offer?.seller_id,gammaSellerId)
+    const zeroClaim=await claimCart(organizations[1].id,zeroOrderCart.id)
+    assert.equal(zeroClaim.status,200)
+    assert.equal(zeroClaim.body.checkout_ready,false,
+      "This internal proof never authorizes visitor checkout")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      zeroOrderCart.id,nativeCustomer.id,[gammaSellerId]
+    ),true,"Real Foundation L must authorize the positive synthetic Cart")
+    const zeroGroupResult=await completeCartWithSplitOrdersWorkflow(container).run({
+      input:{cart_id:zeroOrderCart.id},throwOnError:false
+    })
+    assert.equal(zeroGroupResult.errors?.length??0,0,
+      "Native split-order must complete the authorized zero-total Cart")
+    const zeroOrderGroupId=zeroGroupResult.result?.order_group_id
+    assert.equal(typeof zeroOrderGroupId,"string")
+    const zeroGroupRows=await q("select id from order_group where cart_id=$1",
+      [zeroOrderCart.id])
+    assert.equal(zeroGroupRows.length,1)
+    assert.equal(zeroGroupRows[0].id,zeroOrderGroupId)
+    const {data:zeroOrderLinks}=await query.graph({
+      entity:"order_cart",fields:["order_id"],
+      filters:{cart_id:zeroOrderCart.id}
+    })
+    assert.equal(zeroOrderLinks.length,1,
+      "One approved Gamma Seller creates exactly one native Order")
+    assert.match(zeroOrderLinks[0].order_id,/^order_[A-Za-z0-9_-]+$/)
+    const {data:zeroPaymentLinks}=await query.graph({
+      entity:"cart_payment_collection",fields:["payment_collection_id"],
+      filters:{cart_id:zeroOrderCart.id}
+    })
+    assert.equal(zeroPaymentLinks.length,0,
+      "Zero-total proof must not create payment collection or capture")
+    const completedZeroCart=await cartService.retrieveCart(zeroOrderCart.id)
+    assert.ok(completedZeroCart.completed_at,
+      "Native Cart completion must persist after successful OrderGroup")
+    assert.equal(completedZeroCart.customer_id,nativeCustomer.id)
+    const zeroAttribution=await q("select organization_id,customer_id from da_buyer_cart_attribution where cart_id=$1",
+      [zeroOrderCart.id])
+    assert.equal(zeroAttribution.length,1)
+    assert.equal(zeroAttribution[0].organization_id,organizations[1].id)
+    assert.equal(zeroAttribution[0].customer_id,nativeCustomer.id)
+    process.stdout.write("PASS B22 Chrome: authorized zero-value native Mercur split-order persisted one OrderGroup/Order and completed Cart with immutable Beta attribution; no payment or visitor checkout\\n")
     // Deterministic L/commit race using the production buyer-permission
     // advisory lock and the real Chrome Owner mutation. No successful Cart
     // completion, OrderGroup or payment is exercised in this test.
