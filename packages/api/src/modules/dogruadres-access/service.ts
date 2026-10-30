@@ -1514,6 +1514,155 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return rows as Array<{id:string;person_id:string}>
   }
 
+  /** B22: Store-scoped Buyer Organization block is a Seller policy, NOT a
+   * user permission. Only a strong, live Foundation Organization Owner may
+   * write it. Native Seller approval/member checks remain in the HTTP edge.
+   * A block never cancels historical orders or enables checkout.
+   */
+  @InjectTransactionManager()
+  async personalChangeStoreBuyerBlock(
+    token:string,input:{action:"block"|"unblock";organization_id:string;
+      seller_id:string;buyer_organization_id:string},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.buyer_organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !["block","unblock"].includes(input.action))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const owner=await sessions.organizations(token,input.organization_id,false)
+    if(!owner||owner.person_id!==current.person_id||
+       owner.organizations.length!==1||owner.organizations[0].role!=="owner")return null
+    const issuer=await db.execute(`select id from da_organization_membership
+      where organization_id=? and person_id=? and role='owner'
+        and status='active' and deleted_at is null for share`,
+      [input.organization_id,current.person_id])
+    if(issuer.length!==1)throw new IdentityAccessDenied()
+    const target=await db.execute(`select id from da_organization
+      where id=? and deleted_at is null for share`,[input.buyer_organization_id])
+    if(target.length!==1)return null
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-store-buyer-block'),hashtext(?))`,
+      [input.seller_id+":"+input.buyer_organization_id])
+    const finalOwner=await sessions.organizations(token,input.organization_id,false)
+    if(!finalOwner||finalOwner.person_id!==current.person_id||
+       finalOwner.organizations.length!==1||
+       finalOwner.organizations[0].role!=="owner")return null
+    const sellers=await platformApprovedSellerIds(db,input.organization_id)
+    if(!sellers.includes(input.seller_id))return null
+    const rows=await db.execute(`select b.id,
+      exists(select 1 from da_audit_event e
+        where e.id=b.source_audit_event_id and e.deleted_at is null
+          and e.module='dogruadres-access'
+          and e.action='organization.store_buyer_blocked'
+          and e.resource='store-buyer-block'
+          and e.organization_id=b.owner_organization_id
+          and e.actor_person_id=b.issued_by_person_id
+          and e.target_id=b.seller_id
+          and e.new_values->>'block_id'=b.id
+          and e.new_values->>'buyer_organization_id'=b.buyer_organization_id
+          and exists(select 1 from da_audit_outbox x
+            where x.source_audit_event_id=e.id
+              and x.source_module='dogruadres-access'
+              and x.deleted_at is null)) as proof
+      from da_store_buyer_organization_block b
+      where b.owner_organization_id=? and b.seller_id=?
+        and b.buyer_organization_id=? and b.revoked_at is null
+      for update of b`,[input.organization_id,input.seller_id,input.buyer_organization_id])
+    if(rows.length>1||rows.some(r=>r.proof!==true||typeof r.id!=="string"||
+       !/^dasbb_[A-Za-z0-9_-]+$/.test(r.id)))throw new IdentityAccessDenied()
+    if(input.action==="block"){
+      if(rows.length===1)return {status:"blocked" as const}
+      const id="dasbb_"+randomUUID()
+      const [audit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:current.person_id,actor_type:current.actor_type,
+        actor_id:current.actor_id,role_context:"owner",
+        organization_id:input.organization_id,
+        action:"organization.store_buyer_blocked",module:DOGRUADRES_AUDIT_MODULE,
+        resource:"store-buyer-block",target_id:input.seller_id,
+        new_values:{block_id:id,buyer_organization_id:input.buyer_organization_id},
+        occurred_at:new Date()
+      }],context)
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      const inserted=await db.execute(`insert into da_store_buyer_organization_block
+        (id,owner_organization_id,seller_id,buyer_organization_id,
+         issued_by_person_id,source_audit_event_id)
+        values (?,?,?,?,?,?) returning id`,
+        [id,input.organization_id,input.seller_id,
+         input.buyer_organization_id,current.person_id,audit.id])
+      if(inserted.length!==1)throw new IdentityAccessDenied()
+      return {status:"blocked" as const}
+    }
+    if(rows.length===0)return {status:"unblocked" as const}
+    const id=rows[0].id as string
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:current.person_id,actor_type:current.actor_type,
+      actor_id:current.actor_id,role_context:"owner",
+      organization_id:input.organization_id,
+      action:"organization.store_buyer_unblocked",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-buyer-block",target_id:input.seller_id,
+      previous_values:{block_id:id,buyer_organization_id:input.buyer_organization_id},
+      new_values:{block_id:id,status:"unblocked"},occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const changed=await db.execute(`update da_store_buyer_organization_block
+      set revoked_at=clock_timestamp(),revoked_by_person_id=?,
+        revocation_audit_event_id=?
+      where id=? and revoked_at is null returning id`,
+      [current.person_id,audit.id,id])
+    if(changed.length!==1)throw new IdentityAccessDenied()
+    return {status:"unblocked" as const}
+  }
+
+  /** Read-only native Seller set against Foundation's authoritative Store
+   * Buyer Organization block ledger. A missing or malformed audit/outbox
+   * never becomes ALLOW; true means any Store denies this Buyer Organization.
+   */
+  @InjectTransactionManager()
+  async personalStoreBuyerBlockDecision(
+    token:string,buyerOrganizationId:string,sellerIds:string[],
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyerOrganizationId)||
+       !Array.isArray(sellerIds)||sellerIds.length>50||
+       new Set(sellerIds).size!==sellerIds.length||
+       sellerIds.some(id=>typeof id!=="string"||
+         !/^sel_[A-Za-z0-9_-]+$/.test(id)))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const buyer=await authorizedBuyerOrganization(db,token,buyerOrganizationId)
+    if(!buyer)return null
+    if(!sellerIds.length)return {blocked:false}
+    const rows=await db.execute(`select b.id,b.owner_organization_id,b.seller_id,
+      exists(select 1 from da_audit_event e
+        where e.id=b.source_audit_event_id and e.deleted_at is null
+          and e.module='dogruadres-access'
+          and e.resource='store-buyer-block'
+          and e.action='organization.store_buyer_blocked'
+          and e.organization_id=b.owner_organization_id
+          and e.actor_person_id=b.issued_by_person_id
+          and e.target_id=b.seller_id
+          and e.new_values->>'block_id'=b.id
+          and e.new_values->>'buyer_organization_id'=b.buyer_organization_id
+          and exists(select 1 from da_audit_outbox x
+            where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+              and x.deleted_at is null)) as proof
+      from da_store_buyer_organization_block b
+      where b.buyer_organization_id=? and b.revoked_at is null
+        and b.seller_id in (${sellerIds.map(()=>"?").join(",")})`,
+      [buyerOrganizationId,...sellerIds])
+    if(rows.length>sellerIds.length||rows.some(r=>r.proof!==true||
+       typeof r.id!=="string"||!/^dasbb_[A-Za-z0-9_-]+$/.test(r.id)||
+       typeof r.owner_organization_id!=="string"||
+       typeof r.seller_id!=="string"))throw new IdentityAccessDenied()
+    for(const row of rows){
+      const confirmed=await platformApprovedSellerIds(db,row.owner_organization_id)
+      if(!confirmed.includes(row.seller_id))throw new IdentityAccessDenied()
+    }
+    return {blocked:rows.length!==0}
+  }
+
   @InjectTransactionManager()
   async personalBuyerOrganization(
     token:string,organizationId:string,@MedusaContext() context:Context={}
