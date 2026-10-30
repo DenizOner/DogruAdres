@@ -1267,10 +1267,18 @@ export default async function({container}:any){
       ownerStoreId)).status,200)
     assert.equal(await activeBetaBlocks(),1)
     assert.equal((await readNativeCart(betaScopeUrl)).status,403)
-    assert.equal((await readNativeCart(
-      buyerCart(organizations[0].id,customerCart.id)+
-      "&seller_scope=inspect")).status,200,
-      "Block targeted to Buyer Beta must not block Buyer Alpha")
+    // Alpha's earlier two-Store cart has its second Seller deliberately
+    // suspended. Its native Customer/Organization ownership preflight still
+    // works; do NOT expect sellable Seller scope from a suspended Store.
+    const alphaBuyerPreflight=await readNativeCart(
+      buyerCart(organizations[0].id,customerCart.id))
+    assert.equal(alphaBuyerPreflight.status,200)
+    assert.equal(alphaBuyerPreflight.body.organization_attributed,true)
+    assert.equal((await q(`select count(*)::int n from
+      da_store_buyer_organization_block
+      where buyer_organization_id=$1 and revoked_at is null`,
+      [organizations[0].id]))[0].n,0,
+      "Beta-only Store policy must not create a block on Buyer Alpha")
     assert.equal((await betaSellerBlock("block",sellerGamma.id,
       gammaSellerId)).status,200)
     assert.equal(await activeBetaBlocks(),2)
