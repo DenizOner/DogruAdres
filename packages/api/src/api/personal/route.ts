@@ -673,7 +673,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
 
-  let productPermissionRequest=0;
+  let productPermissionRequest=0,currentMemberships=[];
   async function productPermissions(org,request,keepOutcome=false){
     if(request!==organizationRequest||currentOrg!==org||document.hidden||el('workspace').hidden)return;
     const seq=++productPermissionRequest,statusEl=el('product-grants-status');
@@ -681,9 +681,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('product-grants-panel').hidden=true;
     if(!keepOutcome)statusEl.textContent='İzinler doğrulanıyor…';
     try{
-      const [stores,members,grants]=await Promise.all([
+      // The selected Organization already loaded these member records; do not
+      // cause a second membership GET that can race role-change refreshes.
+      const members={memberships:currentMemberships.slice()};
+      const [stores,grants]=await Promise.all([
         api('organization-stores?organization='+encodeURIComponent(org)),
-        api('memberships?organization='+encodeURIComponent(org)),
         api('store-product-permissions?organization_id='+encodeURIComponent(org))
       ]);
       if(seq!==productPermissionRequest||request!==organizationRequest||currentOrg!==org||document.hidden)return;
@@ -769,6 +771,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   };
   function clearMemberships(){
+    currentMemberships=[];
     el('memberships').replaceChildren();el('memberships').ariaBusy='false';el('memberships-status').textContent='';
     el('memberships-refresh').hidden=true;el('memberships-refresh').disabled=true;
   }
@@ -778,6 +781,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('memberships').ariaBusy='true';el('memberships-status').textContent='Üyelikler yükleniyor…';el('memberships-refresh').disabled=true;
     try{const data=await api('memberships?organization='+encodeURIComponent(org));if(request!==organizationRequest||currentOrg!==org)return;
       if(!Array.isArray(data.memberships))throw new Error('Invalid membership response');
+      currentMemberships=data.memberships.map(m=>({id:m.id,person_id:m.person_id,role:m.role,status:m.status}));
       const canManageOwners=data.memberships.some(m=>m.person_id===currentPersonId&&m.role==='owner'&&m.protected_owner===true&&m.status==='active');
       for(const m of data.memberships){const p=document.createElement('p');p.textContent=m.person_id+' — '+m.role+' — '+m.status;el('memberships').append(p);
         if(m.status==='active'){
