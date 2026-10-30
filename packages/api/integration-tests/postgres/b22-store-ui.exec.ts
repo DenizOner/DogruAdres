@@ -735,6 +735,18 @@ export default async function({container}:any){
     // No actor-native JWT or personal details should reach the page.
     const privateView=await browser.eval("({jwt:/eyJ[A-Za-z0-9_-]+\\.eyJ/.test(document.body.innerText),local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
     assert.equal(privateView.jwt,false);assert.deepEqual(privateView.local,[]);assert.deepEqual(privateView.session,[])
+    // A legitimate Organization membership change can cause the existing
+    // background privacy observer to conceal the entire stale workspace.
+    // Recover via a real Chrome reload, not a fake visibility flag or bypass.
+    // Then confirm that Alpha remains in the fresh authorized list.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    const freshOwnerButton=await browser.eval(`Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent===${JSON.stringify(organizations[0].name+" — owner")})`)
+    if(!freshOwnerButton){
+      await browser.send("Page.reload",{ignoreCache:true})
+      await browser.wait(`!document.getElementById('workspace').hidden &&
+        Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent===${JSON.stringify(organizations[0].name+" — owner")})`)
+    }
     // Last active Organization must still work before the session is locked;
     // a false success due to the previously revoked Beta scope is unacceptable.
     await browser.select(organizations[0].name,"owner")
