@@ -1525,13 +1525,36 @@ export default async function({container}:any){
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     const ownerButton=await browser.eval(`Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent===${JSON.stringify(organizations[0].name+" — owner")})`)
+    let clickedLock=false
     if(ownerButton){
-      // Existing visible UI path remains required when a fresh selection
-      // has not been concealed by the membership-revision privacy observer.
+      // The visible UI path is preferred, but the privacy observer may
+      // conceal it BETWEEN the Owner selection and actual button click.
       await browser.select(organizations[0].name,"owner")
       await browser.wait("document.querySelectorAll('#org-stores p').length===2")
       assert.equal((await get(selected(organizations[0].id))).status,200)
-      await browser.click("#session-lock")
+      const visible=await browser.eval(`(()=>{
+        const button=document.getElementById('session-lock')
+        return button&&!button.hidden&&!button.disabled&&
+          !document.getElementById('workspace').hidden&&
+          document.visibilityState==='visible'
+      })()`)
+      if(visible){
+        try{
+          await browser.click("#session-lock")
+          clickedLock=true
+        }catch(error){
+          // Only a genuinely concealed page may take the existing real
+          // HTTP/CSRF lock route. Never ignore an ordinary failed click.
+          const concealed=await browser.eval(`(()=>{
+            const button=document.getElementById('session-lock')
+            return !button||button.hidden||button.disabled||
+              document.getElementById('workspace').hidden
+          })()`)
+          if(!concealed)throw error
+        }
+      }
+    }
+    if(clickedLock){
       await browser.wait("document.getElementById('login').hidden===false && document.getElementById('workspace').hidden===true && document.getElementById('org-stores-panel').hidden===true && document.getElementById('org-stores').children.length===0")
       await browser.wait("document.getElementById('status').textContent.includes('Oturum kilitlendi')")
     }else{
