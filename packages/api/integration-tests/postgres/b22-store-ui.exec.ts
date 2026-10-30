@@ -1949,7 +1949,7 @@ export default async function({container}:any){
     })
     assert.equal(hookCartAfter.length,1)
     assert.equal(hookCartAfter[0].completed_at,null)
-    process.stdout.write("PASS B22 Mercur 2.3.7 real validate hook: zero-value disposable Cart invokes the hook; intentional denial leaves zero OrderGroup/Order/payment collections and Cart open; no payment or checkout writer\n")
+    process.stdout.write("PASS B22 Chrome: Mercur 2.3.7 real validate hook runtime; zero-value disposable Cart invokes the hook; intentional denial leaves zero OrderGroup/Order/payment collections and Cart open; no payment or checkout writer\n")
   }finally{
     for(const b of browsers)await b.close()
     if(server)await new Promise<void>(r=>server!.close(()=>r()))
