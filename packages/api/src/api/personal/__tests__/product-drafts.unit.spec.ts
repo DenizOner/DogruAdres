@@ -65,6 +65,7 @@ describe("B22 native product drafts are Person/Org/Store action scoped",()=>{
     await POST(req,res)
     expect(svc.personalReserveProductDraft).toHaveBeenCalledWith("opaque",base)
     expect(run).toHaveBeenCalledWith({input:{products:[{
+      id:"prod_"+base.request_id.slice(5),
       title:base.title,status:"draft",seller_ids:["sel_a"],
       metadata:{dogruadres_draft_request_id:base.request_id}
     }],created_by:"sel_a"}})
@@ -136,6 +137,51 @@ describe("B22 native product drafts are Person/Org/Store action scoped",()=>{
     req.query.request_id="wrong"
     await GET(req,res)
     expect(res.status).toHaveBeenLastCalledWith(400)
+  })
+
+  it("reconciles only one exact native draft and completes Foundation evidence without create workflow",async()=>{
+    req.body={...base,action:"reconcile"}
+    svc.personalProductDraftReceipt=jest.fn().mockResolvedValue({status:"review_required"})
+    const graph=jest.fn().mockResolvedValue({data:[{
+      id:"prod_"+base.request_id.slice(5),title:base.title,status:"draft",
+      metadata:{dogruadres_draft_request_id:base.request_id},sellers:[{id:"sel_a"}]
+    }]})
+    req.scope.resolve=jest.fn((key:string)=>key==="seller"?native:{graph})
+    await POST(req,res)
+    expect(graph).toHaveBeenCalledTimes(1)
+    expect(svc.personalCompleteProductDraft).toHaveBeenCalledWith(
+      "opaque",base,"prod_"+base.request_id.slice(5))
+    expect(run).not.toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(200)
+  })
+  it("does not reconcile native rows with wrong Store, wrong metadata or no native result",async()=>{
+    req.body={...base,action:"reconcile"}
+    svc.personalProductDraftReceipt=jest.fn().mockResolvedValue({status:"review_required"})
+    const product={id:"prod_"+base.request_id.slice(5),title:base.title,status:"draft",
+      metadata:{dogruadres_draft_request_id:base.request_id},sellers:[{id:"sel_other"}]}
+    const graph=jest.fn().mockResolvedValue({data:[product]})
+    req.scope.resolve=jest.fn((key:string)=>key==="seller"?native:{graph})
+    await POST(req,res)
+    expect(res.json).toHaveBeenCalledWith({status:"review_required"})
+    graph.mockResolvedValue({data:[{...product,sellers:[{id:"sel_a"}],
+      metadata:{dogruadres_draft_request_id:"dapd_other"}}]})
+    await POST(req,res)
+    expect(res.json).toHaveBeenLastCalledWith({status:"review_required"})
+    graph.mockResolvedValue({data:[]})
+    await POST(req,res)
+    expect(res.json).toHaveBeenLastCalledWith({status:"review_required"})
+    expect(svc.personalCompleteProductDraft).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
+  it("refuses reconciliation after products.edit revoke, without reading native product",async()=>{
+    req.body={...base,action:"reconcile"}
+    svc.personalProductDraftScope.mockResolvedValue(null)
+    const graph=jest.fn()
+    req.scope.resolve=jest.fn((key:string)=>key==="seller"?native:{graph})
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(graph).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
   })
   it("lists only independently scoped and live native eligible stores",async()=>{
     await GET(req,res)

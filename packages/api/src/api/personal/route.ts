@@ -852,8 +852,22 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         button.hidden=true;
         el('product-draft-form').reset();
         el('product-draft-form').querySelector('button').disabled=false;
-      }else if(['review_required','unverified'].includes(result.status)){
-        el('product-draft-status').textContent='İşlem sonucu hâlâ doğrulanamadı. Aynı ürünü yeniden göndermeyin; kayıt incelemesi gerekli.';
+      }else if(result.status==='review_required'){
+        // The reconciliation action verifies an EXISTING native product; it
+        // never invokes the Mercur create workflow or replays the draft POST.
+        const recovered=await api('product-drafts',{method:'POST',
+          body:JSON.stringify({...a,action:'reconcile'})});
+        if(request!==organizationRequest||currentOrg!==a.organization_id||document.hidden)return;
+        if(recovered.status==='created'&&/^prod_[A-Za-z0-9_-]+$/.test(recovered.product_id)){
+          el('product-draft-status').textContent='Mevcut ürün taslağı doğrulandı: '+recovered.product_id;
+          productDraftKey='';productDraftAttempt=null;button.hidden=true;
+          el('product-draft-form').reset();
+          el('product-draft-form').querySelector('button').disabled=false;
+        }else if(recovered.status==='review_required'){
+          el('product-draft-status').textContent='Ürün kaydı kesinleşmedi; inceleme gerekli. Yeniden ürün göndermeyin.';
+        }else throw new Error('Geçersiz uzlaştırma sonucu');
+      }else if(result.status==='unverified'){
+        el('product-draft-status').textContent='İstek kaydı doğrulanamadı. Otomatik tekrar yapmayın; inceleme gerekli.';
       }else throw new Error('Geçersiz işlem sonucu');
     }catch(e){
       if(request===organizationRequest&&currentOrg===a.organization_id)

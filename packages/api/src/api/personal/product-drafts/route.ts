@@ -1,6 +1,7 @@
 import type { MedusaRequest,MedusaResponse } from "@medusajs/framework/http"
 import { z } from "@medusajs/framework/zod"
 import { createProductsWorkflow } from "@mercurjs/core/workflows"
+import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { access,csrf,enabled,sessionToken } from "../security"
 import { IdentityAccessDenied } from "../../../modules/dogruadres-access/identity-session"
 
@@ -12,6 +13,7 @@ const draft=z.object({
   organization_id:org,seller_id:seller,
   title:z.string().min(2).max(120).trim()
 }).strict()
+const reconcile=draft.extend({action:z.literal("reconcile")}).strict()
 
 type NativeSeller={
   listSellerMembers(filter:object):Promise<any[]>
@@ -23,7 +25,7 @@ function cleanNativeRows(rows:any[],binding:any,sellerId:string):boolean{
     Array.isArray(rows[0])&&rows[0].length===1&&
     rows[0][0].seller_id===sellerId&&rows[0][0].member_id===binding.actor_id&&
     Array.isArray(rows[1])&&rows[1].length===1&&
-    rows[1][0].id===binding.actor_id&&
+    rows[1][0].id===binding.actor_id&&rows[1][0].is_active===true&&
     Array.isArray(rows[2])&&rows[2].length===1&&
     rows[2][0].id===sellerId&&rows[2][0].status==="open"&&
     !!rows[2][0].approved_at
@@ -115,6 +117,66 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   let valid=false;try{valid=await csrf(req)}catch{}
   if(!valid||req.headers["x-seller-id"]!==undefined)
     return res.status(403).json({message:"Access denied"})
+  // User-initiated reconciliation is NOT a product create retry.
+  // Only new B22 drafts with deterministic native IDs are eligible.
+  if(req.body&&typeof req.body==="object"&&
+     (req.body as {action?:unknown}).action==="reconcile"){
+    const parsed=reconcile.safeParse(req.body)
+    if(!parsed.success)return res.status(400).json({message:"Invalid input"})
+    const {action:_,...data}=parsed.data
+    const svc=access(req),token=sessionToken(req)
+    try{
+      const scope=await svc.personalProductDraftScope(token,data.organization_id,data.seller_id)
+      if(!scope||!await liveNative(req,token,scope.person_id,data.seller_id))
+        return res.status(403).json({message:"Access denied"})
+      const prior=await svc.personalProductDraftReceipt(
+        token,data.organization_id,data.seller_id,data.request_id)
+      if(!prior)return res.status(403).json({message:"Access denied"})
+      if(prior.status==="created"){
+        const fresh=await svc.personalProductDraftScope(token,data.organization_id,data.seller_id)
+        if(!fresh||fresh.person_id!==scope.person_id||
+           !await liveNative(req,token,scope.person_id,data.seller_id))
+          return res.status(403).json({message:"Access denied"})
+        return res.status(200).json(prior)
+      }
+      if(prior.status!=="review_required")
+        return res.status(200).json({status:"review_required"})
+      const expectedId="prod_"+data.request_id.slice("dapd_".length)
+      const query=req.scope.resolve<{graph(input:object):Promise<{data:any[]}>}>(
+        ContainerRegistrationKeys.QUERY)
+      const {data:products}=await query.graph({
+        entity:"product",fields:["id","title","status","metadata","sellers.id"],
+        filters:{id:expectedId}
+      })
+      if(!Array.isArray(products)||products.length>1)
+        return res.status(503).json({message:"Outcome uncertain; check product record"})
+      if(products.length===0)return res.status(200).json({status:"review_required"})
+      const product=products[0]
+      // Validate exact native data AND Foundation's stored immutable request
+      // fingerprint before completing the canonical Foundation audit/outbox.
+      if(product.id!==expectedId||product.title!==data.title||
+         product.status!=="draft"||
+         product.metadata?.dogruadres_draft_request_id!==data.request_id||
+         !Array.isArray(product.sellers)||product.sellers.length!==1||
+         product.sellers[0]?.id!==data.seller_id)
+        return res.status(200).json({status:"review_required"})
+      const fresh=await svc.personalProductDraftScope(token,data.organization_id,data.seller_id)
+      if(!fresh||fresh.person_id!==scope.person_id||
+         !await liveNative(req,token,scope.person_id,data.seller_id))
+        return res.status(403).json({message:"Access denied"})
+      const completed=await svc.personalCompleteProductDraft(token,data,expectedId)
+      if(!completed)return res.status(403).json({message:"Access denied"})
+      const allowed=await svc.personalProductDraftScope(token,data.organization_id,data.seller_id)
+      if(!allowed||allowed.person_id!==scope.person_id||
+         !await liveNative(req,token,scope.person_id,data.seller_id))
+        return res.status(403).json({message:"Access denied"})
+      return res.status(200).json({status:"created",product_id:expectedId})
+    }catch(e){
+      return res.status(e instanceof IdentityAccessDenied?403:503)
+        .json({message:e instanceof IdentityAccessDenied?"Access denied":
+          "Outcome uncertain; check product record"})
+    }
+  }
   const parsed=draft.safeParse(req.body)
   if(!parsed.success)return res.status(400).json({message:"Invalid input"})
   const data=parsed.data,svc=access(req),token=sessionToken(req)
@@ -142,6 +204,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
       return res.status(409).json({message:"Outcome uncertain; do not retry this operation"})
     const {result}=await createProductsWorkflow(req.scope).run({
       input:{products:[{
+        id:"prod_"+data.request_id.slice("dapd_".length),
         title:data.title,status:"draft",seller_ids:[data.seller_id],
         metadata:{dogruadres_draft_request_id:data.request_id}
       }],created_by:data.seller_id}
