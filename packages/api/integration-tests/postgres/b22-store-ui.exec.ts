@@ -1241,10 +1241,14 @@ export default async function({container}:any){
         type:"publishable",created_by:""}]}
     })
     assert.equal(typeof b22PublishableKey.id,"string")
+    assert.equal(typeof b22PublishableKey.token,"string")
+    assert.ok(b22PublishableKey.token.length>20)
     await linkSalesChannelsToApiKeyWorkflow(container).run({input:{
       id:b22PublishableKey.id,add:[market.id]
     }})
-    const keyHeaders={"x-publishable-api-key":b22PublishableKey.id}
+    // Medusa's API Key module distinguishes the internal apk_ ID from the
+    // public pk_ token used in the Store HTTP header. Never log the token.
+    const keyHeaders={"x-publishable-api-key":b22PublishableKey.token}
     assert.equal((await q(`select count(*)::int n from order_group
       where cart_id=$1`,[betaTwoSellerCart.id]))[0].n,0)
     const tryNativeCompletion=async(actor:B06Chrome,
