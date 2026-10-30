@@ -383,6 +383,17 @@ export default async function({container}:any){
     assert.equal(afterReview.length,1)
     assert.equal(afterReview[0].status,"open")
     assert.ok(afterReview[0].approved_at)
+    // Native Member context now requires the SAME live legal Organization
+    // used by the personal Store list; SellerMember alone is insufficient.
+    const storeContext=(org:string,seller:string)=>
+      '/personal/contexts?type=member&organization='+encodeURIComponent(org)+
+      '&seller='+encodeURIComponent(seller)
+    const authorizedContext=await get(storeContext(organizations[0].id,ownerStoreId))
+    assert.equal(authorizedContext.status,200)
+    assert.equal(authorizedContext.body.organization_id,organizations[0].id)
+    assert.equal(authorizedContext.body.seller.id,ownerStoreId)
+    assert.equal((await get(storeContext(organizations[1].id,ownerStoreId))).status,403)
+    assert.equal((await get('/personal/contexts?type=member&seller='+ownerStoreId)).status,400)
     const replayApprove=await reviewer.eval(`(async()=>{
       const session=await (await fetch('/personal/session')).json()
       const response=await fetch('/personal/platform/stores',{
@@ -406,6 +417,7 @@ export default async function({container}:any){
     // Keep the later existing fixture expectations intact: native suspension
     // hides this reviewed Store without altering the Owner→Org link.
     await suspendSellerWorkflow(container).run({input:{seller_id:ownerStoreId,reason:"B22 task-only native suspend"}})
+    assert.equal((await get(storeContext(organizations[0].id,ownerStoreId))).status,403)
     assert.deepEqual((await get(selected(organizations[0].id))).body.stores,[])
     await browser.select(organizations[0].name,"owner")
     await browser.wait("document.getElementById('org-stores-status').textContent.includes('görüntülenebilir onaylı mağaza bulunmuyor')")
