@@ -8,7 +8,9 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
   let req:any,res:any,svc:any
   beforeEach(()=>{
     jest.resetAllMocks()
-    svc={personalStoreBuyerBlockDecision:jest.fn().mockResolvedValue({blocked:false}),
+    svc={personalStoreBuyerBlockDecision:jest.fn().mockResolvedValue({
+        blocked:false,ownership_verified:true
+      }),
       personalBuyerCartAttribution:jest.fn().mockResolvedValue(false),
       personalClaimBuyerCart:jest.fn().mockResolvedValue({
         status:"attributed",organization_id:"daorg_a"

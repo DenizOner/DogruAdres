@@ -782,7 +782,7 @@ export default async function({container}:any){
     assert.equal(twoStoreScope.status,200)
     assert.deepEqual(twoStoreScope.body,{
       organization_id:organizations[0].id,status:"seller_scope_mapped",
-      seller_count:2,seller_block_verified:true,checkout_ready:false
+      seller_count:2,seller_block_verified:false,checkout_ready:false
     })
     assert.equal((await readNativeCart(buyerCart(organizations[1].id,
       customerCart.id)+"&seller_scope=inspect")).status,403)

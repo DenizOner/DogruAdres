@@ -1633,7 +1633,23 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const db=securitySql(context.transactionManager)
     const buyer=await authorizedBuyerOrganization(db,token,buyerOrganizationId)
     if(!buyer)return null
-    if(!sellerIds.length)return {blocked:false}
+    if(!sellerIds.length)return {blocked:false,ownership_verified:false}
+    // Each participating Seller must have exactly one current platform
+    // Organization origin before saying every Store policy was verified.
+    // A native SellerMember alone is never legal Store ownership.
+    const ownerRows=await db.execute(`select seller_id,organization_id
+      from da_organization_seller_ownership where revoked_at is null
+        and seller_id in (${sellerIds.map(()=>"?").join(",")})`,sellerIds)
+    if(ownerRows.length>sellerIds.length||
+       new Set(ownerRows.map(r=>r.seller_id)).size!==ownerRows.length||
+       ownerRows.some(r=>typeof r.organization_id!=="string"||
+         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(r.organization_id)||
+         !sellerIds.includes(r.seller_id)))throw new IdentityAccessDenied()
+    for(const row of ownerRows){
+      const confirmed=await platformApprovedSellerIds(db,row.organization_id)
+      if(!confirmed.includes(row.seller_id))throw new IdentityAccessDenied()
+    }
+    const ownershipVerified=ownerRows.length===sellerIds.length
     const rows=await db.execute(`select b.id,b.owner_organization_id,b.seller_id,
       exists(select 1 from da_audit_event e
         where e.id=b.source_audit_event_id and e.deleted_at is null
@@ -1660,7 +1676,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       const confirmed=await platformApprovedSellerIds(db,row.owner_organization_id)
       if(!confirmed.includes(row.seller_id))throw new IdentityAccessDenied()
     }
-    return {blocked:rows.length!==0}
+    return {blocked:rows.length!==0,ownership_verified:ownershipVerified}
   }
 
   @InjectTransactionManager()

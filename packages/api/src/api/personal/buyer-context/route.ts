@@ -189,9 +189,11 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       if(remaining.size!==0)return res.status(403).json({message:"Access denied"})
       // Per-Store Buyer Organization block is Foundation-owned and never
       // derived from Medusa Customer or Mercur SellerCustomerGroup.
+      let coverageVerified=false
       const unblocked=async()=>{
         const result=await svc.personalStoreBuyerBlockDecision(
           token,parsed.data.organization_id,[...sellers])
+        coverageVerified=result?.ownership_verified===true
         return result?.blocked===false
       }
       if(!await unblocked())
@@ -211,7 +213,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
         organization_id:checked.organization_id,
         status:sellers.size?"seller_scope_mapped":"seller_scope_empty",
         seller_count:sellers.size,
-        seller_block_verified:sellers.size>0,
+        seller_block_verified:sellers.size>0&&coverageVerified,
         checkout_ready:false
       })
     }
