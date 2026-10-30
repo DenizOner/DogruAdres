@@ -443,6 +443,11 @@ export default async function({container}:any){
     const buyerBefore=await get('/personal/buyer-permissions?organization_id='+organizations[0].id)
     assert.equal(buyerBefore.status,200)
     assert.deepEqual(buyerBefore.body.grants,[],"Owner has no automatic buyer.purchase permission")
+    // An Organization Owner has no implicit procurement authority.
+    const ownerBuyerContext=await get('/personal/buyer-context?organization_id='+
+      encodeURIComponent(organizations[0].id))
+    assert.equal(ownerBuyerContext.status,403)
+
     assert.equal((await q(`select count(*)::int n from da_organization_buyer_permission
       where organization_id=$1`,[organizations[0].id]))[0].n,0)
     await browser.eval(`document.querySelector('#buyer-grants-form select[name=membership_id]').value=${JSON.stringify(alphaMember.id)}`)
@@ -501,6 +506,35 @@ export default async function({container}:any){
       return response.status
     })()`)
     assert.equal(foreignBuyer,403,"Non-Owner cannot enumerate buyer grants")
+    // B is Alpha Member and Beta Owner, but the selected legal buyer must
+    // always be Alpha when Alpha's explicit buyer.purchase is granted.
+    const verifiedBuyer=await reviewer.eval(`(async()=>{
+      const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}')
+      return {status:r.status,body:await r.json()}
+    })()`)
+    assert.equal(verifiedBuyer.status,200)
+    assert.deepEqual(verifiedBuyer.body,{
+      organization_id:organizations[0].id,
+      status:"buyer_permission_verified",checkout_ready:false
+    })
+    const wrongBuyer=await reviewer.eval(`(async()=>{
+      const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[1].id)}')
+      return r.status
+    })()`)
+    assert.equal(wrongBuyer,403,"Beta Owner role cannot invent buyer.purchase")
+    const forgedBuyer=await reviewer.eval(`(async()=>{
+      const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}&actor_id=cus_forged')
+      return r.status
+    })()`)
+    assert.equal(forgedBuyer,400,"Forged Customer context rejected")
+    // Actual browser selection, not only an HTTP request: B's newly-active
+    // Alpha membership is refreshed before selecting that Organization.
+    await reviewer.send("Page.reload",{ignoreCache:true})
+    await reviewer.wait("document.getElementById('workspace').hidden===false")
+    await reviewer.select(organizations[0].name,"member")
+    await reviewer.wait("!document.getElementById('buyer-context-panel').hidden")
+    assert.equal(await reviewer.eval(`document.getElementById('buyer-context-status').textContent.includes('Sepet ve ödeme henüz kullanıma açık değil')`),true)
+
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.wait("!document.getElementById('buyer-grants-panel').hidden")
@@ -518,6 +552,19 @@ export default async function({container}:any){
         and e.target_id=$3 and e.previous_values->>'grant_id'=$4`,
       [A.person,organizations[0].id,B.person,buyerGrant.id])
     assert.equal(buyerRevoked[0].n,1,"Revocation must emit canonical outbox")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    const deniedAfterRevoke=await reviewer.eval(`(async()=>{
+      const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}')
+      return r.status
+    })()`)
+    assert.equal(deniedAfterRevoke,403,"Server rechecks revoked buyer.purchase")
+    await reviewer.click('#buyer-context-refresh')
+    await reviewer.wait("document.getElementById('buyer-context-panel').hidden===true")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    process.stdout.write("PASS B22 Chrome: selected Buyer Organization requires same Person active membership and explicit current buyer.purchase, foreign Owner 403, forged actor 400, revocation clears access; no checkout\\n")
+
     assert.equal((await q(`select count(*)::int n from da_organization_buyer_permission
       where person_id=$1 and organization_id=$2 and revoked_at is null`,
       [B.person,organizations[0].id]))[0].n,0)
