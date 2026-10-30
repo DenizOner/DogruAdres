@@ -89,9 +89,11 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       status:cartForCustomer?"native_customer_cart_verified":
         customerActorId?"buyer_customer_verified":"buyer_permission_verified",
       checkout_ready:false,
-      ...(cartForCustomer?{organization_attributed:
-        await svc.personalBuyerCartAttribution(token,parsed.data.organization_id,
-          cartId,customerActorId)===true}: {})
+      ...(cartForCustomer&&cartId&&customerActorId?{
+        organization_attributed:
+          await svc.personalBuyerCartAttribution(token,parsed.data.organization_id,
+            cartId,customerActorId)===true
+      }: {})
     })
   }catch(e){
     return res.status(e instanceof IdentityAccessDenied?403:503)

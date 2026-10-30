@@ -1,22 +1,28 @@
-import {GET} from "../buyer-context/route"
-import {access,enabled,sessionToken} from "../security"
+import {GET,POST} from "../buyer-context/route"
+import {access,csrf,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 jest.mock("../security",()=>({
-  access:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
+  access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
 describe("B22 selected buyer Organization is not Customer checkout authority",()=>{
   let req:any,res:any,svc:any
   beforeEach(()=>{
     jest.resetAllMocks()
-    svc={personalBuyerOrganization:jest.fn().mockResolvedValue({
+    svc={personalBuyerCartAttribution:jest.fn().mockResolvedValue(false),
+      personalClaimBuyerCart:jest.fn().mockResolvedValue({
+        status:"attributed",organization_id:"daorg_a"
+      }),
+      personalBuyerOrganization:jest.fn().mockResolvedValue({
       person_id:"daprs_a",organization_id:"daorg_a"
     }),personalActorBinding:jest.fn().mockResolvedValue({
       id:"dabind_a",person_id:"daprs_a",actor_id:"cus_a",revoked_at:null
     })}
     ;(enabled as jest.Mock).mockReturnValue(true)
+    ;(csrf as jest.Mock).mockResolvedValue(true)
     ;(sessionToken as jest.Mock).mockReturnValue("opaque")
     ;(access as jest.Mock).mockReturnValue(svc)
     req={query:{organization_id:"daorg_a"},headers:{},
+      body:{action:"attribute",organization_id:"daorg_a",cart_id:"cart_a"},
       scope:{resolve:jest.fn((key:string)=>key==="customer"?
         {listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}:
         {listCarts:jest.fn().mockResolvedValue([{id:"cart_a",customer_id:"cus_a",completed_at:null}])})}}
@@ -81,6 +87,74 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
       person_id:"daprs_a",organization_id:"daorg_a"
     }).mockResolvedValueOnce(null)
     await GET(req,res);expect(res.status).toHaveBeenCalledWith(403)
+  })
+  it("returns attribution only from verified Foundation audit, not Cart metadata",async()=>{
+    req.query.customer="verified";req.query.cart_id="cart_a"
+    svc.personalBuyerCartAttribution.mockResolvedValue(true)
+    await GET(req,res)
+    expect(svc.personalBuyerCartAttribution).toHaveBeenCalledWith(
+      "opaque","daorg_a","cart_a","cus_a")
+    expect(res.json).toHaveBeenCalledWith({
+      organization_id:"daorg_a",status:"native_customer_cart_verified",
+      checkout_ready:false,organization_attributed:true
+    })
+  })
+  it("POST attributes only with CSRF, dual-proof Customer and live native Cart",async()=>{
+    await POST(req,res)
+    expect(svc.personalClaimBuyerCart).toHaveBeenCalledWith(
+      "opaque","daorg_a","cart_a","cus_a")
+    expect(svc.personalBuyerCartAttribution).toHaveBeenCalledWith(
+      "opaque","daorg_a","cart_a","cus_a")
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({
+      status:"attributed",organization_id:"daorg_a",checkout_ready:false
+    })
+  })
+  it("POST denies CSRF, extra context and forged Customer before mutations",async()=>{
+    ;(csrf as jest.Mock).mockResolvedValue(false)
+    await POST(req,res);expect(res.status).toHaveBeenCalledWith(403)
+    expect(svc.personalClaimBuyerCart).not.toHaveBeenCalled()
+    ;(csrf as jest.Mock).mockResolvedValue(true)
+    req.body.customer_id="cus_forged"
+    await POST(req,res);expect(res.status).toHaveBeenLastCalledWith(400)
+    delete req.body.customer_id;req.headers["x-seller-id"]="sel_rogue"
+    await POST(req,res);expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(svc.personalClaimBuyerCart).not.toHaveBeenCalled()
+  })
+  it("POST rejects foreign Cart and revocation before Foundation claim",async()=>{
+    req.scope.resolve=jest.fn((key:string)=>key==="customer"?
+      {listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}:
+      {listCarts:jest.fn().mockResolvedValue([{id:"cart_a",customer_id:"cus_foreign"}])})
+    await POST(req,res);expect(res.status).toHaveBeenCalledWith(403)
+    expect(svc.personalClaimBuyerCart).not.toHaveBeenCalled()
+    req.scope.resolve=jest.fn((key:string)=>key==="customer"?
+      {listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}:
+      {listCarts:jest.fn().mockResolvedValue([{id:"cart_a",customer_id:"cus_a"}])})
+    svc.personalBuyerOrganization.mockResolvedValueOnce({
+      person_id:"daprs_a",organization_id:"daorg_a"
+    }).mockResolvedValueOnce(null)
+    await POST(req,res);expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(svc.personalClaimBuyerCart).not.toHaveBeenCalled()
+  })
+  it("POST fails closed if later Customer/Cart ownership disappears",async()=>{
+    let n=0
+    req.scope.resolve=jest.fn((key:string)=>key==="customer"?
+      {listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}:
+      {listCarts:jest.fn().mockImplementation(async()=>{
+        n++;return n===3?[]:[{id:"cart_a",customer_id:"cus_a"}]
+      })})
+    await POST(req,res)
+    expect(svc.personalClaimBuyerCart).toHaveBeenCalledTimes(1)
+    expect(res.status).toHaveBeenCalledWith(403)
+  })
+  it("POST never returns another Organization's attribution or inferred cart grant",async()=>{
+    svc.personalClaimBuyerCart.mockRejectedValue(new IdentityAccessDenied())
+    await POST(req,res);expect(res.status).toHaveBeenCalledWith(403)
+    svc.personalClaimBuyerCart.mockRejectedValue(new Error("tx uncertain"))
+    await POST(req,res);expect(res.status).toHaveBeenLastCalledWith(503)
+    expect(res.json).toHaveBeenLastCalledWith({
+      message:"Outcome uncertain; recheck cart attribution"
+    })
   })
   it("fails closed for missing, revoked, wrong-Person and stale Customer bindings",async()=>{
     req.query.customer="verified"
