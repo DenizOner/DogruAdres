@@ -29,7 +29,7 @@ describe("B22 native product drafts are Person/Org/Store action scoped",()=>{
       listSellers:jest.fn().mockResolvedValue([{id:"sel_a",name:"Alpha",status:"open",approved_at:"2026-10-30"}])
     }
     run=jest.fn().mockResolvedValue({result:[{id:"prod_a"}]})
-    ;(createProductsWorkflow as jest.Mock).mockReturnValue({run})
+    ;(createProductsWorkflow as unknown as jest.Mock).mockReturnValue({run})
     ;(enabled as jest.Mock).mockReturnValue(true)
     ;(csrf as jest.Mock).mockResolvedValue(true)
     ;(sessionToken as jest.Mock).mockReturnValue("opaque")

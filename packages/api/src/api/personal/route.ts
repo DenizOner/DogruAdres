@@ -799,7 +799,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   async function productDraftStores(org,request,keepOutcome=false){
     if(document.hidden||request!==organizationRequest||currentOrg!==org)return;
-    const seq=++productDraftRequest,select=el('product-draft-form').elements.namedItem('seller_id');
+    const form=el('product-draft-form');
+    // The historical membership DOM contract intentionally contains no
+    // product form; only real browser documents have form.elements.
+    if(!form||!form.elements||typeof form.elements.namedItem!=='function')return;
+    const seq=++productDraftRequest,select=form.elements.namedItem('seller_id');
     const previous=select.value;
     el('product-draft-panel').hidden=true;
     if(!keepOutcome)el('product-draft-status').textContent='Mağaza yetkileri kontrol ediliyor…';
