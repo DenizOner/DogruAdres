@@ -27,6 +27,7 @@ import {
 import { sendSmtpEmail } from "./smtp-client"
 import { PersonalNotifications } from "./personal-notifications"
 import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
+import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
@@ -1395,6 +1396,130 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return rows as Array<{id:string;person_id:string;seller_id:string}>
   }
 
+
+
+  // B22: only active Organization Owner issues/revokes explicit buyer.purchase.
+  // This does NOT authorize a Customer token or a cart/checkout operation.
+  @InjectTransactionManager()
+  async personalChangeBuyerPermission(
+    token:string,input:{action:"grant"|"revoke";organization_id:string;membership_id:string},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
+       !["grant","revoke"].includes(input.action))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const owner=await sessions.organizations(token,input.organization_id,false)
+    if(!owner||owner.person_id!==current.person_id||owner.organizations.length!==1||
+       owner.organizations[0].role!=="owner")return null
+    const issuer=await db.execute(`select id from da_organization_membership
+      where person_id=? and organization_id=? and role='owner'
+        and status='active' and deleted_at is null for share`,
+      [current.person_id,input.organization_id])
+    if(issuer.length!==1)throw new IdentityAccessDenied()
+    const target=await db.execute(`select m.person_id from da_organization_membership m
+      join da_person p on p.id=m.person_id
+      where m.id=? and m.organization_id=? and m.deleted_at is null
+        and p.deleted_at is null and p.disabled_at is null
+        ${input.action==="grant"?"and m.status='active'":""}
+      for share of m,p`,[input.membership_id,input.organization_id])
+    if(target.length!==1||typeof target[0].person_id!=="string"||
+       !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
+    const personId=target[0].person_id as string
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-buyer-purchase'),hashtext(?))`,
+      [input.organization_id+":"+personId])
+    // Recheck issuer after locks; never rely on an earlier UI role label.
+    const currentOwner=await sessions.organizations(token,input.organization_id,false)
+    if(!currentOwner||currentOwner.person_id!==current.person_id||
+       currentOwner.organizations.length!==1||
+       currentOwner.organizations[0].role!=="owner")return null
+    const active=await db.execute(`select id from da_organization_buyer_permission
+      where person_id=? and organization_id=? and permission='buyer.purchase'
+        and revoked_at is null for update`,[personId,input.organization_id])
+    if(active.length>1)throw new IdentityAccessDenied()
+    if(input.action==="grant"){
+      if(active.length){
+        if(!await verifiedBuyerPurchaseGrant(db,personId,input.organization_id))
+          throw new IdentityAccessDenied()
+        return {status:"active" as const,grant_id:active[0].id as string}
+      }
+      const grantId="dabpg_"+randomUUID()
+      const [audit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
+        role_context:"owner",organization_id:input.organization_id,
+        action:"organization.buyer_permission_granted",module:DOGRUADRES_AUDIT_MODULE,
+        resource:"buyer-permission",target_id:personId,
+        new_values:{grant_id:grantId,person_id:personId,permission:"buyer.purchase"},
+        occurred_at:new Date()
+      }],context)
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      await db.execute(`insert into da_organization_buyer_permission
+        (id,person_id,organization_id,permission,issued_by_person_id,source_audit_event_id)
+        values (?,?,?,'buyer.purchase',?,?)`,
+        [grantId,personId,input.organization_id,current.person_id,audit.id])
+      return {status:"active" as const,grant_id:grantId}
+    }
+    if(active.length===0)return {status:"revoked" as const,grant_id:null}
+    const grantId=active[0].id as string
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
+      role_context:"owner",organization_id:input.organization_id,
+      action:"organization.buyer_permission_revoked",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"buyer-permission",target_id:personId,
+      previous_values:{grant_id:grantId,person_id:personId,permission:"buyer.purchase"},
+      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const changed=await db.execute(`update da_organization_buyer_permission
+      set revoked_at=clock_timestamp()
+      where id=? and revoked_at is null returning id`,[grantId])
+    if(changed.length!==1||!audit.id)throw new IdentityAccessDenied()
+    return {status:"revoked" as const,grant_id:grantId}
+  }
+
+  @InjectTransactionManager()
+  async personalListBuyerPermissions(
+    token:string,organizationId:string,@MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),session=new IdentitySessions(db)
+    const current=await session.organizations(token,organizationId,false)
+    if(!current||current.organizations.length!==1||
+       current.organizations[0].role!=="owner")return null
+    const rows=await db.execute(`select g.id,g.person_id
+      from da_organization_buyer_permission g
+      join da_audit_event e on e.id=g.source_audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.actor_person_id=g.issued_by_person_id
+        and e.organization_id=g.organization_id and e.target_id=g.person_id
+        and e.action='organization.buyer_permission_granted'
+        and e.resource='buyer-permission'
+        and e.new_values->>'grant_id'=g.id
+        and e.new_values->>'person_id'=g.person_id
+        and e.new_values->>'permission'=g.permission
+      where g.organization_id=? and g.permission='buyer.purchase'
+        and g.revoked_at is null
+        and (g.expires_at is null or g.expires_at>statement_timestamp())
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id
+            and x.source_module='dogruadres-access' and x.deleted_at is null)
+      order by g.id limit 101`,[organizationId])
+    if(rows.length>100||rows.some(g=>typeof g.id!=="string"||
+       !/^dabpg_[A-Za-z0-9_-]+$/.test(g.id)||
+       typeof g.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)))
+      throw new IdentityAccessDenied()
+    return rows as Array<{id:string;person_id:string}>
+  }
+
+  @InjectTransactionManager()
+  async personalBuyerOrganization(
+    token:string,organizationId:string,@MedusaContext() context:Context={}
+  ){
+    return authorizedBuyerOrganization(securitySql(context.transactionManager),token,organizationId)
+  }
 
   // B22 product draft: Foundation-owned intent ledger, not another product
   // service. Never interpret a reserved/uncertain native outcome as retryable.

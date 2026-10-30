@@ -16,6 +16,7 @@ export function allowedPublicRequest(method,path){
     '/personal/organization-stores':['GET'],
     '/personal/store-applications':['GET','POST'],
     '/personal/store-product-permissions':['GET','POST'],
+    '/personal/buyer-permissions':['GET','POST'],
     '/personal/product-drafts':['GET','POST'],
     '/personal/links':['GET','POST'],
     '/personal/audit-timeline':['GET'],
