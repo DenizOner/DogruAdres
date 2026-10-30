@@ -725,6 +725,36 @@ export default async function({container}:any){
       return r.status
     })()`)
     assert.equal(wrongBuyer,403,"Beta Owner role cannot invent buyer.purchase")
+
+    // Even when B explicitly gains buyer.purchase in TWO Organizations, the
+    // same native Cart cannot be silently reassigned from Alpha to Beta.
+    // This tests the unique immutable attribution, not only missing permission.
+    const ownBetaMembership=memberships[1]
+    const betaPermission=async(action:"grant"|"revoke")=>reviewer.eval(`(async()=>{
+      const s=await(await fetch('/personal/session')).json()
+      const r=await fetch('/personal/buyer-permissions',{
+        method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify(${JSON.stringify({
+          action,organization_id:organizations[1].id,
+          membership_id:ownBetaMembership.id
+        })})
+      });return {status:r.status,body:await r.json()}
+    })()`)
+    assert.equal((await betaPermission("grant")).status,200)
+    const betaCartEligible=await readNativeCart(buyerCart(organizations[1].id,customerCart.id))
+    assert.equal(betaCartEligible.status,200)
+    assert.equal(betaCartEligible.body.organization_attributed,false,
+      "Native Customer is valid for Beta, but Alpha's attribution must remain exclusive")
+    assert.equal((await claimCart(organizations[1].id,customerCart.id)).status,403,
+      "Authorized Beta buyer cannot steal Cart already attributed to Alpha")
+    const unchangedCart=await q(`select organization_id,source_audit_event_id
+      from da_buyer_cart_attribution where cart_id=$1`,[customerCart.id])
+    assert.equal(unchangedCart.length,1)
+    assert.equal(unchangedCart[0].organization_id,organizations[0].id)
+    assert.equal(unchangedCart[0].source_audit_event_id,attributed.source_audit_event_id)
+    assert.equal((await betaPermission("revoke")).status,200)
+    process.stdout.write("PASS B22 explicit Beta grant cannot reassign Alpha Cart: both Organization buyer permissions tested; canonical audit ownership unchanged\\n")
+
     const forgedBuyer=await reviewer.eval(`(async()=>{
       const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}&actor_id=cus_forged')
       return r.status
