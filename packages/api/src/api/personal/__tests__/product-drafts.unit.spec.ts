@@ -19,6 +19,7 @@ describe("B22 native product drafts are Person/Org/Store action scoped",()=>{
       personalProductDraftCandidates:jest.fn().mockResolvedValue({
         person_id:"daprs_a",organization_id:"daorg_a",seller_ids:["sel_a"]}),
       personalProductDraftScope:jest.fn().mockResolvedValue(scope),
+      personalProductDraftReceipt:jest.fn().mockResolvedValue({status:"review_required"}),
       personalActorBinding:jest.fn().mockResolvedValue(binding),
       personalReserveProductDraft:jest.fn().mockResolvedValue({status:"reserved",person_id:"daprs_a"}),
       personalCompleteProductDraft:jest.fn().mockResolvedValue({status:"created",product_id:"prod_a"})
@@ -109,6 +110,32 @@ describe("B22 native product drafts are Person/Org/Store action scoped",()=>{
     await POST(req,res)
     expect(res.status).toHaveBeenCalledWith(503)
     expect(svc.personalCompleteProductDraft).not.toHaveBeenCalled()
+  })
+  it("checks an uncertain intent read-only, never starts Mercur workflow",async()=>{
+    req.query={organization_id:"daorg_a",seller_id:"sel_a",request_id:base.request_id}
+    await GET(req,res)
+    expect(svc.personalProductDraftReceipt).toHaveBeenCalledWith(
+      "opaque","daorg_a","sel_a",base.request_id)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({status:"review_required"})
+    expect(run).not.toHaveBeenCalled()
+    expect(svc.personalReserveProductDraft).not.toHaveBeenCalled()
+  })
+  it("rejects unauthorized, revoked or foreign receipt lookup",async()=>{
+    req.query={organization_id:"daorg_a",seller_id:"sel_a",request_id:base.request_id}
+    svc.personalProductDraftScope.mockResolvedValue(null)
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(svc.personalProductDraftReceipt).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+    svc.personalProductDraftScope.mockResolvedValue(scope)
+    svc.personalProductDraftReceipt.mockResolvedValue({status:"created",product_id:"prod_a"})
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({status:"created",product_id:"prod_a"})
+    req.query.request_id="wrong"
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(400)
   })
   it("lists only independently scoped and live native eligible stores",async()=>{
     await GET(req,res)

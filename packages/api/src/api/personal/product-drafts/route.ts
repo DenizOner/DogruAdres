@@ -44,6 +44,31 @@ async function liveNative(req:MedusaRequest,token:string,personId:string,sellerI
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Cache-Control","no-store")
   if(!enabled())return res.status(503).json({message:"Unavailable"})
+  const receiptMode=req.query.request_id!==undefined||req.query.seller_id!==undefined
+  if(receiptMode){
+    const receiptParams=z.object({organization_id:org,seller_id:seller,
+      request_id:z.string().regex(/^dapd_[0-9a-f]{32}$/)}).strict().safeParse(req.query)
+    if(!receiptParams.success||req.headers["x-seller-id"]!==undefined)
+      return res.status(400).json({message:"Invalid context"})
+    const {organization_id,seller_id,request_id}=receiptParams.data
+    const service=access(req),token=sessionToken(req)
+    try{
+      const current=await service.personalProductDraftScope(token,organization_id,seller_id)
+      if(!current||!await liveNative(req,token,current.person_id,seller_id))
+        return res.status(403).json({message:"Access denied"})
+      const outcome=await service.personalProductDraftReceipt(
+        token,organization_id,seller_id,request_id)
+      if(!outcome)return res.status(403).json({message:"Access denied"})
+      const after=await service.personalProductDraftScope(token,organization_id,seller_id)
+      if(!after||after.person_id!==current.person_id||
+         !await liveNative(req,token,current.person_id,seller_id))
+        return res.status(403).json({message:"Access denied"})
+      return res.status(200).json(outcome)
+    }catch(e){
+      return res.status(e instanceof IdentityAccessDenied?403:503)
+        .json({message:e instanceof IdentityAccessDenied?"Access denied":"Unavailable"})
+    }
+  }
   const parsed=z.object({organization_id:org}).strict().safeParse(req.query)
   if(!parsed.success||req.headers["x-seller-id"]!==undefined)
     return res.status(400).json({message:"Invalid context"})

@@ -1431,6 +1431,52 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {person_id:current.person_id,organization_id:organizationId,seller_ids:allowed}
   }
 
+
+  // Read-only receipt for an uncertain browser submission. A reserved intent
+  // is NOT evidence that Mercur did or did not create a product. No retry and
+  // no native workflow is triggered by this lookup.
+  @InjectTransactionManager()
+  async personalProductDraftReceipt(
+    token:string,organizationId:string,sellerId:string,requestId:string,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId)||
+       !/^dapd_[0-9a-f]{32}$/.test(requestId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const scope=await authorizedProductEditScope(db,token,organizationId,sellerId)
+    if(!scope||scope.person_id!==current.person_id)return null
+    const rows=await db.execute(`select status,product_id,completion_audit_event_id
+      from da_product_draft_request
+      where id=? and person_id=? and organization_id=? and seller_id=?`,
+      [requestId,current.person_id,organizationId,sellerId])
+    if(rows.length>1)throw new IdentityAccessDenied()
+    if(rows.length===0)return {status:"unverified" as const}
+    const row=rows[0]
+    if(row.status==="reserved"&&row.product_id==null&&row.completion_audit_event_id==null)
+      return {status:"review_required" as const}
+    if(row.status!=="created"||typeof row.product_id!=="string"||
+       !/^prod_[A-Za-z0-9_-]+$/.test(row.product_id)||
+       typeof row.completion_audit_event_id!=="string")
+      throw new IdentityAccessDenied()
+    const proof=await db.execute(`select e.id from da_audit_event e
+      where e.id=? and e.actor_person_id=? and e.organization_id=?
+        and e.target_id=? and e.action='organization.product_draft_created'
+        and e.module='dogruadres-access' and e.resource='product-draft'
+        and e.new_values->>'request_id'=?
+        and e.new_values->>'product_id'=?
+        and e.deleted_at is null
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+            and x.deleted_at is null)`,
+      [row.completion_audit_event_id,current.person_id,organizationId,
+       sellerId,requestId,row.product_id])
+    if(proof.length!==1)throw new IdentityAccessDenied()
+    return {status:"created" as const,product_id:row.product_id as string}
+  }
+
   @InjectTransactionManager()
   async personalReserveProductDraft(
     token:string,input:{request_id:string;organization_id:string;seller_id:string;title:string},

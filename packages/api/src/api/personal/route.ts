@@ -217,6 +217,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <button type="submit">Taslak oluştur</button>
     </form>
     <button id="product-draft-refresh" type="button">Yetkili mağazaları yenile</button>
+    <button id="product-draft-check" type="button" hidden>İşlem sonucunu kontrol et</button>
   </section>
   <p id="memberships-status" role="status" aria-live="polite" aria-atomic="true"></p><button id="memberships-refresh" type="button" hidden disabled>Üye listesini yenile</button>
   <div id="memberships" aria-describedby="memberships-status" aria-busy="false"></div>
@@ -785,9 +786,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   };
 
-  let productDraftRequest=0,productDraftKey='';
+  let productDraftRequest=0,productDraftKey='',productDraftAttempt=null;
   function clearProductDraft(){
-    productDraftRequest++;productDraftKey='';
+    productDraftRequest++;productDraftKey='';productDraftAttempt=null;
+    el('product-draft-check').hidden=true;
     el('product-draft-panel').hidden=true;
     el('product-draft-status').textContent='';
     const form=el('product-draft-form');
@@ -833,6 +835,31 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('product-draft-refresh').onclick=()=>{
     if(currentOrg)void productDraftStores(currentOrg,organizationRequest);
   };
+
+  el('product-draft-check').onclick=async()=>{
+    const a=productDraftAttempt,request=organizationRequest;
+    if(!a||document.hidden||el('workspace').hidden||
+       !currentOrg||currentOrg!==a.organization_id)return;
+    const button=el('product-draft-check');button.disabled=true;
+    try{
+      const query=new URLSearchParams({organization_id:a.organization_id,
+        seller_id:a.seller_id,request_id:a.request_id});
+      const result=await api('product-drafts?'+query.toString());
+      if(request!==organizationRequest||currentOrg!==a.organization_id||document.hidden)return;
+      if(result.status==='created'&&/^prod_[A-Za-z0-9_-]+$/.test(result.product_id)){
+        el('product-draft-status').textContent='Önceden gönderilen taslak doğrulandı: '+result.product_id;
+        productDraftKey='';productDraftAttempt=null;
+        button.hidden=true;
+        el('product-draft-form').reset();
+        el('product-draft-form').querySelector('button').disabled=false;
+      }else if(['review_required','unverified'].includes(result.status)){
+        el('product-draft-status').textContent='İşlem sonucu hâlâ doğrulanamadı. Aynı ürünü yeniden göndermeyin; kayıt incelemesi gerekli.';
+      }else throw new Error('Geçersiz işlem sonucu');
+    }catch(e){
+      if(request===organizationRequest&&currentOrg===a.organization_id)
+        el('product-draft-status').textContent='Kayıt durumu güvenle doğrulanamadı. Yeniden gönderim yapmayın.';
+    }finally{button.disabled=false}
+  };
   el('product-draft-form').onsubmit=async event=>{
     event.preventDefault();
     if(document.hidden||el('workspace').hidden||!currentOrg)return;
@@ -843,6 +870,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     // Preserve this exact key for the entire uncertain operation. Neither a
     // timeout nor a 5xx response may silently create a second native product.
     if(!productDraftKey)productDraftKey='dapd_'+crypto.randomUUID().replaceAll('-','');
+    productDraftAttempt={organization_id:org,seller_id,title,request_id:productDraftKey};
     try{
       const result=await api('product-drafts',{method:'POST',body:JSON.stringify({
         request_id:productDraftKey,organization_id:org,seller_id,title
@@ -850,11 +878,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
       if(result.status!=='created'||!/^prod_[A-Za-z0-9_-]+$/.test(result.product_id))
         throw new Error('Ürün sonucu doğrulanamadı');
-      productDraftKey='';form.reset();button.disabled=false;
+      productDraftKey='';productDraftAttempt=null;el('product-draft-check').hidden=true;
+      form.reset();button.disabled=false;
       el('product-draft-status').textContent='Ürün taslağı kaydedildi: '+result.product_id;
       void productDraftStores(org,request,true);
     }catch(e){
       if(request!==organizationRequest||currentOrg!==org)return;
+      el('product-draft-check').hidden=false;
       el('product-draft-status').textContent=e.uncertain||e.httpStatus===409?
         'Sonuç belirsiz. Aynı ürünü tekrar göndermeyin; kayıt denetimi gerekli.':
         'Taslak oluşturma reddedildi: '+e.message;

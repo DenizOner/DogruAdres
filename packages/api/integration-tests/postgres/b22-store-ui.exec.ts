@@ -564,6 +564,12 @@ export default async function({container}:any){
     const replayProduct=await draftPost(productRequest)
     assert.equal(replayProduct.status,200)
     assert.equal(replayProduct.body.product_id,written.id)
+    const receiptProduct=await get('/personal/product-drafts?organization_id='+
+      encodeURIComponent(organizations[0].id)+'&seller_id='+
+      encodeURIComponent(ownerStoreId)+'&request_id='+encodeURIComponent(requestId))
+    assert.equal(receiptProduct.status,200)
+    assert.equal(receiptProduct.body.status,"created")
+    assert.equal(receiptProduct.body.product_id,written.id)
     assert.equal((await draftPost({...productRequest,title:draftTitle+" changed"})).status,403)
     assert.equal((await draftPost({...productRequest,organization_id:organizations[1].id})).status,403)
     assert.equal((await q("select count(*)::int n from product where title=$1",[draftTitle]))[0].n,1)
@@ -598,6 +604,10 @@ export default async function({container}:any){
     },19000,"B22 product permission revoke invalidates writer")
     assert.equal((await draftPost(productRequest)).status,403,
       "Even a completed intent cannot disclose its old product after revoke")
+    assert.equal((await get('/personal/product-drafts?organization_id='+
+      encodeURIComponent(organizations[0].id)+'&seller_id='+
+      encodeURIComponent(ownerStoreId)+'&request_id='+encodeURIComponent(requestId))).status,403,
+      "Receipt lookup must never bypass revoked products.edit")
     assert.equal((await q("select count(*)::int n from product where title=$1",[draftTitle]))[0].n,1)
     process.stdout.write("PASS B22 Chrome: personally authorized native draft, PG16 product_seller and canonical audit/outbox, exact replay no duplicate, conflicting key/foreign Member/revoked permission denied\\n")
     // Native Member context now requires the SAME live legal Organization
