@@ -2085,6 +2085,19 @@ export default async function({container}:any){
       assert.equal((await q("select count(*)::int n from locking where id=$1",
         [concurrentCart.id]))[0].n,1,
         "First Medusa process must own the PostgreSQL Cart lock at L")
+      // Diagnostic only: Mercur 2.3.7 passes millisecond constants to
+      // Medusa 2.21.2's seconds-based acquireLockStep. Check the real lease.
+      const nativeLease=await q(
+        "select owner_id, extract(epoch from (expiration - now()))::double precision as seconds_left from locking where id=$1",
+        [concurrentCart.id])
+      assert.equal(nativeLease.length,1,
+        "Task-owned native Cart must have exactly one persisted lease")
+      assert.equal(nativeLease[0].owner_id,null)
+      const nativeLeaseSeconds=Number(nativeLease[0].seconds_left)
+      assert.ok(Number.isFinite(nativeLeaseSeconds) &&
+        nativeLeaseSeconds>119900 && nativeLeaseSeconds<=120000,
+        "Installed Mercur/Medusa unit mismatch must be observed, not assumed: native Cart lease near 120000 seconds")
+      process.stdout.write("\nOBSERVED B22 native Cart TTL mismatch: PostgreSQL lease near 120000 seconds instead of intended 120 seconds; checkout remains BLOCKED\n")
       let output=""
       let stderr=""
       let started=false
