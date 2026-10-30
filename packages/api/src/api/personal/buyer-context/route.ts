@@ -136,6 +136,24 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
         sellers.add(item.offer.seller_id)
       }
       if(expected.size!==0)return res.status(403).json({message:"Access denied"})
+      // Mercur's Seller lifecycle is authoritative. Complete Offer mapping
+      // cannot make a suspended, pending or unapproved Seller sellable.
+      // This is NOT the #76 Buyer Organization block or checkout permission.
+      const nativeSellers=req.scope.resolve<{
+        listSellers(filter:{id:string}):Promise<Array<{
+          id:string;status:string;approved_at?:unknown
+        }>>
+      }>("seller")
+      const allSellersLive=async()=>{
+        for(const id of sellers){
+          const rows=await nativeSellers.listSellers({id})
+          if(rows.length!==1||rows[0].id!==id||
+             rows[0].status!=="open"||!rows[0].approved_at)return false
+        }
+        return true
+      }
+      if(!await allSellersLive())
+        return res.status(403).json({message:"Access denied"})
       const last=await svc.personalBuyerOrganization(token,parsed.data.organization_id)
       const currentBinding=await svc.personalActorBinding(token,"customer")
       const finalAttribution=await svc.personalBuyerCartAttribution(
@@ -144,7 +162,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
          !currentBinding||currentBinding.revoked_at||
          currentBinding.person_id!==checked.person_id||
          currentBinding.actor_id!==customerActorId||
-         finalAttribution!==true)
+         finalAttribution!==true||!await allSellersLive())
         return res.status(403).json({message:"Access denied"})
       return res.status(200).json({
         organization_id:checked.organization_id,

@@ -783,6 +783,25 @@ export default async function({container}:any){
     })
     assert.equal((await readNativeCart(buyerCart(organizations[1].id,
       customerCart.id)+"&seller_scope=inspect")).status,403)
+    // One native Seller suspended means NO partially authorized two-Store
+    // scope. The native workflow restores the task's prior approved state.
+    await suspendSellerWorkflow(container).run({input:{
+      seller_id:stores[1].id,reason:"B22 task-only cart Seller suspension negative"
+    }})
+    assert.equal((await native.listSellers({id:stores[1].id}))[0].status,"suspended")
+    const suspendedScope=await readNativeCart(
+      buyerCart(organizations[0].id,customerCart.id)+"&seller_scope=inspect")
+    assert.equal(suspendedScope.status,403)
+    assert.deepEqual(suspendedScope.body,{message:"Access denied"})
+    assert.equal((await cartService.retrieveCart(customerCart.id,{
+      relations:["items"]
+    })).items?.length,2,"Suspension must not silently mutate cart")
+    await unsuspendSellerWorkflow(container).run({input:{seller_id:stores[1].id}})
+    const restoredScope=await readNativeCart(
+      buyerCart(organizations[0].id,customerCart.id)+"&seller_scope=inspect")
+    assert.equal(restoredScope.status,200)
+    assert.deepEqual(restoredScope.body,twoStoreScope.body)
+    process.stdout.write("PASS B22 native Seller suspension: one Store suspends -> entire two-Store scope 403, native reopen -> 200; no checkout\\n")
     process.stdout.write("PASS B22 real two-Store Offer Cart: native Mercur Offers and Medusa addToCartWorkflow persist 2 separate Seller links; Chrome read-only scope counts 2 with block unverified and checkout closed\\n")
 
 

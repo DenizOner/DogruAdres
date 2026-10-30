@@ -161,12 +161,17 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
   it("maps distinct native Offer sellers but cannot claim Store block eligibility",async()=>{
     req.query.customer="verified";req.query.cart_id="cart_a";req.query.seller_scope="inspect"
     svc.personalBuyerCartAttribution.mockResolvedValue(true)
+    const nativeStates=new Map([["sel_a","open"],["sel_b","open"]])
+    const sellerRead=jest.fn(async({id}:{id:string})=>
+      nativeStates.has(id)?[{id,status:nativeStates.get(id),
+        approved_at:"2026-10-30T00:00:00Z"}]:[])
     req.scope.resolve=jest.fn((key:string)=>{
       if(key==="customer")return {listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}
       if(key==="cart")return {
         listCarts:jest.fn().mockResolvedValue([{id:"cart_a",customer_id:"cus_a"}]),
         retrieveCart:jest.fn().mockResolvedValue({id:"cart_a",customer_id:"cus_a",
           completed_at:null,items:[{id:"cali_a"},{id:"cali_b"}]})}
+      if(key==="seller")return {listSellers:sellerRead}
       return {graph:jest.fn().mockResolvedValue({data:[{id:"cart_a",items:[
         {id:"cali_a",offer:{id:"offer_a",seller_id:"sel_a"}},
         {id:"cali_b",offer:{id:"offer_b",seller_id:"sel_b"}}
@@ -177,6 +182,17 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
     expect(res.json).toHaveBeenCalledWith({organization_id:"daorg_a",
       status:"seller_scope_mapped",seller_count:2,
       seller_block_verified:false,checkout_ready:false})
+    expect(sellerRead).toHaveBeenCalledWith({id:"sel_a"})
+    expect(sellerRead).toHaveBeenCalledWith({id:"sel_b"})
+    nativeStates.set("sel_b","suspended")
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+    nativeStates.set("sel_b","open")
+    sellerRead.mockImplementationOnce(async({id}:{id:string})=>
+      [{id,status:"pending_approval",approved_at:null}])
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
   })
   it("denies unlinked or truncated Offer rows rather than silently dropping a Store",async()=>{
     req.query.customer="verified";req.query.cart_id="cart_a";req.query.seller_scope="inspect"
