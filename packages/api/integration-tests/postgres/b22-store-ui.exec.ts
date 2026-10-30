@@ -119,6 +119,20 @@ export default async function({container}:any){
       email:customerEmail
     }])
     assert.match(nativeCustomer.id,/^cus_[A-Za-z0-9_-]+$/)
+    // Task-only native Medusa Cart fixtures. No line item, payment or order.
+    const cartService=container.resolve("cart")
+    const customerCart=await cartService.createCarts({
+      currency_code:"eur",customer_id:nativeCustomer.id
+    })
+    assert.match(customerCart.id,/^cart_[A-Za-z0-9_-]+$/)
+    const [foreignNativeCustomer]=await customerService.createCustomers([{
+      email:"b22-foreign-cart-"+rand+"@example.invalid"
+    }])
+    const foreignCart=await cartService.createCarts({
+      currency_code:"eur",customer_id:foreignNativeCustomer.id
+    })
+    assert.match(foreignCart.id,/^cart_[A-Za-z0-9_-]+$/)
+
     const customerPassword=randomBytes(32).toString("base64url")
     const customerReg=await auth.register("emailpass",{
       body:{email:customerEmail,password:customerPassword}
@@ -574,6 +588,36 @@ export default async function({container}:any){
       status:"buyer_customer_verified",checkout_ready:false
     })
     assert.match(readyCustomer.cache,/no-store/)
+    // The native Cart Module only proves Customer↔Cart; the legal Buyer
+    // Organization↔Cart association and per-Store blocks remain unverified.
+    const buyerCart=(org:string,cart:string)=>
+      customerContext(org)+'&cart_id='+encodeURIComponent(cart)
+    const readNativeCart=async(url:string)=>reviewer.eval(`(async()=>{
+      const r=await fetch(${JSON.stringify(url)})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    const validCart=await readNativeCart(buyerCart(organizations[0].id,customerCart.id))
+    assert.equal(validCart.status,200)
+    assert.deepEqual(validCart.body,{
+      organization_id:organizations[0].id,status:"native_customer_cart_verified",
+      checkout_ready:false,organization_attributed:false
+    })
+    const foreignCartCheck=await readNativeCart(buyerCart(organizations[0].id,foreignCart.id))
+    assert.equal(foreignCartCheck.status,403)
+    assert.deepEqual(foreignCartCheck.body,{message:"Access denied"})
+    const absentCartCheck=await readNativeCart(buyerCart(organizations[0].id,
+      "cart_absent_"+rand))
+    assert.equal(absentCartCheck.status,403)
+    const noCustomerProof=await readNativeCart("/personal/buyer-context?organization_id="+
+      encodeURIComponent(organizations[0].id)+"&cart_id="+encodeURIComponent(customerCart.id))
+    assert.equal(noCustomerProof.status,400)
+    const foreignOrganizationCart=await readNativeCart(
+      buyerCart(organizations[1].id,customerCart.id))
+    assert.equal(foreignOrganizationCart.status,403)
+    assert.equal((await cartService.listCarts({
+      id:customerCart.id,customer_id:nativeCustomer.id
+    })).length,1,"Read-only preflight must not mutate cart")
+    process.stdout.write("PASS B22 native cart ownership: real Medusa Cart belongs to verified Customer, foreign and missing carts denied, Org not attributed, no payment or checkout\\n")
     const wrongCustomerOrg=await reviewer.eval(`(async()=>{
       const r=await fetch(${JSON.stringify(customerContext(organizations[1].id))})
       return r.status
@@ -655,6 +699,9 @@ export default async function({container}:any){
       return r.status
     })()`)
     assert.equal(deniedAfterRevoke,403,"Server rechecks revoked buyer.purchase")
+    assert.equal((await readNativeCart(
+      buyerCart(organizations[0].id,customerCart.id))).status,403,
+      "Revoked buyer.purchase cannot read even its own native Cart")
     assert.equal(await reviewer.eval(`(async()=>{
       const r=await fetch(${JSON.stringify(customerContext(organizations[0].id))})
       return r.status
