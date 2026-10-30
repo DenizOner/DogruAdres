@@ -793,7 +793,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const form=el('product-draft-form');
     if(typeof form.reset==='function')form.reset();
     if(typeof form.querySelector==='function'){
-      const select=form.querySelector('select');if(select)select.replaceChildren();
+      const select=form.querySelector('select');if(select&&typeof select.replaceChildren==='function')select.replaceChildren();
       const button=form.querySelector('button');if(button)button.disabled=false;
     }
   }
