@@ -50,7 +50,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
          bindingNow.person_id!==current.person_id||
          bindingNow.actor_id!==customerActorId)
         return res.status(403).json({message:"Access denied"})
-      const freshCustomers=await req.scope.resolve<{listCustomers(filter:object):Promise<any[]}>>
+      const freshCustomers=await req.scope.resolve<{listCustomers(filter:object):Promise<any[]>}>
         ("customer").listCustomers({id:customerActorId})
       if(freshCustomers.length!==1||freshCustomers[0].id!==customerActorId)
         return res.status(403).json({message:"Access denied"})
