@@ -125,6 +125,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
         return res.status(403).json({message:"Access denied"})
       const expected=new Set(cart.items.map(i=>i.id))
       const sellers=new Set<string>()
+      const offerByLine=new Map<string,string>()
       for(const item of rows[0].items){
         if(!item||typeof item.id!=="string"||
            !expected.delete(item.id)||!item.offer||
@@ -134,6 +135,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
            !/^sel_[A-Za-z0-9_-]+$/.test(item.offer.seller_id))
           return res.status(403).json({message:"Access denied"})
         sellers.add(item.offer.seller_id)
+        offerByLine.set(item.id,item.offer.id+"/"+item.offer.seller_id)
       }
       if(expected.size!==0)return res.status(403).json({message:"Access denied"})
       // Mercur's Seller lifecycle is authoritative. Complete Offer mapping
@@ -154,6 +156,37 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       }
       if(!await allSellersLive())
         return res.status(403).json({message:"Access denied"})
+      // Re-read the native Cart and Mercur Offer graph after remote Seller
+      // reads. A line changed, removed or relinked mid-request must not be
+      // silently represented by the old Store set. This is a consistency
+      // guard, NOT an atomic checkout lock or #76 block authorization.
+      const freshCart=await nativeCart.retrieveCart(cartId,{
+        relations:["items"],select:["id","customer_id","completed_at"]
+      })
+      if(freshCart.id!==cartId||freshCart.customer_id!==customerActorId||
+         freshCart.completed_at!=null||!Array.isArray(freshCart.items)||
+         freshCart.items.length!==offerByLine.size||
+         new Set(freshCart.items.map(i=>i.id)).size!==offerByLine.size||
+         freshCart.items.some(i=>!offerByLine.has(i.id)))
+        return res.status(403).json({message:"Access denied"})
+      const {data:freshRows}=await query.graph({
+        entity:"cart",fields:[
+          "id","items.id","items.offer.id","items.offer.seller_id"
+        ],filters:{id:cartId}
+      })
+      if(!Array.isArray(freshRows)||freshRows.length!==1||
+         freshRows[0].id!==cartId||!Array.isArray(freshRows[0].items)||
+         freshRows[0].items.length!==offerByLine.size)
+        return res.status(403).json({message:"Access denied"})
+      const remaining=new Set(offerByLine.keys())
+      for(const item of freshRows[0].items){
+        if(!item||typeof item.id!=="string"||!remaining.delete(item.id)||
+           !item.offer||typeof item.offer.id!=="string"||
+           typeof item.offer.seller_id!=="string"||
+           offerByLine.get(item.id)!==item.offer.id+"/"+item.offer.seller_id)
+          return res.status(403).json({message:"Access denied"})
+      }
+      if(remaining.size!==0)return res.status(403).json({message:"Access denied"})
       const last=await svc.personalBuyerOrganization(token,parsed.data.organization_id)
       const currentBinding=await svc.personalActorBinding(token,"customer")
       const finalAttribution=await svc.personalBuyerCartAttribution(

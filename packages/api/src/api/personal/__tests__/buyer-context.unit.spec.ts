@@ -192,6 +192,50 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
     await GET(req,res)
     expect(res.status).toHaveBeenLastCalledWith(403)
   })
+  it("denies mid-request Cart line or Offer→Seller changes instead of claiming stale multi-Store scope",async()=>{
+    req.query.customer="verified";req.query.cart_id="cart_a";req.query.seller_scope="inspect"
+    svc.personalBuyerCartAttribution.mockResolvedValue(true)
+    const original={id:"cart_a",customer_id:"cus_a",completed_at:null,
+      items:[{id:"cali_a"},{id:"cali_b"}]}
+    const graph={data:[{id:"cart_a",items:[
+      {id:"cali_a",offer:{id:"offer_a",seller_id:"sel_a"}},
+      {id:"cali_b",offer:{id:"offer_b",seller_id:"sel_b"}}
+    ]}]}
+    const staleCases=[
+      {secondCart:{...original,items:[{id:"cali_a"}]},secondGraph:graph},
+      {secondCart:{...original,completed_at:"2026-10-30T00:00:00Z"},secondGraph:graph},
+      {secondCart:original,secondGraph:{data:[{id:"cart_a",items:[
+        graph.data[0].items[0],
+        {id:"cali_b",offer:{id:"offer_changed",seller_id:"sel_b"}}
+      ]}]}},
+      {secondCart:original,secondGraph:{data:[{id:"cart_a",items:[
+        graph.data[0].items[0],
+        {id:"cali_b",offer:{id:"offer_b",seller_id:"sel_other"}}
+      ]}]}}
+    ]
+    for(const scenario of staleCases){
+      const readCart=jest.fn().mockResolvedValueOnce(original)
+        .mockResolvedValueOnce(scenario.secondCart)
+      const readGraph=jest.fn().mockResolvedValueOnce(graph)
+        .mockResolvedValueOnce(scenario.secondGraph)
+      req.scope.resolve=jest.fn((key:string)=>{
+        if(key==="customer")return {listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}
+        if(key==="cart")return {
+          listCarts:jest.fn().mockResolvedValue([{id:"cart_a",customer_id:"cus_a"}]),
+          retrieveCart:readCart}
+        if(key==="seller")return {listSellers:jest.fn(async({id}:{id:string})=>
+          [{id,status:"open",approved_at:"2026-10-30T00:00:00Z"}])}
+        return {graph:readGraph}
+      })
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(403)
+      expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+      expect(readCart).toHaveBeenCalledTimes(2)
+      if(scenario.secondCart.completed_at===null&&scenario.secondCart.items.length===2)
+        expect(readGraph).toHaveBeenCalledTimes(2)
+    }
+    expect(svc.personalClaimBuyerCart).not.toHaveBeenCalled()
+  })
   it("denies unlinked or truncated Offer rows rather than silently dropping a Store",async()=>{
     req.query.customer="verified";req.query.cart_id="cart_a";req.query.seller_scope="inspect"
     svc.personalBuyerCartAttribution.mockResolvedValue(true)
