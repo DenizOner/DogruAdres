@@ -18,7 +18,7 @@ import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow} from "@mercurjs/core/workflows"
-import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow} from "@medusajs/medusa/core-flows"
+import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
 
@@ -1617,6 +1617,105 @@ export default async function({container}:any){
     assert.equal(zeroAttribution[0].organization_id,organizations[1].id)
     assert.equal(zeroAttribution[0].customer_id,nativeCustomer.id)
     process.stdout.write("PASS B22 Chrome: authorized zero-value native Mercur split-order persisted one OrderGroup/Order and completed Cart with immutable Beta attribution; no payment or visitor checkout\\n")
+
+    // Native Medusa system provider is an in-memory simulator. All writes
+    // are in this preauthorized random disposable CI database; no external
+    // payment, HTTP checkout route, provider configuration or payout.
+    const paymentService=container.resolve("payment")
+    const systemProviders=await paymentService.listPaymentProviders({
+      id:"pp_system_default",is_enabled:true
+    })
+    assert.equal(systemProviders.length,1,
+      "Only the built-in system simulator is allowed in this acceptance")
+    await updateRegionsWorkflow(container).run({input:{
+      selector:{id:region.id},
+      update:{payment_providers:["pp_system_default"]}
+    }})
+    const paidCart=await cartService.createCarts({
+      currency_code:"eur",customer_id:nativeCustomer.id
+    })
+    await cartService.updateCarts(paidCart.id,{
+      region_id:region.id,sales_channel_id:market.id
+    })
+    await addToCartWorkflow(container).run({input:{
+      cart_id:paidCart.id,
+      items:[{variant_id:variant.id,offer_id:gammaOffer.id,
+        quantity:1,requires_shipping:false,
+        metadata:{offer_id:gammaOffer.id}} as any]
+    }})
+    const {data:[paidCartGraph]}=await query.graph({
+      entity:"cart",fields:["id","total","completed_at","customer.id",
+        "items.id","items.requires_shipping","items.offer.id",
+        "items.offer.seller_id"],filters:{id:paidCart.id}
+    })
+    assert.ok(Number(paidCartGraph.total)>0,"Simulator must exercise payable Cart")
+    assert.equal(paidCartGraph.completed_at,null)
+    assert.equal(paidCartGraph.customer?.id,nativeCustomer.id)
+    assert.equal(paidCartGraph.items.length,1)
+    assert.equal(paidCartGraph.items[0].requires_shipping,false)
+    assert.equal(paidCartGraph.items[0].offer?.seller_id,gammaSellerId)
+    const paidClaim=await claimCart(organizations[1].id,paidCart.id)
+    assert.equal(paidClaim.status,200)
+    assert.equal(paidClaim.body.checkout_ready,false,
+      "No visitor checkout authority is granted by the simulator")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      paidCart.id,nativeCustomer.id,[gammaSellerId]
+    ),true,"Payable Cart must pass the real fresh Foundation decision")
+    const {result:payCollection}=await createPaymentCollectionForCartWorkflow(
+      container).run({input:{cart_id:paidCart.id}})
+    assert.ok(payCollection.id)
+    const {result:paySession}=await createPaymentSessionsWorkflow(
+      container).run({input:{
+        payment_collection_id:payCollection.id,
+        provider_id:"pp_system_default"
+      }})
+    assert.equal(paySession.provider_id,"pp_system_default")
+    const simulatedAuthorization=await paymentService.authorizePaymentSession(
+      paySession.id,{})
+    assert.ok(simulatedAuthorization?.id,
+      "Existing payment module must produce pre-order authorization")
+    const authorizedSession=await paymentService.retrievePaymentSession(
+      paySession.id,{relations:["payment","payment.captures"]}
+    )
+    assert.equal(authorizedSession.status,"authorized")
+    assert.equal(authorizedSession.payment?.id,simulatedAuthorization.id)
+    assert.equal(authorizedSession.payment?.captures?.length??0,0,
+      "Authorization must not automatically capture before B22 L")
+    const payableOrderRun=await completeCartWithSplitOrdersWorkflow(
+      container).run({input:{cart_id:paidCart.id},throwOnError:false})
+    assert.equal(payableOrderRun.errors?.length??0,0,
+      "Native Mercur must accept an already-authorized simulated session")
+    const payableGroups=await q(
+      "select id from order_group where cart_id=$1",[paidCart.id])
+    assert.equal(payableGroups.length,1)
+    assert.equal(payableGroups[0].id,payableOrderRun.result?.order_group_id)
+    const {data:payableOrderLinks}=await query.graph({
+      entity:"order_cart",fields:["order_id"],filters:{cart_id:paidCart.id}
+    })
+    assert.equal(payableOrderLinks.length,1)
+    const beforeCapture=await paymentService.retrievePayment(
+      simulatedAuthorization.id,{relations:["captures"]}
+    )
+    assert.equal(beforeCapture.captures?.length??0,0,
+      "Native order acceptance must precede any simulated capture")
+    assert.ok((await cartService.retrieveCart(paidCart.id)).completed_at,
+      "Payable Cart must be completed before capture")
+    const {result:capturedSimulation}=await capturePaymentWorkflow(
+      container).run({input:{payment_id:simulatedAuthorization.id}})
+    assert.equal(capturedSimulation.id,simulatedAuthorization.id)
+    const afterCapture=await paymentService.retrievePayment(
+      simulatedAuthorization.id,{relations:["captures"]}
+    )
+    assert.equal(afterCapture.captures?.length,1,
+      "Only one system-provider capture is recorded after Order")
+    assert.ok(afterCapture.captured_at)
+    const paidAttribution=await q(
+      "select organization_id,customer_id from da_buyer_cart_attribution where cart_id=$1",
+      [paidCart.id])
+    assert.equal(paidAttribution.length,1)
+    assert.equal(paidAttribution[0].organization_id,organizations[1].id)
+    assert.equal(paidAttribution[0].customer_id,nativeCustomer.id)
+    process.stdout.write("\nPASS B22 native payment simulation: system provider authorized before L/order; native Mercur persisted single OrderGroup/Order; only then system capture recorded; no external payment, callback or visitor checkout\n")
     // Deterministic L/commit race using the production buyer-permission
     // advisory lock and the real Chrome Owner mutation. No successful Cart
     // completion, OrderGroup or payment is exercised in this test.
