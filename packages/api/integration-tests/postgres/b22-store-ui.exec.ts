@@ -705,8 +705,7 @@ export default async function({container}:any){
     const {result:[sellableProduct]}=await createProductsWorkflow(container).run({
       input:{created_by:stores[0].id,products:[{
         title:"B22 two-Store shared master "+rand,status:"published",
-        variants:[{title:"One size",sku:"B22-NATIVE-"+rand,
-          options:{"Title":"One size"}}]
+        variants:[{title:"One size",sku:"B22-NATIVE-"+rand}]
       }]}
     })
     const variant=sellableProduct.variants?.[0]
