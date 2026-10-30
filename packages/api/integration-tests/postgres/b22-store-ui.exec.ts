@@ -2022,7 +2022,8 @@ export default async function({container}:any){
     assert.equal(hookCartAfter[0].completed_at,null)
     assert.equal(hookCartAfter[0].items.length,1,
       "Foundation denial must leave the real native Cart line unchanged")
-    process.stdout.write("PASS B22 Chrome: valid native Customer + open approved Seller + real Offer-backed zero-value Cart reach Mercur validate and Foundation L; absent legal Buyer attribution denies before OrderGroup/Order/payment writes; Cart and line stay unchanged; no payment writer\\n")  }finally{
+    process.stdout.write("PASS B22 Chrome: valid native Customer + open approved Seller + real Offer-backed zero-value Cart reach Mercur validate and Foundation L; absent legal Buyer attribution denies before OrderGroup/Order/payment writes; Cart and line stay unchanged; no payment writer\n")
+  }finally{
     for(const b of browsers)await b.close()
     if(server)await new Promise<void>(r=>server!.close(()=>r()))
     if(privateServer)await new Promise<void>(r=>privateServer!.close(()=>r()))
