@@ -713,7 +713,7 @@ export default async function({container}:any){
     assert.match(variant?.id??"",/^variant_[A-Za-z0-9_-]+$/)
     // Mercur 2.3.7 createOffersWorkflow's seller-inventory step obtains
     // its Seller from offers[0], so use one run per Seller, not a mixed batch.
-    const offerRows=[]
+    const offerRows:Array<{id:string;seller_id:string}>=[]
     for(let i=0;i<2;i++){
       const sku="B22-TWO-STORE-"+i+"-"+rand
       const {result:[offer]}=await createOffersWorkflow(container).run({
@@ -744,7 +744,8 @@ export default async function({container}:any){
         cart_id:customerCart.id,items:[{
           variant_id:variant.id,offer_id:offer.id,
           quantity:1,requires_shipping:true,metadata:{offer_id:offer.id}
-        }]
+        } as any] // Mercur's installed Offer augmentation is runtime-registered.
+        // The downstream Medusa DTO alone lacks this Mercur-specific field.
       }})
     }
     const nativeTwoStore=await cartService.retrieveCart(customerCart.id,{
