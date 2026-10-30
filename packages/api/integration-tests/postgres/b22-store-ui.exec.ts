@@ -1798,6 +1798,107 @@ export default async function({container}:any){
       assert.equal((await betaSellerBlock("unblock",sellerGamma.id,gammaSellerId)).status,200)
     }
     process.stdout.write("\nPASS B22 native payment denial: pre-authorized system-provider Cart blocked by real Store Owner before L; Mercur rejected with zero OrderGroup/Order/capture and preserved immutable Buyer attribution\n")
+
+    // POST-L cutoff: the native Mercur order-group INSERT can be paused by
+    // a task-owned PostgreSQL SHARE table lock without blocking earlier
+    // SELECTs. A WAITING RowExclusiveLock proves validate/L has finished.
+    // Real Chrome Owner commits Store block during that pause; checkout
+    // must finish because the Product Owner's L cutoff was already crossed.
+    // Zero-value cart only; no payment session, capture, provider or payout.
+    const postLCart=await cartService.createCarts({
+      currency_code:"eur",customer_id:nativeCustomer.id
+    })
+    await cartService.updateCarts(postLCart.id,{
+      region_id:region.id,sales_channel_id:market.id
+    })
+    await addToCartWorkflow(container).run({input:{
+      cart_id:postLCart.id,
+      items:[{variant_id:variant.id,offer_id:hookProbeOffer.id,
+        quantity:1,requires_shipping:false,
+        metadata:{offer_id:hookProbeOffer.id}} as any]
+    }})
+    const {data:[postLGraph]}=await query.graph({
+      entity:"cart",fields:["id","total","customer.id","completed_at",
+        "items.id","items.offer.seller_id"],filters:{id:postLCart.id}
+    })
+    assert.equal(Number(postLGraph.total),0)
+    assert.equal(postLGraph.customer?.id,nativeCustomer.id)
+    assert.equal(postLGraph.completed_at,null)
+    assert.equal(postLGraph.items.length,1)
+    assert.equal(postLGraph.items[0].offer?.seller_id,gammaSellerId)
+    const postLClaim=await claimCart(organizations[1].id,postLCart.id)
+    assert.equal(postLClaim.status,200)
+    assert.equal(postLClaim.body.checkout_ready,false)
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      postLCart.id,nativeCustomer.id,[gammaSellerId]
+    ),true,"Post-L cutoff control must start with a valid Buyer")
+    const postLBarrier=new Client({connectionString:u.toString()})
+    await postLBarrier.connect()
+    let postLBarrierHeld=false
+    let postLStoreBlocked=false
+    let pendingPostLCheckout:Promise<{run?:any;error?:string}>|undefined
+    try{
+      await postLBarrier.query("BEGIN")
+      postLBarrierHeld=true
+      const postLBarrierPid=(await postLBarrier.query(
+        "select pg_backend_pid()::int as pid"
+      )).rows[0].pid as number
+      await postLBarrier.query("LOCK TABLE order_group IN SHARE MODE")
+      pendingPostLCheckout=completeCartWithSplitOrdersWorkflow(
+        container).run({input:{cart_id:postLCart.id},throwOnError:false}).then(
+          (run:any)=>({run}),(error:unknown)=>({error:String(error)})
+        )
+      await until(async()=>{
+        const rows=await q(`select count(*)::int n from pg_locks l
+          where l.locktype='relation' and l.relation='order_group'::regclass
+            and l.mode='RowExclusiveLock' and l.granted=false
+            and l.pid<>$1`,[postLBarrierPid])
+        return rows[0].n===1
+      },19000,"B22 native OrderGroup INSERT waits AFTER real validate L")
+      assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
+        [postLCart.id]))[0].n,0,
+        "Paused post-L workflow must not yet have an OrderGroup")
+      const postLBlock=await betaSellerBlock("block",sellerGamma.id,gammaSellerId)
+      assert.equal(postLBlock.status,200,"Real Chrome Owner block after L")
+      postLStoreBlocked=true
+      assert.equal(await foundation.authorizeBuyerCheckout(
+        postLCart.id,nativeCustomer.id,[gammaSellerId]
+      ),false,"Next L must see the later committed Store block")
+      await postLBarrier.query("ROLLBACK")
+      postLBarrierHeld=false
+      const completedPostL=await pendingPostLCheckout
+      assert.equal(completedPostL.error,undefined)
+      assert.equal(completedPostL.run?.errors?.length??0,0,
+        "Native checkout already past L must not be retroactively denied")
+      const postLGroups=await q("select id from order_group where cart_id=$1",
+        [postLCart.id])
+      assert.equal(postLGroups.length,1)
+      assert.equal(postLGroups[0].id,completedPostL.run?.result?.order_group_id)
+      const {data:postLOrderLinks}=await query.graph({
+        entity:"order_cart",fields:["order_id"],filters:{cart_id:postLCart.id}
+      })
+      assert.equal(postLOrderLinks.length,1)
+      assert.ok((await cartService.retrieveCart(postLCart.id)).completed_at)
+      const {data:postLPaymentLinks}=await query.graph({
+        entity:"cart_payment_collection",fields:["payment_collection_id"],
+        filters:{cart_id:postLCart.id}
+      })
+      assert.equal(postLPaymentLinks.length,0,
+        "Post-L zero-value checkout must not create a payment collection")
+      const postLAttribution=await q(
+        "select organization_id,customer_id from da_buyer_cart_attribution where cart_id=$1",
+        [postLCart.id])
+      assert.equal(postLAttribution.length,1)
+      assert.equal(postLAttribution[0].organization_id,organizations[1].id)
+      assert.equal(postLAttribution[0].customer_id,nativeCustomer.id)
+    }finally{
+      if(postLBarrierHeld)await postLBarrier.query("ROLLBACK")
+      await postLBarrier.end()
+      if(pendingPostLCheckout)await pendingPostLCheckout
+      if(postLStoreBlocked)
+        assert.equal((await betaSellerBlock("unblock",sellerGamma.id,gammaSellerId)).status,200)
+    }
+    process.stdout.write("\nPASS B22 post-L cutoff: native OrderGroup INSERT waited after validate L, real Chrome Store block committed during wait; checkout persisted one OrderGroup/Order with unchanged Buyer and zero payment; later L denied\n")
     // Deterministic L/commit race using the production buyer-permission
     // advisory lock and the real Chrome Owner mutation. No successful Cart
     // completion, OrderGroup or payment is exercised in this test.
