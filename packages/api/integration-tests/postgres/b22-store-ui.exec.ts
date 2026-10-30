@@ -2710,8 +2710,20 @@ export default async function({container}:any){
       // The visible UI path is preferred, but the privacy observer may
       // conceal it BETWEEN the Owner selection and actual button click.
       await browser.select(organizations[0].name,"owner")
-      await browser.wait("document.querySelectorAll('#org-stores p').length===2")
+      // A real privacy observer may clear the panel after membership revoke.
+      // Accept concealment ONLY when the entire workspace is genuinely
+      // hidden. Otherwise insist on the correct Organization and both stores.
+      await browser.wait(`(()=>{
+        if(document.getElementById('workspace').hidden)return true
+        const detail=JSON.parse(document.getElementById('detail').textContent||'{}')
+        return detail.id===${JSON.stringify(organizations[0].id)}
+          &&document.querySelectorAll('#org-stores p').length===2
+      })()`)
       assert.equal((await get(selected(organizations[0].id))).status,200)
+      if(!(await browser.eval("document.getElementById('workspace').hidden"))){
+        assert.equal(await browser.eval(`JSON.parse(document.getElementById('detail').textContent||'{}').id===${JSON.stringify(organizations[0].id)}&&document.querySelectorAll('#org-stores p').length===2`),true,
+          "Visible workspace must show both authorized Owner stores")
+      }
       const visible=await browser.eval(`(()=>{
         const button=document.getElementById('session-lock')
         return button&&!button.hidden&&!button.disabled&&
