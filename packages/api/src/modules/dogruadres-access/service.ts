@@ -1521,6 +1521,115 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return authorizedBuyerOrganization(securitySql(context.transactionManager),token,organizationId)
   }
 
+
+  // Native Cart's customer_id is verified by the API against Medusa before
+  // and after this Foundation-only transaction. Cross-module Cart mutation
+  // cannot be locked here: this is NOT a checkout or commercial eligibility.
+  // One Cart ID may never be silently reassigned to another legal Organization.
+  @InjectTransactionManager()
+  async personalClaimBuyerCart(
+    token:string,organizationId:string,cartId:string,customerId:string,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^cart_[A-Za-z0-9_-]{1,123}$/.test(cartId)||
+       !/^cus_[A-Za-z0-9_-]+$/.test(customerId))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-buyer-cart-attribution'),hashtext(?))`,[cartId])
+    const identity=await new IdentitySessions(db).current(token,true,false)
+    if(!identity)return null
+    const buyer=await authorizedBuyerOrganization(db,token,organizationId)
+    const linked=await new ActorDelegation(db).binding(token,"customer")
+    if(!buyer||buyer.person_id!==identity.person_id||!linked||
+       linked.session.person_id!==identity.person_id||
+       linked.binding.person_id!==identity.person_id||
+       linked.binding.revoked_at||linked.binding.actor_id!==customerId)
+      return null
+    const existing=await db.execute(`select a.cart_id,a.organization_id,a.person_id,
+      a.customer_id,a.source_audit_event_id from da_buyer_cart_attribution a
+      where a.cart_id=? for update`,[cartId])
+    if(existing.length>1)throw new IdentityAccessDenied()
+    if(existing.length===1){
+      const row=existing[0]
+      if(row.organization_id!==organizationId||row.person_id!==identity.person_id||
+         row.customer_id!==customerId)throw new IdentityAccessDenied()
+      const evidence=await db.execute(`select e.id from da_audit_event e
+        where e.id=? and e.deleted_at is null
+          and e.module='dogruadres-access'
+          and e.resource='buyer-cart-attribution'
+          and e.action='organization.buyer_cart_attributed'
+          and e.actor_person_id=? and e.organization_id=?
+          and e.target_id=? and e.new_values->>'cart_id'=?
+          and e.new_values->>'customer_id'=?
+          and exists(select 1 from da_audit_outbox o
+            where o.source_audit_event_id=e.id
+              and o.source_module='dogruadres-access' and o.deleted_at is null)`,
+        [row.source_audit_event_id,identity.person_id,organizationId,cartId,cartId,customerId])
+      if(evidence.length!==1)throw new IdentityAccessDenied()
+      return {status:"attributed" as const,organization_id:organizationId}
+    }
+    // Refresh authority after obtaining the cart-scoped lock. Checkout must
+    // still enforce final authorization and every Seller-specific block.
+    const currentBuyer=await authorizedBuyerOrganization(db,token,organizationId)
+    const currentLink=await new ActorDelegation(db).binding(token,"customer")
+    if(!currentBuyer||currentBuyer.person_id!==identity.person_id||
+       !currentLink||currentLink.session.person_id!==identity.person_id||
+       currentLink.binding.person_id!==identity.person_id||
+       currentLink.binding.actor_id!==customerId||
+       currentLink.binding.revoked_at)return null
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:identity.person_id,actor_type:identity.actor_type,
+      actor_id:identity.actor_id,organization_id:organizationId,
+      action:"organization.buyer_cart_attributed",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"buyer-cart-attribution",
+      target_id:cartId,
+      new_values:{cart_id:cartId,customer_id:customerId},
+      occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const inserted=await db.execute(`insert into da_buyer_cart_attribution
+      (cart_id,organization_id,person_id,customer_id,source_audit_event_id)
+      values (?,?,?,?,?) returning cart_id`,
+      [cartId,organizationId,identity.person_id,customerId,audit.id])
+    if(inserted.length!==1)throw new IdentityAccessDenied()
+    return {status:"attributed" as const,organization_id:organizationId}
+  }
+
+  @InjectTransactionManager()
+  async personalBuyerCartAttribution(
+    token:string,organizationId:string,cartId:string,customerId:string,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^cart_[A-Za-z0-9_-]{1,123}$/.test(cartId)||
+       !/^cus_[A-Za-z0-9_-]+$/.test(customerId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const buyer=await authorizedBuyerOrganization(db,token,organizationId)
+    const linked=await new ActorDelegation(db).binding(token,"customer")
+    if(!buyer||!linked||linked.session.person_id!==buyer.person_id||
+       linked.binding.person_id!==buyer.person_id||linked.binding.revoked_at||
+       linked.binding.actor_id!==customerId)return null
+    const rows=await db.execute(`select a.source_audit_event_id from da_buyer_cart_attribution a
+      join da_audit_event e on e.id=a.source_audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.resource='buyer-cart-attribution'
+        and e.action='organization.buyer_cart_attributed'
+        and e.actor_person_id=a.person_id and e.organization_id=a.organization_id
+        and e.target_id=a.cart_id
+        and e.new_values->>'cart_id'=a.cart_id
+        and e.new_values->>'customer_id'=a.customer_id
+      where a.cart_id=? and a.organization_id=? and a.person_id=?
+        and a.customer_id=?
+        and exists(select 1 from da_audit_outbox o
+          where o.source_audit_event_id=e.id
+            and o.source_module='dogruadres-access' and o.deleted_at is null)`,
+      [cartId,organizationId,buyer.person_id,customerId])
+    if(rows.length>1)throw new IdentityAccessDenied()
+    return rows.length===1
+  }
+
   // B22 product draft: Foundation-owned intent ledger, not another product
   // service. Never interpret a reserved/uncertain native outcome as retryable.
   @InjectTransactionManager()

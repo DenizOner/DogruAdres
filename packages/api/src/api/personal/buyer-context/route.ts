@@ -1,6 +1,6 @@
 import type {MedusaRequest,MedusaResponse} from "@medusajs/framework/http"
 import {z} from "@medusajs/framework/zod"
-import {access,enabled,sessionToken} from "../security"
+import {access,csrf,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 
 export const AUTHENTICATE=false
@@ -89,10 +89,79 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       status:cartForCustomer?"native_customer_cart_verified":
         customerActorId?"buyer_customer_verified":"buyer_permission_verified",
       checkout_ready:false,
-      ...(cartForCustomer?{organization_attributed:false}: {})
+      ...(cartForCustomer?{organization_attributed:
+        await svc.personalBuyerCartAttribution(token,parsed.data.organization_id,
+          cartId,customerActorId)===true}: {})
     })
   }catch(e){
     return res.status(e instanceof IdentityAccessDenied?403:503)
       .json({message:e instanceof IdentityAccessDenied?"Access denied":"Unavailable"})
+  }
+}
+
+const claim=z.object({
+  action:z.literal("attribute"),
+  organization_id:org,
+  cart_id:z.string().regex(/^cart_[A-Za-z0-9_-]{1,123}$/)
+}).strict()
+
+export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
+  res.setHeader("Cache-Control","no-store")
+  if(!enabled())return res.status(503).json({message:"Unavailable"})
+  let valid=false;try{valid=await csrf(req)}catch{}
+  if(!valid||req.headers["x-seller-id"]!==undefined)
+    return res.status(403).json({message:"Access denied"})
+  const parsed=claim.safeParse(req.body)
+  if(!parsed.success)return res.status(400).json({message:"Invalid input"})
+  const {organization_id,cart_id}=parsed.data,svc=access(req),token=sessionToken(req)
+  try{
+    const check=async()=>{
+      const buyer=await svc.personalBuyerOrganization(token,organization_id)
+      if(!buyer||buyer.organization_id!==organization_id||
+         !/^daprs_[A-Za-z0-9_-]+$/.test(buyer.person_id))return null
+      const binding=await svc.personalActorBinding(token,"customer")
+      if(!binding||binding.revoked_at||binding.person_id!==buyer.person_id||
+         typeof binding.actor_id!=="string"||
+         !/^cus_[A-Za-z0-9_-]+$/.test(binding.actor_id))return null
+      const customer=req.scope.resolve<{
+        listCustomers(filter:object):Promise<Array<{id:string}>>
+      }>("customer")
+      const carts=req.scope.resolve<{
+        listCarts(filter:{id:string;customer_id:string}):Promise<Array<{
+          id:string;customer_id?:string|null;completed_at?:Date|string|null
+        }>>
+      }>("cart")
+      const [customers,rows]=await Promise.all([
+        customer.listCustomers({id:binding.actor_id}),
+        carts.listCarts({id:cart_id,customer_id:binding.actor_id})
+      ])
+      if(customers.length!==1||customers[0].id!==binding.actor_id||
+         rows.length!==1||rows[0].id!==cart_id||
+         rows[0].customer_id!==binding.actor_id||rows[0].completed_at!=null)return null
+      return {person_id:buyer.person_id,customer_id:binding.actor_id}
+    }
+    const first=await check()
+    if(!first)return res.status(403).json({message:"Access denied"})
+    const second=await check()
+    if(!second||second.person_id!==first.person_id||
+       second.customer_id!==first.customer_id)
+      return res.status(403).json({message:"Access denied"})
+    const result=await svc.personalClaimBuyerCart(
+      token,organization_id,cart_id,first.customer_id)
+    if(!result)return res.status(403).json({message:"Access denied"})
+    const last=await check()
+    if(!last||last.person_id!==first.person_id||
+       last.customer_id!==first.customer_id)
+      return res.status(403).json({message:"Access denied"})
+    const verified=await svc.personalBuyerCartAttribution(
+      token,organization_id,cart_id,first.customer_id)
+    if(verified!==true)return res.status(403).json({message:"Access denied"})
+    return res.status(200).json({
+      status:"attributed",organization_id,checkout_ready:false
+    })
+  }catch(e){
+    return res.status(e instanceof IdentityAccessDenied?403:503)
+      .json({message:e instanceof IdentityAccessDenied?"Access denied":
+        "Outcome uncertain; recheck cart attribution"})
   }
 }
