@@ -100,6 +100,17 @@ export default async function({container}:any){
       {organization_id:organizations[1].id,person_id:A.person,role:"admin",status:"active",protected_owner:false},
       {organization_id:organizations[2].id,person_id:B.person,role:"owner",status:"active",protected_owner:true},
     ])
+    // A single canonical Person may independently own two seller legal
+    // Organizations. Gamma is a separate seller Organization, not a new
+    // Person, a second login or a fabricated Seller ownership association.
+    const [sellerGamma]=await foundation.createOrganizations([{
+      name:"B22 Gamma Seller "+rand,status:"active"
+    }])
+    const [gammaOwnerMembership]=await foundation.createMemberships([{
+      organization_id:sellerGamma.id,person_id:A.person,role:"owner",
+      status:"active",protected_owner:true
+    }])
+    assert.match(gammaOwnerMembership.id,/^[A-Za-z0-9_-]+$/)
     const betaAdminMembership=memberships[2]
     const memberEmail="b22-secondary-"+rand+"@example.invalid"
     const [member]=await native.createMembers([{email:memberEmail,is_active:true}])
@@ -1073,7 +1084,215 @@ export default async function({container}:any){
     assert.equal(unchangedCart.length,1)
     assert.equal(unchangedCart[0].organization_id,organizations[0].id)
     assert.equal(unchangedCart[0].source_audit_event_id,attributed.source_audit_event_id)
+
+    // B22 cross-Organization commercial scope: independent seller companies
+    // Alpha and Gamma, third independent legal Buyer Beta. Person A is a
+    // real protected Owner of BOTH seller Orgs via separate memberships.
+    // B is Beta Owner and the same dual-proof Customer, without a separate
+    // buyer login or any automatic buyer.purchase permission.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(sellerGamma.name,"owner")
+    const gammaApplication={
+      organization_id:sellerGamma.id,
+      application_id:"daapp_"+randomBytes(16).toString("hex"),
+      name:"B22 Gamma independent Store "+rand,
+      email:"b22-gamma-store-"+rand+"@example.invalid",currency_code:"try"
+    }
+    const gammaSubmitted=await submit(gammaApplication)
+    assert.equal(gammaSubmitted.status,201)
+    const gammaSellerId=gammaSubmitted.body.seller_id as string
+    assert.match(gammaSellerId,/^sel_[A-Za-z0-9_-]+$/)
+    assert.notEqual(gammaSellerId,ownerStoreId)
+    assert.equal((await native.listSellers({id:gammaSellerId}))[0].status,
+      "pending_approval")
+    const gammaLink=await q(`select o.organization_id,e.action,x.id as outbox_id
+      from da_organization_seller_ownership o
+      join da_audit_event e on e.id=o.verification_audit_event_id
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where o.seller_id=$1 and o.revoked_at is null`,[gammaSellerId])
+    assert.equal(gammaLink.length,1)
+    assert.equal(gammaLink[0].organization_id,sellerGamma.id)
+    assert.equal(gammaLink[0].action,"organization.store_application_created")
+    assert.deepEqual((await get(selected(sellerGamma.id))).body.stores,[],
+      "Gamma Store must be denied before separate platform approval")
+    const wrongGammaApproval=await browser.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      return (await fetch('/personal/platform/stores',{
+        method:'POST',headers:{'content-type':'application/json',
+          'x-csrf-token':session.csrf_token},
+        body:JSON.stringify(${JSON.stringify({
+          application_id:gammaApplication.application_id,
+          seller_id:gammaSellerId
+        })})
+      })).status
+    })()`)
+    assert.equal(wrongGammaApproval,403,
+      "Gamma Owner cannot grant themselves the platform approver task")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    const gammaApproved=await reviewer.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      const response=await fetch('/personal/platform/stores',{
+        method:'POST',headers:{'content-type':'application/json',
+          'x-csrf-token':session.csrf_token},
+        body:JSON.stringify(${JSON.stringify({
+          application_id:gammaApplication.application_id,
+          seller_id:gammaSellerId
+        })})
+      })
+      return {status:response.status,body:await response.json()}
+    })()`)
+    assert.equal(gammaApproved.status,200)
+    assert.equal(gammaApproved.body.status,"open")
+    assert.equal((await native.listSellers({id:gammaSellerId}))[0].status,"open")
+    assert.equal((await get(selected(sellerGamma.id))).body.stores[0].id,
+      gammaSellerId)
+    assert.deepEqual((await get(selected(organizations[0].id))).body.stores
+      .map((store:any)=>store.id).sort(),
+      [ownerStoreId,secondOwnerStoreId].sort(),
+      "Gamma ownership must not leak into Alpha")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(organizations[0].name,"owner")
+    const gammaSku="B22-GAMMA-BETA-"+rand
+    const {result:[gammaOffer]}=await createOffersWorkflow(container).run({
+      input:{offers:[{
+        seller_id:gammaSellerId,created_by:member.id,
+        sku:gammaSku,variant_id:variant.id,
+        shipping_profile_id:b22Profile.id,
+        inventory_items:[{sku:gammaSku,stock_levels:[]}],
+        prices:[{amount:1200,currency_code:"eur"}],
+        manage_inventory:false,allow_backorder:true
+      }]}
+    })
+    assert.equal(gammaOffer.seller_id,gammaSellerId)
+    const betaTwoSellerCart=await cartService.createCarts({
+      currency_code:"eur",customer_id:nativeCustomer.id
+    })
+    await cartService.updateCarts(betaTwoSellerCart.id,{
+      region_id:region.id,sales_channel_id:market.id
+    })
+    for(const offer of [offerRows[0],gammaOffer]){
+      await addToCartWorkflow(container).run({input:{
+        cart_id:betaTwoSellerCart.id,
+        items:[{variant_id:variant.id,offer_id:offer.id,
+          quantity:1,requires_shipping:true,
+          metadata:{offer_id:offer.id}} as any]
+      }})
+    }
+    const betaNative=await cartService.retrieveCart(betaTwoSellerCart.id,{
+      relations:["items"]
+    })
+    assert.equal(betaNative.items?.length,2)
+    assert.equal(betaNative.customer_id,nativeCustomer.id)
+    assert.equal(betaNative.completed_at,null)
+    const {data:betaGraph}=await query.graph({
+      entity:"cart",fields:["id","items.id","items.offer.id",
+        "items.offer.seller_id"],
+      filters:{id:betaTwoSellerCart.id}
+    })
+    assert.equal(betaGraph.length,1)
+    assert.deepEqual(new Set(betaGraph[0].items.map((line:any)=>
+      line.offer?.seller_id)),new Set([ownerStoreId,gammaSellerId]))
+    const betaClaim=await claimCart(organizations[1].id,betaTwoSellerCart.id)
+    assert.equal(betaClaim.status,200)
+    assert.equal(betaClaim.body.organization_id,organizations[1].id)
+    assert.equal(betaClaim.body.checkout_ready,false)
+    const betaAttribution=await q(`select a.organization_id,e.action,
+      x.id as outbox_id from da_buyer_cart_attribution a
+      join da_audit_event e on e.id=a.source_audit_event_id
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where a.cart_id=$1`,[betaTwoSellerCart.id])
+    assert.equal(betaAttribution.length,1)
+    assert.equal(betaAttribution[0].organization_id,organizations[1].id)
+    assert.equal(betaAttribution[0].action,"organization.buyer_cart_attributed")
+    assert.equal((await readNativeCart(
+      buyerCart(organizations[0].id,betaTwoSellerCart.id))).status,403,
+      "Explicit Alpha grant cannot seize Beta's separately attributed Cart")
+    const betaScopeUrl=buyerCart(organizations[1].id,betaTwoSellerCart.id)+
+      "&seller_scope=inspect"
+    const betaOpenScope=await readNativeCart(betaScopeUrl)
+    assert.equal(betaOpenScope.status,200)
+    assert.deepEqual(betaOpenScope.body,{
+      organization_id:organizations[1].id,status:"seller_scope_mapped",
+      seller_count:2,seller_block_verified:true,checkout_ready:false
+    })
+    const betaSellerBlock=async(action:"block"|"unblock",
+      sellerOrg:string,sellerId:string)=>browser.eval(`(async()=>{
+        const session=await(await fetch('/personal/session')).json()
+        const response=await fetch('/personal/store-buyer-blocks',{
+          method:'POST',headers:{'content-type':'application/json',
+            'x-csrf-token':session.csrf_token},
+          body:JSON.stringify(${JSON.stringify({
+            action,organization_id:sellerOrg,seller_id:sellerId,
+            buyer_organization_id:organizations[1].id
+          })})
+        })
+        return {status:response.status,body:await response.json()}
+      })()`)
+    assert.equal((await betaSellerBlock("block",organizations[0].id,
+      gammaSellerId)).status,403,
+      "Alpha Owner scope cannot issue Gamma Store's policy")
+    const wrongBetaIssuer=await reviewer.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      return (await fetch('/personal/store-buyer-blocks',{
+        method:'POST',headers:{'content-type':'application/json',
+          'x-csrf-token':session.csrf_token},
+        body:JSON.stringify(${JSON.stringify({
+          action:"block",organization_id:sellerGamma.id,
+          seller_id:gammaSellerId,
+          buyer_organization_id:organizations[1].id
+        })})
+      })).status
+    })()`)
+    assert.equal(wrongBetaIssuer,403,
+      "Buyer Organization Owner and staff may not control Gamma Seller policy")
+    const activeBetaBlocks=async()=>{
+      const [row]=await q(`select count(*)::int n
+        from da_store_buyer_organization_block
+        where buyer_organization_id=$1 and revoked_at is null`,
+        [organizations[1].id])
+      return row.n as number
+    }
+    assert.equal(await activeBetaBlocks(),0)
+    assert.equal((await betaSellerBlock("block",organizations[0].id,
+      ownerStoreId)).status,200)
+    assert.equal(await activeBetaBlocks(),1)
+    assert.equal((await readNativeCart(betaScopeUrl)).status,403)
+    assert.equal((await readNativeCart(
+      buyerCart(organizations[0].id,customerCart.id)+
+      "&seller_scope=inspect")).status,200,
+      "Block targeted to Buyer Beta must not block Buyer Alpha")
+    assert.equal((await betaSellerBlock("block",sellerGamma.id,
+      gammaSellerId)).status,200)
+    assert.equal(await activeBetaBlocks(),2)
+    assert.equal((await betaSellerBlock("unblock",organizations[0].id,
+      ownerStoreId)).status,200)
+    assert.equal(await activeBetaBlocks(),1)
+    assert.equal((await readNativeCart(betaScopeUrl)).status,403,
+      "Gamma Store's Beta block survives Alpha Store's independent unblock")
+    assert.equal((await betaSellerBlock("unblock",sellerGamma.id,
+      gammaSellerId)).status,200)
+    assert.equal(await activeBetaBlocks(),0)
+    assert.deepEqual((await readNativeCart(betaScopeUrl)).body,
+      betaOpenScope.body)
+    assert.equal((await cartService.retrieveCart(betaTwoSellerCart.id,{
+      relations:["items"]
+    })).items?.length,2,
+      "No partial Cart mutation across separate seller companies")
+    const [history]=await q(`select count(*)::int n
+      from da_store_buyer_organization_block
+      where buyer_organization_id=$1 and revoked_at is not null`,
+      [organizations[1].id])
+    assert.equal(history.n,2)
+    assert.equal((await q(`select organization_id from
+      da_buyer_cart_attribution where cart_id=$1`,
+      [betaTwoSellerCart.id]))[0].organization_id,organizations[1].id)
+    process.stdout.write("PASS B22 Alpha/Gamma separate legal Seller Organizations and Beta legal Buyer: two native Offers/Cart, two platform-approved Owner-origin links, wrong issuer 403, each Store block denies full scope, cross-Buyer isolation, independent unblock and audit history, checkout closed\\n")
     assert.equal((await betaPermission("revoke")).status,200)
+    assert.equal((await readNativeCart(betaScopeUrl)).status,403,
+      "Revoked buyer.purchase must remove Beta access even after both sellers unblock")
     process.stdout.write("PASS B22 explicit Beta grant cannot reassign Alpha Cart: both Organization buyer permissions tested; canonical audit ownership unchanged\\n")
 
     const forgedBuyer=await reviewer.eval(`(async()=>{
