@@ -1869,13 +1869,27 @@ export default async function({container}:any){
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
-    await browser.wait("!document.getElementById('product-grants-panel').hidden")
+    // A matching role is not a sufficient signal if the previous selected
+    // Organization also had an Owner role. Wait for exact Organization scope
+    // and freshly loaded Store/member options before the real Chrome click.
+    await browser.wait(`new URLSearchParams(location.search).get('organization')===${JSON.stringify(organizations[0].id)} && JSON.parse(document.getElementById('detail').textContent||'{}').id===${JSON.stringify(organizations[0].id)}`)
+    await browser.wait(`!document.getElementById('product-grants-panel').hidden && Array.from(document.querySelector('#product-grants-form select[name=seller_id]').options).some(o=>o.value===${JSON.stringify(ownerStoreId)}) && Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).some(o=>o.value===${JSON.stringify(alphaMember.id)}) && !document.querySelector('#product-grants-form button[value=grant]').disabled`)
     await browser.eval(`(()=>{
       const f=document.getElementById('product-grants-form');
       f.elements.namedItem('seller_id').value=${JSON.stringify(ownerStoreId)};
       f.elements.namedItem('membership_id').value=${JSON.stringify(alphaMember.id)};
     })()`)
+    const priorProductGrantPosts=browser.http.filter((x:any)=>
+      x.path==="/personal/store-product-permissions"&&x.method==="POST").length
     await browser.click('#product-grants-form button[value="grant"]')
+    await until(async()=>browser.http.filter((x:any)=>
+      x.path==="/personal/store-product-permissions"&&x.method==="POST"
+    ).length>priorProductGrantPosts,19000,
+      "B22 Chrome Owner products.edit POST reaches first-party HTTP")
+    const productGrantPosts=browser.http.filter((x:any)=>
+      x.path==="/personal/store-product-permissions"&&x.method==="POST")
+    assert.equal(productGrantPosts[productGrantPosts.length-1].status,200,
+      "Actual Chrome Owner products.edit POST must be accepted")
     await until(async()=>{
       const rows=await q(`select g.id from da_store_product_permission g
         where g.person_id=$1 and g.organization_id=$2 and g.seller_id=$3
