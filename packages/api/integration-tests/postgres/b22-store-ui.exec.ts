@@ -2014,6 +2014,44 @@ export default async function({container}:any){
     assert.equal(await locking.release(probeKey),true)
     assert.equal((await q("select count(*)::int n from locking where id=$1",
       [probeKey]))[0].n,0,"Task-only provider probe lock must be released")
+    // The installed official PG provider persists acquire() locks in a table.
+    // Test a short *expired* task-owned key, without a Cart, real worker crash,
+    // or protected data. Expiry must not be mistaken for automatic recovery.
+    const expiredProbeKey="b22-pg-expiry-probe:"+rand
+    await locking.acquire(expiredProbeKey,{expire:1})
+    try{
+      const activeProbe=await q(
+        "select owner_id,expiration>now() as active from locking where id=$1",
+        [expiredProbeKey])
+      assert.equal(activeProbe.length,1)
+      assert.equal(activeProbe[0].owner_id,null)
+      assert.equal(activeProbe[0].active,true)
+      await until(async()=>{
+        const expired=await q(
+          "select expiration<=now() as expired from locking where id=$1",
+          [expiredProbeKey])
+        return expired.length===1 && expired[0].expired===true
+      },5000,"B22 task-owned PostgreSQL lock TTL expiration")
+      let attemptedReacquire=false
+      try{
+        await locking.acquire(expiredProbeKey,{expire:1})
+        attemptedReacquire=true
+      }catch(error){
+        assert.match(String(error),/Failed to acquire lock/i,
+          "Official Postgres provider must report expired-row conflict")
+      }
+      assert.equal(attemptedReacquire,false,
+        "An expired provider row cannot currently be reacquired automatically")
+      assert.equal((await q("select count(*)::int n from locking where id=$1",
+        [expiredProbeKey]))[0].n,1,
+        "Expired provider row persists without an explicit release")
+    }finally{
+      assert.equal(await locking.release(expiredProbeKey),true,
+        "Only this exact task-owned expired probe lock is released")
+    }
+    assert.equal((await q("select count(*)::int n from locking where id=$1",
+      [expiredProbeKey]))[0].n,0)
+    process.stdout.write("\nPASS B22 PostgreSQL expired lock behavior: task-owned one-second lock remained after expiration and rejected reacquisition; only explicit scoped release cleared it; crash recovery is NOT proven\n")
     type NativeCartAttempt={run?:any;error?:string}
     const startCartAttempt=():Promise<NativeCartAttempt>=>
       completeCartWithSplitOrdersWorkflow(container).run({
