@@ -18,7 +18,7 @@ import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
 import {approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow} from "@mercurjs/core/workflows"
-import {createShippingProfilesWorkflow,addToCartWorkflow} from "@medusajs/medusa/core-flows"
+import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
 
@@ -1233,6 +1233,18 @@ export default async function({container}:any){
     // No payment session is created; a nonzero two-Offer Cart remains open.
     const nativeCompletePath="/store/carts/"+
       encodeURIComponent(betaTwoSellerCart.id)+"/complete"
+    // Without an API key, Medusa rejects the request before the DoğruAdres
+    // ingress can run. Use its supported native workflow and a disposable
+    // test-only publishable key to prove the INNER security boundary too.
+    const {result:[b22PublishableKey]}=await createApiKeysWorkflow(container).run({
+      input:{api_keys:[{title:"B22 isolated native checkout denial "+rand,
+        type:"publishable",created_by:""}]}
+    })
+    assert.equal(typeof b22PublishableKey.id,"string")
+    await linkSalesChannelsToApiKeyWorkflow(container).run({input:{
+      id:b22PublishableKey.id,add:[market.id]
+    }})
+    const keyHeaders={"x-publishable-api-key":b22PublishableKey.id}
     assert.equal((await q(`select count(*)::int n from order_group
       where cart_id=$1`,[betaTwoSellerCart.id]))[0].n,0)
     const tryNativeCompletion=async(actor:B06Chrome,
@@ -1242,18 +1254,23 @@ export default async function({container}:any){
       })
       return {status:response.status,body:await response.json()}
     })()`)
+    const missingKey=await tryNativeCompletion(reviewer)
+    assert.equal(missingKey.status,400,
+      "No-key request should fail Medusa's publishable-key preflight")
+    assert.equal(missingKey.body?.type,"not_allowed")
+    assert.match(missingKey.body?.message??"",/Publishable API key required/)
     for(const actor of [reviewer,browser]){
-      const denied=await tryNativeCompletion(actor)
+      const denied=await tryNativeCompletion(actor,keyHeaders)
       assert.equal(denied.status,401,
-        "Checkout returned "+denied.status+"; denial body="+
-        JSON.stringify(denied.body).slice(0,380)+
-        "; a pre-route 400 is NOT proof that native ingress ran")
+        "Native checkout with valid Store key returned "+denied.status+
+        "; body="+JSON.stringify(denied.body).slice(0,380)+
+        "; only the personal ingress denial proves checkout is closed")
       assert.deepEqual(denied.body,{
         message:"Personal session ingress required"
       })
     }
     const forgedNative=await tryNativeCompletion(reviewer,{
-      authorization:"Bearer b22-untrusted-not-a-token"
+      ...keyHeaders,authorization:"Bearer b22-untrusted-not-a-token"
     })
     assert.equal(forgedNative.status,401,
       "An unverified native credential cannot enter the order writer")
