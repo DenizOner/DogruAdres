@@ -207,6 +207,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <button id="product-grants-refresh" type="button">İzinleri yenile</button>
     </section>
   </section>
+  <section id="product-draft-panel" hidden aria-labelledby="product-draft-title" style="grid-column:1/-1">
+    <h3 id="product-draft-title">Mağazama ürün taslağı ekle</h3>
+    <p>Yalnız ayrıca ürün düzenleme izniniz bulunan, onaylanmış mağazalarda taslak oluşturabilirsiniz. Sonuç belirsizse aynı işlemi yeniden göndermeyin.</p>
+    <p id="product-draft-status" role="status" aria-live="polite"></p>
+    <form id="product-draft-form">
+      <label>Yetkili mağaza<select name="seller_id" required></select></label>
+      <label>Ürün başlığı<input name="title" required minlength="2" maxlength="120"></label>
+      <button type="submit">Taslak oluştur</button>
+    </form>
+    <button id="product-draft-refresh" type="button">Yetkili mağazaları yenile</button>
+  </section>
   <p id="memberships-status" role="status" aria-live="polite" aria-atomic="true"></p><button id="memberships-refresh" type="button" hidden disabled>Üye listesini yenile</button>
   <div id="memberships" aria-describedby="memberships-status" aria-busy="false"></div>
   <section id="launcher-section" hidden aria-labelledby="launcher-heading" style="grid-column:1/-1;margin-top:1rem;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white">
@@ -479,6 +490,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(request===organizationRequest&&currentOrg===id){
         if(['owner','admin'].includes(managerRole))void storeApplications(id,request,managerRole);
         void organizationStores(id,request);
+        void productDraftStores(id,request);
         if(managerRole==='owner')void productPermissions(id,request);
       }
       if(request===organizationRequest&&currentOrg===id&&!el('pending-invitations-panel').hidden)
@@ -500,6 +512,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   function clearOrganizationStores(){
     clearProductPermissions();
+    clearProductDraft();
     storeRequest++;
     el('org-stores-panel').hidden=true;
     el('org-stores').replaceChildren();
@@ -762,12 +775,87 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('product-grants-status').textContent=action==='grant'?
         'Ürün düzenleme izni kaydedildi.':'Ürün düzenleme izni iptal edildi.';
       void productPermissions(org,request,true);
+      void productDraftStores(org,request);
     }catch(e){
       if(request!==organizationRequest||currentOrg!==org)return;
       el('product-grants-status').textContent=e.uncertain?
         'Sonuç belirsiz. Yeniden göndermeden önce izin listesini yenileyin.':
         'İzin işlemi reddedildi: '+e.message;
       if(!e.uncertain)for(const button of buttons)button.disabled=false;
+    }
+  };
+
+  let productDraftRequest=0,productDraftKey='';
+  function clearProductDraft(){
+    productDraftRequest++;productDraftKey='';
+    el('product-draft-panel').hidden=true;
+    el('product-draft-status').textContent='';
+    const form=el('product-draft-form');
+    if(typeof form.reset==='function')form.reset();
+    if(typeof form.querySelector==='function'){
+      const select=form.querySelector('select');if(select)select.replaceChildren();
+      const button=form.querySelector('button');if(button)button.disabled=false;
+    }
+  }
+  async function productDraftStores(org,request,keepOutcome=false){
+    if(document.hidden||request!==organizationRequest||currentOrg!==org)return;
+    const seq=++productDraftRequest,select=el('product-draft-form').elements.namedItem('seller_id');
+    const previous=select.value;
+    el('product-draft-panel').hidden=true;
+    if(!keepOutcome)el('product-draft-status').textContent='Mağaza yetkileri kontrol ediliyor…';
+    try{
+      const data=await api('product-drafts?organization_id='+encodeURIComponent(org));
+      if(seq!==productDraftRequest||request!==organizationRequest||currentOrg!==org||document.hidden)return;
+      if(data.organization_id!==org||!Array.isArray(data.stores)||data.stores.length>50||
+         data.stores.some(s=>typeof s.id!=='string'||!/^sel_[A-Za-z0-9_-]+$/.test(s.id)||
+           typeof s.name!=='string')||
+         new Set(data.stores.map(s=>s.id)).size!==data.stores.length)
+        throw new Error('Mağaza yetkileri doğrulanamadı');
+      select.replaceChildren();
+      for(const store of data.stores){
+        const option=document.createElement('option');option.value=store.id;
+        option.textContent=store.name;select.append(option);
+      }
+      if(data.stores.some(s=>s.id===previous))select.value=previous;
+      el('product-draft-panel').hidden=data.stores.length===0;
+      if(!keepOutcome)el('product-draft-status').textContent=data.stores.length?
+        'Taslak oluşturabileceğiniz mağazalar hazır.':'Açık ürün düzenleme izniniz bulunmuyor.';
+    }catch(e){
+      if(seq!==productDraftRequest||request!==organizationRequest||currentOrg!==org)return;
+      select.replaceChildren();el('product-draft-panel').hidden=true;
+      el('product-draft-status').textContent='Ürün işlemi için yetki doğrulanamadı.';
+    }
+  }
+  el('product-draft-refresh').onclick=()=>{
+    if(currentOrg)void productDraftStores(currentOrg,organizationRequest);
+  };
+  el('product-draft-form').onsubmit=async event=>{
+    event.preventDefault();
+    if(document.hidden||el('workspace').hidden||!currentOrg)return;
+    const request=organizationRequest,org=currentOrg,form=event.currentTarget;
+    const button=form.querySelector('button');button.disabled=true;
+    const seller_id=form.elements.namedItem('seller_id').value;
+    const title=String(form.elements.namedItem('title').value||'').trim();
+    // Preserve this exact key for the entire uncertain operation. Neither a
+    // timeout nor a 5xx response may silently create a second native product.
+    if(!productDraftKey)productDraftKey='dapd_'+crypto.randomUUID().replaceAll('-','');
+    try{
+      const result=await api('product-drafts',{method:'POST',body:JSON.stringify({
+        request_id:productDraftKey,organization_id:org,seller_id,title
+      })});
+      if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+      if(result.status!=='created'||!/^prod_[A-Za-z0-9_-]+$/.test(result.product_id))
+        throw new Error('Ürün sonucu doğrulanamadı');
+      productDraftKey='';form.reset();button.disabled=false;
+      el('product-draft-status').textContent='Ürün taslağı kaydedildi: '+result.product_id;
+      void productDraftStores(org,request,true);
+    }catch(e){
+      if(request!==organizationRequest||currentOrg!==org)return;
+      el('product-draft-status').textContent=e.uncertain||e.httpStatus===409?
+        'Sonuç belirsiz. Aynı ürünü tekrar göndermeyin; kayıt denetimi gerekli.':
+        'Taslak oluşturma reddedildi: '+e.message;
+      // Even after a 403 the request may have been reserved before access was
+      // revoked. Keep the form disabled; a later new intent is a new action.
     }
   };
   function clearMemberships(){
