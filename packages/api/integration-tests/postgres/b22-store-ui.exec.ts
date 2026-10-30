@@ -17,7 +17,8 @@ import {spawnSync} from "node:child_process"
 import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
-import {approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow} from "@mercurjs/core/workflows"
+import {approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow} from "@mercurjs/core/workflows"
+import {createShippingProfilesWorkflow,addToCartWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
 
@@ -692,6 +693,91 @@ export default async function({container}:any){
     assert.equal((await readNativeCart(
       "/personal/buyer-context?organization_id="+
       encodeURIComponent(organizations[0].id)+"&seller_scope=inspect")).status,400)
+
+    // Positive REAL native multi-Store Cart, no synthetic Graph mocks:
+    // Medusa published master variant, Mercur's per-Seller Offer workflow,
+    // and Medusa's native addToCartWorkflow with Mercur's Offer hooks.
+    // All resources exist solely in this guarded disposable PG16 CI database.
+    const {result:[b22Profile]}=await createShippingProfilesWorkflow(container).run({
+      input:{data:[{name:"B22 two-Store Offer profile "+rand,type:"default"}]}
+    })
+    assert.match(b22Profile.id,/^sp_[A-Za-z0-9_-]+$/)
+    const {result:[sellableProduct]}=await createProductsWorkflow(container).run({
+      input:{created_by:stores[0].id,products:[{
+        title:"B22 two-Store shared master "+rand,status:"published",
+        variants:[{title:"One size",sku:"B22-NATIVE-"+rand,
+          options:{"Title":"One size"}}]
+      }]}
+    })
+    const variant=sellableProduct.variants?.[0]
+    assert.match(variant?.id??"",/^variant_[A-Za-z0-9_-]+$/)
+    // Mercur 2.3.7 createOffersWorkflow's seller-inventory step obtains
+    // its Seller from offers[0], so use one run per Seller, not a mixed batch.
+    const offerRows=[]
+    for(let i=0;i<2;i++){
+      const sku="B22-TWO-STORE-"+i+"-"+rand
+      const {result:[offer]}=await createOffersWorkflow(container).run({
+        input:{offers:[{
+          seller_id:stores[i].id,created_by:member.id,
+          sku,variant_id:variant.id,shipping_profile_id:b22Profile.id,
+          inventory_items:[{sku,stock_levels:[]}],
+          prices:[{amount:1000+i*100,currency_code:"eur"}],
+          manage_inventory:false,allow_backorder:true
+        }]}
+      })
+      assert.match(offer.id,/^offer_[A-Za-z0-9_-]+$/)
+      assert.equal(offer.seller_id,stores[i].id)
+      offerRows.push(offer)
+    }
+    // Use a task-only sales channel and region for native cart pricing.
+    const sales=container.resolve("sales_channel")
+    const market=await sales.createSalesChannels({name:"B22 two-Store channel "+rand})
+    const regions=container.resolve("region")
+    const region=await regions.createRegions({
+      name:"B22 two-Store region "+rand,currency_code:"eur",countries:[]
+    })
+    await cartService.updateCarts(customerCart.id,{
+      region_id:region.id,sales_channel_id:market.id
+    })
+    for(const offer of offerRows){
+      await addToCartWorkflow(container).run({input:{
+        cart_id:customerCart.id,items:[{
+          variant_id:variant.id,offer_id:offer.id,
+          quantity:1,requires_shipping:true,metadata:{offer_id:offer.id}
+        }]
+      }})
+    }
+    const nativeTwoStore=await cartService.retrieveCart(customerCart.id,{
+      relations:["items"]
+    })
+    assert.equal(nativeTwoStore.items?.length,2)
+    assert.equal(nativeTwoStore.customer_id,nativeCustomer.id)
+    assert.equal(nativeTwoStore.completed_at,null)
+    const query=container.resolve("query")
+    const {data:graphTwoStore}=await query.graph({entity:"cart",fields:[
+      "id","items.id","items.offer.id","items.offer.seller_id"
+    ],filters:{id:customerCart.id}})
+    assert.equal(graphTwoStore.length,1)
+    assert.equal(graphTwoStore[0].items.length,2)
+    assert.deepEqual(
+      new Set(graphTwoStore[0].items.map((line:any)=>line.offer?.seller_id)),
+      new Set(stores.slice(0,2).map(s=>s.id))
+    )
+    assert.deepEqual(
+      new Set(graphTwoStore[0].items.map((line:any)=>line.offer?.id)),
+      new Set(offerRows.map(o=>o.id))
+    )
+    const twoStoreScope=await readNativeCart(
+      buyerCart(organizations[0].id,customerCart.id)+"&seller_scope=inspect")
+    assert.equal(twoStoreScope.status,200)
+    assert.deepEqual(twoStoreScope.body,{
+      organization_id:organizations[0].id,status:"seller_scope_mapped",
+      seller_count:2,seller_block_verified:false,checkout_ready:false
+    })
+    assert.equal((await readNativeCart(buyerCart(organizations[1].id,
+      customerCart.id)+"&seller_scope=inspect")).status,403)
+    process.stdout.write("PASS B22 real two-Store Offer Cart: native Mercur Offers and Medusa addToCartWorkflow persist 2 separate Seller links; Chrome read-only scope counts 2 with block unverified and checkout closed\\n")
+
 
     process.stdout.write("PASS B22 audited Buyer Organization Cart attribution: real Chrome POST + Foundation PG16 audit/outbox, exact replay, foreign Customer/Organization denied, no Medusa cart mutation or checkout\\n")
 
