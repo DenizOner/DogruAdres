@@ -17,7 +17,7 @@ import {spawnSync} from "node:child_process"
 import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
-import {approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow} from "@mercurjs/core/workflows"
+import {approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow} from "@mercurjs/core/workflows"
 import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
 
@@ -127,6 +127,26 @@ export default async function({container}:any){
       await native.createSellerMembers([{seller_id:store.id,member_id:member.id,is_owner:true}])
       stores.push(store)
     }
+    // Execute the INSTALLED native Mercur product workflow on the existing
+    // disposable CI DB, before creating any new personal commerce writer.
+    // Workflow input is INTERNAL ONLY: it is not a visitor authorization.
+    const nativeProductTitle="B22 native draft "+rand
+    const {result:products}=await createProductsWorkflow(container).run({
+      input:{products:[{title:nativeProductTitle,status:"draft",seller_ids:[stores[0].id]}],
+        created_by:stores[0].id}
+    })
+    assert.equal(products.length,1)
+    const draft=products[0]
+    assert.ok(/^prod_[A-Za-z0-9_-]+$/.test(draft.id))
+    const [actualProduct]=await q("select id,title,status from product where id=$1",[draft.id])
+    assert.equal(actualProduct?.title,nativeProductTitle)
+    assert.equal(actualProduct?.status,"draft")
+    const actualLinks=await q("select seller_id from product_seller where product_id=$1",[draft.id])
+    assert.deepEqual(actualLinks.map(x=>x.seller_id),[stores[0].id])
+    // A native product workflow does not by itself prove a human's product
+    // permission, nor grant the other Seller/Organization access.
+    assert.ok(!actualLinks.some(x=>x.seller_id===stores[1].id))
+    process.stdout.write("PASS B22 native Mercur product workflow: draft persisted, only selected Seller linked; no visitor writer/permission claim\\n")
     // Deliberately inconsistent TEST-ONLY Seller: status OPEN was written
     // without Mercur approveSellerWorkflow, so approved_at remains absent.
     // Even a platform association + verified Member must never expose it.
