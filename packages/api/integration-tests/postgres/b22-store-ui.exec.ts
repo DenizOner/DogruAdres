@@ -2071,7 +2071,9 @@ export default async function({container}:any){
       const secondInvoked=new Promise<void>((resolve,reject)=>{
         resolveStarted=resolve;rejectStarted=reject
       })
-      const secondary=spawn(process.execPath,[
+      // medusa exec may run under Node even when the CI parent is Bun.
+      // Use the existing installed Bun CLI explicitly for its `run` command.
+      const secondary=spawn("bun",[
         "run","medusa","exec","./integration-tests/postgres/b22-store-ui.exec.ts"
       ],{
         cwd:process.cwd(),
