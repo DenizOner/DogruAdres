@@ -1718,6 +1718,86 @@ export default async function({container}:any){
     assert.equal(paidAttribution[0].organization_id,organizations[1].id)
     assert.equal(paidAttribution[0].customer_id,nativeCustomer.id)
     process.stdout.write("\nPASS B22 native payment simulation: system provider authorized before L/order; native Mercur persisted single OrderGroup/Order; only then system capture recorded; no external payment, callback or visitor checkout\n")
+
+    // Pre-authorized but NOT capturable: the real Chrome Gamma Owner blocks
+    // Beta before Mercur's L. The system provider has no external effects.
+    // This is the paid-cart negative counterpart of the positive sequence.
+    const deniedPaidCart=await cartService.createCarts({
+      currency_code:"eur",customer_id:nativeCustomer.id
+    })
+    await cartService.updateCarts(deniedPaidCart.id,{
+      region_id:region.id,sales_channel_id:market.id
+    })
+    await addToCartWorkflow(container).run({input:{
+      cart_id:deniedPaidCart.id,
+      items:[{variant_id:variant.id,offer_id:gammaOffer.id,
+        quantity:1,requires_shipping:false,
+        metadata:{offer_id:gammaOffer.id}} as any]
+    }})
+    const {data:[deniedPaidGraph]}=await query.graph({
+      entity:"cart",fields:["id","total","customer.id","items.id",
+        "items.offer.seller_id"],filters:{id:deniedPaidCart.id}
+    })
+    assert.ok(Number(deniedPaidGraph.total)>0)
+    assert.equal(deniedPaidGraph.customer?.id,nativeCustomer.id)
+    assert.equal(deniedPaidGraph.items.length,1)
+    assert.equal(deniedPaidGraph.items[0].offer?.seller_id,gammaSellerId)
+    const deniedPaidClaim=await claimCart(organizations[1].id,deniedPaidCart.id)
+    assert.equal(deniedPaidClaim.status,200)
+    assert.equal(deniedPaidClaim.body.checkout_ready,false)
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      deniedPaidCart.id,nativeCustomer.id,[gammaSellerId]
+    ),true,"Paid-cart negative control must start with valid L")
+    const {result:deniedPaymentCollection}=
+      await createPaymentCollectionForCartWorkflow(container).run({
+        input:{cart_id:deniedPaidCart.id}
+      })
+    const {result:deniedPaymentSession}=
+      await createPaymentSessionsWorkflow(container).run({input:{
+        payment_collection_id:deniedPaymentCollection.id,
+        provider_id:"pp_system_default"
+      }})
+    const deniedAuthorization=await paymentService.authorizePaymentSession(
+      deniedPaymentSession.id,{})
+    assert.ok(deniedAuthorization?.id)
+    assert.equal((await paymentService.retrievePayment(
+      deniedAuthorization.id,{relations:["captures"]}
+    )).captures?.length??0,0)
+    assert.equal((await betaSellerBlock("block",sellerGamma.id,gammaSellerId)).status,200)
+    try{
+      assert.equal(await foundation.authorizeBuyerCheckout(
+        deniedPaidCart.id,nativeCustomer.id,[gammaSellerId]
+      ),false,"Owner Store block committed before L must reject authorized Cart")
+      const rejectedPaidRun=await completeCartWithSplitOrdersWorkflow(
+        container).run({input:{cart_id:deniedPaidCart.id},throwOnError:false})
+      const rejectedPaidMessage=(rejectedPaidRun.errors??[]).map((entry:any)=>
+        String(entry.error?.message??entry.error??entry.message??"")).join("\n")
+      assert.match(rejectedPaidMessage,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
+        "Native Mercur L must reject a pre-authorized blocked Buyer")
+      assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
+        [deniedPaidCart.id]))[0].n,0)
+      const {data:deniedOrderLinks}=await query.graph({
+        entity:"order_cart",fields:["order_id"],filters:{cart_id:deniedPaidCart.id}
+      })
+      assert.equal(deniedOrderLinks.length,0)
+      const unchangedPayment=await paymentService.retrievePayment(
+        deniedAuthorization.id,{relations:["captures"]}
+      )
+      assert.equal(unchangedPayment.captures?.length??0,0,
+        "No capture before or after failed B22 native checkout")
+      assert.equal(unchangedPayment.captured_at??null,null)
+      assert.equal((await cartService.retrieveCart(deniedPaidCart.id)).completed_at,
+        null,"Failed paid Cart must remain open")
+      const deniedAttribution=await q(
+        "select organization_id,customer_id from da_buyer_cart_attribution where cart_id=$1",
+        [deniedPaidCart.id])
+      assert.equal(deniedAttribution.length,1)
+      assert.equal(deniedAttribution[0].organization_id,organizations[1].id)
+      assert.equal(deniedAttribution[0].customer_id,nativeCustomer.id)
+    }finally{
+      assert.equal((await betaSellerBlock("unblock",sellerGamma.id,gammaSellerId)).status,200)
+    }
+    process.stdout.write("\nPASS B22 native payment denial: pre-authorized system-provider Cart blocked by real Store Owner before L; Mercur rejected with zero OrderGroup/Order/capture and preserved immutable Buyer attribution\n")
     // Deterministic L/commit race using the production buyer-permission
     // advisory lock and the real Chrome Owner mutation. No successful Cart
     // completion, OrderGroup or payment is exercised in this test.
