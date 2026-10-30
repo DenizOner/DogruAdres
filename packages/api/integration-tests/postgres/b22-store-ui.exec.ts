@@ -915,6 +915,9 @@ export default async function({container}:any){
       buyerCart(organizations[0].id,customerCart.id)+"&seller_scope=inspect")
     assert.equal(blockedScope.status,403)
     assert.deepEqual(blockedScope.body,{message:"Access denied"})
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds
+    ),false,"A Store Buyer Organization block committed before L must deny checkout")
     assert.equal((await cartService.retrieveCart(customerCart.id,{
       relations:["items"]
     })).items?.length,2)
@@ -972,6 +975,20 @@ export default async function({container}:any){
     assert.equal(allUnblocked.status,200)
     assert.deepEqual(allUnblocked.body,twoStoreScope.body)
     assert.equal(allUnblocked.body.seller_block_verified,true)
+    // The single Foundation decision is positive only for the exact immutable
+    // Alpha attribution, verified Customer and both currently unblocked Stores.
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds
+    ),true,"B22 final checkout snapshot must allow the exact current legal Buyer scope")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      foreignCart.id,nativeCustomer.id,cartStoreIds
+    ),false,"A foreign native Cart has no Alpha legal attribution")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,foreignNativeCustomer.id,cartStoreIds
+    ),false,"A different native Customer cannot borrow the immutable attribution")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,[...cartStoreIds,"sel_missing_checkout"]
+    ),false,"Every native Offer Seller must have a matching approved Organization origin")
     assert.equal((await cartService.retrieveCart(customerCart.id,{
       relations:["items"]
     })).items?.length,2)
@@ -1408,6 +1425,9 @@ export default async function({container}:any){
         and e.target_id=$3 and e.previous_values->>'grant_id'=$4`,
       [A.person,organizations[0].id,B.person,buyerGrant.id])
     assert.equal(buyerRevoked[0].n,1,"Revocation must emit canonical outbox")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds
+    ),false,"A buyer.purchase revocation committed before L must deny checkout")
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
     const deniedAfterRevoke=await reviewer.eval(`(async()=>{
@@ -1903,10 +1923,9 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes; approved synthetic Store fixtures read and revoked access denied\n")
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
 
-    // Exercise Mercur's documented workflow extension in the real Medusa
-    // runtime without a payment session, payment provider call or order write.
-    // validateCartPaymentsStep explicitly skips payment only for a zero-value
-    // cart; the intentional hook rejection must happen before order creation.
+    // Exercise the actual project-owned authorization hook on the installed
+    // Mercur workflow. This zero-value task Cart has no legal Buyer attribution,
+    // so denial must happen before any OrderGroup/order/payment side effect.
     const hookProbeCart=await cartService.createCarts({currency_code:"eur"})
     const {data:hookProbeRows}=await query.graph({
       entity:"cart",fields:["id","total","credit_line_total","completed_at"],
@@ -1917,22 +1936,13 @@ export default async function({container}:any){
     assert.equal(Number(hookProbeRows[0].total),0)
     assert.ok(Number(hookProbeRows[0].credit_line_total??0)>=0)
     assert.equal(hookProbeRows[0].completed_at,null)
-    let validateHookCalls=0
-    const validateHookSentinel="B22_EXPECTED_VALIDATE_HOOK_DENIAL"
-    completeCartWithSplitOrdersWorkflow.hooks.validate(({cart}:any)=>{
-      if(cart?.id!==hookProbeCart.id)return
-      validateHookCalls++
-      throw new Error(validateHookSentinel)
-    })
     const hookRun=await completeCartWithSplitOrdersWorkflow(container).run({
       input:{cart_id:hookProbeCart.id},throwOnError:false
     })
-    assert.equal(validateHookCalls,1,
-      "Mercur's actual validate hook must run in the installed workflow runtime")
     const hookErrorText=(hookRun.errors??[]).map((entry:any)=>
       String(entry.error?.message??entry.error??entry.message??"")).join("\n")
-    assert.match(hookErrorText,/B22_EXPECTED_VALIDATE_HOOK_DENIAL/,
-      "Intentional validate-hook denial must be the workflow failure")
+    assert.match(hookErrorText,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
+      "The real installed Mercur validate hook must fail closed for a Cart without legal Buyer/Customer/Store proof")
     assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
       [hookProbeCart.id]))[0].n,0)
     const {data:hookOrderLinks}=await query.graph({
@@ -1949,7 +1959,7 @@ export default async function({container}:any){
     })
     assert.equal(hookCartAfter.length,1)
     assert.equal(hookCartAfter[0].completed_at,null)
-    process.stdout.write("PASS B22 Chrome: Mercur 2.3.7 real validate hook runtime; zero-value disposable Cart invokes the hook; intentional denial leaves zero OrderGroup/Order/payment collections and Cart open; no payment or checkout writer\n")
+    process.stdout.write("PASS B22 Chrome: Mercur 2.3.7 real validate hook invokes the project-owned Foundation authorization; an unattributed zero-value Cart is denied before OrderGroup/Order/payment writes and remains open; no payment writer\n")
   }finally{
     for(const b of browsers)await b.close()
     if(server)await new Promise<void>(r=>server!.close(()=>r()))

@@ -103,9 +103,13 @@ describe("personal ingress (unit contract only)",()=>{
     expect((await probe(path,"POST","Bearer stolen")).res.status).toHaveBeenCalledWith(401)
     expect((await probe(path,"OPTIONS")).res.status).toHaveBeenCalledWith(401)
   })
-  it("permits only the documented payment callback and public cloud capability read",async()=>{
-    expect((await probe("/hooks/payment/pp_system","POST")).next).toHaveBeenCalled()
-    expect((await probe("/hooks/payment/pp_system","POST","Bearer stolen")).res.status).toHaveBeenCalledWith(401)
+  it("keeps payment callbacks closed until authorization-before-capture is proven",async()=>{
+    const anonymous=await probe("/hooks/payment/pp_system","POST")
+    expect(anonymous.next).not.toHaveBeenCalled()
+    expect(anonymous.res.status).toHaveBeenCalledWith(403)
+    const bearer=await probe("/hooks/payment/pp_system","POST","Bearer stolen")
+    expect(bearer.next).not.toHaveBeenCalled()
+    expect(bearer.res.status).toHaveBeenCalledWith(403)
     expect((await probe("/cloud/auth")).next).toHaveBeenCalled()
   })
 

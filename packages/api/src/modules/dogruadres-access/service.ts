@@ -1795,6 +1795,151 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return rows.length===1
   }
 
+
+  /**
+   * B22 final checkout decision (L). Called only from Mercur's split-cart
+   * validate hook, after the native Cart lock and native source reads but
+   * before OrderGroup/order writes. One PostgreSQL statement gives all
+   * Foundation-owned facts one READ COMMITTED snapshot: a revocation committed
+   * before this SELECT is denied; a later revocation may overlap this checkout.
+   *
+   * The caller must validate the native Cart snapshot and current Mercur Seller
+   * lifecycle before calling this method. No native module manager is passed
+   * into Foundation and no cross-module transaction is claimed.
+   */
+  @InjectTransactionManager()
+  async authorizeBuyerCheckout(
+    cartId:string,
+    customerId:string,
+    sellerIds:string[],
+    @MedusaContext() context:Context={}
+  ):Promise<boolean>{
+    if(!/^cart_[A-Za-z0-9_-]{1,123}$/.test(cartId)||
+       !/^cus_[A-Za-z0-9_-]+$/.test(customerId)||
+       !Array.isArray(sellerIds)||sellerIds.length<1||sellerIds.length>50||
+       new Set(sellerIds).size!==sellerIds.length||
+       sellerIds.some(id=>typeof id!=="string"||!/^sel_[A-Za-z0-9_-]+$/.test(id)))
+      throw new IdentityAccessDenied()
+
+    const db=securitySql(context.transactionManager)
+    const sellerSlots=sellerIds.map(()=>"?").join(",")
+    // IMPORTANT: This is the single final Foundation SELECT (L). Do not split
+    // these predicates into sequential service reads or cached decisions.
+    const rows=await db.execute(`
+      select a.cart_id
+      from da_buyer_cart_attribution a
+      join da_organization buyer
+        on buyer.id=a.organization_id
+       and buyer.status='active' and buyer.deleted_at is null
+      join da_audit_event attribution_event
+        on attribution_event.id=a.source_audit_event_id
+       and attribution_event.deleted_at is null
+       and attribution_event.module='dogruadres-access'
+       and attribution_event.resource='buyer-cart-attribution'
+       and attribution_event.action='organization.buyer_cart_attributed'
+       and attribution_event.actor_person_id=a.person_id
+       and attribution_event.organization_id=a.organization_id
+       and attribution_event.target_id=a.cart_id
+       and attribution_event.new_values->>'cart_id'=a.cart_id
+       and attribution_event.new_values->>'customer_id'=a.customer_id
+      where a.cart_id=? and a.customer_id=?
+        and exists(
+          select 1 from da_audit_outbox attribution_outbox
+          where attribution_outbox.source_audit_event_id=attribution_event.id
+            and attribution_outbox.source_module='dogruadres-access'
+            and attribution_outbox.deleted_at is null
+        )
+        and (
+          select count(*) from da_organization_membership m
+          where m.organization_id=a.organization_id
+            and m.person_id=a.person_id
+            and m.status='active' and m.revoked_at is null
+            and m.deleted_at is null
+        )=1
+        and (
+          select count(*) from da_organization_buyer_permission g
+          join da_audit_event grant_event
+            on grant_event.id=g.source_audit_event_id
+           and grant_event.deleted_at is null
+           and grant_event.module='dogruadres-access'
+           and grant_event.resource='buyer-permission'
+           and grant_event.action='organization.buyer_permission_granted'
+           and grant_event.actor_person_id=g.issued_by_person_id
+           and grant_event.organization_id=g.organization_id
+           and grant_event.target_id=g.person_id
+           and grant_event.new_values->>'grant_id'=g.id
+           and grant_event.new_values->>'person_id'=g.person_id
+           and grant_event.new_values->>'permission'=g.permission
+          join da_audit_outbox grant_outbox
+            on grant_outbox.source_audit_event_id=grant_event.id
+           and grant_outbox.source_module='dogruadres-access'
+           and grant_outbox.deleted_at is null
+          where g.person_id=a.person_id
+            and g.organization_id=a.organization_id
+            and g.permission='buyer.purchase'
+            and g.revoked_at is null
+            and (g.expires_at is null or g.expires_at>statement_timestamp())
+        )=1
+        and (
+          select count(*) from da_verified_actor_binding binding
+          join da_actor_mapping actor
+            on actor.person_id=binding.person_id
+           and actor.actor_type=binding.actor_type
+           and actor.actor_id=binding.actor_id
+           and actor.deleted_at is null
+          where binding.person_id=a.person_id
+            and binding.actor_type='customer'
+            and binding.actor_id=a.customer_id
+            and binding.revoked_at is null
+            and binding.verified_at is not null
+        )=1
+        and (
+          select count(distinct ownership.seller_id)
+          from da_organization_seller_ownership ownership
+          join da_organization seller_organization
+            on seller_organization.id=ownership.organization_id
+           and seller_organization.status='active'
+           and seller_organization.deleted_at is null
+          join da_audit_event ownership_event
+            on ownership_event.id=ownership.verification_audit_event_id
+           and ownership_event.deleted_at is null
+           and ownership_event.organization_id=ownership.organization_id
+           and ownership_event.target_id=ownership.seller_id
+           and ownership_event.module='dogruadres-access'
+           and (
+             (ownership_event.action='organization.store_application_created'
+              and ownership_event.resource='store-application'
+              and exists (
+                select 1 from da_store_application application
+                where application.id=(ownership_event.new_values->>'application_id')
+                  and application.organization_id=ownership.organization_id
+                  and application.seller_id=ownership.seller_id
+                  and application.status='created'
+                  and application.person_id=ownership_event.actor_person_id
+              ))
+             or
+             (ownership_event.action='organization.store_association_approved'
+              and ownership_event.resource='store-association')
+           )
+          join da_audit_outbox ownership_outbox
+            on ownership_outbox.source_audit_event_id=ownership_event.id
+           and ownership_outbox.source_module='dogruadres-access'
+           and ownership_outbox.deleted_at is null
+          where ownership.seller_id in (${sellerSlots})
+            and ownership.revoked_at is null
+        )=?
+        and not exists(
+          select 1 from da_store_buyer_organization_block block
+          where block.buyer_organization_id=a.organization_id
+            and block.seller_id in (${sellerSlots})
+            and block.revoked_at is null
+        )
+      limit 2
+    `,[cartId,customerId,...sellerIds,sellerIds.length,...sellerIds])
+    if(rows.length>1)throw new IdentityAccessDenied()
+    return rows.length===1
+  }
+
   // B22 product draft: Foundation-owned intent ledger, not another product
   // service. Never interpret a reserved/uncertain native outcome as retryable.
   @InjectTransactionManager()

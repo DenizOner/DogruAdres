@@ -55,6 +55,13 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
   const anonymous = !authorization && !nativeSession && !("auth_context" in req && req.auth_context)
   const publicAuth = /^\/auth\/(user|member|customer)\/emailpass(?:\/callback)?$/
   const publicStore = /^\/store\/(regions|products|product-categories|collections|currencies|locales|offers|sellers|reviews|product-attributes|product-options|product-tags|product-types|product-variants|shipping-options|payment-providers|return-reasons)(?:\/[^/]+)?\/?$/
+  // Mercur 2.3.7 can capture payment in processPaymentWorkflow BEFORE the
+  // split-cart validate hook runs. No configured provider currently proves an
+  // authorization -> accepted order -> capture sequence, so callbacks fail
+  // closed until that provider-specific sequence is implemented and accepted.
+  if (req.method === "POST" && /^\/hooks\/payment\/[^/]+$/.test(path)) {
+    return res.status(403).json({message:"Payment callback is not enabled"})
+  }
   if ((path==="/personal" && req.method==="GET") ||
       (path==="/personal/session" && ["GET","POST","DELETE"].includes(req.method)) ||
       (path==="/personal/challenge" && req.method==="POST") ||
@@ -89,9 +96,6 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       // Medusa validateToken verifies signature, purpose=reset and atomically
       // consumes the persisted jti. A session JWT cannot pass that middleware.
       (!nativeSession && /^\/auth\/(user|member|customer)\/emailpass\/update$/.test(path) && req.method==="POST") ||
-      // Native payment hook validates provider payload downstream; no other
-      // /hooks operation is public. No bearer/session authority on this path.
-      (anonymous && /^\/hooks\/payment\/[^/]+$/.test(path) && req.method==="POST") ||
       (path==="/store/search" && req.method==="POST") ||
       (publicStore.test(path) && req.method === "GET")) return next()
   // A machine key is still authenticated by the native framework. No staff or
