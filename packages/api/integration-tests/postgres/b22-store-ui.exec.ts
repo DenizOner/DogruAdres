@@ -618,6 +618,69 @@ export default async function({container}:any){
       id:customerCart.id,customer_id:nativeCustomer.id
     })).length,1,"Read-only preflight must not mutate cart")
     process.stdout.write("PASS B22 native cart ownership: real Medusa Cart belongs to verified Customer, foreign and missing carts denied, Org not attributed, no payment or checkout\\n")
+
+    // Bind this real native Customer Cart once to legal Organization Alpha.
+    // This is a Foundation audit transaction, NOT native cart metadata.
+    const claimCart=async(organization_id:string,cart_id:string)=>{
+      return reviewer.eval(`(async()=>{
+        const s=await(await fetch('/personal/session')).json()
+        const r=await fetch('/personal/buyer-context',{
+          method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+          body:JSON.stringify(${JSON.stringify({action:"attribute",organization_id,cart_id})})
+        })
+        return {status:r.status,body:await r.json()}
+      })()`)
+    }
+    const attributionBefore=await q(`select count(*)::int n
+      from da_buyer_cart_attribution where cart_id=$1`,[customerCart.id])
+    assert.equal(attributionBefore[0].n,0)
+    const foreignClaim=await claimCart(organizations[0].id,foreignCart.id)
+    assert.equal(foreignClaim.status,403)
+    const claimed=await claimCart(organizations[0].id,customerCart.id)
+    assert.equal(claimed.status,200)
+    assert.deepEqual(claimed.body,{status:"attributed",
+      organization_id:organizations[0].id,checkout_ready:false})
+    const sameClaim=await claimCart(organizations[0].id,customerCart.id)
+    assert.equal(sameClaim.status,200)
+    assert.deepEqual(sameClaim.body,claimed.body)
+    const [attributed]=await q(`select a.person_id,a.customer_id,a.organization_id,
+      a.source_audit_event_id,e.action,e.actor_person_id,e.new_values,
+      x.id as outbox_id from da_buyer_cart_attribution a
+      join da_audit_event e on e.id=a.source_audit_event_id
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where a.cart_id=$1`,[customerCart.id])
+    assert.equal(attributed.person_id,B.person)
+    assert.equal(attributed.customer_id,nativeCustomer.id)
+    assert.equal(attributed.organization_id,organizations[0].id)
+    assert.equal(attributed.actor_person_id,B.person)
+    assert.equal(attributed.action,"organization.buyer_cart_attributed")
+    assert.equal(attributed.new_values.cart_id,customerCart.id)
+    assert.equal(attributed.new_values.customer_id,nativeCustomer.id)
+    assert.equal((await q(`select count(*)::int n
+      from da_buyer_cart_attribution where cart_id=$1`,[customerCart.id]))[0].n,1)
+    const afterClaim=await readNativeCart(buyerCart(organizations[0].id,customerCart.id))
+    assert.equal(afterClaim.status,200)
+    assert.deepEqual(afterClaim.body,{organization_id:organizations[0].id,
+      status:"native_customer_cart_verified",
+      checkout_ready:false,organization_attributed:true})
+    const otherOrgClaim=await claimCart(organizations[1].id,customerCart.id)
+    assert.equal(otherOrgClaim.status,403)
+    assert.equal((await q(`select count(*)::int n from da_buyer_cart_attribution
+      where cart_id=$1 and organization_id=$2`,
+      [customerCart.id,organizations[0].id]))[0].n,1)
+    const noCsrf=await reviewer.eval(`(async()=>{
+      const r=await fetch('/personal/buyer-context',{
+        method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify(${JSON.stringify({action:"attribute",
+          organization_id:organizations[0].id,cart_id:customerCart.id})})
+      });return r.status
+    })()`)
+    assert.equal(noCsrf,403)
+    assert.equal((await cartService.listCarts({
+      id:customerCart.id,customer_id:nativeCustomer.id
+    })).length,1,"Attribution must not modify native Cart")
+    process.stdout.write("PASS B22 audited Buyer Organization Cart attribution: real Chrome POST + Foundation PG16 audit/outbox, exact replay, foreign Customer/Organization denied, no Medusa cart mutation or checkout\\n")
+
     const wrongCustomerOrg=await reviewer.eval(`(async()=>{
       const r=await fetch(${JSON.stringify(customerContext(organizations[1].id))})
       return r.status
@@ -702,6 +765,9 @@ export default async function({container}:any){
     assert.equal((await readNativeCart(
       buyerCart(organizations[0].id,customerCart.id))).status,403,
       "Revoked buyer.purchase cannot read even its own native Cart")
+    assert.equal((await claimCart(organizations[0].id,customerCart.id)).status,403,
+      "Revoked buyer.purchase must not renew an earlier immutable Cart attribution")
+
     assert.equal(await reviewer.eval(`(async()=>{
       const r=await fetch(${JSON.stringify(customerContext(organizations[0].id))})
       return r.status
