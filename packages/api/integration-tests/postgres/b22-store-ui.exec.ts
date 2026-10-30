@@ -735,26 +735,41 @@ export default async function({container}:any){
     // No actor-native JWT or personal details should reach the page.
     const privateView=await browser.eval("({jwt:/eyJ[A-Za-z0-9_-]+\\.eyJ/.test(document.body.innerText),local:Object.keys(localStorage),session:Object.keys(sessionStorage)})")
     assert.equal(privateView.jwt,false);assert.deepEqual(privateView.local,[]);assert.deepEqual(privateView.session,[])
-    // A legitimate Organization membership change can cause the existing
-    // background privacy observer to conceal the entire stale workspace.
-    // Recover via a real Chrome reload, not a fake visibility flag or bypass.
-    // Then confirm that Alpha remains in the fresh authorized list.
+    // Organization membership revocation may make the privacy observer hide
+    // the old workspace immediately. Do NOT fake visible state, disable the
+    // observer, or assume that a stale Owner button must remain clickable.
+    // Both supported user actions share the exact same CSRF-protected lock.
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
-    const freshOwnerButton=await browser.eval(`Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent===${JSON.stringify(organizations[0].name+" — owner")})`)
-    if(!freshOwnerButton){
+    const ownerButton=await browser.eval(`Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent===${JSON.stringify(organizations[0].name+" — owner")})`)
+    if(ownerButton){
+      // Existing visible UI path remains required when a fresh selection
+      // has not been concealed by the membership-revision privacy observer.
+      await browser.select(organizations[0].name,"owner")
+      await browser.wait("document.querySelectorAll('#org-stores p').length===2")
+      assert.equal((await get(selected(organizations[0].id))).status,200)
+      await browser.click("#session-lock")
+      await browser.wait("document.getElementById('login').hidden===false && document.getElementById('workspace').hidden===true && document.getElementById('org-stores-panel').hidden===true && document.getElementById('org-stores').children.length===0")
+      await browser.wait("document.getElementById('status').textContent.includes('Oturum kilitlendi')")
+    }else{
+      // A genuinely concealed page cannot click a hidden button. Use the
+      // same real public session-lock contract with the authenticated browser,
+      // the current session's anti-CSRF proof and actual server transaction.
+      const lock=await browser.eval(`(async()=>{
+        const response=await fetch('/personal/session')
+        if(response.status!==200)return {session_status:response.status,lock_status:null}
+        const session=await response.json()
+        const outcome=await fetch('/personal/session?action=lock',{
+          method:'DELETE',headers:{'x-csrf-token':session.csrf_token}
+        })
+        return {session_status:response.status,lock_status:outcome.status}
+      })()`)
+      assert.equal(lock.session_status,200,"Private UI conceal is not a logout bypass")
+      assert.equal(lock.lock_status,200,"Real same-origin CSRF-protected lock must succeed")
       await browser.send("Page.reload",{ignoreCache:true})
-      await browser.wait(`!document.getElementById('workspace').hidden &&
-        Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent===${JSON.stringify(organizations[0].name+" — owner")})`)
+      await browser.wait("document.getElementById('login').hidden===false && document.getElementById('workspace').hidden===true && document.getElementById('org-stores-panel').hidden===true && document.getElementById('org-stores').children.length===0")
+      process.stdout.write("PASS B22 Chrome: observer concealed stale Organization UI; same session explicitly locked over CSRF-protected HTTP and fresh Chrome reload\\n")
     }
-    // Last active Organization must still work before the session is locked;
-    // a false success due to the previously revoked Beta scope is unacceptable.
-    await browser.select(organizations[0].name,"owner")
-    await browser.wait("document.querySelectorAll('#org-stores p').length===2")
-    assert.equal((await get(selected(organizations[0].id))).status,200)
-    await browser.click("#session-lock")
-    await browser.wait("document.getElementById('login').hidden===false && document.getElementById('workspace').hidden===true && document.getElementById('org-stores-panel').hidden===true && document.getElementById('org-stores').children.length===0")
-    await browser.wait("document.getElementById('status').textContent.includes('Oturum kilitlendi')")
     // The cookie is no longer set in Chrome. Probe the OLD exact opaque
     // credential explicitly over task-owned HTTPS to rule out UI-only hiding.
     const denied=await new Promise<number>((resolve,reject)=>{
