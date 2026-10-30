@@ -54,3 +54,57 @@ export async function authorizedLegalSellerIds(
   const seller_ids = await platformApprovedSellerIds(db, organizationId)
   return { person_id: result.person_id, organization_id: organizationId, seller_ids }
 }
+
+/** B22 native-product authorization prerequisite: the only positive action
+ * proof is an explicitly assigned, current Foundation record WITH its matching
+ * canonical audit/outbox. A Store association, native owner flag or role alone
+ * must never become products.edit. This function does NOT run native workflows.
+ */
+export async function verifiedStoreProductEditGrant(
+  db: SecuritySql, personId: string, organizationId: string, sellerId: string
+): Promise<boolean> {
+  if (!/^daprs_[A-Za-z0-9_-]+$/.test(personId) ||
+      !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId) ||
+      !/^sel_[A-Za-z0-9_-]+$/.test(sellerId)) throw new IdentityAccessDenied()
+  const rows=await db.execute(`
+    select g.id from da_store_product_permission g
+    join da_audit_event e on e.id=g.source_audit_event_id
+      and e.deleted_at is null
+      and e.actor_person_id=g.issued_by_person_id
+      and e.organization_id=g.organization_id and e.target_id=g.seller_id
+      and e.module='dogruadres-access'
+      and e.action='organization.store_product_permission_granted'
+      and e.resource='store-product-permission'
+      and e.new_values->>'grant_id'=g.id
+      and e.new_values->>'person_id'=g.person_id
+      and e.new_values->>'permission'=g.permission
+    where g.person_id=? and g.organization_id=? and g.seller_id=?
+      and g.permission='products.edit' and g.revoked_at is null
+      and (g.expires_at is null or g.expires_at>statement_timestamp())
+      and exists (select 1 from da_audit_outbox x
+        where x.source_audit_event_id=e.id
+          and x.source_module='dogruadres-access' and x.deleted_at is null)
+  `,[personId,organizationId,sellerId]) as {id:unknown}[]
+  if(rows.length>1 || rows.some(r=>typeof r.id!=="string" ||
+    !/^daspg_[A-Za-z0-9_-]+$/.test(r.id as string)))throw new IdentityAccessDenied()
+  return rows.length===1
+}
+
+/** Fresh Person -> active Organization -> verified Store origin -> explicit
+ * action grant. A caller MUST separately check live native Member/SellerMember
+ * and approved Seller status immediately before a protected product workflow.
+ * Do not treat this read as permission for a browser/native Vendor route.
+ */
+export async function authorizedProductEditScope(
+  db:SecuritySql,token:string,organizationId:string,sellerId:string
+):Promise<{person_id:string;organization_id:string;seller_id:string}|null>{
+  if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId) ||
+     !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))throw new IdentityAccessDenied()
+  const member=await new IdentitySessions(db).organizations(token,organizationId)
+  if(!member || member.organizations.length!==1 ||
+     member.organizations[0].id!==organizationId)return null
+  const stores=await platformApprovedSellerIds(db,organizationId)
+  if(!stores.includes(sellerId))return null
+  if(!await verifiedStoreProductEditGrant(db,member.person_id,organizationId,sellerId))return null
+  return {person_id:member.person_id,organization_id:organizationId,seller_id:sellerId}
+}

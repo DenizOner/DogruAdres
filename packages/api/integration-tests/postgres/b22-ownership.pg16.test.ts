@@ -4,7 +4,7 @@
  * handles all cleanup. No production or protected DB is ever touched.
  */
 import assert from "node:assert/strict"
-import { platformApprovedSellerIds } from "../../src/modules/dogruadres-access/legal-store-ownership"
+import { platformApprovedSellerIds, verifiedStoreProductEditGrant } from "../../src/modules/dogruadres-access/legal-store-ownership"
 
 type Sql = { unsafe(statement: string, params?: readonly unknown[]): Promise<any[]> }
 
@@ -85,6 +85,35 @@ export async function verifyB22OwnedSellerConstraints(db: Sql, databaseName: str
   assert.deepEqual(await platformApprovedSellerIds(adapter,"daorg_b22_beta"),["sel_b22_one"],
     "Only the newly approved active Organization may see this Store")
   assert.deepEqual(await platformApprovedSellerIds(adapter,"daorg_b22_alpha"),["sel_b22_two"])
+
+  // Explicit task-only Person/Organization/Store action grant is separate
+  // from native SellerMember, protected Owner and the Store association.
+  const canEdit=()=>verifiedStoreProductEditGrant(adapter,"daprs_b22_fixture","daorg_b22_beta","sel_b22_one")
+  assert.equal(await canEdit(),false,"Owner/Store association alone cannot edit products")
+  await db.unsafe(`insert into da_store_product_permission
+    (id,person_id,organization_id,seller_id,permission,issued_by_person_id,source_audit_event_id)
+    values ('daspg_b22_scope','daprs_b22_fixture','daorg_b22_beta','sel_b22_one',
+      'products.edit','daprs_b22_fixture','daaud_b22_b1')`)
+  assert.equal(await canEdit(),false,"An unrelated Store event cannot mint a product grant")
+  await db.unsafe(`insert into da_audit_event
+    (id,actor_person_id,actor_type,actor_id,organization_id,action,module,resource,target_id,new_values,occurred_at)
+    values ('daaud_b22_product_grant','daprs_b22_fixture','user','synthetic_actor_b22',
+      'daorg_b22_beta','organization.store_product_permission_granted',
+      'dogruadres-access','store-product-permission','sel_b22_one',
+      '{"grant_id":"daspg_b22_scope","person_id":"daprs_b22_fixture","permission":"products.edit"}'::jsonb,
+      clock_timestamp())`)
+  await db.unsafe(`update da_store_product_permission
+    set source_audit_event_id='daaud_b22_product_grant' where id='daspg_b22_scope'`)
+  assert.equal(await canEdit(),false,"Grant event without matching durable outbox cannot authorize")
+  await db.unsafe(`insert into da_audit_outbox(id,source_audit_event_id,source_module,envelope)
+    values ('daaob_b22_product_grant','daaud_b22_product_grant','dogruadres-access','{}'::jsonb)`)
+  assert.equal(await canEdit(),true,"Only an explicit grant with audit and outbox authorizes")
+  assert.equal(await verifiedStoreProductEditGrant(adapter,"daprs_b22_fixture","daorg_b22_alpha","sel_b22_one"),false)
+  assert.equal(await verifiedStoreProductEditGrant(adapter,"daprs_b22_fixture","daorg_b22_beta","sel_b22_two"),false)
+  assert.equal(await verifiedStoreProductEditGrant(adapter,"daprs_foreign","daorg_b22_beta","sel_b22_one"),false)
+  await db.unsafe("update da_store_product_permission set revoked_at=clock_timestamp() where id='daspg_b22_scope'")
+  assert.equal(await canEdit(),false,"Revocation must take effect on the next read")
+  process.stdout.write("PASS B22 Foundation PG16: explicit Store products.edit grant, audit+outbox, foreign scope and revoke; no visitor writer\\n")
   process.stdout.write("PASS B22 real Medusa CLI PG16: multiple Seller stores per Organization, unique current assignment, exact approval event/outbox, audit FK, retained history\n")
   process.stdout.write("NOT TESTED: real platform review/reassignment, browser Store scope, Buyer Organization checkout\n")
 }

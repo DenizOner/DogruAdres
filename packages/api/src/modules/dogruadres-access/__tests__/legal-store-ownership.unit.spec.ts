@@ -1,5 +1,5 @@
 import { IdentitySessions, IdentityAccessDenied } from "../identity-session"
-import { authorizedLegalSellerIds } from "../legal-store-ownership"
+import { authorizedLegalSellerIds, authorizedProductEditScope, verifiedStoreProductEditGrant } from "../legal-store-ownership"
 
 describe("B22 legal Organization ownership candidate gate (SQL-mock, NOT PostgreSQL acceptance)", () => {
   afterEach(() => jest.restoreAllMocks())
@@ -39,5 +39,48 @@ describe("B22 legal Organization ownership candidate gate (SQL-mock, NOT Postgre
     const execute=jest.fn()
     await expect(authorizedLegalSellerIds({execute},token,"invalid")).rejects.toBeInstanceOf(IdentityAccessDenied)
     expect(execute).not.toHaveBeenCalled()
+  })
+})
+
+describe("B22 distinct products.edit grant (SQL mock only)",()=>{
+  afterEach(()=>jest.restoreAllMocks())
+  const person="daprs_A",org="daorg_A",seller="sel_A",token="x".repeat(43)
+  it("requires current membership, recorded Store and independently issued product action",async()=>{
+    jest.spyOn(IdentitySessions.prototype,"organizations").mockResolvedValue(
+      {person_id:person,organizations:[{id:org,role:"member"}]} as any)
+    const execute=jest.fn()
+      .mockResolvedValueOnce([{seller_id:seller}])
+      .mockResolvedValueOnce([{id:"daspg_A"}])
+    await expect(authorizedProductEditScope({execute},token,org,seller))
+      .resolves.toEqual({person_id:person,organization_id:org,seller_id:seller})
+    expect(execute.mock.calls[1][0]).toContain("da_audit_outbox")
+    expect(execute.mock.calls[1][0]).toContain("e.new_values->>'permission'=g.permission")
+    expect(execute.mock.calls[1][1]).toEqual([person,org,seller])
+  })
+  it("never substitutes active Organization membership for the product permission",async()=>{
+    jest.spyOn(IdentitySessions.prototype,"organizations").mockResolvedValue(
+      {person_id:person,organizations:[{id:org,role:"owner"}]} as any)
+    const execute=jest.fn().mockResolvedValueOnce([{seller_id:seller}]).mockResolvedValueOnce([])
+    await expect(authorizedProductEditScope({execute},token,org,seller)).resolves.toBeNull()
+  })
+  it("denies an unapproved or foreign Store without even reading action grants",async()=>{
+    jest.spyOn(IdentitySessions.prototype,"organizations").mockResolvedValue(
+      {person_id:person,organizations:[{id:org,role:"admin"}]} as any)
+    const execute=jest.fn().mockResolvedValueOnce([])
+    await expect(authorizedProductEditScope({execute},token,org,seller)).resolves.toBeNull()
+    expect(execute).toHaveBeenCalledTimes(1)
+  })
+  it("denies an inactive Person membership before any Store or grant read",async()=>{
+    jest.spyOn(IdentitySessions.prototype,"organizations").mockResolvedValue(null as any)
+    const execute=jest.fn()
+    await expect(authorizedProductEditScope({execute},token,org,seller)).resolves.toBeNull()
+    expect(execute).not.toHaveBeenCalled()
+  })
+  it("does not accept duplicate, malformed or missing permission rows",async()=>{
+    for(const rows of [[],[{id:"bad"}],[{id:"daspg_a"},{id:"daspg_b"}]]){
+      const execute=jest.fn().mockResolvedValue(rows)
+      if(rows.length===0)await expect(verifiedStoreProductEditGrant({execute},person,org,seller)).resolves.toBe(false)
+      else await expect(verifiedStoreProductEditGrant({execute},person,org,seller)).rejects.toBeInstanceOf(IdentityAccessDenied)
+    }
   })
 })
