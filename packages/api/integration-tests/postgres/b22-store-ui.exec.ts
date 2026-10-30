@@ -679,6 +679,20 @@ export default async function({container}:any){
     assert.equal((await cartService.listCarts({
       id:customerCart.id,customer_id:nativeCustomer.id
     })).length,1,"Attribution must not modify native Cart")
+    // Real empty Cart cannot prove sellable Store coverage or buyer block.
+    const inspected=await readNativeCart(
+      buyerCart(organizations[0].id,customerCart.id)+"&seller_scope=inspect")
+    assert.equal(inspected.status,200)
+    assert.deepEqual(inspected.body,{
+      organization_id:organizations[0].id,status:"seller_scope_empty",
+      seller_count:0,seller_block_verified:false,checkout_ready:false
+    })
+    assert.equal((await readNativeCart(buyerCart(organizations[1].id,
+      customerCart.id)+"&seller_scope=inspect")).status,403)
+    assert.equal((await readNativeCart(
+      "/personal/buyer-context?organization_id="+
+      encodeURIComponent(organizations[0].id)+"&seller_scope=inspect")).status,400)
+
     process.stdout.write("PASS B22 audited Buyer Organization Cart attribution: real Chrome POST + Foundation PG16 audit/outbox, exact replay, foreign Customer/Organization denied, no Medusa cart mutation or checkout\\n")
 
     const wrongCustomerOrg=await reviewer.eval(`(async()=>{

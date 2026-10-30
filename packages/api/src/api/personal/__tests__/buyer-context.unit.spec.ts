@@ -158,6 +158,56 @@ describe("B22 selected buyer Organization is not Customer checkout authority",()
       message:"Outcome uncertain; recheck cart attribution"
     })
   })
+  it("maps distinct native Offer sellers but cannot claim Store block eligibility",async()=>{
+    req.query.customer="verified";req.query.cart_id="cart_a";req.query.seller_scope="inspect"
+    svc.personalBuyerCartAttribution.mockResolvedValue(true)
+    req.scope.resolve=jest.fn((key:string)=>{
+      if(key==="customer")return {listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}
+      if(key==="cart")return {
+        listCarts:jest.fn().mockResolvedValue([{id:"cart_a",customer_id:"cus_a"}]),
+        retrieveCart:jest.fn().mockResolvedValue({id:"cart_a",customer_id:"cus_a",
+          completed_at:null,items:[{id:"cali_a"},{id:"cali_b"}]})}
+      return {graph:jest.fn().mockResolvedValue({data:[{id:"cart_a",items:[
+        {id:"cali_a",offer:{id:"offer_a",seller_id:"sel_a"}},
+        {id:"cali_b",offer:{id:"offer_b",seller_id:"sel_b"}}
+      ]}]})}
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({organization_id:"daorg_a",
+      status:"seller_scope_mapped",seller_count:2,
+      seller_block_verified:false,checkout_ready:false})
+  })
+  it("denies unlinked or truncated Offer rows rather than silently dropping a Store",async()=>{
+    req.query.customer="verified";req.query.cart_id="cart_a";req.query.seller_scope="inspect"
+    svc.personalBuyerCartAttribution.mockResolvedValue(true)
+    for(const item of [
+      {id:"cali_a",offer:null},
+      {id:"cali_a",offer:{id:"offer_a",seller_id:null}},
+    ]){
+      req.scope.resolve=jest.fn((key:string)=>{
+        if(key==="customer")return {listCustomers:jest.fn().mockResolvedValue([{id:"cus_a"}])}
+        if(key==="cart")return {
+          listCarts:jest.fn().mockResolvedValue([{id:"cart_a",customer_id:"cus_a"}]),
+          retrieveCart:jest.fn().mockResolvedValue({id:"cart_a",customer_id:"cus_a",
+            completed_at:null,items:[{id:"cali_a"},{id:"cali_b"}]})}
+        return {graph:jest.fn().mockResolvedValue({data:[{id:"cart_a",items:[item,
+          {id:"cali_b",offer:{id:"offer_b",seller_id:"sel_b"}}]}]})}
+      })
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(403)
+    }
+    expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+  })
+  it("never inspects seller scope without immutable Organization cart attribution",async()=>{
+    req.query.customer="verified";req.query.cart_id="cart_a";req.query.seller_scope="inspect"
+    svc.personalBuyerCartAttribution.mockResolvedValue(false)
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    req.query.cart_id=undefined
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(400)
+  })
   it("fails closed for missing, revoked, wrong-Person and stale Customer bindings",async()=>{
     req.query.customer="verified"
     for(const invalid of [null,{person_id:"daprs_a",actor_id:"cus_a",revoked_at:"y"},

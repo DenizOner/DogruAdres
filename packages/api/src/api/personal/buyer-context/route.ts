@@ -13,10 +13,12 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Cache-Control","no-store")
   if(!enabled())return res.status(503).json({message:"Unavailable"})
   const parsed=z.object({organization_id:org,customer:z.literal("verified").optional(),
-    cart_id:z.string().regex(/^cart_[A-Za-z0-9_-]{1,123}$/).optional()
+    cart_id:z.string().regex(/^cart_[A-Za-z0-9_-]{1,123}$/).optional(),
+    seller_scope:z.literal("inspect").optional()
   }).strict().safeParse(req.query)
   if(!parsed.success||req.headers["x-seller-id"]!==undefined||
-     (parsed.success&&parsed.data.cart_id&&parsed.data.customer!=="verified"))
+     (parsed.success&&parsed.data.cart_id&&parsed.data.customer!=="verified")||
+     (parsed.success&&parsed.data.seller_scope&&!parsed.data.cart_id))
     return res.status(400).json({message:"Invalid context"})
   const svc=access(req),token=sessionToken(req)
   try{
@@ -83,6 +85,74 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
            freshCarts[0].completed_at!=null)
           return res.status(403).json({message:"Access denied"})
       }
+    }
+    const attributed=cartForCustomer&&cartId&&customerActorId?
+      await svc.personalBuyerCartAttribution(token,parsed.data.organization_id,
+        cartId,customerActorId)===true:false
+    if(parsed.data.seller_scope==="inspect"){
+      // Read-only mapping, NOT buyer-block or checkout eligibility. Require
+      // immutable Foundation attribution before inspecting commerce resources.
+      if(!attributed||!cartId||!customerActorId)
+        return res.status(403).json({message:"Access denied"})
+      const nativeCart=req.scope.resolve<{
+        retrieveCart(id:string,opts:object):Promise<{
+          id:string;customer_id?:string|null;completed_at?:unknown;
+          items?:Array<{id:string}>
+        }>
+      }>("cart")
+      const cart=await nativeCart.retrieveCart(cartId,{
+        relations:["items"],select:["id","customer_id","completed_at"]
+      })
+      if(cart.id!==cartId||cart.customer_id!==customerActorId||
+         cart.completed_at!=null||!Array.isArray(cart.items)||
+         cart.items.length>100||
+         new Set(cart.items.map(item=>item.id)).size!==cart.items.length)
+        return res.status(403).json({message:"Access denied"})
+      // Mercur v2.3.7 official Offer link: cart.items.offer.seller_id.
+      // Compare every native item ID to Graph, denying truncated joins,
+      // omitted offers and duplicate/missing sellers. Never use item metadata.
+      const query=req.scope.resolve<{
+        graph(input:object):Promise<{data:any[]}>
+      }>("query")
+      const {data:rows}=await query.graph({
+        entity:"cart",fields:[
+          "id","items.id","items.offer.id","items.offer.seller_id"
+        ],filters:{id:cartId}
+      })
+      if(!Array.isArray(rows)||rows.length!==1||rows[0].id!==cartId||
+         !Array.isArray(rows[0].items)||
+         rows[0].items.length!==cart.items.length)
+        return res.status(403).json({message:"Access denied"})
+      const expected=new Set(cart.items.map(i=>i.id))
+      const sellers=new Set<string>()
+      for(const item of rows[0].items){
+        if(!item||typeof item.id!=="string"||
+           !expected.delete(item.id)||!item.offer||
+           typeof item.offer.id!=="string"||
+           !/^offer_[A-Za-z0-9_-]+$/.test(item.offer.id)||
+           typeof item.offer.seller_id!=="string"||
+           !/^sel_[A-Za-z0-9_-]+$/.test(item.offer.seller_id))
+          return res.status(403).json({message:"Access denied"})
+        sellers.add(item.offer.seller_id)
+      }
+      if(expected.size!==0)return res.status(403).json({message:"Access denied"})
+      const last=await svc.personalBuyerOrganization(token,parsed.data.organization_id)
+      const currentBinding=await svc.personalActorBinding(token,"customer")
+      const finalAttribution=await svc.personalBuyerCartAttribution(
+        token,parsed.data.organization_id,cartId,customerActorId)
+      if(!last||last.person_id!==checked.person_id||
+         !currentBinding||currentBinding.revoked_at||
+         currentBinding.person_id!==checked.person_id||
+         currentBinding.actor_id!==customerActorId||
+         finalAttribution!==true)
+        return res.status(403).json({message:"Access denied"})
+      return res.status(200).json({
+        organization_id:checked.organization_id,
+        status:sellers.size?"seller_scope_mapped":"seller_scope_empty",
+        seller_count:sellers.size,
+        seller_block_verified:false,
+        checkout_ready:false
+      })
     }
     return res.status(200).json({
       organization_id:checked.organization_id,
