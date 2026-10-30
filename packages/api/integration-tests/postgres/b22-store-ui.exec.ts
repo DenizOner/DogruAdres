@@ -430,6 +430,10 @@ export default async function({container}:any){
     assert.equal(afterReview[0].status,"open")
     assert.ok(afterReview[0].approved_at)
 
+    const [alphaMember]=await foundation.createMemberships([{
+      organization_id:organizations[0].id,person_id:B.person,role:"member",
+      status:"active",protected_owner:false
+    }])
     // B22 buyer.purchase is Organization-scoped and NEVER inferred from
     // Owner/Member roles, native Customer or Store product permission.
     await browser.send("Page.bringToFront")
@@ -520,10 +524,6 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Chrome: Organization Owner grants and revokes buyer.purchase for active Alpha Member, audit/outbox PG16, idempotent replay, foreign Org Owner/staff 403 and no automatic Owner permission; no checkout writer\\n")
     // The Organization Owner may explicitly grant AND revoke products.edit
     // for an active member; platform staff status is not sufficient.
-    const [alphaMember]=await foundation.createMemberships([{
-      organization_id:organizations[0].id,person_id:B.person,role:"member",
-      status:"active",protected_owner:false
-    }])
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
