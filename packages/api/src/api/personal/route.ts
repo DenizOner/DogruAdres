@@ -13,6 +13,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const rawSf = process.env.DOGRUADRES_STOREFRONT_URL ?? process.env.STOREFRONT_URL
     if (rawSf) { const u = new URL(rawSf); storefrontOrigin = u.origin }
   } catch { /* malformed or unset -- launcher degrades gracefully, no storefront link shown */ }
+  // Encode as a JS data literal; even a syntactically valid URL may contain quotes.
+  const storefrontOriginScript = JSON.stringify(storefrontOrigin).replace(/</g, "\\u003c")
   res.setHeader("Cache-Control","no-store")
   res.setHeader("Referrer-Policy","no-referrer")
   res.setHeader("X-Content-Type-Options","nosniff")
@@ -1554,7 +1556,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // App launch URLs: server-embedded from trusted process config at render time.
   // Native Vendor App 2.3.7 has no verified opaque-session transport seam.
   // Binding eligibility does not make its separate native login an Option A launch target.
-  const APP_URLS=Object.assign(Object.create(null),{storefront:'${storefrontOrigin}'});
+  const APP_URLS=Object.assign(Object.create(null),{storefront:${storefrontOriginScript}});
   let launcherSaving=false,launcherDragSrc=null,launcherDragOver=null;
   let launcherKeyHandle=null;
   async function loadLauncher(){

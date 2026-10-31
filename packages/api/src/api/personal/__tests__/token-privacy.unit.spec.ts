@@ -57,6 +57,25 @@ describe("bearer URL privacy (executed page scripts, not backend/browser accepta
     expect(nodes['invitation-card'].hidden).toBe(true)
     expect(JSON.stringify([nodes, status.mock.calls])).not.toMatch(/synthetic-private|recipient@example/)
   })
+  it("renders a configured Storefront URL only as data inside the nonce script", async () => {
+    const previous = process.env.DOGRUADRES_STOREFRONT_URL
+    const configured = "https://x'+console.log(123)+'z"
+    process.env.DOGRUADRES_STOREFRONT_URL = configured
+    try {
+      const { html } = await page()
+      const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
+      expect(scripts).toHaveLength(2)
+      const declaration = scripts[1][1].split("\n").find(line => line.includes("const APP_URLS="))
+      expect(declaration).toBeTruthy()
+      const logger = jest.fn()
+      const rendered = runInNewContext((declaration || "")+"\nAPP_URLS.storefront", { console: { log: logger } })
+      expect(rendered).toBe(configured)
+      expect(logger).not.toHaveBeenCalled()
+    } finally {
+      if (previous === undefined) delete process.env.DOGRUADRES_STOREFRONT_URL
+      else process.env.DOGRUADRES_STOREFRONT_URL = previous
+    }
+  })
   it("storefront captures the token in component memory and scrubs before inspection, with fixed response policies", () => {
     const root=path.resolve(__dirname,"../../../../../..")
     const source=readFileSync(path.join(root,"apps/storefront/src/app/[locale]/auth/verify-email/page.tsx"),"utf8")
