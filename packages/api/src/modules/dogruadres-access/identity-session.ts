@@ -38,6 +38,25 @@ function revision(value:unknown):number {
 /** Foundation-owned tables only. Caller MUST supply this module's transaction manager.
  * No email lookup, ambient browser identity, cross-module manager or cached grant.
  */
+/** Canonical protected Owner proof for inherited business actions.
+ * Callers also verify the live browser/Person/Organization scope.
+ */
+export async function isCurrentProtectedOwner(
+  db:SecuritySql,personId:string,organizationId:string
+):Promise<boolean>{
+  if(!/^daprs_[A-Za-z0-9_-]+$/.test(personId)||
+     !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))throw new IdentityAccessDenied()
+  const rows=await db.execute(`select m.id from da_organization_membership m
+    join da_person p on p.id=m.person_id and p.disabled_at is null and p.deleted_at is null
+    join da_organization o on o.id=m.organization_id and o.status='active' and o.deleted_at is null
+    where m.person_id=? and m.organization_id=? and m.role='owner'
+      and m.protected_owner=true and m.status='active'
+      and m.revoked_at is null and m.deleted_at is null for share of m`,
+    [personId,organizationId])
+  if(rows.length>1||rows.some(r=>typeof r.id!=="string"||!r.id))throw new IdentityAccessDenied()
+  return rows.length===1
+}
+
 export class IdentitySessions {
   constructor(private readonly db: SecuritySql) {}
 

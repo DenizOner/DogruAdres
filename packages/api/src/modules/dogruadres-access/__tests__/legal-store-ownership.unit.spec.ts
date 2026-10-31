@@ -57,10 +57,21 @@ describe("B22 distinct products.edit grant (SQL mock only)",()=>{
     expect(execute.mock.calls[1][0]).toContain("e.new_values->>'permission'=g.permission")
     expect(execute.mock.calls[1][1]).toEqual([person,org,seller])
   })
-  it("never substitutes active Organization membership for the product permission",async()=>{
+  it("permits active protected Owner without extra product permission",async()=>{
     jest.spyOn(IdentitySessions.prototype,"organizations").mockResolvedValue(
       {person_id:person,organizations:[{id:org,role:"owner"}]} as any)
-    const execute=jest.fn().mockResolvedValueOnce([{seller_id:seller}]).mockResolvedValueOnce([])
+    const execute=jest.fn().mockResolvedValueOnce([{seller_id:seller}])
+      .mockResolvedValueOnce([{id:"damem_owner"}])
+    await expect(authorizedProductEditScope({execute},token,org,seller))
+      .resolves.toEqual({person_id:person,organization_id:org,seller_id:seller})
+    expect(execute).toHaveBeenCalledTimes(2)
+    expect(execute.mock.calls[1][0]).toContain("m.protected_owner=true")
+  })
+  it("denies an unprotected Owner role without explicit permission",async()=>{
+    jest.spyOn(IdentitySessions.prototype,"organizations").mockResolvedValue(
+      {person_id:person,organizations:[{id:org,role:"owner"}]} as any)
+    const execute=jest.fn().mockResolvedValueOnce([{seller_id:seller}])
+      .mockResolvedValueOnce([]).mockResolvedValueOnce([])
     await expect(authorizedProductEditScope({execute},token,org,seller)).resolves.toBeNull()
   })
   it("denies an unapproved or foreign Store without even reading action grants",async()=>{

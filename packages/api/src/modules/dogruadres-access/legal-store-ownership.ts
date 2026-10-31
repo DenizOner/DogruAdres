@@ -1,4 +1,4 @@
-import { IdentityAccessDenied, IdentitySessions, type SecuritySql } from "./identity-session"
+import { IdentityAccessDenied, IdentitySessions, isCurrentProtectedOwner, type SecuritySql } from "./identity-session"
 
 /**
  * Store-to-Organization origin read. New applications are connected during
@@ -90,8 +90,8 @@ export async function verifiedStoreProductEditGrant(
   return rows.length===1
 }
 
-/** Fresh Person -> active Organization -> verified Store origin -> explicit
- * action grant. A caller MUST separately check live native Member/SellerMember
+/** Fresh Person -> active Organization -> verified Store origin -> protected
+ * Owner OR explicit Member action grant. Separately check native Member/SellerMember
  * and approved Seller status immediately before a protected product workflow.
  * Do not treat this read as permission for a browser/native Vendor route.
  */
@@ -105,6 +105,8 @@ export async function authorizedProductEditScope(
      member.organizations[0].id!==organizationId)return null
   const stores=await platformApprovedSellerIds(db,organizationId)
   if(!stores.includes(sellerId))return null
-  if(!await verifiedStoreProductEditGrant(db,member.person_id,organizationId,sellerId))return null
+  const owner=member.organizations[0].role==="owner" &&
+    await isCurrentProtectedOwner(db,member.person_id,organizationId)
+  if(!owner&&!await verifiedStoreProductEditGrant(db,member.person_id,organizationId,sellerId))return null
   return {person_id:member.person_id,organization_id:organizationId,seller_id:sellerId}
 }

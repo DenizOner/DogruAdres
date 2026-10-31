@@ -12,7 +12,7 @@ import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, has
 import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
-import { IdentitySessions, securitySql, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced } from "./identity-session"
+import { IdentitySessions, securitySql, isCurrentProtectedOwner, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced } from "./identity-session"
 import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
 import { MfaEnrollmentTickets } from "./mfa-enrollment-ticket"
 import { resolveMfaPolicy, type MfaPlatformMode } from "./mfa-policy"
@@ -1917,7 +1917,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             and m.deleted_at is null
         )=1
         and (
-          select count(*) from da_organization_buyer_permission g
+          exists(select 1 from da_organization_membership protected_owner
+            where protected_owner.person_id=a.person_id
+              and protected_owner.organization_id=a.organization_id
+              and protected_owner.role='owner'
+              and protected_owner.protected_owner=true
+              and protected_owner.status='active'
+              and protected_owner.revoked_at is null
+              and protected_owner.deleted_at is null)
+          or (select count(*) from da_organization_buyer_permission g
           join da_audit_event grant_event
             on grant_event.id=g.source_audit_event_id
            and grant_event.deleted_at is null
@@ -1939,7 +1947,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             and g.permission='buyer.purchase'
             and g.revoked_at is null
             and (g.expires_at is null or g.expires_at>statement_timestamp())
-        )=1
+          )=1
+        )
         and (
           select count(*) from da_verified_actor_binding binding
           join da_actor_mapping actor
@@ -2027,9 +2036,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!member||member.person_id!==current.person_id||
        member.organizations.length!==1)return null
     const stores=await platformApprovedSellerIds(db,organizationId)
+    const owner=member.organizations[0].role==="owner" &&
+      await isCurrentProtectedOwner(db,current.person_id,organizationId)
     const allowed:string[]=[]
     for(const id of stores){
-      if(await verifiedStoreProductEditGrant(db,current.person_id,organizationId,id))
+      if(owner||await verifiedStoreProductEditGrant(db,current.person_id,organizationId,id))
         allowed.push(id)
     }
     return {person_id:current.person_id,organization_id:organizationId,seller_ids:allowed}

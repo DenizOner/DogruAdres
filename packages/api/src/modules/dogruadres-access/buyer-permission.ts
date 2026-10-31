@@ -1,7 +1,7 @@
-import { IdentityAccessDenied, IdentitySessions, type SecuritySql } from "./identity-session"
+import { IdentityAccessDenied, IdentitySessions, isCurrentProtectedOwner, type SecuritySql } from "./identity-session"
 
-/** A current, explicit Organization-level authorization record with its
- * canonical audit/outbox. Never infer procurement from owner/admin/customer.
+/** Explicit non-Owner Organization buyer permission with its
+ * canonical audit/outbox. Protected Owner is verified separately.
  * Buyer checkout MUST still validate native Customer, cart, every Store block
  * and final revocation separately. No checkout writes in this module.
  */
@@ -42,6 +42,8 @@ export async function authorizedBuyerOrganization(
   const membership=await new IdentitySessions(db).organizations(token,organizationId,false)
   if(!membership||membership.organizations.length!==1||
      membership.organizations[0].id!==organizationId)return null
-  if(!await verifiedBuyerPurchaseGrant(db,membership.person_id,organizationId))return null
+  const owner=membership.organizations[0].role==="owner" &&
+    await isCurrentProtectedOwner(db,membership.person_id,organizationId)
+  if(!owner&&!await verifiedBuyerPurchaseGrant(db,membership.person_id,organizationId))return null
   return {person_id:membership.person_id,organization_id:organizationId}
 }

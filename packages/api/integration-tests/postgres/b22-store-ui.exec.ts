@@ -596,11 +596,11 @@ export default async function({container}:any){
     await browser.wait("!document.getElementById('buyer-grants-panel').hidden")
     const buyerBefore=await get('/personal/buyer-permissions?organization_id='+organizations[0].id)
     assert.equal(buyerBefore.status,200)
-    assert.deepEqual(buyerBefore.body.grants,[],"Owner has no automatic buyer.purchase permission")
-    // An Organization Owner has no implicit procurement authority.
+    assert.deepEqual(buyerBefore.body.grants,[],"Inherent Owner authority is not an issued grant")
+    // Protected Owner is allowed to purchase without any separate grant.
     const ownerBuyerContext=await get('/personal/buyer-context?organization_id='+
       encodeURIComponent(organizations[0].id))
-    assert.equal(ownerBuyerContext.status,403)
+    assert.equal(ownerBuyerContext.status,200)
 
     assert.equal((await q(`select count(*)::int n from da_organization_buyer_permission
       where organization_id=$1`,[organizations[0].id]))[0].n,0)
@@ -2659,17 +2659,11 @@ export default async function({container}:any){
       [A.person,organizations[0].id,ownerStoreId])
     assert.equal(revokeAudit[0].n,1,"Revocation requires canonical outbox")
     process.stdout.write("PASS B22 Chrome: Owner grants active Member scoped products.edit, retry idempotent, foreign Member/staff 403, Owner revokes with PG16 audit/outbox\\n")
-    // B22 actual visitor draft writer: Owner may grant THEMSELVES an explicit
-    // permission but protected Owner alone still confers no product privilege.
-    assert.equal((await get('/personal/product-drafts?organization_id='+organizations[0].id)).status,200)
-    assert.deepEqual((await get('/personal/product-drafts?organization_id='+organizations[0].id)).body.stores,[])
-    await browser.wait("!document.getElementById('product-grants-panel').hidden")
-    await browser.eval(`(()=>{
-      const f=document.getElementById('product-grants-form')
-      f.elements.namedItem('seller_id').value=${JSON.stringify(ownerStoreId)}
-      f.elements.namedItem('membership_id').value=${JSON.stringify(memberships[0].id)}
-    })()`)
-    await browser.click('#product-grants-form button[value="grant"]')
+    // Protected Owner writes a draft for their approved Store without grant.
+    const ownerDraftAccess=await get('/personal/product-drafts?organization_id='+organizations[0].id)
+    assert.equal(ownerDraftAccess.status,200)
+    assert.ok(ownerDraftAccess.body.stores.some((row:any)=>row.id===ownerStoreId))
+    assert.equal((await q("select count(*)::int n from da_store_product_permission where person_id=$1 and organization_id=$2 and seller_id=$3",[A.person,organizations[0].id,ownerStoreId]))[0].n,0)
     await browser.wait("!document.getElementById('product-draft-panel').hidden")
     const draftTitle="B22 browser product draft "+rand
     await browser.input("#product-draft-form input[name=title]",draftTitle)
@@ -2809,28 +2803,14 @@ export default async function({container}:any){
     assert.equal(memberCannotWrite,403)
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
-    await browser.wait("!document.getElementById('product-grants-panel').hidden")
-    await browser.eval(`(()=>{
-      const f=document.getElementById('product-grants-form')
-      f.elements.namedItem('seller_id').value=${JSON.stringify(ownerStoreId)}
-      f.elements.namedItem('membership_id').value=${JSON.stringify(memberships[0].id)}
-    })()`)
-    await browser.click('#product-grants-form button[value="revoke"]')
-    await until(async()=>{
-      const rows=await q(`select count(*)::int n from da_store_product_permission
-        where person_id=$1 and organization_id=$2 and seller_id=$3
-          and permission='products.edit' and revoked_at is null`,
-        [A.person,organizations[0].id,ownerStoreId])
-      return rows[0].n===0
-    },19000,"B22 product permission revoke invalidates writer")
-    assert.equal((await draftPost(productRequest)).status,403,
-      "Even a completed intent cannot disclose its old product after revoke")
+    assert.equal((await q("select count(*)::int n from da_store_product_permission where person_id=$1 and organization_id=$2 and seller_id=$3 and revoked_at is null",[A.person,organizations[0].id,ownerStoreId]))[0].n,0)
+    assert.equal((await draftPost(productRequest)).status,200,
+      "Protected Owner's completed draft remains available without an explicit grant")
     assert.equal((await get('/personal/product-drafts?organization_id='+
       encodeURIComponent(organizations[0].id)+'&seller_id='+
-      encodeURIComponent(ownerStoreId)+'&request_id='+encodeURIComponent(requestId))).status,403,
-      "Receipt lookup must never bypass revoked products.edit")
+      encodeURIComponent(ownerStoreId)+'&request_id='+encodeURIComponent(requestId))).status,200)
     assert.equal((await q("select count(*)::int n from product where title=$1",[draftTitle]))[0].n,1)
-    process.stdout.write("PASS B22 Chrome: personally authorized native draft, PG16 product_seller and canonical audit/outbox, exact replay no duplicate, conflicting key/foreign Member/revoked permission denied\\n")
+    process.stdout.write("PASS B22 Chrome: protected Owner native draft without self grant, PG16 product_seller/audit/outbox, exact replay no duplicate, conflicting key/foreign Member denied\\n")
     // Native Member context now requires the SAME live legal Organization
     // used by the personal Store list; SellerMember alone is insufficient.
     const storeContext=(org:string,seller:string)=>
