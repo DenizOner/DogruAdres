@@ -109,4 +109,34 @@ describe("Foundation outbox relay decisions (mocked, NOT database acceptance)", 
     expect(await relayOneFoundationAudit(f.source,f.index)).toBe("quarantined")
     expect(f.source.quarantineFoundationAudit).toHaveBeenCalledWith(f.claim,"INDEX_CONFLICT")
   })
+  it("delivers canonical Platform Staff provision events without false quarantine", async () => {
+    const f = fixture()
+    Object.assign(f.event, { role_context: "platform_staff", action: "organization.provisioned",
+      resource: "organization", target_id: "daorg_test" })
+    expect(await relayOneFoundationAudit(f.source, f.index)).toBe("delivered")
+    expect(f.source.quarantineFoundationAudit).not.toHaveBeenCalled()
+    expect(f.index.indexFoundationAuditEvent).toHaveBeenCalledTimes(1)
+    expect(f.index.indexFoundationAuditEvent.mock.calls[0][0]).toEqual(expect.objectContaining({
+      role_context: "platform_staff", action: "organization.provisioned",
+    }))
+    expect(f.source.acknowledgeFoundationAudit).toHaveBeenCalledTimes(1)
+  })
+  it("reconciles already-indexed Platform Staff events without duplicate writes", async () => {
+    const f = fixture()
+    Object.assign(f.event, { role_context: "platform_staff", action: "organization.owner_assigned",
+      resource: "membership", target_id: "damem_test" })
+    f.index.inspectFoundationAuditEvent.mockResolvedValueOnce("matching")
+    expect(await relayOneFoundationAudit(f.source, f.index)).toBe("delivered")
+    expect(f.index.indexFoundationAuditEvent).not.toHaveBeenCalled()
+    expect(f.source.quarantineFoundationAudit).not.toHaveBeenCalled()
+  })
+  it("quarantines an unsupported forged role instead of inserting or acknowledging", async () => {
+    const f = fixture()
+    f.event.role_context = "unrecognized_superuser"
+    expect(await relayOneFoundationAudit(f.source, f.index)).toBe("quarantined")
+    expect(f.source.quarantineFoundationAudit).toHaveBeenCalledWith(f.claim,"ENVELOPE_INVALID")
+    expect(f.source.acknowledgeFoundationAudit).not.toHaveBeenCalled()
+    expect(f.index.indexFoundationAuditEvent).not.toHaveBeenCalled()
+  })
+
 })

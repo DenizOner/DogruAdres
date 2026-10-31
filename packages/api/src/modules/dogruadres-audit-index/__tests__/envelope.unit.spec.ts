@@ -44,4 +44,24 @@ describe("Audit Index version 1 validation and redaction", () => {
     const e = projectFoundationAuditEvent(source())
     expect(envelopeFingerprint(Object.fromEntries(Object.entries(e).reverse()))).toBe(envelopeFingerprint(e))
   })
+  it.each([
+    ["organization.provisioned", "organization", "daorg_example"],
+    ["organization.owner_assigned", "membership", "damem_example"],
+  ])("accepts canonical Platform Staff %s without projecting private fields", (action, resource, targetId) => {
+    const e = projectFoundationAuditEvent({
+      ...source(), role_context: "platform_staff", action, resource, target_id: targetId,
+      staff_grant_id: "private-grant", password: "do-not-project",
+    })
+    expect(e.actor.role_context).toBe("platform_staff")
+    expect(e.action).toBe(action)
+    expect(e.resource).toBe(resource)
+    expect(e.target_id).toBe(targetId)
+    expect(validateAuditIndexEnvelope(e)).toEqual(e)
+    expect(JSON.stringify(e)).not.toContain("private-grant")
+    expect(JSON.stringify(e)).not.toContain("do-not-project")
+  })
+  it.each(["root", "platform-staff", "platform_staff ", "superuser"])("still rejects unsupported role %s", role => {
+    expect(() => projectFoundationAuditEvent({ ...source(), role_context: role })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+  })
+
 })

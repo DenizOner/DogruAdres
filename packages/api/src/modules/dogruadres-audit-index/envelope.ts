@@ -25,7 +25,7 @@ const schema = z.object({
     person_id: reference,
     type: z.enum(["user", "member", "customer"]),
     id: reference,
-    role_context: z.enum(["platform_administrator", "owner", "admin", "member"]).nullable(),
+    role_context: z.enum(["platform_administrator", "platform_staff", "owner", "admin", "member"]).nullable(),
   }).strict(),
   action: z.enum(Object.keys(resources) as [keyof typeof resources, ...(keyof typeof resources)[]]),
   resource: z.enum(["organization", "membership", "invitation"]),
