@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef, useTransition } from "react"
 import { useSearchParams, useRouter, useParams } from "next/navigation"
 import Link from "next/link"
 
-type VerificationState = "loading" | "pending" | "submitting" | "confirmed" | "expired" | "consumed" | "invalid"
+type VerificationState = "loading" | "pending" | "submitting" | "confirmed" | "expired" | "consumed" | "invalid" | "unavailable"
 type SupportedLocale = "tr" | "en" | "ar"
 
 const copy = {
@@ -26,6 +26,8 @@ const copy = {
     consumedDesc: "Bu e-posta adresi zaten doğrulanmış veya bu bağlantı daha önce kullanılmıştır.",
     invalidTitle: "Geçersiz Bağlantı",
     invalidDesc: "Doğrulama bağlantısı geçersiz, hatalı veya eksik. Lütfen e-postanızdaki bağlantıyı kontrol ediniz.",
+    unavailableTitle: "Doğrulama Şu Anda Kullanılamıyor",
+    unavailableDesc: "E-posta doğrulama hizmeti şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin.",
     securityNoteTitle: "Güvenlik Notu:",
     securityNoteText: "Bu bağlantı tek kullanımlıktır. İşlemi tamamlamak için onayınız gerekir.",
     supportText: "Destek:",
@@ -50,6 +52,8 @@ const copy = {
     consumedDesc: "This email address is already verified or this link has previously been used.",
     invalidTitle: "Invalid Link",
     invalidDesc: "The verification link is invalid, malformed, or missing. Please check the link in your email.",
+    unavailableTitle: "Verification Unavailable",
+    unavailableDesc: "Email verification is currently unavailable. Please try again later.",
     securityNoteTitle: "Security Notice:",
     securityNoteText: "This link can be used once. Confirm to complete verification.",
     supportText: "Support:",
@@ -74,6 +78,8 @@ const copy = {
     consumedDesc: "تم التحقق من عنوان البريد الإلكتروني هذا بالفعل أو تم استخدام الرابط مسبقاً.",
     invalidTitle: "رابط غير صالح",
     invalidDesc: "رابط التحقق غير صالح أو غير مكتمل. يرجى التأكد من الرابط الوارد في بريدك الإلكتروني.",
+    unavailableTitle: "خدمة التحقق غير متاحة",
+    unavailableDesc: "خدمة تأكيد البريد الإلكتروني غير متاحة حالياً. يرجى المحاولة لاحقاً.",
     securityNoteTitle: "ملاحظة أمنية:",
     securityNoteText: "يمكن استخدام هذا الرابط مرة واحدة فقط. أكّد لإتمام التحقق.",
     supportText: "الدعم الفني:",
@@ -101,10 +107,24 @@ export default function VerifyEmailPage() {
   const isRtl = currentLocale === "ar"
   const t = copy[currentLocale]
 
-  const backendUrl =
-    process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL ||
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    "http://127.0.0.1:19100"
+  // Only the explicitly configured browser-reachable Medusa API origin.
+  // Never fall back to the Storefront or a visitor-local bearer destination.
+  const backendUrl = (() => {
+    const value = process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL
+    if (!value) return null
+    try {
+      const url = new URL(value)
+      const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+      if (url.protocol !== "https:" &&
+          !(process.env.NODE_ENV !== "production" && url.protocol === "http:" && local))
+        return null
+      if (url.username || url.password || url.pathname !== "/" || url.search || url.hash)
+        return null
+      return url.origin
+    } catch {
+      return null
+    }
+  })()
 
   // 1. Safe GET inspection on mount
   useEffect(() => {
@@ -118,6 +138,11 @@ export default function VerifyEmailPage() {
     if (isTerminalRef.current) return
     if (!token) {
       setState("invalid")
+      return
+    }
+
+    if (!backendUrl) {
+      setState("unavailable")
       return
     }
 
@@ -169,6 +194,10 @@ export default function VerifyEmailPage() {
   // 2. Explicit POST confirmation action
   async function handleConfirm() {
     if (!token || state === "submitting") return
+    if (!backendUrl) {
+      setState("unavailable")
+      return
+    }
 
     setState("submitting")
 
@@ -401,7 +430,7 @@ export default function VerifyEmailPage() {
           )}
 
           {/* State 7: Invalid / Error */}
-          {state === "invalid" && (
+          {(state === "invalid" || state === "unavailable") && (
             <div className="text-center space-y-6">
               <div className="w-16 h-16 mx-auto rounded-full bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -412,10 +441,10 @@ export default function VerifyEmailPage() {
               </div>
               <div>
                 <h1 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
-                  {t.invalidTitle}
+                  {state === "unavailable" ? t.unavailableTitle : t.invalidTitle}
                 </h1>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                  {errorMessage || t.invalidDesc}
+                  {state === "unavailable" ? t.unavailableDesc : errorMessage || t.invalidDesc}
                 </p>
               </div>
 
