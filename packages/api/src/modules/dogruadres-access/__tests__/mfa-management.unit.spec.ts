@@ -15,6 +15,17 @@ describe("MFA management Foundation transaction",()=>{
  it('preserves preference in disabled platform reconciliation',async()=>{policy.mockResolvedValue({platform_mode:'disabled',version:1});await service.personalPrepareNativeMfaDisable('token',ctx);expect(logout).toHaveBeenCalled();expect(preference).not.toHaveBeenCalled()})
  it('rejects obsolete native disable through uncommitted service entrypoint',async()=>{const op=jest.fn();expect(await service.personalManageNativeMfa('token','disable',op,ctx)).toBeNull();expect(op).not.toHaveBeenCalled();expect(record).not.toHaveBeenCalled()})
  it('leaves native untouched when Foundation precommit audit fails',async()=>{logout.mockRejectedValue(Error('outbox unavailable'));await expect(service.personalPrepareNativeMfaDisable('token',ctx)).rejects.toThrow('outbox unavailable');expect(record).not.toHaveBeenCalled()})
- it('records recovery generation against the genuine session actor',async()=>{await service.personalManageNativeMfa('token','recovery_codes',async()=>({}),ctx);expect(record).toHaveBeenCalledWith(expect.objectContaining({person_id:'person_self',actor_id:'user_self'}),'mfa.recovery_codes_generated');expect(logout).not.toHaveBeenCalled()})
+ it('rejects a required mode already committed before the native completion lock',async()=>{
+   policy.mockResolvedValue({platform_mode:'required',version:3})
+   const operation=jest.fn()
+   const result=await service.personalCompletePreparedNativeMfaDisable({
+     session_id:'s',person_id:'person_self',auth_identity_id:'auth_self',actor_type:'user',actor_id:'user_self'
+   },operation,ctx)
+   expect(result).toBeNull()
+   expect(operation).not.toHaveBeenCalled()
+   expect(record).not.toHaveBeenCalled()
+   expect(execute).toHaveBeenCalledWith(expect.stringContaining('pg_advisory_xact_lock'))
+ })
+  it('records recovery generation against the genuine session actor',async()=>{await service.personalManageNativeMfa('token','recovery_codes',async()=>({}),ctx);expect(record).toHaveBeenCalledWith(expect.objectContaining({person_id:'person_self',actor_id:'user_self'}),'mfa.recovery_codes_generated');expect(logout).not.toHaveBeenCalled()})
 })
 describe('recent MFA time boundary',()=>{it('rejects exact expiry, future proof and non-full scope',()=>{for(const s of [{last_strong_auth_at:new Date(1000),now_ms:301000,mfa_purpose:'full'},{last_strong_auth_at:new Date(3000),now_ms:2000,mfa_purpose:'full'},{last_strong_auth_at:new Date(1000),now_ms:2000,mfa_purpose:'mfa_enroll'}])expect(hasRecentMfaProof(s,300)).toBe(false)})})

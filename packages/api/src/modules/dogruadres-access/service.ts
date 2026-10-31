@@ -545,19 +545,28 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id}
   }
 
-  /** A post-native audit cannot restore or re-authorize pre-revoked sessions. */
+  /** A second Foundation transaction holds the SAME policy advisory lock
+   * as setPlatformPolicy across the native Medusa operation. The first
+   * committed Person session/epoch revocation can never be rolled back
+   * by a native write or completion-audit failure. */
   @InjectTransactionManager()
-  async personalRecordPreparedNativeMfaDisable(
+  async personalCompletePreparedNativeMfaDisable(
     prepared:Readonly<{session_id:string;person_id:string;auth_identity_id:string;actor_type:MfaAuditActor["actor_type"];actor_id:string}>,
+    operation:(identityId:string)=>Promise<unknown>,
     @MedusaContext() context:Context={}
   ) {
     const sql=securitySql(context.transactionManager)
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    const store=new MfaPersistence(sql),policy=await store.readPlatformPolicy()
+    if(policy.platform_mode==="required")return null
     const rows=await sql.execute("select s.id from da_browser_session s join da_person_security e on e.person_id=s.person_id where s.id=? and s.person_id=? and s.auth_identity_id=? and s.actor_type=? and s.actor_id=? and s.status='revoked' and e.epoch>s.epoch",
       [prepared.session_id,prepared.person_id,prepared.auth_identity_id,prepared.actor_type,prepared.actor_id])
     if(rows.length!==1)throw new IdentityAccessDenied()
-    await new MfaPersistence(sql).recordNativeMfaAction({
+    const result=await operation(prepared.auth_identity_id)
+    await store.recordNativeMfaAction({
       person_id:prepared.person_id,actor_type:prepared.actor_type,actor_id:prepared.actor_id
     },"mfa.native_factor_disabled")
+    return result
   }
 
   @InjectTransactionManager()

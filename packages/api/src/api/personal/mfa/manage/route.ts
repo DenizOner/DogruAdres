@@ -37,12 +37,15 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
       if(!prepared||prepared.auth_identity_id!==session.auth_identity_id)
         return res.status(403).json({message:"Recent MFA proof and permitted policy required"})
       res.clearCookie("da_session",{path:"/"})
-      nativeAttempted=true
-      const factor=await auth.disableAuthMfa({id:factors[0].id,method:parsed.data.method,code:parsed.data.code})
-      if(factor.id!==factors[0].id||factor.auth_identity_id!==prepared.auth_identity_id||factor.status!=="disabled")
-        throw Error("Native disable result unavailable")
-      await service.personalRecordPreparedNativeMfaDisable(prepared)
-      return res.json({disabled:true,sessions_revoked:true})
+      const completed=await service.personalCompletePreparedNativeMfaDisable(prepared,async identityId=>{
+        nativeAttempted=true
+        const factor=await auth.disableAuthMfa({id:factors[0].id,method:parsed.data.method,code:parsed.data.code})
+        if(factor.id!==factors[0].id||factor.auth_identity_id!==identityId||factor.status!=="disabled")
+          throw Error("Native disable result unavailable")
+        return {disabled:true}
+      })
+      if(!completed)return res.status(409).json({message:"MFA policy changed; native factor remains enabled"})
+      return res.json({...completed as object,sessions_revoked:true})
     }catch{
       return res.status(503).json({message:nativeAttempted?
         "INDETERMINATE: native operation may have persisted; do not retry; reconciliation required":
