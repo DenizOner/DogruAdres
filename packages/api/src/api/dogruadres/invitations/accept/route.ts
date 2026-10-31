@@ -5,12 +5,16 @@ import type { AcceptInvitationBody } from "../../validators"
 import { acceptInvitationWorkflow } from "../../../../workflows/dogruadres-access/accept-invitation"
 import { normalizeEmail, verifiedEmailForActor } from "../../../../modules/dogruadres-access/security"
 
-const verifiedEmailFor = async (req: AuthenticatedMedusaRequest) => {
-  const claimedEmail = req.auth_context.user_metadata?.email
-  const identityId = req.auth_context.auth_identity_id
-  const authProvider = req.auth_context.auth_provider
-  const actorType = req.auth_context.actor_type
-  const actorId = req.auth_context.actor_id
+/** Reusable server-owned actor proof; no email or actor selector is accepted from a body. */
+export const verifiedEmailForActorContext = async (
+  req: Pick<AuthenticatedMedusaRequest, "scope">,
+  context: Pick<AuthenticatedMedusaRequest["auth_context"], "user_metadata" | "auth_identity_id" | "auth_provider" | "actor_type" | "actor_id">
+) => {
+  const claimedEmail = context.user_metadata?.email
+  const identityId = context.auth_identity_id
+  const authProvider = context.auth_provider
+  const actorType = context.actor_type
+  const actorId = context.actor_id
   if (!identityId || !authProvider || !actorId || !["user", "member", "customer"].includes(actorType)) return null
   // Normal emailpass JWTs do not include an email claim. Resolve the actual
   // authenticated actor on the server rather than accepting a client email.
@@ -34,8 +38,8 @@ const verifiedEmailFor = async (req: AuthenticatedMedusaRequest) => {
   // would discard valid case/whitespace variants before the proof is checked.
   // Read all email proofs for this identity, rather than a default first page.
   return verifiedEmailForActor({
-    actorType: req.auth_context.actor_type,
-    actorId: req.auth_context.actor_id,
+    actorType: context.actor_type,
+    actorId: context.actor_id,
     authIdentityId: identityId,
     authProvider,
     authenticatedEmail: email,
@@ -43,6 +47,9 @@ const verifiedEmailFor = async (req: AuthenticatedMedusaRequest) => {
     verifications,
   })
 }
+
+export const verifiedEmailFor = (req: AuthenticatedMedusaRequest) =>
+  verifiedEmailForActorContext(req, req.auth_context)
 
 export const POST = async (req: AuthenticatedMedusaRequest<AcceptInvitationBody>, res: MedusaResponse) => {
   const email = await verifiedEmailFor(req)

@@ -1,3 +1,6 @@
+﻿import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
+import type { OutboxClaim, DeliveryErrorCode } from "./audit-delivery-policy"
+import { hasRecentMfaProof } from "./mfa-management"
 import {
   InjectTransactionManager,
   MedusaContext,
@@ -6,9 +9,26 @@ import {
 } from "@medusajs/framework/utils"
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
-import { ActorMapping, AuditEvent, Invitation, Membership, Organization, Person } from "./models"
-import { randomBytes } from "node:crypto"
+import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
+import { IdentitySessions, securitySql, isCurrentProtectedOwner, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced } from "./identity-session"
+import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
+import { MfaEnrollmentTickets } from "./mfa-enrollment-ticket"
+import { resolveMfaPolicy, type MfaPlatformMode } from "./mfa-policy"
+import { generateJwtToken } from "@medusajs/framework/utils"
+import { ActorDelegation } from './actor-delegation'
+import {AccountLinking,type VerifiedSecondary} from './account-linking'
+import {
+  PlatformSmtpPersistence,
+  type UpdateSmtpSettingsInput,
+  type SmtpAuditActor,
+} from "./smtp-settings"
+import { sendSmtpEmail } from "./smtp-client"
+import { PersonalNotifications } from "./personal-notifications"
+import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
+import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
+import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -16,6 +36,7 @@ type ProvisionOrganizationInput = Readonly<{
   name: string
   provisioned_by: ActorReference
   initial_owners: ActorReference[]
+  staff_grant_id?: string
 }>
 
 type ChangeMembershipInput = Readonly<{
@@ -28,13 +49,28 @@ type ChangeMembershipInput = Readonly<{
   actor_id: string
 }>
 
+type FoundationAuditInput = {
+  actor_person_id: string
+  actor_type: string
+  actor_id: string
+  role_context?: string | null
+  organization_id?: string | null
+  action: string
+  module: string
+  resource: string
+  target_id?: string | null
+  previous_values?: Record<string, unknown> | null
+  new_values?: Record<string, unknown> | null
+  occurred_at: Date
+}
+
 type AdvisoryLockManager = Readonly<{
   execute: (query: string, parameters: string[]) => Promise<unknown>
 }>
 
 const activeStatus = "active"
 const supportedActorTypes = new Set(["user", "member", "customer"])
-export const DOGRUADRES_AUDIT_MODULE = "dogruadres-access"
+export const DOGRUADRES_AUDIT_MODULE: "dogruadres-access" = "dogruadres-access"
 
 export default class DogruAdresAccessModuleService extends MedusaService({
   Person,
@@ -43,7 +79,611 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   Membership,
   Invitation,
   AuditEvent,
+  AuditOutbox,
 }) {
+  private async persistAuditEventsWithOutbox_(input: FoundationAuditInput[], sharedContext: Context) {
+    // No decorator here: the five mutation entrypoints already own the physical
+    // module transaction. Refuse accidental use without that active manager.
+    if (!sharedContext.transactionManager || !input.length || input.some(event => event.module !== DOGRUADRES_AUDIT_MODULE)) {
+      throw new Error("Foundation audit/outbox persistence requires an active transaction and Foundation events")
+    }
+    const events = await this.createAuditEvents(input, sharedContext)
+    if (events.length !== input.length || new Set(events.map(event => event.id)).size !== input.length) {
+      throw new Error("Canonical audit cardinality mismatch")
+    }
+    const outbox = await this.createAuditOutboxes(events.map(event => {
+      if (!event.id || event.module !== DOGRUADRES_AUDIT_MODULE) throw new Error("Invalid canonical Foundation audit identity")
+      return {
+        source_audit_event_id: event.id,
+        source_module: DOGRUADRES_AUDIT_MODULE,
+        envelope_version: 1,
+        status: "pending" as const,
+        // Explicit allowlist. No before/after payload, recipient email, token or
+        // credentials; use only the actual persisted canonical audit identifiers.
+        envelope: {
+          version: 1,
+          source_module: DOGRUADRES_AUDIT_MODULE,
+          source_audit_event_id: event.id,
+          organization_id: event.organization_id ?? null,
+          actor: {
+            person_id: event.actor_person_id,
+            type: event.actor_type,
+            id: event.actor_id,
+            role_context: event.role_context ?? null,
+          },
+          action: event.action,
+          resource: event.resource,
+          target_id: event.target_id ?? null,
+          occurred_at: new Date(event.occurred_at).toISOString(),
+        },
+      }
+    }), sharedContext)
+    const sourceIds = new Set(events.map(event => event.id))
+    if (outbox.length !== events.length || new Set(outbox.map(row => row.source_audit_event_id)).size !== events.length ||
+        outbox.some(row => row.source_module !== DOGRUADRES_AUDIT_MODULE || !sourceIds.has(row.source_audit_event_id))) {
+      throw new Error("Foundation audit/outbox cardinality mismatch")
+    }
+    // All errors escape the enclosing transaction; no network publish, independent
+    // transaction or workflow compensation substitutes for rollback here.
+    return events
+  }
+
+  // Every operation owns a short Foundation transaction. No Index call occurs
+  // while a Foundation row lock/EntityManager is held across module boundaries.
+  @InjectTransactionManager()
+  async claimFoundationAuditOutbox(@MedusaContext() context: Context = {}) {
+    return claimAuditDelivery(this.auditDeliveryManager_(context))
+  }
+  @InjectTransactionManager()
+  async readClaimedFoundationAudit(claim: OutboxClaim, @MedusaContext() context: Context = {}) {
+    return loadClaimedAuditEvent(this.auditDeliveryManager_(context), claim)
+  }
+  @InjectTransactionManager()
+  async acknowledgeFoundationAudit(claim: OutboxClaim, @MedusaContext() context: Context = {}) {
+    return acknowledgeAuditDelivery(this.auditDeliveryManager_(context), claim)
+  }
+  @InjectTransactionManager()
+  async deferFoundationAudit(claim: OutboxClaim, code: DeliveryErrorCode, @MedusaContext() context: Context = {}) {
+    return deferAuditDelivery(this.auditDeliveryManager_(context), claim, code)
+  }
+  @InjectTransactionManager()
+  async quarantineFoundationAudit(claim: OutboxClaim, code: DeliveryErrorCode, @MedusaContext() context: Context = {}) {
+    return quarantineAuditDelivery(this.auditDeliveryManager_(context), claim, code)
+  }
+  private auditDeliveryManager_(context: Context): DeliveryManager {
+    if (!context.transactionManager) throw new Error("FOUNDATION_DELIVERY_TRANSACTION_REQUIRED")
+    return context.transactionManager as unknown as DeliveryManager
+  }
+
+
+  @InjectTransactionManager()
+  async personalLinkPrimary(token:string,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).primary(token)}
+  @InjectTransactionManager()
+  async beginActorLink(token:string,proof:VerifiedSecondary,challenge:string|null,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).begin(token,proof,challenge)}
+  @InjectTransactionManager()
+  async readActorLink(token:string,intent:string,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).read(token,intent)}
+  @InjectTransactionManager()
+  async completeActorLink(token:string,intent:string,proof:VerifiedSecondary,challenge:string|null,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).complete(token,intent,proof,challenge)}
+  @InjectTransactionManager()
+  async unlinkActor(token:string,id:string,@MedusaContext() context:Context={}) {return new AccountLinking(securitySql(context.transactionManager)).unlink(token,id)}
+  @InjectTransactionManager()
+  async personalActorLinks(token:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager),s=await new IdentitySessions(sql).current(token)
+    if(!s)return null // Preserve terminal expiry when returning denial.
+    return sql.execute(`select id,actor_type,actor_id,revoked_at from da_verified_actor_binding where person_id=? order by verified_at`,[s.person_id])
+  }
+  @InjectTransactionManager()
+  async personalActorBinding(token:string,type:string,@MedusaContext() context:Context={}) {
+    const result=await new ActorDelegation(securitySql(context.transactionManager)).binding(token,type)
+    return result?.binding??null
+  }
+  @InjectTransactionManager()
+  async personalActorCredential(token:string,type:string,identity:{id:string;app_metadata?:Record<string,unknown>},http:Parameters<typeof generateJwtToken>[1],@MedusaContext() context:Context={}) {
+    return new ActorDelegation(securitySql(context.transactionManager)).credential(token,type,identity,http)
+  }
+  @InjectTransactionManager()
+  async personalMemberships(token:string,org:string,@MedusaContext() context:Context={}) {
+    const decision=await new IdentitySessions(securitySql(context.transactionManager)).organizations(token,org)
+    if(!decision||!['owner','admin'].includes(decision.organizations[0].role))throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
+    return this.listMemberships({organization_id:org,status:'active'},{select:['id','person_id','role','status','protected_owner']},context)
+  }
+  @InjectTransactionManager()
+  async personalRevokeMembership(token:string,org:string,membership:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`,[org])
+    const sessions=new IdentitySessions(sql),identity=await sessions.current(token,true)
+    const decision=identity?await sessions.organizations(token,org):null
+    if(!identity||!decision||!['owner','admin'].includes(decision.organizations[0].role))throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
+    const result=await this.changeMembership({organization_id:org,membership_id:membership,actor_person_id:identity.person_id,actor_type:identity.actor_type,actor_id:identity.actor_id,status:'revoked'},context)
+    return {id:result.id,status:result.status}
+  }
+  @InjectTransactionManager()
+  async personalChangeMembershipRole(token:string,org:string,membership:string,role:'member'|'admin',@MedusaContext() context:Context={}) {
+    if(role!=='member'&&role!=='admin')throw new MedusaError(MedusaError.Types.INVALID_DATA,'Invalid role')
+    const sql=securitySql(context.transactionManager)
+    await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`,[org])
+    const sessions=new IdentitySessions(sql),identity=await sessions.current(token,true)
+    const decision=identity?await sessions.organizations(token,org):null
+    if(!identity||!decision||!['owner','admin'].includes(decision.organizations[0].role))throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
+    const target=await this.getMembershipInOrganization(membership,org,context)
+    if(!target)throw new MedusaError(MedusaError.Types.NOT_FOUND,'Membership not found in the selected Organization')
+    if(target.protected_owner||target.role==='owner')throw new MedusaError(MedusaError.Types.FORBIDDEN,'Protected Owner cannot be changed through ordinary role controls')
+    const result=await this.changeMembership({
+      organization_id:org,
+      membership_id:membership,
+      actor_person_id:identity.person_id,
+      actor_type:identity.actor_type,
+      actor_id:identity.actor_id,
+      role
+    },context)
+    return {id:result.id,role:result.role,status:result.status}
+  }
+
+  /**
+   * B07: an existing active member can become a protected Owner, and an
+   * existing protected Owner can return to Admin only when another protected
+   * Owner remains. All invariant checks and audit/outbox writes remain in the
+   * existing transaction-bound changeMembership implementation.
+   */
+  @InjectTransactionManager()
+  async personalManageProtectedOwner(
+    token: string,
+    org: string,
+    membership: string,
+    role: 'owner' | 'admin',
+    @MedusaContext() context: Context = {}
+  ) {
+    if (role !== 'owner' && role !== 'admin') {
+      throw new MedusaError(MedusaError.Types.INVALID_DATA, 'Invalid Owner operation')
+    }
+    const sql = securitySql(context.transactionManager)
+    await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`, [org])
+    const sessions = new IdentitySessions(sql)
+    const identity = await sessions.current(token, true)
+    const decision = identity ? await sessions.organizations(token, org) : null
+    if (!identity || decision?.organizations[0]?.role !== 'owner') {
+      throw new MedusaError(MedusaError.Types.FORBIDDEN, 'Access denied')
+    }
+    const target = await this.getMembershipInOrganization(membership, org, context)
+    if (!target) {
+      throw new MedusaError(MedusaError.Types.NOT_FOUND, 'Membership not found in the selected Organization')
+    }
+    // Explicit B07 operation states, not a backdoor to revoked membership
+    // reactivation or ordinary B06 role controls.
+    if (target.status !== 'active' ||
+        (role === 'owner' && (target.protected_owner || target.role === 'owner')) ||
+        (role === 'admin' && (!target.protected_owner || target.role !== 'owner'))) {
+      throw new MedusaError(MedusaError.Types.FORBIDDEN, 'Owner operation denied')
+    }
+    const result = await this.changeMembership({
+      organization_id: org,
+      membership_id: membership,
+      actor_person_id: identity.person_id,
+      actor_type: identity.actor_type,
+      actor_id: identity.actor_id,
+      role,
+    }, context)
+    return { id: result.id, role: result.role, status: result.status, protected_owner: result.protected_owner }
+  }
+
+  @InjectTransactionManager()
+  async personalMachineGrant(apiKeyId:string,method:string,resource:string,@MedusaContext() context:Context={}) {
+    const rows=await securitySql(context.transactionManager).execute(`select id from da_machine_grant where api_key_id=? and method=? and resource=? and revoked_at is null`,[apiKeyId,method,resource])
+    return rows.length===1
+  }
+  @InjectTransactionManager()
+  async renewPersonalNativeCredential(token:string,identity:{id:string;app_metadata?:Record<string,unknown>},http:Parameters<typeof generateJwtToken>[1],@MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).renewNative(token,identity,http)
+  }
+  @InjectTransactionManager()
+  async personalNativeCredential(hash:string,@MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).native(hash)
+  }
+  @InjectTransactionManager()
+  async personalLoginAttempt(subjectHash:string, addressHash:string, @MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    // Fixed server-owned engineering abuse limits, never an authorization grant.
+    for(const [bucket,maximum] of [["subject:"+subjectHash,10],["address:"+addressHash,60]] as const){
+      const [row]=await sql.execute(`insert into da_login_attempt(bucket,minute,attempts)
+        values (?,floor(extract(epoch from clock_timestamp())/60),1)
+        on conflict(bucket,minute) do update set attempts=da_login_attempt.attempts+1 returning attempts`,[bucket])
+      if(!row || row.attempts>maximum)return false
+    }
+    return true
+  }
+  @InjectTransactionManager()
+  async pendingPersonalChallenge(authId:string, challengeId:string, @MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).pending(authId,challengeId)
+  }
+  @InjectTransactionManager()
+  async readPersonalChallenge(token:string, @MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).challenge(token)
+  }
+  @InjectTransactionManager()
+  async completePersonalChallenge(token:string, completedAt:Date, @MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).complete(token,completedAt)
+  }
+  @InjectTransactionManager()
+  async openPersonalSession(
+    authIdentityId: string,
+    purpose:BrowserMfaPurpose="legacy",
+    expectedRevision?:Readonly<{platform:number;person:number}>,
+    @MedusaContext() context: Context = {}
+  ) {
+    return new IdentitySessions(securitySql(context.transactionManager))
+      .create(authIdentityId,null,purpose,expectedRevision)
+  }
+  @InjectTransactionManager()
+  async personalMfaRuntimeActivation(@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    const rows=await sql.execute(`select
+      coalesce(to_jsonb(q)->>'mfa_activated','false') as mfa_activated
+      from da_session_policy q where q.id='current' for share`)
+    if(rows.length!==1||!["true","false"].includes(rows[0].mfa_activated))
+      throw new IdentityAccessDenied()
+    return rows[0].mfa_activated==="true"
+  }
+
+  @InjectTransactionManager()
+  async personalLoginMfaDecision(
+    authIdentityId:string,
+    nativeFactorState:"enabled"|"pending"|"not_enrolled",
+    @MedusaContext() context: Context = {}) {
+    if(!mfaRuntimeEnforced())throw new IdentityAccessDenied()
+    const sql=securitySql(context.transactionManager)
+    const bindings=await sql.execute(`select b.person_id from da_login_binding b
+      join da_person p on p.id=b.person_id and p.disabled_at is null and p.deleted_at is null
+      join da_actor_mapping a on a.person_id=p.id and a.actor_type=b.actor_type
+        and a.actor_id=b.actor_id and a.deleted_at is null
+      where b.auth_identity_id=? and b.revoked_at is null and b.verified_at is not null`,
+      [authIdentityId])
+    if(bindings.length!==1)throw new IdentityAccessDenied()
+    const persistence=new MfaPersistence(sql)
+    const [policy,personal]=await Promise.all([
+      persistence.readPlatformPolicy(),persistence.readPersonPreference(bindings[0].person_id),
+    ])
+    if(!["enabled","pending","not_enrolled"].includes(nativeFactorState))
+      throw new IdentityAccessDenied()
+    const decision=resolveMfaPolicy(policy.platform_mode,personal.user_enabled,
+      nativeFactorState==="enabled")
+    // Enabled always needs a completed native challenge, never password-only.
+    if(nativeFactorState==="enabled")throw new IdentityAccessDenied()
+    // Pending factors are not usable for authentication. Give only setup access
+    // so the owner can resume with fresh password proof and existing secret.
+    // Never treat "pending" as a completed, full-strength MFA factor.
+    if(nativeFactorState==="pending" && policy.platform_mode==="disabled")
+      throw new IdentityAccessDenied()
+    return {
+      purpose:(nativeFactorState==="pending"||decision.required?"mfa_enroll":"full") as BrowserMfaPurpose,
+      expectedRevision:{platform:policy.version,person:personal.version},
+    }
+  }
+  @InjectTransactionManager()
+  async personalEnrollmentSession(token:string,@MedusaContext() context:Context={}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).enrollment(token)
+  }
+  @InjectTransactionManager()
+  async personalEnrollmentMfaSettings(token:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    const s=await new IdentitySessions(sql).enrollment(token)
+    if(!s)return null
+    const store=new MfaPersistence(sql)
+    return {
+      platform:await store.readPlatformPolicy(),
+      personal:await store.readPersonPreference(s.person_id),
+    }
+  }
+
+  @InjectTransactionManager()
+  async personalSession(token: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).current(token)
+  }
+
+  @InjectTransactionManager()
+  async closePersonalSession(token: string, all: boolean, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).logout(token, all)
+  }
+
+  @InjectTransactionManager()
+  async lockPersonalSession(token: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).logout(token, false, true)
+  }
+
+  @InjectTransactionManager()
+  async personalNotifications(token: string, offset: number, organization?: string, @MedusaContext() context: Context = {}) {
+    return new PersonalNotifications(securitySql(context.transactionManager)).list(token, offset, organization)
+  }
+
+  @InjectTransactionManager()
+  async readPersonalNotification(token: string, id: string, organization?: string, @MedusaContext() context: Context = {}) {
+    return new PersonalNotifications(securitySql(context.transactionManager)).read(token, id, organization)
+  }
+
+  @InjectTransactionManager()
+  async personalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId)
+  }
+
+  // Background privacy checks must not extend the user's idle session.
+  @InjectTransactionManager()
+  async observePersonalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId, false)
+  }
+
+  @InjectTransactionManager()
+  async personalStaff(token: string, task: string, resource: string, @MedusaContext() context: Context = {}) {
+    return new IdentitySessions(securitySql(context.transactionManager)).staff(token, task, resource)
+  }
+
+  /**
+   * Settings are always scoped to the current canonical Person. No Person or
+   * native actor selector is accepted from the client.
+   * This source path remains unreachable until MFA settings ingress is enabled.
+   */
+  /** These internal helpers never accept client Person or actor selectors. */
+  @InjectTransactionManager()
+  async personalBeginMfaEnrollment(token:string,authIdentityId:string,factorId:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    // Session/Person lock comes FIRST, matching staff policy-change lock order.
+    // Taking the platform advisory lock first could deadlock against a staff
+    // update that already holds this same browser session lock.
+    if(!await new IdentitySessions(sql).enrollment(token))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).beginAfterPasswordProof(token,authIdentityId,factorId)
+  }
+
+  @InjectTransactionManager()
+  async personalRevokePendingMfaEnrollment(token:string,factorId:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    if(!await new IdentitySessions(sql).enrollment(token))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).revokePendingFactor(token,factorId)
+  }
+
+  @InjectTransactionManager()
+  async personalClaimMfaVerification(token:string,ticket:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    // Session/Person lock comes FIRST, matching staff policy-change lock order.
+    // Taking the platform advisory lock first could deadlock against a staff
+    // update that already holds this same browser session lock.
+    if(!await new IdentitySessions(sql).enrollment(token))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).claimVerificationAttempt(token,ticket)
+  }
+
+  @InjectTransactionManager()
+  async personalCompleteMfaEnrollment(token:string,ticket:string,factorId:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    // Session/Person lock comes FIRST, matching staff policy-change lock order.
+    // Taking the platform advisory lock first could deadlock against a staff
+    // update that already holds this same browser session lock.
+    if(!await new IdentitySessions(sql).enrollment(token))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    if((await new MfaPersistence(sql).readPlatformPolicy()).platform_mode==="disabled")return null
+    return new MfaEnrollmentTickets(sql).completeAfterNativeVerification(token,ticket,factorId,new Date())
+  }
+
+  @InjectTransactionManager()
+  async personalMfaSettings(token: string, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const session = await sessions.current(token)
+    if (!session) return null
+    const store = new MfaPersistence(sql)
+    const platform = await store.readPlatformPolicy()
+    const personal = await store.readPersonPreference(session.person_id)
+    const platformGrant = await sessions.staff(token, "security.mfa.manage", "platform")
+    return {
+      platform, personal,
+      can_manage_platform: !!platformGrant,
+      // Exact AuthIdentity native factor status is NOT inferred from preference.
+      native_factor_state: "unverified" as const,
+    }
+  }
+
+  @InjectTransactionManager()
+  async personalSetMfaPreference(token: string, enabled: boolean, expectedVersion: number, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const session = await sessions.current(token, true)
+    if (!session) return null
+    const store = new MfaPersistence(sql)
+    const policy = await store.readPlatformPolicy()
+    if (policy.platform_mode !== "optional") return null
+    const actor: MfaAuditActor = {
+      person_id: session.person_id,
+      actor_type: session.actor_type as MfaAuditActor["actor_type"],
+      actor_id: session.actor_id,
+    }
+    return store.setPersonPreference(session.person_id, enabled, expectedVersion, actor)
+  }
+
+  /** Recovery codes are audited in their Foundation transaction. Native
+   * factor disable is only reachable after separate committed revocation. */
+  @InjectTransactionManager()
+  async personalManageNativeMfa(token:string,action:"recovery_codes"|"disable",operation:(identityId:string)=>Promise<unknown>,@MedusaContext() context:Context={}) {
+    if(action!=="recovery_codes")return null // Closed obsolete pre-commit disable path.
+    const sql=securitySql(context.transactionManager),sessions=new IdentitySessions(sql)
+    const session=await sessions.current(token,true)
+    if(!session)return null
+    const [limits]=await sql.execute("select recent_auth_seconds from da_session_policy where id='current'")
+    if(!hasRecentMfaProof(session,limits?.recent_auth_seconds))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    const store=new MfaPersistence(sql)
+    await store.readPlatformPolicy()
+    const actor={person_id:session.person_id,actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id}
+    const result=await operation(session.auth_identity_id)
+    await store.recordNativeMfaAction(actor,"mfa.recovery_codes_generated")
+    return {result,sessions_revoked:false}
+  }
+
+  /** Foundation revocation and mandatory audit/outbox COMMIT before native
+   * factor disable. Failure leaves the native factor unchanged and the
+   * strongly-authenticated browser session in its original state. */
+  @InjectTransactionManager()
+  async personalPrepareNativeMfaDisable(token:string,@MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager),sessions=new IdentitySessions(sql)
+    const session=await sessions.current(token,true)
+    if(!session)return null
+    const [limits]=await sql.execute("select recent_auth_seconds from da_session_policy where id='current'")
+    if(!hasRecentMfaProof(session,limits?.recent_auth_seconds))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    const store=new MfaPersistence(sql),policy=await store.readPlatformPolicy()
+    if(policy.platform_mode==="required")return null
+    const personal=await store.readPersonPreference(session.person_id)
+    await sessions.logout(token,true)
+    // Optional preference is a separate audited Foundation row in this same
+    // precommit. In disabled mode the saved preference must be preserved.
+    if(policy.platform_mode==="optional"&&personal.user_enabled)
+      await store.setPersonPreference(session.person_id,false,personal.version,{
+        person_id:session.person_id,actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id
+      })
+    return {session_id:session.id,person_id:session.person_id,auth_identity_id:session.auth_identity_id,
+      actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id}
+  }
+
+  /** A second Foundation transaction holds the SAME policy advisory lock
+   * as setPlatformPolicy across the native Medusa operation. The first
+   * committed Person session/epoch revocation can never be rolled back
+   * by a native write or completion-audit failure. */
+  @InjectTransactionManager()
+  async personalCompletePreparedNativeMfaDisable(
+    prepared:Readonly<{session_id:string;person_id:string;auth_identity_id:string;actor_type:MfaAuditActor["actor_type"];actor_id:string}>,
+    operation:(identityId:string)=>Promise<unknown>,
+    @MedusaContext() context:Context={}
+  ) {
+    const sql=securitySql(context.transactionManager)
+    // Lock the Person epoch BEFORE the shared policy lock, matching session
+    // creation and staff policy updates. A concurrent full login may commit
+    // after preparation but not during native completion.
+    const security=await sql.execute(
+      "select epoch from da_person_security where person_id=? for update",
+      [prepared.person_id])
+    if(security.length!==1)throw new IdentityAccessDenied()
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    const store=new MfaPersistence(sql),policy=await store.readPlatformPolicy()
+    if(policy.platform_mode==="required")return null
+    const rows=await sql.execute("select s.id from da_browser_session s join da_person_security e on e.person_id=s.person_id where s.id=? and s.person_id=? and s.auth_identity_id=? and s.actor_type=? and s.actor_id=? and s.status='revoked' and e.epoch>s.epoch",
+      [prepared.session_id,prepared.person_id,prepared.auth_identity_id,prepared.actor_type,prepared.actor_id])
+    if(rows.length!==1)throw new IdentityAccessDenied()
+    // If another session was minted after precommit, do NOT disable the native
+    // factor and leave that freshly authenticated browser alive. The Person
+    // row lock above prevents a further session from racing past this check.
+    const newer=await sql.execute(
+      "select id from da_browser_session where person_id=? and status='active' and epoch=? limit 1",
+      [prepared.person_id,security[0].epoch])
+    if(newer.length)return null
+    const result=await operation(prepared.auth_identity_id)
+    await store.recordNativeMfaAction({
+      person_id:prepared.person_id,actor_type:prepared.actor_type,actor_id:prepared.actor_id
+    },"mfa.native_factor_disabled")
+    return result
+  }
+
+  @InjectTransactionManager()
+  async personalSetPlatformMfaMode(token: string, mode: MfaPlatformMode, expectedVersion: number, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const staff = await new IdentitySessions(sql).staff(token, "security.mfa.manage", "platform")
+    if (!staff) return null
+    const actor: MfaAuditActor = {
+      person_id: staff.person_id,
+      actor_type: staff.actor_type as MfaAuditActor["actor_type"],
+      actor_id: staff.actor_id,
+    }
+    return new MfaPersistence(sql).setPlatformPolicy(mode, expectedVersion, actor)
+  }
+
+  @InjectTransactionManager()
+  async provisionPersonalOrganization(token: string, input: Omit<ProvisionOrganizationInput,"provisioned_by">, @MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(sql).staff(token,"organization.provision","platform")
+    if(!staff)throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
+
+    for (const owner of input.initial_owners) {
+      if (!supportedActorTypes.has(owner?.actor_type) || !owner?.actor_id) {
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+      }
+    }
+
+    // Deterministic advisory lock ordering matching AccountLinking (da-actor-link)
+    // to serialize against concurrent linking/unlinking without deadlock.
+    const actorLinkKeys = [...new Set(input.initial_owners.map(o => `${o.actor_type}:${o.actor_id}`))].sort()
+    for (const key of actorLinkKeys) {
+      await sql.execute(`select pg_advisory_xact_lock(hashtext('da-actor-link'), hashtext(?))`, [key])
+    }
+
+    const ownerPersonIds = new Set<string>()
+    for (const owner of input.initial_owners) {
+      // Step A: Inspect all active verified proofs with row-level shared locks.
+      // Do not join with da_actor_mapping or da_person yet to avoid masking conflicting proofs.
+      const loginProofs = await sql.execute(
+        `select person_id from da_login_binding
+         where actor_type=? and actor_id=? and verified_at is not null and revoked_at is null
+         for share`,
+        [owner.actor_type, owner.actor_id]
+      )
+      const secondaryProofs = await sql.execute(
+        `select person_id from da_verified_actor_binding
+         where actor_type=? and actor_id=? and verified_at is not null and revoked_at is null
+         for share`,
+        [owner.actor_type, owner.actor_id]
+      )
+
+      const proofRows = [...loginProofs, ...secondaryProofs]
+      if (proofRows.length === 0) {
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+      }
+
+      const distinctProofPersonIds = [...new Set(proofRows.map((r: any) => r.person_id))]
+      if (distinctProofPersonIds.length !== 1) {
+        // Conflicting active proofs pointing to multiple distinct Persons
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+      }
+      const verifiedPersonId = distinctProofPersonIds[0]
+
+      // Step B: Ensure active actor mapping exists and agrees with the verified Person.
+      const mappings = await sql.execute(
+        `select person_id, deleted_at from da_actor_mapping
+         where actor_type=? and actor_id=?
+         for share`,
+        [owner.actor_type, owner.actor_id]
+      )
+      if (mappings.length !== 1 || mappings[0].deleted_at !== null || mappings[0].person_id !== verifiedPersonId) {
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+      }
+
+      // Step C: Ensure the canonical Person is active (not disabled or deleted).
+      const people = await sql.execute(
+        `select id, disabled_at, deleted_at from da_person
+         where id=?
+         for share`,
+        [verifiedPersonId]
+      )
+      if (people.length !== 1 || people[0].disabled_at !== null || people[0].deleted_at !== null) {
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
+      }
+
+      ownerPersonIds.add(verifiedPersonId)
+    }
+
+    if (ownerPersonIds.size !== input.initial_owners.length) {
+      throw new MedusaError(MedusaError.Types.INVALID_DATA, "Initial Owners must be distinct canonical Persons")
+    }
+    const result=await this.provisionOrganization({...input,staff_grant_id:staff.grant_id,provisioned_by:{actor_type:staff.actor_type,actor_id:staff.actor_id}},context)
+    // Generated MedusaService writes may still be pending in this transaction's
+    // identity map. Flush before the raw SELECT/FK insert; commit stays owned here.
+    const manager=context.transactionManager
+    if(!manager || typeof manager!=="object" || !("flush" in manager) || typeof manager.flush!=="function")throw new Error("Foundation transaction manager unavailable")
+    await manager.flush()
+    await sql.execute(`insert into da_security_outbox(id,audit_event_id,created_at)
+      select 'security_'||id,id,clock_timestamp() from da_audit_event where organization_id=?
+      and action in ('organization.provisioned','organization.owner_assigned') on conflict(audit_event_id) do nothing`,[result.organization.id])
+    return result
+  }
+
   private async ensureActorPerson_(
     actor: ActorReference,
     createdBy: ActorReference,
@@ -200,31 +840,32 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       })),
       sharedContext
     )
-    await this.createAuditEvents([
+    await this.persistAuditEventsWithOutbox_([
       {
         actor_id: input.provisioned_by.actor_id,
         actor_type: input.provisioned_by.actor_type,
         actor_person_id: provisioner.id,
-        role_context: "platform_administrator",
+        role_context: input.staff_grant_id ? "platform_staff" : "platform_administrator",
         organization_id: organization.id,
         action: "organization.provisioned",
         module: DOGRUADRES_AUDIT_MODULE,
         resource: "organization",
         target_id: organization.id,
-        new_values: { name: organization.name, initial_owner_count: memberships.length },
+        new_values: { name: organization.name, initial_owner_count: memberships.length, ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:"organization.provision",staff_resource:"platform"}:{}) },
         occurred_at: new Date(),
       },
       ...memberships.map((membership, index) => ({
         actor_id: input.provisioned_by.actor_id,
         actor_type: input.provisioned_by.actor_type,
         actor_person_id: provisioner.id,
-        role_context: "platform_administrator",
+        role_context: input.staff_grant_id ? "platform_staff" : "platform_administrator",
         organization_id: organization.id,
         action: "organization.owner_assigned",
         module: DOGRUADRES_AUDIT_MODULE,
         resource: "membership",
         target_id: membership.id,
-        new_values: { role: "owner", protected_owner: true, person_id: owners[index].id },
+        new_values: { role: "owner", protected_owner: true, person_id: owners[index].id,
+          ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:"organization.provision",staff_resource:"platform"}:{}) },
         occurred_at: new Date(),
       })),
     ], sharedContext)
@@ -281,7 +922,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       protected_owner: nextRole === "owner" && nextStatus === "active",
       revoked_at: nextStatus === "revoked" ? new Date() : null,
     }, sharedContext)
-    await this.createAuditEvents([{
+    const [membershipAudit] = await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor_id,
       actor_type: input.actor_type,
       actor_person_id: input.actor_person_id,
@@ -295,6 +936,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       new_values: { role: nextRole, status: nextStatus, protected_owner: nextRole === "owner" && nextStatus === "active" },
       occurred_at: new Date(),
     }], sharedContext)
+    const auditManager=sharedContext.transactionManager as {flush():Promise<void>}
+    await auditManager.flush()
+    await securitySql(sharedContext.transactionManager).execute(`insert into da_security_outbox(id,audit_event_id,created_at) values(?,?,clock_timestamp())`,['security_'+membershipAudit.id,membershipAudit.id])
     return updated
   }
 
@@ -313,6 +957,34 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const recipient = normalizeEmail(input.email)
     if (!recipient || !recipient.includes("@")) throw new MedusaError(MedusaError.Types.INVALID_DATA, "A valid recipient email is required")
 
+    // Serialize invitations for the same recipient/organization within this transaction.
+    // Reuse a valid pending invitation on resend: revoking it before a new record or
+    // email exists can strand the intended recipient when either operation fails.
+    const transactionManager = sharedContext.transactionManager as AdvisoryLockManager | undefined
+    if (!transactionManager) throw new Error("Invitation creation requires an active database transaction")
+    await transactionManager.execute(
+      "SELECT pg_advisory_xact_lock(hashtext('dogruadres-invite-recipient'), hashtext(?))",
+      [JSON.stringify([organization.id, recipient])]
+    )
+    const pending = await this.listInvitations({
+      organization_id: organization.id,
+      recipient_email: recipient,
+      status: "pending",
+    }, { take: 100 }, sharedContext)
+    if (pending.length >= 100) throw new Error("Invitation state requires authorized review")
+    const active = pending.filter((item) => item.expires_at.getTime() > Date.now())
+    if (active.length > 1) throw new Error("Multiple active invitations require authorized review")
+    if (active.length === 1) {
+      const existing = active[0]
+      // A secret rotation may have invalidated this deterministic link.
+      // Never report a resend as sent when the stored hash does not match.
+      if (existing.role !== input.role ||
+          !invitationTokenMatches(deriveInvitationToken(existing.id), existing.token_hash)) {
+        throw new Error("Existing invitation cannot be safely resent")
+      }
+      return existing
+    }
+
     // The placeholder is replaced inside this transaction. The plaintext token is
     // derived from the invitation id and is never returned by the workflow step.
     const [invitation] = await this.createInvitations([{
@@ -326,7 +998,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }], sharedContext)
     const token = deriveInvitationToken(invitation.id)
     const updated = await this.updateInvitations({ id: invitation.id, token_hash: hashInvitationToken(token) }, sharedContext)
-    await this.createAuditEvents([{
+    await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor_id,
       actor_type: input.actor_type,
       actor_person_id: input.actor_person_id,
@@ -355,7 +1027,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const current = await this.getInvitationInOrganization(invitation.id, input.organization_id, sharedContext)
     if (!current || current.status !== "pending" || current.expires_at.getTime() <= Date.now()) throw new MedusaError(MedusaError.Types.NOT_FOUND, "Pending invitation not found")
     const updated = await this.updateInvitations({ id: current.id, status: "revoked", revoked_at: new Date() }, sharedContext)
-    await this.createAuditEvents([{
+    await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor_id,
       actor_type: input.actor_type,
       actor_person_id: input.actor_person_id,
@@ -425,7 +1097,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       accepted_at: new Date(),
       accepted_by_person_id: person.id,
     }, sharedContext)
-    await this.createAuditEvents([{
+    await this.persistAuditEventsWithOutbox_([{
       actor_id: input.actor.actor_id,
       actor_type: input.actor.actor_type,
       actor_person_id: person.id,
@@ -439,5 +1111,1264 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       occurred_at: new Date(),
     }], sharedContext)
     return { membership, invitation: accepted }
+  }
+
+  @InjectTransactionManager()
+  async getActiveSmtpConfig(@MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    return new PlatformSmtpPersistence(sql).readSettings(true)
+  }
+
+  @InjectTransactionManager()
+  async personalPlatformSmtpSettings(token: string, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
+    if (!staff) return null
+    const persistence = new PlatformSmtpPersistence(sql)
+    const settings = await persistence.readSettings(false)
+    return {
+      settings,
+      can_manage: true,
+    }
+  }
+
+  @InjectTransactionManager()
+  async personalUpdatePlatformSmtpSettings(
+    token: string,
+    input: UpdateSmtpSettingsInput,
+    @MedusaContext() context: Context = {}
+  ) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
+    if (!staff) return null
+    const actor: SmtpAuditActor = {
+      person_id: staff.person_id,
+      actor_type: staff.actor_type as SmtpAuditActor["actor_type"],
+      actor_id: staff.actor_id,
+    }
+    const persistence = new PlatformSmtpPersistence(sql)
+    return persistence.updateSettings(input, actor)
+  }
+
+  @InjectTransactionManager()
+  async personalTestPlatformSmtpSettings(
+    token: string,
+    targetRecipient: string,
+    candidateSettings?: Partial<UpdateSmtpSettingsInput>,
+    @MedusaContext() context: Context = {}
+  ) {
+    const sql = securitySql(context.transactionManager)
+    const sessions = new IdentitySessions(sql)
+    const staff = await sessions.staff(token, "platform.smtp.manage", "platform")
+    if (!staff) return null
+
+    const persistence = new PlatformSmtpPersistence(sql)
+    const current = await persistence.readSettings(true)
+
+    const testHost = candidateSettings?.host || current.host
+    const testPort = candidateSettings?.port || current.port
+    const testSecurity = candidateSettings?.security || current.security
+    const testUsername = candidateSettings?.username !== undefined ? candidateSettings.username : current.username
+    const testPassword = candidateSettings?.password !== undefined ? candidateSettings.password : current.password
+    const testFromEmail = candidateSettings?.from_email || current.from_email
+    const testFromName = candidateSettings?.from_name !== undefined ? candidateSettings.from_name : current.from_name
+
+    return sendSmtpEmail(
+      {
+        to: targetRecipient,
+        subject: "DogruAdres Platform SMTP Test Mesaji",
+        text: `DogruAdres Platform SMTP Yapilandirma Testi basariyla tamamlandi.\n\nZaman: ${new Date().toISOString()}\nSunucu: ${testHost}:${testPort}`,
+        html: `<div style="font-family:sans-serif;padding:20px;border:1px solid #ddd;border-radius:6px;"><h3>DogruAdres Platform SMTP Test</h3><p>SMTP Yapilandirma Testi basariyla tamamlandi.</p><p><strong>Sunucu:</strong> ${testHost}:${testPort}</p><p><strong>Zaman:</strong> ${new Date().toISOString()}</p></div>`,
+      },
+      {
+        enabled: true,
+        host: testHost,
+        port: testPort,
+        security: testSecurity,
+        username: testUsername || undefined,
+        password: testPassword || undefined,
+        fromEmail: testFromEmail,
+        fromName: testFromName || undefined,
+      }
+    )
+  }
+
+  // B22 initial Store application: Organization Owner creates an application
+  // and a direct Organization reference; only Mercur Admin approves Seller.
+  @InjectTransactionManager()
+  async personalStoreApplications(token:string,org:string,@MedusaContext() context:Context={}){
+    return readStoreApplications(securitySql(context.transactionManager),token,org)
+  }
+
+  /** B22 Owner membership revoke vs native Mercur Seller creation.
+   * The canonical protected Owner membership is held FOR SHARE for the entire
+   * native workflow and Foundation audit completion. The existing separately
+   * committed claim='creating' remains the durable idempotency barrier; do
+   * NOT move it into this outer transaction (crash could allow duplicate Seller).
+   */
+  @InjectTransactionManager()
+  async personalWithStoreApplicationOwnerLock<T>(
+    token:string,input:StoreRequest,execute:(context:Context)=>Promise<T>,
+    @MedusaContext() context:Context={}
+  ):Promise<T|null>{
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^daapp_[0-9a-f]{32}$/.test(input.application_id)||
+       typeof execute!=="function")throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const actor=await eligibleOwner(db,token,input.organization_id)
+    if(!actor)return null
+    // Verify the immutable committed claim, native Member and payload before
+    // touching Mercur. Keep this row stable until the same Foundation manager
+    // completes the Origin/Audit write after native creation.
+    const rows=await db.execute(`select id from da_store_application
+      where id=? and organization_id=? and person_id=?
+        and member_actor_id=? and member_auth_identity_id=?
+        and request_fingerprint=? and status='creating' and seller_id is null
+      for share`,[input.application_id,input.organization_id,actor.person_id,
+        actor.member_id,actor.member_auth_identity_id,storeRequestFingerprint(input)])
+    if(rows.length!==1)return null
+    return execute(context)
+  }
+
+  @InjectTransactionManager()
+  async reserveStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}){
+    const db=securitySql(context.transactionManager),actor=await eligibleOwner(db,token,input.organization_id)
+    if(!actor)return null
+    const fingerprint=storeRequestFingerprint(input)
+    await db.execute(`select pg_advisory_xact_lock(hashtext('b22-store-application'),hashtext(?))`,
+      [input.application_id])
+    const prior=await db.execute(`select * from da_store_application where id=? for update`,[input.application_id])
+    if(prior.length>1)throw new IdentityAccessDenied()
+    if(prior.length){
+      const r=prior[0]
+      if(r.organization_id!==input.organization_id||r.person_id!==actor.person_id||
+         r.member_actor_id!==actor.member_id||r.request_fingerprint!==fingerprint)
+        throw new IdentityAccessDenied()
+      return {status:r.status as string,seller_id:r.seller_id as string|null}
+    }
+    await db.execute(`insert into da_store_application
+      (id,organization_id,person_id,member_actor_id,member_auth_identity_id,request_fingerprint,status)
+      values(?,?,?,?,?,?,'reserved')`,[input.application_id,input.organization_id,actor.person_id,
+      actor.member_id,actor.member_auth_identity_id,fingerprint])
+    return {status:"reserved" as const,seller_id:null}
+  }
+
+  @InjectTransactionManager()
+  async claimStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}){
+    const db=securitySql(context.transactionManager),actor=await eligibleOwner(db,token,input.organization_id)
+    if(!actor)return null
+    const rows=await db.execute(`update da_store_application
+      set status='creating',updated_at=clock_timestamp()
+      where id=? and organization_id=? and person_id=? and member_actor_id=?
+        and member_auth_identity_id=? and request_fingerprint=? and status='reserved'
+      returning member_actor_id,member_auth_identity_id`,[
+      input.application_id,input.organization_id,actor.person_id,actor.member_id,
+      actor.member_auth_identity_id,storeRequestFingerprint(input)])
+    if(rows.length!==1)return null
+    return {member_id:rows[0].member_actor_id as string,
+      member_auth_identity_id:rows[0].member_auth_identity_id as string}
+  }
+
+  @InjectTransactionManager()
+  async finishStoreApplication(token:string,input:StoreRequest,sellerId:string,
+    @MedusaContext() context:Context={}){
+    const db=securitySql(context.transactionManager),actor=await eligibleOwner(db,token,input.organization_id)
+    if(!actor||!/^sel_[A-Za-z0-9_-]+$/.test(sellerId))return null
+    const pending=await db.execute(`select id from da_store_application
+      where id=? and organization_id=? and person_id=? and member_actor_id=?
+        and request_fingerprint=? and status='creating' for update`,[
+      input.application_id,input.organization_id,actor.person_id,actor.member_id,
+      storeRequestFingerprint(input)])
+    if(pending.length!==1)return null
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
+      role_context:"owner",organization_id:input.organization_id,
+      action:"organization.store_application_created",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-application",target_id:sellerId,
+      new_values:{application_id:input.application_id,status:"pending_approval"},
+      occurred_at:new Date()
+    }],context)
+    // The Medusa createAuditEvents/createAuditOutboxes calls stage ORM writes.
+    // Flush on this SAME transaction manager before the raw SQL FK insert;
+    // do not commit or open an independent transaction.
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    await db.execute(`insert into da_organization_seller_ownership
+      (id,organization_id,seller_id,verification_audit_event_id,verified_at)
+      values(?,?,?,?,clock_timestamp())`,[
+      "daown_"+randomUUID(),input.organization_id,sellerId,audit.id])
+    const finish=await db.execute(`update da_store_application set seller_id=?,
+      status='created',updated_at=clock_timestamp()
+      where id=? and status='creating' returning id`,[sellerId,input.application_id])
+    if(finish.length!==1)throw new IdentityAccessDenied()
+    return {seller_id:sellerId}
+  }
+
+  // B22: a separate and explicitly granted platform task reviews only
+  // persisted Owner-submitted applications. This is not native User access,
+  // not an Organization Owner entitlement and not a separate link approval.
+  /** B22: Hold the actual Staff grant row across native Mercur approval.
+   * The same PostgreSQL row is updated by grant revocation, so a committed
+   * revoke cannot race ahead of the native Store opening.
+   * No platform authority is derived from a business Owner role.
+   * This is not a cross-module transaction or general crash-recovery claim.
+   */
+  @InjectTransactionManager()
+  async personalWithStoreApprovalStaffLock<T>(
+    token:string,target:{application_id:string;seller_id:string},
+    execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
+  ):Promise<T|null>{
+    if(!/^daapp_[0-9a-f]{32}$/.test(target.application_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
+       typeof execute!=="function")throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const staff=await sessions.staff(token,"store.approve","platform")
+    if(!staff)return null
+    // Unlike an advisory-only lock, a row SHARE lock also serializes an
+    // ordinary UPDATE ... revoked_at on the canonical staff-grant record.
+    const locked=await db.execute(`select g.id from da_platform_staff_grant g
+      where g.id=? and g.person_id=? and g.task='store.approve'
+        and g.resource='platform' and g.revoked_at is null
+        and (g.expires_at is null or g.expires_at>clock_timestamp())
+      for share of g`,[staff.grant_id,staff.person_id])
+    if(locked.length!==1||locked[0].id!==staff.grant_id)return null
+    const fresh=await sessions.staff(token,"store.approve","platform")
+    if(!fresh||fresh.grant_id!==staff.grant_id)return null
+    const candidate=await this.personalReviewableStoreApplications(token,target,context)
+    if(!candidate||candidate.length!==1)return null
+    return execute(context)
+  }
+
+  @InjectTransactionManager()
+  async personalReviewableStoreApplications(token:string,
+    target?:{application_id:string;seller_id:string},
+    @MedusaContext() context:Context={},
+    page=0) {
+    if(!Number.isSafeInteger(page)||page<0||page>1000)throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
+    if(!staff)return null
+    const rows=await db.execute(`select a.id application_id,a.seller_id,
+        a.organization_id,d.name organization_name
+      from da_store_application a
+      join da_organization d on d.id=a.organization_id
+        and d.status='active' and d.deleted_at is null
+      join da_organization_seller_ownership o on o.organization_id=a.organization_id
+        and o.seller_id=a.seller_id and o.revoked_at is null
+      join da_audit_event e on e.id=o.verification_audit_event_id
+        and e.module='dogruadres-access'
+        and e.action='organization.store_application_created'
+        and e.resource='store-application'
+        and e.actor_person_id=a.person_id
+        and e.organization_id=a.organization_id
+        and e.target_id=a.seller_id
+        and e.new_values->>'application_id'=a.id and e.deleted_at is null
+      where a.status='created' and a.seller_id is not null
+        and exists(select 1 from da_audit_outbox x where
+          x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+          and x.deleted_at is null)
+        ${target?"and a.id=? and a.seller_id=?":""}
+      -- Stable id tie-break and bounded pages expose older pending records.
+      -- Exact-target POST stays independent of list page.
+      order by a.created_at desc,a.id desc limit ${target?1:31} offset ${target?0:page*30}`,
+      target?[target.application_id,target.seller_id]:[])
+    if(!Array.isArray(rows)||rows.length>(target?1:31) ||
+       rows.some(r=>typeof r.application_id!=="string" ||
+         !/^daapp_[0-9a-f]{32}$/.test(r.application_id) ||
+         typeof r.seller_id!=="string" ||
+         !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id) ||
+         typeof r.organization_id!=="string" ||
+         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(r.organization_id) ||
+         typeof r.organization_name!=="string") ||
+       new Set(rows.map(r=>r.seller_id)).size!==rows.length)
+      throw new IdentityAccessDenied()
+    return (target?rows:rows.slice(0,30)) as Array<{application_id:string;seller_id:string;
+      organization_id:string;organization_name:string}>
+  }
+
+  // B22: legal ownership candidates are NOT a grant, and never leave this
+  // module without separately verified live native Seller/Member authority.
+  @InjectTransactionManager()
+  async personalLegalSellerIds(token: string, organizationId: string,
+    @MedusaContext() context: Context = {}) {
+    return authorizedLegalSellerIds(securitySql(context.transactionManager), token, organizationId)
+  }
+
+
+  // B22: Only a currently authenticated Organization Owner may change one
+  // independently assigned products.edit grant for a member of THAT same Org.
+  // Atomic Foundation audit/outbox is authoritative, not Mercur is_owner.
+  // Native Seller status is additionally checked by the public POST adapter.
+  @InjectTransactionManager()
+  async personalChangeStoreProductPermission(
+    token:string,input:{action:"grant"|"revoke";organization_id:string;seller_id:string;membership_id:string},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
+       !["grant","revoke"].includes(input.action))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const owner=await sessions.organizations(token,input.organization_id,false)
+    if(!owner||owner.person_id!==current.person_id||owner.organizations.length!==1||
+       owner.organizations[0].role!=="owner")return null
+    // Serialize with Foundation membership mutations and other grant requests.
+    const issuer=await db.execute(`select id from da_organization_membership
+      where organization_id=? and person_id=? and role='owner'
+        and status='active' and deleted_at is null for share`,
+      [input.organization_id,current.person_id])
+    if(issuer.length!==1)throw new IdentityAccessDenied()
+    const target=await db.execute(`select m.person_id from da_organization_membership m
+      join da_person p on p.id=m.person_id
+      where m.id=? and m.organization_id=? and m.deleted_at is null
+        and p.disabled_at is null and p.deleted_at is null
+        ${input.action==="grant"?"and m.status='active'":""}
+      for share of m,p`,[input.membership_id,input.organization_id])
+    if(target.length!==1||typeof target[0].person_id!=="string"||
+       !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
+    const targetPerson=target[0].person_id as string
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-products-edit'),hashtext(?))`,
+      [input.organization_id+":"+input.seller_id+":"+targetPerson])
+    const active=await db.execute(`select id from da_store_product_permission
+      where person_id=? and organization_id=? and seller_id=?
+        and permission='products.edit' and revoked_at is null for update`,
+      [targetPerson,input.organization_id,input.seller_id])
+    if(active.length>1)throw new IdentityAccessDenied()
+    if(input.action==="grant"){
+      const authorized=await platformApprovedSellerIds(db,input.organization_id)
+      if(!authorized.includes(input.seller_id))return null
+      if(active.length){
+        if(!await verifiedStoreProductEditGrant(db,targetPerson,input.organization_id,input.seller_id))
+          throw new IdentityAccessDenied()
+        return {status:"active" as const,grant_id:active[0].id as string}
+      }
+      const id="daspg_"+randomUUID()
+      const [audit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
+        role_context:"owner",organization_id:input.organization_id,
+        action:"organization.store_product_permission_granted",module:DOGRUADRES_AUDIT_MODULE,
+        resource:"store-product-permission",target_id:input.seller_id,
+        new_values:{grant_id:id,person_id:targetPerson,permission:"products.edit"},
+        occurred_at:new Date()
+      }],context)
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      await db.execute(`insert into da_store_product_permission
+        (id,person_id,organization_id,seller_id,permission,issued_by_person_id,source_audit_event_id)
+        values (?,?,?,?,'products.edit',?,?)`,
+        [id,targetPerson,input.organization_id,input.seller_id,current.person_id,audit.id])
+      return {status:"active" as const,grant_id:id}
+    }
+    if(active.length===0)return {status:"revoked" as const,grant_id:null}
+    const grantId=active[0].id as string
+    const [event]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
+      role_context:"owner",organization_id:input.organization_id,
+      action:"organization.store_product_permission_revoked",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-product-permission",target_id:input.seller_id,
+      previous_values:{grant_id:grantId,person_id:targetPerson,permission:"products.edit"},
+      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const result=await db.execute(`update da_store_product_permission
+      set revoked_at=clock_timestamp() where id=? and revoked_at is null
+      returning id`,[grantId])
+    if(result.length!==1||!event.id)throw new IdentityAccessDenied()
+    return {status:"revoked" as const,grant_id:grantId}
+  }
+
+  @InjectTransactionManager()
+  async personalListStoreProductPermissions(token:string,organizationId:string,
+    @MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),s=new IdentitySessions(db)
+    const current=await s.organizations(token,organizationId,false)
+    if(!current||current.organizations.length!==1||
+       current.organizations[0].role!=="owner")return null
+    const rows=await db.execute(`select g.id,g.person_id,g.seller_id
+      from da_store_product_permission g
+      join da_audit_event e on e.id=g.source_audit_event_id
+       and e.deleted_at is null and e.module='dogruadres-access'
+       and e.actor_person_id=g.issued_by_person_id
+       and e.organization_id=g.organization_id and e.target_id=g.seller_id
+       and e.action='organization.store_product_permission_granted'
+       and e.resource='store-product-permission'
+       and e.new_values->>'grant_id'=g.id
+       and e.new_values->>'person_id'=g.person_id
+       and e.new_values->>'permission'=g.permission
+      where g.organization_id=? and g.permission='products.edit'
+       and g.revoked_at is null and (g.expires_at is null or g.expires_at>statement_timestamp())
+       and exists(select 1 from da_audit_outbox x
+         where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+         and x.deleted_at is null)
+      order by g.id limit 101`,[organizationId])
+    if(rows.length>100||rows.some(g=>typeof g.id!=="string"||
+       !/^daspg_[A-Za-z0-9_-]+$/.test(g.id)||typeof g.person_id!=="string"||
+       !/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)||
+       typeof g.seller_id!=="string"||!/^sel_[A-Za-z0-9_-]+$/.test(g.seller_id)))
+      throw new IdentityAccessDenied()
+    return rows as Array<{id:string;person_id:string;seller_id:string}>
+  }
+
+
+
+  // B22: only active Organization Owner issues/revokes explicit buyer.purchase.
+  // This does NOT authorize a Customer token or a cart/checkout operation.
+  @InjectTransactionManager()
+  async personalChangeBuyerPermission(
+    token:string,input:{action:"grant"|"revoke";organization_id:string;membership_id:string},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
+       !["grant","revoke"].includes(input.action))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const owner=await sessions.organizations(token,input.organization_id,false)
+    if(!owner||owner.person_id!==current.person_id||owner.organizations.length!==1||
+       owner.organizations[0].role!=="owner")return null
+    const issuer=await db.execute(`select id from da_organization_membership
+      where person_id=? and organization_id=? and role='owner'
+        and status='active' and deleted_at is null for share`,
+      [current.person_id,input.organization_id])
+    if(issuer.length!==1)throw new IdentityAccessDenied()
+    const target=await db.execute(`select m.person_id from da_organization_membership m
+      join da_person p on p.id=m.person_id
+      where m.id=? and m.organization_id=? and m.deleted_at is null
+        and p.deleted_at is null and p.disabled_at is null
+        ${input.action==="grant"?"and m.status='active'":""}
+      for share of m,p`,[input.membership_id,input.organization_id])
+    if(target.length!==1||typeof target[0].person_id!=="string"||
+       !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
+    const personId=target[0].person_id as string
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-buyer-purchase'),hashtext(?))`,
+      [input.organization_id+":"+personId])
+    // Recheck issuer after locks; never rely on an earlier UI role label.
+    const currentOwner=await sessions.organizations(token,input.organization_id,false)
+    if(!currentOwner||currentOwner.person_id!==current.person_id||
+       currentOwner.organizations.length!==1||
+       currentOwner.organizations[0].role!=="owner")return null
+    const active=await db.execute(`select id from da_organization_buyer_permission
+      where person_id=? and organization_id=? and permission='buyer.purchase'
+        and revoked_at is null for update`,[personId,input.organization_id])
+    if(active.length>1)throw new IdentityAccessDenied()
+    if(input.action==="grant"){
+      if(active.length){
+        if(!await verifiedBuyerPurchaseGrant(db,personId,input.organization_id))
+          throw new IdentityAccessDenied()
+        return {status:"active" as const,grant_id:active[0].id as string}
+      }
+      const grantId="dabpg_"+randomUUID()
+      const [audit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
+        role_context:"owner",organization_id:input.organization_id,
+        action:"organization.buyer_permission_granted",module:DOGRUADRES_AUDIT_MODULE,
+        resource:"buyer-permission",target_id:personId,
+        new_values:{grant_id:grantId,person_id:personId,permission:"buyer.purchase"},
+        occurred_at:new Date()
+      }],context)
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      await db.execute(`insert into da_organization_buyer_permission
+        (id,person_id,organization_id,permission,issued_by_person_id,source_audit_event_id)
+        values (?,?,?,'buyer.purchase',?,?)`,
+        [grantId,personId,input.organization_id,current.person_id,audit.id])
+      return {status:"active" as const,grant_id:grantId}
+    }
+    if(active.length===0)return {status:"revoked" as const,grant_id:null}
+    const grantId=active[0].id as string
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
+      role_context:"owner",organization_id:input.organization_id,
+      action:"organization.buyer_permission_revoked",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"buyer-permission",target_id:personId,
+      previous_values:{grant_id:grantId,person_id:personId,permission:"buyer.purchase"},
+      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const changed=await db.execute(`update da_organization_buyer_permission
+      set revoked_at=clock_timestamp()
+      where id=? and revoked_at is null returning id`,[grantId])
+    if(changed.length!==1||!audit.id)throw new IdentityAccessDenied()
+    return {status:"revoked" as const,grant_id:grantId}
+  }
+
+  @InjectTransactionManager()
+  async personalListBuyerPermissions(
+    token:string,organizationId:string,@MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),session=new IdentitySessions(db)
+    const current=await session.organizations(token,organizationId,false)
+    if(!current||current.organizations.length!==1||
+       current.organizations[0].role!=="owner")return null
+    const rows=await db.execute(`select g.id,g.person_id
+      from da_organization_buyer_permission g
+      join da_audit_event e on e.id=g.source_audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.actor_person_id=g.issued_by_person_id
+        and e.organization_id=g.organization_id and e.target_id=g.person_id
+        and e.action='organization.buyer_permission_granted'
+        and e.resource='buyer-permission'
+        and e.new_values->>'grant_id'=g.id
+        and e.new_values->>'person_id'=g.person_id
+        and e.new_values->>'permission'=g.permission
+      where g.organization_id=? and g.permission='buyer.purchase'
+        and g.revoked_at is null
+        and (g.expires_at is null or g.expires_at>statement_timestamp())
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id
+            and x.source_module='dogruadres-access' and x.deleted_at is null)
+      order by g.id limit 101`,[organizationId])
+    if(rows.length>100||rows.some(g=>typeof g.id!=="string"||
+       !/^dabpg_[A-Za-z0-9_-]+$/.test(g.id)||
+       typeof g.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)))
+      throw new IdentityAccessDenied()
+    return rows as Array<{id:string;person_id:string}>
+  }
+
+  /** B22: Store-scoped Buyer Organization block is a Seller policy, NOT a
+   * user permission. Only a strong, live Foundation Organization Owner may
+   * write it. Native Seller approval/member checks remain in the HTTP edge.
+   * A block never cancels historical orders or enables checkout.
+   */
+  @InjectTransactionManager()
+  async personalChangeStoreBuyerBlock(
+    token:string,input:{action:"block"|"unblock";organization_id:string;
+      seller_id:string;buyer_organization_id:string},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.buyer_organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !["block","unblock"].includes(input.action))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const owner=await sessions.organizations(token,input.organization_id,false)
+    if(!owner||owner.person_id!==current.person_id||
+       owner.organizations.length!==1||owner.organizations[0].role!=="owner")return null
+    const issuer=await db.execute(`select id from da_organization_membership
+      where organization_id=? and person_id=? and role='owner'
+        and status='active' and deleted_at is null for share`,
+      [input.organization_id,current.person_id])
+    if(issuer.length!==1)throw new IdentityAccessDenied()
+    const target=await db.execute(`select id from da_organization
+      where id=? and deleted_at is null for share`,[input.buyer_organization_id])
+    if(target.length!==1)return null
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-store-buyer-block'),hashtext(?))`,
+      [input.seller_id+":"+input.buyer_organization_id])
+    const finalOwner=await sessions.organizations(token,input.organization_id,false)
+    if(!finalOwner||finalOwner.person_id!==current.person_id||
+       finalOwner.organizations.length!==1||
+       finalOwner.organizations[0].role!=="owner")return null
+    const sellers=await platformApprovedSellerIds(db,input.organization_id)
+    if(!sellers.includes(input.seller_id))return null
+    const rows=await db.execute(`select b.id,
+      exists(select 1 from da_audit_event e
+        where e.id=b.source_audit_event_id and e.deleted_at is null
+          and e.module='dogruadres-access'
+          and e.action='organization.store_buyer_blocked'
+          and e.resource='store-buyer-block'
+          and e.organization_id=b.owner_organization_id
+          and e.actor_person_id=b.issued_by_person_id
+          and e.target_id=b.seller_id
+          and e.new_values->>'block_id'=b.id
+          and e.new_values->>'buyer_organization_id'=b.buyer_organization_id
+          and exists(select 1 from da_audit_outbox x
+            where x.source_audit_event_id=e.id
+              and x.source_module='dogruadres-access'
+              and x.deleted_at is null)) as proof
+      from da_store_buyer_organization_block b
+      where b.owner_organization_id=? and b.seller_id=?
+        and b.buyer_organization_id=? and b.revoked_at is null
+      for update of b`,[input.organization_id,input.seller_id,input.buyer_organization_id])
+    if(rows.length>1||rows.some(r=>r.proof!==true||typeof r.id!=="string"||
+       !/^dasbb_[A-Za-z0-9_-]+$/.test(r.id)))throw new IdentityAccessDenied()
+    if(input.action==="block"){
+      if(rows.length===1)return {status:"blocked" as const}
+      const id="dasbb_"+randomUUID()
+      const [audit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:current.person_id,actor_type:current.actor_type,
+        actor_id:current.actor_id,role_context:"owner",
+        organization_id:input.organization_id,
+        action:"organization.store_buyer_blocked",module:DOGRUADRES_AUDIT_MODULE,
+        resource:"store-buyer-block",target_id:input.seller_id,
+        new_values:{block_id:id,buyer_organization_id:input.buyer_organization_id},
+        occurred_at:new Date()
+      }],context)
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      const inserted=await db.execute(`insert into da_store_buyer_organization_block
+        (id,owner_organization_id,seller_id,buyer_organization_id,
+         issued_by_person_id,source_audit_event_id)
+        values (?,?,?,?,?,?) returning id`,
+        [id,input.organization_id,input.seller_id,
+         input.buyer_organization_id,current.person_id,audit.id])
+      if(inserted.length!==1)throw new IdentityAccessDenied()
+      return {status:"blocked" as const}
+    }
+    if(rows.length===0)return {status:"unblocked" as const}
+    const id=rows[0].id as string
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:current.person_id,actor_type:current.actor_type,
+      actor_id:current.actor_id,role_context:"owner",
+      organization_id:input.organization_id,
+      action:"organization.store_buyer_unblocked",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-buyer-block",target_id:input.seller_id,
+      previous_values:{block_id:id,buyer_organization_id:input.buyer_organization_id},
+      new_values:{block_id:id,status:"unblocked"},occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const changed=await db.execute(`update da_store_buyer_organization_block
+      set revoked_at=clock_timestamp(),revoked_by_person_id=?,
+        revocation_audit_event_id=?
+      where id=? and revoked_at is null returning id`,
+      [current.person_id,audit.id,id])
+    if(changed.length!==1)throw new IdentityAccessDenied()
+    return {status:"unblocked" as const}
+  }
+
+  /** Read-only native Seller set against Foundation's authoritative Store
+   * Buyer Organization block ledger. A missing or malformed audit/outbox
+   * never becomes ALLOW; true means any Store denies this Buyer Organization.
+   */
+  @InjectTransactionManager()
+  async personalStoreBuyerBlockDecision(
+    token:string,buyerOrganizationId:string,sellerIds:string[],
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyerOrganizationId)||
+       !Array.isArray(sellerIds)||sellerIds.length>50||
+       new Set(sellerIds).size!==sellerIds.length||
+       sellerIds.some(id=>typeof id!=="string"||
+         !/^sel_[A-Za-z0-9_-]+$/.test(id)))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const buyer=await authorizedBuyerOrganization(db,token,buyerOrganizationId)
+    if(!buyer)return null
+    if(!sellerIds.length)return {blocked:false,ownership_verified:false}
+    // Each participating Seller must have exactly one current platform
+    // Organization origin before saying every Store policy was verified.
+    // A native SellerMember alone is never legal Store ownership.
+    const ownerRows=await db.execute(`select seller_id,organization_id
+      from da_organization_seller_ownership where revoked_at is null
+        and seller_id in (${sellerIds.map(()=>"?").join(",")})`,sellerIds)
+    if(ownerRows.length>sellerIds.length||
+       new Set(ownerRows.map(r=>r.seller_id)).size!==ownerRows.length||
+       ownerRows.some(r=>typeof r.organization_id!=="string"||
+         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(r.organization_id)||
+         !sellerIds.includes(r.seller_id)))throw new IdentityAccessDenied()
+    for(const row of ownerRows){
+      const confirmed=await platformApprovedSellerIds(db,row.organization_id)
+      if(!confirmed.includes(row.seller_id))throw new IdentityAccessDenied()
+    }
+    const ownershipVerified=ownerRows.length===sellerIds.length
+    const rows=await db.execute(`select b.id,b.owner_organization_id,b.seller_id,
+      exists(select 1 from da_audit_event e
+        where e.id=b.source_audit_event_id and e.deleted_at is null
+          and e.module='dogruadres-access'
+          and e.resource='store-buyer-block'
+          and e.action='organization.store_buyer_blocked'
+          and e.organization_id=b.owner_organization_id
+          and e.actor_person_id=b.issued_by_person_id
+          and e.target_id=b.seller_id
+          and e.new_values->>'block_id'=b.id
+          and e.new_values->>'buyer_organization_id'=b.buyer_organization_id
+          and exists(select 1 from da_audit_outbox x
+            where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+              and x.deleted_at is null)) as proof
+      from da_store_buyer_organization_block b
+      where b.buyer_organization_id=? and b.revoked_at is null
+        and b.seller_id in (${sellerIds.map(()=>"?").join(",")})`,
+      [buyerOrganizationId,...sellerIds])
+    if(rows.length>sellerIds.length||rows.some(r=>r.proof!==true||
+       typeof r.id!=="string"||!/^dasbb_[A-Za-z0-9_-]+$/.test(r.id)||
+       typeof r.owner_organization_id!=="string"||
+       typeof r.seller_id!=="string"))throw new IdentityAccessDenied()
+    for(const row of rows){
+      const confirmed=await platformApprovedSellerIds(db,row.owner_organization_id)
+      if(!confirmed.includes(row.seller_id))throw new IdentityAccessDenied()
+    }
+    return {blocked:rows.length!==0,ownership_verified:ownershipVerified}
+  }
+
+  @InjectTransactionManager()
+  async personalBuyerOrganization(
+    token:string,organizationId:string,@MedusaContext() context:Context={}
+  ){
+    return authorizedBuyerOrganization(securitySql(context.transactionManager),token,organizationId)
+  }
+
+
+  // Native Cart's customer_id is verified by the API against Medusa before
+  // and after this Foundation-only transaction. Cross-module Cart mutation
+  // cannot be locked here: this is NOT a checkout or commercial eligibility.
+  // One Cart ID may never be silently reassigned to another legal Organization.
+  @InjectTransactionManager()
+  async personalClaimBuyerCart(
+    token:string,organizationId:string,cartId:string,customerId:string,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^cart_[A-Za-z0-9_-]{1,123}$/.test(cartId)||
+       !/^cus_[A-Za-z0-9_-]+$/.test(customerId))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-buyer-cart-attribution'),hashtext(?))`,[cartId])
+    const identity=await new IdentitySessions(db).current(token,true,false)
+    if(!identity)return null
+    const buyer=await authorizedBuyerOrganization(db,token,organizationId)
+    const linked=await new ActorDelegation(db).binding(token,"customer")
+    if(!buyer||buyer.person_id!==identity.person_id||!linked||
+       linked.session.person_id!==identity.person_id||
+       linked.binding.person_id!==identity.person_id||
+       linked.binding.revoked_at||linked.binding.actor_id!==customerId)
+      return null
+    const existing=await db.execute(`select a.cart_id,a.organization_id,a.person_id,
+      a.customer_id,a.source_audit_event_id from da_buyer_cart_attribution a
+      where a.cart_id=? for update`,[cartId])
+    if(existing.length>1)throw new IdentityAccessDenied()
+    if(existing.length===1){
+      const row=existing[0]
+      if(row.organization_id!==organizationId||row.person_id!==identity.person_id||
+         row.customer_id!==customerId)throw new IdentityAccessDenied()
+      const evidence=await db.execute(`select e.id from da_audit_event e
+        where e.id=? and e.deleted_at is null
+          and e.module='dogruadres-access'
+          and e.resource='buyer-cart-attribution'
+          and e.action='organization.buyer_cart_attributed'
+          and e.actor_person_id=? and e.organization_id=?
+          and e.target_id=? and e.new_values->>'cart_id'=?
+          and e.new_values->>'customer_id'=?
+          and exists(select 1 from da_audit_outbox o
+            where o.source_audit_event_id=e.id
+              and o.source_module='dogruadres-access' and o.deleted_at is null)`,
+        [row.source_audit_event_id,identity.person_id,organizationId,cartId,cartId,customerId])
+      if(evidence.length!==1)throw new IdentityAccessDenied()
+      return {status:"attributed" as const,organization_id:organizationId}
+    }
+    // Refresh authority after obtaining the cart-scoped lock. Checkout must
+    // still enforce final authorization and every Seller-specific block.
+    const currentBuyer=await authorizedBuyerOrganization(db,token,organizationId)
+    const currentLink=await new ActorDelegation(db).binding(token,"customer")
+    if(!currentBuyer||currentBuyer.person_id!==identity.person_id||
+       !currentLink||currentLink.session.person_id!==identity.person_id||
+       currentLink.binding.person_id!==identity.person_id||
+       currentLink.binding.actor_id!==customerId||
+       currentLink.binding.revoked_at)return null
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:identity.person_id,actor_type:identity.actor_type,
+      actor_id:identity.actor_id,organization_id:organizationId,
+      action:"organization.buyer_cart_attributed",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"buyer-cart-attribution",
+      target_id:cartId,
+      new_values:{cart_id:cartId,customer_id:customerId},
+      occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const inserted=await db.execute(`insert into da_buyer_cart_attribution
+      (cart_id,organization_id,person_id,customer_id,source_audit_event_id)
+      values (?,?,?,?,?) returning cart_id`,
+      [cartId,organizationId,identity.person_id,customerId,audit.id])
+    if(inserted.length!==1)throw new IdentityAccessDenied()
+    return {status:"attributed" as const,organization_id:organizationId}
+  }
+
+  @InjectTransactionManager()
+  async personalBuyerCartAttribution(
+    token:string,organizationId:string,cartId:string,customerId:string,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^cart_[A-Za-z0-9_-]{1,123}$/.test(cartId)||
+       !/^cus_[A-Za-z0-9_-]+$/.test(customerId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const buyer=await authorizedBuyerOrganization(db,token,organizationId)
+    const linked=await new ActorDelegation(db).binding(token,"customer")
+    if(!buyer||!linked||linked.session.person_id!==buyer.person_id||
+       linked.binding.person_id!==buyer.person_id||linked.binding.revoked_at||
+       linked.binding.actor_id!==customerId)return null
+    const rows=await db.execute(`select a.source_audit_event_id from da_buyer_cart_attribution a
+      join da_audit_event e on e.id=a.source_audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.resource='buyer-cart-attribution'
+        and e.action='organization.buyer_cart_attributed'
+        and e.actor_person_id=a.person_id and e.organization_id=a.organization_id
+        and e.target_id=a.cart_id
+        and e.new_values->>'cart_id'=a.cart_id
+        and e.new_values->>'customer_id'=a.customer_id
+      where a.cart_id=? and a.organization_id=? and a.person_id=?
+        and a.customer_id=?
+        and exists(select 1 from da_audit_outbox o
+          where o.source_audit_event_id=e.id
+            and o.source_module='dogruadres-access' and o.deleted_at is null)`,
+      [cartId,organizationId,buyer.person_id,customerId])
+    if(rows.length>1)throw new IdentityAccessDenied()
+    return rows.length===1
+  }
+
+
+  /**
+   * B22 final checkout decision (L). Called only from Mercur's split-cart
+   * validate hook, after the native Cart lock and native source reads but
+   * before OrderGroup/order writes. One PostgreSQL statement gives all
+   * Foundation-owned facts one READ COMMITTED snapshot: a revocation committed
+   * before this SELECT is denied; a later revocation may overlap this checkout.
+   *
+   * The caller must validate the native Cart snapshot and current Mercur Seller
+   * lifecycle before calling this method. No native module manager is passed
+   * into Foundation and no cross-module transaction is claimed.
+   */
+  @InjectTransactionManager()
+  async authorizeBuyerCheckout(
+    cartId:string,
+    customerId:string,
+    sellerIds:string[],
+    @MedusaContext() context:Context={}
+  ):Promise<boolean>{
+    if(!/^cart_[A-Za-z0-9_-]{1,123}$/.test(cartId)||
+       !/^cus_[A-Za-z0-9_-]+$/.test(customerId)||
+       !Array.isArray(sellerIds)||sellerIds.length<1||sellerIds.length>50||
+       new Set(sellerIds).size!==sellerIds.length||
+       sellerIds.some(id=>typeof id!=="string"||!/^sel_[A-Za-z0-9_-]+$/.test(id)))
+      throw new IdentityAccessDenied()
+
+    const db=securitySql(context.transactionManager)
+    const sellerSlots=sellerIds.map(()=>"?").join(",")
+    // IMPORTANT: This is the single final Foundation SELECT (L). Do not split
+    // these predicates into sequential service reads or cached decisions.
+    const rows=await db.execute(`
+      select a.cart_id
+      from da_buyer_cart_attribution a
+      join da_person person
+        on person.id=a.person_id
+       and person.disabled_at is null
+       and person.deleted_at is null
+      join da_organization buyer
+        on buyer.id=a.organization_id
+       and buyer.status='active' and buyer.deleted_at is null
+      join da_audit_event attribution_event
+        on attribution_event.id=a.source_audit_event_id
+       and attribution_event.deleted_at is null
+       and attribution_event.module='dogruadres-access'
+       and attribution_event.resource='buyer-cart-attribution'
+       and attribution_event.action='organization.buyer_cart_attributed'
+       and attribution_event.actor_person_id=a.person_id
+       and attribution_event.organization_id=a.organization_id
+       and attribution_event.target_id=a.cart_id
+       and attribution_event.new_values->>'cart_id'=a.cart_id
+       and attribution_event.new_values->>'customer_id'=a.customer_id
+      where a.cart_id=? and a.customer_id=?
+        and exists(
+          select 1 from da_audit_outbox attribution_outbox
+          where attribution_outbox.source_audit_event_id=attribution_event.id
+            and attribution_outbox.source_module='dogruadres-access'
+            and attribution_outbox.deleted_at is null
+        )
+        and (
+          select count(*) from da_organization_membership m
+          where m.organization_id=a.organization_id
+            and m.person_id=a.person_id
+            and m.status='active' and m.revoked_at is null
+            and m.deleted_at is null
+        )=1
+        and (
+          exists(select 1 from da_organization_membership protected_owner
+            where protected_owner.person_id=a.person_id
+              and protected_owner.organization_id=a.organization_id
+              and protected_owner.role='owner'
+              and protected_owner.protected_owner=true
+              and protected_owner.status='active'
+              and protected_owner.revoked_at is null
+              and protected_owner.deleted_at is null)
+          or (select count(*) from da_organization_buyer_permission g
+          join da_audit_event grant_event
+            on grant_event.id=g.source_audit_event_id
+           and grant_event.deleted_at is null
+           and grant_event.module='dogruadres-access'
+           and grant_event.resource='buyer-permission'
+           and grant_event.action='organization.buyer_permission_granted'
+           and grant_event.actor_person_id=g.issued_by_person_id
+           and grant_event.organization_id=g.organization_id
+           and grant_event.target_id=g.person_id
+           and grant_event.new_values->>'grant_id'=g.id
+           and grant_event.new_values->>'person_id'=g.person_id
+           and grant_event.new_values->>'permission'=g.permission
+          join da_audit_outbox grant_outbox
+            on grant_outbox.source_audit_event_id=grant_event.id
+           and grant_outbox.source_module='dogruadres-access'
+           and grant_outbox.deleted_at is null
+          where g.person_id=a.person_id
+            and g.organization_id=a.organization_id
+            and g.permission='buyer.purchase'
+            and g.revoked_at is null
+            and (g.expires_at is null or g.expires_at>statement_timestamp())
+          )=1
+        )
+        and (
+          select count(*) from da_verified_actor_binding binding
+          join da_actor_mapping actor
+            on actor.person_id=binding.person_id
+           and actor.actor_type=binding.actor_type
+           and actor.actor_id=binding.actor_id
+           and actor.deleted_at is null
+          where binding.person_id=a.person_id
+            and binding.actor_type='customer'
+            and binding.actor_id=a.customer_id
+            and binding.revoked_at is null
+            and binding.verified_at is not null
+        )=1
+        and (
+          select count(distinct ownership.seller_id)
+          from da_organization_seller_ownership ownership
+          join da_organization seller_organization
+            on seller_organization.id=ownership.organization_id
+           and seller_organization.status='active'
+           and seller_organization.deleted_at is null
+          join da_audit_event ownership_event
+            on ownership_event.id=ownership.verification_audit_event_id
+           and ownership_event.deleted_at is null
+           and ownership_event.organization_id=ownership.organization_id
+           and ownership_event.target_id=ownership.seller_id
+           and ownership_event.module='dogruadres-access'
+           and (
+             (ownership_event.action='organization.store_application_created'
+              and ownership_event.resource='store-application'
+              and exists (
+                select 1 from da_store_application application
+                where application.id=(ownership_event.new_values->>'application_id')
+                  and application.organization_id=ownership.organization_id
+                  and application.seller_id=ownership.seller_id
+                  and application.status='created'
+                  and application.person_id=ownership_event.actor_person_id
+              ))
+             or
+             (ownership_event.action='organization.store_association_approved'
+              and ownership_event.resource='store-association')
+           )
+          join da_audit_outbox ownership_outbox
+            on ownership_outbox.source_audit_event_id=ownership_event.id
+           and ownership_outbox.source_module='dogruadres-access'
+           and ownership_outbox.deleted_at is null
+          where ownership.seller_id in (${sellerSlots})
+            and ownership.revoked_at is null
+        )=?
+        and not exists(
+          select 1 from da_store_buyer_organization_block block
+          where block.buyer_organization_id=a.organization_id
+            and block.seller_id in (${sellerSlots})
+            and block.revoked_at is null
+        )
+      limit 2
+    `,[cartId,customerId,...sellerIds,sellerIds.length,...sellerIds])
+    if(rows.length>1)throw new IdentityAccessDenied()
+    return rows.length===1
+  }
+
+  // B22 product draft: Foundation-owned intent ledger, not another product
+  // service. Never interpret a reserved/uncertain native outcome as retryable.
+  @InjectTransactionManager()
+  async personalProductDraftScope(
+    token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}
+  ){
+    const db=securitySql(context.transactionManager),s=new IdentitySessions(db)
+    const current=await s.current(token,true,false)
+    if(!current)return null
+    const scope=await authorizedProductEditScope(db,token,organizationId,sellerId)
+    return scope?.person_id===current.person_id?scope:null
+  }
+
+  @InjectTransactionManager()
+  async personalProductDraftCandidates(
+    token:string,organizationId:string,@MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const member=await sessions.organizations(token,organizationId,false)
+    if(!member||member.person_id!==current.person_id||
+       member.organizations.length!==1)return null
+    const stores=await platformApprovedSellerIds(db,organizationId)
+    const owner=member.organizations[0].role==="owner" &&
+      await isCurrentProtectedOwner(db,current.person_id,organizationId)
+    const allowed:string[]=[]
+    for(const id of stores){
+      if(owner||await verifiedStoreProductEditGrant(db,current.person_id,organizationId,id))
+        allowed.push(id)
+    }
+    return {person_id:current.person_id,organization_id:organizationId,seller_ids:allowed}
+  }
+
+
+  // Read-only receipt for an uncertain browser submission. A reserved intent
+  // is NOT evidence that Mercur did or did not create a product. No retry and
+  // no native workflow is triggered by this lookup.
+  @InjectTransactionManager()
+  async personalProductDraftReceipt(
+    token:string,organizationId:string,sellerId:string,requestId:string,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId)||
+       !/^dapd_[0-9a-f]{32}$/.test(requestId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const scope=await authorizedProductEditScope(db,token,organizationId,sellerId)
+    if(!scope||scope.person_id!==current.person_id)return null
+    const rows=await db.execute(`select status,product_id,completion_audit_event_id
+      from da_product_draft_request
+      where id=? and person_id=? and organization_id=? and seller_id=?`,
+      [requestId,current.person_id,organizationId,sellerId])
+    if(rows.length>1)throw new IdentityAccessDenied()
+    if(rows.length===0)return {status:"unverified" as const}
+    const row=rows[0]
+    if(row.status==="reserved"&&row.product_id==null&&row.completion_audit_event_id==null)
+      return {status:"review_required" as const}
+    if(row.status!=="created"||typeof row.product_id!=="string"||
+       !/^prod_[A-Za-z0-9_-]+$/.test(row.product_id)||
+       typeof row.completion_audit_event_id!=="string")
+      throw new IdentityAccessDenied()
+    const proof=await db.execute(`select e.id from da_audit_event e
+      where e.id=? and e.actor_person_id=? and e.organization_id=?
+        and e.target_id=? and e.action='organization.product_draft_created'
+        and e.module='dogruadres-access' and e.resource='product-draft'
+        and e.new_values->>'request_id'=?
+        and e.new_values->>'product_id'=?
+        and e.deleted_at is null
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+            and x.deleted_at is null)`,
+      [row.completion_audit_event_id,current.person_id,organizationId,
+       sellerId,requestId,row.product_id])
+    if(proof.length!==1)throw new IdentityAccessDenied()
+    return {status:"created" as const,product_id:row.product_id as string}
+  }
+
+  /**
+   * B22: keep the SAME Foundation products.edit advisory lock as the grant
+   * writer for the full native product-create + Foundation completion window.
+   * Revocation cannot COMMIT while the native workflow is in progress.
+   *
+   * This is a bounded, in-process transaction lock, NOT an atomic native /
+   * Foundation transaction. Existing durable request keys and reconciliation
+   * remain necessary for crash/uncertain native outcomes.
+   */
+  @InjectTransactionManager()
+  async personalWithProductDraftPermissionLock<T>(
+    token:string,input:{organization_id:string;seller_id:string},
+    execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
+  ):Promise<T|null>{
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       typeof execute!=="function")throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    // Same key as personalChangeStoreProductPermission. Acquire before the
+    // fresh authorization read, so a committed earlier revocation denies
+    // BEFORE native creation, and later revocation waits for completion.
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-products-edit'),hashtext(?))`,
+      [input.organization_id+":"+input.seller_id+":"+current.person_id])
+    const allowed=await authorizedProductEditScope(
+      db,token,input.organization_id,input.seller_id)
+    if(!allowed||allowed.person_id!==current.person_id)return null
+    // Carry the same manager into nested Foundation reads/completion.
+    // A second transaction would wait on this transaction's FOR UPDATE
+    // session/person rows, creating a self-deadlock.
+    return await execute(context)
+  }
+
+  @InjectTransactionManager()
+  async personalReserveProductDraft(
+    token:string,input:{request_id:string;organization_id:string;seller_id:string;title:string},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^dapd_[0-9a-f]{32}$/.test(input.request_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       typeof input.title!=="string"||input.title.trim()!==input.title||
+       input.title.length<2||input.title.length>120)throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const decision=await authorizedProductEditScope(db,token,input.organization_id,input.seller_id)
+    if(!decision||decision.person_id!==current.person_id)return null
+    const fingerprint=createHash("sha256").update(JSON.stringify([
+      input.organization_id,input.seller_id,input.title
+    ])).digest("hex")
+    // PK locks simultaneous attempts across processes. A second request
+    // cannot proceed to Mercur, even if the first native result is uncertain.
+    const added=await db.execute(`insert into da_product_draft_request
+      (id,person_id,organization_id,seller_id,request_fingerprint)
+      values (?,?,?,?,?) on conflict (id) do nothing returning id`,
+      [input.request_id,current.person_id,input.organization_id,input.seller_id,fingerprint])
+    if(added.length>1)throw new IdentityAccessDenied()
+    if(added.length===1)return {status:"reserved" as const,person_id:current.person_id}
+    const existing=await db.execute(`select person_id,organization_id,seller_id,
+      request_fingerprint,status,product_id,completion_audit_event_id
+      from da_product_draft_request where id=? for update`,[input.request_id])
+    if(existing.length!==1)throw new IdentityAccessDenied()
+    const row=existing[0]
+    if(row.person_id!==current.person_id||
+       row.organization_id!==input.organization_id||
+       row.seller_id!==input.seller_id||
+       row.request_fingerprint!==fingerprint)throw new IdentityAccessDenied()
+    if(row.status==="reserved")return {status:"uncertain" as const,person_id:current.person_id}
+    if(row.status!=="created"||typeof row.product_id!=="string")
+      throw new IdentityAccessDenied()
+    const proof=await db.execute(`select e.id from da_audit_event e
+      where e.id=? and e.actor_person_id=? and e.organization_id=?
+        and e.target_id=? and e.action='organization.product_draft_created'
+        and e.module='dogruadres-access' and e.resource='product-draft'
+        and e.new_values->>'request_id'=?
+        and e.new_values->>'product_id'=?
+        and e.deleted_at is null
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+            and x.deleted_at is null)`,
+      [row.completion_audit_event_id,current.person_id,input.organization_id,
+       input.seller_id,input.request_id,row.product_id])
+    if(proof.length!==1)throw new IdentityAccessDenied()
+    return {status:"created" as const,person_id:current.person_id,product_id:row.product_id as string}
+  }
+
+  @InjectTransactionManager()
+  async personalCompleteProductDraft(
+    token:string,input:{request_id:string;organization_id:string;seller_id:string;title:string},
+    productId:string,@MedusaContext() context:Context={}
+  ){
+    if(!/^dapd_[0-9a-f]{32}$/.test(input.request_id)||
+       !/^prod_[A-Za-z0-9_-]+$/.test(productId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,false,false)
+    if(!current)return null
+    const rows=await db.execute(`select person_id,organization_id,seller_id,
+       request_fingerprint,status,product_id from da_product_draft_request
+       where id=? for update`,[input.request_id])
+    const fingerprint=createHash("sha256").update(JSON.stringify([
+      input.organization_id,input.seller_id,input.title
+    ])).digest("hex")
+    if(rows.length!==1||rows[0].person_id!==current.person_id||
+       rows[0].organization_id!==input.organization_id||
+       rows[0].seller_id!==input.seller_id||
+       rows[0].request_fingerprint!==fingerprint)throw new IdentityAccessDenied()
+    if(rows[0].status==="created"){
+      if(rows[0].product_id!==productId)throw new IdentityAccessDenied()
+      return {status:"created" as const,product_id:productId}
+    }
+    if(rows[0].status!=="reserved")throw new IdentityAccessDenied()
+    const [event]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:current.person_id,actor_type:current.actor_type,actor_id:current.actor_id,
+      organization_id:input.organization_id,
+      action:"organization.product_draft_created",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"product-draft",target_id:input.seller_id,
+      new_values:{request_id:input.request_id,product_id:productId,status:"draft"},
+      occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const changed=await db.execute(`update da_product_draft_request
+      set status='created',product_id=?,completion_audit_event_id=?,
+          completed_at=clock_timestamp()
+      where id=? and status='reserved' returning id`,
+      [productId,event.id,input.request_id])
+    if(changed.length!==1)throw new IdentityAccessDenied()
+    return {status:"created" as const,product_id:productId}
+  }
+
+  // ---------------------------------------------------------------------------
+  // B20: per-Person persistent launcher preference
+  // ---------------------------------------------------------------------------
+  // Retain historic B20 app IDs non-destructively. B22 deprecates
+  // the vendor app as a separate end-user commercial panel. Only public
+  // catalog discovery is shown by launcher GET at present.
+  // A stored preference is not a commercial permission or Store entitlement.
+  static readonly KNOWN_APP_IDS: ReadonlySet<string> = new Set(['storefront', 'vendor'])
+
+  @InjectTransactionManager()
+  async getLauncherPreference(token: string, @MedusaContext() context: Context = {}) {
+    const sql = securitySql(context.transactionManager)
+    const session = await new IdentitySessions(sql).current(token)
+    if (!session) return null
+    const rows = await sql.execute(
+      `select app_ids,collapsed_ids,version from da_launcher_preference where person_id=?`,
+      [session.person_id]
+    ) as Array<{app_ids: unknown; collapsed_ids: unknown; version: number}>
+    const row = rows[0]
+    const parseJsonb = (v: unknown): string[] => {
+      if (Array.isArray(v)) return v as string[]
+      if (typeof v === 'string') { try { return JSON.parse(v) } catch { return [] } }
+      return []
+    }
+    return {
+      person_id: session.person_id,
+      app_ids: row ? parseJsonb(row.app_ids) : [],
+      collapsed_ids: row ? parseJsonb(row.collapsed_ids) : [],
+      version: row ? row.version : 0,
+    }
+  }
+
+  @InjectTransactionManager()
+  async saveLauncherPreference(
+    token: string,
+    rawAppIds: string[],
+    rawCollapsedIds: string[],
+    expectedVersion: number,
+    @MedusaContext() context: Context = {}
+  ) {
+    const sql = securitySql(context.transactionManager)
+    const session = await new IdentitySessions(sql).current(token, true)
+    if (!session) throw new MedusaError(MedusaError.Types.UNAUTHORIZED, 'Session required')
+    const known = DogruAdresAccessModuleService.KNOWN_APP_IDS
+    const seen = new Set<string>()
+    const appIds = rawAppIds.filter(id => {
+      if (typeof id !== 'string' || !known.has(id) || seen.has(id)) return false
+      seen.add(id); return true
+    })
+    const collSeen = new Set<string>()
+    const collapsedIds = rawCollapsedIds.filter(id => {
+      if (typeof id !== 'string' || !known.has(id) || collSeen.has(id)) return false
+      collSeen.add(id); return true
+    })
+    if (expectedVersion < 0 || !Number.isInteger(expectedVersion)) {
+      throw new MedusaError(MedusaError.Types.INVALID_DATA, 'Invalid version')
+    }
+    const personId = session.person_id
+    if (expectedVersion === 0) {
+      await sql.execute(
+        `insert into da_launcher_preference(id,person_id,app_ids,collapsed_ids,version,updated_at)
+         values(?,?,?,?,1,now())
+         on conflict(person_id) do nothing`,
+        [randomUUID(), personId, JSON.stringify(appIds), JSON.stringify(collapsedIds)]
+      )
+      const stored = await sql.execute(
+        `select app_ids,collapsed_ids,version from da_launcher_preference where person_id=?`,
+        [personId]
+      ) as Array<{app_ids: unknown; collapsed_ids: unknown; version: number}>
+      const pa = (v: unknown): string[] => Array.isArray(v) ? v as string[] : typeof v==='string' ? (() => { try { return JSON.parse(v) } catch { return [] } })() : []
+      return { app_ids: pa(stored[0].app_ids), collapsed_ids: pa(stored[0].collapsed_ids), version: stored[0].version }
+    }
+    const updated = await sql.execute(
+      `update da_launcher_preference
+         set app_ids=?,collapsed_ids=?,version=version+1,updated_at=now()
+         where person_id=? and version=?
+         returning app_ids,collapsed_ids,version`,
+      [JSON.stringify(appIds), JSON.stringify(collapsedIds), personId, expectedVersion]
+    ) as Array<{app_ids: unknown; collapsed_ids: unknown; version: number}>
+    if (!updated.length) {
+      throw new MedusaError(MedusaError.Types.CONFLICT, 'Launcher preference version conflict — reload and retry')
+    }
+    const pu2 = (v: unknown): string[] => Array.isArray(v) ? v as string[] : typeof v==='string' ? (() => { try { return JSON.parse(v) } catch { return [] } })() : []
+    return { app_ids: pu2(updated[0].app_ids), collapsed_ids: pu2(updated[0].collapsed_ids), version: updated[0].version }
   }
 }

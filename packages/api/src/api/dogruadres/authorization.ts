@@ -6,11 +6,12 @@ import {
 } from "../../utils/organization-authorization"
 import DogruAdresAccessModuleService from "../../modules/dogruadres-access/service"
 import { DOGRUADRES_ACCESS_MODULE } from "../../modules/dogruadres-access"
+import { enabled, sessionToken } from "../personal/security"
 
 export async function requireOrganizationAccess(
   req: AuthenticatedMedusaRequest,
   organizationId: string,
-  action: "organization.read" | "membership.list" | "membership.manage" | "invitation.manage"
+  action: "organization.read" | "membership.list" | "membership.manage" | "invitation.manage" | "audit.timeline.read"
 ) {
   const principal = {
     actorId: req.auth_context.actor_id,
@@ -47,7 +48,7 @@ export async function requireOrganizationAccess(
       const membership = await service.getActiveMembership(personId, orgId)
       if (!membership || membership.status !== "active") return false
       if (requestedAction === "organization.read") return true
-      if (["membership.list", "membership.manage", "invitation.manage"].includes(requestedAction)) {
+      if (["membership.list", "membership.manage", "invitation.manage", "audit.timeline.read"].includes(requestedAction)) {
         return membership.role === "owner" || membership.role === "admin"
       }
       return false
@@ -67,9 +68,12 @@ export async function requireOrganizationAccess(
   return { personId: decision.personId, organizationId: decision.organizationId, service }
 }
 
-export function requirePlatformAdministrator(req: AuthenticatedMedusaRequest) {
-  if (req.auth_context?.actor_type !== "user" || !req.auth_context?.actor_id) {
+export async function requirePlatformAdministrator(req: AuthenticatedMedusaRequest) {
+  if (!enabled()) {
     throw new MedusaError(MedusaError.Types.FORBIDDEN, "Platform administrator authentication is required")
   }
-  return { actor_id: req.auth_context.actor_id, actor_type: req.auth_context.actor_type }
+  const service = req.scope.resolve<DogruAdresAccessModuleService>(DOGRUADRES_ACCESS_MODULE)
+  const staff = await service.personalStaff(sessionToken(req),"organization.provision","platform")
+  if (!staff) throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
+  return { actor_id: staff.actor_id, actor_type: staff.actor_type }
 }
