@@ -2840,6 +2840,77 @@ export default async function({container}:any){
       [A.person,organizations[0].id,ownerStoreId])
     assert.equal(revokeAudit[0].n,1,"Revocation requires canonical outbox")
     process.stdout.write("PASS B22 Chrome: Owner grants active Member scoped products.edit, retry idempotent, foreign Member/staff 403, Owner revokes with PG16 audit/outbox\\n")
+    // CR-03: An active role-only "owner" without protected_owner cannot
+    // change permissions or Store policy. Only task-owned PG16 rows are
+    // temporarily changed; the real protected Alpha Owner stays active.
+    const preRole=await q("select role,protected_owner,status from da_organization_membership where id=$1",[alphaMember.id])
+    assert.equal(preRole.length,1)
+    assert.equal(preRole[0].role,"member")
+    assert.equal(preRole[0].protected_owner,false)
+    assert.equal(preRole[0].status,"active")
+    await q("update da_organization_membership set role='owner',protected_owner=false,updated_at=clock_timestamp() where id=$1",[alphaMember.id])
+    try{
+      const roleOnly=await q("select role,protected_owner,status from da_organization_membership where id=$1",[alphaMember.id])
+      assert.equal(roleOnly.length,1)
+      assert.equal(roleOnly[0].role,"owner")
+      assert.equal(roleOnly[0].protected_owner,false)
+      assert.equal(roleOnly[0].status,"active")
+      const realOwner=await q("select role,protected_owner,status from da_organization_membership where id=$1",[memberships[0].id])
+      assert.equal(realOwner.length,1)
+      assert.equal(realOwner[0].role,"owner")
+      assert.equal(realOwner[0].protected_owner,true)
+      const snapshot=async()=> (await q(
+        "select (select count(*)::int from da_organization_buyer_permission where organization_id=$1) buyer,"+
+        "(select count(*)::int from da_store_product_permission where organization_id=$1) products,"+
+        "(select count(*)::int from da_store_buyer_organization_block where owner_organization_id=$1) blocks,"+
+        "(select count(*)::int from da_audit_event where organization_id=$1) audits,"+
+        "(select count(*)::int from da_audit_outbox x join da_audit_event e on e.id=x.source_audit_event_id where e.organization_id=$1) outboxes",
+        [organizations[0].id]))[0]
+      const before=await snapshot()
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      const token=await reviewer.token()
+      assert.match(token??"",/^[A-Za-z0-9_-]{43}$/)
+      const script="(async()=>{"+
+        "const session=await (await fetch('/personal/session')).json();"+
+        "const send=async(path,value)=>{const r=await fetch(path,{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+        "body:JSON.stringify(value)});return r.status};"+
+        "const org="+JSON.stringify(organizations[0].id)+";"+
+        "const member="+JSON.stringify(alphaMember.id)+";"+
+        "const seller="+JSON.stringify(ownerStoreId)+";"+
+        "return {buyerList:(await fetch('/personal/buyer-permissions?organization_id='+org)).status,"+
+        "productList:(await fetch('/personal/store-product-permissions?organization_id='+org)).status,"+
+        "buyerGrant:await send('/personal/buyer-permissions',{action:'grant',organization_id:org,membership_id:member}),"+
+        "buyerRevoke:await send('/personal/buyer-permissions',{action:'revoke',organization_id:org,membership_id:member}),"+
+        "productGrant:await send('/personal/store-product-permissions',{action:'grant',organization_id:org,seller_id:seller,membership_id:member}),"+
+        "productRevoke:await send('/personal/store-product-permissions',{action:'revoke',organization_id:org,seller_id:seller,membership_id:member})"+
+        "}})()"
+      const denied=await reviewer.eval(script)
+      for(const [name,status] of Object.entries(denied))
+        assert.equal(status,403,"Role-only Owner denied: "+name)
+      // Service-level denial is checked directly: a native Seller edge must
+      // not accidentally mask a missing Foundation authorization check.
+      for(const action of ["grant","revoke"] as const){
+        assert.equal(await foundation.personalChangeBuyerPermission(token,{
+          action,organization_id:organizations[0].id,membership_id:alphaMember.id}),null)
+        assert.equal(await foundation.personalChangeStoreProductPermission(token,{
+          action,organization_id:organizations[0].id,seller_id:ownerStoreId,
+          membership_id:alphaMember.id}),null)
+      }
+      for(const action of ["block","unblock"] as const)
+        assert.equal(await foundation.personalChangeStoreBuyerBlock(token,{
+          action,organization_id:organizations[0].id,seller_id:ownerStoreId,
+          buyer_organization_id:organizations[1].id}),null)
+      assert.deepEqual(await snapshot(),before,
+        "Role-only Owner must not persist permissions, block policy, audit or outboxes")
+      process.stdout.write("PASS B22 CR-03 real Chrome/HTTP/PG16: active unprotected Owner 403 for grants and listings; service denies block and revoke, zero audit/outbox writes\n")
+    }finally{
+      await q("update da_organization_membership set role='member',protected_owner=false,updated_at=clock_timestamp() where id=$1",[alphaMember.id])
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+    }
+
     // Protected Owner writes a draft for their approved Store without grant.
     const ownerDraftAccess=await get('/personal/product-drafts?organization_id='+organizations[0].id)
     assert.equal(ownerDraftAccess.status,200)

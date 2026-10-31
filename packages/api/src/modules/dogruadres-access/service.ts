@@ -1416,11 +1416,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!owner||owner.person_id!==current.person_id||owner.organizations.length!==1||
        owner.organizations[0].role!=="owner")return null
     // Serialize with Foundation membership mutations and other grant requests.
-    const issuer=await db.execute(`select id from da_organization_membership
-      where organization_id=? and person_id=? and role='owner'
-        and status='active' and deleted_at is null for share`,
-      [input.organization_id,current.person_id])
-    if(issuer.length!==1)throw new IdentityAccessDenied()
+    // Authoritative protected Owner check holds the live membership row lock
+    // in the same Foundation transaction as the domain and audit writes.
+    if(!await isCurrentProtectedOwner(db,current.person_id,input.organization_id))return null
     const target=await db.execute(`select m.person_id from da_organization_membership m
       join da_person p on p.id=m.person_id
       where m.id=? and m.organization_id=? and m.deleted_at is null
@@ -1488,7 +1486,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const db=securitySql(context.transactionManager),s=new IdentitySessions(db)
     const current=await s.organizations(token,organizationId,false)
     if(!current||current.organizations.length!==1||
-       current.organizations[0].role!=="owner")return null
+       current.organizations[0].role!=="owner"||
+       !await isCurrentProtectedOwner(db,current.person_id,organizationId))return null
     const rows=await db.execute(`select g.id,g.person_id,g.seller_id
       from da_store_product_permission g
       join da_audit_event e on e.id=g.source_audit_event_id
@@ -1532,11 +1531,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const owner=await sessions.organizations(token,input.organization_id,false)
     if(!owner||owner.person_id!==current.person_id||owner.organizations.length!==1||
        owner.organizations[0].role!=="owner")return null
-    const issuer=await db.execute(`select id from da_organization_membership
-      where person_id=? and organization_id=? and role='owner'
-        and status='active' and deleted_at is null for share`,
-      [current.person_id,input.organization_id])
-    if(issuer.length!==1)throw new IdentityAccessDenied()
+    // Role-only ownership never grants authority to edit member permissions.
+    if(!await isCurrentProtectedOwner(db,current.person_id,input.organization_id))return null
     const target=await db.execute(`select m.person_id from da_organization_membership m
       join da_person p on p.id=m.person_id
       where m.id=? and m.organization_id=? and m.deleted_at is null
@@ -1606,7 +1602,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const db=securitySql(context.transactionManager),session=new IdentitySessions(db)
     const current=await session.organizations(token,organizationId,false)
     if(!current||current.organizations.length!==1||
-       current.organizations[0].role!=="owner")return null
+       current.organizations[0].role!=="owner"||
+       !await isCurrentProtectedOwner(db,current.person_id,organizationId))return null
     const rows=await db.execute(`select g.id,g.person_id
       from da_organization_buyer_permission g
       join da_audit_event e on e.id=g.source_audit_event_id
@@ -1653,11 +1650,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const owner=await sessions.organizations(token,input.organization_id,false)
     if(!owner||owner.person_id!==current.person_id||
        owner.organizations.length!==1||owner.organizations[0].role!=="owner")return null
-    const issuer=await db.execute(`select id from da_organization_membership
-      where organization_id=? and person_id=? and role='owner'
-        and status='active' and deleted_at is null for share`,
-      [input.organization_id,current.person_id])
-    if(issuer.length!==1)throw new IdentityAccessDenied()
+    // Authoritative protected Owner check holds the live membership row lock
+    // in the same Foundation transaction as the domain and audit writes.
+    if(!await isCurrentProtectedOwner(db,current.person_id,input.organization_id))return null
     const target=await db.execute(`select id from da_organization
       where id=? and deleted_at is null for share`,[input.buyer_organization_id])
     if(target.length!==1)return null
