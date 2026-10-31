@@ -556,12 +556,26 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     @MedusaContext() context:Context={}
   ) {
     const sql=securitySql(context.transactionManager)
+    // Lock the Person epoch BEFORE the shared policy lock, matching session
+    // creation and staff policy updates. A concurrent full login may commit
+    // after preparation but not during native completion.
+    const security=await sql.execute(
+      "select epoch from da_person_security where person_id=? for update",
+      [prepared.person_id])
+    if(security.length!==1)throw new IdentityAccessDenied()
     await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
     const store=new MfaPersistence(sql),policy=await store.readPlatformPolicy()
     if(policy.platform_mode==="required")return null
     const rows=await sql.execute("select s.id from da_browser_session s join da_person_security e on e.person_id=s.person_id where s.id=? and s.person_id=? and s.auth_identity_id=? and s.actor_type=? and s.actor_id=? and s.status='revoked' and e.epoch>s.epoch",
       [prepared.session_id,prepared.person_id,prepared.auth_identity_id,prepared.actor_type,prepared.actor_id])
     if(rows.length!==1)throw new IdentityAccessDenied()
+    // If another session was minted after precommit, do NOT disable the native
+    // factor and leave that freshly authenticated browser alive. The Person
+    // row lock above prevents a further session from racing past this check.
+    const newer=await sql.execute(
+      "select id from da_browser_session where person_id=? and status='active' and epoch=? limit 1",
+      [prepared.person_id,security[0].epoch])
+    if(newer.length)return null
     const result=await operation(prepared.auth_identity_id)
     await store.recordNativeMfaAction({
       person_id:prepared.person_id,actor_type:prepared.actor_type,actor_id:prepared.actor_id
