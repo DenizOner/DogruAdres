@@ -2476,6 +2476,92 @@ export default async function({container}:any){
       where person_id=$1 and organization_id=$2 and revoked_at is null`,
       [B.person,organizations[0].id]))[0].n,0)
     process.stdout.write("PASS B22 Chrome: Organization Owner grants and revokes buyer.purchase for active Alpha Member, audit/outbox PG16, idempotent replay, foreign Org Owner/staff 403 and no automatic Owner permission; no checkout writer\\n")
+    // F-02: an actual native Medusa Customer GET completes, but its HTTP
+    // response is held while a supported Customer unlink commits to PG16.
+    // No fake upstream actor response, production hook or external service.
+    const customerBeforeRace=await reviewer.eval("(async()=>{const r=await fetch('/personal/contexts?type=customer');return r.status})()")
+    assert.equal(customerBeforeRace,200,"Valid Customer stays available before unlink")
+    const customerBindingRows=await q(
+      "select id from da_verified_actor_binding where person_id=$1 and actor_type='customer' and revoked_at is null",
+      [B.person])
+    assert.equal(customerBindingRows.length,1)
+    const raceCookie=await reviewer.token()
+    assert.match(raceCookie??"",/^[A-Za-z0-9_-]{43}$/)
+    const nativeCustomerTarget=topology.privateOrigin+"/store/customers/me"
+    const realNodeFetch=globalThis.fetch
+    let nativeResponseReceived=false,gateReleased=false
+    let releaseNative!:()=>void
+    const nativeGate=new Promise<void>(resolve=>{releaseNative=()=>{gateReleased=true;resolve()}})
+    let intercepted=false
+    globalThis.fetch=async(...args:Parameters<typeof fetch>):Promise<Response>=>{
+      const response=await realNodeFetch(...args)
+      const target=typeof args[0]==="string"?args[0]:
+        args[0] instanceof URL?args[0].toString():args[0].url
+      if(!intercepted&&target===nativeCustomerTarget&&response.status===200){
+        intercepted=true
+        // Read the real native body before waiting. Only delivery to the
+        // public response is paused; the upstream Customer GET already passed.
+        await response.clone().arrayBuffer()
+        nativeResponseReceived=true
+        await nativeGate
+      }
+      return response
+    }
+    let inFlightCustomer:Promise<{status:number;body:any}>|undefined
+    try{
+      inFlightCustomer=new Promise((resolve,reject)=>{
+        const request=tlsRequest(host+"/personal/contexts?type=customer",{
+          method:"GET",ca:readFileSync(crt),
+          headers:{Cookie:"da_session="+raceCookie}
+        },response=>{
+          let body=""
+          response.setEncoding("utf8")
+          response.on("data",chunk=>{body+=chunk})
+          response.on("end",()=>{
+            try{resolve({status:response.statusCode??0,body:JSON.parse(body)})}
+            catch(error){reject(error)}
+          })
+        })
+        request.on("error",reject)
+        request.setTimeout(14000,()=>request.destroy(Error("F-02 Customer GET timed out")))
+        request.end()
+      })
+      await until(async()=>nativeResponseReceived,10000,
+        "F-02 actual Medusa Customer HTTP response held before public reply")
+      const unlinkCode="(async()=>{"+
+        "const sr=await fetch('/personal/session');"+
+        "if(sr.status!==200)return {status:sr.status};"+
+        "const session=await sr.json();"+
+        "const r=await fetch('/personal/links',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+        "body:JSON.stringify({action:'unlink',binding_id:"+
+        JSON.stringify(customerBindingRows[0].id)+"})});"+
+        "return {status:r.status}})()"
+      const unlinkOutcome=await reviewer.eval(unlinkCode)
+      assert.equal(unlinkOutcome.status,200,
+        "Supported CSRF-protected Customer unlink must commit while native GET is held")
+      const revokedBinding=await q(
+        "select revoked_at from da_verified_actor_binding where id=$1",
+        [customerBindingRows[0].id])
+      assert.equal(revokedBinding.length,1)
+      assert.ok(revokedBinding[0].revoked_at,
+        "Independent PG16 readback confirms Customer unlink was committed")
+      assert.equal((await q(
+        "select count(*)::int n from da_actor_credential where binding_id=$1 and retired_at is null",
+        [customerBindingRows[0].id]))[0].n,0,
+        "Revoked Customer leaves no live native credential")
+      releaseNative()
+      const outcome=await inFlightCustomer
+      assert.equal(outcome.status,403,
+        "F-02: a native response completed before committed unlink must not expose stale Customer context")
+      assert.deepEqual(outcome.body,{message:"Access denied"})
+      process.stdout.write("PASS F-02 actual native Customer GET held: supported unlink committed PG16; stale public context denied and credentials retired\n")
+    }finally{
+      if(!gateReleased)releaseNative()
+      globalThis.fetch=realNodeFetch
+      if(inFlightCustomer)await inFlightCustomer.catch(()=>{})
+    }
+
     // The Organization Owner may explicitly grant AND revoke products.edit
     // for an active member; platform staff status is not sufficient.
     await browser.send("Page.bringToFront")
