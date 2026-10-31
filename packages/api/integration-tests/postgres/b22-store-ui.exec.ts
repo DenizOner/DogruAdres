@@ -3138,9 +3138,18 @@ export default async function({container}:any){
       await ownerRaceBarrier.end()
       if(ownerPauseTrigger)await q("drop trigger if exists b22_native_seller_owner_pause_v1 on seller")
       if(ownerPauseFn)await q("drop function if exists b22_native_seller_owner_pause_v1()")
+      // The revoked Gamma workspace is no longer selectable by A. Do NOT
+      // reload it and confuse a denied tenant with a failed global login.
+      // Test that the same Personal session still authorizes unrelated Alpha,
+      // then select Alpha before the pre-existing browser acceptance cases.
       await browser.send("Page.bringToFront")
-      await browser.send("Page.reload",{ignoreCache:true})
-      await reviewer.send("Page.reload",{ignoreCache:true})
+      await browser.wait("document.visibilityState==='visible'")
+      const stillPersonal=await get("/personal/session")
+      assert.equal(stillPersonal.status,200,
+        "Gamma Owner revoke must not terminate A's independent Alpha Person session")
+      await browser.select(organizations[0].name,"owner")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
     }
 
     // Native Member context now requires the SAME live legal Organization
