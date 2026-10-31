@@ -3178,63 +3178,102 @@ export default async function({container}:any){
     const disableBeforeAudit=Number((await q(
       "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='mfa.native_factor_disabled'",
       [B.person]))[0].n)
-    // A real native Medusa disable executes first; the isolated PG16
-    // fault blocks BOTH Foundation MFA audit and independent session-revoke
-    // audit. The previous one-fault case has an accepted exact-SHA PASS.
-    await q("create function b22_mfa_disable_outbox_fault_v1() returns trigger language plpgsql as $b22$ begin if exists(select 1 from da_audit_event e where e.id=NEW.audit_event_id and e.action in ('mfa.native_factor_disabled','session.all_revoked')) then raise exception 'B22 forced MFA disable and revocation outbox failures'; end if; return NEW; end $b22$")
-    let disableFaultInstalled=false
+    // B-01 double fault: BOTH the native-disable and all-session-revocation
+    // outbox writes are rejected by a test-only PG16 trigger. A secure flow
+    // must abort BEFORE mutating the actual native MFA factor.
+    const epochBeforeDisable=Number((await q(
+      "select epoch from da_person_security where person_id=$1",[B.person]))[0].epoch)
+    const countLogoutAudit=async()=>Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='session.all_revoked'",[B.person]))[0].n)
+    const countLogoutOutbox=async()=>Number((await q(
+      "select count(*)::int n from da_security_outbox x join da_audit_event e on e.id=x.audit_event_id where e.actor_person_id=$1 and e.action='session.all_revoked'",[B.person]))[0].n)
+    const logoutAuditBefore=await countLogoutAudit()
+    const logoutOutboxBefore=await countLogoutOutbox()
+    assert.equal(logoutAuditBefore,logoutOutboxBefore)
+    const oldCookieStatus=async()=>new Promise<number>((resolve,reject)=>{
+      const request=tlsRequest(host+"/personal/session",{
+        method:"GET",ca:readFileSync(crt),
+        headers:{cookie:"da_session="+preDisableCookie}
+      },response=>{response.resume();response.on("end",()=>resolve(response.statusCode??0))})
+      request.on("error",reject)
+      request.setTimeout(10000,()=>request.destroy(Error("MFA disable old cookie timed out")))
+      request.end()
+    })
+    assert.equal(await oldCookieStatus(),200)
+    const enabledFactorList=async()=>auth.listAuthMfa(
+      {auth_identity_id:recoveryIdentity[0].auth_identity_id,status:"enabled"},{take:2})
+    const nativeDisablePost=async()=>reviewer.eval(
+      "(async()=>{const sr=await fetch('/personal/session');"+
+      "if(sr.status!==200)return {status:sr.status,body:{}};"+
+      "const session=await sr.json();"+
+      "const response=await fetch('/personal/mfa/manage',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({action:'disable',method:'recovery_code',code:"+JSON.stringify(disableCodes[2])+"})});"+
+      "return {status:response.status,body:await response.json()}})()")
+    let disableFunctionInstalled=false,disableTriggerInstalled=false
     try{
+      await q("create function b22_mfa_disable_outbox_fault_v1() returns trigger language plpgsql as $b22$ begin if exists(select 1 from da_audit_event e where e.id=NEW.audit_event_id and e.action in ('mfa.native_factor_disabled','session.all_revoked')) then raise exception 'B22 forced MFA disable and revocation outbox failures'; end if; return NEW; end $b22$")
+      disableFunctionInstalled=true
       await q("create trigger b22_mfa_disable_outbox_fault_v1 before insert on da_security_outbox for each row execute function b22_mfa_disable_outbox_fault_v1()")
-      disableFaultInstalled=true
-      const disableResponse=await reviewer.eval(
-        "(async()=>{const sr=await fetch('/personal/session');"+
-        "if(sr.status!==200)return {status:sr.status,body:{}};"+
-        "const session=await sr.json();"+
-        "const response=await fetch('/personal/mfa/manage',{method:'POST',"+
-        "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
-        "body:JSON.stringify({action:'disable',method:'recovery_code',code:"+JSON.stringify(disableCodes[2])+"})});"+
-        "return {status:response.status,body:await response.json()}})()")
-      assert.equal(disableResponse.status,503,
-        "Post-native Foundation failure must not be reported as successful disable")
-      assert.match(disableResponse.body?.message??"",/INDETERMINATE/)
+      disableTriggerInstalled=true
+      const denied=await nativeDisablePost()
+      assert.equal(denied.status,503,
+        "Broken Foundation precommit must not allow the native factor operation")
+      assert.equal(denied.body?.message,"Service unavailable",
+        "Native MFA was never attempted, so this is not a native INDETERMINATE outcome")
+      assert.equal((await enabledFactorList()).length,1,
+        "The original native factor MUST remain enabled after both outbox failures")
+      assert.equal(await oldCookieStatus(),200,
+        "Precommit failure preserves only the original MFA-protected session")
+      assert.equal(await reviewer.eval(
+        "(async()=> (await fetch('/personal/session')).status)()"),200)
+      assert.equal(Number((await q(
+        "select epoch from da_person_security where person_id=$1",[B.person]))[0].epoch),epochBeforeDisable)
+      assert.equal(await countLogoutAudit(),logoutAuditBefore)
+      assert.equal(await countLogoutOutbox(),logoutOutboxBefore)
+      assert.equal(Number((await q(
+        "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='mfa.native_factor_disabled'",
+        [B.person]))[0].n),disableBeforeAudit)
+      process.stdout.write("PASS B-01 MFA double-outbox failure: no native disable, original TOTP/session intact, no partial Foundation audit or epoch change\n")
+      // Second boundary: a successful precommit, true Medusa native disable,
+      // then a failing COMPLETION audit. Revocation must remain committed.
+      await q("drop trigger b22_mfa_disable_outbox_fault_v1 on da_security_outbox")
+      disableTriggerInstalled=false
+      await q("drop function b22_mfa_disable_outbox_fault_v1()")
+      disableFunctionInstalled=false
+      await q("create function b22_mfa_disable_outbox_fault_v1() returns trigger language plpgsql as $b22$ begin if exists(select 1 from da_audit_event e where e.id=NEW.audit_event_id and e.action='mfa.native_factor_disabled') then raise exception 'B22 forced post-native MFA completion audit failure'; end if; return NEW; end $b22$")
+      disableFunctionInstalled=true
+      await q("create trigger b22_mfa_disable_outbox_fault_v1 before insert on da_security_outbox for each row execute function b22_mfa_disable_outbox_fault_v1()")
+      disableTriggerInstalled=true
+      const uncertain=await nativeDisablePost()
+      assert.equal(uncertain.status,503)
+      assert.match(uncertain.body?.message??"",/INDETERMINATE/)
       assert.equal(await reviewer.eval(
         "(async()=> (await fetch('/personal/session')).status)()"),401,
-        "Old full browser session MUST NOT remain usable after native MFA disable")
-      const disabledEpoch=await q(
-        "select e.epoch from da_person_security e where e.person_id=$1",[B.person])
-      const disabledSessions=await q(
-        "select status from da_browser_session where person_id=$1",[B.person])
-      assert.equal(disabledEpoch.length,1)
-      assert.ok(disabledSessions.length>=2)
-      assert.ok(disabledSessions.every((row:any)=>row.status!=="active"),
-        "No other Person session may remain active after uncertain native disable")
-      const recoveryLogoutAudit=await q(
-        "select e.id from da_audit_event e join da_security_outbox x on x.audit_event_id=e.id where e.actor_person_id=$1 and e.action='session.all_revoked'",
-        [B.person])
-      assert.ok(recoveryLogoutAudit.length>=1,
-        "Separate Foundation revocation must persist its real audit/outbox")
+        "Committed pre-native revocation denies the old browser")
+      assert.equal(await oldCookieStatus(),401,
+        "The exact old HTTPS cookie must fail even though post-native audit rolled back")
+      assert.equal((await enabledFactorList()).length,0)
       const [nativeDisabled]=await auth.listAuthMfa(
         {auth_identity_id:recoveryIdentity[0].auth_identity_id,status:"disabled"},{take:2})
-      assert.equal(nativeDisabled?.id,enabledFactors[0].id,
-        "True native Medusa MFA factor must be disabled despite failed Foundation audit")
-      assert.equal((await q(
+      assert.equal(nativeDisabled?.id,enabledFactors[0].id)
+      assert.ok(Number((await q(
+        "select epoch from da_person_security where person_id=$1",[B.person]))[0].epoch)>epochBeforeDisable)
+      const allSessions=await q("select status from da_browser_session where person_id=$1",[B.person])
+      assert.ok(allSessions.length>=2)
+      assert.ok(allSessions.every((row:any)=>row.status!=="active"))
+      assert.equal(await countLogoutAudit(),logoutAuditBefore+1)
+      assert.equal(await countLogoutOutbox(),logoutOutboxBefore+1)
+      assert.equal(Number((await q(
         "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='mfa.native_factor_disabled'",
-        [B.person]))[0].n,disableBeforeAudit,
-        "Failed audit/outbox transaction cannot falsely claim success")
-      // Probe exact pre-disable opaque cookie on live HTTPS, not just hidden UI.
-      const oldCredentialStatus=await new Promise<number>((resolve,reject)=>{
-        const request=tlsRequest(host+"/personal/session",{
-          method:"GET",ca:readFileSync(crt),headers:{cookie:"da_session="+preDisableCookie}
-        },response=>{response.resume();response.on("end",()=>resolve(response.statusCode??0))})
-        request.on("error",reject);request.setTimeout(10000,()=>request.destroy(Error("MFA disable old-cookie timeout")));request.end()
-      })
-      assert.equal(oldCredentialStatus,401,
-        "MFA-disabled identity's old full cookie must not work after audit failure")
-      process.stdout.write("PASS B-01 MFA disable outbox fault: native factor disabled, Foundation audit failed, stale browser and old cookie denied\n")
+        [B.person]))[0].n),disableBeforeAudit,
+        "Failed post-native audit cannot be reported as committed")
+      process.stdout.write("PASS B-01 MFA completion audit failure: native factor disabled, independent precommitted session revocation/audit survives, old HTTPS cookie denied\n")
     }finally{
-      if(disableFaultInstalled)
+      if(disableTriggerInstalled)
         await q("drop trigger b22_mfa_disable_outbox_fault_v1 on da_security_outbox")
-      await q("drop function b22_mfa_disable_outbox_fault_v1()")
+      if(disableFunctionInstalled)
+        await q("drop function b22_mfa_disable_outbox_fault_v1()")
     }
 
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
