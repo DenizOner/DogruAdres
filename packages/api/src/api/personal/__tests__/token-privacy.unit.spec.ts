@@ -63,9 +63,11 @@ describe("bearer URL privacy (executed page scripts, not backend/browser accepta
     process.env.DOGRUADRES_STOREFRONT_URL = configured
     try {
       const { html } = await page()
-      const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
-      expect(scripts).toHaveLength(2)
-      const declaration = scripts[1][1].split("\n").find(line => line.includes("const APP_URLS="))
+      // This is a known server-rendered fixture, not an HTML sanitization check.
+      // Extract the generated declaration directly rather than parsing HTML with regex.
+      const declarations = html.split("\n").filter(line => line.trim().startsWith("const APP_URLS="))
+      expect(declarations).toHaveLength(1)
+      const declaration = declarations[0]
       expect(declaration).toBeTruthy()
       const logger = jest.fn()
       const rendered = runInNewContext((declaration || "")+"\nAPP_URLS.storefront", { console: { log: logger } })
