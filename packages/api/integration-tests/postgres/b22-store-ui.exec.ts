@@ -3036,10 +3036,19 @@ export default async function({container}:any){
     await ownerRaceBarrier.connect()
     let ownerBarrierHeld=false,ownerPauseFn=false,ownerPauseTrigger=false
     try{
+      const [gammaMembershipBeforeRace]=await q(
+        "select status,protected_owner from da_organization_membership where id=$1",
+        [gammaOwnerMembership.id])
+      assert.equal(gammaMembershipBeforeRace.status,"active")
+      assert.equal(gammaMembershipBeforeRace.protected_owner,true)
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
+      // The prior product-race test reloads the Chrome page. Wait for the
+      // async Organization list, not merely for the workspace shell.
+      await browser.wait(`!document.getElementById('workspace').hidden &&
+        Array.from(document.querySelectorAll('#organizations button')).some(
+          b=>b.textContent===${JSON.stringify(sellerGamma.name+" — owner")})`)
       await browser.select(sellerGamma.name,"owner")
-      await browser.wait("!document.getElementById('workspace').hidden")
       await q("create function b22_native_seller_owner_pause_v1() returns trigger language plpgsql as $b22$ begin if NEW.email='"+ownerRaceEmail+"' then perform pg_advisory_xact_lock(hashtext('b22-native-owner-create-pause'),hashtext('"+ownerRaceEmail+"')); end if; return NEW; end $b22$")
       ownerPauseFn=true
       await q("create trigger b22_native_seller_owner_pause_v1 after insert on seller for each row execute function b22_native_seller_owner_pause_v1()")
