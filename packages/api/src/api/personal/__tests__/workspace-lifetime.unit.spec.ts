@@ -23,6 +23,29 @@ const tick=()=>new Promise<void>(r=>setImmediate(r))
 async function answer(h:ReturnType<typeof harness>,path:string,data:any,ok=true){const p=h.pending.find(p=>p.path===path&&!p.answered)!;p.answered=true;p.resolve({ok,status:ok?200:403,json:async()=>data});await tick()}
 async function loaded(h:ReturnType<typeof harness>){await answer(h,'/personal/session',{person_id:'private-person',csrf_token:'csrf'});await answer(h,'/personal/organizations',{person_id:'private-person',organizations:[{id:'A',name:'private-org',role:'owner'}]})}
 
+describe('selected Organization native Seller UI (script regression, not backend proof)',()=>{
+  it('requires Organization, sends the selected scope, and ignores late cross-Organization responses',async()=>{
+    const h=harness();
+    (h.context as any).FormData=class {get(name:string){return name==='seller'?'sel_fixture':null}};
+    runInContext("api=async path=>{globalThis.sellerPath=path;return {organization_id:'daorg_A',seller:{id:'sel_fixture'}}}",h.context);
+    const submit=()=>h.el('seller').onsubmit({preventDefault(){},target:{}});
+    await submit();
+    expect(h.el('status').textContent).toContain('Önce erişiminiz olan kuruluşu seçin');
+    expect((h.context as any).sellerPath).toBeUndefined();
+
+    runInContext("currentOrg='daorg_A';organizationRequest=1",h.context);
+    await submit();
+    expect((h.context as any).sellerPath).toBe('contexts?type=member&organization=daorg_A&seller=sel_fixture');
+    expect(JSON.parse(h.el('actor-result').textContent).organization_id).toBe('daorg_A');
+
+    runInContext("api=path=>new Promise(resolve=>{globalThis.resolveSeller=resolve})",h.context);
+    const delayed=submit();
+    runInContext("currentOrg='daorg_B';organizationRequest++",h.context);
+    (h.context as any).resolveSeller({organization_id:'daorg_A',seller:{id:'sel_fixture'}});
+    await delayed;
+    expect(h.el('actor-result').textContent).toBe('');
+  });
+});
 describe('private workspace lifetime (script regression only)',()=>{
   it('polls with the no-touch header, stops while hidden, and clears private DOM',async()=>{
     const h=harness();await loaded(h)

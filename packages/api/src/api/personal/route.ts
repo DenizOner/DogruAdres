@@ -473,7 +473,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   };
   async function selectOrg(id){
     clearNotifications();
-    const request=++organizationRequest;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('invite-member').hidden=true;el('invite-result').textContent='';clearPendingInvitations();el('detail').textContent='';clearMemberships();clearOrganizationStores();history.replaceState(null,'','/personal');
+    const request=++organizationRequest;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('invite-member').hidden=true;el('invite-result').textContent='';clearPendingInvitations();el('detail').textContent='';el('actor-result').textContent='';el('seller').reset();clearMemberships();clearOrganizationStores();history.replaceState(null,'','/personal');
     el('memberships').ariaBusy='true';el('memberships-status').textContent='Üyelikler yükleniyor…';
     try{const result=await api('organizations?id='+encodeURIComponent(id));if(request!==organizationRequest)return;
       currentOrg=id;el('detail').textContent=JSON.stringify(result.organizations[0],null,2);history.replaceState(null,'','/personal?organization='+encodeURIComponent(id));
@@ -1332,7 +1332,28 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('link-account').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button');b.disabled=true;try{const values=Object.fromEntries(new FormData(e.target));const result=await api('links',{method:'POST',body:JSON.stringify({action:'begin',...values})});linkIntent=result.intent;e.target.reset();el('link-confirm').reset();el('link-confirm').querySelector('button').disabled=false;el('link-confirm').hidden=false;el('link-confirm').elements.code.required=result.challenge_required;status(result.challenge_required?'İkincil hesap için MFA gerekli':'İkincil sahiplik doğrulandı; bağlantıyı tamamlayın')}catch(err){status(err.message)}finally{b.disabled=false}};
   el('link-confirm').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button');b.disabled=true;try{const code=new FormData(e.target).get('code');await api('links',{method:'POST',body:JSON.stringify({action:'complete',intent:linkIntent,...(code?{code}:{})})});linkIntent='';e.target.reset();e.target.hidden=true;await links();status('Hesap bağlantısı tamamlandı')}catch(err){status(err.message);if(!err.uncertain)b.disabled=false}};
   el('provision').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button'),v=new FormData(e.target);b.disabled=true;try{const result=await api('platform',{method:'POST',body:JSON.stringify({name:v.get('name'),initial_owners:[{actor_type:v.get('type1'),actor_id:v.get('owner1')},{actor_type:v.get('type2'),actor_id:v.get('owner2')}]})});el('provision-result').textContent=JSON.stringify(result,null,2);status('Kuruluş oluşturuldu');e.target.reset()}catch(err){status(err.message);if(!err.uncertain)b.disabled=false}};
-  el('seller').onsubmit=async e=>{e.preventDefault();try{const result=await api('contexts?type=member&seller='+encodeURIComponent(new FormData(e.target).get('seller')));el('actor-result').textContent=JSON.stringify(result,null,2);status('Satıcı erişimi doğrulandı')}catch(e){el('actor-result').textContent='';status(e.message)}};
+  el('seller').onsubmit=async e=>{
+    e.preventDefault();
+    const org=currentOrg,request=organizationRequest;
+    const seller=String(new FormData(e.target).get('seller')||'');
+    el('actor-result').textContent='';
+    if(!org){status('Önce erişiminiz olan kuruluşu seçin.');return;}
+    if(!/^sel_[A-Za-z0-9_-]+$/.test(seller)){status('Geçerli mağaza kimliği gerekli.');return;}
+    try{
+      // Native Member and Store membership do not establish legal Organization authority.
+      const query=new URLSearchParams({type:'member',organization:org,seller});
+      const result=await api('contexts?'+query.toString());
+      if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+      if(result.organization_id!==org||result.seller?.id!==seller)
+        throw new Error('Güncel kuruluş-mağaza bağlamı doğrulanamadı');
+      el('actor-result').textContent=JSON.stringify(result,null,2);
+      status('Satıcı erişimi doğrulandı');
+    }catch(error){
+      if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+      el('actor-result').textContent='';
+      status(error.message);
+    }
+  };
   el('customer').onclick=async()=>{try{const result=await api('contexts?type=customer');el('actor-result').textContent=JSON.stringify(result,null,2);status('Müşteri bağlamı doğrulandı')}catch(e){el('actor-result').textContent='';status(e.message)}};
   el('mfa-recovery').onclick=async()=>{
     if(!confirm('Yeni kodlar önceki kurtarma kodlarını geçersiz kılar. Devam edilsin mi?'))return;

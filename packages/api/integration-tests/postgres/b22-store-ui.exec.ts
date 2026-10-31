@@ -3197,6 +3197,17 @@ export default async function({container}:any){
     await browser.wait("!document.getElementById('workspace').hidden")
     await browser.select(organizations[0].name,"owner")
     await browser.wait("document.querySelectorAll('#org-stores p').length===1")
+    // The visible Seller-context form must send the selected Organization.
+    await browser.input('#seller input[name=seller]',ownerStoreId)
+    await browser.click('#seller button')
+    await browser.wait(`(()=>{try{
+      return JSON.parse(document.getElementById('actor-result').textContent).seller.id===
+        ${JSON.stringify(ownerStoreId)}
+    }catch{return false}})()`)
+    const sellerUiContext=await browser.eval("JSON.parse(document.getElementById('actor-result').textContent)")
+    assert.equal(sellerUiContext.organization_id,organizations[0].id)
+    assert.equal(sellerUiContext.seller.id,ownerStoreId)
+    process.stdout.write("PASS B22 Chrome: Seller context UI includes selected Organization and authorized native Seller; missing-Organization HTTP 400 retained\n")
     assert.equal((await get(selected(organizations[0].id))).body.stores[0].id,ownerStoreId)
     assert.equal(await browser.eval(`document.getElementById('org-stores').textContent.includes(${JSON.stringify(applicationName)})`),true)
     assert.deepEqual((await get(selected(organizations[1].id))).body.stores,[])
