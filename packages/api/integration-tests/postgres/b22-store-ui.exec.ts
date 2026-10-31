@@ -3173,7 +3173,7 @@ export default async function({container}:any){
     assert.equal(await reviewer.eval(
       "(async()=> (await fetch('/personal/session')).status)()"),401)
     await reloginWithRecovery(disableCodes[1])
-    const preDisableCookie=await reviewer.token()
+    let preDisableCookie=await reviewer.token()
     assert.match(preDisableCookie??"",/^[A-Za-z0-9_-]{43}$/)
     const disableBeforeAudit=Number((await q(
       "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='mfa.native_factor_disabled'",
@@ -3181,14 +3181,14 @@ export default async function({container}:any){
     // B-01 double fault: BOTH the native-disable and all-session-revocation
     // outbox writes are rejected by a test-only PG16 trigger. A secure flow
     // must abort BEFORE mutating the actual native MFA factor.
-    const epochBeforeDisable=Number((await q(
+    let epochBeforeDisable=Number((await q(
       "select epoch from da_person_security where person_id=$1",[B.person]))[0].epoch)
     const countLogoutAudit=async()=>Number((await q(
       "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='session.all_revoked'",[B.person]))[0].n)
     const countLogoutOutbox=async()=>Number((await q(
       "select count(*)::int n from da_security_outbox x join da_audit_event e on e.id=x.audit_event_id where e.actor_person_id=$1 and e.action='session.all_revoked'",[B.person]))[0].n)
-    const logoutAuditBefore=await countLogoutAudit()
-    const logoutOutboxBefore=await countLogoutOutbox()
+    let logoutAuditBefore=await countLogoutAudit()
+    let logoutOutboxBefore=await countLogoutOutbox()
     assert.equal(logoutAuditBefore,logoutOutboxBefore)
     const oldCookieStatus=async()=>new Promise<number>((resolve,reject)=>{
       const request=tlsRequest(host+"/personal/session",{
@@ -3241,6 +3241,98 @@ export default async function({container}:any){
       disableTriggerInstalled=false
       await q("drop function b22_mfa_disable_outbox_fault_v1()")
       disableFunctionInstalled=false
+      // B-01 real policy race: an authorized independent A staff login sets
+      // platform MFA to REQUIRED only AFTER B's audited revoke precommit,
+      // while B's original HTTPS disable request is still in flight.
+      // No direct database policy update or mocked native MFA response.
+      const [staffAIdentity]=await q(
+        "select auth_identity_id from da_login_binding where person_id=$1 and actor_type='user' and revoked_at is null",
+        [A.person])
+      assert.ok(staffAIdentity?.auth_identity_id)
+      const {codes:staffCodes}=await auth.generateAuthMfaRecoveryCodes({
+        auth_identity_id:staffAIdentity.auth_identity_id,count:10})
+      assert.equal(staffCodes?.length,10)
+      const staffGrantId="da_staff_mfa_race_"+rand
+      await q("insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason) values($1,$2,'security.mfa.manage','platform',$2,'B22 disposable independent MFA policy race actor')",
+        [staffGrantId,A.person])
+      const loginStaffA=async(recoveryCode:string)=>{
+        await browser.send("Page.reload",{ignoreCache:true})
+        await browser.wait("document.getElementById('login').hidden===false")
+        await browser.input("#login input[name=email]",A.email)
+        await browser.input("#login input[name=password]",A.password)
+        await browser.click("#login button")
+        await browser.wait("document.getElementById('challenge').hidden===false")
+        assert.equal(await browser.eval("(()=>{const s=document.querySelector('#challenge select[name=method]');s.value='recovery_code';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"),"recovery_code")
+        await browser.input("#challenge input[name=code]",recoveryCode)
+        await browser.click("#challenge button")
+        await browser.wait("document.getElementById('workspace').hidden===false")
+        assert.equal(await browser.eval("(async()=> (await fetch('/personal/session')).status)()"),200)
+      }
+      const staffSetPlatform=async(mode:"required"|"optional",version:number)=>browser.eval(
+        "(async()=>{const sr=await fetch('/personal/session');"+
+        "if(sr.status!==200)return {status:sr.status};"+
+        "const session=await sr.json();"+
+        "const r=await fetch('/personal/mfa',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+        "body:JSON.stringify({action:'platform',platform_mode:"+JSON.stringify(mode)+
+        ",expected_version:"+version+"})});return {status:r.status}})()")
+      await loginStaffA(staffCodes[0])
+      const foundationPrototype=Object.getPrototypeOf(foundation)
+      const originalPrepare=foundationPrototype.personalPrepareNativeMfaDisable
+      let reachedPrecommit=false,gateReleased=false
+      let releasePrecommit!:()=>void
+      const precommitGate=new Promise<void>(resolve=>{releasePrecommit=()=>{gateReleased=true;resolve()}})
+      foundationPrototype.personalPrepareNativeMfaDisable=async function(this:any,...args:any[]){
+        const prepared=await originalPrepare.apply(this,args)
+        if(prepared?.person_id===B.person){
+          reachedPrecommit=true
+          await precommitGate
+        }
+        return prepared
+      }
+      let inFlightPolicyRace:Promise<any>|undefined
+      try{
+        inFlightPolicyRace=nativeDisablePost()
+        await until(async()=>reachedPrecommit,10000,
+          "MFA platform policy switch after B's committed session revoke")
+        assert.equal(await oldCookieStatus(),401,
+          "B session revocation must commit before policy writer changes required mode")
+        const [beforeRequired]=await q("select version,platform_mode from da_mfa_policy where id='current'")
+        assert.equal(beforeRequired.platform_mode,"optional")
+        const toRequired=await staffSetPlatform("required",Number(beforeRequired.version))
+        assert.equal(toRequired.status,200,
+          "Real independently authenticated Staff A must commit required policy via HTTP")
+        const [requiredPolicy]=await q("select version,platform_mode from da_mfa_policy where id='current'")
+        assert.equal(requiredPolicy.platform_mode,"required")
+        releasePrecommit()
+        const raced=await inFlightPolicyRace
+        assert.equal(raced.status,409,
+          "Required policy committed before native completion must block factor disable")
+        assert.equal((await enabledFactorList()).length,1,
+          "Verified native Medusa TOTP must remain enabled under newly required MFA")
+        assert.equal(await oldCookieStatus(),401)
+        process.stdout.write("PASS B-01 MFA policy race: separate Staff A HTTP required transition committed between B precommit and native operation; native factor remained enabled, old B session denied\n")
+      }finally{
+        if(!gateReleased)releasePrecommit()
+        foundationPrototype.personalPrepareNativeMfaDisable=originalPrepare
+        if(inFlightPolicyRace)await inFlightPolicyRace.catch(()=>{})
+      }
+      // Restore optional only through the same real MFA challenge + authorized
+      // platform staff API. This permits the pre-existing post-native fault
+      // regression to run with a fresh B session and its original invariants.
+      await loginStaffA(staffCodes[1])
+      const [requiredPolicy]=await q("select version,platform_mode from da_mfa_policy where id='current'")
+      assert.equal(requiredPolicy.platform_mode,"required")
+      assert.equal((await staffSetPlatform("optional",Number(requiredPolicy.version))).status,200)
+      await reloginWithRecovery(disableCodes[3])
+      preDisableCookie=await reviewer.token()
+      assert.match(preDisableCookie??"",/^[A-Za-z0-9_-]{43}$/)
+      assert.equal(await oldCookieStatus(),200)
+      epochBeforeDisable=Number((await q(
+        "select epoch from da_person_security where person_id=$1",[B.person]))[0].epoch)
+      logoutAuditBefore=await countLogoutAudit()
+      logoutOutboxBefore=await countLogoutOutbox()
+      assert.equal(logoutAuditBefore,logoutOutboxBefore)
       await q("create function b22_mfa_disable_outbox_fault_v1() returns trigger language plpgsql as $b22$ begin if exists(select 1 from da_audit_event e where e.id=NEW.audit_event_id and e.action='mfa.native_factor_disabled') then raise exception 'B22 forced post-native MFA completion audit failure'; end if; return NEW; end $b22$")
       disableFunctionInstalled=true
       await q("create trigger b22_mfa_disable_outbox_fault_v1 before insert on da_security_outbox for each row execute function b22_mfa_disable_outbox_fault_v1()")
