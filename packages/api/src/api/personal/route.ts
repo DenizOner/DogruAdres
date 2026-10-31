@@ -191,7 +191,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     </section>
     <section id="product-grants-panel" hidden aria-labelledby="product-grants-title">
       <h3 id="product-grants-title">Mağaza ürün düzenleme yetkileri</h3>
-      <p>Yalnız kuruluş Owner'ı, aktif üyeye kendi kuruluşunun onaylı mağazası için ayrı ürün düzenleme izni verebilir veya iptal edebilir. Hiçbir üyeye otomatik izin atanmaz.</p>
+      <p>Korunmuş Owner, kendi kuruluşunun onaylı mağazalarında ayrıca ürün düzenleme izni almadan işlem yapabilir. Diğer aktif üyelere yalnız bu kuruluşun onaylı mağazaları için ayrı izin verilebilir veya izinleri iptal edilebilir.</p>
       <p id="product-grants-status" role="status" aria-live="polite"></p>
       <form id="product-grants-form">
         <label>Onaylı mağaza<select name="seller_id" required></select></label>
@@ -213,7 +213,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   </section>
   <section id="buyer-grants-panel" hidden aria-labelledby="buyer-grants-title" style="grid-column:1/-1">
     <h3 id="buyer-grants-title">Kuruluş satın alma izinleri</h3>
-    <p>Kuruluş Owner'ı, bu kuruluşun aktif üyesine ayrı satın alma izni verir veya iptal eder. Owner rolü veya kişisel müşteri hesabı kendiliğinden satın alma yetkisi vermez. Bu ekrandan sipariş veya ödeme yapılamaz.</p>
+    <p>Korunmuş Owner, kendi aktif kuruluşu için ayrıca satın alma izni almaz. Diğer aktif üyeler için satın alma iznini Owner verir veya iptal eder. Kişisel müşteri bağlantısı tek başına kuruluş adına işlem yetkisi vermez. Mağazanın alıcı kuruluş engeli herkese uygulanır. Bu ekrandan sipariş veya ödeme yapılamaz.</p>
     <p id="buyer-grants-status" role="status" aria-live="polite"></p>
     <form id="buyer-grants-form">
       <label>Kuruluş üyesi<select name="membership_id" required></select></label>
@@ -225,7 +225,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   </section>
   <section id="product-draft-panel" hidden aria-labelledby="product-draft-title" style="grid-column:1/-1">
     <h3 id="product-draft-title">Mağazama ürün taslağı ekle</h3>
-    <p>Yalnız ayrıca ürün düzenleme izniniz bulunan, onaylanmış mağazalarda taslak oluşturabilirsiniz. Sonuç belirsizse aynı işlemi yeniden göndermeyin.</p>
+    <p>Kendi kuruluşunun onaylı mağazalarında korunmuş Owner veya ayrı ürün düzenleme izni olan aktif üye taslak oluşturabilir. Sonuç belirsizse aynı işlemi yeniden göndermeyin.</p>
     <p id="product-draft-status" role="status" aria-live="polite"></p>
     <form id="product-draft-form">
       <label>Yetkili mağaza<select name="seller_id" required></select></label>
@@ -1080,7 +1080,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(data.stores.some(s=>s.id===previous))select.value=previous;
       el('product-draft-panel').hidden=data.stores.length===0;
       if(!keepOutcome)el('product-draft-status').textContent=data.stores.length?
-        'Taslak oluşturabileceğiniz mağazalar hazır.':'Açık ürün düzenleme izniniz bulunmuyor.';
+        'Taslak oluşturabileceğiniz mağazalar hazır.':'Bu kuruluşta onaylı mağaza için taslak oluşturma yetkiniz bulunmuyor.';
     }catch(e){
       if(seq!==productDraftRequest||request!==organizationRequest||currentOrg!==org)return;
       select.replaceChildren();el('product-draft-panel').hidden=true;

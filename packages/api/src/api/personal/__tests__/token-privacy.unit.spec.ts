@@ -72,6 +72,15 @@ describe("bearer URL privacy (executed page scripts, not backend/browser accepta
       else process.env.DOGRUADRES_STOREFRONT_URL = previous
     }
   })
+  it("describes protected Owner inherent commerce rights without suggesting Member access", async () => {
+    const { html } = await page()
+    expect(html).toContain("Korunmuş Owner, kendi aktif kuruluşu için ayrıca satın alma izni almaz.")
+    expect(html).toContain("Diğer aktif üyeler için satın alma iznini Owner verir veya iptal eder.")
+    expect(html).toContain("Mağazanın alıcı kuruluş engeli herkese uygulanır.")
+    expect(html).toContain("Korunmuş Owner, kendi kuruluşunun onaylı mağazalarında ayrıca ürün düzenleme izni almadan işlem yapabilir.")
+    expect(html).not.toContain("Owner rolü veya kişisel müşteri hesabı kendiliğinden satın alma yetkisi vermez.")
+    expect(html).not.toContain("Yalnız ayrıca ürün düzenleme izniniz bulunan")
+  })
   it("storefront captures the token in component memory and scrubs before inspection, with fixed response policies", () => {
     const root=path.resolve(__dirname,"../../../../../..")
     const source=readFileSync(path.join(root,"apps/storefront/src/app/[locale]/auth/verify-email/page.tsx"),"utf8")
