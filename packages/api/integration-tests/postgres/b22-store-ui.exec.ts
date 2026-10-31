@@ -3178,9 +3178,10 @@ export default async function({container}:any){
     const disableBeforeAudit=Number((await q(
       "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='mfa.native_factor_disabled'",
       [B.person]))[0].n)
-    // A real native Medusa disable executes first, then an isolated
-    // Foundation security-outbox fault forces the owning tx to roll back.
-    await q("create function b22_mfa_disable_outbox_fault_v1() returns trigger language plpgsql as $b22$ begin if exists(select 1 from da_audit_event e where e.id=NEW.audit_event_id and e.action='mfa.native_factor_disabled') then raise exception 'B22 forced MFA disable outbox failure'; end if; return NEW; end $b22$")
+    // A real native Medusa disable executes first; the isolated PG16
+    // fault blocks BOTH Foundation MFA audit and independent session-revoke
+    // audit. The previous one-fault case has an accepted exact-SHA PASS.
+    await q("create function b22_mfa_disable_outbox_fault_v1() returns trigger language plpgsql as $b22$ begin if exists(select 1 from da_audit_event e where e.id=NEW.audit_event_id and e.action in ('mfa.native_factor_disabled','session.all_revoked')) then raise exception 'B22 forced MFA disable and revocation outbox failures'; end if; return NEW; end $b22$")
     let disableFaultInstalled=false
     try{
       await q("create trigger b22_mfa_disable_outbox_fault_v1 before insert on da_security_outbox for each row execute function b22_mfa_disable_outbox_fault_v1()")
