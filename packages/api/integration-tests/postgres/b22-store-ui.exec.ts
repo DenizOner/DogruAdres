@@ -725,8 +725,9 @@ export default async function({container}:any){
       encodeURIComponent(organizations[0].id)+"&cart_id="+encodeURIComponent(customerCart.id))
     assert.equal(noCustomerProof.status,400)
     const foreignOrganizationCart=await readNativeCart(
-      buyerCart(organizations[1].id,customerCart.id))
-    assert.equal(foreignOrganizationCart.status,403)
+      buyerCart(sellerGamma.id,customerCart.id))
+    assert.equal(foreignOrganizationCart.status,403,
+      "Another Person's unrelated Organization must not inherit this Customer or purchase rights")
     assert.equal((await cartService.listCarts({
       id:customerCart.id,customer_id:nativeCustomer.id
     })).length,1,"Read-only preflight must not mutate cart")
@@ -1179,9 +1180,9 @@ export default async function({container}:any){
     assert.equal((await q(`select count(*)::int n from da_verified_actor_binding
       where person_id=$1 and actor_type='customer' and revoked_at is null`,
       [B.person]))[0].n,1)
-    process.stdout.write("PASS B22 Chrome: live Customer dual-proof binding + Alpha buyer.purchase / native Customer module, wrong Buyer Org 403, forged Customer 400, no JWT/checkout writer\\n")
-    // B is Alpha Member and Beta Owner, but the selected legal buyer must
-    // always be Alpha when Alpha's explicit buyer.purchase is granted.
+    process.stdout.write("PASS B22 Chrome: native Customer dual-proof, Alpha Member grant and independent Beta Owner eligibility; forged Customer 400, immutable Buyer attribution\\n")
+    // B is Alpha Member with a scoped explicit grant and independently Beta
+    // protected Owner. Both may be eligible; an attributed Cart cannot switch.
     const verifiedBuyer=await reviewer.eval(`(async()=>{
       const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}')
       return {status:r.status,body:await r.json()}
@@ -1195,7 +1196,8 @@ export default async function({container}:any){
       const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[1].id)}')
       return r.status
     })()`)
-    assert.equal(wrongBuyer,403,"Beta Owner role cannot invent buyer.purchase")
+    assert.equal(wrongBuyer,200,
+      "Protected Beta Owner has inherent buyer eligibility without any explicit grant")
 
     // Even when B explicitly gains buyer.purchase in TWO Organizations, the
     // same native Cart cannot be silently reassigned from Alpha to Beta.
@@ -2376,21 +2378,25 @@ export default async function({container}:any){
     assert.equal((await pendingBuyerRevoke).status,200)
     assert.equal(await foundation.authorizeBuyerCheckout(
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
-    ),false,"Next L must deny after the overlapped Owner revoke commits")
-    process.stdout.write("PASS B22 pre-revocation control: PG16 advisory barrier proved real Chrome Owner revoke waiting; L allowed before commit, subsequent L denied after commit; no successful checkout or payment\\n")
-    assert.equal((await readNativeCart(betaScopeUrl)).status,403,
-      "Revoked buyer.purchase must remove Beta access even after both sellers unblock")
-    process.stdout.write("PASS B22 explicit Beta grant cannot reassign Alpha Cart: both Organization buyer permissions tested; canonical audit ownership unchanged\\n")
+    ),true,"An independent Beta protected Owner retains authority after self-grant revoke")
+    process.stdout.write("PASS B22 Owner authority: advisory barrier proved a real grant revocation commit; native Buyer scope remains authorized by protected Owner, not an obsolete self-grant\\n")
+    assert.equal((await readNativeCart(betaScopeUrl)).status,200,
+      "Protected Beta Owner's own Cart stays readable after self-grant revocation")
+    assert.equal((await claimCart(organizations[1].id,customerCart.id)).status,403,
+      "Even an Owner cannot replace an existing Alpha immutable Cart attribution")
+    // Keep this test a safe native checkout DENIAL: a fresh Owner Store block
+    // (not self-grant revocation) causes the actual Mercur hook to refuse.
+    assert.equal((await betaSellerBlock("block",sellerGamma.id,gammaSellerId)).status,200)
     assert.equal(await foundation.authorizeBuyerCheckout(
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
-    ),false,"Committed Beta buyer.purchase revocation before L must deny the fully valid Cart")
+    ),false,"Store Buyer Organization block overrides even protected Owner authority")
     const hookRun=await completeCartWithSplitOrdersWorkflow(container).run({
       input:{cart_id:hookProbeCart.id},throwOnError:false
     })
     const hookErrorText=(hookRun.errors??[]).map((entry:any)=>
       String(entry.error?.message??entry.error??entry.message??"")).join("\n")
     assert.match(hookErrorText,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
-      "Mercur validate must deny a fully attributed, otherwise-valid Cart after buyer.purchase revocation")
+      "Mercur validate must deny the protected Owner's Cart because its Store buyer block is active")
     assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",[hookProbeCart.id]))[0].n,0)
     const {data:hookOrderLinks}=await query.graph({
       entity:"order_cart",fields:["order_id"],filters:{cart_id:hookProbeCart.id}
@@ -2412,7 +2418,11 @@ export default async function({container}:any){
     assert.equal(hookCartAfter[0].items.length,1)
     assert.equal(hookCartAfter[0].items[0].offer?.id,hookProbeOffer.id)
     assert.equal(hookCartAfter[0].items[0].offer?.seller_id,gammaSellerId)
-    process.stdout.write("PASS B22 real Mercur validate: fully attributed Beta Cart + approved Gamma Store passed L before revoke; after actual Owner revoke workflow denies before OrderGroup/Order/payment writes and preserves native Cart\\n")
+    assert.equal((await betaSellerBlock("unblock",sellerGamma.id,gammaSellerId)).status,200)
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
+    ),true,"Unblocking restores inherited Owner authority independently of an explicit grant")
+    process.stdout.write("PASS B22 real Mercur validate: protected Owner still authorized after self-grant revoke, but Store Buyer Organization block denies native checkout with zero OrderGroup/Order/payment; unblock restores L\\n")
     process.stdout.write("NOT TESTED B22: successful order placement, authorization/capture with a real payment provider, post-L overlap orchestration, independent exact-PR acceptance\\n")
 
     const forgedBuyer=await reviewer.eval(`(async()=>{
@@ -2470,12 +2480,12 @@ export default async function({container}:any){
     await reviewer.wait("document.getElementById('buyer-context-panel').hidden===true")
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
-    process.stdout.write("PASS B22 Chrome: selected Buyer Organization requires same Person active membership and explicit current buyer.purchase, foreign Owner 403, forged actor 400, revocation clears access; no checkout\\n")
+    process.stdout.write("PASS B22 Chrome: explicit buyer.purchase remains mandatory for Alpha Member; cross-Organization, forged actor and revoked Member denied; protected Owner independent\\n")
 
     assert.equal((await q(`select count(*)::int n from da_organization_buyer_permission
       where person_id=$1 and organization_id=$2 and revoked_at is null`,
       [B.person,organizations[0].id]))[0].n,0)
-    process.stdout.write("PASS B22 Chrome: Organization Owner grants and revokes buyer.purchase for active Alpha Member, audit/outbox PG16, idempotent replay, foreign Org Owner/staff 403 and no automatic Owner permission; no checkout writer\\n")
+    process.stdout.write("PASS B22 Chrome: Owner grants and revokes Alpha Member buyer.purchase with real audit/outbox, idempotent replay; independent protected Owner authority creates no self-grant\\n")
     // F-02: an actual native Medusa Customer GET completes, but its HTTP
     // response is held while a supported Customer unlink commits to PG16.
     // No fake upstream actor response, production hook or external service.
