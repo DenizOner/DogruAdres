@@ -194,7 +194,17 @@ async function main(){
     // multi-worker crash, or full Medusa module runtime acceptance.
     await check("authorized Platform Staff audit events relay to Index and ACK on real PG16",async()=>{
       const deliver=async()=>{
-        const manager={execute:(query:string,parameters:unknown[]=[])=>sql(db,query,parameters)}
+        // Bun SQL may return JSONB as text, unlike the Node pg driver used
+        // by the standalone B14 test. Normalize only these SQL result fields
+        // so the production delivery policy sees the actual persisted value.
+        const manager={execute:async(query:string,parameters:unknown[]=[])=>{
+          const rows=await sql(db,query,parameters)
+          return rows.map(row=>({
+            ...row,
+            ...(typeof row.envelope==="string"?{envelope:JSON.parse(row.envelope)}:{}),
+            ...(typeof row.canonical_event==="string"?{canonical_event:JSON.parse(row.canonical_event)}:{}),
+          }))
+        }}
         const source={
           claimFoundationAuditOutbox:()=>claimAuditDelivery(manager),
           readClaimedFoundationAudit:(claim:any)=>loadClaimedAuditEvent(manager,claim),
@@ -257,7 +267,7 @@ async function main(){
         results.push(result)
       }
       assert.equal(results.filter(x=>x==="delivered").length,3,
-        "Previously committed Owner membership plus two valid Staff events must reach Index")
+        "Previously committed Owner membership plus two valid Staff events must reach Index; outcomes="+results.join(","))
       assert.equal(results.filter(x=>x==="quarantined").length,1,
         "Unsupported role must fail closed")
       for(const [i,id] of ids.entries()){
