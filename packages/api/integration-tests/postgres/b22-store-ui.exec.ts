@@ -322,6 +322,20 @@ export default async function({container}:any){
     const browser=new B06Chrome(host,"A");browsers.push(browser)
     await browser.start(crt)
     await browser.login(A.email,A.password,A.person)
+    // Approved personal workspace has no editable launcher. Its retired
+    // Person-only API must not read or write historical preference rows.
+    const legacyPrefsBefore=await q("select id,person_id,app_ids,collapsed_ids,version from da_launcher_preference order by id")
+    const retiredLauncher=await browser.eval(`(async()=>{
+      const get=await fetch('/personal/launcher',{credentials:'same-origin'})
+      const post=await fetch('/personal/launcher',{method:'POST',
+        credentials:'same-origin',headers:{'content-type':'application/json'},
+        body:JSON.stringify({app_ids:['storefront'],collapsed_ids:[],version:0})})
+      return {present:!!document.getElementById('launcher-section'),
+        get:get.status,post:post.status}
+    })()`)
+    assert.deepEqual(retiredLauncher,{present:false,get:403,post:403})
+    assert.deepEqual(await q("select id,person_id,app_ids,collapsed_ids,version from da_launcher_preference order by id"),legacyPrefsBefore)
+    process.stdout.write("PASS B22 Chrome: no personal launcher; old GET/POST 403, historic preference rows untouched\n")
     const cookie=await browser.token()
     assert.match(cookie??"",/^[A-Za-z0-9_-]{43}$/)
     // Execute the INSTALLED native Mercur product workflow on the existing

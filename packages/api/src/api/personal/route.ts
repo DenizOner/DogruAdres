@@ -1,20 +1,10 @@
 ﻿import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { randomBytes } from "node:crypto"
 import { enabled } from "./security"
-// Storefront origin is trusted configuration; native Vendor transport is not ready for Option A.
 export const AUTHENTICATE = false
 export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   if (!enabled()) return res.status(503).send("Kişisel çalışma alanı etkin değil")
   const nonce = randomBytes(18).toString("base64")
-  // Resolve Storefront URL from trusted process env only.
-  // DOGRUADRES_STOREFRONT_URL or STOREFRONT_URL for the real Next.js Buyer Storefront.
-  let storefrontOrigin = ""
-  try {
-    const rawSf = process.env.DOGRUADRES_STOREFRONT_URL ?? process.env.STOREFRONT_URL
-    if (rawSf) { const u = new URL(rawSf); storefrontOrigin = u.origin }
-  } catch { /* malformed or unset -- launcher degrades gracefully, no storefront link shown */ }
-  // Encode as a JS data literal; even a syntactically valid URL may contain quotes.
-  const storefrontOriginScript = JSON.stringify(storefrontOrigin).replace(/</g, "\\u003c")
   res.setHeader("Cache-Control","no-store")
   res.setHeader("Referrer-Policy","no-referrer")
   res.setHeader("X-Content-Type-Options","nosniff")
@@ -63,13 +53,6 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
    #verification-status h2{font-size:1.2rem;margin:0 0 .5rem}
    #verification-status p{margin:.4rem 0;overflow-wrap:anywhere}
   fieldset{border:1px solid var(--line);border-radius:.6rem;padding:1rem} fieldset label{display:flex;align-items:center;gap:.65rem;margin:.5rem 0} input[type=radio],input[type=checkbox]{width:auto;min-height:auto}
-  #launcher-list li{display:flex;align-items:center;gap:.5rem;padding:.6rem .8rem;border:1px solid var(--line);border-radius:.6rem;background:white;cursor:default;user-select:none}
-  #launcher-list li[aria-grabbed="true"]{opacity:.5;border-style:dashed}
-  #launcher-list li.drag-over{border-color:var(--accent);background:#eaf1fa}
-  .launcher-handle{touch-action:none;cursor:grab;padding:.2rem .4rem;border:1px solid #c8d4e3;border-radius:.35rem;background:#f0f4fa;font-size:1.1rem;line-height:1;color:var(--muted);flex-shrink:0}
-  .launcher-handle:focus{outline:3px solid #4c91e5;outline-offset:2px;cursor:grabbing}
-  .launcher-name{flex:1;font-weight:600}
-  .launcher-toggle{font-size:.85rem;padding:.3rem .6rem;min-height:auto}
   @media(max-width:700px){body{padding:0 .75rem 2rem}#personal-header{margin-top:1.5rem}#workspace{grid-template-columns:minmax(0,1fr)}}
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
   </style>
@@ -254,13 +237,6 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   </section>
   <p id="memberships-status" role="status" aria-live="polite" aria-atomic="true"></p><button id="memberships-refresh" type="button" hidden disabled>Üye listesini yenile</button>
   <div id="memberships" aria-describedby="memberships-status" aria-busy="false"></div>
-  <section id="launcher-section" hidden aria-labelledby="launcher-heading" style="grid-column:1/-1;margin-top:1rem;padding:1rem;border:1px solid var(--line);border-radius:.9rem;background:white">
-    <h2 id="launcher-heading">Uygulamalarım</h2>
-    <p id="launcher-desc" style="margin:0 0 .5rem;color:var(--muted);font-size:.9rem">Uygulamaları sürükle-bırak veya klavyeyle yeniden sırala. Kapat/Aç düğmesiyle bölümü daralt. Sıralama ve kapat/aç durumu sunucuda kişiye özel saklanır; yeniden girişte de korunur.</p>
-    <p id="launcher-status" role="status" aria-live="polite" style="min-height:1.2em;font-size:.9rem;margin:.25rem 0"></p>
-    <ul id="launcher-list" role="listbox" aria-label="Uygulama sırası" style="list-style:none;padding:0;margin:.5rem 0;display:flex;flex-direction:column;gap:.5rem"></ul>
-    <button id="launcher-reset" type="button" style="margin-top:.5rem">Varsayılan sıraya dön</button>
-  </section>
   <section id="audit-timeline-section" hidden style="margin-top: 16px; padding: 14px; border: 1px solid #c1c6d4; border-radius: 8px; background: #f8f9fa;">
     <h3 style="margin-top: 0; font-size: 14px;">Kurulus Denetim Zaman Cizelgesi</h3>
     <p style="font-size: 12px; color: #555; margin-bottom: 8px;">Projeksiyon durumu: Nihai tutarlilik (eventual), tamlik garantilenmemistir (not_guaranteed).</p>
@@ -1238,7 +1214,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
   el('org-stores-refresh').onclick=()=>{if(currentOrg)void organizationStores(currentOrg,organizationRequest)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void loadLauncher();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
@@ -1548,196 +1524,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       status('Bu bağlantıyla mevcut oturumda devam edilemiyor.');
     }finally{btn.disabled=false}
   };
-  // ---------------------------------------------------------------------------
-  // B20: Launcher preference -- drag/touch/keyboard reorder + expand/collapse
-  // ---------------------------------------------------------------------------
-  // Null-prototype map prevents __proto__/constructor property pollution reads.
-  const APP_LABELS=Object.assign(Object.create(null),{storefront:'Genel Ürün Kataloğu',vendor:'Mağaza İşlemleri'});
-  // App launch URLs: server-embedded from trusted process config at render time.
-  // Native Vendor App 2.3.7 has no verified opaque-session transport seam.
-  // Binding eligibility does not make its separate native login an Option A launch target.
-  const APP_URLS=Object.assign(Object.create(null),{storefront:${storefrontOriginScript}});
-  let launcherSaving=false,launcherDragSrc=null,launcherDragOver=null;
-  let launcherKeyHandle=null;
-  async function loadLauncher(){
-    try{
-      const data=await api('launcher');
-      launcherState=data;
-      renderLauncher();
-      el('launcher-section').hidden=false;
-    }catch(e){
-      if([401,403].includes(e.httpStatus)){concealPrivateView();el('login').hidden=false;return}
-      el('launcher-status').textContent='Ba\u015flat\u0131c\u0131 y\u00fcklenemedi.';
-    }
-  }
-  function clearLauncher(){
-    el('launcher-section').hidden=true;
-    el('launcher-list').replaceChildren();
-    el('launcher-status').textContent='';
-    launcherState={app_ids:[],collapsed_ids:[],available_ids:[],version:0};
-    launcherDragSrc=null;launcherDragOver=null;launcherKeyHandle=null;launcherSaving=false;
-  }
-  function renderLauncher(){
-    const list=el('launcher-list');list.replaceChildren();
-    const ids=launcherState.app_ids.length?launcherState.app_ids:[...launcherState.available_ids];
-    for(const id of ids){
-      const li=document.createElement('li');
-      li.setAttribute('role','option');li.setAttribute('aria-selected','false');
-      li.setAttribute('data-id',id);li.setAttribute('draggable','true');
-      li.setAttribute('aria-grabbed','false');
-      const handle=document.createElement('span');
-      handle.className='launcher-handle';handle.setAttribute('tabindex','0');
-      handle.setAttribute('role','button');handle.setAttribute('aria-pressed','false');
-      const appName=(APP_LABELS[id]||id);
-      handle.setAttribute('aria-label',appName+' \u2014 Space/Enter ile tut, ok tu\u015flar\u0131yla ta\u015f\u0131, Space/Enter ile b\u0131rak, Esc ile iptal');
-      handle.textContent='\u283f';
-      const collapsed=launcherState.collapsed_ids.includes(id);
-      const toggle=document.createElement('button');
-      toggle.className='launcher-toggle';toggle.type='button';
-      toggle.textContent=collapsed?'A\u00e7':'Kapat';
-      toggle.setAttribute('aria-label',appName+' bolumu '+(collapsed?'a\u00e7':'kapat'));
-      toggle.setAttribute('aria-expanded',String(!collapsed));
-      const name=document.createElement('span');name.className='launcher-name';
-      name.textContent=appName;
-      // Launch link — navigates to real app in new tab.
-      // URL is server-embedded from process config; null-prototype map prevents prototype reads.
-      const launchUrl=Object.prototype.hasOwnProperty.call(APP_URLS,id)?APP_URLS[id]:null;
-      const launchLink=document.createElement('a');
-      if(launchUrl){launchLink.href=launchUrl;launchLink.target='_blank';launchLink.rel='noopener noreferrer';
-        launchLink.textContent=appName+' \u2192';launchLink.style.cssText='display:inline-block;margin-top:.5rem;font-size:.95rem;font-weight:500;color:var(--accent);text-decoration:none;padding:.3rem .7rem;border:1px solid var(--accent);border-radius:.4rem';}
-      // Collapsible content section — shows/hides launch link. Does not affect entitlement.
-      const content=document.createElement('div');
-      content.id='launcher-content-'+id;
-      content.setAttribute('role','region');content.setAttribute('aria-label',appName);
-      content.hidden=collapsed;
-      content.style.cssText='padding:.25rem 0 0 0';
-      if(launchUrl)content.append(launchLink);
-      else if(id==='vendor'){const unavailable=document.createElement('p');unavailable.textContent='Mağaza işlemleri, tek oturumlu kuruluş çalışma alanında doğrulandığında açılacaktır.';content.append(unavailable);}
-      li.append(handle,name,toggle,content);
-      // HTML5 drag (mouse/trackpad)
-      li.addEventListener('dragstart',e=>{
-        launcherDragSrc=li;li.setAttribute('aria-grabbed','true');
-        e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',id);
-      });
-      // Pointer/touch drag (mobile) — supplementary to HTML5 drag events
-      let ptId=null,ptStartY=0,ptClone=null;
-      li.addEventListener('pointerdown',e=>{if(e.target!==handle)return;e.preventDefault();
-        ptId=e.pointerId;ptStartY=e.clientY;li.setPointerCapture(e.pointerId);
-        li.setAttribute('aria-grabbed','true');
-        ptClone=li.cloneNode(true);const r=li.getBoundingClientRect();
-        ptClone.style.cssText='position:fixed;opacity:.55;pointer-events:none;width:'+li.offsetWidth+'px;left:'+r.left+'px;top:'+r.top+'px;z-index:9999;background:white;border:1px dashed var(--accent);border-radius:.6rem';
-        document.body.appendChild(ptClone);});
-      li.addEventListener('pointermove',e=>{if(e.pointerId!==ptId||!ptClone)return;e.preventDefault();
-        ptClone.style.top=(parseFloat(ptClone.style.top)+(e.clientY-ptStartY))+'px';ptStartY=e.clientY;
-        const items=[...list.children];const target=items.find(r=>r!==li&&r.getBoundingClientRect)&&items.find(r=>{if(r===li)return false;const rb=r.getBoundingClientRect();return e.clientY>=rb.top&&e.clientY<=rb.bottom;});
-        items.forEach(r=>r.classList.remove('drag-over'));if(target){target.classList.add('drag-over');launcherDragOver=target;}else launcherDragOver=null;});
-      li.addEventListener('pointerup',e=>{if(e.pointerId!==ptId)return;
-        li.setAttribute('aria-grabbed','false');
-        if(ptClone){document.body.removeChild(ptClone);ptClone=null;}ptId=null;
-        if(launcherDragOver&&launcherDragOver!==li){const items=[...list.children];const fi=items.indexOf(li),ti=items.indexOf(launcherDragOver);
-          if(fi<ti)launcherDragOver.after(li);else launcherDragOver.before(li);
-          list.querySelectorAll('li').forEach(r=>r.classList.remove('drag-over'));launcherDragOver=null;void saveLauncherOrder();}});
-      li.addEventListener('pointercancel',e=>{if(e.pointerId!==ptId)return;
-        li.setAttribute('aria-grabbed','false');
-        if(ptClone){document.body.removeChild(ptClone);ptClone=null;}ptId=null;
-        list.querySelectorAll('li').forEach(r=>r.classList.remove('drag-over'));launcherDragOver=null;});
-      li.addEventListener('dragend',()=>{
-        li.setAttribute('aria-grabbed','false');
-        list.querySelectorAll('li').forEach(r=>r.classList.remove('drag-over'));
-        launcherDragSrc=null;launcherDragOver=null;
-      });
-      li.addEventListener('dragover',e=>{
-        if(!launcherDragSrc||launcherDragSrc===li)return;
-        e.preventDefault();e.dataTransfer.dropEffect='move';
-        if(launcherDragOver!==li){
-          list.querySelectorAll('li').forEach(r=>r.classList.remove('drag-over'));
-          li.classList.add('drag-over');launcherDragOver=li;
-        }
-      });
-      li.addEventListener('dragleave',()=>li.classList.remove('drag-over'));
-      li.addEventListener('drop',e=>{
-        e.preventDefault();if(!launcherDragSrc||launcherDragSrc===li)return;
-        li.classList.remove('drag-over');
-        const items=[...list.children];
-        const fromIdx=items.indexOf(launcherDragSrc),toIdx=items.indexOf(li);
-        if(fromIdx<0||toIdx<0)return;
-        if(fromIdx<toIdx)li.after(launcherDragSrc);else li.before(launcherDragSrc);
-        void saveLauncherOrder();
-      });
-      // Keyboard drag
-      handle.addEventListener('keydown',async e=>{
-        if(e.key==='Escape'&&launcherKeyHandle){
-          e.preventDefault();launcherKeyHandle=null;
-          handle.setAttribute('aria-pressed','false');
-          el('launcher-status').textContent='Ta\u015f\u0131ma iptal edildi.';
-          renderLauncher();return;
-        }
-        if((e.key===' '||e.key==='Enter')&&!launcherKeyHandle){
-          e.preventDefault();launcherKeyHandle=handle;
-          handle.setAttribute('aria-pressed','true');
-          el('launcher-status').textContent=appName+' tutuldu. Ok tu\u015flar\u0131yla ta\u015f\u0131, Space/Enter b\u0131rak, Esc iptal.';return;
-        }
-        if((e.key===' '||e.key==='Enter')&&launcherKeyHandle===handle){
-          e.preventDefault();launcherKeyHandle=null;
-          handle.setAttribute('aria-pressed','false');
-          el('launcher-status').textContent=appName+' yeni konumuna b\u0131rak\u0131ld\u0131.';
-          await saveLauncherOrder();return;
-        }
-        if((e.key==='ArrowUp'||e.key==='ArrowDown')&&launcherKeyHandle===handle){
-          e.preventDefault();
-          const items=[...list.children];const idx=items.indexOf(li);
-          if(e.key==='ArrowUp'&&idx>0)items[idx-1].before(li);
-          else if(e.key==='ArrowDown'&&idx<items.length-1)items[idx+1].after(li);
-          const newIdx=[...list.children].indexOf(li);
-          el('launcher-status').textContent=appName+' '+(newIdx+1)+'. s\u0131raya ta\u015f\u0131nd\u0131.';
-          li.querySelector('.launcher-handle').focus();
-        }
-      });
-      toggle.addEventListener('click',async()=>{
-        const cur=launcherState.collapsed_ids;
-        const next=cur.includes(id)?cur.filter(x=>x!==id):[...cur,id];
-        launcherState.collapsed_ids=next;
-        const nowCollapsed=next.includes(id);
-        toggle.textContent=nowCollapsed?'A\u00e7':'Kapat';
-        toggle.setAttribute('aria-expanded',String(!nowCollapsed));
-        toggle.setAttribute('aria-label',appName+' b\u00f6l\u00fcm\u00fc '+(nowCollapsed?'a\u00e7':'kapat'));
-        // Show/hide real content section
-        const contentEl=document.getElementById('launcher-content-'+id);
-        if(contentEl)contentEl.hidden=nowCollapsed;
-        await saveLauncherOrder();
-      });
-      list.append(li);
-    }
-  }
-  async function saveLauncherOrder(){
-    if(launcherSaving)return;
-    launcherSaving=true;el('launcher-status').textContent='Kaydediliyor...';
-    try{
-      const items=[...el('launcher-list').children];
-      const appIds=items.map(li=>li.getAttribute('data-id')).filter(Boolean);
-      const result=await api('launcher',{method:'POST',body:JSON.stringify({
-        app_ids:appIds,collapsed_ids:launcherState.collapsed_ids,version:launcherState.version
-      })});
-      launcherState.app_ids=result.app_ids;
-      launcherState.collapsed_ids=result.collapsed_ids;
-      launcherState.version=result.version;
-      el('launcher-status').textContent='Tercih kaydedildi.';
-    }catch(e){
-      if(e.httpStatus===409){el('launcher-status').textContent='Catisma: baska oturumda degisiklik. Yenileniyor...';await loadLauncher();}
-      else if([401,403].includes(e.httpStatus)){concealPrivateView();el('login').hidden=false;}
-      else el('launcher-status').textContent=e.uncertain?'Kayit sonucu belirsiz; yenileyip kontrol edin.':'Tercih kaydedilemedi.';
-    }finally{launcherSaving=false;}
-  }
-  el('launcher-reset').onclick=async()=>{
-    launcherState.app_ids=[];launcherState.collapsed_ids=[];
-    await saveLauncherOrder();await loadLauncher();
-  };
   // Conceal before browser history or hidden-page restoration; pending reads
   // belong to a view epoch and cannot repopulate a concealed private workspace.
   function concealPrivateView(){
     clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
-    el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPendingInvitations();clearLauncher();
+    el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPendingInvitations();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');

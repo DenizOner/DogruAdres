@@ -57,22 +57,16 @@ describe("bearer URL privacy (executed page scripts, not backend/browser accepta
     expect(nodes['invitation-card'].hidden).toBe(true)
     expect(JSON.stringify([nodes, status.mock.calls])).not.toMatch(/synthetic-private|recipient@example/)
   })
-  it("renders a configured Storefront URL only as data inside the nonce script", async () => {
+  it("does not render the retired personal launcher or embed its Storefront URL", async () => {
     const previous = process.env.DOGRUADRES_STOREFRONT_URL
     const configured = "https://x'+console.log(123)+'z"
     process.env.DOGRUADRES_STOREFRONT_URL = configured
     try {
       const { html } = await page()
-      // This is a known server-rendered fixture, not an HTML sanitization check.
-      // Extract the generated declaration directly rather than parsing HTML with regex.
-      const declarations = html.split("\n").filter(line => line.trim().startsWith("const APP_URLS="))
-      expect(declarations).toHaveLength(1)
-      const declaration = declarations[0]
-      expect(declaration).toBeTruthy()
-      const logger = jest.fn()
-      const rendered = runInNewContext((declaration || "")+"\nAPP_URLS.storefront", { console: { log: logger } })
-      expect(rendered).toBe(configured)
-      expect(logger).not.toHaveBeenCalled()
+      expect(html).not.toContain('id="launcher-section"')
+      expect(html).not.toContain('const APP_URLS=')
+      expect(html).not.toContain("api('launcher')")
+      expect(html).not.toContain(configured)
     } finally {
       if (previous === undefined) delete process.env.DOGRUADRES_STOREFRONT_URL
       else process.env.DOGRUADRES_STOREFRONT_URL = previous
