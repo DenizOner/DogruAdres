@@ -3018,6 +3018,122 @@ export default async function({container}:any){
       await reviewer.send("Page.reload",{ignoreCache:true})
     }
 
+
+    // B22 protected Owner revoke vs real native Seller creation. Gamma is a
+    // separate task-owned Organization; this negative must not revoke A's
+    // Alpha purchasing/product permissions used by unrelated assertions.
+    const [secondGammaOwner]=await foundation.createMemberships([{
+      organization_id:sellerGamma.id,person_id:B.person,
+      role:"owner",status:"active",protected_owner:true
+    }])
+    assert.match(secondGammaOwner.id,/^[A-Za-z0-9_-]+$/)
+    const ownerRaceEmail="b22-owner-revoke-race-"+rand+"@example.invalid"
+    const ownerRaceName="B22 Owner in-flight Store "+rand
+    const ownerRaceRequest={organization_id:sellerGamma.id,
+      application_id:"daapp_"+randomBytes(16).toString("hex"),
+      name:ownerRaceName,email:ownerRaceEmail,currency_code:"try"}
+    const ownerRaceBarrier=new Client({connectionString:u.toString()})
+    await ownerRaceBarrier.connect()
+    let ownerBarrierHeld=false,ownerPauseFn=false,ownerPauseTrigger=false
+    try{
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      await browser.select(sellerGamma.name,"owner")
+      await browser.wait("!document.getElementById('workspace').hidden")
+      await q("create function b22_native_seller_owner_pause_v1() returns trigger language plpgsql as $b22$ begin if NEW.email='"+ownerRaceEmail+"' then perform pg_advisory_xact_lock(hashtext('b22-native-owner-create-pause'),hashtext('"+ownerRaceEmail+"')); end if; return NEW; end $b22$")
+      ownerPauseFn=true
+      await q("create trigger b22_native_seller_owner_pause_v1 after insert on seller for each row execute function b22_native_seller_owner_pause_v1()")
+      ownerPauseTrigger=true
+      await ownerRaceBarrier.query("BEGIN")
+      ownerBarrierHeld=true
+      const ownerBarrierPid=(await ownerRaceBarrier.query("select pg_backend_pid()::int pid")).rows[0].pid as number
+      await ownerRaceBarrier.query("select pg_advisory_xact_lock(hashtext('b22-native-owner-create-pause'),hashtext($1))",[ownerRaceEmail])
+      let ownerCreateFinished=false
+      const ownerCreatePending=browser.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify("+JSON.stringify(ownerRaceRequest)+")});"+
+        "return {status:r.status,body:await r.json()}})()"
+      ).then((v:any)=>{ownerCreateFinished=true;return v},
+        (e:unknown)=>{ownerCreateFinished=true;throw e})
+      await until(async()=>{
+        const [w]=await q("select count(*)::int n from pg_locks h join pg_locks w on w.locktype=h.locktype and w.database=h.database and w.classid=h.classid and w.objid=h.objid and w.objsubid=h.objsubid and w.pid<>h.pid and w.granted=false where h.pid=$1 and h.locktype='advisory' and h.granted=true",[ownerBarrierPid])
+        return w.n===1
+      },19000,"Actual Mercur Seller INSERT blocked by task-owned PG16 advisory barrier")
+      assert.equal(ownerCreateFinished,false)
+      assert.equal((await q("select status from da_store_application where id=$1",[ownerRaceRequest.application_id]))[0].status,"creating",
+        "Native Store creation must follow an independently COMMITTED idempotency claim")
+      assert.equal((await q("select count(*)::int n from seller where email=$1",[ownerRaceEmail]))[0].n,0,
+        "Native Seller insertion is uncommitted while its transaction waits")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      const ownerRevokeRequest={
+        action:"revoke",organization_id:sellerGamma.id,
+        membership_id:gammaOwnerMembership.id
+      }
+      let ownerRevokeFinished=false
+      const ownerRevokePending=reviewer.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/memberships',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify("+JSON.stringify(ownerRevokeRequest)+")});"+
+        "return {status:r.status,body:await r.json()}})()"
+      ).then((v:any)=>{ownerRevokeFinished=true;return v},
+        (e:unknown)=>{ownerRevokeFinished=true;throw e})
+      await until(async()=>{
+        const [w]=await q("select count(*)::int n from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.granted=false and l.locktype in ('transactionid','tuple') and a.datname=current_database() and a.query ilike '%da_organization_membership%'")
+        return w.n>=1
+      },19000,"Real second protected Owner revocation waits on applicant membership row")
+      assert.equal(ownerRevokeFinished,false)
+      assert.equal(ownerCreateFinished,false)
+      const [stillOwner]=await q("select status,protected_owner from da_organization_membership where id=$1",[gammaOwnerMembership.id])
+      assert.equal(stillOwner.status,"active")
+      assert.equal(stillOwner.protected_owner,true)
+      await ownerRaceBarrier.query("ROLLBACK")
+      ownerBarrierHeld=false
+      const submitted=await ownerCreatePending
+      const revoked=await ownerRevokePending
+      assert.equal(submitted.status,201,
+        "Native Seller and authoritative Origin must complete before the Owner revoke commits")
+      assert.equal(submitted.body.status,"pending_approval")
+      assert.match(submitted.body.seller_id,/^sel_[A-Za-z0-9_-]+$/)
+      assert.equal(revoked.status,200)
+      const [revokedMember]=await q("select status,revoked_at from da_organization_membership where id=$1",[gammaOwnerMembership.id])
+      assert.equal(revokedMember.status,"revoked")
+      assert.ok(revokedMember.revoked_at)
+      const [ownerRaceLedger]=await q("select status,seller_id from da_store_application where id=$1",[ownerRaceRequest.application_id])
+      assert.equal(ownerRaceLedger.status,"created")
+      assert.equal(ownerRaceLedger.seller_id,submitted.body.seller_id)
+      const nativeSeller=await native.listSellers({id:submitted.body.seller_id})
+      assert.equal(nativeSeller.length,1)
+      assert.equal(nativeSeller[0].status,"pending_approval")
+      assert.equal(nativeSeller[0].approved_at,null,
+        "Owner submission must never itself approve Store sales")
+      assert.equal((await q("select count(*)::int n from seller where email=$1",[ownerRaceEmail]))[0].n,1)
+      assert.equal((await q("select count(*)::int n from da_organization_seller_ownership o join da_audit_event e on e.id=o.verification_audit_event_id join da_audit_outbox x on x.source_audit_event_id=e.id where o.organization_id=$1 and o.seller_id=$2 and o.revoked_at is null and e.action='organization.store_application_created' and e.new_values->>'application_id'=$3",[sellerGamma.id,submitted.body.seller_id,ownerRaceRequest.application_id]))[0].n,1,
+        "Owner native Seller requires exactly one authoritative Org link and audit/outbox")
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      const deniedOwnerStore=await browser.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify("+JSON.stringify({...ownerRaceRequest,
+          application_id:"daapp_"+randomBytes(16).toString("hex"),
+          email:"b22-owner-post-revoke-"+rand+"@example.invalid"})+")});"+
+        "return r.status})()")
+      assert.equal(deniedOwnerStore,403)
+      assert.equal((await q("select count(*)::int n from seller where email=$1",["b22-owner-post-revoke-"+rand+"@example.invalid"]))[0].n,0)
+      assert.equal((await q("select count(*)::int n from da_store_application where person_id=$1 and organization_id=$2 and id<>$3 and created_at >= (select created_at from da_store_application where id=$3)",[A.person,sellerGamma.id,ownerRaceRequest.application_id]))[0].n,0)
+      process.stdout.write("PASS B22 Chrome: real Mercur Seller INSERT and Owner membership revoke serialized on PG16; Seller pending plus source audit/outbox before revoke, next Owner Store POST403 and zero Seller\n")
+    }finally{
+      if(ownerBarrierHeld)await ownerRaceBarrier.query("ROLLBACK")
+      await ownerRaceBarrier.end()
+      if(ownerPauseTrigger)await q("drop trigger if exists b22_native_seller_owner_pause_v1 on seller")
+      if(ownerPauseFn)await q("drop function if exists b22_native_seller_owner_pause_v1()")
+      await browser.send("Page.bringToFront")
+      await browser.send("Page.reload",{ignoreCache:true})
+      await reviewer.send("Page.reload",{ignoreCache:true})
+    }
+
     // Native Member context now requires the SAME live legal Organization
     // used by the personal Store list; SellerMember alone is insufficient.
     const storeContext=(org:string,seller:string)=>
