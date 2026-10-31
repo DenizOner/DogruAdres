@@ -14,7 +14,10 @@ function harness() {
   const context=createContext({document,window:{addEventListener:(n:string,f:Function)=>listeners.set(n,f)},location:new URL('https://app.example.invalid/personal'),URL,history:{replaceState(){}},URLSearchParams,setInterval:(f:Function)=>listeners.set('poll',f),fetch:(path:string,options:any)=>new Promise(resolve=>pending.push({path,options,resolve}))})
   const scripts=[...source.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1])
   // Execute the early token capture too; workspace lifetime keeps its original assertions.
-  for(const script of scripts)runInContext(script,context)
+  // Raw route.ts is a template literal; this VM-only lifetime harness must
+  // replace the server-rendered launch URL placeholder with inert script data.
+  // The actual rendered URL serialization is tested in token-privacy.unit.spec.ts.
+  for(const script of scripts)runInContext(script.replaceAll('${storefrontOriginScript}', '""'),context)
   runInContext('links=async()=>{};refreshMfa=async()=>{};refreshSmtp=async()=>{};notifications=async()=>{}',context)
   return {context,el,pending,listeners,document}
 }
