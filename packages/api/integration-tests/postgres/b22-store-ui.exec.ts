@@ -3591,6 +3591,11 @@ export default async function({container}:any){
           }
           return true
         },70000,"B22 task-only Staff A genuine login rate window")
+        // load() intentionally conceals personal data in a hidden tab.
+        // Native Staff recovery login is a *visible* Chrome user journey,
+        // independent of the earlier Gamma Owner revocation browser focus.
+        await browser.send("Page.bringToFront")
+        await browser.wait("document.visibilityState==='visible'")
         await browser.send("Page.reload",{ignoreCache:true})
         await browser.wait("document.getElementById('login').hidden===false")
         await browser.input("#login input[name=email]",A.email)
@@ -3608,8 +3613,31 @@ export default async function({container}:any){
         await browser.wait("document.getElementById('challenge').hidden===false")
         assert.equal(await browser.eval("(()=>{const s=document.querySelector('#challenge select[name=method]');s.value='recovery_code';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"),"recovery_code")
         await browser.input("#challenge input[name=code]",recoveryCode)
+        const recoveryHttpBefore=browser.http.filter((row:any)=>
+          row.method==="POST"&&row.path==="/personal/challenge").length
         await browser.click("#challenge button")
-        await browser.wait("document.getElementById('workspace').hidden===false")
+        // Distinguish actual native recovery rejection from subsequent UI
+        // rendering/session failures. Never log or return a recovery code.
+        await until(async()=>browser.http.filter((row:any)=>
+          row.method==="POST"&&row.path==="/personal/challenge").length>recoveryHttpBefore,
+          10000,"B22 Staff A native recovery POST settled")
+        const recoveryHttp=browser.http.filter((row:any)=>
+          row.method==="POST"&&row.path==="/personal/challenge").at(-1)
+        assert.equal(recoveryHttp?.status,200,
+          "B22 Staff A native MFA recovery HTTP must succeed before showing workspace")
+        try{
+          await browser.wait("document.getElementById('workspace').hidden===false")
+        }catch{
+          // Safe diagnosis: HTTP statuses and visibility ONLY. No Person
+          // identifier, cookie, password, recovery code, or response body.
+          const safe=browser.http.filter((row:any)=>
+            ["/personal/challenge","/personal/session","/personal/organizations"]
+              .includes(row.path)).slice(-8).map((row:any)=>
+                ({method:row.method,path:row.path,status:row.status}))
+          const visibility=await browser.eval("document.visibilityState")
+          throw new Error("B22 Staff A post-recovery UI did not open: "+
+            JSON.stringify({visibility,http:safe}))
+        }
         assert.equal(await browser.eval("(async()=> (await fetch('/personal/session')).status)()"),200)
       }
       const staffSetPlatform=async(mode:"required"|"optional",version:number)=>browser.eval(
