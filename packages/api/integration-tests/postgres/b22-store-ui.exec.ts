@@ -2379,7 +2379,7 @@ export default async function({container}:any){
     assert.equal(await foundation.authorizeBuyerCheckout(
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"An independent Beta protected Owner retains authority after self-grant revoke")
-    process.stdout.write("PASS B22 Owner authority: advisory barrier proved a real grant revocation commit; native Buyer scope remains authorized by protected Owner, not an obsolete self-grant\\n")
+    process.stdout.write("PASS B22 Owner authority: advisory barrier proved a real grant revocation commit; native Buyer scope remains authorized by protected Owner, not an obsolete self-grant\n")
     assert.equal((await readNativeCart(betaScopeUrl)).status,200,
       "Protected Beta Owner's own Cart stays readable after self-grant revocation")
     assert.equal((await claimCart(organizations[1].id,customerCart.id)).status,403,
@@ -2422,7 +2422,7 @@ export default async function({container}:any){
     assert.equal(await foundation.authorizeBuyerCheckout(
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Unblocking restores inherited Owner authority independently of an explicit grant")
-    process.stdout.write("PASS B22 real Mercur validate: protected Owner still authorized after self-grant revoke, but Store Buyer Organization block denies native checkout with zero OrderGroup/Order/payment; unblock restores L\\n")
+    process.stdout.write("PASS B22 real Mercur validate: protected Owner still authorized after self-grant revoke, but Store Buyer Organization block denies native checkout with zero OrderGroup/Order/payment; unblock restores L\n")
     process.stdout.write("NOT TESTED B22: successful order placement, authorization/capture with a real payment provider, post-L overlap orchestration, independent exact-PR acceptance\\n")
 
     const forgedBuyer=await reviewer.eval(`(async()=>{
