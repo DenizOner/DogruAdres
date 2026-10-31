@@ -14,6 +14,19 @@ Mercur is the marketplace engine. DoğruAdres is the product and domain layer bu
 
 Follow [DoğruAdres engineering principles §11](#11-product-scope-and-dependency-boundaries) for product scope, dependency boundaries and source-only repository rules. DoğruAdres is the development target. Never edit Mercur or Medusa upstream source; the historical escalation list below does not authorize such edits. Continue independent authorized project work when a dependency issue blocks only one operation.
 
+## Owner-facing communication — mandatory #ELI5 rule
+
+**Scope:** Applies to every local/remote engineering Agent, Technical Advisor, review Agent, and PR/Issue progress reporter when communicating with the Product Owner. This is a presentation rule, **not** permission to weaken security, reduce source coverage, conceal failures, alter evidence, or override any existing approval/review gate.
+
+- Explain outcomes to the Product Owner in **plain Turkish, #ELI5 style**. Assume no prior knowledge of software engineering, GitHub, authentication, databases, or CI. Be respectful and adult, not childish.
+- Lead with the real-world meaning: **what works for a user, what does not yet work or remains unverified, why it matters, and what happens next**. Do not lead with acronyms, SHAs, commands, error codes, or unstructured test logs.
+- On first use, explain unavoidable terms in simple Turkish: e.g. PR = code-change proposal under review; CI = automated checks; HEAD/base = the exact proposed/reference code revisions; merge = adding reviewed changes to the main code branch. Keep precise identifiers, links, commands, and evidence in a short technical appendix or existing GitHub record when necessary.
+- Translate statuses without changing their meaning: `PASS` = doğrulandı; `FAIL` = test başarısız; `BLOCKED` = engel var, doğrulama/işlem tamamlanamadı; `NOT TESTED` = henüz denenmedi. A green CI, mock/unit test, Agent assertion, partial review, or merge is **not** proof of an accepted real user journey.
+- For an actionable blocker, explain **the precise missing proof/permission**, its practical consequence, the **smallest safe next action**, and whether the Agent or Product Owner must perform it. If the Product Owner needs to act, give concrete numbered instructions; otherwise proceed independently within existing authorization.
+- Keep normal progress updates proportionate; at the end of each task, use exactly these three Turkish headings: **1. Ne çalışıyor? 2. Ne eksik veya riskli? 3. Şimdi ne yapılacak?** State only supported outcomes; show evidence links and distinguish observed facts from assumptions. Do not reproduce long console output in owner-facing summaries.
+- Agent executable task instructions remain **English**. New GitHub Issue titles, acceptance criteria, and user-facing reports remain **Turkish**. Source code, identifiers, test commands, review provenance, and canonical records retain their exact technical meaning. Reviewers must still inspect complete relevant source and report all findings precisely, even if the summary is simplified.
+- If asked for deeper technical detail, provide it separately without replacing or changing the plain-language conclusion. Never use simplification to hide a security concern, an unresolved independent-review requirement, a discrepancy in revisions, or a failed/untested path.
+
 ## Required Mercur workflow
 
 Before nontrivial framework-facing changes, verify the actual installed package versions, relevant bundled Mercur docs, project code and generated types. Use matching official Medusa docs for Medusa-specific behavior. If the installed sources are unavailable to the reviewer, identify what could and could not be verified; never invent an API contract or assume a feature is missing.
