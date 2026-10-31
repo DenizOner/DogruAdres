@@ -2821,6 +2821,132 @@ export default async function({container}:any){
       encodeURIComponent(ownerStoreId)+'&request_id='+encodeURIComponent(requestId))).status,200)
     assert.equal((await q("select count(*)::int n from product where title=$1",[draftTitle]))[0].n,1)
     process.stdout.write("PASS B22 Chrome: protected Owner native draft without self grant, PG16 product_seller/audit/outbox, exact replay no duplicate, conflicting key/foreign Member denied\\n")
+
+    // B22 PG16 negative race: the native INSERT is held while a *different*
+    // authenticated protected Owner revokes an ordinary Admin's products.edit.
+    // The real Chrome requests and native Mercur workflow run unmocked.
+    let racePromoted=false,raceDemoted=false,raceFn=false,raceTrigger=false
+    const raceBarrier=new Client({connectionString:u.toString()})
+    await raceBarrier.connect()
+    let raceBarrierHeld=false
+    const raceKey="dapd_"+randomBytes(16).toString("hex")
+    const raceProductId="prod_"+raceKey.slice("dapd_".length)
+    const raceTitle="B22 native products edit race "+rand
+    try{
+      await foundation.changeMembership({
+        organization_id:organizations[0].id,membership_id:alphaMember.id,
+        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,role:"owner"
+      })
+      racePromoted=true
+      await foundation.changeMembership({
+        organization_id:organizations[0].id,membership_id:memberships[0].id,
+        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,role:"admin"
+      })
+      raceDemoted=true
+      const [roles]=await q("select count(*)::int n from da_organization_membership where organization_id=$1 and protected_owner=true and status='active'",[organizations[0].id])
+      assert.equal(roles.n,1)
+      const ownerEdit=async(action:"grant"|"revoke")=>{
+        const intent={action,organization_id:organizations[0].id,
+          seller_id:ownerStoreId,membership_id:memberships[0].id}
+        return reviewer.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
+          "const r=await fetch('/personal/store-product-permissions',{method:'POST',"+
+          "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+          "body:JSON.stringify("+JSON.stringify(intent)+")});"+
+          "return {status:r.status,body:await r.json()}})()")
+      }
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      const grant=await ownerEdit("grant")
+      assert.equal(grant.status,200)
+      const grantRow=await q("select id from da_store_product_permission where person_id=$1 and organization_id=$2 and seller_id=$3 and revoked_at is null",[A.person,organizations[0].id,ownerStoreId])
+      assert.equal(grantRow.length,1)
+      // Task-owned disposable PG16 only. ID is generated hex, not user input.
+      await q("create function b22_native_product_pause_v1() returns trigger language plpgsql as $b22$ begin if NEW.id='"+raceProductId+"' then perform pg_advisory_xact_lock(hashtext('b22-native-draft-pause'),hashtext('"+raceProductId+"')); end if; return NEW; end $b22$")
+      raceFn=true
+      await q("create trigger b22_native_product_pause_v1 after insert on product for each row execute function b22_native_product_pause_v1()")
+      raceTrigger=true
+      await raceBarrier.query("BEGIN")
+      raceBarrierHeld=true
+      const barrierPid=(await raceBarrier.query("select pg_backend_pid()::int pid")).rows[0].pid as number
+      await raceBarrier.query("select pg_advisory_xact_lock(hashtext('b22-native-draft-pause'),hashtext($1))",[raceProductId])
+      const racePayload={request_id:raceKey,organization_id:organizations[0].id,
+        seller_id:ownerStoreId,title:raceTitle}
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      let createDone=false
+      const createPending=browser.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/product-drafts',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify("+JSON.stringify(racePayload)+")});"+
+        "return {status:r.status,body:await r.json()}})()"
+      ).then((result:any)=>{createDone=true;return result},(err:unknown)=>{createDone=true;throw err})
+      const waiters=async(pid:number)=>Number((await q(
+        "select count(*)::int n from pg_locks h join pg_locks w "+
+        "on w.locktype=h.locktype and w.database=h.database and w.classid=h.classid "+
+        "and w.objid=h.objid and w.objsubid=h.objsubid and w.pid<>h.pid "+
+        "and w.granted=false where h.pid=$1 and h.locktype='advisory' and h.granted=true",
+        [pid]))[0].n)
+      await until(async()=>await waiters(barrierPid)===1,19000,
+        "B22 native product INSERT waits on task-only PG16 transaction barrier")
+      assert.equal(createDone,false)
+      assert.equal((await q("select status from da_product_draft_request where id=$1",[raceKey]))[0].status,"reserved")
+      let revokeDone=false
+      const revokePending=ownerEdit("revoke").then(
+        (x:any)=>{revokeDone=true;return x},(e:unknown)=>{revokeDone=true;throw e})
+      await until(async()=>{
+        const [row]=await q(
+          "select count(*)::int n from pg_locks h join pg_locks w "+
+          "on w.locktype=h.locktype and w.database=h.database and w.classid=h.classid "+
+          "and w.objid=h.objid and w.objsubid=h.objsubid and w.pid<>h.pid "+
+          "and w.granted=false where h.pid<>$1 and h.locktype='advisory' and h.granted=true",
+          [barrierPid])
+        return row.n>=1
+      },19000,"B22 real Owner revoke waits on product creation authorization lock")
+      assert.equal(revokeDone,false)
+      assert.equal(createDone,false)
+      assert.equal((await q("select count(*)::int n from da_store_product_permission where id=$1 and revoked_at is null",[grantRow[0].id]))[0].n,1)
+      assert.equal((await q("select count(*)::int n from product where id=$1",[raceProductId]))[0].n,0)
+      await raceBarrier.query("ROLLBACK")
+      raceBarrierHeld=false
+      const created=await createPending,revoked=await revokePending
+      assert.ok([201,403].includes(created.status),
+        "HTTP may observe revocation after the prior authorized native commit")
+      assert.equal(revoked.status,200)
+      assert.equal(revoked.body.status,"revoked")
+      const [ledger]=await q("select status,product_id,completion_audit_event_id,completed_at from da_product_draft_request where id=$1",[raceKey])
+      const [revocation]=await q("select revoked_at from da_store_product_permission where id=$1",[grantRow[0].id])
+      assert.equal(ledger.status,"created")
+      assert.equal(ledger.product_id,raceProductId)
+      assert.ok(revocation.revoked_at)
+      assert.ok(new Date(ledger.completed_at).getTime()<new Date(revocation.revoked_at).getTime(),
+        "The native and Foundation product completion must precede revoke")
+      assert.equal((await q("select count(*)::int n from product where id=$1",[raceProductId]))[0].n,1)
+      assert.deepEqual((await q("select seller_id from product_seller where product_id=$1",[raceProductId])).map((v:any)=>v.seller_id),[ownerStoreId])
+      assert.equal((await q("select count(*)::int n from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id where e.id=$1 and e.action='organization.product_draft_created' and e.actor_person_id=$2 and e.organization_id=$3 and e.new_values->>'request_id'=$4 and e.new_values->>'product_id'=$5",[ledger.completion_audit_event_id,A.person,organizations[0].id,raceKey,raceProductId]))[0].n,1)
+      const deniedPayload={...racePayload,request_id:"dapd_"+randomBytes(16).toString("hex"),title:"B22 denied after revoke "+rand}
+      const denied=await draftPost(deniedPayload)
+      assert.equal(denied.status,403)
+      assert.equal((await q("select count(*)::int n from product where title=$1",[deniedPayload.title]))[0].n,0)
+      assert.equal((await draftPost(racePayload)).status,403,"Revoke must block replay of the earlier product")
+      process.stdout.write("PASS B22 Chrome: real native product INSERT and protected Owner products.edit revoke serialized on PG16; committed product/audit predates revoke; next Member HTTP 403 and zero new product\n")
+    }finally{
+      if(raceBarrierHeld)await raceBarrier.query("ROLLBACK")
+      await raceBarrier.end()
+      if(raceTrigger)await q("drop trigger if exists b22_native_product_pause_v1 on product")
+      if(raceFn)await q("drop function if exists b22_native_product_pause_v1()")
+      if(raceDemoted)await foundation.changeMembership({
+        organization_id:organizations[0].id,membership_id:memberships[0].id,
+        actor_person_id:B.person,actor_type:"user",actor_id:B.actor,role:"owner"
+      })
+      if(racePromoted)await foundation.changeMembership({
+        organization_id:organizations[0].id,membership_id:alphaMember.id,
+        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,role:"member"
+      })
+      await browser.send("Page.bringToFront")
+      await browser.send("Page.reload",{ignoreCache:true})
+      await reviewer.send("Page.reload",{ignoreCache:true})
+    }
+
     // Native Member context now requires the SAME live legal Organization
     // used by the personal Store list; SellerMember alone is insufficient.
     const storeContext=(org:string,seller:string)=>

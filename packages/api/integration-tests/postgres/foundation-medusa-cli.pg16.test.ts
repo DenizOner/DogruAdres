@@ -165,6 +165,7 @@ async function run(){
         assert.ok(result.includes("PASS B22 official Redis provider: independent process exit, live-lock denial, automatic TTL recovery; native Mercur Cart checkout NOT TESTED on Redis"),"Missing native Redis process exit and recovery evidence")
         assert.ok(result.includes("OBSERVED B22 native Cart TTL mismatch: PostgreSQL lease near 120000 seconds instead of intended 120 seconds; checkout remains BLOCKED"),"Missing native Mercur Cart lease units mismatch evidence")
         assert.ok(result.includes("PASS B22 real Mercur validate: protected Owner still authorized after self-grant revoke, but Store Buyer Organization block denies native checkout with zero OrderGroup/Order/payment; unblock restores L"),"Missing protected Owner Store-block denial and no-order/payment evidence")
+        assert.ok(result.includes("PASS B22 Chrome: real native product INSERT and protected Owner products.edit revoke serialized on PG16; committed product/audit predates revoke; next Member HTTP 403 and zero new product"),"Missing actual native-product and products.edit revoke PG16/Chrome overlap proof")
       }
 
       if (scope === "b02") {
