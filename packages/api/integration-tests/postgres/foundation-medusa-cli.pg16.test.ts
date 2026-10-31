@@ -340,7 +340,7 @@ async function run(){
             "PASS SMTP native failures:", "PASS SMTP native TLS:", "PASS SMTP native local-event failure:", "PASS SMTP native logs:", "PASS SMTP verification origin:",
             "PASS verification CORS:",
             "PASS verification HTTP GET:", "PASS verification HTTP negatives:",
-            "PASS browser Next middleware:", "PASS browser token preservation:", "PASS browser native GET inspection:", "PASS browser explicit confirmation:", "PASS browser replay denial:", "PASS browser privacy:",
+            "PASS browser Next middleware:", "PASS browser token preservation:", "PASS browser native GET inspection:", "PASS browser explicit confirmation:", "PASS browser replay denial:", "PASS browser privacy:", "PASS browser missing backend configuration:",
             "PASS verification HTTP POST:", "PASS verification HTTP privacy:", "PASS verification scope:"])
             assert.ok(smtpOutput.includes(marker), "Missing native SMTP acceptance marker: " + marker)
           // Only fixed acceptance markers are published, never transport/message/secret data.
