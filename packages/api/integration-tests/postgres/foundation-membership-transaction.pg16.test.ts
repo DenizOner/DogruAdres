@@ -192,7 +192,7 @@ async function main(){
     // independent Index write -> ACK, followed by duplicate reconciliation.
     // Source rows below are synthetic; this is NOT a native Staff provisioning,
     // multi-worker crash, or full Medusa module runtime acceptance.
-    await check("authorized Platform Staff audit events relay to Index and ACK on real PG16",async()=>{
+    await check("authorized Staff events deliver, wrong role/action quarantines on real PG16",async()=>{
       const deliver=async()=>{
         // Bun SQL may return JSONB as text, unlike the Node pg driver used
         // by the standalone B14 test. Normalize only these SQL result fields
@@ -240,6 +240,7 @@ async function main(){
         {action:"organization.provisioned",resource:"organization",target:org,role:"platform_staff"},
         {action:"organization.owner_assigned",resource:"membership",target:ownerId,role:"platform_staff"},
         {action:"organization.provisioned",resource:"organization",target:org,role:"forged_superuser"},
+        {action:"organization.invitation_accepted",resource:"invitation",target:"dainv_tx_staff_mismatch",role:"platform_staff"},
       ] as const
       const ids:string[]=[]
       for(const event of staffEvents){
@@ -268,8 +269,8 @@ async function main(){
       }
       assert.equal(results.filter(x=>x==="delivered").length,3,
         "Previously committed Owner membership plus two valid Staff events must reach Index; outcomes="+results.join(","))
-      assert.equal(results.filter(x=>x==="quarantined").length,1,
-        "Unsupported role must fail closed")
+      assert.equal(results.filter(x=>x==="quarantined").length,2,
+        "Unsupported role and forbidden Staff action combination must both quarantine")
       for(const [i,id] of ids.entries()){
         const out=(await db.unsafe("select status,delivered_at,last_error_code from da_audit_outbox where source_audit_event_id=$1",[id]))[0]
         const idx=await db.unsafe("select source_event_id,envelope from da_audit_index_entry where source_event_id=$1",[id])

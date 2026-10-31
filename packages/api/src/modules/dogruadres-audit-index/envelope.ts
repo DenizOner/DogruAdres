@@ -31,7 +31,13 @@ const schema = z.object({
   resource: z.enum(["organization", "membership", "invitation"]),
   target_id: reference,
   occurred_at: timestamp,
-}).strict().refine(value => resources[value.action] === value.resource)
+}).strict()
+  .refine(value => resources[value.action] === value.resource)
+  // Only the two provisioning actions are emitted by the canonical Staff
+  // producer. A valid role alone must not make a different action authentic.
+  .refine(value => value.actor.role_context !== "platform_staff" ||
+    value.action === "organization.provisioned" ||
+    value.action === "organization.owner_assigned")
 
 export type AuditIndexEnvelopeV1 = z.infer<typeof schema>
 export function validateAuditIndexEnvelope(value: unknown): AuditIndexEnvelopeV1 {

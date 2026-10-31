@@ -60,6 +60,23 @@ describe("Audit Index version 1 validation and redaction", () => {
     expect(JSON.stringify(e)).not.toContain("private-grant")
     expect(JSON.stringify(e)).not.toContain("do-not-project")
   })
+  it.each([
+    ["organization.membership_changed", "membership"],
+    ["organization.invitation_created", "invitation"],
+    ["organization.invitation_revoked", "invitation"],
+    ["organization.invitation_accepted", "invitation"],
+  ])("rejects Platform Staff paired with unrelated %s despite a valid resource", (action, resource) => {
+    const legitimate = projectFoundationAuditEvent({
+      ...source(), role_context: "owner", action, resource, target_id: "damem_example",
+    })
+    expect(validateAuditIndexEnvelope(legitimate)).toEqual(legitimate)
+    expect(() => projectFoundationAuditEvent({
+      ...source(), role_context: "platform_staff", action, resource, target_id: "damem_example",
+    })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+    expect(() => validateAuditIndexEnvelope({
+      ...legitimate, actor: { ...legitimate.actor, role_context: "platform_staff" },
+    })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+  })
   it.each(["root", "platform-staff", "platform_staff ", "superuser"])("still rejects unsupported role %s", role => {
     expect(() => projectFoundationAuditEvent({ ...source(), role_context: role })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })

@@ -130,6 +130,16 @@ describe("Foundation outbox relay decisions (mocked, NOT database acceptance)", 
     expect(f.index.indexFoundationAuditEvent).not.toHaveBeenCalled()
     expect(f.source.quarantineFoundationAudit).not.toHaveBeenCalled()
   })
+  it("quarantines a canonical-shaped Staff membership event without ACK or Index write", async () => {
+    const f = fixture()
+    f.event.role_context = "platform_staff"
+    // This action/resource is valid for an Organization Owner, not Staff.
+    expect(await relayOneFoundationAudit(f.source, f.index)).toBe("quarantined")
+    expect(f.source.quarantineFoundationAudit).toHaveBeenCalledWith(f.claim, "ENVELOPE_INVALID")
+    expect(f.source.acknowledgeFoundationAudit).not.toHaveBeenCalled()
+    expect(f.index.inspectFoundationAuditEvent).not.toHaveBeenCalled()
+    expect(f.index.indexFoundationAuditEvent).not.toHaveBeenCalled()
+  })
   it("quarantines an unsupported forged role instead of inserting or acknowledging", async () => {
     const f = fixture()
     f.event.role_context = "unrecognized_superuser"
