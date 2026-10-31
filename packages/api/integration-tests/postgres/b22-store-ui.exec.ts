@@ -21,6 +21,7 @@ import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerW
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
+import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
 
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
@@ -539,6 +540,91 @@ export default async function({container}:any){
     const reviewer=new B06Chrome(host,"B");browsers.push(reviewer)
     await reviewer.start(crt)
     await reviewer.login(B.email,B.password,B.person)
+    // CR-01: a real strongly authenticated Staff browser provisions a new
+    // Organization using the installed personal HTTP route and native Medusa
+    // user/Person binding. Its canonical audit/outbox producer must emit the
+    // exact Staff role accepted by the strict Index projection contract.
+    // This is task-owned CI data; no real company approval is performed.
+    assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform')).status)()"),403,
+      "Native sign-in and Store approval grant do not confer Organization provisioning")
+    const staffOrgGrantId="da_staff_org_"+rand
+    await q(`insert into da_platform_staff_grant
+      (id,person_id,task,resource,granted_by_person_id,reason)
+      values($1,$2,'organization.provision','platform',$2,'B22 isolated Staff provision fixture')`,
+      [staffOrgGrantId,B.person])
+    assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform')).status)()"),200)
+    assert.equal((await get("/personal/platform")).status,403,
+      "Organization Owner cannot acquire separate Staff provision permission")
+    const provisionName="B22 Staff provision "+rand
+    const provisionBody={name:provisionName,initial_owners:[{actor_type:"user",actor_id:B.actor}]}
+    const provision=async(body:unknown, csrfOverride?:string)=>reviewer.eval(`(async()=>{
+      const s=await (await fetch('/personal/session')).json()
+      const response=await fetch('/personal/platform',{
+        method:'POST',headers:{'content-type':'application/json',
+          'x-csrf-token':${JSON.stringify(csrfOverride??"")}||s.csrf_token},
+        body:JSON.stringify(${JSON.stringify(body)})
+      })
+      return {status:response.status,body:await response.json()}
+    })()`)
+    const forbiddenCsrf=await provision(provisionBody,"invalid-task-csrf")
+    assert.equal(forbiddenCsrf.status,403)
+    assert.equal((await q("select count(*)::int n from da_organization where name=$1",
+      [provisionName]))[0].n,0,"CSRF denial must not write an Organization")
+    const forgedOwner=await provision({...provisionBody,
+      initial_owners:[{actor_type:"user",actor_id:"usr_foreign_b22_"+rand}]})
+    assert.equal(forgedOwner.status,400,
+      "Unknown native actor cannot be assigned protected Owner")
+    assert.equal((await q("select count(*)::int n from da_organization where name=$1",
+      [provisionName]))[0].n,0)
+    const created=await provision(provisionBody)
+    assert.equal(created.status,201,"Strong Staff grant + verified Owner may provision")
+    assert.match(created.body.organization.id,/^daorg_[A-Za-z0-9_-]+$/)
+    assert.equal(created.body.organization.name,provisionName)
+    assert.equal(created.body.initial_owner_count,1)
+    const staffOrgId=created.body.organization.id
+    const staffOwner=await q(`select person_id,role,status,protected_owner from
+      da_organization_membership where organization_id=$1 and deleted_at is null`,
+      [staffOrgId])
+    assert.equal(staffOwner.length,1)
+    assert.equal(staffOwner[0].person_id,B.person)
+    assert.equal(staffOwner[0].role,"owner")
+    assert.equal(staffOwner[0].status,"active")
+    assert.equal(staffOwner[0].protected_owner,true)
+    const staffEvents=await q(`select e.*,x.id as outbox_id,x.envelope
+      from da_audit_event e join da_audit_outbox x
+      on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and
+        e.action in ('organization.provisioned','organization.owner_assigned')
+      order by e.action`,[staffOrgId])
+    assert.deepEqual(staffEvents.map(e=>e.action),
+      ["organization.owner_assigned","organization.provisioned"])
+    for(const e of staffEvents){
+      assert.equal(e.actor_person_id,B.person)
+      assert.equal(e.actor_type,"user")
+      assert.equal(e.actor_id,B.actor)
+      assert.equal(e.role_context,"platform_staff")
+      assert.ok(/^daaob_[A-Za-z0-9_-]+$/.test(e.outbox_id))
+      const projected=projectFoundationAuditEvent(e)
+      assert.equal(projected.actor.role_context,"platform_staff")
+      assert.equal(projected.action,e.action)
+      assert.equal(projected.organization_id,staffOrgId)
+      assert.equal(projected.source_event_id,e.id)
+      const envelope=typeof e.envelope==="string"?JSON.parse(e.envelope):e.envelope
+      assert.equal(envelope.actor.role_context,"platform_staff")
+      assert.equal(envelope.source_audit_event_id,e.id)
+      assert.equal((await q("select count(*)::int n from da_security_outbox where audit_event_id=$1",
+        [e.id]))[0].n,1,
+        "Staff provisioning canonical/security audit must commit together")
+    }
+    await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",
+      [staffOrgGrantId])
+    assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform')).status)()"),403)
+    assert.equal((await provision({...provisionBody,name:provisionName+" revoked"})).status,403)
+    assert.equal((await q("select count(*)::int n from da_organization where name=$1",
+      [provisionName+" revoked"]))[0].n,0)
+    // Separate store.approve grant remains valid; Staff and Owner roles
+    // cannot silently inherit each other's permissions.
+    process.stdout.write("PASS B22 Chrome: real Staff Organization provision HTTP201 and protected Owner persisted, two canonical platform_staff audit/outboxes project safely; CSRF/foreign actor/revoked grant denied\\n")
     reviewer.phase="platform-store-review"
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
