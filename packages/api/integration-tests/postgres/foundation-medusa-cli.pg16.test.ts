@@ -164,7 +164,7 @@ async function run(){
         assert.ok(result.includes("OBSERVED B22 abrupt Medusa process exit: expired provider lock persists and rejects reacquisition; exact task-only cleanup; checkout recovery BLOCKED"),"Missing independent Medusa process exit and stale lock negative evidence")
         assert.ok(result.includes("PASS B22 official Redis provider: independent process exit, live-lock denial, automatic TTL recovery; native Mercur Cart checkout NOT TESTED on Redis"),"Missing native Redis process exit and recovery evidence")
         assert.ok(result.includes("OBSERVED B22 native Cart TTL mismatch: PostgreSQL lease near 120000 seconds instead of intended 120 seconds; checkout remains BLOCKED"),"Missing native Mercur Cart lease units mismatch evidence")
-        assert.ok(result.includes("PASS B22 real Mercur validate: fully attributed Beta Cart + approved Gamma Store passed L before revoke; after actual Owner revoke workflow denies before OrderGroup/Order/payment writes and preserves native Cart"),"Missing post-revocation Mercur validate denial evidence")
+        assert.ok(result.includes("PASS B22 real Mercur validate: protected Owner still authorized after self-grant revoke, but Store Buyer Organization block denies native checkout with zero OrderGroup/Order/payment; unblock restores L"),"Missing protected Owner Store-block denial and no-order/payment evidence")
       }
 
       if (scope === "b02") {
