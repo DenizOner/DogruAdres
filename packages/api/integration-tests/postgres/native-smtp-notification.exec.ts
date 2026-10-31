@@ -153,7 +153,7 @@ export default async function({ container }: ExecArgs) {
     try {
       process.env.NODE_ENV = "production"
       delete process.env.PUBLIC_ORIGIN; delete process.env.MEDUSA_STOREFRONT_URL
-      for (const origin of [undefined, "http://localhost:8000", "https://shop.example.invalid/path", "https://[::ffff:7f00:1]:9443", "https://user:private-origin-secret@shop.example.invalid"]) {
+      for (const origin of [undefined, "http://localhost:8000", "https://shop.example.invalid/path", "https://[::ffff:7f00:1]:9443", "https://127.0.0.2:9443", "https://shop.localhost:9443", "https://shop.localhost.:9443", "https://user:private-origin-secret@shop.example.invalid"]) {
         if (origin === undefined) delete process.env.STOREFRONT_URL
         else process.env.STOREFRONT_URL = origin
         const previous = Number((await pg("notification").where({ to: recipient, status: "failure" }).count("*").first())!.count)
@@ -163,7 +163,7 @@ export default async function({ container }: ExecArgs) {
         assert.ok(rows.length === previous + 1 && Number(messages.length) === sent && rows.every((row: any) => !row.external_id), "Invalid production origin must persist native failure without SMTP delivery")
       }
       assert.ok(logged.every(line => !line.includes("private-origin-secret")), "Origin credentials leaked into native logs")
-      process.stdout.write("PASS SMTP verification origin: missing/insecure/non-origin/credential/IPv4-mapped production config rejected before SMTP; native failure persisted and errors sanitized\n")
+      process.stdout.write("PASS SMTP verification origin: missing/insecure/non-origin/credential/IPv4-mapped/127-8/localhost-subdomain production config rejected before SMTP; native failure persisted and errors sanitized\n")
     } finally {
       for (const [key, value] of Object.entries(oldEnv)) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
     }

@@ -6,7 +6,12 @@ export function resolveVerificationOrigin(env: Record<string, string | undefined
     const url = new URL(value)
     // Reject canonicalized IPv4-mapped IPv6, including 127/8 loopback.
     if (url.hostname.startsWith("[::ffff:")) throw new Error()
-    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+    // WHATWG canonicalizes IP spellings; strip DNS trailing dots before
+    // classifying the entire 127/8 range and localhost subdomains.
+    const hostname = url.hostname.toLowerCase().replace(/\.+$/, "")
+    const loopback = hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      hostname.startsWith("127.") || hostname === "[::1]"
     if (url.origin !== value || url.username || url.password ||
         (url.protocol !== "https:" && !(["development", "test"].includes(env.NODE_ENV || "") && url.protocol === "http:" && loopback)) ||
         (env.NODE_ENV === "production" && loopback)) throw new Error()
