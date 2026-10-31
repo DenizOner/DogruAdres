@@ -556,9 +556,80 @@ export default async function({container}:any){
     // asynchronous page switch completed before approval.
     await reviewer.wait(`document.querySelectorAll('#store-approval-list button').length===1 && document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`)
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
-    // The real browser button invokes the project-owned staff-only adapter,
-    // which reuses Mercur's native pending→open approval workflow.
-    await reviewer.click("#store-approval-list button")
+    // The real browser button invokes Mercur's native approval. Hold the
+    // task-only seller status UPDATE with an independent PG16 advisory lock,
+    // then revoke the current platform Staff task from a second connection.
+    // The staff-grant row lock must keep revoke UNCOMMITTED until the native
+    // approval and its Foundation authorization completion have finished.
+    const staffBarrier=new Client({connectionString:u.toString()})
+    const staffRevoker=new Client({connectionString:u.toString()})
+    await staffBarrier.connect()
+    await staffRevoker.connect()
+    let sellerPauseFn=false,sellerPauseTrigger=false,staffBarrierHeld=false
+    let staffRevokeDone=false
+    const beforeStoreApprovals=reviewer.http.filter(
+      (x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST").length
+    try{
+      const tables=await q("select count(*)::int n from pg_class where oid=to_regclass('public.seller') and relkind='r'")
+      assert.equal(tables[0].n,1,"Installed Mercur native Seller persistence must be a real PG16 relation")
+      await q("create function b22_staff_native_seller_pause_v1() returns trigger language plpgsql as $b22$ begin if NEW.id='"+ownerStoreId+"' and NEW.status='open' then perform pg_advisory_xact_lock(hashtext('b22-seller-open-pause'),hashtext('"+ownerStoreId+"')); end if; return NEW; end $b22$")
+      sellerPauseFn=true
+      await q("create trigger b22_staff_native_seller_pause_v1 after update on seller for each row execute function b22_staff_native_seller_pause_v1()")
+      sellerPauseTrigger=true
+      await staffBarrier.query("BEGIN")
+      staffBarrierHeld=true
+      const holderPid=(await staffBarrier.query("select pg_backend_pid()::int pid")).rows[0].pid as number
+      const revokePid=(await staffRevoker.query("select pg_backend_pid()::int pid")).rows[0].pid as number
+      await staffBarrier.query("select pg_advisory_xact_lock(hashtext('b22-seller-open-pause'),hashtext($1))",[ownerStoreId])
+      await reviewer.click("#store-approval-list button")
+      await until(async()=>{
+        const [w]=await q("select count(*)::int n from pg_locks h join pg_locks w on w.locktype=h.locktype and w.database=h.database and w.classid=h.classid and w.objid=h.objid and w.objsubid=h.objsubid and w.pid<>h.pid and w.granted=false where h.locktype='advisory' and h.pid=$1 and h.granted=true",[holderPid])
+        return w.n===1
+      },19000,"Actual Mercur Seller UPDATE waits on independent PG16 barrier")
+      assert.equal(reviewer.http.filter(
+        (x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST").length,
+        beforeStoreApprovals,"Staff approval HTTP has not returned before native write")
+      const revokePending=staffRevoker.query(
+        "update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1 and revoked_at is null returning revoked_at",
+        [grantId]).then((v:any)=>{staffRevokeDone=true;return v},
+          (e:unknown)=>{staffRevokeDone=true;throw e})
+      await until(async()=>{
+        const [w]=await q("select count(*)::int n from pg_locks where pid=$1 and granted=false and locktype='transactionid'",[revokePid])
+        return w.n>=1
+      },19000,"Real PG16 Staff grant revoke waits on approval's locked grant row")
+      assert.equal(staffRevokeDone,false,"Permission revoke cannot commit before approved Store write finishes")
+      assert.equal((await q("select count(*)::int n from da_platform_staff_grant where id=$1 and revoked_at is null",[grantId]))[0].n,1)
+      assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval",
+        "The uncommitted native Seller UPDATE is not visible to outside readers")
+      await staffBarrier.query("ROLLBACK")
+      staffBarrierHeld=false
+      await until(async()=>{
+        const http=reviewer.http.filter(
+          (x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST")
+        const rows=await native.listSellers({id:ownerStoreId})
+        return http.length===beforeStoreApprovals+1&&http[http.length-1].status===200&&
+          rows.length===1&&rows[0].status==="open"&&!!rows[0].approved_at
+      },19000,"Real Chrome Staff approval HTTP200 with committed native Seller open")
+      const revoked=await revokePending
+      assert.equal(revoked.rows.length,1)
+      assert.ok(revoked.rows[0].revoked_at)
+      assert.equal((await q("select count(*)::int n from da_platform_staff_grant where id=$1 and revoked_at is not null",[grantId]))[0].n,1)
+      assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform/stores')).status)()"),403,
+        "Current platform Staff revoke must deny all subsequent Store approvals")
+      assert.equal((await q("select count(*)::int n from da_store_application where id=$1 and seller_id=$2 and status='created'",[applicationId,ownerStoreId]))[0].n,1)
+      assert.equal((await q("select count(*)::int n from da_organization_seller_ownership where organization_id=$1 and seller_id=$2 and revoked_at is null",[organizations[0].id,ownerStoreId]))[0].n,1)
+      process.stdout.write("PASS B22 Chrome: Staff grant revoke waits during real native Seller approval; HTTP200 and Seller open before revoke commit, later Staff HTTP403; authoritative origin retained\n")
+    }finally{
+      if(staffBarrierHeld)await staffBarrier.query("ROLLBACK")
+      await staffRevoker.end()
+      await staffBarrier.end()
+      if(sellerPauseTrigger)await q("drop trigger if exists b22_staff_native_seller_pause_v1 on seller")
+      if(sellerPauseFn)await q("drop function if exists b22_staff_native_seller_pause_v1()")
+      // Restore only this task-created grant to preserve the remaining
+      // B22 UI tests; the existing final revoke test still runs below.
+      await q("update da_platform_staff_grant set revoked_at=null where id=$1",[grantId])
+      await reviewer.send("Page.bringToFront")
+    }
     // Verify the real browser network action AND native committed Seller state.
     // A temporary status message is not a durable success contract: the
     // privacy epoch may conceal an inactive browser while the POST completes.
