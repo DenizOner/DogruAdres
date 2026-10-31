@@ -2479,6 +2479,10 @@ export default async function({container}:any){
     // F-02: an actual native Medusa Customer GET completes, but its HTTP
     // response is held while a supported Customer unlink commits to PG16.
     // No fake upstream actor response, production hook or external service.
+    // The native Store Customer endpoint requires Medusa's publishable token.
+    // Reuse the existing disposable B22 key; never log or persist it.
+    const previousCustomerPublishable=process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY
+    process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY=b22PublishableKey.token
     const customerBeforeRace=await reviewer.eval("(async()=>{const r=await fetch('/personal/contexts?type=customer');return r.status})()")
     assert.equal(customerBeforeRace,200,"Valid Customer stays available before unlink")
     const customerBindingRows=await q(
@@ -2559,6 +2563,8 @@ export default async function({container}:any){
     }finally{
       if(!gateReleased)releaseNative()
       globalThis.fetch=realNodeFetch
+      if(previousCustomerPublishable===undefined)delete process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY
+      else process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY=previousCustomerPublishable
       if(inFlightCustomer)await inFlightCustomer.catch(()=>{})
     }
 
