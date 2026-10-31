@@ -101,11 +101,25 @@ export async function verifyNativeBrowser({
   let ws: WebSocket | undefined
   let storefrontLogs = ""
 
+  // Only the two Next dev children of this isolated test belong to us.
+  // Next can leave an HTTP-listening worker after killing its parent.
+  function stopStorefront() {
+    if (!storefront) return
+    if (process.platform !== "win32" && storefront.pid) {
+      try {
+        process.kill(-storefront.pid, "SIGKILL")
+        return
+      } catch {}
+    }
+    killProcess(storefront)
+  }
+
   try {
     // 1. Launch Next.js Storefront in development mode bound to loopback.
     const nextBin = require.resolve("next/dist/bin/next", { paths: [storefrontDir] })
     storefront = spawn(process.execPath, [nextBin, "dev", "-p", String(storefrontPort), "-H", "127.0.0.1"], {
       cwd: storefrontDir,
+      detached: process.platform !== "win32",
       env: {
         ...process.env,
         PORT: String(storefrontPort),
@@ -342,7 +356,7 @@ export async function verifyNativeBrowser({
     // F-01: restart the same real Next.js route with no public Medusa API
     // origin, while its private backend and Storefront base URL remain set.
     // No bearer may be fetched to Storefront, Medusa or localhost fallback.
-    killProcess(storefront)
+    stopStorefront()
     await until(async () => {
       try {
         await fetch(`http://127.0.0.1:${storefrontPort}/auth/verify-email`, {
@@ -356,6 +370,7 @@ export async function verifyNativeBrowser({
     storefrontLogs = ""
     storefront = spawn(process.execPath, [nextBin, "dev", "-p", String(storefrontPort), "-H", "127.0.0.1"], {
       cwd: storefrontDir,
+      detached: process.platform !== "win32",
       env: {
         ...process.env,
         PORT: String(storefrontPort),
@@ -408,6 +423,6 @@ export async function verifyNativeBrowser({
     try {
       rmSync(tempProfile, { recursive: true, force: true })
     } catch {}
-    killProcess(storefront)
+    stopStorefront()
   }
 }
