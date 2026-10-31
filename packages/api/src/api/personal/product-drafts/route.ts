@@ -202,23 +202,36 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     if(!fresh||fresh.person_id!==scope.person_id||
        !await liveNative(req,token,scope.person_id,data.seller_id))
       return res.status(409).json({message:"Outcome uncertain; do not retry this operation"})
-    const {result}=await createProductsWorkflow(req.scope).run({
-      input:{products:[{
-        id:"prod_"+data.request_id.slice("dapd_".length),
-        title:data.title,status:"draft",seller_ids:[data.seller_id],
-        metadata:{dogruadres_draft_request_id:data.request_id}
-      }],created_by:data.seller_id}
-    })
-    if(result.length!==1||typeof result[0]?.id!=="string"||
-       !/^prod_[A-Za-z0-9_-]+$/.test(result[0].id))
+    // Keep the *existing* PostgreSQL products.edit grant lock held through
+    // native Mercur creation and Foundation audit completion. This does not
+    // claim cross-module atomicity; reserved/reconcile still handle failure.
+    const written=await svc.personalWithProductDraftPermissionLock(
+      token,data,async()=>{
+        if(!await liveNative(req,token,scope.person_id,data.seller_id))
+          return {status:"denied" as const}
+        const {result}=await createProductsWorkflow(req.scope).run({
+          input:{products:[{
+            id:"prod_"+data.request_id.slice("dapd_".length),
+            title:data.title,status:"draft",seller_ids:[data.seller_id],
+            metadata:{dogruadres_draft_request_id:data.request_id}
+          }],created_by:data.seller_id}
+        })
+        if(result.length!==1||typeof result[0]?.id!=="string"||
+           !/^prod_[A-Za-z0-9_-]+$/.test(result[0].id))
+          return {status:"uncertain" as const}
+        const completed=await svc.personalCompleteProductDraft(token,data,result[0].id)
+        if(!completed)return {status:"uncertain" as const}
+        return {status:"created" as const,product_id:result[0].id as string}
+      })
+    if(!written||written.status==="denied")
+      return res.status(403).json({message:"Access denied"})
+    if(written.status!=="created")
       return res.status(503).json({message:"Outcome uncertain; check product record"})
-    const completed=await svc.personalCompleteProductDraft(token,data,result[0].id)
-    if(!completed)return res.status(503).json({message:"Outcome uncertain; check product record"})
     const authorized=await svc.personalProductDraftScope(token,data.organization_id,data.seller_id)
     if(!authorized||authorized.person_id!==scope.person_id||
        !await liveNative(req,token,scope.person_id,data.seller_id))
       return res.status(403).json({message:"Access denied"})
-    return res.status(201).json({status:"created",product_id:result[0].id})
+    return res.status(201).json({status:"created",product_id:written.product_id})
   }catch(e){
     if(e instanceof IdentityAccessDenied)return res.status(403).json({message:"Access denied"})
     return res.status(503).json({message:"Outcome uncertain; do not retry this operation"})

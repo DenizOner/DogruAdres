@@ -22,6 +22,7 @@ describe("B22 native product drafts are Person/Org/Store action scoped",()=>{
       personalProductDraftReceipt:jest.fn().mockResolvedValue({status:"review_required"}),
       personalActorBinding:jest.fn().mockResolvedValue(binding),
       personalReserveProductDraft:jest.fn().mockResolvedValue({status:"reserved",person_id:"daprs_a"}),
+      personalWithProductDraftPermissionLock:jest.fn(async(_t:string,_d:any,work:()=>Promise<unknown>)=>work()),
       personalCompleteProductDraft:jest.fn().mockResolvedValue({status:"created",product_id:"prod_a"})
     }
     native={
@@ -69,9 +70,18 @@ describe("B22 native product drafts are Person/Org/Store action scoped",()=>{
       title:base.title,status:"draft",seller_ids:["sel_a"],
       metadata:{dogruadres_draft_request_id:base.request_id}
     }],created_by:"sel_a"}})
+    expect(svc.personalWithProductDraftPermissionLock).toHaveBeenCalledWith(
+      "opaque",base,expect.any(Function))
     expect(svc.personalCompleteProductDraft).toHaveBeenCalledWith("opaque",base,"prod_a")
     expect(res.status).toHaveBeenCalledWith(201)
     expect(res.json).toHaveBeenCalledWith({status:"created",product_id:"prod_a"})
+  })
+  it("denies if revocation wins the per-Person/Store lock before native create",async()=>{
+    svc.personalWithProductDraftPermissionLock.mockResolvedValue(null)
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(run).not.toHaveBeenCalled()
+    expect(svc.personalCompleteProductDraft).not.toHaveBeenCalled()
   })
   it("replays completed identical intent as read-only response, no native write",async()=>{
     svc.personalReserveProductDraft.mockResolvedValue({

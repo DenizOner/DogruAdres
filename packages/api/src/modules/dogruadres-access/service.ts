@@ -2092,6 +2092,38 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {status:"created" as const,product_id:row.product_id as string}
   }
 
+  /**
+   * B22: keep the SAME Foundation products.edit advisory lock as the grant
+   * writer for the full native product-create + Foundation completion window.
+   * Revocation cannot COMMIT while the native workflow is in progress.
+   *
+   * This is a bounded, in-process transaction lock, NOT an atomic native /
+   * Foundation transaction. Existing durable request keys and reconciliation
+   * remain necessary for crash/uncertain native outcomes.
+   */
+  @InjectTransactionManager()
+  async personalWithProductDraftPermissionLock<T>(
+    token:string,input:{organization_id:string;seller_id:string},
+    execute:()=>Promise<T>,@MedusaContext() context:Context={}
+  ):Promise<T|null>{
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       typeof execute!=="function")throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    // Same key as personalChangeStoreProductPermission. Acquire before the
+    // fresh authorization read, so a committed earlier revocation denies
+    // BEFORE native creation, and later revocation waits for completion.
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-products-edit'),hashtext(?))`,
+      [input.organization_id+":"+input.seller_id+":"+current.person_id])
+    const allowed=await authorizedProductEditScope(
+      db,token,input.organization_id,input.seller_id)
+    if(!allowed||allowed.person_id!==current.person_id)return null
+    return await execute()
+  }
+
   @InjectTransactionManager()
   async personalReserveProductDraft(
     token:string,input:{request_id:string;organization_id:string;seller_id:string;title:string},
