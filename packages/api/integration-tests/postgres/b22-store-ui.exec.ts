@@ -3116,6 +3116,113 @@ export default async function({container}:any){
       await q("drop function b22_mfa_outbox_fault_v1()")
     }
 
+    // B-01 MFA disable: use only an existing B22 CI synthetic browser and PG16.
+    // Supported platform policy and recovery-code HTTP flows create a real
+    // current full session; no direct synthetic epoch/version manipulation.
+    const freshDisableCodes=await nativeRecoveryPost()
+    assert.equal(freshDisableCodes.status,200,
+      "Real recovery API must refresh B's codes after the earlier fault")
+    assert.equal(freshDisableCodes.body.recovery_codes?.length,10)
+    const disableCodes=freshDisableCodes.body.recovery_codes as string[]
+    const reloginWithRecovery=async(code:string)=>{
+      // Lock a still-active old browser session via the real CSRF route, if any.
+      const lock=await reviewer.eval("(async()=>{"+
+        "const session=await fetch('/personal/session');"+
+        "if(session.status!==200)return session.status;"+
+        "const value=await session.json();"+
+        "const response=await fetch('/personal/session?action=lock',{method:'DELETE',"+
+        "headers:{'x-csrf-token':value.csrf_token}});return response.status})()")
+      assert.ok([200,401,403].includes(lock),"Only actual expired or explicitly locked prior session")
+      await reviewer.send("Page.reload",{ignoreCache:true})
+      await reviewer.wait("document.getElementById('login').hidden===false")
+      await reviewer.input("#login input[name=email]",B.email)
+      await reviewer.input("#login input[name=password]",B.password)
+      await reviewer.click("#login button")
+      await reviewer.wait("document.getElementById('challenge').hidden===false")
+      assert.equal(await reviewer.eval("(()=>{const select=document.querySelector('#challenge select[name=method]');select.value='recovery_code';select.dispatchEvent(new Event('change',{bubbles:true}));return select.value})()"),"recovery_code")
+      await reviewer.input("#challenge input[name=code]",code)
+      await reviewer.click("#challenge button")
+      await reviewer.wait("document.getElementById('workspace').hidden===false")
+      assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/session')).status)()"),200)
+    }
+    // Reauthenticate just before the true platform-mode transition to
+    // avoid claiming an old stale strong-proof as current authority.
+    await reloginWithRecovery(disableCodes[0])
+    const [existingMfaPolicy]=await q(
+      "select version,platform_mode from da_mfa_policy where id='current'")
+    assert.ok(!existingMfaPolicy||existingMfaPolicy.platform_mode==="required",
+      "B22 default policy must not silently change before this probe")
+    const staffMfaId="da_staff_mfa_"+rand
+    await q("insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason) values($1,$2,'security.mfa.manage','platform',$2,'B22 disposable native MFA policy fixture')",[staffMfaId,B.person])
+    const policyVersion=Number(existingMfaPolicy?.version??0)
+    const policyResponse=await reviewer.eval(
+      "(async()=>{const sr=await fetch('/personal/session');"+
+      "if(sr.status!==200)return {status:sr.status};"+
+      "const session=await sr.json();"+
+      "const response=await fetch('/personal/mfa',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({action:'platform',platform_mode:'optional',expected_version:"+policyVersion+"})});"+
+      "return {status:response.status}})()")
+    assert.equal(policyResponse.status,200,
+      "Real task-only staff grant + authenticated MFA mode transition required")
+    const [optionalPolicy]=await q(
+      "select version,platform_mode from da_mfa_policy where id='current'")
+    assert.equal(optionalPolicy.platform_mode,"optional")
+    assert.equal(Number(optionalPolicy.version),policyVersion+1)
+    // A changed platform MFA revision must invalidate the previous session.
+    assert.equal(await reviewer.eval(
+      "(async()=> (await fetch('/personal/session')).status)()"),401)
+    await reloginWithRecovery(disableCodes[1])
+    const preDisableCookie=await reviewer.token()
+    assert.match(preDisableCookie??"",/^[A-Za-z0-9_-]{43}$/)
+    const disableBeforeAudit=Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='mfa.native_factor_disabled'",
+      [B.person]))[0].n)
+    // A real native Medusa disable executes first, then an isolated
+    // Foundation security-outbox fault forces the owning tx to roll back.
+    await q("create function b22_mfa_disable_outbox_fault_v1() returns trigger language plpgsql as $b22$ begin if exists(select 1 from da_audit_event e where e.id=NEW.audit_event_id and e.action='mfa.native_factor_disabled') then raise exception 'B22 forced MFA disable outbox failure'; end if; return NEW; end $b22$")
+    let disableFaultInstalled=false
+    try{
+      await q("create trigger b22_mfa_disable_outbox_fault_v1 before insert on da_security_outbox for each row execute function b22_mfa_disable_outbox_fault_v1()")
+      disableFaultInstalled=true
+      const disableResponse=await reviewer.eval(
+        "(async()=>{const sr=await fetch('/personal/session');"+
+        "if(sr.status!==200)return {status:sr.status,body:{}};"+
+        "const session=await sr.json();"+
+        "const response=await fetch('/personal/mfa/manage',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+        "body:JSON.stringify({action:'disable',method:'recovery_code',code:"+JSON.stringify(disableCodes[2])+"})});"+
+        "return {status:response.status,body:await response.json()}})()")
+      assert.equal(disableResponse.status,503,
+        "Post-native Foundation failure must not be reported as successful disable")
+      assert.match(disableResponse.body?.message??"",/INDETERMINATE/)
+      assert.equal(await reviewer.eval(
+        "(async()=> (await fetch('/personal/session')).status)()"),401,
+        "Old full browser session MUST NOT remain usable after native MFA disable")
+      const [nativeDisabled]=await auth.listAuthMfa(
+        {auth_identity_id:recoveryIdentity[0].auth_identity_id,status:"disabled"},{take:2})
+      assert.equal(nativeDisabled?.id,enabledFactors[0].id,
+        "True native Medusa MFA factor must be disabled despite failed Foundation audit")
+      assert.equal((await q(
+        "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='mfa.native_factor_disabled'",
+        [B.person]))[0].n,disableBeforeAudit,
+        "Failed audit/outbox transaction cannot falsely claim success")
+      // Probe exact pre-disable opaque cookie on live HTTPS, not just hidden UI.
+      const oldCredentialStatus=await new Promise<number>((resolve,reject)=>{
+        const request=tlsRequest(host+"/personal/session",{
+          method:"GET",ca:readFileSync(crt),headers:{cookie:"da_session="+preDisableCookie}
+        },response=>{response.resume();response.on("end",()=>resolve(response.statusCode??0))})
+        request.on("error",reject);request.setTimeout(10000,()=>request.destroy(Error("MFA disable old-cookie timeout")));request.end()
+      })
+      assert.equal(oldCredentialStatus,401,
+        "MFA-disabled identity's old full cookie must not work after audit failure")
+      process.stdout.write("PASS B-01 MFA disable outbox fault: native factor disabled, Foundation audit failed, stale browser and old cookie denied\n")
+    }finally{
+      if(disableFaultInstalled)
+        await q("drop trigger b22_mfa_disable_outbox_fault_v1 on da_security_outbox")
+      await q("drop function b22_mfa_disable_outbox_fault_v1()")
+    }
+
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
 
   }finally{
