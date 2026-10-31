@@ -3199,6 +3199,19 @@ export default async function({container}:any){
       assert.equal(await reviewer.eval(
         "(async()=> (await fetch('/personal/session')).status)()"),401,
         "Old full browser session MUST NOT remain usable after native MFA disable")
+      const disabledEpoch=await q(
+        "select e.epoch from da_person_security e where e.person_id=$1",[B.person])
+      const disabledSessions=await q(
+        "select status from da_browser_session where person_id=$1",[B.person])
+      assert.equal(disabledEpoch.length,1)
+      assert.ok(disabledSessions.length>=2)
+      assert.ok(disabledSessions.every((row:any)=>row.status!=="active"),
+        "No other Person session may remain active after uncertain native disable")
+      const recoveryLogoutAudit=await q(
+        "select e.id from da_audit_event e join da_security_outbox x on x.audit_event_id=e.id where e.actor_person_id=$1 and e.action='session.all_revoked'",
+        [B.person])
+      assert.ok(recoveryLogoutAudit.length>=1,
+        "Separate Foundation revocation must persist its real audit/outbox")
       const [nativeDisabled]=await auth.listAuthMfa(
         {auth_identity_id:recoveryIdentity[0].auth_identity_id,status:"disabled"},{take:2})
       assert.equal(nativeDisabled?.id,enabledFactors[0].id,

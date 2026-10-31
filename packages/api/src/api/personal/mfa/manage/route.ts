@@ -43,6 +43,15 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     if(managed.sessions_revoked)res.clearCookie("da_session",{path:"/"})
     return res.json({...managed.result as object,sessions_revoked:managed.sessions_revoked})
   }catch {
+    if(attempted&&parsed.data.action==="disable"){
+      // Medusa Auth and Foundation are separate transactions. A failed
+      // Foundation audit rolls back the original logout, even when native MFA
+      // was already disabled. Revoke all Person sessions through a NEW
+      // Foundation transaction before reporting the uncertain native result.
+      // A server-side failure to revoke is not a successful reconciliation.
+      try{await service.closePersonalSession(token,true)}catch{}
+      res.clearCookie("da_session",{path:"/"})
+    }
     return res.status(attempted?503:409).json({message:attempted?
       "INDETERMINATE: native operation may have persisted; do not retry; reconciliation required":
       "Native factor reconciliation required"})
