@@ -1202,6 +1202,36 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return readStoreApplications(securitySql(context.transactionManager),token,org)
   }
 
+  /** B22 Owner membership revoke vs native Mercur Seller creation.
+   * The canonical protected Owner membership is held FOR SHARE for the entire
+   * native workflow and Foundation audit completion. The existing separately
+   * committed claim='creating' remains the durable idempotency barrier; do
+   * NOT move it into this outer transaction (crash could allow duplicate Seller).
+   */
+  @InjectTransactionManager()
+  async personalWithStoreApplicationOwnerLock<T>(
+    token:string,input:StoreRequest,execute:(context:Context)=>Promise<T>,
+    @MedusaContext() context:Context={}
+  ):Promise<T|null>{
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^daapp_[0-9a-f]{32}$/.test(input.application_id)||
+       typeof execute!=="function")throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const actor=await eligibleOwner(db,token,input.organization_id)
+    if(!actor)return null
+    // Verify the immutable committed claim, native Member and payload before
+    // touching Mercur. Keep this row stable until the same Foundation manager
+    // completes the Origin/Audit write after native creation.
+    const rows=await db.execute(`select id from da_store_application
+      where id=? and organization_id=? and person_id=?
+        and member_actor_id=? and member_auth_identity_id=?
+        and request_fingerprint=? and status='creating' and seller_id is null
+      for share`,[input.application_id,input.organization_id,actor.person_id,
+        actor.member_id,actor.member_auth_identity_id,storeRequestFingerprint(input)])
+    if(rows.length!==1)return null
+    return execute(context)
+  }
+
   @InjectTransactionManager()
   async reserveStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}){
     const db=securitySql(context.transactionManager),actor=await eligibleOwner(db,token,input.organization_id)

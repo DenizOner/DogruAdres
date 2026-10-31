@@ -1,5 +1,6 @@
 import type {MedusaRequest,MedusaResponse} from "@medusajs/framework/http"
 import {z} from "@medusajs/framework/zod"
+import type {Context} from "@medusajs/framework/types"
 import {createSellerAccountWorkflow} from "@mercurjs/core/workflows"
 import {access,csrf,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
@@ -46,22 +47,39 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     const claimed=await svc.claimStoreApplication(token,parsed.data)
     if(!claimed)return res.status(409).json({message:"Application processing"})
     const native=req.scope.resolve<{listMembers(filter:object):Promise<any[]>}>("seller")
-    const members=await native.listMembers({id:claimed.member_id,is_active:true})
-    if(members.length!==1||members[0].id!==claimed.member_id)
-      return res.status(403).json({message:"Access denied"})
-    const {result:seller}=await createSellerAccountWorkflow(req.scope).run({
-      input:{
-        auth_identity_id:claimed.member_auth_identity_id,
-        member_id:claimed.member_id,
-        seller:{name:parsed.data.name,email:parsed.data.email,
-          currency_code:parsed.data.currency_code}
-      }
-    })
-    if(!seller||!/^sel_[A-Za-z0-9_-]+$/.test(seller.id)||seller.status!=="pending_approval"||seller.approved_at)
-      throw new IdentityAccessDenied()
-    const completed=await svc.finishStoreApplication(token,parsed.data,seller.id)
-    if(!completed)throw new IdentityAccessDenied()
-    return res.status(201).json({application_id:parsed.data.application_id,seller_id:seller.id,status:"pending_approval"})
+    // A completed claim is intentionally COMMITTED before any native create.
+    // The protected Owner membership row is held across native create AND
+    // Foundation completion. A concurrent revoke either wins before this
+    // guard (no native create) or waits for both records to complete.
+    const outcome=await svc.personalWithStoreApplicationOwnerLock(
+      token,parsed.data,async(context:Context)=>{
+        const members=await native.listMembers({id:claimed.member_id,is_active:true})
+        if(members.length!==1||members[0].id!==claimed.member_id)
+          throw new IdentityAccessDenied()
+        try{
+          const {result:seller}=await createSellerAccountWorkflow(req.scope).run({
+            input:{
+              auth_identity_id:claimed.member_auth_identity_id,
+              member_id:claimed.member_id,
+              seller:{name:parsed.data.name,email:parsed.data.email,
+                currency_code:parsed.data.currency_code}
+            }
+          })
+          if(!seller||!/^sel_[A-Za-z0-9_-]+$/.test(seller.id)||
+             seller.status!=="pending_approval"||seller.approved_at)
+            throw new Error("Native Seller outcome uncertain")
+          const completed=await svc.finishStoreApplication(token,parsed.data,seller.id,context)
+          if(!completed)throw new Error("Native Seller outcome uncertain")
+          return {seller_id:seller.id as string}
+        }catch{
+          // Never roll back the *prior committed* creating claim or pretend
+          // an uncertain native Seller write has been undone; no automatic
+          // second Seller creation from the same request key.
+          throw new Error("Native Seller outcome uncertain")
+        }
+      })
+    if(!outcome)return res.status(403).json({message:"Access denied"})
+    return res.status(201).json({application_id:parsed.data.application_id,seller_id:outcome.seller_id,status:"pending_approval"})
   }catch(e){
     if(e instanceof IdentityAccessDenied)return res.status(403).json({message:"Access denied"})
     // This may be a successful native write followed by a lost confirmation.

@@ -1,5 +1,5 @@
 import {createHash} from "node:crypto"
-import {IdentityAccessDenied,IdentitySessions,type SecuritySql} from "./identity-session"
+import {IdentityAccessDenied,IdentitySessions,isCurrentProtectedOwner,type SecuritySql} from "./identity-session"
 import {ActorDelegation} from "./actor-delegation"
 
 export type StoreRequest = Readonly<{
@@ -18,6 +18,11 @@ export async function eligibleOwner(db:SecuritySql,token:string,org:string){
   const scope=await new IdentitySessions(db).organizations(token,org,false)
   if(!scope||scope.person_id!==s.person_id||scope.organizations.length!==1||
      scope.organizations[0].role!=="owner")return null
+  // Only the canonical active protected Owner can start a business Store.
+  // isCurrentProtectedOwner also locks the actual membership row FOR SHARE
+  // for the lifetime of the supplied transaction; a role label alone is not
+  // an approval or an irrevocable native Seller credential.
+  if(!await isCurrentProtectedOwner(db,s.person_id,org))return null
   const bound=await new ActorDelegation(db).binding(token,"member")
   if(!bound || bound.binding.person_id!==s.person_id ||
      !bound.binding.auth_identity_id || !bound.binding.actor_id)return null
