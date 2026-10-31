@@ -1154,7 +1154,7 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 audited Buyer Organization Cart attribution: real Chrome POST + Foundation PG16 audit/outbox, exact replay, foreign Customer/Organization denied, no Medusa cart mutation or checkout\\n")
 
     const wrongCustomerOrg=await reviewer.eval(`(async()=>{
-      const r=await fetch(${JSON.stringify(customerContext(organizations[1].id))})
+      const r=await fetch(${JSON.stringify(customerContext(sellerGamma.id))})
       return r.status
     })()`)
     assert.equal(wrongCustomerOrg,403)
