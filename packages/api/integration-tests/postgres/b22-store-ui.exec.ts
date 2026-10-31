@@ -3271,6 +3271,11 @@ export default async function({container}:any){
     assert.deepEqual(alphaSuspended.body.stores.map((x:any)=>x.id),[stores[1].id])
     assert.deepEqual((await get(selected(organizations[1].id))).body.stores.map((x:any)=>x.id),[stores[2].id],
       "Independent Organization Store visibility must survive Alpha suspension")
+    // A native Store suspend can trigger the privacy observer while the
+    // Organization choice list is reloading. Wait for the SAME authorized
+    // Owner button; do not fabricate a selection or relax the later denial.
+    await browser.wait(`Array.from(document.querySelectorAll('#organizations button')).some(
+      b=>b.textContent===${JSON.stringify(organizations[0].name+" — owner")})`)
     await browser.select(organizations[0].name,"owner")
     await browser.wait("document.querySelectorAll('#org-stores p').length===1")
     assert.equal(await browser.eval(`document.getElementById('org-stores').textContent.includes(${JSON.stringify(stores[0].name)})`),false)
