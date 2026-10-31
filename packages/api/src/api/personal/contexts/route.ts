@@ -73,5 +73,15 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       context:'member',actor_id:m.member.id,seller:{id:m.seller.id,name:m.seller.name}})
   }
   if(data.customer?.id!==binding.actor_id)return res.status(503).json({message:'Invalid native context'})
+  // F-02: Customer bindings may be unlinked while private native HTTP is
+  // pending. Never return a previously verified actor after its revocation.
+  // This closes the response boundary, not a cross-module transaction.
+  const liveCustomer=await service.personalActorBinding(token,'customer')
+  if(!liveCustomer||liveCustomer.revoked_at||
+     liveCustomer.id!==binding.id||
+     liveCustomer.person_id!==binding.person_id||
+     liveCustomer.actor_id!==binding.actor_id||
+     liveCustomer.auth_identity_id!==binding.auth_identity_id)
+    return res.status(403).json({message:'Access denied'})
   return res.json({person_id:binding.person_id,context:'customer',actor_id:data.customer.id})
 }
