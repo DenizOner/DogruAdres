@@ -1,5 +1,6 @@
 import type {MedusaRequest,MedusaResponse} from "@medusajs/framework/http"
 import {z} from "@medusajs/framework/zod"
+import type {Context} from "@medusajs/framework/types"
 import {approveSellerWorkflow} from "@mercurjs/core/workflows"
 import {access,csrf,enabled,sessionToken} from "../../security"
 import {IdentityAccessDenied} from "../../../../modules/dogruadres-access/identity-session"
@@ -60,17 +61,29 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     if(before.length!==1||before[0].id!==parsed.data.seller_id||
        before[0].status!=="pending_approval"||before[0].approved_at)
       return res.status(409).json({message:"Store is not pending approval"})
-    // Verify the exact same task and origin immediately before the native
-    // workflow. This is bounded revalidation, NOT cross-module atomicity.
-    const fresh=await svc.personalReviewableStoreApplications(token,parsed.data)
-    if(!fresh||fresh.length!==1)return res.status(403).json({message:"Access denied"})
-    await approveSellerWorkflow(req.scope).run({input:{seller_id:parsed.data.seller_id}})
-    const after=await native.listSellers({id:parsed.data.seller_id})
-    const final=await svc.personalReviewableStoreApplications(token,parsed.data)
-    if(after.length!==1||after[0].id!==parsed.data.seller_id||
-      after[0].status!=="open"||!after[0].approved_at||
-      !final||final.length!==1)
-      return res.status(503).json({message:"Outcome uncertain; check approval status"})
+    // Hold the live Staff grant row's SHARE lock from the final source
+    // check through native Mercur approval and its verified readback.
+    // Concurrent platform revoke must commit either before authorization
+    // (native never called) or after approval has completed.
+    const outcome=await svc.personalWithStoreApprovalStaffLock(
+      token,parsed.data,async(context:Context)=>{
+        const fresh=await svc.personalReviewableStoreApplications(token,parsed.data,context)
+        if(!fresh||fresh.length!==1)return "denied" as const
+        const pending=await native.listSellers({id:parsed.data.seller_id})
+        if(pending.length!==1||pending[0].id!==parsed.data.seller_id||
+           pending[0].status!=="pending_approval"||pending[0].approved_at)
+          return "conflict" as const
+        await approveSellerWorkflow(req.scope).run({input:{seller_id:parsed.data.seller_id}})
+        const after=await native.listSellers({id:parsed.data.seller_id})
+        const final=await svc.personalReviewableStoreApplications(token,parsed.data,context)
+        if(after.length!==1||after[0].id!==parsed.data.seller_id||
+           after[0].status!=="open"||!after[0].approved_at||
+           !final||final.length!==1)return "uncertain" as const
+        return "approved" as const
+      })
+    if(!outcome||outcome==="denied")return res.status(403).json({message:"Access denied"})
+    if(outcome==="conflict")return res.status(409).json({message:"Store is not pending approval"})
+    if(outcome!=="approved")return res.status(503).json({message:"Outcome uncertain; check approval status"})
     return res.status(200).json({...parsed.data,status:"open"})
   }catch(e){
     if(e instanceof IdentityAccessDenied)return res.status(403).json({message:"Access denied"})

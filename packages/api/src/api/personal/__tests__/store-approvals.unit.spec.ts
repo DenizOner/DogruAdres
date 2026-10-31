@@ -13,7 +13,11 @@ describe("B22 platform Store approval guard",()=>{
   let service:any,native:any,req:any,res:any,run:any
   beforeEach(()=>{
     jest.resetAllMocks()
-    service={personalReviewableStoreApplications:jest.fn().mockResolvedValue([candidate])}
+    service={
+      personalReviewableStoreApplications:jest.fn().mockResolvedValue([candidate]),
+      personalWithStoreApprovalStaffLock:jest.fn(async(_token:string,_target:any,
+        operation:(context:any)=>Promise<unknown>)=>operation({}))
+    }
     native={listSellers:jest.fn().mockResolvedValue([{
       id:candidate.seller_id,name:"Store",status:"pending_approval",approved_at:null
     }])}
@@ -49,11 +53,20 @@ describe("B22 platform Store approval guard",()=>{
   })
   it("calls native Mercur approval only for matching persisted application",async()=>{
     native.listSellers.mockResolvedValueOnce([{id:candidate.seller_id,status:"pending_approval",approved_at:null}])
+      .mockResolvedValueOnce([{id:candidate.seller_id,status:"pending_approval",approved_at:null}])
       .mockResolvedValueOnce([{id:candidate.seller_id,status:"open",approved_at:new Date()}])
     await POST(req,res)
     expect(service.personalReviewableStoreApplications).toHaveBeenCalledWith("opaque",req.body)
+    expect(service.personalWithStoreApprovalStaffLock).toHaveBeenCalledWith(
+      "opaque",req.body,expect.any(Function))
     expect(run).toHaveBeenCalledWith({input:{seller_id:candidate.seller_id}})
     expect(res.status).toHaveBeenCalledWith(200)
+  })
+  it("does not call native Mercur when Staff revoke wins before locked final check",async()=>{
+    service.personalWithStoreApprovalStaffLock.mockResolvedValue(null)
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(run).not.toHaveBeenCalled()
   })
   it("hides pending Store identities without staff and never queries native",async()=>{
     service.personalReviewableStoreApplications.mockResolvedValue(null)

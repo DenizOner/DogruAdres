@@ -1278,6 +1278,38 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   // B22: a separate and explicitly granted platform task reviews only
   // persisted Owner-submitted applications. This is not native User access,
   // not an Organization Owner entitlement and not a separate link approval.
+  /** B22: Hold the actual Staff grant row across native Mercur approval.
+   * The same PostgreSQL row is updated by grant revocation, so a committed
+   * revoke cannot race ahead of the native Store opening.
+   * No platform authority is derived from a business Owner role.
+   * This is not a cross-module transaction or general crash-recovery claim.
+   */
+  @InjectTransactionManager()
+  async personalWithStoreApprovalStaffLock<T>(
+    token:string,target:{application_id:string;seller_id:string},
+    execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
+  ):Promise<T|null>{
+    if(!/^daapp_[0-9a-f]{32}$/.test(target.application_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
+       typeof execute!=="function")throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const staff=await sessions.staff(token,"store.approve","platform")
+    if(!staff)return null
+    // Unlike an advisory-only lock, a row SHARE lock also serializes an
+    // ordinary UPDATE ... revoked_at on the canonical staff-grant record.
+    const locked=await db.execute(`select g.id from da_platform_staff_grant g
+      where g.id=? and g.person_id=? and g.task='store.approve'
+        and g.resource='platform' and g.revoked_at is null
+        and (g.expires_at is null or g.expires_at>clock_timestamp())
+      for share of g`,[staff.grant_id,staff.person_id])
+    if(locked.length!==1||locked[0].id!==staff.grant_id)return null
+    const fresh=await sessions.staff(token,"store.approve","platform")
+    if(!fresh||fresh.grant_id!==staff.grant_id)return null
+    const candidate=await this.personalReviewableStoreApplications(token,target,context)
+    if(!candidate||candidate.length!==1)return null
+    return execute(context)
+  }
+
   @InjectTransactionManager()
   async personalReviewableStoreApplications(token:string,
     target?:{application_id:string;seller_id:string},
