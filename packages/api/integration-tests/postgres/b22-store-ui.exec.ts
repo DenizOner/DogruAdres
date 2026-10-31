@@ -3102,7 +3102,7 @@ export default async function({container}:any){
       assert.equal(uncertainRecovery.status,503,
         "No HTTP success when the native operation precedes a failed Foundation audit")
       assert.match(uncertainRecovery.body?.message??"",/INDETERMINATE/)
-      assert.equal(Object.hasOwn(uncertainRecovery.body,"recovery_codes"),false)
+      assert.equal(Object.prototype.hasOwnProperty.call(uncertainRecovery.body,"recovery_codes"),false)
       assert.equal(await recoveryAuditCount(),beforeRecovery+1,
         "Audit write must roll back when its security outbox insert fails")
       assert.equal(await recoveryOutboxCount(),beforeRecovery+1)
