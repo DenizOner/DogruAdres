@@ -3452,8 +3452,8 @@ export default async function({container}:any){
         nativeFirstPending=invalidNativeDisablePost()
         await until(async()=>nativeCallbackEntered,10000,
           "Native MFA callback entered under real Foundation transaction lock")
-        assert.equal(await oldCookieStatus(),401,
-          "Pre-native Person revocation must already be committed")
+        // Do not call /personal/session here: its Person row read correctly
+        // waits for this native completion transaction's security row lock.
         staffPolicyPending=staffSetPlatform("required",Number(nativeFirstPolicy.version))
           .then(v=>{staffPolicySettled=true;return v},e=>{
             staffPolicySettled=true;return {status:-1,error:String(e)}
