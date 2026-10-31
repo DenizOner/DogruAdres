@@ -3256,11 +3256,34 @@ export default async function({container}:any){
       await q("insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason) values($1,$2,'security.mfa.manage','platform',$2,'B22 disposable independent MFA policy race actor')",
         [staffGrantId,A.person])
       const loginStaffA=async(recoveryCode:string)=>{
+        // These are repeated independent strong logins in a single real CI
+        // suite. Respect the SERVER's existing per-minute 10/60 abuse caps:
+        // never bypass, reset or directly write their persisted counters.
+        const subject="subject:"+createHash("sha256").update(A.email.toLowerCase()).digest("hex")
+        await until(async()=>{
+          const [budget]=await q(
+            "select coalesce((select attempts from da_login_attempt where bucket=$1 and minute=floor(extract(epoch from clock_timestamp())/60)),0)::int subject_attempts, coalesce((select max(attempts) from da_login_attempt where bucket like 'address:%' and minute=floor(extract(epoch from clock_timestamp())/60)),0)::int address_attempts",
+            [subject])
+          if(Number(budget.subject_attempts)>=9||Number(budget.address_attempts)>=58){
+            await new Promise<void>(resolve=>setTimeout(resolve,900))
+            return false
+          }
+          return true
+        },70000,"B22 task-only Staff A genuine login rate window")
         await browser.send("Page.reload",{ignoreCache:true})
         await browser.wait("document.getElementById('login').hidden===false")
         await browser.input("#login input[name=email]",A.email)
         await browser.input("#login input[name=password]",A.password)
+        const beforeLogin=browser.http.filter((row:any)=>
+          row.method==="POST"&&row.path==="/personal/session").length
         await browser.click("#login button")
+        await until(async()=>browser.http.filter((row:any)=>
+          row.method==="POST"&&row.path==="/personal/session").length>beforeLogin,
+          10000,"Real Staff A /personal/session HTTP result")
+        const loginResponse=browser.http.filter((row:any)=>
+          row.method==="POST"&&row.path==="/personal/session").at(-1)
+        assert.equal(loginResponse?.status,202,
+          "Real strong-MFA challenge must begin with HTTP 202, not throttled or bypassed")
         await browser.wait("document.getElementById('challenge').hidden===false")
         assert.equal(await browser.eval("(()=>{const s=document.querySelector('#challenge select[name=method]');s.value='recovery_code';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"),"recovery_code")
         await browser.input("#challenge input[name=code]",recoveryCode)
