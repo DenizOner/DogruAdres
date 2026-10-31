@@ -3325,6 +3325,83 @@ export default async function({container}:any){
       assert.equal(requiredPolicy.platform_mode,"required")
       assert.equal((await staffSetPlatform("optional",Number(requiredPolicy.version))).status,200)
       await reloginWithRecovery(disableCodes[3])
+      // B-01: a second genuinely independent Chrome profile completes a NEW
+      // native MFA login after the first Person-wide revocation commits, but
+      // before native factor disable begins. A secure implementation refuses
+      // the disable (409) rather than leaving that session trusted after the
+      // native factor disappears. Existing audit/epoch and native factor stay.
+      const newSessionBrowser=new B06Chrome(host,"B")
+      browsers.push(newSessionBrowser)
+      await newSessionBrowser.start(crt)
+      preDisableCookie=await reviewer.token()
+      assert.match(preDisableCookie??"",/^[A-Za-z0-9_-]{43}$/)
+      assert.equal(await oldCookieStatus(),200)
+      const raceAuditBefore=await countLogoutAudit()
+      const raceNativeBefore=await enabledFactorList()
+      assert.equal(raceNativeBefore.length,1)
+      let newSessionGateReached=false,newSessionGateReleased=false
+      let releaseNewSessionGate!:()=>void
+      const newSessionGate=new Promise<void>(resolve=>{
+        releaseNewSessionGate=()=>{newSessionGateReleased=true;resolve()}
+      })
+      const originalPrepareNewSession=foundationPrototype.personalPrepareNativeMfaDisable
+      foundationPrototype.personalPrepareNativeMfaDisable=async function(this:any,...args:any[]){
+        const prepared=await originalPrepareNewSession.apply(this,args)
+        if(prepared?.person_id===B.person){
+          newSessionGateReached=true
+          await newSessionGate
+        }
+        return prepared
+      }
+      let newSessionRace:Promise<any>|undefined
+      try{
+        newSessionRace=nativeDisablePost()
+        await until(async()=>newSessionGateReached,10000,
+          "MFA disable precommit before another Person B full login")
+        assert.equal(await oldCookieStatus(),401)
+        // Real second profile, password and a previously unused native recovery
+        // code; neither native Auth nor the HTTP session endpoint is mocked.
+        await newSessionBrowser.input("#login input[name=email]",B.email)
+        await newSessionBrowser.input("#login input[name=password]",B.password)
+        await newSessionBrowser.click("#login button")
+        await newSessionBrowser.wait("document.getElementById('challenge').hidden===false")
+        assert.equal(await newSessionBrowser.eval(
+          "(()=>{const s=document.querySelector('#challenge select[name=method]');s.value='recovery_code';s.dispatchEvent(new Event('change',{bubbles:true}));return s.value})()"),
+          "recovery_code")
+        await newSessionBrowser.input("#challenge input[name=code]",disableCodes[4])
+        await newSessionBrowser.click("#challenge button")
+        await newSessionBrowser.wait("document.getElementById('workspace').hidden===false")
+        const freshCookie=await newSessionBrowser.token()
+        assert.match(freshCookie??"",/^[A-Za-z0-9_-]{43}$/)
+        const newRows=await q(
+          "select s.status,s.epoch,e.epoch current_epoch from da_browser_session s join da_person_security e on e.person_id=s.person_id where s.id=$1 and s.person_id=$2",
+          [createHash("sha256").update(freshCookie!).digest("hex"),B.person])
+        assert.equal(newRows.length,1)
+        assert.equal(newRows[0].status,"active")
+        assert.equal(String(newRows[0].epoch),String(newRows[0].current_epoch))
+        assert.equal(await newSessionBrowser.eval(
+          "(async()=> (await fetch('/personal/session')).status)()"),200)
+        releaseNewSessionGate()
+        const result=await newSessionRace
+        assert.equal(result.status,409,
+          "A newly authenticated full Person session must prevent native factor disable")
+        assert.equal((await enabledFactorList()).length,1,
+          "A refused disable must preserve the native factor for the new session")
+        assert.equal(await oldCookieStatus(),401)
+        assert.equal(await newSessionBrowser.eval(
+          "(async()=> (await fetch('/personal/session')).status)()"),200)
+        assert.equal(await countLogoutAudit(),raceAuditBefore+1,
+          "Successful first revocation must keep its canonical audit/outbox")
+        assert.equal(await countLogoutOutbox(),await countLogoutAudit())
+        process.stdout.write("PASS B-01 MFA new-login race: independent Chrome B login committed between pre-native revocation and completion; native disable denied 409, factor and new session preserved, old cookie 401\\n")
+      }finally{
+        if(!newSessionGateReleased)releaseNewSessionGate()
+        foundationPrototype.personalPrepareNativeMfaDisable=originalPrepareNewSession
+        if(newSessionRace)await newSessionRace.catch(()=>{})
+      }
+      // The original browser was correctly revoked in the aborted attempt.
+      // Regain fresh MFA proof for the existing post-native fault regression.
+      await reloginWithRecovery(disableCodes[5])
       preDisableCookie=await reviewer.token()
       assert.match(preDisableCookie??"",/^[A-Za-z0-9_-]{43}$/)
       assert.equal(await oldCookieStatus(),200)
