@@ -40,6 +40,20 @@ export default async function({container}:any){
   // An independent real Medusa process uses the same task-owned Cart
   // while the primary process is past L and paused before OrderGroup INSERT.
   // Reject any attempt to run this mode outside the strict CI sentinel above.
+  // This extra native child acquires a disposable lock then exits abruptly;
+  // the parent checks whether an abandoned row blocks future acquisitions.
+  const abruptExitKey=process.env.B22_ABRUPT_LOCK_TEST_KEY
+  if(abruptExitKey){
+    assert.equal(preparing,false)
+    assert.equal(process.env.DOGRUADRES_B22_PG_LOCK_TEST,"true")
+    assert.match(abruptExitKey,/^b22-pg-process-exit:[0-9a-f]{16}$/)
+    await container.resolve("locking").acquire(abruptExitKey,{expire:1})
+    // Flush a fixed marker, then bypass normal container release. No raw logs.
+    process.stdout.write("B22_TASK_PROVIDER_LOCK_BEFORE_ABRUPT_EXIT\n",
+      ()=>process.exit(86))
+    await new Promise<void>(()=>{})
+    return
+  }
   const secondaryCartId=process.env.B22_SECOND_PROCESS_CART_ID
   if(secondaryCartId){
     assert.equal(preparing,false)
@@ -2055,6 +2069,44 @@ export default async function({container}:any){
       [expiredProbeKey]))[0].n,0,
       "Only the task-owned expired probe row is deleted")
     process.stdout.write("\nPASS B22 PostgreSQL expired lock behavior: task-owned one-second lock remained after expiration and rejected reacquisition; only explicit scoped release cleared it; crash recovery is NOT proven\n")
+    // Independent native Medusa process exits abnormally after acquire().
+    // Never terminate a host process, protected worker or Cart transaction.
+    const abandonedKey="b22-pg-process-exit:"+rand
+    const exitedProvider=spawnSync("bun",[
+      "run","medusa","exec","./integration-tests/postgres/b22-store-ui.exec.ts"
+    ],{
+      cwd:process.cwd(),env:{...process.env,B22_ABRUPT_LOCK_TEST_KEY:abandonedKey},
+      encoding:"utf8",timeout:45000,maxBuffer:1024*1024,stdio:["ignore","pipe","pipe"]
+    })
+    assert.ok(!exitedProvider.error && exitedProvider.status===86 &&
+      String(exitedProvider.stdout??"").includes("B22_TASK_PROVIDER_LOCK_BEFORE_ABRUPT_EXIT"),
+      "Independent disposable Medusa provider must acquire and exit 86; logs retained only in memory")
+    try{
+      assert.equal((await q("select count(*)::int n from locking where id=$1",
+        [abandonedKey]))[0].n,1,"Exited provider left exact task-owned lock row")
+      await until(async()=>{
+        const row=await q("select expiration<=now() as expired from locking where id=$1",
+          [abandonedKey])
+        return row.length===1 && row[0].expired===true
+      },5000,"B22 expired provider lock after abrupt process exit")
+      let recovered=false
+      try{
+        await locking.acquire(abandonedKey,{expire:1})
+        recovered=true
+      }catch(error){
+        assert.match(String(error),/Failed to acquire lock/i)
+      }
+      assert.equal(recovered,false,"Expired lock may not be assumed recoverable")
+      assert.equal((await q("select count(*)::int n from locking where id=$1",
+        [abandonedKey]))[0].n,1)
+    }finally{
+      // No Cart key and no global releaseAll: exact synthetic probe key only.
+      await locking.release(abandonedKey)
+    }
+    assert.equal((await q("select count(*)::int n from locking where id=$1",
+      [abandonedKey]))[0].n,0,"Synthetic lock cleanup scoped by exact key")
+    process.stdout.write("\nOBSERVED B22 abrupt Medusa process exit: expired provider lock persists and rejects reacquisition; exact task-only cleanup; checkout recovery BLOCKED\n")
+
     type NativeCartAttempt={run?:any;error?:string}
     const startCartAttempt=():Promise<NativeCartAttempt>=>
       completeCartWithSplitOrdersWorkflow(container).run({
