@@ -21,6 +21,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   const service=access(req),token=sessionToken(req)
   if(!await service.personalLoginAttempt(digest("mfa-management:"+token),digest(req.socket.remoteAddress??"unknown")))return res.status(429).json({message:"Try again later"})
   if(parsed.data.action==="disable"){
+    const disableProof=parsed.data
     // Native Medusa Auth runs ONLY after a successful, committed Foundation
     // session/epoch revocation AND its canonical security audit/outbox.
     let nativeAttempted=false
@@ -39,7 +40,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
       res.clearCookie("da_session",{path:"/"})
       const completed=await service.personalCompletePreparedNativeMfaDisable(prepared,async identityId=>{
         nativeAttempted=true
-        const factor=await auth.disableAuthMfa({id:factors[0].id,method:parsed.data.method,code:parsed.data.code})
+        const factor=await auth.disableAuthMfa({id:factors[0].id,method:disableProof.method,code:disableProof.code})
         if(factor.id!==factors[0].id||factor.auth_identity_id!==identityId||factor.status!=="disabled")
           throw Error("Native disable result unavailable")
         return {disabled:true}

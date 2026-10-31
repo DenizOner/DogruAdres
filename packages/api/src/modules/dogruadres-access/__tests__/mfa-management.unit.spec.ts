@@ -24,7 +24,7 @@ describe("MFA management Foundation transaction",()=>{
    expect(result).toBeNull()
    expect(operation).not.toHaveBeenCalled()
    expect(record).not.toHaveBeenCalled()
-   expect(execute).toHaveBeenCalledWith(expect.stringContaining('pg_advisory_xact_lock'))
+   expect(execute).toHaveBeenCalledWith(expect.stringContaining('pg_advisory_xact_lock'),undefined)
  })
   it('records recovery generation against the genuine session actor',async()=>{await service.personalManageNativeMfa('token','recovery_codes',async()=>({}),ctx);expect(record).toHaveBeenCalledWith(expect.objectContaining({person_id:'person_self',actor_id:'user_self'}),'mfa.recovery_codes_generated');expect(logout).not.toHaveBeenCalled()})
 })
