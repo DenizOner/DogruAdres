@@ -22,7 +22,7 @@ describe("B22 native product drafts are Person/Org/Store action scoped",()=>{
       personalProductDraftReceipt:jest.fn().mockResolvedValue({status:"review_required"}),
       personalActorBinding:jest.fn().mockResolvedValue(binding),
       personalReserveProductDraft:jest.fn().mockResolvedValue({status:"reserved",person_id:"daprs_a"}),
-      personalWithProductDraftPermissionLock:jest.fn(async(_t:string,_d:any,work:()=>Promise<unknown>)=>work()),
+      personalWithProductDraftPermissionLock:jest.fn(async(_t:string,_d:any,work:(ctx:any)=>Promise<unknown>)=>work({})),
       personalCompleteProductDraft:jest.fn().mockResolvedValue({status:"created",product_id:"prod_a"})
     }
     native={
@@ -72,7 +72,7 @@ describe("B22 native product drafts are Person/Org/Store action scoped",()=>{
     }],created_by:"sel_a"}})
     expect(svc.personalWithProductDraftPermissionLock).toHaveBeenCalledWith(
       "opaque",base,expect.any(Function))
-    expect(svc.personalCompleteProductDraft).toHaveBeenCalledWith("opaque",base,"prod_a")
+    expect(svc.personalCompleteProductDraft).toHaveBeenCalledWith("opaque",base,"prod_a",expect.any(Object))
     expect(res.status).toHaveBeenCalledWith(201)
     expect(res.json).toHaveBeenCalledWith({status:"created",product_id:"prod_a"})
   })

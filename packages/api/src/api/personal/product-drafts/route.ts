@@ -1,5 +1,6 @@
 import type { MedusaRequest,MedusaResponse } from "@medusajs/framework/http"
 import { z } from "@medusajs/framework/zod"
+import type { Context } from "@medusajs/framework/types"
 import { createProductsWorkflow } from "@mercurjs/core/workflows"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { access,csrf,enabled,sessionToken } from "../security"
@@ -30,8 +31,8 @@ function cleanNativeRows(rows:any[],binding:any,sellerId:string):boolean{
     rows[2][0].id===sellerId&&rows[2][0].status==="open"&&
     !!rows[2][0].approved_at
 }
-async function liveNative(req:MedusaRequest,token:string,personId:string,sellerId:string){
-  const binding=await access(req).personalActorBinding(token,"member")
+async function liveNative(req:MedusaRequest,token:string,personId:string,sellerId:string,context?:Context){
+  const binding=await access(req).personalActorBinding(token,"member",context)
   if(!binding||binding.revoked_at||binding.person_id!==personId||
      typeof binding.actor_id!=="string")return false
   const native=req.scope.resolve<NativeSeller>("seller")
@@ -206,8 +207,8 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     // native Mercur creation and Foundation audit completion. This does not
     // claim cross-module atomicity; reserved/reconcile still handle failure.
     const written=await svc.personalWithProductDraftPermissionLock(
-      token,data,async()=>{
-        if(!await liveNative(req,token,scope.person_id,data.seller_id))
+      token,data,async(context:Context)=>{
+        if(!await liveNative(req,token,scope.person_id,data.seller_id,context))
           return {status:"denied" as const}
         const {result}=await createProductsWorkflow(req.scope).run({
           input:{products:[{
@@ -219,7 +220,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
         if(result.length!==1||typeof result[0]?.id!=="string"||
            !/^prod_[A-Za-z0-9_-]+$/.test(result[0].id))
           return {status:"uncertain" as const}
-        const completed=await svc.personalCompleteProductDraft(token,data,result[0].id)
+        const completed=await svc.personalCompleteProductDraft(token,data,result[0].id,context)
         if(!completed)return {status:"uncertain" as const}
         return {status:"created" as const,product_id:result[0].id as string}
       })

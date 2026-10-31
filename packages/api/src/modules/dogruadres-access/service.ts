@@ -2104,7 +2104,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalWithProductDraftPermissionLock<T>(
     token:string,input:{organization_id:string;seller_id:string},
-    execute:()=>Promise<T>,@MedusaContext() context:Context={}
+    execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
   ):Promise<T|null>{
     if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
@@ -2121,7 +2121,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const allowed=await authorizedProductEditScope(
       db,token,input.organization_id,input.seller_id)
     if(!allowed||allowed.person_id!==current.person_id)return null
-    return await execute()
+    // Carry the same manager into nested Foundation reads/completion.
+    // A second transaction would wait on this transaction's FOR UPDATE
+    // session/person rows, creating a self-deadlock.
+    return await execute(context)
   }
 
   @InjectTransactionManager()
