@@ -11,7 +11,10 @@ loadEnv(process.env.NODE_ENV || 'development', process.cwd())
 // authorized B22 disposable PostgreSQL acceptance database. Production,
 // protected data, and every other runtime keep their existing configuration.
 const b22DisposablePgLock=process.env.DOGRUADRES_B22_PG_LOCK_TEST==="true"
-if(b22DisposablePgLock){
+const b22DisposableRedisLock=process.env.DOGRUADRES_B22_REDIS_LOCK_TEST==="true"
+if(b22DisposablePgLock && b22DisposableRedisLock)
+  throw new Error("REFUSED: two B22 CI Locking providers")
+if(b22DisposablePgLock || b22DisposableRedisLock){
   const db=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   if(process.env.CI!=="true"||process.env.GITHUB_ACTIONS!=="true"||
       process.env.GITHUB_EVENT_NAME!=="pull_request"||
@@ -22,8 +25,13 @@ if(b22DisposablePgLock){
       db.port!=="5432"||db.username!=="mfa_test"||
       db.password!=="ci-disposable-only-not-a-real-secret"||
       !/^\/mfa_cli_ci_[0-9a-f]{16}$/.test(db.pathname))
-    throw new Error("REFUSED: B22 PostgreSQL locking only on an exact task-owned disposable CI database")
+    throw new Error("REFUSED: B22 locking only on an exact task-owned disposable CI database")
 }
+if(b22DisposableRedisLock && (
+  process.env.LOCKING_REDIS_URL!=="redis://127.0.0.1:6379" ||
+  !/^b22-redis-process-exit:[0-9a-f]{16}$/.test(process.env.B22_REDIS_PROBE_KEY??"") ||
+  !["crash","recover"].includes(process.env.B22_REDIS_PROBE_MODE??"")
+))throw new Error("REFUSED: Redis only for B22 disposable process-exit CI probe")
 
 
 // Fail closed even when Medusa evaluates configuration during a production build.
@@ -76,6 +84,17 @@ module.exports = withMercur({
         resolve: "@medusajs/medusa/locking-postgres",
         id: "locking-postgres",
         is_default: true,
+      }] },
+    }] : b22DisposableRedisLock ? [{
+      resolve: "@medusajs/medusa/locking",
+      options: { providers: [{
+        resolve: "@medusajs/medusa/locking-redis",
+        id: "locking-redis",
+        is_default: true,
+        options: {
+          redisUrl: process.env.LOCKING_REDIS_URL,
+          namespace: "b22-ci-lock:" + new URL(process.env.DATABASE_URL!).pathname.slice(1) + ":",
+        },
       }] },
     }] : []),
     {

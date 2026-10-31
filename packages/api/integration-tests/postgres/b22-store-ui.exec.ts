@@ -54,6 +54,49 @@ export default async function({container}:any){
     await new Promise<void>(()=>{})
     return
   }
+  // Genuine Medusa Redis provider, isolated from PostgreSQL checkout.
+  const redisProbeKey=process.env.B22_REDIS_PROBE_KEY
+  if(redisProbeKey){
+    assert.equal(preparing,false)
+    assert.equal(process.env.DOGRUADRES_B22_PG_LOCK_TEST,"false")
+    assert.equal(process.env.DOGRUADRES_B22_REDIS_LOCK_TEST,"true")
+    assert.equal(process.env.LOCKING_REDIS_URL,"redis://127.0.0.1:6379")
+    assert.match(redisProbeKey,/^b22-redis-process-exit:[0-9a-f]{16}$/)
+    const mode=process.env.B22_REDIS_PROBE_MODE
+    assert.ok(mode==="crash"||mode==="recover")
+    const redisLock=container.resolve("locking")
+    if(mode==="crash"){
+      await redisLock.acquire(redisProbeKey,{expire:25})
+      process.stdout.write("B22_REDIS_NATIVE_LOCK_BEFORE_EXIT\n",()=>process.exit(86))
+      await new Promise<void>(()=>{})
+      return
+    }
+    let initiallyAcquired=false
+    try{
+      await redisLock.acquire(redisProbeKey,{expire:2})
+      initiallyAcquired=true
+    }catch(error){
+      assert.match(String(error),/Failed to acquire lock/i)
+    }finally{
+      if(initiallyAcquired)await redisLock.release(redisProbeKey)
+    }
+    assert.equal(initiallyAcquired,false,"Second process must deny active Redis lock")
+    let recovered=false
+    await until(async()=>{
+      try{
+        await redisLock.acquire(redisProbeKey,{expire:3})
+        recovered=true
+        return true
+      }catch(error){
+        assert.match(String(error),/Failed to acquire lock/i)
+        return false
+      }
+    },35000,"B22 Redis lock recovery after process exit and TTL")
+    assert.equal(recovered,true)
+    assert.equal(await redisLock.release(redisProbeKey),true)
+    process.stdout.write("B22_REDIS_NATIVE_LOCK_RECOVERED_AFTER_TTL\n")
+    return
+  }
   const secondaryCartId=process.env.B22_SECOND_PROCESS_CART_ID
   if(secondaryCartId){
     assert.equal(preparing,false)
@@ -2106,6 +2149,33 @@ export default async function({container}:any){
     assert.equal((await q("select count(*)::int n from locking where id=$1",
       [abandonedKey]))[0].n,0,"Synthetic lock cleanup scoped by exact key")
     process.stdout.write("\nOBSERVED B22 abrupt Medusa process exit: expired provider lock persists and rejects reacquisition; exact task-only cleanup; checkout recovery BLOCKED\n")
+    // Only installed official Redis is tested: two isolated native processes,
+    // no real Cart, order, payment, or production service.
+    const redisKey="b22-redis-process-exit:"+rand
+    const redisEnv:NodeJS.ProcessEnv={
+      ...process.env,
+      DOGRUADRES_B22_PG_LOCK_TEST:"false",
+      DOGRUADRES_B22_REDIS_LOCK_TEST:"true",
+      LOCKING_REDIS_URL:"redis://127.0.0.1:6379",
+      B22_REDIS_PROBE_KEY:redisKey,
+    }
+    const cmd=["run","medusa","exec","./integration-tests/postgres/b22-store-ui.exec.ts"]
+    const firstRedis=spawnSync("bun",cmd,{
+      cwd:process.cwd(),env:{...redisEnv,B22_REDIS_PROBE_MODE:"crash"},
+      encoding:"utf8",stdio:["ignore","pipe","pipe"],timeout:45000,maxBuffer:1024*1024
+    })
+    assert.ok(!firstRedis.error&&firstRedis.status===86&&
+      String(firstRedis.stdout??"").includes("B22_REDIS_NATIVE_LOCK_BEFORE_EXIT"),
+      "B22 disposable Redis lock acquire and abrupt exit required")
+    const secondRedis=spawnSync("bun",cmd,{
+      cwd:process.cwd(),env:{...redisEnv,B22_REDIS_PROBE_MODE:"recover"},
+      encoding:"utf8",stdio:["ignore","pipe","pipe"],timeout:65000,maxBuffer:1024*1024
+    })
+    assert.ok(!secondRedis.error&&secondRedis.status===0&&
+      String(secondRedis.stdout??"").includes("B22_REDIS_NATIVE_LOCK_RECOVERED_AFTER_TTL"),
+      "B22 native Redis must deny active key, then recover after expiry")
+    process.stdout.write("\nPASS B22 official Redis provider: independent process exit, live-lock denial, automatic TTL recovery; native Mercur Cart checkout NOT TESTED on Redis\n")
+
 
     type NativeCartAttempt={run?:any;error?:string}
     const startCartAttempt=():Promise<NativeCartAttempt>=>
