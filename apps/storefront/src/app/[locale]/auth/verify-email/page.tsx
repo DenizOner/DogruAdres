@@ -114,11 +114,25 @@ export default function VerifyEmailPage() {
     if (!value) return null
     try {
       const url = new URL(value)
-      const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-      if (url.protocol !== "https:" &&
-          !(process.env.NODE_ENV !== "production" && url.protocol === "http:" && local))
+      const local = url.hostname === "localhost" ||
+        url.hostname.endsWith(".localhost") ||
+        url.hostname.startsWith("127.") || url.hostname === "[::1]"
+      // HTTPS loopback must never become a production bearer destination,
+      // even if misconfigured as a supposedly secure public API origin.
+      if (local) {
+        if (process.env.NODE_ENV === "production" || url.protocol !== "http:")
+          return null
+      } else if (url.protocol !== "https:") {
         return null
+      }
       if (url.username || url.password || url.pathname !== "/" || url.search || url.hash)
+        return null
+      // The Storefront's URL is not a verified Medusa API. Reject both
+      // declared and actual same-origin mistakes rather than sending a token.
+      const storefrontBase = process.env.NEXT_PUBLIC_BASE_URL
+      if (storefrontBase && new URL(storefrontBase).origin === url.origin)
+        return null
+      if (typeof window !== "undefined" && window.location.origin === url.origin)
         return null
       return url.origin
     } catch {

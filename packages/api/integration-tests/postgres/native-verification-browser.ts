@@ -353,68 +353,69 @@ export async function verifyNativeBrowser({
     assert.ok(logs.every(line => !line.includes(token)), "Token leaked into captured test logs")
 
     process.stdout.write("PASS browser privacy: no token in Referer, secondary navigation, rendered DOM or Next logs\n")
-    // F-01: restart the same real Next.js route with no public Medusa API
-    // origin, while its private backend and Storefront base URL remain set.
-    // No bearer may be fetched to Storefront, Medusa or localhost fallback.
-    stopStorefront()
-    await until(async () => {
-      try {
-        await fetch(`http://127.0.0.1:${storefrontPort}/auth/verify-email`, {
-          signal: AbortSignal.timeout(1000),
-        })
-        return false
-      } catch {
-        return true
-      }
-    }, 15000, "original verification Storefront stopped")
-    storefrontLogs = ""
-    storefront = spawn(process.execPath, [nextBin, "dev", "-p", String(storefrontPort), "-H", "127.0.0.1"], {
-      cwd: storefrontDir,
-      detached: process.platform !== "win32",
-      env: {
-        ...process.env,
-        PORT: String(storefrontPort),
-        HOSTNAME: "127.0.0.1",
-        MEDUSA_BACKEND_URL: apiOrigin,
-        NEXT_PUBLIC_MEDUSA_BACKEND_URL: "",
-        NEXT_PUBLIC_BASE_URL: `http://127.0.0.1:${storefrontPort}`,
-        NEXT_PUBLIC_DEFAULT_REGION: "tr",
-        NODE_ENV: "development",
-        NEXT_TELEMETRY_DISABLED: "1",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    })
-    storefront.stdout?.on("data", d => { storefrontLogs += d.toString() })
-    storefront.stderr?.on("data", d => { storefrontLogs += d.toString() })
-    await until(async () => {
-      if (storefront!.exitCode !== null) throw Error("Missing-config Storefront exited")
-      const res = await fetch(`http://127.0.0.1:${storefrontPort}/auth/verify-email?token=probe`, {
-        redirect: "manual", signal: AbortSignal.timeout(10000),
+    // F-01: the same native Next page must reject missing, self-origin and
+    // HTTPS loopback API settings. Only our isolated Next process is restarted.
+    async function rejectUntrustedApiOrigin(publicApiOrigin: string, scenario: "missing backend configuration" | "Storefront origin" | "HTTPS localhost") {
+      stopStorefront()
+      await until(async () => {
+        try {
+          await fetch(`http://127.0.0.1:${storefrontPort}/auth/verify-email`, { signal: AbortSignal.timeout(1000) })
+          return false
+        } catch {
+          return true
+        }
+      }, 15000, "previous task-owned Storefront stopped")
+      storefrontLogs = ""
+      storefront = spawn(process.execPath, [nextBin, "dev", "-p", String(storefrontPort), "-H", "127.0.0.1"], {
+        cwd: storefrontDir,
+        detached: process.platform !== "win32",
+        env: {
+          ...process.env,
+          PORT: String(storefrontPort),
+          HOSTNAME: "127.0.0.1",
+          MEDUSA_BACKEND_URL: apiOrigin,
+          NEXT_PUBLIC_MEDUSA_BACKEND_URL: publicApiOrigin,
+          NEXT_PUBLIC_BASE_URL: `http://127.0.0.1:${storefrontPort}`,
+          NEXT_PUBLIC_DEFAULT_REGION: "tr",
+          NODE_ENV: "development",
+          NEXT_TELEMETRY_DISABLED: "1",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
       })
-      return res.status === 200 || res.status === 307
-    }, 60000, "missing public backend Next route readiness")
-    await cdpSend("Network.setCacheDisabled", { cacheDisabled: true })
-    const beforeMissingConfig = networkRequests.length
-    await cdpSend("Page.navigate", { url: targetUrl })
-    await until(async () => {
-      const text = await evaluate<string>("document.body.innerText")
-      return text.includes("Doğrulama Şu Anda Kullanılamıyor") ||
-        text.includes("Verification Unavailable")
-    }, 25000, "missing backend unavailable UI")
-    const hrefAfterMissingConfig = await evaluate<string>("window.location.href")
-    assert.ok(!hrefAfterMissingConfig.includes(token), "Missing-config page must scrub bearer URL")
-    assert.ok(!await evaluate("document.getElementById('btn-confirm-email')"),
-      "Missing-config page cannot offer confirmation")
-    const unexpectedRequests = networkRequests.slice(beforeMissingConfig).filter(r =>
-      ["Fetch", "XHR"].includes(r.type) &&
-      (r.request.url.includes("/auth/verify-email") || r.request.url.includes(encodeURIComponent(token))))
-    assert.equal(unexpectedRequests.length, 0,
-      "Missing public origin may never fetch the verification bearer to ANY target")
-    const rowAfterMissingConfig = await pg("auth_verification").where({ id: initialRow.id }).first()
-    assert.equal(new Date(rowAfterMissingConfig.verified_at).getTime(),
-      new Date(confirmedRow.verified_at).getTime(),
-      "Missing backend configuration must leave verified_at unchanged")
-    process.stdout.write("PASS browser missing backend configuration: no verification fetch; URL scrubbed, confirmation disabled and PostgreSQL unchanged\n")
+      storefront.stdout?.on("data", d => { storefrontLogs += d.toString() })
+      storefront.stderr?.on("data", d => { storefrontLogs += d.toString() })
+      await until(async () => {
+        if (storefront!.exitCode !== null) throw Error("Untrusted-origin Storefront exited")
+        const res = await fetch(`http://127.0.0.1:${storefrontPort}/auth/verify-email?token=probe`, {
+          redirect: "manual", signal: AbortSignal.timeout(10000),
+        })
+        return res.status === 200 || res.status === 307
+      }, 60000, "untrusted API origin Next route readiness")
+      await cdpSend("Network.setCacheDisabled", { cacheDisabled: true })
+      const requestStart = networkRequests.length
+      await cdpSend("Page.navigate", { url: targetUrl })
+      await until(async () => {
+        const text = await evaluate<string>("document.body.innerText")
+        return text.includes("Doğrulama Şu Anda Kullanılamıyor") ||
+          text.includes("Verification Unavailable")
+      }, 25000, `fail-closed ${scenario} UI`)
+      const href = await evaluate<string>("window.location.href")
+      assert.ok(!href.includes(token), `${scenario}: URL must scrub the verification bearer`)
+      assert.ok(!await evaluate("document.getElementById('btn-confirm-email')"),
+        `${scenario}: confirmation button must not exist`)
+      const verificationRequests = networkRequests.slice(requestStart).filter(r =>
+        ["Fetch", "XHR"].includes(r.type) &&
+        (r.request.url.includes("/auth/verify-email") || r.request.url.includes(encodeURIComponent(token))))
+      assert.equal(verificationRequests.length, 0,
+        `${scenario}: no token-bearing verification fetch may reach any host`)
+      const row = await pg("auth_verification").where({ id: initialRow.id }).first()
+      assert.equal(new Date(row.verified_at).getTime(), new Date(confirmedRow.verified_at).getTime(),
+        `${scenario}: PostgreSQL verified_at must be unchanged`)
+      process.stdout.write(`PASS browser ${scenario}: no verification fetch; URL scrubbed, confirmation disabled and PostgreSQL unchanged\n`)
+    }
+    await rejectUntrustedApiOrigin("", "missing backend configuration")
+    await rejectUntrustedApiOrigin(`http://127.0.0.1:${storefrontPort}`, "Storefront origin")
+    await rejectUntrustedApiOrigin("https://localhost:9443", "HTTPS localhost")
   } finally {
     if (ws) {
       try { ws.close() } catch {}
