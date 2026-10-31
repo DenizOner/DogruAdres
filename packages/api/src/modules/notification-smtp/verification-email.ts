@@ -4,6 +4,8 @@ export function resolveVerificationOrigin(env: Record<string, string | undefined
   try {
     if (!value) throw new Error()
     const url = new URL(value)
+    // Reject canonicalized IPv4-mapped IPv6, including 127/8 loopback.
+    if (url.hostname.startsWith("[::ffff:")) throw new Error()
     const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
     if (url.origin !== value || url.username || url.password ||
         (url.protocol !== "https:" && !(["development", "test"].includes(env.NODE_ENV || "") && url.protocol === "http:" && loopback)) ||

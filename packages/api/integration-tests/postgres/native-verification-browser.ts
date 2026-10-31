@@ -355,7 +355,7 @@ export async function verifyNativeBrowser({
     process.stdout.write("PASS browser privacy: no token in Referer, secondary navigation, rendered DOM or Next logs\n")
     // F-01: the same native Next page must reject missing, self-origin and
     // HTTPS loopback API settings. Only our isolated Next process is restarted.
-    async function rejectUntrustedApiOrigin(publicApiOrigin: string, scenario: "missing backend configuration" | "Storefront origin" | "HTTPS localhost") {
+    async function rejectUntrustedApiOrigin(publicApiOrigin: string, scenario: "missing backend configuration" | "Storefront origin" | "HTTPS localhost" | "IPv4-mapped loopback") {
       stopStorefront()
       await until(async () => {
         try {
@@ -416,6 +416,7 @@ export async function verifyNativeBrowser({
     await rejectUntrustedApiOrigin("", "missing backend configuration")
     await rejectUntrustedApiOrigin(`http://127.0.0.1:${storefrontPort}`, "Storefront origin")
     await rejectUntrustedApiOrigin("https://localhost:9443", "HTTPS localhost")
+    await rejectUntrustedApiOrigin("https://[::ffff:7f00:1]:9443", "IPv4-mapped loopback")
   } finally {
     if (ws) {
       try { ws.close() } catch {}

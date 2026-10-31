@@ -114,6 +114,9 @@ export default function VerifyEmailPage() {
     if (!value) return null
     try {
       const url = new URL(value)
+      // WHATWG URL canonicalizes all IPv4-mapped IPv6 forms to [::ffff:...].
+      // Reject these outright, including loopback disguised as HTTPS.
+      if (url.hostname.startsWith("[::ffff:")) return null
       const local = url.hostname === "localhost" ||
         url.hostname.endsWith(".localhost") ||
         url.hostname.startsWith("127.") || url.hostname === "[::1]"
