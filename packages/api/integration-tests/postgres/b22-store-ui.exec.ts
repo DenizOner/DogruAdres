@@ -3393,7 +3393,7 @@ export default async function({container}:any){
         assert.equal(await countLogoutAudit(),raceAuditBefore+1,
           "Successful first revocation must keep its canonical audit/outbox")
         assert.equal(await countLogoutOutbox(),await countLogoutAudit())
-        process.stdout.write("PASS B-01 MFA new-login race: independent Chrome B login committed between pre-native revocation and completion; native disable denied 409, factor and new session preserved, old cookie 401\\n")
+        process.stdout.write("PASS B-01 MFA new-login race: independent Chrome B login committed between pre-native revocation and completion; native disable denied 409, factor and new session preserved, old cookie 401\n")
       }finally{
         if(!newSessionGateReleased)releaseNewSessionGate()
         foundationPrototype.personalPrepareNativeMfaDisable=originalPrepareNewSession
@@ -3402,6 +3402,99 @@ export default async function({container}:any){
       // The original browser was correctly revoked in the aborted attempt.
       // Regain fresh MFA proof for the existing post-native fault regression.
       await reloginWithRecovery(disableCodes[5])
+      // B-01 native-lock-first case: after the native callback is reached,
+      // the Foundation advisory lock must hold an independent Staff A policy
+      // writer until the callback finishes. The native Medusa operation is
+      // genuinely called with an invalid proof after the controlled pause,
+      // preserving the factor for the pre-existing post-native fault test.
+      const concurrencyBLock=await newSessionBrowser.eval(
+        "(async()=>{const sr=await fetch('/personal/session');"+
+        "if(sr.status!==200)return sr.status;"+
+        "const s=await sr.json();"+
+        "const r=await fetch('/personal/session?action=lock',{method:'DELETE',"+
+        "headers:{'x-csrf-token':s.csrf_token}});return r.status})()")
+      assert.equal(concurrencyBLock,200,
+        "Close the concurrent B session before the native-first control")
+      await loginStaffA(staffCodes[4])
+      const nativeFirstPolicy=(await q(
+        "select version,platform_mode from da_mfa_policy where id='current'"))[0]
+      assert.equal(nativeFirstPolicy.platform_mode,"optional")
+      preDisableCookie=await reviewer.token()
+      assert.equal(await oldCookieStatus(),200)
+      const originalNativeFirst=foundationPrototype.personalCompletePreparedNativeMfaDisable
+      let nativeCallbackEntered=false,nativeFirstGateReleased=false
+      let releaseNativeFirst!:()=>void
+      const nativeFirstGate=new Promise<void>(resolve=>{
+        releaseNativeFirst=()=>{nativeFirstGateReleased=true;resolve()}
+      })
+      foundationPrototype.personalCompletePreparedNativeMfaDisable=
+        async function(this:any,prepared:any,operation:(identityId:string)=>Promise<unknown>,...rest:any[]){
+          return originalNativeFirst.apply(this,[prepared,async(identityId:string)=>{
+            if(prepared?.person_id===B.person){
+              nativeCallbackEntered=true
+              await nativeFirstGate
+            }
+            return operation(identityId)
+          },...rest])
+        }
+      const invalidNativeDisablePost=async()=>reviewer.eval(
+        "(async()=>{const sr=await fetch('/personal/session');"+
+        "if(sr.status!==200)return {status:sr.status,body:{}};"+
+        "const session=await sr.json();"+
+        "const r=await fetch('/personal/mfa/manage',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+        "body:JSON.stringify({action:'disable',method:'recovery_code',code:'invalid-native-proof'})});"+
+        "return {status:r.status,body:await r.json()}})()")
+      let nativeFirstPending:Promise<any>|undefined
+      let staffPolicyPending:Promise<any>|undefined
+      let staffPolicySettled=false
+      try{
+        nativeFirstPending=invalidNativeDisablePost()
+        await until(async()=>nativeCallbackEntered,10000,
+          "Native MFA callback entered under real Foundation transaction lock")
+        assert.equal(await oldCookieStatus(),401,
+          "Pre-native Person revocation must already be committed")
+        staffPolicyPending=staffSetPlatform("required",Number(nativeFirstPolicy.version))
+          .then(v=>{staffPolicySettled=true;return v},e=>{
+            staffPolicySettled=true;return {status:-1,error:String(e)}
+          })
+        await until(async()=>{
+          const [waiters]=await q(
+            "select count(*)::int n from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.locktype='advisory' and l.granted=false and a.datname=current_database()")
+          return Number(waiters.n)>0
+        },10000,"Independent Staff A policy writer waits on native MFA lock")
+        assert.equal(staffPolicySettled,false,
+          "Staff policy HTTP must NOT return while native callback holds the lock")
+        const [stillOptional]=await q(
+          "select platform_mode from da_mfa_policy where id='current'")
+        assert.equal(stillOptional.platform_mode,"optional")
+        releaseNativeFirst()
+        const failedNative=await nativeFirstPending
+        assert.equal(failedNative.status,503,
+          "Actual native invalid proof must not successfully disable MFA")
+        assert.match(failedNative.body?.message??"",/INDETERMINATE/)
+        const wroteRequired=await staffPolicyPending
+        assert.equal(wroteRequired.status,200,
+          "Real Staff A policy writer must complete after native lock releases")
+        const [requiredAfterLock]=await q(
+          "select version,platform_mode from da_mfa_policy where id='current'")
+        assert.equal(requiredAfterLock.platform_mode,"required")
+        assert.ok(Number(requiredAfterLock.version)>Number(nativeFirstPolicy.version))
+        assert.equal((await enabledFactorList()).length,1)
+        assert.equal(await oldCookieStatus(),401)
+        process.stdout.write("PASS B-01 MFA native-first policy race: real Staff A HTTP policy writer waited on PostgreSQL advisory lock through actual native Auth failed proof; required committed after release, native factor intact, old cookie 401\n")
+      }finally{
+        if(!nativeFirstGateReleased)releaseNativeFirst()
+        foundationPrototype.personalCompletePreparedNativeMfaDisable=originalNativeFirst
+        if(nativeFirstPending)await nativeFirstPending.catch(()=>{})
+        if(staffPolicyPending)await staffPolicyPending.catch(()=>{})
+      }
+      await loginStaffA(staffCodes[5])
+      const [policyAfterNativeFirst]=await q(
+        "select version,platform_mode from da_mfa_policy where id='current'")
+      assert.equal(policyAfterNativeFirst.platform_mode,"required")
+      assert.equal((await staffSetPlatform("optional",Number(policyAfterNativeFirst.version))).status,200)
+      await reloginWithRecovery(disableCodes[6])
       preDisableCookie=await reviewer.token()
       assert.match(preDisableCookie??"",/^[A-Za-z0-9_-]{43}$/)
       assert.equal(await oldCookieStatus(),200)
