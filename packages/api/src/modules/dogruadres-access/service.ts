@@ -501,12 +501,30 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return store.setPersonPreference(session.person_id, enabled, expectedVersion, actor)
   }
 
-  /** Holds session/epoch then platform lock across the native operation.
-   * Native Auth and Foundation are separate transactions: any failure after
-   * native invocation is INDETERMINATE, never compensated or retried here.
-   */
+  /** Recovery codes are audited in their Foundation transaction. Native
+   * factor disable is only reachable after separate committed revocation. */
   @InjectTransactionManager()
-  async personalManageNativeMfa(token:string, action:"recovery_codes"|"disable", operation:(identityId:string)=>Promise<unknown>, @MedusaContext() context:Context={}) {
+  async personalManageNativeMfa(token:string,action:"recovery_codes"|"disable",operation:(identityId:string)=>Promise<unknown>,@MedusaContext() context:Context={}) {
+    if(action!=="recovery_codes")return null // Closed obsolete pre-commit disable path.
+    const sql=securitySql(context.transactionManager),sessions=new IdentitySessions(sql)
+    const session=await sessions.current(token,true)
+    if(!session)return null
+    const [limits]=await sql.execute("select recent_auth_seconds from da_session_policy where id='current'")
+    if(!hasRecentMfaProof(session,limits?.recent_auth_seconds))return null
+    await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
+    const store=new MfaPersistence(sql)
+    await store.readPlatformPolicy()
+    const actor={person_id:session.person_id,actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id}
+    const result=await operation(session.auth_identity_id)
+    await store.recordNativeMfaAction(actor,"mfa.recovery_codes_generated")
+    return {result,sessions_revoked:false}
+  }
+
+  /** Foundation revocation and mandatory audit/outbox COMMIT before native
+   * factor disable. Failure leaves the native factor unchanged and the
+   * strongly-authenticated browser session in its original state. */
+  @InjectTransactionManager()
+  async personalPrepareNativeMfaDisable(token:string,@MedusaContext() context:Context={}) {
     const sql=securitySql(context.transactionManager),sessions=new IdentitySessions(sql)
     const session=await sessions.current(token,true)
     if(!session)return null
@@ -514,19 +532,34 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!hasRecentMfaProof(session,limits?.recent_auth_seconds))return null
     await sql.execute("select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))")
     const store=new MfaPersistence(sql),policy=await store.readPlatformPolicy()
-    if(action==="disable"&&policy.platform_mode==="required")return null
+    if(policy.platform_mode==="required")return null
     const personal=await store.readPersonPreference(session.person_id)
-    const actor={person_id:session.person_id,actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id}
-    const result=await operation(session.auth_identity_id)
-    await store.recordNativeMfaAction(actor,action==="disable"?"mfa.native_factor_disabled":"mfa.recovery_codes_generated")
-    if(action==="disable") {
-      await sessions.logout(token,true)
-      // Disabled platform preserves the preference; optional self-disable turns it off.
-      if(policy.platform_mode==="optional"&&personal.user_enabled)
-        await store.setPersonPreference(session.person_id,false,personal.version,actor)
-    }
-    return {result,sessions_revoked:action==="disable"}
+    await sessions.logout(token,true)
+    // Optional preference is a separate audited Foundation row in this same
+    // precommit. In disabled mode the saved preference must be preserved.
+    if(policy.platform_mode==="optional"&&personal.user_enabled)
+      await store.setPersonPreference(session.person_id,false,personal.version,{
+        person_id:session.person_id,actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id
+      })
+    return {session_id:session.id,person_id:session.person_id,auth_identity_id:session.auth_identity_id,
+      actor_type:session.actor_type as MfaAuditActor["actor_type"],actor_id:session.actor_id}
   }
+
+  /** A post-native audit cannot restore or re-authorize pre-revoked sessions. */
+  @InjectTransactionManager()
+  async personalRecordPreparedNativeMfaDisable(
+    prepared:Readonly<{session_id:string;person_id:string;auth_identity_id:string;actor_type:MfaAuditActor["actor_type"];actor_id:string}>,
+    @MedusaContext() context:Context={}
+  ) {
+    const sql=securitySql(context.transactionManager)
+    const rows=await sql.execute("select s.id from da_browser_session s join da_person_security e on e.person_id=s.person_id where s.id=? and s.person_id=? and s.auth_identity_id=? and s.actor_type=? and s.actor_id=? and s.status='revoked' and e.epoch>s.epoch",
+      [prepared.session_id,prepared.person_id,prepared.auth_identity_id,prepared.actor_type,prepared.actor_id])
+    if(rows.length!==1)throw new IdentityAccessDenied()
+    await new MfaPersistence(sql).recordNativeMfaAction({
+      person_id:prepared.person_id,actor_type:prepared.actor_type,actor_id:prepared.actor_id
+    },"mfa.native_factor_disabled")
+  }
+
   @InjectTransactionManager()
   async personalSetPlatformMfaMode(token: string, mode: MfaPlatformMode, expectedVersion: number, @MedusaContext() context: Context = {}) {
     const sql = securitySql(context.transactionManager)

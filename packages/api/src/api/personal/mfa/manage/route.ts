@@ -20,40 +20,54 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   if(!parsed.success||Object.keys(req.query??{}).length)return res.status(400).json({message:"Invalid input"})
   const service=access(req),token=sessionToken(req)
   if(!await service.personalLoginAttempt(digest("mfa-management:"+token),digest(req.socket.remoteAddress??"unknown")))return res.status(429).json({message:"Try again later"})
+  if(parsed.data.action==="disable"){
+    // Native Medusa Auth runs ONLY after a successful, committed Foundation
+    // session/epoch revocation AND its canonical security audit/outbox.
+    let nativeAttempted=false
+    try{
+      const auth:IAuthModuleService=req.scope.resolve("auth")
+      const session=await service.personalSession(token)
+      if(!session)return res.status(403).json({message:"Access denied"})
+      const summary=await readNativeMfaSummary(auth,session.auth_identity_id)
+      if(!summary.enabled)return res.status(409).json({message:"Native factor reconciliation required"})
+      const factors=await auth.listAuthMfa({auth_identity_id:session.auth_identity_id,status:"enabled"},{take:2})
+      if(factors.length!==1||factors[0].auth_identity_id!==session.auth_identity_id||factors[0].provider!=="totp")
+        return res.status(409).json({message:"Native factor reconciliation required"})
+      const prepared=await service.personalPrepareNativeMfaDisable(token)
+      if(!prepared||prepared.auth_identity_id!==session.auth_identity_id)
+        return res.status(403).json({message:"Recent MFA proof and permitted policy required"})
+      res.clearCookie("da_session",{path:"/"})
+      nativeAttempted=true
+      const factor=await auth.disableAuthMfa({id:factors[0].id,method:parsed.data.method,code:parsed.data.code})
+      if(factor.id!==factors[0].id||factor.auth_identity_id!==prepared.auth_identity_id||factor.status!=="disabled")
+        throw Error("Native disable result unavailable")
+      await service.personalRecordPreparedNativeMfaDisable(prepared)
+      return res.json({disabled:true,sessions_revoked:true})
+    }catch{
+      return res.status(503).json({message:nativeAttempted?
+        "INDETERMINATE: native operation may have persisted; do not retry; reconciliation required":
+        "Service unavailable"})
+    }
+  }
   let attempted=false
-  try {
-    const managed=await service.personalManageNativeMfa(token,parsed.data.action,async identityId=>{
+  try{
+    const managed=await service.personalManageNativeMfa(token,"recovery_codes",async identityId=>{
       const auth:IAuthModuleService=req.scope.resolve("auth")
       const summary=await readNativeMfaSummary(auth,identityId)
       if(!summary.enabled)throw Error("MFA factor unavailable")
-      if(parsed.data.action==="recovery_codes") {
-        attempted=true
-        const {codes}=await auth.generateAuthMfaRecoveryCodes({auth_identity_id:identityId,count:10})
-        if(!Array.isArray(codes)||codes.length!==10||new Set(codes).size!==10||codes.some(c=>typeof c!=="string"||!c))throw Error("Invalid native recovery result")
-        return {recovery_codes:codes}
-      }
-      const factors=await auth.listAuthMfa({auth_identity_id:identityId,status:"enabled"},{take:2})
-      if(factors.length!==1||factors[0].auth_identity_id!==identityId||factors[0].provider!=="totp")throw Error("MFA factor reconciliation required")
       attempted=true
-      const factor=await auth.disableAuthMfa({id:factors[0].id,method:parsed.data.method,code:parsed.data.code})
-      if(factor.id!==factors[0].id||factor.auth_identity_id!==identityId||factor.status!=="disabled")throw Error("Native disable result unavailable")
-      return {disabled:true}
+      const {codes}=await auth.generateAuthMfaRecoveryCodes({auth_identity_id:identityId,count:10})
+      if(!Array.isArray(codes)||codes.length!==10||new Set(codes).size!==10||codes.some(c=>typeof c!=="string"||!c))
+        throw Error("Invalid native recovery result")
+      return {recovery_codes:codes}
     })
     if(!managed)return res.status(403).json({message:"Recent MFA proof and permitted policy required"})
-    if(managed.sessions_revoked)res.clearCookie("da_session",{path:"/"})
-    return res.json({...managed.result as object,sessions_revoked:managed.sessions_revoked})
-  }catch {
-    if(attempted&&parsed.data.action==="disable"){
-      // Medusa Auth and Foundation are separate transactions. A failed
-      // Foundation audit rolls back the original logout, even when native MFA
-      // was already disabled. Revoke all Person sessions through a NEW
-      // Foundation transaction before reporting the uncertain native result.
-      // A server-side failure to revoke is not a successful reconciliation.
-      try{await service.closePersonalSession(token,true)}catch{}
-      res.clearCookie("da_session",{path:"/"})
-    }
+    return res.json({...managed.result as object,sessions_revoked:false})
+  }catch{
     return res.status(attempted?503:409).json({message:attempted?
       "INDETERMINATE: native operation may have persisted; do not retry; reconciliation required":
       "Native factor reconciliation required"})
   }
+}
+
 }
