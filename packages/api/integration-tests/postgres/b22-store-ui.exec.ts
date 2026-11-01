@@ -23,6 +23,109 @@ import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
 
+// Keep this bounded real Chrome/PG16 policy check independent of the already
+// large native acceptance runner, without suppressing TypeScript checking.
+async function verifyOwnerMembershipManagePolicy({
+  organizationId,targetMembershipId,ownerPersonId,ownerActorId,browser,foundation,q
+}:{
+  organizationId:string;targetMembershipId:string;ownerPersonId:string;ownerActorId:string
+  browser:B06Chrome;foundation:any;q:(sql:string,args?:unknown[])=>Promise<any[]>
+}):Promise<void>{
+    // The same task-owned ordinary Alpha membership must survive a centrally
+    // narrowed Owner membership.manage policy, including direct native service
+    // calls. Read-only member.list remains separate and available.
+    const membershipPolicyRows=await q(`select id,person_id,role,status,protected_owner,revoked_at
+      from da_organization_membership where organization_id=$1 order by id`,
+      [organizationId])
+    const membershipPolicyAudits=await q(`select id from da_audit_event
+      where organization_id=$1 order by id`,[organizationId])
+    const membershipPolicyOutboxes=await q(`select x.id from da_audit_outbox x
+      join da_audit_event e on e.id=x.source_audit_event_id
+      where e.organization_id=$1 order by x.id`,[organizationId])
+    const membershipChangedAuditBefore=await q(`select count(*)::int n from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.target_id=$2
+        and e.action='organization.membership_changed'`,[organizationId,targetMembershipId])
+    const oldMembershipActions=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    try{
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage"
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      const deniedMember=await browser.eval(`(async()=>{
+        const org=${JSON.stringify(organizationId)}
+        const member=${JSON.stringify(targetMembershipId)}
+        const session=await(await fetch('/personal/session')).json()
+        const post=async(value)=>{
+          const r=await fetch('/personal/memberships',{method:'POST',
+            headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+            body:JSON.stringify(value)})
+          return r.status
+        }
+        return {
+          list:(await fetch('/personal/memberships?organization='+org)).status,
+          role:await post({action:'role',organization_id:org,membership_id:member,role:'admin'}),
+          revoke:await post({action:'revoke',organization_id:org,membership_id:member}),
+          protectedOwner:await post({action:'protected_owner',organization_id:org,
+            membership_id:member,role:'owner'})
+        }
+      })()`)
+      assert.deepEqual(deniedMember,{list:200,role:403,revoke:403,protectedOwner:403},
+        "Narrowed Owner role can still list but cannot mutate memberships")
+      await assert.rejects(foundation.changeMembership({
+        organization_id:organizationId,membership_id:targetMembershipId,
+        actor_person_id:ownerPersonId,actor_type:"user",actor_id:ownerActorId,role:"admin"
+      }),/Active protected Owner or Admin membership is required/)
+      assert.deepEqual(await q(`select id,person_id,role,status,protected_owner,revoked_at
+        from da_organization_membership where organization_id=$1 order by id`,
+        [organizationId]),membershipPolicyRows,
+        "Denied membership.manage must not change membership or protected Owner state")
+      assert.deepEqual(await q(`select id from da_audit_event
+        where organization_id=$1 order by id`,[organizationId]),
+        membershipPolicyAudits,"Denied membership.manage cannot append audit")
+      assert.deepEqual(await q(`select x.id from da_audit_outbox x
+        join da_audit_event e on e.id=x.source_audit_event_id
+        where e.organization_id=$1 order by x.id`,[organizationId]),
+        membershipPolicyOutboxes,"Denied membership.manage cannot append audit outbox")
+    }finally{
+      if(oldMembershipActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=oldMembershipActions
+    }
+    // Prove the restored Owner default using the SAME real HTTPS/CSRF path.
+    // Apply a reversible ordinary Member->Admin->Member transition only to
+    // our disposable test membership, never to a protected Owner.
+    const restoredMembership=await browser.eval(`(async()=>{
+      const org=${JSON.stringify(organizationId)}
+      const member=${JSON.stringify(targetMembershipId)}
+      const session=await(await fetch('/personal/session')).json()
+      const post=async(role)=>{
+        const r=await fetch('/personal/memberships',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+          body:JSON.stringify({action:'role',organization_id:org,membership_id:member,role})})
+        return {status:r.status,body:r.status===200?await r.json():null}
+      }
+      const promoted=await post('admin')
+      const restored=promoted.status===200?await post('member'):{status:0,body:null}
+      return {promoted:promoted.status,restored:restored.status,
+        promotedRole:promoted.body?.membership?.role,restoredRole:restored.body?.membership?.role}
+    })()`)
+    assert.deepEqual(restoredMembership,{promoted:200,restored:200,
+      promotedRole:"admin",restoredRole:"member"},
+      "Restored Owner role policy must permit HTTP role changes in the same Organization")
+    const finalMembershipState=await q(`select role,status,protected_owner,revoked_at
+      from da_organization_membership where id=$1`,[targetMembershipId])
+    assert.deepEqual(finalMembershipState,[{role:"member",status:"active",
+      protected_owner:false,revoked_at:null}],
+      "Owner role acceptance must restore the test Member's exact state")
+    const membershipChangedAudit=await q(`select count(*)::int n from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.target_id=$2
+        and e.action='organization.membership_changed'`,
+      [organizationId,targetMembershipId])
+    assert.equal(membershipChangedAudit[0].n,membershipChangedAuditBefore[0].n+2,
+      "Both authorized transitions must append exactly one canonical audit/outbox each")
+    process.stdout.write("PASS B22 Owner role policy: narrowed membership.manage denies Chrome role/revoke/protected Owner and native Foundation change; PG16 membership/audit/outbox unchanged; restored Owner role changes 200\n")
+}
+ 
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   const preparing=process.env.B22_UI_PREPARE==="true"
@@ -3159,95 +3262,10 @@ export default async function({container}:any){
     }
     process.stdout.write("PASS B22 protected Owner management: verified protected Owner and ordinary Admin both retain private membership/invitation reads after role-only denial\n")
 
-    // The same task-owned ordinary Alpha membership must survive a centrally
-    // narrowed Owner membership.manage policy, including direct native service
-    // calls. Read-only member.list remains separate and available.
-    const membershipPolicyRows=await q(`select id,person_id,role,status,protected_owner,revoked_at
-      from da_organization_membership where organization_id=$1 order by id`,
-      [organizations[0].id])
-    const membershipPolicyAudits=await q(`select id from da_audit_event
-      where organization_id=$1 order by id`,[organizations[0].id])
-    const membershipPolicyOutboxes=await q(`select x.id from da_audit_outbox x
-      join da_audit_event e on e.id=x.source_audit_event_id
-      where e.organization_id=$1 order by x.id`,[organizations[0].id])
-    const oldMembershipActions=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
-    try{
-      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage"
-      await browser.send("Page.bringToFront")
-      await browser.wait("document.visibilityState==='visible'")
-      const deniedMember=await browser.eval(`(async()=>{
-        const org=${JSON.stringify(organizations[0].id)}
-        const member=${JSON.stringify(alphaMember.id)}
-        const session=await(await fetch('/personal/session')).json()
-        const post=async(value)=>{
-          const r=await fetch('/personal/memberships',{method:'POST',
-            headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
-            body:JSON.stringify(value)})
-          return r.status
-        }
-        return {
-          list:(await fetch('/personal/memberships?organization='+org)).status,
-          role:await post({action:'role',organization_id:org,membership_id:member,role:'admin'}),
-          revoke:await post({action:'revoke',organization_id:org,membership_id:member}),
-          protectedOwner:await post({action:'protected_owner',organization_id:org,
-            membership_id:member,role:'owner'})
-        }
-      })()`)
-      assert.deepEqual(deniedMember,{list:200,role:403,revoke:403,protectedOwner:403},
-        "Narrowed Owner role can still list but cannot mutate memberships")
-      await assert.rejects(foundation.changeMembership({
-        organization_id:organizations[0].id,membership_id:alphaMember.id,
-        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,role:"admin"
-      }),/Active protected Owner or Admin membership is required/)
-      assert.deepEqual(await q(`select id,person_id,role,status,protected_owner,revoked_at
-        from da_organization_membership where organization_id=$1 order by id`,
-        [organizations[0].id]),membershipPolicyRows,
-        "Denied membership.manage must not change membership or protected Owner state")
-      assert.deepEqual(await q(`select id from da_audit_event
-        where organization_id=$1 order by id`,[organizations[0].id]),
-        membershipPolicyAudits,"Denied membership.manage cannot append audit")
-      assert.deepEqual(await q(`select x.id from da_audit_outbox x
-        join da_audit_event e on e.id=x.source_audit_event_id
-        where e.organization_id=$1 order by x.id`,[organizations[0].id]),
-        membershipPolicyOutboxes,"Denied membership.manage cannot append audit outbox")
-    }finally{
-      if(oldMembershipActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
-      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=oldMembershipActions
-    }
-    // Prove the restored Owner default using the SAME real HTTPS/CSRF path.
-    // Apply a reversible ordinary Member->Admin->Member transition only to
-    // our disposable test membership, never to a protected Owner.
-    const restoredMembership=await browser.eval(`(async()=>{
-      const org=${JSON.stringify(organizations[0].id)}
-      const member=${JSON.stringify(alphaMember.id)}
-      const session=await(await fetch('/personal/session')).json()
-      const post=async(role)=>{
-        const r=await fetch('/personal/memberships',{method:'POST',
-          headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
-          body:JSON.stringify({action:'role',organization_id:org,membership_id:member,role})})
-        return {status:r.status,body:r.status===200?await r.json():null}
-      }
-      const promoted=await post('admin')
-      const restored=promoted.status===200?await post('member'):{status:0,body:null}
-      return {promoted:promoted.status,restored:restored.status,
-        promotedRole:promoted.body?.membership?.role,restoredRole:restored.body?.membership?.role}
-    })()`)
-    assert.deepEqual(restoredMembership,{promoted:200,restored:200,
-      promotedRole:"admin",restoredRole:"member"},
-      "Restored Owner role policy must permit HTTP role changes in the same Organization")
-    const finalMembershipState=await q(`select role,status,protected_owner,revoked_at
-      from da_organization_membership where id=$1`,[alphaMember.id])
-    assert.deepEqual(finalMembershipState,[{role:"member",status:"active",
-      protected_owner:false,revoked_at:null}],
-      "Owner role acceptance must restore the test Member's exact state")
-    const membershipChangedAudit=await q(`select count(*)::int n from da_audit_event e
-      join da_audit_outbox x on x.source_audit_event_id=e.id
-      where e.organization_id=$1 and e.target_id=$2
-        and e.action='organization.membership_changed'`,
-      [organizations[0].id,alphaMember.id])
-    assert.ok(membershipChangedAudit[0].n>=2,
-      "Both real role transitions must be represented by canonical audit/outbox")
-    process.stdout.write("PASS B22 Owner role policy: narrowed membership.manage denies Chrome role/revoke/protected Owner and native Foundation change; PG16 membership/audit/outbox unchanged; restored Owner role changes 200\n")
+    await verifyOwnerMembershipManagePolicy({
+      organizationId:organizations[0].id,targetMembershipId:alphaMember.id,
+      ownerPersonId:A.person,ownerActorId:A.actor,browser,foundation,q,
+    })
     // Protected Owner writes a draft for their approved Store without grant.
     const ownerDraftAccess=await get('/personal/product-drafts?organization_id='+organizations[0].id)
     assert.equal(ownerDraftAccess.status,200)
