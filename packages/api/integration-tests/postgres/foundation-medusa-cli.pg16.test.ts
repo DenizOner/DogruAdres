@@ -151,7 +151,6 @@ async function run(){
           DOGRUADRES_MFA_SETTINGS_ENABLED:"true",DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true"})
         assert.ok(result.includes("PASS B22 CR-03 real Chrome/HTTP/PG16: active unprotected Owner 403 for grants and listings; service denies block and revoke, zero audit/outbox writes"),
           "Missing actual role-only Owner 403 and zero-side-effect Chrome/PG16 acceptance")
-        assert.ok(result.includes("PASS B22 audit worker: real Medusa Access/Index job after isolated process crash and forced lease expiry; Staff events ACK and single Index entry on lost-ACK replay; natural TTL NOT TESTED"),"Missing real native audit worker recovery evidence")
         assert.ok(result.includes("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes"))
         assert.ok(result.includes("PASS B22 native Mercur product workflow: draft persisted, only selected Seller linked"))
         assert.ok(result.includes("PASS B22 Chrome: native private HTTP and signed-in HTTPS payment callbacks return 403; Cart open, zero OrderGroup and payment links; no provider/capture"),"Missing native payment callback fail-closed HTTP/Chrome evidence")
@@ -171,6 +170,15 @@ async function run(){
         assert.ok(result.includes("PASS B22 Chrome: real native product INSERT and protected Owner products.edit revoke serialized on PG16; committed product/audit predates revoke; next Member HTTP 403 and zero new product"),"Missing actual native-product and products.edit revoke PG16/Chrome overlap proof")
         assert.ok(result.includes("PASS B22 Chrome: Staff grant revoke waits during real native Seller approval; HTTP200 and Seller open before revoke commit, later Staff HTTP403; authoritative origin retained"),"Missing native Staff approval × grant revoke real PG16 ordering proof")
         assert.ok(result.includes("PASS B22 Chrome: real Mercur Seller INSERT and Owner membership revoke serialized on PG16; Seller pending plus source audit/outbox before revoke, next Owner Store POST403 and zero Seller"),"Missing real Owner membership revocation versus native Seller create PG16/Chrome overlap proof")
+
+        // Run native Access/Index/crash test only after Chrome is finished,
+        // using the same disposable database and installed Medusa modules.
+        const audit=invoke("./integration-tests/postgres/b22-audit-worker.exec.ts",
+          {...task,DOGRUADRES_MFA_RUNTIME_ENABLED:"true",
+            DOGRUADRES_MFA_SETTINGS_ENABLED:"true",
+            DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true"})
+        assert.ok(audit.includes("PASS B22 audit worker: real Medusa Access/Index job after isolated process crash and forced lease expiry; Staff events ACK and single Index entry on lost-ACK replay; natural TTL NOT TESTED"),
+          "Missing native worker crash/Index/ACK/replay evidence")
       }
 
       if (scope === "b02") {
