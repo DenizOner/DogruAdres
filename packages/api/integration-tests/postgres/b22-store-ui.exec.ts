@@ -2870,6 +2870,24 @@ export default async function({container}:any){
     assert.equal(preRole[0].role,"member")
     assert.equal(preRole[0].protected_owner,false)
     assert.equal(preRole[0].status,"active")
+    // Real pending invitation through the installed Medusa/DoğruAdres
+    // transaction-aware service. This avoids direct SQL fabrication and
+    // never sends an external SMTP message from the test.
+    const pendingInvite=await foundation.createOrganizationInvitation({
+      organization_id:organizations[0].id,
+      actor_person_id:A.person,actor_type:"user",actor_id:A.actor,
+      email:"b22-pending-revoke-"+rand+"@example.invalid",role:"member"
+    })
+    assert.match(pendingInvite.id,/^dainv_[A-Za-z0-9_-]+$/)
+    const pendingBefore=await q(`select id,status,revoked_at,expires_at
+      from da_organization_invitation
+      where id=$1 and organization_id=$2`,
+      [pendingInvite.id,organizations[0].id])
+    assert.equal(pendingBefore.length,1,"Native invitation must persist")
+    assert.equal(pendingBefore[0].status,"pending")
+    assert.equal(pendingBefore[0].revoked_at,null)
+    assert.ok(new Date(pendingBefore[0].expires_at).getTime()>Date.now(),
+      "The target must be a REAL nonexpired pending invitation")
     await q("update da_organization_membership set role='owner',protected_owner=false,updated_at=clock_timestamp() where id=$1",[alphaMember.id])
     try{
       const roleOnly=await q("select role,protected_owner,status from da_organization_membership where id=$1",[alphaMember.id])
@@ -2898,11 +2916,11 @@ export default async function({container}:any){
       const beforeInvitations=await q(`select id,status,revoked_at
         from da_organization_invitation where organization_id=$1 order by id`,
         [organizations[0].id])
-      // Prefer a real pending invitation when one exists. The fixture may
-      // have none; even an absent, well-formed target must be denied at
-      // the current-actor authorization boundary before target lookup.
-      const invitationTarget=beforeInvitations.find((x:any)=>x.status==="pending")?.id ??
-        "dainv_missing_"+rand
+      // Fixed, real pending target; never replace it with a missing ID.
+      const invitationTarget=pendingInvite.id
+      assert.ok(beforeInvitations.some((x:any)=>x.id===invitationTarget &&
+        x.status==="pending" && x.revoked_at===null),
+        "The exact existing pending invitation must be targeted")
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       const token=await reviewer.token()
@@ -2970,6 +2988,10 @@ export default async function({container}:any){
         [organizations[0].id])
       assert.deepEqual(afterInvitations,beforeInvitations,
         "Role-only Owner must not revoke an invitation or change its state")
+      assert.deepEqual(await q(`select id,status,revoked_at,expires_at
+        from da_organization_invitation where id=$1 and organization_id=$2`,
+        [invitationTarget,organizations[0].id]),pendingBefore,
+        "Denied revoke must leave the exact real pending invitation unchanged")
       assert.deepEqual(await snapshot(),before,
         "Denied role-change/invitation-revoke cannot write domain audit/outbox")
       process.stdout.write("PASS B22 protected Owner mutation negatives: role-only Owner HTTP 403 on membership role-change and invitation revoke; membership/invitation states and canonical audit/outbox unchanged\n")
@@ -2998,6 +3020,48 @@ export default async function({container}:any){
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
     }
+
+    // Positive authorization for the *same* pending invitation. The real
+    // protected Alpha Owner now revokes it through browser HTTPS/CSRF and
+    // the existing Medusa workflow. No test-only SQL mutation of the invite.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    const authorizedRevoke=await browser.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      const response=await fetch('/personal/invitations',{
+        method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify(${JSON.stringify({
+          action:"revoke",organization_id:organizations[0].id,
+          invitation_id:pendingInvite.id
+        })})
+      })
+      if(response.status!==200)return {status:response.status}
+      const data=await response.json()
+      return {status:response.status,id:data.invitation?.id,
+        state:data.invitation?.status,revoked:!!data.invitation?.revoked_at}
+    })()`)
+    assert.deepEqual(authorizedRevoke,{
+      status:200,id:pendingInvite.id,state:"revoked",revoked:true
+    },"Protected Owner must revoke the same real pending invitation via HTTPS")
+    const revokedInvite=await q(`select id,status,revoked_at
+      from da_organization_invitation where id=$1 and organization_id=$2`,
+      [pendingInvite.id,organizations[0].id])
+    assert.equal(revokedInvite.length,1)
+    assert.equal(revokedInvite[0].status,"revoked")
+    assert.ok(revokedInvite[0].revoked_at)
+    const revokeEvents=await q(`select e.action,e.actor_person_id,e.organization_id,
+      e.target_id,x.id outbox_id from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.target_id=$2
+        and e.action='organization.invitation_revoked'`,
+      [organizations[0].id,pendingInvite.id])
+    assert.equal(revokeEvents.length,1,
+      "Exactly one canonical invitation revocation audit/outbox is required")
+    assert.equal(revokeEvents[0].actor_person_id,A.person)
+    assert.equal(revokeEvents[0].organization_id,organizations[0].id)
+    assert.equal(revokeEvents[0].target_id,pendingInvite.id)
+    process.stdout.write("PASS B22 protected Owner management: real pending invitation HTTP 403 for role-only Owner with no DB/audit mutation; same invitation HTTPS 200 revoked by protected Owner with single audit/outbox\n")
 
     // Positive read-back for the SAME scoped endpoints: a genuine protected
     // Alpha Owner and a current ordinary Alpha Admin remain allowed. Use only

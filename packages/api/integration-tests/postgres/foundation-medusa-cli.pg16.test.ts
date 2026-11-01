@@ -159,6 +159,8 @@ async function run(){
           "Missing real role-only Owner membership role-change + invitation revoke 403 / no-write acceptance")
         assert.ok(result.includes("PASS B22 protected Owner management: active role-only Owner 403 membership/invitation/audit/Store reads, invitation create and membership revoke; no invitations, membership or audit/outbox writes"),
           "Missing role-only Owner HTTP/PG16 management and privacy negative evidence")
+        assert.ok(result.split("\n").includes("PASS B22 protected Owner management: real pending invitation HTTP 403 for role-only Owner with no DB/audit mutation; same invitation HTTPS 200 revoked by protected Owner with single audit/outbox"),
+          "Missing real pending invitation, denied role-only Owner and authorized protected Owner revoke/PG16 audit evidence")
         assert.ok(result.includes("PASS B22 protected Owner management: verified protected Owner and ordinary Admin both retain private membership/invitation reads after role-only denial"),
           "Missing protected Owner and ordinary Admin positive readback evidence")
         assert.ok(result.includes("PASS B22 Owner role policy: narrowed buyer.purchase denies real HTTPS and PG16 final checkout L with zero OrderGroup; default restored"),
