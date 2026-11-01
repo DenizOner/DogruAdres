@@ -127,15 +127,23 @@ async function run(){
         // verification child has pre-existing SMTP/negative test fixtures.
         const suffix=randomBytes(8).toString("hex")
         const task:NodeJS.ProcessEnv={...nativeEnv,REDIS_URL:undefined,
+          ...(process.env.B22_ADMIN_SMTP==="true"?{
+            DOGRUADRES_SMTP_ENCRYPTION_KEY:randomBytes(32).toString("hex"),
+            B22_SMTP_CANARY:"b22-smtp-"+randomBytes(24).toString("hex"),
+            SMTP_ENABLED:"false",SMTP_HOST:"smtp.b22.example.invalid",
+            SMTP_FROM_EMAIL:"b22@example.invalid",SMTP_PASSWORD:undefined,
+          }:{}),
           B22_UI_EMAIL_A:"b22-a-"+suffix+"@example.invalid",
           B22_UI_EMAIL_B:"b22-b-"+suffix+"@example.invalid",
           B22_UI_PASSWORD_A:randomBytes(32).toString("base64url"),
           B22_UI_PASSWORD_B:randomBytes(32).toString("base64url"),
-          B06_EVIDENCE_DIR:join(process.env.RUNNER_TEMP??"/not-authorized","b22-ui-r1-evidence")
+          B06_EVIDENCE_DIR:join(process.env.RUNNER_TEMP??"/not-authorized",
+            process.env.B22_ADMIN_SMTP==="true"?"b22-admin-smtp-evidence":"b22-ui-r1-evidence")
         }
         function invoke(file:string,env:NodeJS.ProcessEnv,direct=false){
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
             cwd:process.cwd(),env,encoding:"utf8",timeout:210000,maxBuffer:3*1024*1024})
+          if(task.B22_SMTP_CANARY)assert.ok(!String(child.stdout??"").concat(String(child.stderr??"")).includes(task.B22_SMTP_CANARY),"SMTP canary leaked to child logs")
           const valid=String(child.stdout??"").split("\n")
             .filter(x=>/^PASS B22 Chrome:|^PASS B22 native organization\.read role policy:|^PASS B22 Owner role policy:|^PASS B22 protected Owner mutation negatives:|^PASS B22 protected Owner management:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^OBSERVED B22 native Cart TTL mismatch:|^PASS B22 native Mercur product workflow:|^PASS B22 audit worker:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
           if(child.error||child.status!==0)
@@ -149,6 +157,10 @@ async function run(){
         assert.ok(invoke("./integration-tests/postgres/b06-activation.pg16.ts",task,true).includes("PASS B06 disposable native activation"))
         const result=invoke(script,{...task,DOGRUADRES_MFA_RUNTIME_ENABLED:"true",
           DOGRUADRES_MFA_SETTINGS_ENABLED:"true",DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true"})
+        if(process.env.B22_ADMIN_SMTP==="true"){
+          assert.ok(result.includes("PASS B22 Chrome: native Admin SMTP same-origin MFA/grant GET200"))
+          return
+        }
         for(const target of ["active","missing","foreign","revoked"])
           assert.ok(result.split("\n").includes("PASS B22 Chrome: membership non-disclosure "+target+
             " target HTTP403 identical safe body; PG16 membership/canonical audit/audit outbox/security outbox unchanged"),

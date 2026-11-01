@@ -10,7 +10,7 @@ import {randomBytes,createHash} from "node:crypto"
 import {createServer as tlsServer,request as tlsRequest} from "node:https"
 import {createServer as plainServer} from "node:http"
 import {dirname} from "node:path"
-import {mkdtempSync,readFileSync,rmSync} from "node:fs"
+import {mkdtempSync,readFileSync,rmSync,mkdirSync,writeFileSync} from "node:fs"
 import {join} from "node:path"
 import {tmpdir} from "node:os"
 import {spawn,spawnSync} from "node:child_process"
@@ -23,6 +23,130 @@ import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,l
 import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
+
+// Uses only the existing Mercur module middleware and its real built dashboard.
+// This dedicated child terminates after invalidating its two genuine MFA sessions.
+async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:any,
+  person:string, otherPerson:string, q:(sql:string,args?:unknown[])=>Promise<any[]>) {
+  assert.equal(container.resolve("admin_ui").getServingMode(),"static")
+  const secret=process.env.B22_SMTP_CANARY!
+  assert.match(secret,/^b22-smtp-[0-9a-f]{48}$/)
+  browser.secretCanary=secret;denied.secretCanary=secret
+  const path="/dashboard/settings/smtp"
+  const evidence=process.env.B06_EVIDENCE_DIR!
+  assert.equal(evidence,join(process.env.RUNNER_TEMP!,"b22-admin-smtp-evidence"))
+  mkdirSync(evidence,{recursive:true})
+  const open=async(b:B06Chrome)=>{
+    await b.send("Page.navigate",{url:b.origin+path})
+    await b.wait("document.body.textContent.includes('Platform SMTP Ayarları')")
+    assert.equal(await b.eval("location.pathname"),path)
+  }
+  const read=async(b:B06Chrome)=>b.eval(`(async()=>{const r=await fetch('/personal/platform/smtp');return {status:r.status,body:await r.json()}})()`)
+  const hidden=async(b:B06Chrome)=>b.wait("!document.querySelector('#smtp-host') && !document.body.textContent.includes('Yapılandırma yükleniyor')")
+  const digest=()=>q("select id,enabled,host,port,security,username,password_encrypted,from_email,from_name,version from da_platform_smtp_settings order by id")
+  const before=await digest()
+  assert.deepEqual(before,[],"Fresh dedicated SMTP database")
+  // Negative checks precede any valid settings write.
+  await open(denied);await hidden(denied)
+  assert.equal((await read(denied)).status,403)
+  assert.deepEqual(await digest(),before)
+  const grant="da_staff_smtp_"+randomBytes(12).toString("hex")
+  await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
+    values($1,$2,'platform.smtp.manage','platform',$2,'B22 disposable SMTP acceptance fixture')`,[grant,person])
+  await open(browser)
+  await browser.wait("!!document.querySelector('#smtp-host')")
+  const first=await read(browser)
+  assert.equal(first.status,200);assert.equal(first.body.can_manage,true)
+  assert.equal(first.body.settings.version,0)
+  assert.equal(await browser.eval("document.querySelector('#smtp-host').value"),first.body.settings.host)
+  // DOM inputs and submit use real Chrome input events. SMTP remains disabled;
+  // neither the separate send-test control nor any provider is invoked.
+  if(await browser.eval("document.querySelector('#smtp-toggle').getAttribute('aria-checked')==='true'"))
+    await browser.click("#smtp-toggle")
+  const replace=async(selector:string,value:string)=>{
+    await browser.click(selector)
+    await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:"a",code:"KeyA",modifiers:2})
+    await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:"a",code:"KeyA",modifiers:2})
+    await browser.send("Input.insertText",{text:value})
+  }
+  await replace("#smtp-host","smtp.b22.example.invalid")
+  await replace("#smtp-from-email","b22@example.invalid")
+  await replace("#smtp-pass",secret)
+  await browser.click("form button[type=submit]")
+  await browser.wait("document.body.textContent.includes('Ayar sürümü: 1')")
+  const saved=await digest()
+  assert.equal(saved.length,1);assert.equal(saved[0].enabled,false)
+  assert.equal(saved[0].host,"smtp.b22.example.invalid");assert.equal(saved[0].version,1)
+  assert.match(saved[0].password_encrypted,/^v1:/)
+  assert.ok(!JSON.stringify(saved).includes(secret),"No plaintext persisted")
+  const safe=await read(browser)
+  assert.equal(safe.status,200);assert.equal(safe.body.settings.has_password,true)
+  assert.ok(!JSON.stringify(safe).includes(secret))
+  assert.ok(!('password' in safe.body.settings));assert.ok(!('password_encrypted' in safe.body.settings))
+  await browser.send("Page.reload",{ignoreCache:true})
+  await browser.wait("document.body.textContent.includes('Ayar sürümü: 1')")
+  assert.equal(await browser.eval("document.querySelector('#smtp-host').value"),saved[0].host)
+  assert.equal(await browser.eval("document.querySelector('#smtp-pass').value"),"")
+  await browser.screenshot(join(evidence,"saved-refreshed.png"))
+  // A stale real HTTP writer must not overwrite the newer browser save.
+  const stale=await browser.eval(`(async()=>{const s=await(await fetch('/personal/session')).json();
+    const r=await fetch('/personal/platform/smtp',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+    body:JSON.stringify({action:'save',enabled:false,host:'stale.example.invalid',port:465,security:'ssl',from_email:'b22@example.invalid',expected_version:0})});
+    return {status:r.status,body:await r.json()}})()`)
+  assert.equal(stale.status,409);assert.deepEqual(await digest(),saved)
+  // Real database read failure, not a mocked successful API or component.
+  await q("alter table da_platform_smtp_settings rename to b22_smtp_settings_fault")
+  try {
+    await browser.send("Page.reload",{ignoreCache:true});await hidden(browser)
+    assert.equal((await read(browser)).status,500)
+  } finally {await q("alter table b22_smtp_settings_fault rename to da_platform_smtp_settings")}
+  const enabled=process.env.DOGRUADRES_IDENTITY_ENABLED
+  try {
+    process.env.DOGRUADRES_IDENTITY_ENABLED="false"
+    await browser.send("Page.reload",{ignoreCache:true});await hidden(browser)
+    assert.equal((await read(browser)).status,503)
+  } finally {process.env.DOGRUADRES_IDENTITY_ENABLED=enabled}
+  // Revoked grant denies even the original strong, genuine session.
+  await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[grant])
+  await browser.send("Page.reload",{ignoreCache:true});await hidden(browser)
+  assert.equal((await read(browser)).status,403)
+  // Give B an explicit grant, prove its real MFA session, then expire it.
+  await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
+    values($1,$2,'platform.smtp.manage','platform',$2,'B22 disposable expiry fixture')`,[grant+"_b",otherPerson])
+  assert.equal((await read(denied)).status,200)
+  const bHash=createHash('sha256').update(await denied.token()).digest('hex')
+  await q("update da_browser_session set created_at=clock_timestamp()-interval '30 days' where id=$1",[bHash])
+  assert.equal((await read(denied)).status,403)
+  await denied.send("Page.reload",{ignoreCache:true});await hidden(denied)
+  // A receives a new explicit fixture grant; logout then revokes its current
+  // genuine cookie. No session is fabricated or restored by the test.
+  await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
+    values($1,$2,'platform.smtp.manage','platform',$2,'B22 disposable revocation fixture')`,[grant+"_a",person])
+  assert.equal((await read(browser)).status,200)
+  const aHash=createHash('sha256').update(await browser.token()).digest('hex')
+  await q("update da_browser_session set status='revoked' where id=$1",[aHash])
+  assert.equal((await read(browser)).status,403)
+  await browser.send("Page.reload",{ignoreCache:true});await hidden(browser)
+  assert.deepEqual(await digest(),saved)
+  for(const b of [browser,denied]){
+    for(const r of b.http.filter(r=>r.path==='/personal/platform/smtp')){
+      const body=await b.send('Network.getResponseBody',{requestId:r.requestId})
+      const text=body.base64Encoded?Buffer.from(body.body,'base64').toString():body.body
+      assert.ok(!text.includes(secret)&&!text.includes(saved[0].password_encrypted),"Secret in browser response")
+    }
+    assert.equal(b.secretLeaks,false,"Secret in Chrome protocol/console")
+  }
+  assert.ok(browser.http.some(r=>r.path===path&&r.status===200&&r.tls))
+  assert.ok(browser.http.some(r=>r.path==='/personal/platform/smtp'&&r.method==='POST'&&r.status===200))
+  writeFileSync(join(evidence,"acceptance.json"),JSON.stringify({
+    source:process.env.GITHUB_SHA,sameOrigin:true,nativeModule:"admin_ui",servingMode:"static",
+    syntheticOnly:true,smtpEnabled:false,versionBefore:0,versionAfter:1,
+    scenarios:["MFA and explicit grant GET200","browser save and PostgreSQL readback","refresh",
+      "stale409 unchanged","unauthorized403","expired403","revoked403","GET500 form hidden","GET503 form hidden"],
+    http:[...browser.http,...denied.http].map(({method,path,status,tls})=>({method,path,status,tls})),
+  },null,2))
+  process.stdout.write("PASS B22 Chrome: native Admin SMTP same-origin MFA/grant GET200, browser save/version/PG16/refresh, stale409 unchanged, unauthorized/expired/revoked403, real500/503 form hidden; disabled synthetic SMTP, no send\n")
+}
 
 async function verifyMembershipNonDisclosure({
   organizationId,activeId,foreignId,personId,browser,foundation,q
@@ -656,6 +780,12 @@ export default async function({container}:any){
     const browser=new B06Chrome(host,"A");browsers.push(browser)
     await browser.start(crt)
     await browser.login(A.email,A.password,A.person)
+    if(process.env.B22_ADMIN_SMTP==="true"){
+      const other=new B06Chrome(host,"B");browsers.push(other)
+      await other.start(crt);await other.login(B.email,B.password,B.person)
+      await verifyAdminSmtp(browser,other,container,A.person,B.person,q)
+      return
+    }
     // Approved personal workspace has no editable launcher. Its retired
     // Person-only API must not read or write historical preference rows.
     const legacyPrefsBefore=await q("select id,person_id,app_ids,collapsed_ids,version from da_launcher_preference order by id")
