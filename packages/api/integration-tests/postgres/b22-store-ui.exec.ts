@@ -56,6 +56,12 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   }
   const read=async(b:B06Chrome)=>b.eval(`(async()=>{const r=await fetch('/personal/platform/smtp');return {status:r.status,body:await r.json()}})()`)
   const hidden=async(b:B06Chrome)=>b.wait("!document.querySelector('#smtp-host') && !document.body.textContent.includes('Yapılandırma yükleniyor')")
+  const reload=async(b:B06Chrome,status:number)=>{
+    const start=b.http.length
+    await b.send("Page.reload",{ignoreCache:true})
+    await until(async()=>b.http.slice(start).some(r=>r.path==='/personal/platform/smtp'&&r.method==='GET'&&r.status===status),
+      20000,'New document SMTP GET '+status)
+  }
   const digest=()=>q("select id,enabled,host,port,security,username,password_encrypted,from_email,from_name,version from da_platform_smtp_settings order by id")
   const before=await digest()
   assert.deepEqual(before,[],"Fresh dedicated SMTP database")
@@ -96,7 +102,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   assert.equal(safe.status,200);assert.equal(safe.body.settings.has_password,true)
   assert.ok(!JSON.stringify(safe).includes(secret))
   assert.ok(!('password' in safe.body.settings));assert.ok(!('password_encrypted' in safe.body.settings))
-  await browser.send("Page.reload",{ignoreCache:true})
+  await reload(browser,200)
   await browser.wait("document.body.textContent.includes('Ayar sürümü: 1')")
   assert.equal(await browser.eval("document.querySelector('#smtp-host').value"),saved[0].host)
   assert.equal(await browser.eval("document.querySelector('#smtp-pass').value"),"")
@@ -110,18 +116,18 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   // Real database read failure, not a mocked successful API or component.
   await q("alter table da_platform_smtp_settings rename to b22_smtp_settings_fault")
   try {
-    await browser.send("Page.reload",{ignoreCache:true});await hidden(browser)
+    await reload(browser,500);await hidden(browser)
     assert.equal((await read(browser)).status,500)
   } finally {await q("alter table b22_smtp_settings_fault rename to da_platform_smtp_settings")}
   const enabled=process.env.DOGRUADRES_IDENTITY_ENABLED
   try {
     process.env.DOGRUADRES_IDENTITY_ENABLED="false"
-    await browser.send("Page.reload",{ignoreCache:true});await hidden(browser)
+    await reload(browser,503);await hidden(browser)
     assert.equal((await read(browser)).status,503)
   } finally {process.env.DOGRUADRES_IDENTITY_ENABLED=enabled}
   // Revoked grant denies even the original strong, genuine session.
   await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[grant])
-  await browser.send("Page.reload",{ignoreCache:true});await hidden(browser)
+  await reload(browser,403);await hidden(browser)
   assert.equal((await read(browser)).status,403)
   // Give B an explicit grant, prove its real MFA session, then expire it.
   await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
@@ -130,7 +136,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   const bHash=createHash('sha256').update(await denied.token()).digest('hex')
   await q("update da_browser_session set created_at=clock_timestamp()-interval '30 days' where id=$1",[bHash])
   assert.equal((await read(denied)).status,403)
-  await denied.send("Page.reload",{ignoreCache:true});await hidden(denied)
+  await reload(denied,403);await hidden(denied)
   // A receives a new explicit fixture grant; a terminal DB fixture then revokes
   // its genuine session. No session is fabricated or restored by the test.
   await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
@@ -139,7 +145,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   const aHash=createHash('sha256').update(await browser.token()).digest('hex')
   await q("update da_browser_session set status='revoked' where id=$1",[aHash])
   assert.equal((await read(browser)).status,403)
-  await browser.send("Page.reload",{ignoreCache:true});await hidden(browser)
+  await reload(browser,403);await hidden(browser)
   assert.deepEqual(await digest(),saved)
   for(const b of [browser,denied]){
     for(const r of b.http.filter(r=>r.path==='/personal/platform/smtp')){
