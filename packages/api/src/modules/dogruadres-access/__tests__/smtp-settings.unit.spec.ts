@@ -66,7 +66,7 @@ describe("smtp-settings unit tests", () => {
       execute: jest.fn().mockImplementation((sql: string, params: any[] = []) => {
         executedQueries.push({ sql, params })
         if (sql.includes("select pg_advisory_xact_lock")) return Promise.resolve([])
-        if (sql.includes("from da_platform_smtp_settings where id='current'")) return Promise.resolve([])
+        if (/from\s+da_platform_smtp_settings\s+where\s+id='current'/.test(sql)) return Promise.resolve([])
         if (sql.includes("insert into da_platform_smtp_settings")) return Promise.resolve([])
         if (sql.includes("insert into da_audit_event")) return Promise.resolve([])
         if (sql.includes("insert into da_security_outbox")) return Promise.resolve([])
@@ -107,10 +107,12 @@ describe("smtp-settings unit tests", () => {
   })
 
   it("throws SmtpConcurrentUpdateError when version does not match expected_version", async () => {
+    let versionRowRead = false
     const mockDb: SecuritySql = {
       execute: jest.fn().mockImplementation((sql: string) => {
         if (sql.includes("select pg_advisory_xact_lock")) return Promise.resolve([])
-        if (sql.includes("from da_platform_smtp_settings where id='current'")) {
+        if (/from\s+da_platform_smtp_settings\s+where\s+id='current'/.test(sql)) {
+          versionRowRead = true
           return Promise.resolve([
             {
               enabled: true,
@@ -138,5 +140,6 @@ describe("smtp-settings unit tests", () => {
     await expect(store.updateSettings(input, dummyActor)).rejects.toThrow(
       SmtpConcurrentUpdateError
     )
+    expect(versionRowRead).toBe(true)
   })
 })

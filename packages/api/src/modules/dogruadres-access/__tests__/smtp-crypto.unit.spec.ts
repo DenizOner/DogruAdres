@@ -65,7 +65,7 @@ describe("smtp-crypto unit tests", () => {
     const encrypted = encryptSmtpPassword(password)
     const parts = encrypted.split(":")
     // Corrupt auth tag
-    parts[2] = parts[2].slice(0, -2) + "00"
+    parts[2] = (parts[2][0] === "0" ? "1" : "0") + parts[2].slice(1)
     const tampered = parts.join(":")
 
     expect(() => decryptSmtpPassword(tampered)).toThrow(SmtpCryptoError)
