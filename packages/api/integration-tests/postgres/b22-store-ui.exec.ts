@@ -1806,8 +1806,8 @@ export default async function({container}:any){
     assert.equal(await foundation.authorizeBuyerCheckout(
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Restored approved role default must allow the same attributed Cart")
-    process.stdout.write("PASS B22 Owner role policy: narrowed buyer.purchase denies real HTTPS and PG16 final checkout L with zero OrderGroup; default restored\\n")
-    process.stdout.write("PASS B22 pre-revocation control: real Customer + immutable Beta Cart attribution + approved Gamma Store + active buyer.purchase passes Foundation L; zero-value Cart remains open\\n")
+    process.stdout.write("PASS B22 Owner role policy: narrowed buyer.purchase denies real HTTPS and PG16 final checkout L with zero OrderGroup; default restored\n")
+    process.stdout.write("PASS B22 pre-revocation control: real Customer + immutable Beta Cart attribution + approved Gamma Store + active buyer.purchase passes Foundation L; zero-value Cart remains open\n")
     // A real Owner's Store-specific Buyer Organization block must deny the
     // native Mercur completion at L, not only the read-only Seller scope.
     // Restore only this task-owned block before the separate permission race.
@@ -2971,7 +2971,7 @@ export default async function({container}:any){
     const restoredOwnerDraft=await get('/personal/product-drafts?organization_id='+organizations[0].id)
     assert.equal(restoredOwnerDraft.status,200)
     assert.ok(restoredOwnerDraft.body.stores.some((row:any)=>row.id===ownerStoreId))
-    process.stdout.write("PASS B22 Owner role policy: narrowed products.edit denies real HTTP POST and native PG16 product/intent writes, restored default lists approved Store\\n")
+    process.stdout.write("PASS B22 Owner role policy: narrowed products.edit denies real HTTP POST and native PG16 product/intent writes, restored default lists approved Store\n")
     await browser.wait("!document.getElementById('product-draft-panel').hidden")
     const draftTitle="B22 browser product draft "+rand
     await browser.input("#product-draft-form input[name=title]",draftTitle)
