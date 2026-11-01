@@ -2889,6 +2889,12 @@ export default async function({container}:any){
         "(select count(*)::int from da_audit_outbox x join da_audit_event e on e.id=x.source_audit_event_id where e.organization_id=$1) outboxes",
         [organizations[0].id]))[0]
       const before=await snapshot()
+      const beforeManager=await q(`select
+        (select count(*)::int from da_invitation where organization_id=$1) invitations,
+        (select count(*)::int from da_organization_membership where organization_id=$1) memberships,
+        (select status from da_organization_membership where id=$2) as target_status`,
+        [organizations[0].id,alphaMember.id])
+      assert.equal(beforeManager.length,1)
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       const token=await reviewer.token()
@@ -2908,6 +2914,42 @@ export default async function({container}:any){
         "productGrant:await send('/personal/store-product-permissions',{action:'grant',organization_id:org,seller_id:seller,membership_id:member}),"+
         "productRevoke:await send('/personal/store-product-permissions',{action:'revoke',organization_id:org,seller_id:seller,membership_id:member})"+
         "}})()"
+      // Same active but deliberately UNPROTECTED Owner fixture: no native
+      // role-only reader or management endpoint may accept its title.
+      // Use only this disposable PG16 database, existing authenticated Chrome,
+      // and the current server CSRF. Never echo invitation/session secrets.
+      const managerDenied=await reviewer.eval(`(async()=>{
+        const org=${JSON.stringify(organizations[0].id)}
+        const membership=${JSON.stringify(alphaMember.id)}
+        const session=await(await fetch('/personal/session')).json()
+        const post=async(path,value)=>{
+          const response=await fetch(path,{method:'POST',
+            headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+            body:JSON.stringify(value)})
+          return response.status
+        }
+        return {
+          memberships:(await fetch('/personal/memberships?organization='+org)).status,
+          invitations:(await fetch('/personal/invitations?organization='+org)).status,
+          audit:(await fetch('/personal/audit-timeline?organization='+org)).status,
+          stores:(await fetch('/personal/organization-stores?organization='+org)).status,
+          createInvite:await post('/personal/invitations',{action:'create',
+            organization_id:org,email:'unprotected-owner@example.invalid',role:'member'}),
+          revokeMember:await post('/personal/memberships',{action:'revoke',
+            organization_id:org,membership_id:membership})
+        }
+      })()`)
+      for(const [name,status] of Object.entries(managerDenied))
+        assert.equal(status,403,"Role-only Owner management/private read denied: "+name)
+      assert.deepEqual(await snapshot(),before,
+        "Unprotected Owner must not append any domain or audit/outbox writes")
+      const afterManager=await q(`select
+        (select count(*)::int from da_invitation where organization_id=$1) invitations,
+        (select count(*)::int from da_organization_membership where organization_id=$1) memberships,
+        (select status from da_organization_membership where id=$2) as target_status`,
+        [organizations[0].id,alphaMember.id])
+      assert.deepEqual(afterManager,beforeManager,
+        "Denied role-only Owner cannot change invitations or membership status")
       const denied=await reviewer.eval(script)
       for(const [name,status] of Object.entries(denied))
         assert.equal(status,403,"Role-only Owner denied: "+name)
@@ -2926,6 +2968,7 @@ export default async function({container}:any){
           buyer_organization_id:organizations[1].id}),null)
       assert.deepEqual(await snapshot(),before,
         "Role-only Owner must not persist permissions, block policy, audit or outboxes")
+      process.stdout.write("PASS B22 protected Owner management: active role-only Owner 403 membership/invitation/audit/Store reads, invitation create and membership revoke; no invitations, membership or audit/outbox writes\n")
       process.stdout.write("PASS B22 CR-03 real Chrome/HTTP/PG16: active unprotected Owner 403 for grants and listings; service denies block and revoke, zero audit/outbox writes\n")
     }finally{
       await q("update da_organization_membership set role='member',protected_owner=false,updated_at=clock_timestamp() where id=$1",[alphaMember.id])
