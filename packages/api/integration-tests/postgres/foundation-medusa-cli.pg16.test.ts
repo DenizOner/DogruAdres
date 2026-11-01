@@ -142,10 +142,10 @@ async function run(){
         }
         function invoke(file:string,env:NodeJS.ProcessEnv,direct=false){
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
-            cwd:process.cwd(),env,encoding:"utf8",timeout:210000,maxBuffer:3*1024*1024})
+            cwd:process.cwd(),env,encoding:"utf8",timeout:file.includes('b22-audit-worker.exec.ts')?360000:210000,maxBuffer:3*1024*1024})
           if(task.B22_SMTP_CANARY)assert.ok(!String(child.stdout??"").concat(String(child.stderr??"")).includes(task.B22_SMTP_CANARY),"SMTP canary leaked to child logs")
           const valid=String(child.stdout??"").split("\n")
-            .filter(x=>/^PASS B22 Chrome:|^PASS B22 native organization\.read role policy:|^PASS B22 Owner role policy:|^PASS B22 protected Owner mutation negatives:|^PASS B22 protected Owner management:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^OBSERVED B22 native Cart TTL mismatch:|^PASS B22 native Mercur product workflow:|^PASS B22 audit worker:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
+            .filter(x=>/^PASS B22 Chrome:|^PASS B22 native organization\.read role policy:|^PASS B22 Owner role policy:|^PASS B22 protected Owner mutation negatives:|^PASS B22 protected Owner management:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^OBSERVED B22 native Cart TTL mismatch:|^PASS B22 native Mercur product workflow:|^PASS B22 audit worker:|^PASS B22 audit real ACK:|^PASS B22 audit natural lease:|^PASS B22 audit native scheduler and crash restart:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
           if(child.error||child.status!==0)
             throw Error("B22 dedicated task-only child stage failed: "+sanitized(
               String(child.error??"exit "+child.status)+"\n"+String(child.stderr??"")+"\n"+String(child.stdout??"")))
@@ -217,6 +217,10 @@ async function run(){
             DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true"})
         assert.ok(audit.includes("PASS B22 audit worker: real Medusa Access/Index job delivered canonical Staff events, ACK and single Index entry on lost-ACK replay; crash recovery NOT TESTED"),
           "Missing native worker crash/Index/ACK/replay evidence")
+        for(const proof of ["PASS B22 audit real ACK: committed receipt lost,",
+          "PASS B22 audit natural lease: DB clock 60s,",
+          "PASS B22 audit native scheduler and crash restart: true Medusa cron,"])
+          assert.ok(audit.includes(proof),"Missing genuine native audit recovery: "+proof)
       }
 
       if (scope === "b02") {
