@@ -19,11 +19,20 @@ describe("M0 B12 safe invitation resend", () => {
     else process.env.DOGRUADRES_INVITATION_SECRET = originalSecret
   })
 
-  function setup() {
+  function setup(protectedOwner = true) {
     const service = Object.create(AccessService.prototype) as AccessService
-    const tx = { execute: jest.fn(async () => []) }
+    // The real service checks a live, transaction-bound protected Owner SQL
+    // proof BEFORE the advisory lock, existing invite lookup and any mutation.
+    // Only the exact protected-Owner query may receive a synthetic match.
+    const tx = { execute: jest.fn(async (sql:string) =>
+      sql.includes("m.protected_owner=true")
+        ? protectedOwner ? [{id:"damem_synthetic_owner"}] : []
+        : []) }
     const context = { transactionManager: tx } as unknown as Context
-    jest.spyOn(service as any, "getActiveMembership").mockResolvedValue({role:"owner"})
+    jest.spyOn(service as any, "getActiveMembership").mockResolvedValue({
+      role:"owner",status:"active",protected_owner:protectedOwner,
+      person_id:"daprs_owner",organization_id:"daorg_test",
+    })
     jest.spyOn(service as any, "getOrganization").mockResolvedValue({id:"daorg_test"})
     jest.spyOn(service as any, "listPeople").mockResolvedValue([{id:"daprs_owner"}])
     const create = jest.spyOn(service as any, "createInvitations").mockResolvedValue([])
@@ -45,6 +54,10 @@ describe("M0 B12 safe invitation resend", () => {
     const result = await service.createOrganizationInvitation(input,context)
     expect(result).toEqual(existing)
     expect(tx.execute).toHaveBeenCalledWith(
+      expect.stringContaining("m.protected_owner=true"),
+      ["daprs_owner","daorg_test"]
+    )
+    expect(tx.execute).toHaveBeenCalledWith(
       expect.stringContaining("pg_advisory_xact_lock"),
       [JSON.stringify(["daorg_test","recipient@example.test"])]
     )
@@ -54,7 +67,7 @@ describe("M0 B12 safe invitation resend", () => {
   })
 
   it("fails closed on duplicate pending links without mutations", async () => {
-    const {service,context,create}=setup()
+    const {service,context,create,update,audit}=setup()
     const make = (id:string) => ({
       id,role:"member",status:"pending",expires_at:new Date(Date.now()+60_000),
       token_hash:hashInvitationToken(deriveInvitationToken(id)),
@@ -63,10 +76,12 @@ describe("M0 B12 safe invitation resend", () => {
     await expect(service.createOrganizationInvitation(input,context))
       .rejects.toThrow("Multiple active invitations require authorized review")
     expect(create).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(audit).not.toHaveBeenCalled()
   })
 
   it("never resends a token that no longer matches the stored hash", async () => {
-    const {service,context,create}=setup()
+    const {service,context,create,update,audit}=setup()
     jest.spyOn(service as any,"listInvitations").mockResolvedValue([{
       id:"dainv_old",role:"member",status:"pending",
       expires_at:new Date(Date.now()+60_000),
@@ -75,5 +90,23 @@ describe("M0 B12 safe invitation resend", () => {
     await expect(service.createOrganizationInvitation(input,context))
       .rejects.toThrow("Existing invitation cannot be safely resent")
     expect(create).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(audit).not.toHaveBeenCalled()
+  })
+
+  it("rejects a role-only, unprotected Owner before reading or writing invitations", async()=>{
+    const {service,tx,context,create,update,audit}=setup(false)
+    const list=jest.spyOn(service as any,"listInvitations").mockResolvedValue([])
+    await expect(service.createOrganizationInvitation(input,context))
+      .rejects.toThrow("Active protected Owner or Admin membership is required")
+    expect(tx.execute).toHaveBeenCalledWith(
+      expect.stringContaining("m.protected_owner=true"),
+      ["daprs_owner","daorg_test"]
+    )
+    expect(tx.execute).toHaveBeenCalledTimes(1)
+    expect(list).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(audit).not.toHaveBeenCalled()
   })
 })
