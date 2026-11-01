@@ -1785,6 +1785,28 @@ export default async function({container}:any){
     assert.equal(await foundation.authorizeBuyerCheckout(
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Before revocation L must allow the exact attributed Beta→Gamma cart")
+    // On THIS disposable Medusa/PG16 execution only, narrow the trusted
+    // default Owner role policy, without altering Member grants or DB data.
+    // HTTP and final one-statement checkout L must both deny the same
+    // otherwise-eligible Cart; the old policy is restored in finally.
+    const priorBuyerOwnerActions=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    try{
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="products.edit"
+      const narrowed=await readNativeCart(buyerCart(organizations[1].id,hookProbeCart.id))
+      assert.equal(narrowed.status,403,"Owner buyer.purchase removed from trusted role policy must deny HTTP")
+      assert.equal(await foundation.authorizeBuyerCheckout(
+        hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
+      ),false,"Owner role policy must also deny real final PostgreSQL checkout L")
+      assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
+        [hookProbeCart.id]))[0].n,0)
+    }finally{
+      if(priorBuyerOwnerActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=priorBuyerOwnerActions
+    }
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
+    ),true,"Restored approved role default must allow the same attributed Cart")
+    process.stdout.write("PASS B22 Owner role policy: narrowed buyer.purchase denies real HTTPS and PG16 final checkout L with zero OrderGroup; default restored\\n")
     process.stdout.write("PASS B22 pre-revocation control: real Customer + immutable Beta Cart attribution + approved Gamma Store + active buyer.purchase passes Foundation L; zero-value Cart remains open\\n")
     // A real Owner's Store-specific Buyer Organization block must deny the
     // native Mercur completion at L, not only the read-only Seller scope.
@@ -2916,6 +2938,40 @@ export default async function({container}:any){
     assert.equal(ownerDraftAccess.status,200)
     assert.ok(ownerDraftAccess.body.stores.some((row:any)=>row.id===ownerStoreId))
     assert.equal((await q("select count(*)::int n from da_store_product_permission where person_id=$1 and organization_id=$2 and seller_id=$3",[A.person,organizations[0].id,ownerStoreId]))[0].n,0)
+    const narrowedDraftKey="dapd_"+randomBytes(16).toString("hex")
+    const narrowedDraftTitle="B22 denied Owner role product "+rand
+    const priorProductOwnerActions=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    try{
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase"
+      const deniedRead=await get('/personal/product-drafts?organization_id='+organizations[0].id)
+      assert.equal(deniedRead.status,200)
+      assert.deepEqual(deniedRead.body.stores,[],
+        "With products.edit removed, no Store can be advertised for Owner editing")
+      const deniedWrite=await browser.eval(`(async()=>{
+        const session=await(await fetch('/personal/session')).json()
+        const r=await fetch('/personal/product-drafts',{
+          method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+          body:JSON.stringify(${JSON.stringify({
+            request_id:narrowedDraftKey,organization_id:organizations[0].id,
+            seller_id:ownerStoreId,title:narrowedDraftTitle
+          })})
+        })
+        return r.status
+      })()`)
+      assert.equal(deniedWrite,403,"Narrowed Owner products.edit must deny real HTTP POST")
+      assert.equal((await q("select count(*)::int n from da_product_draft_request where id=$1",
+        [narrowedDraftKey]))[0].n,0,
+        "Denied Owner edit must reserve no product intent")
+      assert.equal((await q("select count(*)::int n from product where title=$1",
+        [narrowedDraftTitle]))[0].n,0,"Denied Owner edit cannot create native product")
+    }finally{
+      if(priorProductOwnerActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=priorProductOwnerActions
+    }
+    const restoredOwnerDraft=await get('/personal/product-drafts?organization_id='+organizations[0].id)
+    assert.equal(restoredOwnerDraft.status,200)
+    assert.ok(restoredOwnerDraft.body.stores.some((row:any)=>row.id===ownerStoreId))
+    process.stdout.write("PASS B22 Owner role policy: narrowed products.edit denies real HTTP POST and native PG16 product/intent writes, restored default lists approved Store\\n")
     await browser.wait("!document.getElementById('product-draft-panel').hidden")
     const draftTitle="B22 browser product draft "+rand
     await browser.input("#product-draft-form input[name=title]",draftTitle)

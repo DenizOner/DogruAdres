@@ -1,6 +1,6 @@
 import { IdentitySessions, IdentityAccessDenied } from "../identity-session"
 import { authorizedLegalSellerIds, authorizedProductEditScope, verifiedStoreProductEditGrant } from "../legal-store-ownership"
-import { organizationActionAllowed, ownerRoleAllows, DEFAULT_OWNER_ACTIONS } from "../role-action-policy"
+import { organizationActionAllowed, ownerRoleAllows, DEFAULT_OWNER_ACTIONS, configuredOwnerActions } from "../role-action-policy"
 import { authorizedBuyerOrganization } from "../buyer-permission"
 
 describe("B22 legal Organization ownership candidate gate (SQL-mock, NOT PostgreSQL acceptance)", () => {
@@ -129,5 +129,35 @@ describe("B22 shared Owner action policy (pure decision, NOT live policy adminis
     expect(execute.mock.calls[0][0]).toContain("protected_owner=true")
     expect(execute).toHaveBeenCalledTimes(1)
     jest.restoreAllMocks()
+  })
+})
+
+describe("B22 trusted Owner role allowlist configuration (no browser setting or DB writer)",()=>{
+  const previous=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+  afterEach(()=>{
+    if(previous===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previous
+  })
+  it("preserves approved defaults when omitted, and fails closed for malformed or unknown actions",()=>{
+    delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    expect(configuredOwnerActions()).toEqual(DEFAULT_OWNER_ACTIONS)
+    expect(ownerRoleAllows("buyer.purchase")).toBe(true)
+    for(const raw of ["", "admin", "buyer.purchase,buyer.purchase",
+      " buyer.purchase", "buyer.purchase,platform.smtp.manage"]){
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=raw
+      expect(configuredOwnerActions()).toEqual([])
+      expect(ownerRoleAllows("buyer.purchase")).toBe(false)
+      expect(ownerRoleAllows("products.edit")).toBe(false)
+    }
+  })
+  it("narrows actions centrally without using a personal grant or unprotected role bypass",()=>{
+    process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="products.edit"
+    expect(ownerRoleAllows("buyer.purchase")).toBe(false)
+    expect(ownerRoleAllows("products.edit")).toBe(true)
+    expect(organizationActionAllowed("owner","buyer.purchase",true,true)).toBe(false)
+    process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase"
+    expect(ownerRoleAllows("buyer.purchase")).toBe(true)
+    expect(ownerRoleAllows("products.edit")).toBe(false)
+    expect(organizationActionAllowed("owner","products.edit",false,true)).toBe(false)
   })
 })
