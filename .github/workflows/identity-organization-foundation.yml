@@ -71,6 +71,14 @@ jobs:
         # typecheck exceeds Node's default V8 call stack (RangeError) on
         # current B22 source; provide bounded stack headroom, not --skipCheck.
         run: node --stack-size=4096 ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json
+      - name: Admin dashboard TypeScript and Vite build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: apps/admin
+        run: |
+          bun run build
+          test -s dist/index.html
+          grep -Fq '/dashboard/assets/' dist/index.html
+          test -n "$(find dist/assets -maxdepth 1 -type f -print -quit)"
       - name: Token privacy and native SMTP notification regressions
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
