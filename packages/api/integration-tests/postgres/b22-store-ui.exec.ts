@@ -3319,6 +3319,18 @@ export default async function({container}:any){
       assert.equal(stillPersonal.status,200,
         "Gamma Owner revoke must not terminate A's independent Alpha Person session")
       await browser.select(organizations[0].name,"owner")
+      // Gamma Owner membership was revoked above. The privacy observer
+      // compares the full Organization set against the one loaded at login;
+      // its correct fail-closed behavior can conceal a stale workspace at the
+      // next 5-second check. Reload ONLY after selecting still-authorized
+      // Alpha, so the browser obtains the fresh server-authorized scope.
+      // Never disable the observer or keep using a stale Organization view.
+      await browser.send("Page.reload",{ignoreCache:true})
+      await browser.wait(`(()=>{
+        if(document.getElementById('workspace').hidden)return false
+        const detail=JSON.parse(document.getElementById('detail').textContent||'{}')
+        return detail.id===${JSON.stringify(organizations[0].id)} && detail.role==='owner'
+      })()`)
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
     }
