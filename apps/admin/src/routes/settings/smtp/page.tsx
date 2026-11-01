@@ -23,7 +23,6 @@ export const config = {
 }
 
 interface SmtpSettings {
-  id: string
   enabled: boolean
   host: string
   port: number
@@ -33,7 +32,23 @@ interface SmtpSettings {
   from_name: string | null
   has_password: boolean
   version: number
-  updated_at: string
+  updated_at?: string
+}
+
+// Validate the read contract, including the backend's version-zero bootstrap response.
+function isSmtpSettings(value: unknown): value is SmtpSettings {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const s = value as Record<string, unknown>
+  return typeof s.enabled === "boolean" &&
+    typeof s.host === "string" && s.host.trim().length > 0 && s.host.length <= 255 &&
+    typeof s.port === "number" && Number.isInteger(s.port) && s.port >= 1 && s.port <= 65535 &&
+    (s.security === "ssl" || s.security === "tls") &&
+    (s.username === null || typeof s.username === "string") &&
+    typeof s.from_email === "string" && s.from_email.trim().length > 0 &&
+    (s.from_name === null || typeof s.from_name === "string") &&
+    typeof s.has_password === "boolean" &&
+    typeof s.version === "number" && Number.isInteger(s.version) && s.version >= 0 && s.version <= 2147483646 &&
+    (s.updated_at === undefined || (typeof s.updated_at === "string" && Number.isFinite(Date.parse(s.updated_at))))
 }
 
 export default function PlatformSmtpSettingsPage() {
@@ -42,7 +57,8 @@ export default function PlatformSmtpSettingsPage() {
   const [testing, setTesting] = useState(false)
   const [csrfToken, setCsrfToken] = useState<string>("")
   const [authError, setAuthError] = useState<string | null>(null)
-  const [canManage, setCanManage] = useState<boolean>(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [canManage, setCanManage] = useState<boolean>(false)
 
   // Settings Form State - initialized empty / unpopulated until server readback
   const [enabled, setEnabled] = useState(true)
@@ -65,10 +81,30 @@ export default function PlatformSmtpSettingsPage() {
 
   // Fetch current settings on mount
   useEffect(() => {
+    let cancelled = false
+    function clearSettings() {
+      setCanManage(false)
+      setCsrfToken("")
+      setEnabled(false)
+      setHost("")
+      setPort(465)
+      setSecurity("ssl")
+      setUsername("")
+      setPassword("")
+      setHasExistingPassword(false)
+      setFromEmail("")
+      setFromName("")
+      setVersion(0)
+      setLastUpdated(null)
+      setTestRecipient("")
+      setTestResult(null)
+    }
     async function loadSettings() {
       try {
         setLoading(true)
         setAuthError(null)
+        setLoadError(null)
+        clearSettings()
 
         // 1. Fetch CSRF token from /personal/session
         try {
@@ -82,13 +118,15 @@ export default function PlatformSmtpSettingsPage() {
           })
           if (sessionRes.ok) {
             const sessionData = await sessionRes.json()
-            if (sessionData?.csrf_token) {
+            if (!cancelled && typeof sessionData?.csrf_token === "string") {
               setCsrfToken(sessionData.csrf_token)
             }
           }
         } catch {
           // Frontdoor / proxy fallback handles same-origin credentials
         }
+
+        if (cancelled) return
 
         // 2. Fetch platform SMTP settings
         const res = await fetch(`${backendUrl}/personal/platform/smtp`, {
@@ -100,38 +138,45 @@ export default function PlatformSmtpSettingsPage() {
           credentials: "include",
         })
 
-        if (!res.ok) {
+        if (cancelled) return
+        if (res.status !== 200) {
           if (res.status === 401 || res.status === 403) {
-            setCanManage(false)
+            clearSettings()
             setAuthError("SMTP ayarlarını yönetmek için yetkili platform hesabınızla ek doğrulama yapmanız gerekiyor.")
             return
           }
           throw new Error("HTTP " + res.status)
         }
 
-        const data: { settings: SmtpSettings; can_manage?: boolean } = await res.json()
-        if (data?.settings) {
-          const s = data.settings
-          setEnabled(s.enabled)
-          setHost(s.host || "")
-          setPort(s.port || 465)
-          setSecurity(s.security || "ssl")
-          setUsername(s.username || "")
-          setFromEmail(s.from_email || "")
-          setFromName(s.from_name || "")
-          setHasExistingPassword(s.has_password)
-          setVersion(s.version)
-          setLastUpdated(s.updated_at)
-          setCanManage(data.can_manage !== false)
+        const data = await res.json()
+        if (cancelled) return
+        if (data?.can_manage !== true || !isSmtpSettings(data?.settings)) {
+          throw new Error("Invalid SMTP settings response")
         }
-      } catch (err: any) {
-        toast.error("SMTP ayarları yüklenemedi: " + (err.message || ""))
+        const s = data.settings
+        setEnabled(s.enabled)
+        setHost(s.host)
+        setPort(s.port)
+        setSecurity(s.security)
+        setUsername(s.username ?? "")
+        setFromEmail(s.from_email)
+        setFromName(s.from_name ?? "")
+        setHasExistingPassword(s.has_password)
+        setVersion(s.version)
+        setLastUpdated(s.updated_at ?? null)
+        setCanManage(true)
+      } catch {
+        if (!cancelled) {
+          clearSettings()
+          setLoadError("SMTP ayarları yüklenemedi. Lütfen daha sonra sayfayı yenileyerek tekrar deneyin.")
+        }
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
     loadSettings()
+    return () => { cancelled = true }
   }, [backendUrl])
 
   // Save Settings handler
@@ -279,9 +324,9 @@ export default function PlatformSmtpSettingsPage() {
             <Heading level="h1" className="text-2xl font-bold tracking-tight text-ui-fg-base">
               Platform SMTP Ayarları
             </Heading>
-            <Badge color="blue" size="small" className="bg-[#0e66c2]/10 text-[#0e66c2] border-[#0e66c2]/20 font-semibold">
+            {canManage && <Badge color="blue" size="small" className="bg-[#0e66c2]/10 text-[#0e66c2] border-[#0e66c2]/20 font-semibold">
               Ayar sürümü: {version}
-            </Badge>
+            </Badge>}
           </div>
           <Text className="text-sm text-ui-fg-subtle">
             DoğruAdres e-posta doğrulama, kullanıcı davetleri ve işlem bildirimleri için giden SMTP sunucu altyapısı.
@@ -318,6 +363,8 @@ export default function PlatformSmtpSettingsPage() {
           </div>
         </Alert>
       )}
+
+      {loadError && <Alert variant="error">{loadError}</Alert>}
 
       {loading ? (
         <Container className="p-8 text-center">

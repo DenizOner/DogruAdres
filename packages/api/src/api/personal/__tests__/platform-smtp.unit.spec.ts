@@ -282,3 +282,149 @@ describe("personal platform smtp route unit tests", () => {
     })
   })
 })
+
+// Component-state regression checks use the installed TypeScript/Jest stack and
+// inert UI primitives. They neither start a browser/backend nor send SMTP mail.
+describe("Admin SMTP fail-closed loading", () => {
+  const { readFileSync } = require("node:fs")
+  const { resolve } = require("node:path")
+  const { runInNewContext } = require("node:vm")
+  const ts = require("typescript")
+  const source = readFileSync(resolve(process.cwd(), "../../apps/admin/src/routes/settings/smtp/page.tsx"), "utf8")
+  const compiled = ts.transpileModule(source, { compilerOptions: {
+    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React,
+    target: ts.ScriptTarget.ES2022, esModuleInterop: true,
+  } }).outputText
+  const settings = {
+    enabled: true, host: "smtp.example.invalid", port: 465, security: "ssl",
+    username: null, from_email: "sender@example.invalid", from_name: null,
+    has_password: false, version: 0,
+  }
+
+  function mount(response: any, networkFailure = false) {
+    const states: any[] = []
+    let cursor = 0
+    let effect: () => void
+    let cleanup: any
+    const react = {
+      createElement: (type: any, props: any, ...children: any[]) => ({ type, props: props || {}, children }),
+      useState: (initial: any) => {
+        const index = cursor++
+        if (!(index in states)) states[index] = initial
+        return [states[index], (value: any) => { states[index] = value }]
+      },
+      useEffect: (callback: any) => { effect = callback },
+    }
+    const ui = new Proxy({}, { get: (_, key) => key === "toast" ? { error: jest.fn(), success: jest.fn() } : String(key) })
+    const fetchMock = jest.fn(async (url: string) => {
+      if (url.endsWith("/session")) return { ok: true, json: async () => ({ csrf_token: "synthetic-csrf" }) }
+      if (networkFailure) throw new Error("private-error-must-not-be-shown")
+      return response
+    })
+    const module = { exports: {} as any }
+    runInNewContext(compiled, { module, exports: module.exports, fetch: fetchMock,
+      require: (id: string) => {
+        if (id === "react") return react
+        if (id === "@medusajs/ui") return ui
+        throw Error("Unexpected component dependency")
+      },
+    })
+    const render = () => { cursor = 0; return module.exports.default() }
+    const initial = render()
+    const start = () => { cleanup = effect!() }
+    const stop = () => cleanup?.()
+    return { render, initial, start, stop, fetchMock }
+  }
+  function nodes(tree: any): any[] {
+    if (!tree || typeof tree !== "object") return []
+    return [tree, ...tree.children.flat(Infinity).flatMap(nodes)]
+  }
+  const response = (status: number, data: any) => ({ status, ok: status === 200, json: async () => data })
+  const settle = () => new Promise(resolve => setImmediate(resolve))
+
+  it("reveals populated bootstrap version-zero settings only after an authorized 200", async () => {
+    const page = mount(response(200, { can_manage: true, settings }))
+    expect(nodes(page.initial).some(n => n.type === "form")).toBe(false)
+    page.start()
+    expect(nodes(page.render()).some(n => n.type === "form")).toBe(false)
+    await settle()
+    const result = nodes(page.render())
+    expect(result.some(n => n.type === "form")).toBe(true)
+    expect(result.find(n => n.props.id === "smtp-host").props.value).toBe(settings.host)
+    expect(result.find(n => n.props.id === "smtp-port").props.value).toBe(465)
+    expect(result.find(n => n.props.id === "smtp-pass").props.type).toBe("password")
+    expect(result.find(n => n.props.id === "smtp-pass").props.value).toBe("")
+  })
+
+  it("populates persisted settings and ignores a cancelled load", async () => {
+    let finish: any
+    const pending = new Promise(resolve => { finish = resolve })
+    const res = { status: 200, json: () => pending }
+    const page = mount(res)
+    page.start()
+    await settle()
+    page.stop()
+    finish({ can_manage: true, settings })
+    await settle()
+    expect(nodes(page.render()).some(n => n.type === "form")).toBe(false)
+
+    const persisted = mount(response(200, { can_manage: true, settings: {
+      ...settings, enabled: false, port: 587, security: "tls", version: 7,
+      username: "smtp-user", from_name: "Example", has_password: true,
+      updated_at: "2026-11-01T12:00:00.000Z",
+    } }))
+    persisted.start()
+    await settle()
+    const all = nodes(persisted.render())
+    expect(all.some(n => n.type === "form")).toBe(true)
+    expect(all.find(n => n.props.id === "smtp-port").props.value).toBe(587)
+    expect(all.find(n => n.props.id === "smtp-user").props.value).toBe("smtp-user")
+    expect(all.find(n => n.props.id === "smtp-pass").props.value).toBe("")
+  })
+
+  const invalidSettings = [null, {}, ...["enabled", "host", "port", "security", "username", "from_email", "from_name", "has_password", "version"].map(key => ({ ...settings, [key]: undefined })),
+    { ...settings, port: 0 }, { ...settings, version: -1 }, { ...settings, security: "none" },
+    { ...settings, updated_at: "invalid" }]
+  const failureCases: Array<[string, any, boolean]> = [
+    ...[401, 403, 500, 503, 201].map(status => [String(status), response(status, { can_manage: true, settings }), false] as [string, any, boolean]),
+    ["network", null, true],
+    ["malformed JSON", { status: 200, json: async () => { throw Error("private-json") } }, false],
+    ...[undefined, false, null, "true", 1].map(can_manage => [`authorization ${JSON.stringify(can_manage)}`, response(200, { can_manage, settings }), false] as [string, any, boolean]),
+    ...invalidSettings.map((s, i) => [`invalid settings ${i}`, response(200, { can_manage: true, settings: s }), false] as [string, any, boolean]),
+  ]
+  it.each(failureCases)("keeps controls hidden for %s with safe distinct errors", async (_, res, network) => {
+    const page = mount(res, network as boolean)
+    page.start()
+    await settle()
+    const result = page.render()
+    const all = nodes(result)
+    expect(all.some(n => n.type === "form" || n.props.id === "test-recipient" || n.props.id === "smtp-pass")).toBe(false)
+    expect(all.some(n => n.type === "Alert")).toBe(true)
+    const text = JSON.stringify(result)
+    expect(text).not.toContain("private-")
+    expect(text.includes("Personal Frontdoor")).toBe([401, 403].includes((res as any)?.status))
+  })
+
+  it("clears populated and typed values when loading restarts, then fails", async () => {
+    const res = response(200, { can_manage: true, settings })
+    const page = mount(res)
+    page.start()
+    await settle()
+    const all = nodes(page.render())
+    all.find(n => n.props.id === "smtp-pass").props.onChange({ target: { value: "synthetic-password" } })
+    all.find(n => n.props.id === "test-recipient").props.onChange({ target: { value: "recipient@example.invalid" } })
+    res.status = 503
+    page.stop()
+    page.start()
+    expect(nodes(page.render()).some(n => n.type === "form")).toBe(false)
+    await settle()
+    expect(JSON.stringify(page.render())).not.toContain("synthetic-password")
+    res.status = 200
+    page.stop()
+    page.start()
+    await settle()
+    const reloaded = nodes(page.render())
+    expect(reloaded.find(n => n.props.id === "smtp-pass").props.value).toBe("")
+    expect(reloaded.find(n => n.props.id === "test-recipient").props.value).toBe("")
+  })
+})
