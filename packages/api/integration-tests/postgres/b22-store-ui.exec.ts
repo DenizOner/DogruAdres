@@ -32,6 +32,12 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   const secret=process.env.B22_SMTP_CANARY!
   assert.match(secret,/^b22-smtp-[0-9a-f]{48}$/)
   browser.secretCanary=secret;denied.secretCanary=secret
+  // CDP response bodies normally belong to their renderer. Preserve a bounded
+  // in-memory buffer across document/process navigation for the privacy check.
+  // https://github.com/ChromeDevTools/devtools-protocol/blob/master/pdl/domains/Network.pdl
+  for(const b of [browser,denied])await b.send('Network.enable',{
+    maxTotalBufferSize:8*1024*1024,maxResourceBufferSize:1024*1024,enableDurableMessages:true,
+  })
   let persistedCiphertext=""
   const inspected=new Set<string>()
   const scanResponses=async(b:B06Chrome)=>{
