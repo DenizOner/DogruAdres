@@ -3796,15 +3796,41 @@ export default async function({container}:any){
         await browser.send("Page.bringToFront")
         await browser.wait("document.visibilityState==='visible'")
         await browser.send("Page.reload",{ignoreCache:true})
-        await browser.wait("document.getElementById('login').hidden===false")
+        // Page.reload may return before the inline submit handler is installed.
+        // A native HTML submit could otherwise bypass the intended POST/CDP
+        // observation (and disclose credentials in URL query parameters).
+        await browser.wait(`document.readyState==='complete' &&
+          document.getElementById('login').hidden===false &&
+          typeof document.getElementById('login').onsubmit==='function' &&
+          document.querySelector('#login button').disabled===false`)
+        // Repeated same-profile logins must not append to browser-restored
+        // form values. This is the browser's ordinary "clear form" action.
+        await browser.eval("document.getElementById('login').reset()")
         await browser.input("#login input[name=email]",A.email)
         await browser.input("#login input[name=password]",A.password)
         const beforeLogin=browser.http.filter((row:any)=>
           row.method==="POST"&&row.path==="/personal/session").length
         await browser.click("#login button")
-        await until(async()=>browser.http.filter((row:any)=>
-          row.method==="POST"&&row.path==="/personal/session").length>beforeLogin,
-          10000,"Real Staff A /personal/session HTTP result")
+        try{
+          await until(async()=>browser.http.filter((row:any)=>
+            row.method==="POST"&&row.path==="/personal/session").length>beforeLogin,
+            10000,"Real Staff A /personal/session HTTP result")
+        }catch{
+          // Status-only investigation: never publish input values, tokens,
+          // cookies, recovery codes, bodies, origins or full request URLs.
+          const dom=await browser.eval(`(()=>{
+            const form=document.getElementById('login')
+            return {ready:document.readyState,visible:!form.hidden,
+              bound:typeof form.onsubmit==='function',
+              valid:form.checkValidity(),
+              disabled:form.querySelector('button').disabled,
+              pageVisible:document.visibilityState==='visible'}
+          })()`)
+          const recent=browser.http.filter((row:any)=>
+            ["/personal/session","/personal/challenge"].includes(row.path))
+            .slice(-5).map((row:any)=>({method:row.method,path:row.path,status:row.status}))
+          throw Error("B22 Staff A login response not observed: "+JSON.stringify({dom,recent}))
+        }
         const loginResponse=browser.http.filter((row:any)=>
           row.method==="POST"&&row.path==="/personal/session").at(-1)
         assert.equal(loginResponse?.status,202,
