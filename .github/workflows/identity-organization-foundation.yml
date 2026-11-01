@@ -275,7 +275,20 @@ jobs:
       - name: Prepare existing Admin assets for same-origin SMTP acceptance
         if: github.event_name != 'workflow_dispatch'
         working-directory: apps/admin
-        run: bun run build
+        # Vite evaluates medusa-config in production mode. Fresh build-only
+        # secrets satisfy its existing guard; never fall back to router base '/'.
+        run: |
+          node --input-type=module <<'NODE'
+          import { randomBytes } from 'node:crypto'
+          import { spawnSync } from 'node:child_process'
+          const result = spawnSync('bun', ['run', 'build'], {
+            env: { ...process.env, JWT_SECRET: randomBytes(48).toString('hex'), COOKIE_SECRET: randomBytes(48).toString('hex') },
+            encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+          })
+          process.stdout.write(result.stdout ?? '')
+          process.stderr.write(result.stderr ?? '')
+          if (result.error || result.status !== 0 || (result.stdout + result.stderr).includes('Could not load the Medusa config')) process.exit(1)
+          NODE
       - name: Native Admin SMTP real Chrome and disposable PG16
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
