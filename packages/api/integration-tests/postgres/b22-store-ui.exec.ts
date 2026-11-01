@@ -2861,7 +2861,7 @@ export default async function({container}:any){
         and e.actor_person_id=$1 and e.organization_id=$2 and e.target_id=$3`,
       [A.person,organizations[0].id,ownerStoreId])
     assert.equal(revokeAudit[0].n,1,"Revocation requires canonical outbox")
-    process.stdout.write("PASS B22 Chrome: Owner grants active Member scoped products.edit, retry idempotent, foreign Member/staff 403, Owner revokes with PG16 audit/outbox\\n")
+    process.stdout.write("PASS B22 Chrome: Owner grants active Member scoped products.edit, retry idempotent, foreign Member/staff 403, Owner revokes with PG16 audit/outbox\n")
     // CR-03: An active role-only "owner" without protected_owner cannot
     // change permissions or Store policy. Only task-owned PG16 rows are
     // temporarily changed; the real protected Alpha Owner stays active.
