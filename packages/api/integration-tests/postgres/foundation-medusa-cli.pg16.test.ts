@@ -137,7 +137,7 @@ async function run(){
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
             cwd:process.cwd(),env,encoding:"utf8",timeout:210000,maxBuffer:3*1024*1024})
           const valid=String(child.stdout??"").split("\n")
-            .filter(x=>/^PASS B22 Chrome:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^OBSERVED B22 native Cart TTL mismatch:|^PASS B22 native Mercur product workflow:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
+            .filter(x=>/^PASS B22 Chrome:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^OBSERVED B22 native Cart TTL mismatch:|^PASS B22 native Mercur product workflow:|^PASS B22 audit worker:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
           if(child.error||child.status!==0)
             throw Error("B22 dedicated task-only child stage failed: "+sanitized(
               String(child.error??"exit "+child.status)+"\n"+String(child.stderr??"")+"\n"+String(child.stdout??"")))
@@ -151,6 +151,7 @@ async function run(){
           DOGRUADRES_MFA_SETTINGS_ENABLED:"true",DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true"})
         assert.ok(result.includes("PASS B22 CR-03 real Chrome/HTTP/PG16: active unprotected Owner 403 for grants and listings; service denies block and revoke, zero audit/outbox writes"),
           "Missing actual role-only Owner 403 and zero-side-effect Chrome/PG16 acceptance")
+        assert.ok(result.includes("PASS B22 audit worker: real Medusa Access/Index job after isolated process crash and forced lease expiry; Staff events ACK and single Index entry on lost-ACK replay; natural TTL NOT TESTED"),"Missing real native audit worker recovery evidence")
         assert.ok(result.includes("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes"))
         assert.ok(result.includes("PASS B22 native Mercur product workflow: draft persisted, only selected Seller linked"))
         assert.ok(result.includes("PASS B22 Chrome: native private HTTP and signed-in HTTPS payment callbacks return 403; Cart open, zero OrderGroup and payment links; no provider/capture"),"Missing native payment callback fail-closed HTTP/Chrome evidence")
