@@ -7,9 +7,9 @@
  * future persisted policy editor must replace this source atomically, not
  * introduce another role-only bypass or grant implicit Store approval.
  */
-export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage"
+export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage" | "membership.manage"
 export const DEFAULT_OWNER_ACTIONS: readonly OrganizationAction[] =
-  Object.freeze(["buyer.purchase","products.edit","invitation.manage"])
+  Object.freeze(["buyer.purchase","products.edit","invitation.manage","membership.manage"])
 const DENY_ALL_OWNER_ACTIONS: readonly OrganizationAction[] = Object.freeze([])
 
 /** Optional trusted deployment setting for the Organization Owner ROLE,
@@ -48,7 +48,7 @@ export function organizationActionAllowed(
   ownerActions: readonly OrganizationAction[] = configuredOwnerActions()
 ): boolean {
   if(role==="owner") return protectedOwner===true && ownerActions.includes(action)
-  if(role==="member" || role==="admin") return action!=="invitation.manage" && auditedMemberGrant===true
+  if(role==="member" || role==="admin") return !["invitation.manage","membership.manage"].includes(action) && auditedMemberGrant===true
   return false
 }
 

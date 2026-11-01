@@ -123,6 +123,24 @@ describe("M0 B06 personal membership role change service boundary", () => {
     expect(result).toEqual({ id: memberId, role: "admin", status: "active" })
   })
 
+  it("blocks role, revoke and protected-Owner changes when the current Owner role policy excludes membership.manage",async()=>{
+    const previous=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    try{
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage"
+      await expect(service.personalChangeMembershipRole(token,orgId,memberId,"admin",context))
+        .rejects.toThrow("Access denied")
+      await expect(service.personalRevokeMembership(token,orgId,memberId,context))
+        .rejects.toThrow("Access denied")
+      await expect(service.personalManageProtectedOwner(token,orgId,memberId,"owner",context))
+        .rejects.toThrow("Access denied")
+      expect(getMembershipSpy).not.toHaveBeenCalled()
+      expect(changeMembershipSpy).not.toHaveBeenCalled()
+    }finally{
+      if(previous===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previous
+    }
+  })
+
   it("allows Admin to change an active ordinary Admin back to Member", async () => {
     organizationsSpy.mockResolvedValue(orgDecisionAdmin)
     getMembershipSpy.mockResolvedValue(targetAdmin)
