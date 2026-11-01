@@ -206,9 +206,9 @@ async function verifyOwnerAuditTimelinePolicy({
 // this checks real Foundation/PG16 authorization without pretending a direct
 // resolver call is an authenticated HTTP request. Do NOT open the native route.
 async function verifyNativeOrganizationReadPolicy({
-  container,ownerActor,memberActor,alphaOrg,betaOrg,foreignOrg,browser,q
+  container,ownerActor,memberActor,memberPersonId,alphaOrg,betaOrg,foreignOrg,browser,q
 }:{
-  container:any;ownerActor:string;memberActor:string
+  container:any;ownerActor:string;memberActor:string;memberPersonId:string
   alphaOrg:string;betaOrg:string;foreignOrg:string
   browser:B06Chrome;q:(sql:string,args?:unknown[])=>Promise<any[]>
 }):Promise<void>{
@@ -252,9 +252,7 @@ async function verifyNativeOrganizationReadPolicy({
     await assert.rejects(nativeGet(B,foreignOrg),/Organization access denied/,
       "Foreign Organization remains denied regardless of Owner role policy")
     const roleOnly=await q(`select id from da_organization_membership
-      where organization_id=$1 and person_id=(select person_id from da_actor_mapping
-        where actor_type='user' and actor_id=$2 and revoked_at is null)
-      and status='active'`,[alphaOrg,memberActor])
+      where organization_id=$1 and person_id=$2 and status='active'`,[alphaOrg,memberPersonId])
     assert.equal(roleOnly.length,1)
     // The previous role is restored exactly; no protected Owner is mutated.
     await q("update da_organization_membership set role='owner',protected_owner=false,updated_at=clock_timestamp() where id=$1",[roleOnly[0].id])
@@ -3457,7 +3455,7 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 200; restored Owner 200\n")
 
     await verifyNativeOrganizationReadPolicy({
-      container,ownerActor:A.actor,memberActor:B.actor,
+      container,ownerActor:A.actor,memberActor:B.actor,memberPersonId:B.person,
       alphaOrg:organizations[0].id,betaOrg:organizations[1].id,
       foreignOrg:organizations[2].id,browser,q,
     })
