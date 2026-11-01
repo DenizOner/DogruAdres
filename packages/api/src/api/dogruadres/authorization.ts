@@ -49,13 +49,13 @@ export async function requireOrganizationAccess(
       const membership = await service.getActiveMembership(personId, orgId)
       if (!membership || membership.status !== "active") return false
       if (requestedAction === "organization.read") return true
-      if (requestedAction === "invitation.manage" || requestedAction === "membership.manage") {
+      if (requestedAction === "invitation.manage" || requestedAction === "membership.manage" || requestedAction === "membership.list") {
         if (membership.role === "admin") return true
         return membership.role === "owner" && membership.protected_owner === true &&
           organizationActionAllowed("owner",requestedAction,
             await service.currentProtectedOwner(personId,orgId),false)
       }
-      if (["membership.list", "audit.timeline.read"].includes(requestedAction)) {
+      if (requestedAction === "audit.timeline.read") {
         if (membership.role === "admin") return true
         return membership.role === "owner" && membership.protected_owner === true &&
           await service.currentProtectedOwner(personId,orgId)

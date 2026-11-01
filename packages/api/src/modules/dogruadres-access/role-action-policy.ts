@@ -7,9 +7,9 @@
  * future persisted policy editor must replace this source atomically, not
  * introduce another role-only bypass or grant implicit Store approval.
  */
-export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage" | "membership.manage"
+export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage" | "membership.manage" | "membership.list"
 export const DEFAULT_OWNER_ACTIONS: readonly OrganizationAction[] =
-  Object.freeze(["buyer.purchase","products.edit","invitation.manage","membership.manage"])
+  Object.freeze(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list"])
 const DENY_ALL_OWNER_ACTIONS: readonly OrganizationAction[] = Object.freeze([])
 
 /** Optional trusted deployment setting for the Organization Owner ROLE,
@@ -26,7 +26,7 @@ export function configuredOwnerActions(
   const raw=source.DOGRUADRES_OWNER_ROLE_ACTIONS
   if(raw===undefined)return DEFAULT_OWNER_ACTIONS
   if(raw==="")return DENY_ALL_OWNER_ACTIONS
-  if(raw.length>80)return DENY_ALL_OWNER_ACTIONS
+  if(raw.length>DEFAULT_OWNER_ACTIONS.join(",").length)return DENY_ALL_OWNER_ACTIONS
   const parts=raw.split(",")
   if(parts.length>DEFAULT_OWNER_ACTIONS.length ||
      new Set(parts).size!==parts.length ||
@@ -48,7 +48,7 @@ export function organizationActionAllowed(
   ownerActions: readonly OrganizationAction[] = configuredOwnerActions()
 ): boolean {
   if(role==="owner") return protectedOwner===true && ownerActions.includes(action)
-  if(role==="member" || role==="admin") return !["invitation.manage","membership.manage"].includes(action) && auditedMemberGrant===true
+  if(role==="member" || role==="admin") return !["invitation.manage","membership.manage","membership.list"].includes(action) && auditedMemberGrant===true
   return false
 }
 

@@ -48,7 +48,7 @@ async function verifyOwnerMembershipManagePolicy({
         and e.action='organization.membership_changed'`,[organizationId,targetMembershipId])
     const oldMembershipActions=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     try{
-      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage"
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage,membership.list"
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
       const deniedMember=await browser.eval(`(async()=>{
@@ -3242,8 +3242,26 @@ export default async function({container}:any){
     })()`)
     assert.deepEqual(protectedReads,{memberships:200,invitations:200},
       "Real protected Alpha Owner keeps approved membership/invitation read access")
+    const listPolicyMembershipBefore=await q(`select id,role,status,protected_owner,revoked_at
+      from da_organization_membership where organization_id=$1 order by id`,[organizations[0].id])
+    const listPolicyAuditBefore=await q(`select id from da_audit_event
+      where organization_id=$1 order by id`,[organizations[0].id])
+    const listPolicyOutboxBefore=await q(`select x.id from da_audit_outbox x
+      join da_audit_event e on e.id=x.source_audit_event_id
+      where e.organization_id=$1 order by x.id`,[organizations[0].id])
+    const previousListPolicy=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     await q("update da_organization_membership set role='admin',protected_owner=false,updated_at=clock_timestamp() where id=$1",[alphaMember.id])
     try{
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage,membership.manage"
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      const deniedList=await browser.eval(`(async()=>{
+        const response=await fetch('/personal/memberships?organization='+${JSON.stringify(organizations[0].id)})
+        const body=await response.json()
+        return {status:response.status,privateRows:Object.hasOwn(body,'memberships')}
+      })()`)
+      assert.deepEqual(deniedList,{status:403,privateRows:false},
+        "Narrowed protected Owner cannot receive private membership rows")
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       const adminReads=await reviewer.eval(`(async()=>{
@@ -3254,13 +3272,32 @@ export default async function({container}:any){
         }
       })()`)
       assert.deepEqual(adminReads,{memberships:200,invitations:200},
-        "Ordinary active Organization Admin retains bounded management read access")
+        "Ordinary Admin retains private reads while Owner membership.list is narrowed")
     }finally{
+      if(previousListPolicy===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previousListPolicy
       await q("update da_organization_membership set role='member',protected_owner=false,updated_at=clock_timestamp() where id=$1",[alphaMember.id])
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
     }
     process.stdout.write("PASS B22 protected Owner management: verified protected Owner and ordinary Admin both retain private membership/invitation reads after role-only denial\n")
+
+    const listPolicyRestored=await browser.eval(`(async()=>{
+      return (await fetch('/personal/memberships?organization='+${JSON.stringify(organizations[0].id)})).status
+    })()`)
+    assert.equal(listPolicyRestored,200,"Owner membership.list returns after role policy restoration")
+    assert.deepEqual(await q(`select id,role,status,protected_owner,revoked_at
+      from da_organization_membership where organization_id=$1 order by id`,
+      [organizations[0].id]),listPolicyMembershipBefore,
+      "Denied membership read cannot change membership state")
+    assert.deepEqual(await q(`select id from da_audit_event
+      where organization_id=$1 order by id`,[organizations[0].id]),
+      listPolicyAuditBefore,"Denied read cannot append audit")
+    assert.deepEqual(await q(`select x.id from da_audit_outbox x
+      join da_audit_event e on e.id=x.source_audit_event_id
+      where e.organization_id=$1 order by x.id`,[organizations[0].id]),
+      listPolicyOutboxBefore,"Denied read cannot append outbox")
+    process.stdout.write("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 200; restored Owner 200\n")
 
     await verifyOwnerMembershipManagePolicy({
       organizationId:organizations[0].id,targetMembershipId:alphaMember.id,

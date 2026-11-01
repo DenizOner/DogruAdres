@@ -165,6 +165,8 @@ async function run(){
           "Missing protected Owner and ordinary Admin positive readback evidence")
         assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed invitation.manage denies Owner HTTPS list/create/revoke and Foundation writes with unchanged PG16 invitation/audit/outbox; restored Owner revokes"),
           "Missing invitation.manage denied and restored real Chrome/PG16 marker")
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 200; restored Owner 200"),
+          "Missing protected Owner membership.list 403/private data denial, Admin 200, restore 200 and zero-write PG16 evidence")
         assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed membership.manage denies Chrome role/revoke/protected Owner and native Foundation change; PG16 membership/audit/outbox unchanged; restored Owner role changes 200"),
           "Missing owner membership.manage role-policy HTTP/PG16 zero-write and restored positive evidence")
         assert.ok(result.includes("PASS B22 Owner role policy: narrowed buyer.purchase denies real HTTPS and PG16 final checkout L with zero OrderGroup; default restored"),

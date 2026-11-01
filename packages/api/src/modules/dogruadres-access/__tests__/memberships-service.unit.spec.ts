@@ -17,6 +17,29 @@ describe("B05 active membership listing service boundary (mock-only)", () => {
       { select: ["id", "person_id", "role", "status", "protected_owner"] }, context)
   })
 
+  it("denies a narrowed protected Owner before private membership queries, but preserves Admin access",async()=>{
+    const previous=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    const authorize=jest.spyOn(IdentitySessions.prototype,"organizations").mockResolvedValue(
+      {person_id:"daprs_p",organizations:[{id:"daorg_test",role:"owner"}]} as any)
+    const list=jest.spyOn(service,"listMemberships").mockResolvedValue([])
+    try{
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage,membership.manage"
+      await expect(service.personalMemberships("synthetic","daorg_test",context))
+        .rejects.toThrow("Access denied")
+      expect(list).not.toHaveBeenCalled()
+      authorize.mockResolvedValue({person_id:"daprs_p",
+        organizations:[{id:"daorg_test",role:"admin"}]} as any)
+      await expect(service.personalMemberships("synthetic","daorg_test",context)).resolves.toEqual([])
+      expect(list).toHaveBeenCalledTimes(1)
+    }finally{
+      if(previous===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previous
+    }
+    authorize.mockResolvedValue({person_id:"daprs_p",
+      organizations:[{id:"daorg_test",role:"owner"}]} as any)
+    await expect(service.personalMemberships("synthetic","daorg_test",context)).resolves.toEqual([])
+  })
+
   it.each([null, { person_id: "p", organizations: [{ id: "daorg_test", role: "member" }] }])("does not query any list after a denied identity/scope/role decision", async decision => {
     jest.spyOn(IdentitySessions.prototype, "organizations").mockResolvedValue(decision as any)
     const list = jest.spyOn(service, "listMemberships").mockResolvedValue([])

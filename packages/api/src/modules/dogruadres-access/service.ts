@@ -188,7 +188,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const decision=await new IdentitySessions(db).organizations(token,org)
     if(!decision||!['owner','admin'].includes(decision.organizations[0].role)||
        (decision.organizations[0].role==='owner' &&
-         !await isCurrentProtectedOwner(db,decision.person_id,org)))
+         !organizationActionAllowed("owner","membership.list",
+           await isCurrentProtectedOwner(db,decision.person_id,org),false)))
       throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
     return this.listMemberships({organization_id:org,status:'active'},{select:['id','person_id','role','status','protected_owner']},context)
   }
