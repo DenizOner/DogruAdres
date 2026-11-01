@@ -55,6 +55,18 @@ export default async function({container}:any){
     await new Promise<void>(()=>{})
     return
   }
+  // Previously demonstrated native claim/crash path, isolated from
+  // browser acceptance. Never activate except on this exact CI fixture.
+  const auditCrash=process.env.B22_AUDIT_CRASH_OUTBOX_ID
+  if(auditCrash){
+    assert.equal(preparing,false)
+    assert.match(auditCrash,/^daaob_[A-Za-z0-9_-]{1,120}$/)
+    const claim=await container.resolve("dogruadresAccess").claimFoundationAuditOutbox()
+    assert.equal(claim?.id,auditCrash)
+    process.stdout.write("B22_AUDIT_CLAIM_BEFORE_CRASH\n",()=>process.exit(86))
+    await new Promise<void>(()=>{})
+    return
+  }
   // Genuine Medusa Redis provider, isolated from PostgreSQL checkout.
   const redisProbeKey=process.env.B22_REDIS_PROBE_KEY
   if(redisProbeKey){

@@ -24,17 +24,6 @@ export default async function({container}:any){
     u.password==="ci-disposable-only-not-a-real-secret"&&
     /^\/mfa_cli_ci_[0-9a-f]{16}$/.test(u.pathname),
     "REFUSED: native audit worker test requires exact disposable B22 CI database")
-  // This branch is executed by a SECOND native Medusa process only.
-  // Commit a real claim, then exit without Index/ACK or graceful cleanup.
-  const crashId=process.env.B22_AUDIT_CRASH_OUTBOX_ID
-  if(crashId){
-    assert.match(crashId,/^daaob_[A-Za-z0-9_-]{1,120}$/)
-    const claim=await container.resolve("dogruadresAccess").claimFoundationAuditOutbox()
-    assert.equal(claim?.id,crashId,"Crash child must claim exactly the test-owned event")
-    process.stdout.write("B22_AUDIT_NATIVE_CLAIM_BEFORE_EXIT\n",()=>process.exit(86))
-    await new Promise<void>(()=>{})
-    return
-  }
   const pg=new Client({connectionString:u.toString()})
   await pg.connect()
   const q=async(sql:string,args:unknown[]=[]) => (await pg.query(sql,args)).rows
@@ -63,17 +52,18 @@ export default async function({container}:any){
         " where id in ($1,$2) and status='pending' returning id",
         [crashedId,staffEvents[1].outbox_id])
       assert.equal(due.length,2)
-      // The former failed probe invoked b22-store-ui.exec.ts although its
-      // exit-86 branch lived in b22-audit-worker.exec.ts. Invoke THIS native
-      // Medusa script and assert the independently committed PG lease.
+      // Reuse the already proven B22 native abrupt-exit entrypoint.
+      // It runs AFTER Chrome now, avoiding the historic browser timeout.
+      // The newly separated exec entrypoint did not prove a crash; its failed
+      // run remains in history. Verify the durable lease independently.
       const crash=spawnSync(process.execPath,
-        ["run","medusa","exec","./integration-tests/postgres/b22-audit-worker.exec.ts"],{
+        ["run","medusa","exec","./integration-tests/postgres/b22-store-ui.exec.ts"],{
           cwd:process.cwd(),
           env:{...process.env,B22_AUDIT_CRASH_OUTBOX_ID:crashedId},
           encoding:"utf8",timeout:75000,maxBuffer:1024*1024,
         })
       assert.ok(!crash.error&&crash.status===86&&
-        String(crash.stdout??"").includes("B22_AUDIT_NATIVE_CLAIM_BEFORE_EXIT"),
+        String(crash.stdout??"").includes("B22_AUDIT_CLAIM_BEFORE_CRASH"),
         "Separate native Medusa process must claim first outbox and abruptly exit before Index/ACK")
       const abandoned=(await q(
         "select status,attempt_count,lease_token,lease_expires_at,now() as server_now"+
