@@ -2890,7 +2890,7 @@ export default async function({container}:any){
         [organizations[0].id]))[0]
       const before=await snapshot()
       const beforeManager=await q(`select
-        (select count(*)::int from da_invitation where organization_id=$1) invitations,
+        (select count(*)::int from da_organization_invitation where organization_id=$1) invitations,
         (select count(*)::int from da_organization_membership where organization_id=$1) memberships,
         (select status from da_organization_membership where id=$2) as target_status`,
         [organizations[0].id,alphaMember.id])
@@ -2944,7 +2944,7 @@ export default async function({container}:any){
       assert.deepEqual(await snapshot(),before,
         "Unprotected Owner must not append any domain or audit/outbox writes")
       const afterManager=await q(`select
-        (select count(*)::int from da_invitation where organization_id=$1) invitations,
+        (select count(*)::int from da_organization_invitation where organization_id=$1) invitations,
         (select count(*)::int from da_organization_membership where organization_id=$1) memberships,
         (select status from da_organization_membership where id=$2) as target_status`,
         [organizations[0].id,alphaMember.id])
@@ -2975,6 +2975,40 @@ export default async function({container}:any){
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
     }
+
+    // Positive read-back for the SAME scoped endpoints: a genuine protected
+    // Alpha Owner and a current ordinary Alpha Admin remain allowed. Use only
+    // task-owned memberships; restore temporary Admin role in every outcome.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    const protectedReads=await browser.eval(`(async()=>{
+      const org=${JSON.stringify(organizations[0].id)}
+      return {
+        memberships:(await fetch('/personal/memberships?organization='+org)).status,
+        invitations:(await fetch('/personal/invitations?organization='+org)).status
+      }
+    })()`)
+    assert.deepEqual(protectedReads,{memberships:200,invitations:200},
+      "Real protected Alpha Owner keeps approved membership/invitation read access")
+    await q("update da_organization_membership set role='admin',protected_owner=false,updated_at=clock_timestamp() where id=$1",[alphaMember.id])
+    try{
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      const adminReads=await reviewer.eval(`(async()=>{
+        const org=${JSON.stringify(organizations[0].id)}
+        return {
+          memberships:(await fetch('/personal/memberships?organization='+org)).status,
+          invitations:(await fetch('/personal/invitations?organization='+org)).status
+        }
+      })()`)
+      assert.deepEqual(adminReads,{memberships:200,invitations:200},
+        "Ordinary active Organization Admin retains bounded management read access")
+    }finally{
+      await q("update da_organization_membership set role='member',protected_owner=false,updated_at=clock_timestamp() where id=$1",[alphaMember.id])
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+    }
+    process.stdout.write("PASS B22 protected Owner management: verified protected Owner and ordinary Admin both retain private membership/invitation reads after role-only denial\n")
 
     // Protected Owner writes a draft for their approved Store without grant.
     const ownerDraftAccess=await get('/personal/product-drafts?organization_id='+organizations[0].id)
