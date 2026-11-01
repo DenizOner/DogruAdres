@@ -216,7 +216,7 @@ async function realAuditRelayRecovery(
     // C: the dedicated child uses real Medusa and claim transaction, then
     // kills itself with SIGKILL. The parent never kills other CI processes.
     await prioritize(eligible[2])
-    const killed=spawnSync(process.execPath,['run','medusa','exec',
+    const killed=spawnSync('node',[require.resolve('@medusajs/cli/cli.js'),'exec',
       './integration-tests/postgres/b22-audit-worker.exec.ts'],{
       cwd:process.cwd(),encoding:'utf8',timeout:100000,maxBuffer:1024*1024,
       env:{...process.env,B22_AUDIT_RECOVERY_CHILD:'claim-crash',
