@@ -22,7 +22,7 @@ function fixture() {
     ensureActorPerson_: jest.fn(async (actor: { actor_id: string }) => ({ id: `person_${actor.actor_id}` })),
     getActiveMembership: jest.fn(async () => ({ id: "owner", role: "owner", status: "active", protected_owner: true })),
     getMembershipInOrganization: jest.fn(async () => ({ id: "member_target", person_id: "target", role: "member", status: "active", protected_owner: false })),
-    getOrganization: jest.fn(async () => ({ id: "daorg_test" })), listPeople: jest.fn(async () => [{ id: "person_owner" }]),
+    getOrganization: jest.fn(async () => ({ id: "daorg_test" })), listPeople: jest.fn(async () => [{ id: "daprs_owner" }]),
     updateMemberships: jest.fn(async (data: Record<string, unknown>) => data),
     createInvitations: jest.fn(async () => [invitation]), updateInvitations: jest.fn(async (data: Record<string, unknown>) => ({ ...invitation, ...data })),
     getInvitationInOrganization: jest.fn(async () => invitation),
@@ -52,7 +52,7 @@ describe("Foundation canonical audit and outbox persistence contract", () => {
 
   it("uses the same audit/outbox integration for the other four mutation paths", async () => {
     const f = fixture()
-    const input = { organization_id: "daorg_test", actor_person_id: "person_owner", actor_type: "user", actor_id: "owner" }
+    const input = { organization_id: "daorg_test", actor_person_id: "daprs_owner", actor_type: "user", actor_id: "owner" }
     await f.service.changeMembership({ ...input, membership_id: "member_target", role: "admin" }, f.context)
     await f.service.createOrganizationInvitation({ ...input, email: "recipient@example.invalid", role: "member" }, f.context)
     await f.service.revokeOrganizationInvitation({ ...input, invitation_id: "invitation_test" }, f.context)
@@ -67,7 +67,7 @@ describe("Foundation canonical audit and outbox persistence contract", () => {
   it("allowlists the envelope and excludes arbitrary before/after values and secrets", async () => {
     const f = fixture()
     const persist = Reflect.get(f.service, "persistAuditEventsWithOutbox_")
-    await persist.call(f.service, [{ actor_person_id: "person_owner", actor_type: "user", actor_id: "owner", module: DOGRUADRES_AUDIT_MODULE,
+    await persist.call(f.service, [{ actor_person_id: "daprs_owner", actor_type: "user", actor_id: "owner", module: DOGRUADRES_AUDIT_MODULE,
       action: "organization.membership_changed", resource: "membership", occurred_at: new Date("2026-10-18T00:00:00.000Z"),
       previous_values: { password: "synthetic-do-not-project" }, new_values: { token: "synthetic-do-not-project", email: "private@example.invalid" } }], f.context)
     const row = f.outbox.mock.calls[0][0][0]
