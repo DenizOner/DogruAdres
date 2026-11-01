@@ -149,6 +149,10 @@ async function run(){
         assert.ok(invoke("./integration-tests/postgres/b06-activation.pg16.ts",task,true).includes("PASS B06 disposable native activation"))
         const result=invoke(script,{...task,DOGRUADRES_MFA_RUNTIME_ENABLED:"true",
           DOGRUADRES_MFA_SETTINGS_ENABLED:"true",DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true"})
+        for(const target of ["active","missing","foreign","revoked"])
+          assert.ok(result.split("\n").includes("PASS B22 Chrome: membership non-disclosure "+target+
+            " target HTTP403 identical safe body; PG16 membership/canonical audit/audit outbox/security outbox unchanged"),
+            "Missing real HTTP/PG16 membership non-disclosure evidence: "+target)
         assert.ok(result.includes("PASS B22 CR-03 real Chrome/HTTP/PG16: active unprotected Owner 403 for grants and listings; service denies block and revoke, zero audit/outbox writes"),
           "Missing actual role-only Owner 403 and zero-side-effect Chrome/PG16 acceptance")
         assert.ok(result.includes("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes"))

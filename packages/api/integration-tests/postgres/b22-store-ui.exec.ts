@@ -24,6 +24,81 @@ import {B06Chrome} from "./b06-ui-browser"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
 
+async function verifyMembershipNonDisclosure({
+  organizationId,activeId,foreignId,personId,browser,foundation,q
+}:{
+  organizationId:string;activeId:string;foreignId:string;personId:string
+  browser:B06Chrome;foundation:any;q:(sql:string,args?:unknown[])=>Promise<any[]>
+}):Promise<void>{
+  // Extra synthetic target only in the existing task-owned CI database.
+  // The real Owner and the authenticated unauthorized Member stay untouched.
+  const [revokedPerson]=await foundation.createPeople([{}])
+  const [revoked]=await foundation.createMemberships([{
+    organization_id:organizationId,person_id:revokedPerson.id,role:"member",
+    status:"revoked",protected_owner:false,revoked_at:new Date()
+  }])
+  const missingId="daomem_"+randomBytes(16).toString("hex")
+  const targets=[{kind:"active",id:activeId},{kind:"missing",id:missingId},
+    {kind:"foreign",id:foreignId},{kind:"revoked",id:revoked.id}]
+  const rows=await q(`select id,organization_id,status,revoked_at
+    from da_organization_membership where id=any($1::text[])`,[targets.map(t=>t.id)])
+  assert.equal(rows.length,3,"Exactly three real targets and one nonexistent target")
+  assert.ok(rows.some(r=>r.id===activeId&&r.organization_id===organizationId&&r.status==="active"))
+  assert.ok(rows.some(r=>r.id===foreignId&&r.organization_id!==organizationId&&r.status==="active"))
+  assert.ok(rows.some(r=>r.id===revoked.id&&r.organization_id===organizationId&&r.status==="revoked"&&r.revoked_at))
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible'")
+  const token=await browser.token()
+  assert.match(token??"",/^[A-Za-z0-9_-]{43}$/)
+  const sessionRows=await q(`select s.person_id,s.status,s.last_strong_auth_at,s.csrf_hash,
+    statement_timestamp()<s.last_strong_auth_at+p.recent_auth_seconds*interval '1 second' recent
+    from da_browser_session s cross join da_session_policy p where s.id=$1 and p.id='current'`,
+    [createHash("sha256").update(token!).digest("hex")])
+  assert.equal(sessionRows.length,1)
+  assert.equal(sessionRows[0].person_id,personId)
+  assert.equal(sessionRows[0].status,"active")
+  assert.ok(sessionRows[0].last_strong_auth_at,"Real native MFA-completed session required")
+  assert.equal(sessionRows[0].recent,true,"Sensitive HTTP must have recent strong authentication")
+  const actor=await q(`select role,status,protected_owner from da_organization_membership
+    where organization_id=$1 and person_id=$2 and deleted_at is null`,[organizationId,personId])
+  assert.deepEqual(actor,[{role:"member",status:"active",protected_owner:false}])
+  // One current CSRF value, same cookie, Organization, operation and role;
+  // only membership_id changes. Keep CSRF/cookie out of evidence.
+  const session=await browser.eval(`(async()=>{
+    const r=await fetch('/personal/session');return {status:r.status,body:await r.json()}
+  })()`)
+  assert.equal(session.status,200)
+  assert.match(session.body.csrf_token,/^[A-Za-z0-9_-]{43}$/)
+  assert.equal(createHash("sha256").update(session.body.csrf_token).digest("hex"),
+    sessionRows[0].csrf_hash,"CSRF must match the persisted session, not cause a false 403")
+  const snapshot=async()=>{
+    const state:Record<string,unknown>={}
+    for(const table of ["da_organization_membership","da_audit_event",
+      "da_audit_outbox","da_security_outbox"])
+      state[table]=await q(`select id,md5(to_jsonb(t)::text) fingerprint from ${table} t order by id`)
+    return state
+  }
+  const before=await snapshot()
+  for(const target of targets){
+    const response=await browser.eval(`(async()=>{
+      const r=await fetch('/personal/memberships',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':${JSON.stringify(session.body.csrf_token)}},
+        body:JSON.stringify({action:'role',organization_id:${JSON.stringify(organizationId)},
+          membership_id:${JSON.stringify(target.id)},role:'admin'})})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    // Read back even on an unexpected response before stopping; no retry.
+    assert.deepEqual(await snapshot(),before,
+      "Unauthorized "+target.kind+" target must leave all membership/audit/outbox rows unchanged")
+    assert.equal(response.status,403,"Non-disclosing HTTP denial for "+target.kind)
+    assert.deepEqual(response.body,{message:"Access denied"},
+      "All target states must return the same safe body: "+target.kind)
+    assert.equal(await browser.token(),token,"All four requests must retain the same session")
+    process.stdout.write("PASS B22 Chrome: membership non-disclosure "+target.kind+
+      " target HTTP403 identical safe body; PG16 membership/canonical audit/audit outbox/security outbox unchanged\n")
+  }
+}
+
 // Keep this bounded real Chrome/PG16 policy check independent of the already
 // large native acceptance runner, without suppressing TypeScript checking.
 async function verifyOwnerMembershipManagePolicy({
@@ -1017,6 +1092,9 @@ export default async function({container}:any){
       organization_id:organizations[0].id,person_id:B.person,role:"member",
       status:"active",protected_owner:false
     }])
+    await verifyMembershipNonDisclosure({organizationId:organizations[0].id,
+      activeId:alphaMember.id,foreignId:betaAdminMembership.id,personId:B.person,
+      browser:reviewer,foundation,q})
     // B22 buyer.purchase is Organization-scoped and NEVER inferred from
     // Owner/Member roles, native Customer or Store product permission.
     await browser.send("Page.bringToFront")
