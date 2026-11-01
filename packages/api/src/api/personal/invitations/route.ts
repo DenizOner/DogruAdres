@@ -4,6 +4,7 @@ import { createInvitationWorkflow } from "../../../workflows/dogruadres-access/c
 import { acceptInvitationWorkflow } from "../../../workflows/dogruadres-access/accept-invitation"
 import { revokeInvitationWorkflow } from "../../../workflows/dogruadres-access/revoke-invitation"
 import { deriveInvitationToken } from "../../../modules/dogruadres-access/security"
+import { organizationActionAllowed } from "../../../modules/dogruadres-access/role-action-policy"
 import { sendSmtpEmail } from "../../../modules/dogruadres-access/smtp-client"
 import { verifiedEmailForActorContext } from "../../dogruadres/invitations/accept/route"
 import { access, csrf, enabled, sessionToken } from "../security"
@@ -71,6 +72,14 @@ function buildInvitationEmail(inviteUrl: string, recipientEmail: string) {
   return { subject, text, html };
 }
 
+// personalManagerOrganization already proves active Organization and protected
+// Owner status; this additional decision is the centrally changeable role policy.
+function invitationManagerAllowed(scoped:Readonly<{organizations:ReadonlyArray<{role:string}>}>|null|undefined):boolean{
+  if(!scoped || scoped.organizations.length!==1)return false
+  const role=scoped.organizations[0].role
+  return role==="admin" || organizationActionAllowed(role,"invitation.manage",role==="owner",false)
+}
+
 // No client-provided actor, Person, role elevation, auth provider, or native JWT.
 const organization = z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/)
 const create = z.object({
@@ -101,8 +110,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.status(400).json({ message: "Invalid input" })
   const service = access(req)
   const scoped = await service.personalManagerOrganization(sessionToken(req), parsed.data)
-  if (!scoped || scoped.organizations.length !== 1 ||
-      !["owner", "admin"].includes(scoped.organizations[0].role))
+  if (!invitationManagerAllowed(scoped))
     return res.status(403).json({ message: "Access denied" })
   const invitations = await service.listInvitations(
     { organization_id: parsed.data, status: "pending" },
@@ -136,8 +144,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   if (parsed.data.action === "create") {
     const input = parsed.data
     const scoped = await service.personalManagerOrganization(token, input.organization_id)
-    if (!scoped || scoped.organizations.length !== 1 ||
-        !["owner", "admin"].includes(scoped.organizations[0].role))
+    if (!invitationManagerAllowed(scoped))
       return res.status(403).json({ message: "Access denied" })
     // Never derive an invitation link from caller-controlled headers or localhost defaults.
     // Check configuration before creating a persistent invitation record.
@@ -201,8 +208,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
   if (parsed.data.action === "revoke") {
     const scoped = await service.personalManagerOrganization(token, parsed.data.organization_id)
-    if (!scoped || scoped.organizations.length !== 1 ||
-        !["owner", "admin"].includes(scoped.organizations[0].role))
+    if (!invitationManagerAllowed(scoped))
       return res.status(403).json({ message: "Access denied" })
     try {
       // The existing Foundation workflow verifies active membership and changes

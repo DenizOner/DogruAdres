@@ -1,4 +1,4 @@
-/** B22 canonical, reviewable defaults for Organization *business* actions.
+/** B22 canonical, reviewable defaults for Organization actions.
  * This is NOT a platform Staff grant, native Mercur Seller membership,
  * application entitlement or global Person permission.
  * Owner's full default within the current B22 action catalog is a ROLE
@@ -7,15 +7,15 @@
  * future persisted policy editor must replace this source atomically, not
  * introduce another role-only bypass or grant implicit Store approval.
  */
-export type OrganizationAction = "buyer.purchase" | "products.edit"
+export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage"
 export const DEFAULT_OWNER_ACTIONS: readonly OrganizationAction[] =
-  Object.freeze(["buyer.purchase","products.edit"])
+  Object.freeze(["buyer.purchase","products.edit","invitation.manage"])
 const DENY_ALL_OWNER_ACTIONS: readonly OrganizationAction[] = Object.freeze([])
 
 /** Optional trusted deployment setting for the Organization Owner ROLE,
  * NOT client, session, Person, Store or platform Staff input.
  * Omitted => current approved full B22 defaults. An explicit empty value
- * denies both B22 actions. Only these exact strings are accepted; malformed,
+ * denies every B22 Owner action. Only these exact strings are accepted; malformed,
  * duplicate and unknown entries fail closed rather than restoring defaults.
  * No database schema, new service or per-Organization override is created.
  * Operational changes must be reviewed and rolled out consistently.
@@ -48,7 +48,7 @@ export function organizationActionAllowed(
   ownerActions: readonly OrganizationAction[] = configuredOwnerActions()
 ): boolean {
   if(role==="owner") return protectedOwner===true && ownerActions.includes(action)
-  if(role==="member" || role==="admin") return auditedMemberGrant===true
+  if(role==="member" || role==="admin") return action!=="invitation.manage" && auditedMemberGrant===true
   return false
 }
 

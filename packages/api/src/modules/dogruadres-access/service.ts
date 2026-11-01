@@ -982,8 +982,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   ) {
     const actorMembership = await this.getActiveMembership(input.actor_person_id, input.organization_id, sharedContext)
     if (!actorMembership || !["owner", "admin"].includes(actorMembership.role) ||
-        (actorMembership.role==="owner" && !await isCurrentProtectedOwner(
-          securitySql(sharedContext.transactionManager),input.actor_person_id,input.organization_id))) {
+        (actorMembership.role==="owner" && !organizationActionAllowed(
+          "owner","invitation.manage",await isCurrentProtectedOwner(
+            securitySql(sharedContext.transactionManager),input.actor_person_id,input.organization_id),false))) {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "Active protected Owner or Admin membership is required")
     }
     const organization = await this.getOrganization(input.organization_id, sharedContext)
@@ -1055,11 +1056,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     @MedusaContext() sharedContext: Context = {}
   ) {
     const actorMembership = await this.getActiveMembership(input.actor_person_id, input.organization_id, sharedContext)
-    const invitation = await this.getInvitationInOrganization(input.invitation_id, input.organization_id, sharedContext)
     if (!actorMembership || !["owner", "admin"].includes(actorMembership.role) ||
-        (actorMembership.role==="owner" && !await isCurrentProtectedOwner(
-          securitySql(sharedContext.transactionManager),input.actor_person_id,input.organization_id)))
+        (actorMembership.role==="owner" && !organizationActionAllowed(
+          "owner","invitation.manage",await isCurrentProtectedOwner(
+            securitySql(sharedContext.transactionManager),input.actor_person_id,input.organization_id),false)))
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "Active protected Owner or Admin membership is required")
+    // Deny before reading a private invitation target.
+    const invitation = await this.getInvitationInOrganization(input.invitation_id, input.organization_id, sharedContext)
     if (!invitation) throw new Error("Pending invitation not found")
     await this.lockInvitation_(invitation.id, sharedContext)
     const current = await this.getInvitationInOrganization(invitation.id, input.organization_id, sharedContext)

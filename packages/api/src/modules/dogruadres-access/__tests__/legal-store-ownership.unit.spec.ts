@@ -109,7 +109,7 @@ describe("B22 distinct products.edit grant (SQL mock only)",()=>{
 
 describe("B22 shared Owner action policy (pure decision, NOT live policy administration)",()=>{
   it("grants the currently approved Owner defaults only with fresh protected membership proof",()=>{
-    expect(DEFAULT_OWNER_ACTIONS).toEqual(["buyer.purchase","products.edit"])
+    expect(DEFAULT_OWNER_ACTIONS).toEqual(["buyer.purchase","products.edit","invitation.manage"])
     expect(Object.isFrozen(DEFAULT_OWNER_ACTIONS)).toBe(true)
     for(const action of DEFAULT_OWNER_ACTIONS){
       expect(ownerRoleAllows(action)).toBe(true)
@@ -117,7 +117,7 @@ describe("B22 shared Owner action policy (pure decision, NOT live policy adminis
       expect(organizationActionAllowed("owner",action,false,true)).toBe(false)
       expect(organizationActionAllowed("member",action,false,false)).toBe(false)
       expect(organizationActionAllowed("admin",action,false,false)).toBe(false)
-      expect(organizationActionAllowed("member",action,false,true)).toBe(true)
+      expect(organizationActionAllowed("member",action,false,true)).toBe(action!=="invitation.manage")
     }
     expect(organizationActionAllowed("platform_staff","products.edit",true,true)).toBe(false)
   })
@@ -126,6 +126,8 @@ describe("B22 shared Owner action policy (pure decision, NOT live policy adminis
     expect(organizationActionAllowed("owner","buyer.purchase",true,true,narrowed)).toBe(false)
     expect(organizationActionAllowed("owner","products.edit",true,false,narrowed)).toBe(true)
     expect(organizationActionAllowed("owner","products.edit",true,true,[])).toBe(false)
+    expect(organizationActionAllowed("owner","invitation.manage",true,false,narrowed)).toBe(false)
+    expect(organizationActionAllowed("admin","invitation.manage",false,true)).toBe(false)
     expect(organizationActionAllowed("owner","buyer.purchase",false,true,DEFAULT_OWNER_ACTIONS)).toBe(false)
   })
   it("Buyer scope checks current Owner proof under the same default as products.edit",async()=>{
@@ -151,12 +153,14 @@ describe("B22 trusted Owner role allowlist configuration (no browser setting or 
     delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     expect(configuredOwnerActions()).toEqual(DEFAULT_OWNER_ACTIONS)
     expect(ownerRoleAllows("buyer.purchase")).toBe(true)
+    expect(ownerRoleAllows("invitation.manage")).toBe(true)
     for(const raw of ["", "admin", "buyer.purchase,buyer.purchase",
       " buyer.purchase", "buyer.purchase,platform.smtp.manage"]){
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=raw
       expect(configuredOwnerActions()).toEqual([])
       expect(ownerRoleAllows("buyer.purchase")).toBe(false)
       expect(ownerRoleAllows("products.edit")).toBe(false)
+      expect(ownerRoleAllows("invitation.manage")).toBe(false)
     }
   })
   it("narrows actions centrally without using a personal grant or unprotected role bypass",()=>{

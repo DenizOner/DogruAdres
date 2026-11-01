@@ -3021,6 +3021,67 @@ export default async function({container}:any){
       await browser.wait("document.visibilityState==='visible'")
     }
 
+    // Narrow only the trusted Owner invitation action while retaining the
+    // same real pending invitation for restored-policy positive acceptance.
+    const policyInvitations=await q(`select id,status,revoked_at,expires_at
+      from da_organization_invitation where organization_id=$1 order by id`,
+      [organizations[0].id])
+    const policyAudits=await q(`select id from da_audit_event
+      where organization_id=$1 order by id`,[organizations[0].id])
+    const policyOutboxes=await q(`select x.id from da_audit_outbox x
+      join da_audit_event e on e.id=x.source_audit_event_id
+      where e.organization_id=$1 order by x.id`,[organizations[0].id])
+    const oldInvitationActions=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    try{
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit"
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      const policyDenied=await browser.eval(`(async()=>{
+        const org=${JSON.stringify(organizations[0].id)}
+        const invite=${JSON.stringify(pendingInvite.id)}
+        const session=await(await fetch('/personal/session')).json()
+        const post=async(value)=>{
+          const r=await fetch('/personal/invitations',{method:'POST',
+            headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+            body:JSON.stringify(value)})
+          return r.status
+        }
+        return {
+          list:(await fetch('/personal/invitations?organization='+org)).status,
+          create:await post({action:'create',organization_id:org,
+            email:'role-policy-denied@example.invalid',role:'member'}),
+          revoke:await post({action:'revoke',organization_id:org,invitation_id:invite})
+        }
+      })()`)
+      assert.deepEqual(policyDenied,{list:403,create:403,revoke:403},
+        "Protected Owner must lose invitation access when role policy narrows")
+      await assert.rejects(foundation.createOrganizationInvitation({
+        organization_id:organizations[0].id,
+        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,
+        email:"role-policy-service-denied@example.invalid",role:"member"
+      }),/Active protected Owner or Admin membership is required/)
+      await assert.rejects(foundation.revokeOrganizationInvitation({
+        organization_id:organizations[0].id,invitation_id:pendingInvite.id,
+        actor_person_id:A.person,actor_type:"user",actor_id:A.actor
+      }),/Active protected Owner or Admin membership is required/)
+      assert.deepEqual(await q(`select id,status,revoked_at,expires_at
+        from da_organization_invitation where organization_id=$1 order by id`,
+        [organizations[0].id]),policyInvitations,"Denied invitation must not change any state")
+      assert.deepEqual(await q(`select id from da_audit_event
+        where organization_id=$1 order by id`,[organizations[0].id]),
+        policyAudits,"Denied invitation must not append audit")
+      assert.deepEqual(await q(`select x.id from da_audit_outbox x
+        join da_audit_event e on e.id=x.source_audit_event_id
+        where e.organization_id=$1 order by x.id`,[organizations[0].id]),
+        policyOutboxes,"Denied invitation must not append outbox")
+    }finally{
+      if(oldInvitationActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=oldInvitationActions
+    }
+    const policyRestored=await browser.eval(`(async()=>{
+      return (await fetch('/personal/invitations?organization='+${JSON.stringify(organizations[0].id)})).status
+    })()`)
+    assert.equal(policyRestored,200,"Restored policy permits Owner invitation read")
     // Positive authorization for the *same* pending invitation. The real
     // protected Alpha Owner now revokes it through browser HTTPS/CSRF and
     // the existing Medusa workflow. No test-only SQL mutation of the invite.
@@ -3062,6 +3123,7 @@ export default async function({container}:any){
     assert.equal(revokeEvents[0].organization_id,organizations[0].id)
     assert.equal(revokeEvents[0].target_id,pendingInvite.id)
     process.stdout.write("PASS B22 protected Owner management: real pending invitation HTTP 403 for role-only Owner with no DB/audit mutation; same invitation HTTPS 200 revoked by protected Owner with single audit/outbox\n")
+    process.stdout.write("PASS B22 Owner role policy: narrowed invitation.manage denies Owner HTTPS list/create/revoke and Foundation writes with unchanged PG16 invitation/audit/outbox; restored Owner revokes\n")
 
     // Positive read-back for the SAME scoped endpoints: a genuine protected
     // Alpha Owner and a current ordinary Alpha Admin remain allowed. Use only

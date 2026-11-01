@@ -163,6 +163,8 @@ async function run(){
           "Missing real pending invitation, denied role-only Owner and authorized protected Owner revoke/PG16 audit evidence")
         assert.ok(result.includes("PASS B22 protected Owner management: verified protected Owner and ordinary Admin both retain private membership/invitation reads after role-only denial"),
           "Missing protected Owner and ordinary Admin positive readback evidence")
+        assert.ok(result.split("\\n").includes("PASS B22 Owner role policy: narrowed invitation.manage denies Owner HTTPS list/create/revoke and Foundation writes with unchanged PG16 invitation/audit/outbox; restored Owner revokes"),
+          "Missing invitation.manage denied and restored real Chrome/PG16 marker")
         assert.ok(result.includes("PASS B22 Owner role policy: narrowed buyer.purchase denies real HTTPS and PG16 final checkout L with zero OrderGroup; default restored"),
           "Missing real Owner role buyer.purchase narrowed-denial and restored-policy PG16/HTTP evidence")
         assert.ok(result.includes("PASS B22 Owner role policy: narrowed products.edit denies real HTTP POST and native PG16 product/intent writes, restored default lists approved Store"),
