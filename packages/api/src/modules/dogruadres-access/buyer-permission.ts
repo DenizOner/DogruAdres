@@ -1,7 +1,8 @@
 import { IdentityAccessDenied, IdentitySessions, isCurrentProtectedOwner, type SecuritySql } from "./identity-session"
+import { organizationActionAllowed } from "./role-action-policy"
 
 /** Explicit non-Owner Organization buyer permission with its
- * canonical audit/outbox. Protected Owner is verified separately.
+ * canonical audit/outbox. Protected Owner follows shared role policy.
  * Buyer checkout MUST still validate native Customer, cart, every Store block
  * and final revocation separately. No checkout writes in this module.
  */
@@ -42,8 +43,13 @@ export async function authorizedBuyerOrganization(
   const membership=await new IdentitySessions(db).organizations(token,organizationId,false)
   if(!membership||membership.organizations.length!==1||
      membership.organizations[0].id!==organizationId)return null
-  const owner=membership.organizations[0].role==="owner" &&
+  const role=membership.organizations[0].role
+  const owner=role==="owner" &&
     await isCurrentProtectedOwner(db,membership.person_id,organizationId)
-  if(!owner&&!await verifiedBuyerPurchaseGrant(db,membership.person_id,organizationId))return null
+  // A protected Owner must still pass the default role action policy;
+  // narrowing it cannot fall through to a personal Member grant.
+  const grant=role==="owner"?false:
+    await verifiedBuyerPurchaseGrant(db,membership.person_id,organizationId)
+  if(!organizationActionAllowed(role,"buyer.purchase",owner,grant))return null
   return {person_id:membership.person_id,organization_id:organizationId}
 }

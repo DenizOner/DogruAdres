@@ -1,5 +1,7 @@
 import { IdentitySessions, IdentityAccessDenied } from "../identity-session"
 import { authorizedLegalSellerIds, authorizedProductEditScope, verifiedStoreProductEditGrant } from "../legal-store-ownership"
+import { organizationActionAllowed, ownerRoleAllows, DEFAULT_OWNER_ACTIONS } from "../role-action-policy"
+import { authorizedBuyerOrganization } from "../buyer-permission"
 
 describe("B22 legal Organization ownership candidate gate (SQL-mock, NOT PostgreSQL acceptance)", () => {
   afterEach(() => jest.restoreAllMocks())
@@ -93,5 +95,39 @@ describe("B22 distinct products.edit grant (SQL mock only)",()=>{
       if(rows.length===0)await expect(verifiedStoreProductEditGrant({execute},person,org,seller)).resolves.toBe(false)
       else await expect(verifiedStoreProductEditGrant({execute},person,org,seller)).rejects.toBeInstanceOf(IdentityAccessDenied)
     }
+  })
+})
+
+describe("B22 shared Owner action policy (pure decision, NOT live policy administration)",()=>{
+  it("grants the currently approved Owner defaults only with fresh protected membership proof",()=>{
+    expect(DEFAULT_OWNER_ACTIONS).toEqual(["buyer.purchase","products.edit"])
+    expect(Object.isFrozen(DEFAULT_OWNER_ACTIONS)).toBe(true)
+    for(const action of DEFAULT_OWNER_ACTIONS){
+      expect(ownerRoleAllows(action)).toBe(true)
+      expect(organizationActionAllowed("owner",action,true,false)).toBe(true)
+      expect(organizationActionAllowed("owner",action,false,true)).toBe(false)
+      expect(organizationActionAllowed("member",action,false,false)).toBe(false)
+      expect(organizationActionAllowed("admin",action,false,false)).toBe(false)
+      expect(organizationActionAllowed("member",action,false,true)).toBe(true)
+    }
+    expect(organizationActionAllowed("platform_staff","products.edit",true,true)).toBe(false)
+  })
+  it("a narrowed Owner role policy denies that action even with an old personal grant",()=>{
+    const narrowed=Object.freeze(["products.edit"] as const)
+    expect(organizationActionAllowed("owner","buyer.purchase",true,true,narrowed)).toBe(false)
+    expect(organizationActionAllowed("owner","products.edit",true,false,narrowed)).toBe(true)
+    expect(organizationActionAllowed("owner","products.edit",true,true,[])).toBe(false)
+    expect(organizationActionAllowed("owner","buyer.purchase",false,true,DEFAULT_OWNER_ACTIONS)).toBe(false)
+  })
+  it("Buyer scope checks current Owner proof under the same default as products.edit",async()=>{
+    const person="daprs_A",org="daorg_A",token="x".repeat(43)
+    jest.spyOn(IdentitySessions.prototype,"organizations").mockResolvedValue(
+      {person_id:person,organizations:[{id:org,role:"owner"}]} as any)
+    const execute=jest.fn().mockResolvedValueOnce([{id:"damem_owner"}])
+    await expect(authorizedBuyerOrganization({execute},token,org))
+      .resolves.toEqual({person_id:person,organization_id:org})
+    expect(execute.mock.calls[0][0]).toContain("protected_owner=true")
+    expect(execute).toHaveBeenCalledTimes(1)
+    jest.restoreAllMocks()
   })
 })
