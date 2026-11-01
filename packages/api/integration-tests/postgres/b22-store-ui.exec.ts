@@ -37,8 +37,21 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   assert.equal(evidence,join(process.env.RUNNER_TEMP!,"b22-admin-smtp-evidence"))
   mkdirSync(evidence,{recursive:true})
   const open=async(b:B06Chrome)=>{
+    b.phase='native-admin-smtp-navigation'
     await b.send("Page.navigate",{url:b.origin+path})
-    await b.wait("document.body.textContent.includes('Platform SMTP Ayarları')")
+    try {await b.wait("document.body.textContent.includes('Platform SMTP Ayarları')")}
+    catch(error){
+      // Before any SMTP secret input: bounded diagnostics of this one native
+      // navigation. No cookies, headers, HTML source or input values retained.
+      await b.screenshot(join(evidence,"native-navigation-failed.png"))
+      writeFileSync(join(evidence,"native-navigation-failed.json"),JSON.stringify({
+        source:process.env.GITHUB_SHA,
+        document:await b.eval("({path:location.pathname,title:document.title,text:document.body.innerText.slice(0,800)})"),
+        errors:b.runtimeErrors,
+        http:b.http.filter(r=>r.phase===b.phase).map(({method,path,status})=>({method,path,status})),
+      },null,2))
+      throw error
+    }
     assert.equal(await b.eval("location.pathname"),path)
   }
   const read=async(b:B06Chrome)=>b.eval(`(async()=>{const r=await fetch('/personal/platform/smtp');return {status:r.status,body:await r.json()}})()`)
@@ -118,8 +131,8 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   await q("update da_browser_session set created_at=clock_timestamp()-interval '30 days' where id=$1",[bHash])
   assert.equal((await read(denied)).status,403)
   await denied.send("Page.reload",{ignoreCache:true});await hidden(denied)
-  // A receives a new explicit fixture grant; logout then revokes its current
-  // genuine cookie. No session is fabricated or restored by the test.
+  // A receives a new explicit fixture grant; a terminal DB fixture then revokes
+  // its genuine session. No session is fabricated or restored by the test.
   await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
     values($1,$2,'platform.smtp.manage','platform',$2,'B22 disposable revocation fixture')`,[grant+"_a",person])
   assert.equal((await read(browser)).status,200)
