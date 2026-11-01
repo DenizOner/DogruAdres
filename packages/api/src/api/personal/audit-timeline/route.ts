@@ -28,7 +28,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     if (cursor !== undefined) paginationQuery.cursor = cursor
 
     const result = await timelinePage(paginationQuery, async () => {
-      const decision = await access(req).personalOrganizations(sessionToken(req), orgId)
+      const decision = await access(req).personalManagerOrganization(sessionToken(req), orgId)
       if (!decision || !decision.organizations.length || !["owner", "admin"].includes(decision.organizations[0].role)) {
         throw new TimelineError(403)
       }

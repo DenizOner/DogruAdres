@@ -39,7 +39,7 @@ function mockRequest(options: {
   } = options
 
   const accessService = {
-    personalOrganizations: jest.fn(async (_token: string, selectedOrg?: string) => {
+    personalManagerOrganization: jest.fn(async (_token: string, selectedOrg?: string) => {
       if (!role) return null
       if (selectedOrg && selectedOrg !== orgId) return null
       return {
@@ -135,6 +135,15 @@ describe("Personal audit timeline route (GET /personal/audit-timeline)", () => {
     await GET(req, res)
     expect(getStatus()).toBe(403)
     expect(getBody()).toEqual({ message: "Access denied" })
+  })
+
+  it("returns 403 when live manager proof is absent, without reading Index", async()=>{
+    const {req,accessService,indexService}=mockRequest()
+    accessService.personalManagerOrganization.mockResolvedValue(null)
+    const {res,getStatus}=mockResponse()
+    await GET(req,res)
+    expect(getStatus()).toBe(403)
+    expect(indexService.readOrganizationTimeline).not.toHaveBeenCalled()
   })
 
   it("returns 403 when user is only a member (not owner or admin)", async () => {

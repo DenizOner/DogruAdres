@@ -10,10 +10,11 @@ const keyText = Buffer.alloc(32, 7).toString("base64"), key = cursorKey(keyText)
 const identity = { organizationId: "org_a", personId: "person_a" }
 const scope = { ...identity, limit: 1 }
 const boundary = { occurred_at: "2026-10-18T00:00:00.000Z", id: "daidx_b" }
-function authFixture(role: string | null = "owner", person: unknown = { id: "person_a" }, active = true) {
+function authFixture(role: string | null = "owner", person: unknown = { id: "person_a" }, active = true, protectedOwner = true) {
   const service = {
     resolvePersonForActor: jest.fn(async () => person),
-    getActiveMembership: jest.fn(async () => role ? ({ role, status: active ? "active" : "revoked", protected_owner: false }) : null),
+    getActiveMembership: jest.fn(async () => role ? ({ role, status: active ? "active" : "revoked", protected_owner: protectedOwner }) : null),
+    currentProtectedOwner: jest.fn(async () => protectedOwner),
     getOrganization: jest.fn(async () => ({ id: "org_a", status: "active" })),
   }
   const req = { auth_context: { actor_id: "user_a", actor_type: "user" }, scope: { resolve: () => service } } as unknown as AuthenticatedMedusaRequest
@@ -25,6 +26,14 @@ const row = { ...boundary, source_module: "dogruadres-access", source_event_id: 
 describe("Audit timeline current authorization", () => {
   it.each(["owner", "admin"])("allows active %s including platform user only through membership", async role => {
     await expect(authFixture(role).authorize()).resolves.toMatchObject(identity)
+  })
+  it("denies active role-only Owner even for private audit", async () => {
+    const f=authFixture("owner",{id:"person_a"},true,false)
+    await expect(f.authorize()).rejects.toMatchObject({message:"Organization access denied"})
+    expect(f.service.currentProtectedOwner).not.toHaveBeenCalled()
+    const withoutProof=authFixture()
+    withoutProof.service.currentProtectedOwner.mockResolvedValue(false)
+    await expect(withoutProof.authorize()).rejects.toThrow("Organization access denied")
   })
   it.each(["member", null])("denies member or platform user without membership: %s", async role => {
     await expect(authFixture(role).authorize()).rejects.toMatchObject({ message: "Organization access denied" })

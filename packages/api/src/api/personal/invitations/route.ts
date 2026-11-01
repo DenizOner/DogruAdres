@@ -100,7 +100,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   if (!parsed.success || Object.keys(req.query).length !== 1)
     return res.status(400).json({ message: "Invalid input" })
   const service = access(req)
-  const scoped = await service.personalOrganizations(sessionToken(req), parsed.data)
+  const scoped = await service.personalManagerOrganization(sessionToken(req), parsed.data)
   if (!scoped || scoped.organizations.length !== 1 ||
       !["owner", "admin"].includes(scoped.organizations[0].role))
     return res.status(403).json({ message: "Access denied" })
@@ -135,7 +135,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
   if (parsed.data.action === "create") {
     const input = parsed.data
-    const scoped = await service.personalOrganizations(token, input.organization_id)
+    const scoped = await service.personalManagerOrganization(token, input.organization_id)
     if (!scoped || scoped.organizations.length !== 1 ||
         !["owner", "admin"].includes(scoped.organizations[0].role))
       return res.status(403).json({ message: "Access denied" })
@@ -200,7 +200,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   }
 
   if (parsed.data.action === "revoke") {
-    const scoped = await service.personalOrganizations(token, parsed.data.organization_id)
+    const scoped = await service.personalManagerOrganization(token, parsed.data.organization_id)
     if (!scoped || scoped.organizations.length !== 1 ||
         !["owner", "admin"].includes(scoped.organizations[0].role))
       return res.status(403).json({ message: "Access denied" })

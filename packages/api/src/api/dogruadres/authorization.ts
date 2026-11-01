@@ -49,7 +49,9 @@ export async function requireOrganizationAccess(
       if (!membership || membership.status !== "active") return false
       if (requestedAction === "organization.read") return true
       if (["membership.list", "membership.manage", "invitation.manage", "audit.timeline.read"].includes(requestedAction)) {
-        return membership.role === "owner" || membership.role === "admin"
+        if (membership.role === "admin") return true
+        return membership.role === "owner" && membership.protected_owner === true &&
+          await service.currentProtectedOwner(personId,orgId)
       }
       return false
     },

@@ -51,7 +51,9 @@ export async function authorizedLegalSellerIds(
   if (!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)) throw new IdentityAccessDenied()
   const result = await new IdentitySessions(db).organizations(token, organizationId)
   if (!result || result.organizations.length !== 1 ||
-      !["owner","admin"].includes(result.organizations[0].role)) return null
+      !["owner","admin"].includes(result.organizations[0].role) ||
+      (result.organizations[0].role==="owner" &&
+       !await isCurrentProtectedOwner(db,result.person_id,organizationId))) return null
   const seller_ids = await platformApprovedSellerIds(db, organizationId)
   return { person_id: result.person_id, organization_id: organizationId, seller_ids }
 }
