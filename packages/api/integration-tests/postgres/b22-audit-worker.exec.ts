@@ -6,6 +6,8 @@
 import assert from "node:assert/strict"
 import {Client} from "@medusajs/framework/pg"
 import {runAuditRelayBatch} from "../../src/jobs/dogruadres-audit-relay"
+import {relayOneFoundationAudit} from "../../src/workflows/dogruadres-audit-relay/relay"
+import {once} from "node:events"
 
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
@@ -113,9 +115,7 @@ export default async function({container}:any){
 async function realAuditRelayRecovery(
   container:any,q:(sql:string,args?:unknown[])=>Promise<any[]>
 ) {
-  const {relayOneFoundationAudit}=await import('../../src/workflows/dogruadres-audit-relay/relay')
   const {spawn,spawnSync}=await import('node:child_process')
-  const {once}=await import('node:events')
   const {setTimeout:sleep}=await import('node:timers/promises')
   const source=container.resolve('dogruadresAccess') as any
   const index=container.resolve('dogruadresAuditIndex') as any
