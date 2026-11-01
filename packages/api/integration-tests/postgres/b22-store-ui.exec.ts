@@ -32,11 +32,29 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   const secret=process.env.B22_SMTP_CANARY!
   assert.match(secret,/^b22-smtp-[0-9a-f]{48}$/)
   browser.secretCanary=secret;denied.secretCanary=secret
+  let persistedCiphertext=""
+  const inspected=new Set<string>()
+  const scanResponses=async(b:B06Chrome)=>{
+    for(const r of b.http.filter(r=>r.path==='/personal/platform/smtp')){
+      const id=b.actor+':'+r.requestId
+      if(inspected.has(id))continue
+      const body=await b.send('Network.getResponseBody',{requestId:r.requestId})
+      const text=body.base64Encoded?Buffer.from(body.body,'base64').toString():body.body
+      assert.ok(!text.includes(secret)&&(!persistedCiphertext||!text.includes(persistedCiphertext)),"Secret in browser response")
+      inspected.add(id)
+    }
+  }
   const path="/dashboard/settings/smtp"
   const evidence=process.env.B06_EVIDENCE_DIR!
   assert.equal(evidence,join(process.env.RUNNER_TEMP!,"b22-admin-smtp-evidence"))
   mkdirSync(evidence,{recursive:true})
+  const completed:string[]=[]
+  const mark=(scenario:string)=>{
+    completed.push(scenario)
+    writeFileSync(join(evidence,"completed-scenarios.json"),JSON.stringify({source:process.env.GITHUB_SHA,completed},null,2))
+  }
   const open=async(b:B06Chrome)=>{
+    await scanResponses(b)
     b.phase='native-admin-smtp-navigation'
     await b.send("Page.navigate",{url:b.origin+path})
     try {await b.wait("document.body.textContent.includes('Platform SMTP Ayarları')")}
@@ -57,6 +75,8 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   const read=async(b:B06Chrome)=>b.eval(`(async()=>{const r=await fetch('/personal/platform/smtp');return {status:r.status,body:await r.json()}})()`)
   const hidden=async(b:B06Chrome)=>b.wait("!document.querySelector('#smtp-host') && !document.body.textContent.includes('Yapılandırma yükleniyor')")
   const reload=async(b:B06Chrome,status:number)=>{
+    // Inspect response bodies before navigating away from their document.
+    await scanResponses(b)
     const start=b.http.length
     await b.send("Page.reload",{ignoreCache:true})
     await until(async()=>b.http.slice(start).some(r=>r.path==='/personal/platform/smtp'&&r.method==='GET'&&r.status===status),
@@ -69,6 +89,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   await open(denied);await hidden(denied)
   assert.equal((await read(denied)).status,403)
   assert.deepEqual(await digest(),before)
+  mark("Unauthorized real MFA session GET403; no SMTP rows")
   const grant="da_staff_smtp_"+randomBytes(12).toString("hex")
   await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
     values($1,$2,'platform.smtp.manage','platform',$2,'B22 disposable SMTP acceptance fixture')`,[grant,person])
@@ -78,6 +99,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   assert.equal(first.status,200);assert.equal(first.body.can_manage,true)
   assert.equal(first.body.settings.version,0)
   assert.equal(await browser.eval("document.querySelector('#smtp-host').value"),first.body.settings.host)
+  mark("Native Admin render and explicitly granted MFA session GET200")
   await browser.screenshot(join(evidence,"authorized-read.png"))
   writeFileSync(join(evidence,"authorized-read.json"),JSON.stringify({
     source:process.env.GITHUB_SHA,nativeModule:"admin_ui",sameOrigin:true,
@@ -130,22 +152,26 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   assert.equal(saved.length,1);assert.equal(saved[0].enabled,false)
   assert.equal(saved[0].host,"smtp.b22.example.invalid");assert.equal(saved[0].version,1)
   assert.match(saved[0].password_encrypted,/^v1:/)
+  persistedCiphertext=saved[0].password_encrypted
   assert.ok(!JSON.stringify(saved).includes(secret),"No plaintext persisted")
   const safe=await read(browser)
   assert.equal(safe.status,200);assert.equal(safe.body.settings.has_password,true)
   assert.ok(!JSON.stringify(safe).includes(secret))
-  assert.ok(!('password' in safe.body.settings));assert.ok(!('password_encrypted' in safe.body.settings))
+  assert.equal(safe.body.settings.password,null);assert.ok(!('password_encrypted' in safe.body.settings))
+  mark("Real browser save HTTP200; PG16 version1, disabled, encrypted password; GET secret null")
   await reload(browser,200)
   await browser.wait("document.body.textContent.includes('Ayar sürümü: 1')")
   assert.equal(await browser.eval("document.querySelector('#smtp-host').value"),saved[0].host)
   assert.equal(await browser.eval("document.querySelector('#smtp-pass').value"),"")
   await browser.screenshot(join(evidence,"saved-refreshed.png"))
+  mark("New document refresh GET200 and persisted settings rendered; password input empty")
   // A stale real HTTP writer must not overwrite the newer browser save.
   const stale=await browser.eval(`(async()=>{const s=await(await fetch('/personal/session')).json();
     const r=await fetch('/personal/platform/smtp',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
     body:JSON.stringify({action:'save',enabled:false,host:'stale.example.invalid',port:465,security:'ssl',from_email:'b22@example.invalid',expected_version:0})});
     return {status:r.status,body:await r.json()}})()`)
   assert.equal(stale.status,409);assert.deepEqual(await digest(),saved)
+  mark("Stale HTTP409 with unchanged PG16 settings")
   // Real database read failure, not a mocked successful API or component.
   await q("alter table da_platform_smtp_settings rename to b22_smtp_settings_fault")
   try {
@@ -158,10 +184,12 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     await reload(browser,503);await hidden(browser)
     assert.equal((await read(browser)).status,503)
   } finally {process.env.DOGRUADRES_IDENTITY_ENABLED=enabled}
+  mark("Real GET500 and GET503 keep configuration form hidden")
   // Revoked grant denies even the original strong, genuine session.
   await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[grant])
   await reload(browser,403);await hidden(browser)
   assert.equal((await read(browser)).status,403)
+  mark("Revoked platform grant GET403 and form hidden")
   // Give B an explicit grant, prove its real MFA session, then expire it.
   await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
     values($1,$2,'platform.smtp.manage','platform',$2,'B22 disposable expiry fixture')`,[grant+"_b",otherPerson])
@@ -170,6 +198,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   await q("update da_browser_session set created_at=clock_timestamp()-interval '30 days' where id=$1",[bHash])
   assert.equal((await read(denied)).status,403)
   await reload(denied,403);await hidden(denied)
+  mark("Expired real session GET403 and form hidden")
   // A receives a new explicit fixture grant; a terminal DB fixture then revokes
   // its genuine session. No session is fabricated or restored by the test.
   await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
@@ -179,13 +208,10 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   await q("update da_browser_session set status='revoked' where id=$1",[aHash])
   assert.equal((await read(browser)).status,403)
   await reload(browser,403);await hidden(browser)
+  mark("Revoked real session GET403 and form hidden")
   assert.deepEqual(await digest(),saved)
   for(const b of [browser,denied]){
-    for(const r of b.http.filter(r=>r.path==='/personal/platform/smtp')){
-      const body=await b.send('Network.getResponseBody',{requestId:r.requestId})
-      const text=body.base64Encoded?Buffer.from(body.body,'base64').toString():body.body
-      assert.ok(!text.includes(secret)&&!text.includes(saved[0].password_encrypted),"Secret in browser response")
-    }
+    await scanResponses(b)
     assert.equal(b.secretLeaks,false,"Secret in Chrome protocol/console")
   }
   assert.ok(browser.http.some(r=>r.path===path&&r.status===200&&r.tls))
