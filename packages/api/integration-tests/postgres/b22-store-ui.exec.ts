@@ -78,6 +78,11 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   assert.equal(first.status,200);assert.equal(first.body.can_manage,true)
   assert.equal(first.body.settings.version,0)
   assert.equal(await browser.eval("document.querySelector('#smtp-host').value"),first.body.settings.host)
+  await browser.screenshot(join(evidence,"authorized-read.png"))
+  writeFileSync(join(evidence,"authorized-read.json"),JSON.stringify({
+    source:process.env.GITHUB_SHA,nativeModule:"admin_ui",sameOrigin:true,
+    realMfa:true,unauthorizedStatus:403,authorizedStatus:first.status,version:first.body.settings.version,
+  },null,2))
   // DOM inputs and submit use real Chrome input events. SMTP remains disabled;
   // neither the separate send-test control nor any provider is invoked.
   if(await browser.eval("document.querySelector('#smtp-toggle').getAttribute('aria-checked')==='true'"))
@@ -91,8 +96,33 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   await replace("#smtp-host","smtp.b22.example.invalid")
   await replace("#smtp-from-email","b22@example.invalid")
   await replace("#smtp-pass",secret)
+  const saveStart=browser.http.length
   await browser.click("form button[type=submit]")
-  await browser.wait("document.body.textContent.includes('Ayar sürümü: 1')")
+  try {await browser.wait("document.body.textContent.includes('Ayar sürümü: 1')")}
+  catch(error){
+    // Read back this one ambiguous attempt before the dedicated DB is retired.
+    // Never retry its submit; retain no request payload or password/ciphertext.
+    const posts=browser.http.slice(saveStart).filter(r=>r.path==='/personal/platform/smtp'&&r.method==='POST')
+    const responses:any[]=[]
+    for(const post of posts){
+      const response=await browser.send('Network.getResponseBody',{requestId:post.requestId})
+      const text=response.base64Encoded?Buffer.from(response.body,'base64').toString():response.body
+      const body=JSON.parse(text)
+      responses.push({status:post.status,keys:Object.keys(body),message:body.message,errors:body.errors,
+        secretLeaked:text.includes(secret)})
+    }
+    const state=await browser.eval(`({
+      text:document.body.innerText,
+      hostMatches:document.querySelector('#smtp-host')?.value==='smtp.b22.example.invalid',
+      senderMatches:document.querySelector('#smtp-from-email')?.value==='b22@example.invalid',
+      validity:Array.from(document.querySelectorAll('form input')).map(e=>({id:e.id,valid:e.validity.valid,message:e.validationMessage})),
+    })`)
+    state.text=state.text.replaceAll(secret,'[redacted]').slice(0,1500)
+    const rows=await q("select id,enabled,version,host from da_platform_smtp_settings order by id")
+    writeFileSync(join(evidence,"save-failed.json"),JSON.stringify({source:process.env.GITHUB_SHA,
+      responses,state,rows,consoleSecretLeaked:browser.secretLeaks},null,2).replaceAll(secret,'[redacted]'))
+    throw error
+  }
   const saved=await digest()
   assert.equal(saved.length,1);assert.equal(saved[0].enabled,false)
   assert.equal(saved[0].host,"smtp.b22.example.invalid");assert.equal(saved[0].version,1)
