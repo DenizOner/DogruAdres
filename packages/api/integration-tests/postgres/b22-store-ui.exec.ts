@@ -2972,7 +2972,7 @@ export default async function({container}:any){
         "Role-only Owner must not revoke an invitation or change its state")
       assert.deepEqual(await snapshot(),before,
         "Denied role-change/invitation-revoke cannot write domain audit/outbox")
-      process.stdout.write("PASS B22 protected Owner mutation negatives: role-only Owner HTTP 403 on membership role-change and invitation revoke; membership/invitation states and canonical audit/outbox unchanged\\n")
+      process.stdout.write("PASS B22 protected Owner mutation negatives: role-only Owner HTTP 403 on membership role-change and invitation revoke; membership/invitation states and canonical audit/outbox unchanged\n")
       const denied=await reviewer.eval(script)
       for(const [name,status] of Object.entries(denied))
         assert.equal(status,403,"Role-only Owner denied: "+name)
