@@ -109,7 +109,7 @@ describe("B22 distinct products.edit grant (SQL mock only)",()=>{
 
 describe("B22 shared Owner action policy (pure decision, NOT live policy administration)",()=>{
   it("grants the currently approved Owner defaults only with fresh protected membership proof",()=>{
-    expect(DEFAULT_OWNER_ACTIONS).toEqual(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list"])
+    expect(DEFAULT_OWNER_ACTIONS).toEqual(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read"])
     expect(Object.isFrozen(DEFAULT_OWNER_ACTIONS)).toBe(true)
     for(const action of DEFAULT_OWNER_ACTIONS){
       expect(ownerRoleAllows(action)).toBe(true)
@@ -117,7 +117,7 @@ describe("B22 shared Owner action policy (pure decision, NOT live policy adminis
       expect(organizationActionAllowed("owner",action,false,true)).toBe(false)
       expect(organizationActionAllowed("member",action,false,false)).toBe(false)
       expect(organizationActionAllowed("admin",action,false,false)).toBe(false)
-      expect(organizationActionAllowed("member",action,false,true)).toBe(!["invitation.manage","membership.manage","membership.list"].includes(action))
+      expect(organizationActionAllowed("member",action,false,true)).toBe(!["invitation.manage","membership.manage","membership.list","audit.timeline.read"].includes(action))
     }
     expect(organizationActionAllowed("platform_staff","products.edit",true,true)).toBe(false)
   })
@@ -132,6 +132,8 @@ describe("B22 shared Owner action policy (pure decision, NOT live policy adminis
     expect(organizationActionAllowed("admin","membership.manage",false,true)).toBe(false)
     expect(organizationActionAllowed("owner","membership.list",true,false,narrowed)).toBe(false)
     expect(organizationActionAllowed("admin","membership.list",false,true)).toBe(false)
+    expect(organizationActionAllowed("owner","audit.timeline.read",true,false,narrowed)).toBe(false)
+    expect(organizationActionAllowed("admin","audit.timeline.read",false,true)).toBe(false)
     expect(organizationActionAllowed("owner","buyer.purchase",false,true,DEFAULT_OWNER_ACTIONS)).toBe(false)
   })
   it("Buyer scope checks current Owner proof under the same default as products.edit",async()=>{
@@ -160,6 +162,7 @@ describe("B22 trusted Owner role allowlist configuration (no browser setting or 
     expect(ownerRoleAllows("invitation.manage")).toBe(true)
     expect(ownerRoleAllows("membership.manage")).toBe(true)
     expect(ownerRoleAllows("membership.list")).toBe(true)
+    expect(ownerRoleAllows("audit.timeline.read")).toBe(true)
     for(const raw of ["", "admin", "buyer.purchase,buyer.purchase",
       " buyer.purchase", "buyer.purchase,platform.smtp.manage"]){
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=raw
@@ -169,6 +172,7 @@ describe("B22 trusted Owner role allowlist configuration (no browser setting or 
       expect(ownerRoleAllows("invitation.manage")).toBe(false)
       expect(ownerRoleAllows("membership.manage")).toBe(false)
       expect(ownerRoleAllows("membership.list")).toBe(false)
+      expect(ownerRoleAllows("audit.timeline.read")).toBe(false)
     }
   })
   it("narrows actions centrally without using a personal grant or unprotected role bypass",()=>{

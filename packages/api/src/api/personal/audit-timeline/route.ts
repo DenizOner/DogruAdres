@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { access, enabled, sessionToken } from "../security"
 import { timelinePage, TimelineError } from "../../dogruadres/audit-timeline"
 import { DOGRUADRES_AUDIT_INDEX_MODULE } from "../../../modules/dogruadres-audit-index"
+import { organizationActionAllowed } from "../../../modules/dogruadres-access/role-action-policy"
 import type AuditIndexModuleService from "../../../modules/dogruadres-audit-index/service"
 
 export const AUTHENTICATE = false
@@ -29,7 +30,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
     const result = await timelinePage(paginationQuery, async () => {
       const decision = await access(req).personalManagerOrganization(sessionToken(req), orgId)
-      if (!decision || !decision.organizations.length || !["owner", "admin"].includes(decision.organizations[0].role)) {
+      // personalManagerOrganization already checks a current active Organization
+      // and SQL-proven protected Owner; never infer permission from a raw role.
+      const role=decision?.organizations.length===1?decision.organizations[0].role:null
+      if (!role || (role!=="admin" &&
+          !organizationActionAllowed(role,"audit.timeline.read",role==="owner",false))) {
         throw new TimelineError(403)
       }
       return { personId: decision.person_id, organizationId: orgId }

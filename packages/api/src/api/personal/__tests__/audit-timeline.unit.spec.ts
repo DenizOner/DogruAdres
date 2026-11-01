@@ -137,6 +137,34 @@ describe("Personal audit timeline route (GET /personal/audit-timeline)", () => {
     expect(getBody()).toEqual({ message: "Access denied" })
   })
 
+  it("denies a centrally narrowed protected Owner before any audit-index read; Admin and restored Owner retain access",async()=>{
+    const original=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    try{
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=
+        "buyer.purchase,products.edit,invitation.manage,membership.manage,membership.list"
+      const {req,indexService}=mockRequest({role:"owner"})
+      const denied=mockResponse()
+      await GET(req,denied.res)
+      expect(denied.getStatus()).toBe(403)
+      expect(denied.getBody()).toEqual({message:"Access denied"})
+      expect(indexService.readOrganizationTimeline).not.toHaveBeenCalled()
+
+      const admin=mockRequest({role:"admin"})
+      const allowed=mockResponse()
+      await GET(admin.req,allowed.res)
+      expect(allowed.getStatus()).toBe(200)
+      expect(admin.indexService.readOrganizationTimeline).toHaveBeenCalledTimes(1)
+    }finally{
+      if(original===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=original
+    }
+    const restored=mockRequest({role:"owner"})
+    const response=mockResponse()
+    await GET(restored.req,response.res)
+    expect(response.getStatus()).toBe(200)
+    expect(restored.indexService.readOrganizationTimeline).toHaveBeenCalledTimes(1)
+  })
+
   it("returns 403 when live manager proof is absent, without reading Index", async()=>{
     const {req,accessService,indexService}=mockRequest()
     accessService.personalManagerOrganization.mockResolvedValue(null)

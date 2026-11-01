@@ -126,6 +126,82 @@ async function verifyOwnerMembershipManagePolicy({
     process.stdout.write("PASS B22 Owner role policy: narrowed membership.manage denies Chrome role/revoke/protected Owner and native Foundation change; PG16 membership/audit/outbox unchanged; restored Owner role changes 200\n")
 }
  
+// Dedicated real Chrome/PG16 audit timeline read-policy verification.
+// Keeps strict source/audit observation independent of the large B22 body.
+async function verifyOwnerAuditTimelinePolicy({
+  organizationId,adminMembershipId,browser,reviewer,q
+}:{
+  organizationId:string;adminMembershipId:string
+  browser:B06Chrome;reviewer:B06Chrome
+  q:(sql:string,args?:unknown[])=>Promise<any[]>
+}):Promise<void>{
+  const originalOwnerActions=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+  const originalCursorKey=process.env.DOGRUADRES_AUDIT_CURSOR_KEY
+  const membershipBefore=await q(`select id,role,status,protected_owner,revoked_at
+    from da_organization_membership where organization_id=$1 order by id`,[organizationId])
+  const eventsBefore=await q(`select id from da_audit_event
+    where organization_id=$1 order by id`,[organizationId])
+  const outboxBefore=await q(`select x.id from da_audit_outbox x
+    join da_audit_event e on e.id=x.source_audit_event_id
+    where e.organization_id=$1 order by x.id`,[organizationId])
+  try{
+    // Task-only fresh cursor signing key; never print it or persist in GitHub.
+    process.env.DOGRUADRES_AUDIT_CURSOR_KEY=randomBytes(32).toString("base64")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    const ownerDefault=await browser.eval(`(async()=>{
+      const r=await fetch('/personal/audit-timeline?organization='+${JSON.stringify(organizationId)})
+      return r.status
+    })()`)
+    assert.equal(ownerDefault,200,"Default protected Owner can read scoped audit timeline")
+    // This is a disposable ordinary Member, never a protected Owner.
+    await q("update da_organization_membership set role='admin',protected_owner=false,updated_at=clock_timestamp() where id=$1",[adminMembershipId])
+    try{
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=
+        "buyer.purchase,products.edit,invitation.manage,membership.manage,membership.list"
+      const deniedOwner=await browser.eval(`(async()=>{
+        const r=await fetch('/personal/audit-timeline?organization='+${JSON.stringify(organizationId)})
+        const body=await r.json()
+        return {status:r.status,privateItems:Object.hasOwn(body,'items'),message:body.message}
+      })()`)
+      assert.deepEqual(deniedOwner,{status:403,privateItems:false,message:"Access denied"},
+        "Narrowed protected Owner must not receive even private audit items")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      const adminRead=await reviewer.eval(`(async()=>{
+        return (await fetch('/personal/audit-timeline?organization='+${JSON.stringify(organizationId)})).status
+      })()`)
+      assert.equal(adminRead,200,"Current ordinary Organization Admin retains audit read")
+    }finally{
+      if(originalOwnerActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=originalOwnerActions
+      await q("update da_organization_membership set role='member',protected_owner=false,updated_at=clock_timestamp() where id=$1",[adminMembershipId])
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+    }
+    const restoredOwner=await browser.eval(`(async()=>{
+      return (await fetch('/personal/audit-timeline?organization='+${JSON.stringify(organizationId)})).status
+    })()`)
+    assert.equal(restoredOwner,200,"Restored Owner role can again read audit timeline")
+    assert.deepEqual(await q(`select id,role,status,protected_owner,revoked_at
+      from da_organization_membership where organization_id=$1 order by id`,[organizationId]),
+      membershipBefore,"Audit read permission denial must not mutate memberships")
+    assert.deepEqual(await q(`select id from da_audit_event
+      where organization_id=$1 order by id`,[organizationId]),
+      eventsBefore,"Audit read permission denial must not write source audit")
+    assert.deepEqual(await q(`select x.id from da_audit_outbox x
+      join da_audit_event e on e.id=x.source_audit_event_id
+      where e.organization_id=$1 order by x.id`,[organizationId]),
+      outboxBefore,"Audit read permission denial must not write outbox")
+    process.stdout.write("PASS B22 Owner role policy: narrowed audit.timeline.read denies Owner HTTPS GET 403 without private audit items; Admin 200; restored Owner 200; PG16 membership/audit/outbox unchanged\n")
+  }finally{
+    if(originalOwnerActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=originalOwnerActions
+    if(originalCursorKey===undefined)delete process.env.DOGRUADRES_AUDIT_CURSOR_KEY
+    else process.env.DOGRUADRES_AUDIT_CURSOR_KEY=originalCursorKey
+  }
+}
+
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   const preparing=process.env.B22_UI_PREPARE==="true"
@@ -3299,6 +3375,10 @@ export default async function({container}:any){
       listPolicyOutboxBefore,"Denied read cannot append outbox")
     process.stdout.write("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 200; restored Owner 200\n")
 
+    await verifyOwnerAuditTimelinePolicy({
+      organizationId:organizations[0].id,adminMembershipId:alphaMember.id,
+      browser,reviewer,q,
+    })
     await verifyOwnerMembershipManagePolicy({
       organizationId:organizations[0].id,targetMembershipId:alphaMember.id,
       ownerPersonId:A.person,ownerActorId:A.actor,browser,foundation,q,
