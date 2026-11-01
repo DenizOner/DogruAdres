@@ -135,7 +135,7 @@ async function run(){
         }
         function invoke(file:string,env:NodeJS.ProcessEnv,direct=false){
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
-            cwd:process.cwd(),env,encoding:"utf8",timeout:210000,maxBuffer:3*1024*1024})
+            cwd:process.cwd(),env,encoding:"utf8",timeout:file.endsWith("b22-audit-worker.exec.ts")?315000:210000,maxBuffer:3*1024*1024})
           const valid=String(child.stdout??"").split("\n")
             .filter(x=>/^PASS B22 Chrome:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^OBSERVED B22 native Cart TTL mismatch:|^PASS B22 native Mercur product workflow:|^PASS B22 audit worker:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
           if(child.error||child.status!==0)
@@ -177,7 +177,7 @@ async function run(){
           {...task,DOGRUADRES_MFA_RUNTIME_ENABLED:"true",
             DOGRUADRES_MFA_SETTINGS_ENABLED:"true",
             DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true"})
-        assert.ok(audit.includes("PASS B22 audit worker: real Medusa Access/Index job delivered canonical Staff events, ACK and single Index entry on lost-ACK replay; crash recovery NOT TESTED"),
+        assert.ok(audit.includes("PASS B22 audit worker: native Medusa child crash after PG claim, natural 60s lease expiry, scheduled worker Index ACK and single identity; lost ACK retry single Index entry"),
           "Missing native worker crash/Index/ACK/replay evidence")
       }
 

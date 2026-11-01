@@ -4,6 +4,8 @@
  * Real Medusa Access, workflow and Index services; no private/prod data.
  */
 import assert from "node:assert/strict"
+import {spawn,spawnSync} from "node:child_process"
+import {setTimeout as sleep} from "node:timers/promises"
 import {Client} from "@medusajs/framework/pg"
 import {runAuditRelayBatch} from "../../src/jobs/dogruadres-audit-relay"
 
@@ -22,6 +24,17 @@ export default async function({container}:any){
     u.password==="ci-disposable-only-not-a-real-secret"&&
     /^\/mfa_cli_ci_[0-9a-f]{16}$/.test(u.pathname),
     "REFUSED: native audit worker test requires exact disposable B22 CI database")
+  // This branch is executed by a SECOND native Medusa process only.
+  // Commit a real claim, then exit without Index/ACK or graceful cleanup.
+  const crashId=process.env.B22_AUDIT_CRASH_OUTBOX_ID
+  if(crashId){
+    assert.match(crashId,/^daaob_[A-Za-z0-9_-]{1,120}$/)
+    const claim=await container.resolve("dogruadresAccess").claimFoundationAuditOutbox()
+    assert.equal(claim?.id,crashId,"Crash child must claim exactly the test-owned event")
+    process.stdout.write("B22_AUDIT_NATIVE_CLAIM_BEFORE_EXIT\n",()=>process.exit(86))
+    await new Promise<void>(()=>{})
+    return
+  }
   const pg=new Client({connectionString:u.toString()})
   await pg.connect()
   const q=async(sql:string,args:unknown[]=[]) => (await pg.query(sql,args)).rows
@@ -50,11 +63,83 @@ export default async function({container}:any){
         " where id in ($1,$2) and status='pending' returning id",
         [crashedId,staffEvents[1].outbox_id])
       assert.equal(due.length,2)
-      // Actual Medusa job module resolves real Access and Index services,
-      // backed by the same disposable native PostgreSQL database.
-      const batch=await runAuditRelayBatch(container,2)
-      assert.equal(batch.delivered,2)
-      assert.equal(batch.lastOutcome,"delivered")
+      // The former failed probe invoked b22-store-ui.exec.ts although its
+      // exit-86 branch lived in b22-audit-worker.exec.ts. Invoke THIS native
+      // Medusa script and assert the independently committed PG lease.
+      const crash=spawnSync(process.execPath,
+        ["run","medusa","exec","./integration-tests/postgres/b22-audit-worker.exec.ts"],{
+          cwd:process.cwd(),
+          env:{...process.env,B22_AUDIT_CRASH_OUTBOX_ID:crashedId},
+          encoding:"utf8",timeout:75000,maxBuffer:1024*1024,
+        })
+      assert.ok(!crash.error&&crash.status===86&&
+        String(crash.stdout??"").includes("B22_AUDIT_NATIVE_CLAIM_BEFORE_EXIT"),
+        "Separate native Medusa process must claim first outbox and abruptly exit before Index/ACK")
+      const abandoned=(await q(
+        "select status,attempt_count,lease_token,lease_expires_at,now() as server_now"+
+        " from da_audit_outbox where id=$1",[crashedId]))[0]
+      assert.equal(abandoned.status,"pending")
+      assert.equal(abandoned.attempt_count,1)
+      assert.ok(abandoned.lease_token)
+      const expiryMs=new Date(abandoned.lease_expires_at).getTime()
+      assert.ok(expiryMs>new Date(abandoned.server_now).getTime()+
+        30000,"A genuine 60-second PostgreSQL lease must still be unexpired after the crash")
+      assert.equal((await q(
+        "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
+        [staffEvents[0].id]))[0].n,0)
+      // While the crashed claim is locked, an actual native workflow may
+      // deliver only the other canonical Staff event. No forced lease expiry.
+      assert.equal((await runAuditRelayBatch(container,1)).delivered,1)
+      assert.equal((await q(
+        "select status from da_audit_outbox where id=$1",
+        [staffEvents[1].outbox_id]))[0].status,"delivered")
+      assert.equal((await q(
+        "select status from da_audit_outbox where id=$1",[crashedId]))[0].status,"pending")
+
+      // Official Medusa scheduled-job loader, not a manual workflow call:
+      // worker mode on the SAME disposable DB; loopback-only dev endpoint.
+      // Real cron is "* * * * *" and lease TTL must elapse naturally.
+      const worker=spawn(process.execPath,
+        ["run","medusa","develop","--host","127.0.0.1","--port","19623"],{
+          cwd:process.cwd(),detached:true,stdio:"ignore",
+          env:{...process.env,MEDUSA_WORKER_MODE:"worker",REDIS_URL:undefined,
+            B22_AUDIT_CRASH_OUTBOX_ID:undefined},
+        })
+      let workerStopped=false,workerError=false
+      worker.on("exit",()=>{workerStopped=true})
+      worker.on("error",()=>{workerError=true})
+      try{
+        let restored=false
+        const deadline=Date.now()+155000
+        while(Date.now()<deadline){
+          const row=(await q(
+            "select status,attempt_count,delivered_at,lease_token from da_audit_outbox where id=$1",
+            [crashedId]))[0]
+          if(row.status==="delivered"){
+            assert.ok(new Date(row.delivered_at).getTime()>=expiryMs,
+              "Delivery was acknowledged before the actual crashed lease expired")
+            assert.equal(row.attempt_count,2)
+            assert.equal(row.lease_token,null)
+            restored=true
+            break
+          }
+          if(workerStopped||workerError)
+            throw Error("Native Medusa scheduled worker stopped before audit recovery")
+          await sleep(1000)
+        }
+        assert.ok(restored,
+          "Native scheduled Medusa worker did not recover the expired crash lease and ACK within the bounded window")
+      }finally{
+        // Only the process group created by THIS test is terminated.
+        if(worker.pid){
+          try{process.kill(-worker.pid,"SIGTERM")}catch{}
+          await sleep(1500)
+          try{process.kill(-worker.pid,"SIGKILL")}catch{}
+        }
+      }
+      assert.equal((await q("select count(*)::int n from da_audit_index_entry where source_event_id=$1",
+        [staffEvents[0].id]))[0].n,1,
+        "Real scheduled recovery must commit exactly one Index identity")
       for(const e of staffEvents){
         const rows=await q("select o.status,o.delivered_at,o.lease_token,o.attempt_count,"+
           " i.source_module,i.organization_id,i.action,i.resource,i.envelope"+
@@ -82,7 +167,7 @@ export default async function({container}:any){
       assert.equal((await q("select attempt_count from da_audit_outbox where id=$1",[crashedId]))[0].attempt_count,2)
       assert.equal((await q("select count(*)::int n from da_audit_index_entry where source_event_id=$1",[staffEvents[0].id]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_audit_event where id=any($1::text[])",[staffEvents.map(e=>e.id)]))[0].n,2)
-      process.stdout.write("PASS B22 audit worker: real Medusa Access/Index job delivered canonical Staff events, ACK and single Index entry on lost-ACK replay; crash recovery NOT TESTED\n")
+      process.stdout.write("PASS B22 audit worker: native Medusa child crash after PG claim, natural 60s lease expiry, scheduled worker Index ACK and single identity; lost ACK retry single Index entry\n")
     }finally{
       for(const row of originals)
         await q("update da_audit_outbox set created_at=$2 where id=$1",[row.id,row.created_at])
