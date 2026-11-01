@@ -89,13 +89,16 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     await browser.click("#smtp-toggle")
   const replace=async(selector:string,value:string)=>{
     await browser.click(selector)
-    await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:"a",code:"KeyA",modifiers:2})
-    await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:"a",code:"KeyA",modifiers:2})
+    await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:"a",code:"KeyA",modifiers:2,windowsVirtualKeyCode:65})
+    await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:"a",code:"KeyA",modifiers:2,windowsVirtualKeyCode:65})
     await browser.send("Input.insertText",{text:value})
   }
   await replace("#smtp-host","smtp.b22.example.invalid")
   await replace("#smtp-from-email","b22@example.invalid")
   await replace("#smtp-pass",secret)
+  assert.equal(await browser.eval("document.querySelector('#smtp-host').value==='smtp.b22.example.invalid'"),true)
+  assert.equal(await browser.eval("document.querySelector('#smtp-from-email').value==='b22@example.invalid'"),true)
+  assert.equal(await browser.eval("document.querySelector('form').checkValidity()"),true)
   const saveStart=browser.http.length
   await browser.click("form button[type=submit]")
   try {await browser.wait("document.body.textContent.includes('Ayar sürümü: 1')")}
