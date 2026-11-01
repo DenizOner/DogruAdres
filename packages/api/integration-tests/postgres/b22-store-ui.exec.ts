@@ -17,6 +17,7 @@ import {spawn,spawnSync} from "node:child_process"
 import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
+import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
@@ -212,7 +213,6 @@ async function verifyNativeOrganizationReadPolicy({
   alphaOrg:string;betaOrg:string;foreignOrg:string
   browser:B06Chrome;q:(sql:string,args?:unknown[])=>Promise<any[]>
 }):Promise<void>{
-  const {requireOrganizationAccess}=await import("../../src/api/dogruadres/authorization")
   const requestFor=(actor_id:string)=>({
     auth_context:{actor_id,actor_type:"user"},
     scope:container.createScope()
