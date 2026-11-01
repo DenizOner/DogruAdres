@@ -2895,6 +2895,14 @@ export default async function({container}:any){
         (select status from da_organization_membership where id=$2) as target_status`,
         [organizations[0].id,alphaMember.id])
       assert.equal(beforeManager.length,1)
+      const beforeInvitations=await q(`select id,status,revoked_at
+        from da_organization_invitation where organization_id=$1 order by id`,
+        [organizations[0].id])
+      // Prefer a real pending invitation when one exists. The fixture may
+      // have none; even an absent, well-formed target must be denied at
+      // the current-actor authorization boundary before target lookup.
+      const invitationTarget=beforeInvitations.find((x:any)=>x.status==="pending")?.id ??
+        "dainv_missing_"+rand
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       const token=await reviewer.token()
@@ -2921,6 +2929,7 @@ export default async function({container}:any){
       const managerDenied=await reviewer.eval(`(async()=>{
         const org=${JSON.stringify(organizations[0].id)}
         const membership=${JSON.stringify(alphaMember.id)}
+        const invitation=${JSON.stringify(invitationTarget)}
         const session=await(await fetch('/personal/session')).json()
         const post=async(path,value)=>{
           const response=await fetch(path,{method:'POST',
@@ -2936,7 +2945,11 @@ export default async function({container}:any){
           createInvite:await post('/personal/invitations',{action:'create',
             organization_id:org,email:'unprotected-owner@example.invalid',role:'member'}),
           revokeMember:await post('/personal/memberships',{action:'revoke',
-            organization_id:org,membership_id:membership})
+            organization_id:org,membership_id:membership}),
+          changeRole:await post('/personal/memberships',{action:'role',
+            organization_id:org,membership_id:membership,role:'admin'}),
+          revokeInvite:await post('/personal/invitations',{action:'revoke',
+            organization_id:org,invitation_id:invitation})
         }
       })()`)
       for(const [name,status] of Object.entries(managerDenied))
@@ -2950,6 +2963,16 @@ export default async function({container}:any){
         [organizations[0].id,alphaMember.id])
       assert.deepEqual(afterManager,beforeManager,
         "Denied role-only Owner cannot change invitations or membership status")
+      // An invitation can be revoked in-place without changing row count.
+      // Compare each invitation's status/revocation timestamp as well.
+      const afterInvitations=await q(`select id,status,revoked_at
+        from da_organization_invitation where organization_id=$1 order by id`,
+        [organizations[0].id])
+      assert.deepEqual(afterInvitations,beforeInvitations,
+        "Role-only Owner must not revoke an invitation or change its state")
+      assert.deepEqual(await snapshot(),before,
+        "Denied role-change/invitation-revoke cannot write domain audit/outbox")
+      process.stdout.write("PASS B22 protected Owner mutation negatives: role-only Owner HTTP 403 on membership role-change and invitation revoke; membership/invitation states and canonical audit/outbox unchanged\\n")
       const denied=await reviewer.eval(script)
       for(const [name,status] of Object.entries(denied))
         assert.equal(status,403,"Role-only Owner denied: "+name)

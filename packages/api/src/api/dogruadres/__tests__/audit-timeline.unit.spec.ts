@@ -18,7 +18,8 @@ function authFixture(role: string | null = "owner", person: unknown = { id: "per
     getOrganization: jest.fn(async () => ({ id: "org_a", status: "active" })),
   }
   const req = { auth_context: { actor_id: "user_a", actor_type: "user" }, scope: { resolve: () => service } } as unknown as AuthenticatedMedusaRequest
-  return { service, req, authorize: () => requireOrganizationAccess(req, "org_a", "audit.timeline.read") }
+  return { service, req, authorize: (action: Parameters<typeof requireOrganizationAccess>[2] = "audit.timeline.read") =>
+    requireOrganizationAccess(req, "org_a", action) }
 }
 const row = { ...boundary, source_module: "dogruadres-access", source_event_id: "audit_a", indexed_at: boundary.occurred_at,
   action: "organization.provisioned", resource: "organization", target_id: "org_a", actor_person_id: "person_old", envelope: { secret: "excluded" }, actor_id: "excluded" }
@@ -27,6 +28,16 @@ describe("Audit timeline current authorization", () => {
   it.each(["owner", "admin"])("allows active %s including platform user only through membership", async role => {
     await expect(authFixture(role).authorize()).resolves.toMatchObject(identity)
   })
+  it.each(["membership.list","membership.manage","invitation.manage","audit.timeline.read"] as const)(
+    "denies role-only Owner and missing protected proof for native action %s while preserving Admin", async action => {
+      const roleOnly=authFixture("owner",{id:"person_a"},true,false)
+      await expect(roleOnly.authorize(action)).rejects.toThrow("Organization access denied")
+      const unproved=authFixture()
+      unproved.service.currentProtectedOwner.mockResolvedValue(false)
+      await expect(unproved.authorize(action)).rejects.toThrow("Organization access denied")
+      await expect(authFixture("admin").authorize(action)).resolves.toMatchObject(identity)
+      await expect(authFixture("owner").authorize(action)).resolves.toMatchObject(identity)
+    })
   it("denies active role-only Owner even for private audit", async () => {
     const f=authFixture("owner",{id:"person_a"},true,false)
     await expect(f.authorize()).rejects.toMatchObject({message:"Organization access denied"})
