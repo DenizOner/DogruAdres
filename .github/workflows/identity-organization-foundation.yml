@@ -67,7 +67,10 @@ jobs:
         # Runtime/PostgreSQL/browser evidence is collected separately; this is unit-only.
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
-        run: node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json
+        # Keep every TypeScript diagnostic active. This project-wide Medusa
+        # typecheck exceeds Node's default V8 call stack (RangeError) on
+        # current B22 source; provide bounded stack headroom, not --skipCheck.
+        run: node --stack-size=4096 ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json
       - name: Token privacy and native SMTP notification regressions
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
