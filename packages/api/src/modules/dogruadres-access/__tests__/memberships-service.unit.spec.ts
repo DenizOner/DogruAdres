@@ -5,11 +5,11 @@ import { IdentitySessions } from "../identity-session"
 
 describe("B05 active membership listing service boundary (mock-only)", () => {
   const service = Object.create(AccessService.prototype) as AccessService
-  const context = { transactionManager: { execute: jest.fn() } } as unknown as Context
+  const context = { transactionManager: { execute: jest.fn(async(sql:string)=>sql.includes("m.protected_owner=true")?[{id:"damem_valid"}]:[]) } } as unknown as Context
   afterEach(() => jest.restoreAllMocks())
 
   it.each(["owner", "admin"])("authorizes %s and queries only active rows in the exact Organization with the approved projection", async role => {
-    const authorize = jest.spyOn(IdentitySessions.prototype, "organizations").mockResolvedValue({ person_id: "p", organizations: [{ id: "daorg_test", role }] } as any)
+    const authorize = jest.spyOn(IdentitySessions.prototype, "organizations").mockResolvedValue({ person_id: "daprs_p", organizations: [{ id: "daorg_test", role }] } as any)
     const list = jest.spyOn(service, "listMemberships").mockResolvedValue([])
     await expect(service.personalMemberships("synthetic", "daorg_test", context)).resolves.toEqual([])
     expect(authorize).toHaveBeenCalledWith("synthetic", "daorg_test")
@@ -33,7 +33,7 @@ describe("M0 B06 personal membership role change service boundary", () => {
   const service = Object.create(AccessService.prototype) as AccessService
   const context = {
     transactionManager: {
-      execute: jest.fn(async () => []),
+      execute: jest.fn(async(sql:string)=>sql.includes("m.protected_owner=true")?[{id:"damem_valid"}]:[]),
       flush: jest.fn(async () => undefined),
     },
   } as unknown as Context
@@ -182,7 +182,7 @@ describe("M0 B07 protected Owner session gateway (mock-only)", () => {
   const orgId = "daorg_01M0TESTORGANIZATION123456"
   const membershipId = "daomem_01M0TESTMEMBERSHIP12345"
   const service = Object.create(AccessService.prototype) as AccessService
-  const context = { transactionManager: { execute: jest.fn(async () => []) } } as unknown as Context
+  const context = { transactionManager: { execute: jest.fn(async(sql:string)=>sql.includes("m.protected_owner=true")?[{id:"damem_valid"}]:[]) } } as unknown as Context
   const identity = { person_id: "daprs_owner", actor_type: "user", actor_id: "user_owner" } as any
   const ownerDecision = { organizations: [{ id: orgId, role: "owner" }] } as any
   const activeMember = { id: membershipId, person_id: "daprs_member", role: "member", status: "active", protected_owner: false } as any

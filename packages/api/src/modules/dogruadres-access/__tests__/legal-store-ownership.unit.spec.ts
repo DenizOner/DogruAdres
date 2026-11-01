@@ -6,20 +6,23 @@ import { authorizedBuyerOrganization } from "../buyer-permission"
 describe("B22 legal Organization ownership candidate gate (SQL-mock, NOT PostgreSQL acceptance)", () => {
   afterEach(() => jest.restoreAllMocks())
   const token = "x".repeat(43), org = "daorg_A"
-  const allowed = { person_id: "person_A", organizations: [{ id: org, role: "owner" }] }
-  const setup = (scope: unknown, rows: any[] = []) => {
+  const allowed = { person_id: "daprs_A", organizations: [{ id: org, role: "owner" }] }
+  const setup = (scope: unknown, rows: any[] = [], protectedOwner = true) => {
     jest.spyOn(IdentitySessions.prototype,"organizations").mockResolvedValue(scope as any)
-    const execute = jest.fn().mockResolvedValue(rows)
+    const execute = jest.fn(async(sql:string)=>sql.includes("m.protected_owner=true")
+      ? (protectedOwner?[{id:"damem_owner"}]:[]) : rows)
     return { execute, run:() => authorizedLegalSellerIds({ execute },token,org) }
   }
   it("only returns explicitly recorded current ownership, never SellerMember or an implicit default",async()=>{
     const { execute,run }=setup(allowed,[{seller_id:"sel_1"},{seller_id:"sel_2"}])
-    await expect(run()).resolves.toEqual({person_id:"person_A",organization_id:org,seller_ids:["sel_1","sel_2"]})
+    await expect(run()).resolves.toEqual({person_id:"daprs_A",organization_id:org,seller_ids:["sel_1","sel_2"]})
     expect(execute).toHaveBeenCalledWith(
       expect.stringContaining("e.action='organization.store_association_approved'"),[org])
-    expect(execute.mock.calls[0][0]).toContain("da_audit_outbox")
-    expect(execute.mock.calls[0][0]).toContain("e.organization_id=o.organization_id")
-    expect(execute.mock.calls[0][0]).toContain("e.target_id=o.seller_id")
+    const ownershipSql=execute.mock.calls[1][0]
+    expect(execute.mock.calls[0][0]).toContain("m.protected_owner=true")
+    expect(ownershipSql).toContain("da_audit_outbox")
+    expect(ownershipSql).toContain("e.organization_id=o.organization_id")
+    expect(ownershipSql).toContain("e.target_id=o.seller_id")
   })
   it.each([null,{person_id:"person_B",organizations:[]},{person_id:"person_A",organizations:[{id:org,role:"member"}]}])(
     "denies untrusted, foreign or non-manager Organization membership before ownership read",async scope=>{
@@ -27,6 +30,12 @@ describe("B22 legal Organization ownership candidate gate (SQL-mock, NOT Postgre
       await expect(run()).resolves.toBeNull()
       expect(execute).not.toHaveBeenCalled()
     })
+  it("refuses unprotected role-only Owner before reading private legal Store ids",async()=>{
+    const {execute,run}=setup(allowed,[{seller_id:"sel_private"}],false)
+    await expect(run()).resolves.toBeNull()
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(execute.mock.calls[0][0]).toContain("m.protected_owner=true")
+  })
   it("an Organization with no verified ownership has zero Stores rather than inferred native rights",async()=>{
     await expect(setup(allowed,[]).run()).resolves.toMatchObject({seller_ids:[]})
   })

@@ -6,20 +6,23 @@ import { hashInvitationToken } from "../security"
 // Isolated method doubles test context/cardinality/error propagation, NOT SQL
 // rollback or the trigger. No module/container/bootstrap/database is initialized.
 function fixture() {
-  const context = { transactionManager: { execute: jest.fn(async () => []), flush: jest.fn(async () => undefined) } } as unknown as Context
+  const context = { transactionManager: {
+    execute: jest.fn(async(sql:string)=>sql.includes("m.protected_owner=true")?[{id:"damem_protected"}]:[]),
+    flush: jest.fn(async () => undefined)
+  } } as unknown as Context
   const service = Object.create(AccessService.prototype) as AccessService
   const audits = jest.fn(async (data: Record<string, unknown>[], _context?: Context) => data.map((event, index) => ({ ...event, id: `audit_${index}` })))
   const outbox = jest.fn(async (data: Record<string, unknown>[], _context?: Context) => data.map((event, index) => ({ ...event, id: `outbox_${index}` })))
-  const organizations = jest.fn(async (_data: unknown, _context?: Context) => [{ id: "org_test", name: "Test", status: "active" }])
+  const organizations = jest.fn(async (_data: unknown, _context?: Context) => [{ id: "daorg_test", name: "Test", status: "active" }])
   const memberships = jest.fn(async (data: Record<string, unknown>[], _context?: Context) => data.map((value, index) => ({ ...value, id: `membership_${index}` })))
-  const invitation = { id: "invitation_test", organization_id: "org_test", role: "member", status: "pending", expires_at: new Date(Date.now() + 60000), recipient_email: "recipient@example.invalid", token_hash: hashInvitationToken("unit-token") }
+  const invitation = { id: "invitation_test", organization_id: "daorg_test", role: "member", status: "pending", expires_at: new Date(Date.now() + 60000), recipient_email: "recipient@example.invalid", token_hash: hashInvitationToken("unit-token") }
   Object.assign(service, {
     createAuditEvents: audits, createAuditOutboxes: outbox, createOrganizations: organizations, createMemberships: memberships,
     lockActor_: jest.fn(async () => undefined),
     ensureActorPerson_: jest.fn(async (actor: { actor_id: string }) => ({ id: `person_${actor.actor_id}` })),
     getActiveMembership: jest.fn(async () => ({ id: "owner", role: "owner", status: "active", protected_owner: true })),
     getMembershipInOrganization: jest.fn(async () => ({ id: "member_target", person_id: "target", role: "member", status: "active", protected_owner: false })),
-    getOrganization: jest.fn(async () => ({ id: "org_test" })), listPeople: jest.fn(async () => [{ id: "person_owner" }]),
+    getOrganization: jest.fn(async () => ({ id: "daorg_test" })), listPeople: jest.fn(async () => [{ id: "person_owner" }]),
     updateMemberships: jest.fn(async (data: Record<string, unknown>) => data),
     createInvitations: jest.fn(async () => [invitation]), updateInvitations: jest.fn(async (data: Record<string, unknown>) => ({ ...invitation, ...data })),
     getInvitationInOrganization: jest.fn(async () => invitation),
@@ -49,7 +52,7 @@ describe("Foundation canonical audit and outbox persistence contract", () => {
 
   it("uses the same audit/outbox integration for the other four mutation paths", async () => {
     const f = fixture()
-    const input = { organization_id: "org_test", actor_person_id: "person_owner", actor_type: "user", actor_id: "owner" }
+    const input = { organization_id: "daorg_test", actor_person_id: "person_owner", actor_type: "user", actor_id: "owner" }
     await f.service.changeMembership({ ...input, membership_id: "member_target", role: "admin" }, f.context)
     await f.service.createOrganizationInvitation({ ...input, email: "recipient@example.invalid", role: "member" }, f.context)
     await f.service.revokeOrganizationInvitation({ ...input, invitation_id: "invitation_test" }, f.context)

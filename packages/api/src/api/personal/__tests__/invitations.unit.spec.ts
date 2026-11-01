@@ -47,7 +47,7 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
   }
   const service = {
     personalLinkPrimary: jest.fn(),
-    personalOrganizations: jest.fn(),
+    personalManagerOrganization: jest.fn(),
     listInvitations: jest.fn(),
   }
   const mockCreateRun = jest.fn()
@@ -62,7 +62,7 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     ;(sessionToken as jest.Mock).mockReturnValue("opaque-current-session")
     ;(access as jest.Mock).mockReturnValue(service)
     service.personalLinkPrimary.mockResolvedValue(principal)
-    service.personalOrganizations.mockResolvedValue({
+    service.personalManagerOrganization.mockResolvedValue({
       person_id: principal.person_id,
       organizations: [{ id: "daorg_allowed", role: "owner" }],
     })
@@ -130,7 +130,7 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
   it.each([null,{ organizations:[{ id:"daorg_allowed",role:"member" }] },
     { organizations:[{ id:"daorg_allowed",role:"admin" },{ id:"daorg_allowed",role:"owner" }] }])
     ("denies invitation listing without exactly one authorized Organization: %p", async scoped => {
-      service.personalOrganizations.mockResolvedValue(scoped)
+      service.personalManagerOrganization.mockResolvedValue(scoped)
       const res = await invokeGet({ organization:"daorg_allowed" })
       expect(res.status).toHaveBeenCalledWith(403)
       expect(service.listInvitations).not.toHaveBeenCalled()
@@ -146,7 +146,7 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     expect(sendSmtpEmail).not.toHaveBeenCalled()
   })
   it("rejects unauthorized and forged revocation before any workflow call", async () => {
-    service.personalOrganizations.mockResolvedValue({organizations:[{id:"daorg_allowed",role:"member"}]})
+    service.personalManagerOrganization.mockResolvedValue({organizations:[{id:"daorg_allowed",role:"member"}]})
     const denied=await invoke(revokeBody)
     expect(denied.status).toHaveBeenCalledWith(403)
     expect(mockRevokeRun).not.toHaveBeenCalled()
@@ -201,7 +201,7 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
   it.each([null, { organizations: [{ id: "daorg_allowed", role: "member" }] }, { organizations: [
     { id: "daorg_allowed", role: "owner" }, { id: "daorg_allowed", role: "admin" },
   ] }])("denies absent, non-owner, or ambiguous scope before any invitation write", async scoped => {
-    service.personalOrganizations.mockResolvedValue(scoped)
+    service.personalManagerOrganization.mockResolvedValue(scoped)
     const res = await invoke(createBody)
     expect(res.status).toHaveBeenCalledWith(403)
     expect(mockCreateRun).not.toHaveBeenCalled()
@@ -209,7 +209,7 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
   it("creates a single ordinary Member invitation using only the current server principal", async () => {
     const res = await invoke(createBody)
     expect(service.personalLinkPrimary).toHaveBeenCalledWith("opaque-current-session")
-    expect(service.personalOrganizations).toHaveBeenCalledWith("opaque-current-session", "daorg_allowed")
+    expect(service.personalManagerOrganization).toHaveBeenCalledWith("opaque-current-session", "daorg_allowed")
     expect(createInvitationWorkflow).toHaveBeenCalledWith(scope)
     expect(mockCreateRun).toHaveBeenCalledWith({input: {
       organization_id: "daorg_allowed", email: "member@example.invalid",
@@ -227,7 +227,7 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     expect(mockAcceptRun).not.toHaveBeenCalled()
   })
   it.each(["owner", "admin"] as const)("allows %s to invite a verified-target Admin without exposing the secret to the inviter", async actorRole => {
-    service.personalOrganizations.mockResolvedValue({
+    service.personalManagerOrganization.mockResolvedValue({
       person_id: principal.person_id,
       organizations: [{ id: "daorg_allowed", role: actorRole }],
     })
