@@ -16,6 +16,8 @@ import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, de
 import { projectFoundationAuditEvent, matchesAuditIndexProjection } from "../../src/modules/dogruadres-audit-index/envelope"
 import { relayOneFoundationAudit } from "../../src/workflows/dogruadres-audit-relay/relay"
 import { Migration20261020230000 } from "../../src/modules/dogruadres-access/migrations/Migration20261020230000"
+import { Migration20261020230300 } from "../../src/modules/dogruadres-access/migrations/Migration20261020230300"
+import { Migration20261021230000 } from "../../src/modules/dogruadres-access/migrations/Migration20261021230000"
 
 const url=new URL(process.env.PG_MFA_TEST_URL??"postgres://bad/invalid")
 if(process.env.CI!=="true" ||
@@ -125,6 +127,71 @@ async function main(){
     assert.equal(identity.name,"mfa_ci_ephemeral")
     assert.match(identity.ver,/^16\d{4}$/)
     assert.equal((await db.unsafe("select to_regclass('da_person') as t"))[0].t,null)
+    // Reproduce the actual PRE-upgrade schema with existing rows in a rollback-only
+    // transaction. No second DB, protected data, or destructive production reset.
+    await check("populated legacy credential and pending audit outbox survive additive migrations",async()=>{
+      const rollbackMarker="EXPECTED_POPULATED_MIGRATION_ROLLBACK"
+      await assert.rejects(db.begin(async(tx:Query)=>{
+        await migrate(tx,Migration20261017135550)
+        await migrate(tx,Migration20261017150237)
+        await migrate(tx,Migration20261020230000)
+        await migrate(tx,Migration20261020230300)
+        await migrate(tx,Migration20261018000000)
+        await tx.unsafe("insert into da_person(id) values ('daprs_legacy_migration')")
+        await tx.unsafe(`insert into da_login_binding
+          (auth_identity_id,person_id,actor_type,actor_id,verified_at)
+          values ('auth_legacy_migration','daprs_legacy_migration','user','user_legacy_migration',now())`)
+        await tx.unsafe(`insert into da_browser_session
+          (id,person_id,auth_identity_id,actor_type,actor_id,epoch,csrf_hash,
+           status,created_at,last_activity_at,last_strong_auth_at)
+          values ('session_legacy_migration','daprs_legacy_migration',
+           'auth_legacy_migration','user','user_legacy_migration',0,'fixture',
+           'active',now(),now(),now())`)
+        await tx.unsafe(`insert into da_native_credential(token_hash,session_id,ciphertext)
+          values ('hash_legacy_migration','session_legacy_migration','opaque-test-fixture')`)
+        await tx.unsafe(`insert into da_audit_event
+          (id,actor_person_id,actor_type,actor_id,action,module,resource,occurred_at)
+          values ('daaud_legacy_migration','daprs_legacy_migration','user',
+          'user_legacy_migration','organization.membership_changed',
+          'dogruadres-access','membership',now())`)
+        await tx.unsafe(`insert into da_audit_outbox
+          (id,source_audit_event_id,source_module,envelope_version,envelope,status)
+          values ('daaob_legacy_migration','daaud_legacy_migration',
+          'dogruadres-access',1,'{}'::jsonb,'pending')`)
+        const before=(await tx.unsafe(`select o.id,o.source_audit_event_id,o.status,
+          o.created_at,o.updated_at,e.id as event_id
+          from da_audit_outbox o join da_audit_event e
+          on e.id=o.source_audit_event_id where o.id='daaob_legacy_migration'`))[0]
+        assert.equal(before.status,"pending")
+        await migrate(tx,Migration20261021230000)
+        await migrate(tx,Migration20261025120000)
+        const after=(await tx.unsafe(`select o.id,o.source_audit_event_id,o.status,
+          o.created_at,o.updated_at,o.attempt_count,o.lease_token,
+          o.delivered_at,e.id as event_id
+          from da_audit_outbox o join da_audit_event e
+          on e.id=o.source_audit_event_id where o.id='daaob_legacy_migration'`))[0]
+        assert.equal(after.id,before.id)
+        assert.equal(after.source_audit_event_id,before.source_audit_event_id)
+        assert.equal(after.event_id,before.event_id)
+        assert.equal(after.status,"pending")
+        assert.equal(new Date(after.created_at).getTime(),new Date(before.created_at).getTime())
+        assert.equal(new Date(after.updated_at).getTime(),new Date(before.updated_at).getTime())
+        assert.equal(after.attempt_count,0)
+        assert.equal(after.lease_token,null)
+        assert.equal(after.delivered_at,null)
+        const credential=(await tx.unsafe(`select token_hash,session_id,ciphertext,
+          retired_at,extract(epoch from (expires_at-created_at))::int as validity_seconds
+          from da_native_credential where token_hash='hash_legacy_migration'`))[0]
+        assert.equal(credential.session_id,"session_legacy_migration")
+        assert.equal(credential.ciphertext,"opaque-test-fixture")
+        assert.ok(credential.retired_at,"Historical native credentials must be retired")
+        assert.equal(credential.validity_seconds,900)
+        // Deliberately rollback the entire isolated historic fixture, including DDL.
+        throw Error(rollbackMarker)
+      }),new RegExp(rollbackMarker))
+      const empty=await db.unsafe("select to_regclass('da_person') as t")
+      assert.equal(empty[0].t,null,"Legacy fixture rollback must preserve fresh primary test")
+    })
     await db.begin(async(tx:Query)=>{
       await migrate(tx,Migration20261017135550)
       await migrate(tx,Migration20261017150237)
