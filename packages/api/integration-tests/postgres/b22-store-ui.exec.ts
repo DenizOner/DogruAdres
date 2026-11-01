@@ -3457,7 +3457,7 @@ export default async function({container}:any){
     await verifyNativeOrganizationReadPolicy({
       container,ownerActor:A.actor,memberActor:B.actor,memberPersonId:B.person,
       alphaOrg:organizations[0].id,betaOrg:organizations[1].id,
-      foreignOrg:organizations[2].id,browser,q,
+      foreignOrg:sellerGamma.id,browser,q,
     })
     await verifyOwnerAuditTimelinePolicy({
       organizationId:organizations[0].id,adminMembershipId:alphaMember.id,
