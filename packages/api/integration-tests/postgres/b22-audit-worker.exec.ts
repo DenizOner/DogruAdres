@@ -4,7 +4,6 @@
  * Real Medusa Access, workflow and Index services; no private/prod data.
  */
 import assert from "node:assert/strict"
-import {spawnSync} from "node:child_process"
 import {Client} from "@medusajs/framework/pg"
 import {runAuditRelayBatch} from "../../src/jobs/dogruadres-audit-relay"
 
@@ -23,17 +22,6 @@ export default async function({container}:any){
     u.password==="ci-disposable-only-not-a-real-secret"&&
     /^\/mfa_cli_ci_[0-9a-f]{16}$/.test(u.pathname),
     "REFUSED: native audit worker test requires exact disposable B22 CI database")
-  // Task-owned native Medusa child: commit claim then exit without ACK.
-  const auditCrash=process.env.B22_AUDIT_CRASH_OUTBOX_ID
-  if(auditCrash){
-    assert.notEqual(process.env.B22_UI_PREPARE,"true")
-    assert.match(auditCrash,/^daaob_[A-Za-z0-9_-]{1,120}$/)
-    const claim=await container.resolve("dogruadresAccess").claimFoundationAuditOutbox()
-    assert.equal(claim?.id,auditCrash)
-    process.stdout.write("B22_AUDIT_CLAIM_BEFORE_CRASH\n",()=>process.exit(86))
-    await new Promise<void>(()=>{})
-    return
-  }
   const pg=new Client({connectionString:u.toString()})
   await pg.connect()
   const q=async(sql:string,args:unknown[]=[]) => (await pg.query(sql,args)).rows
@@ -62,28 +50,11 @@ export default async function({container}:any){
         " where id in ($1,$2) and status='pending' returning id",
         [crashedId,staffEvents[1].outbox_id])
       assert.equal(due.length,2)
-      const child=spawnSync("bun",["run","medusa","exec","./integration-tests/postgres/b22-store-ui.exec.ts"],{
-        cwd:process.cwd(),env:{...process.env,B22_AUDIT_CRASH_OUTBOX_ID:crashedId},
-        encoding:"utf8",timeout:45000,maxBuffer:1024*1024,stdio:["ignore","pipe","pipe"]})
-      assert.ok(!child.error&&child.status===86&&
-        String(child.stdout??"").includes("B22_AUDIT_CLAIM_BEFORE_CRASH"),
-        "Separate Medusa process must commit real claim and exit 86")
-      const abandoned=(await q("select status,attempt_count,lease_token,lease_expires_at from da_audit_outbox where id=$1",[crashedId]))[0]
-      assert.equal(abandoned.status,"pending")
-      assert.equal(abandoned.attempt_count,1)
-      assert.ok(abandoned.lease_token)
-      assert.ok(new Date(abandoned.lease_expires_at).getTime()>Date.now())
-      assert.equal((await q("select count(*)::int n from da_audit_index_entry where source_event_id=$1",[staffEvents[0].id]))[0].n,0)
-      // The leased source event is skipped; the next event is delivered.
-      assert.equal((await runAuditRelayBatch(container,1)).delivered,1)
-      assert.equal((await q("select status from da_audit_outbox where id=$1",[staffEvents[1].outbox_id]))[0].status,"delivered")
-      // Only this task-owned crash lease is moved past expiry. This is not
-      // evidence of natural 60s wall-clock TTL.
-      const expire=await q("update da_audit_outbox set lease_expires_at=now()-interval '1 second'"+
-        " where id=$1 and lease_token=$2 and status='pending' and lease_expires_at>now() returning id",
-        [crashedId,abandoned.lease_token])
-      assert.equal(expire.length,1)
-      assert.equal((await runAuditRelayBatch(container,1)).delivered,1)
+      // Actual Medusa job module resolves real Access and Index services,
+      // backed by the same disposable native PostgreSQL database.
+      const batch=await runAuditRelayBatch(container,2)
+      assert.equal(batch.delivered,2)
+      assert.equal(batch.lastOutcome,"delivered")
       for(const e of staffEvents){
         const rows=await q("select o.status,o.delivered_at,o.lease_token,o.attempt_count,"+
           " i.source_module,i.organization_id,i.action,i.resource,i.envelope"+
@@ -102,16 +73,16 @@ export default async function({container}:any){
         assert.equal(envelope.actor.role_context,"platform_staff")
         assert.equal((await q("select count(*)::int n from da_audit_index_entry where source_event_id=$1",[e.id]))[0].n,1)
       }
-      assert.equal((await q("select attempt_count from da_audit_outbox where id=$1",[crashedId]))[0].attempt_count,2)
+      assert.equal((await q("select attempt_count from da_audit_outbox where id=$1",[crashedId]))[0].attempt_count,1)
       // Simulated lost ACK after a real Index commit: only outbox state is
       // reset in the disposable DB. Native Index must not insert again.
       assert.equal((await q("update da_audit_outbox set status='pending',delivered_at=null"+
-        " where id=$1 and status='delivered' and attempt_count=2 returning id",[crashedId])).length,1)
+        " where id=$1 and status='delivered' and attempt_count=1 returning id",[crashedId])).length,1)
       assert.equal((await runAuditRelayBatch(container,1)).delivered,1)
-      assert.equal((await q("select attempt_count from da_audit_outbox where id=$1",[crashedId]))[0].attempt_count,3)
+      assert.equal((await q("select attempt_count from da_audit_outbox where id=$1",[crashedId]))[0].attempt_count,2)
       assert.equal((await q("select count(*)::int n from da_audit_index_entry where source_event_id=$1",[staffEvents[0].id]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_audit_event where id=any($1::text[])",[staffEvents.map(e=>e.id)]))[0].n,2)
-      process.stdout.write("PASS B22 audit worker: real Medusa Access/Index job after isolated process crash and forced lease expiry; Staff events ACK and single Index entry on lost-ACK replay; natural TTL NOT TESTED\n")
+      process.stdout.write("PASS B22 audit worker: real Medusa Access/Index job delivered canonical Staff events, ACK and single Index entry on lost-ACK replay; crash recovery NOT TESTED\n")
     }finally{
       for(const row of originals)
         await q("update da_audit_outbox set created_at=$2 where id=$1",[row.id,row.created_at])

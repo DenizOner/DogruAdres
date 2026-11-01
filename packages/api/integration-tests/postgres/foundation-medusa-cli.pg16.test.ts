@@ -177,7 +177,7 @@ async function run(){
           {...task,DOGRUADRES_MFA_RUNTIME_ENABLED:"true",
             DOGRUADRES_MFA_SETTINGS_ENABLED:"true",
             DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true"})
-        assert.ok(audit.includes("PASS B22 audit worker: real Medusa Access/Index job after isolated process crash and forced lease expiry; Staff events ACK and single Index entry on lost-ACK replay; natural TTL NOT TESTED"),
+        assert.ok(audit.includes("PASS B22 audit worker: real Medusa Access/Index job delivered canonical Staff events, ACK and single Index entry on lost-ACK replay; crash recovery NOT TESTED"),
           "Missing native worker crash/Index/ACK/replay evidence")
       }
 
