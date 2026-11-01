@@ -7,9 +7,9 @@
  * future persisted policy editor must replace this source atomically, not
  * introduce another role-only bypass or grant implicit Store approval.
  */
-export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage" | "membership.manage" | "membership.list" | "audit.timeline.read"
+export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage" | "membership.manage" | "membership.list" | "audit.timeline.read" | "organization.read"
 export const DEFAULT_OWNER_ACTIONS: readonly OrganizationAction[] =
-  Object.freeze(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read"])
+  Object.freeze(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read","organization.read"])
 const DENY_ALL_OWNER_ACTIONS: readonly OrganizationAction[] = Object.freeze([])
 
 /** Optional trusted deployment setting for the Organization Owner ROLE,

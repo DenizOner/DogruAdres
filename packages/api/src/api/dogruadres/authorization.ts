@@ -48,7 +48,15 @@ export async function requireOrganizationAccess(
     resolvePolicy: async ({ personId, organizationId: orgId, action: requestedAction }) => {
       const membership = await service.getActiveMembership(personId, orgId)
       if (!membership || membership.status !== "active") return false
-      if (requestedAction === "organization.read") return true
+      if (requestedAction === "organization.read") {
+        // Ordinary active Member/Admin keep the existing scoped read.
+        // A protected Owner additionally requires the centrally adjustable
+        // Owner action; role label alone must never bypass a narrowed policy.
+        if (membership.role === "member" || membership.role === "admin") return true
+        return membership.role === "owner" && membership.protected_owner === true &&
+          organizationActionAllowed("owner","organization.read",
+            await service.currentProtectedOwner(personId,orgId),false)
+      }
       if (requestedAction === "invitation.manage" || requestedAction === "membership.manage" || requestedAction === "membership.list" || requestedAction === "audit.timeline.read") {
         if (membership.role === "admin") return true
         return membership.role === "owner" && membership.protected_owner === true &&

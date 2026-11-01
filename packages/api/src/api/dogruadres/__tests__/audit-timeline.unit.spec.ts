@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { cursorKey, encodeCursor, decodeCursor, pagination, timelinePage } from "../audit-timeline"
 import { requireOrganizationAccess } from "../authorization"
+import { GET as nativeOrganizationGet } from "../organizations/[id]/route"
+import type { MedusaResponse } from "@medusajs/framework/http"
 import Service from "../../../modules/dogruadres-audit-index/service"
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http"
 
@@ -38,6 +40,46 @@ describe("Audit timeline current authorization", () => {
       await expect(authFixture("admin").authorize(action)).resolves.toMatchObject(identity)
       await expect(authFixture("owner").authorize(action)).resolves.toMatchObject(identity)
     })
+  it("enforces centrally narrowed organization.read for a current protected Owner, without private HTTP body; Member/Admin and restored Owner remain authorized",async()=>{
+    const original=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    const f=authFixture()
+    const response={json:jest.fn()} as unknown as MedusaResponse
+    const req=Object.assign(f.req,{params:{id:"org_a"}})
+    try{
+      delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      await expect(f.authorize("organization.read")).resolves.toMatchObject(identity)
+      const roleOnly=authFixture("owner",{id:"person_a"},true,false)
+      await expect(roleOnly.authorize("organization.read")).rejects.toThrow("Organization access denied")
+      const unproved=authFixture()
+      unproved.service.currentProtectedOwner.mockResolvedValue(false)
+      await expect(unproved.authorize("organization.read")).rejects.toThrow("Organization access denied")
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=
+        "buyer.purchase,products.edit,invitation.manage,membership.manage,membership.list,audit.timeline.read"
+      await expect(nativeOrganizationGet(req,response)).rejects.toThrow("Organization access denied")
+      expect(response.json).not.toHaveBeenCalled()
+      // Active Member and Admin require their own current membership,
+      // not an Owner permission or a client-provided role selector.
+      for(const role of ["member","admin"]){
+        const allowed=authFixture(role)
+        await expect(allowed.authorize("organization.read")).resolves.toMatchObject(identity)
+      }
+      const foreign=authFixture("member")
+      foreign.service.getOrganization.mockResolvedValue({id:"org_foreign",status:"active"})
+      await expect(foreign.authorize("organization.read")).rejects.toThrow("Organization access denied")
+      const revoked=authFixture("admin",{id:"person_a"},false)
+      await expect(revoked.authorize("organization.read")).rejects.toThrow("Organization access denied")
+      const missing=authFixture(null)
+      await expect(missing.authorize("organization.read")).rejects.toThrow("Organization access denied")
+    }finally{
+      if(original===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=original
+    }
+    await nativeOrganizationGet(req,response)
+    expect(response.json).toHaveBeenCalledWith({
+      organization:{id:"org_a",name:undefined,status:"active"}
+    })
+  })
+
   it("denies active role-only Owner even for private audit", async () => {
     const f=authFixture("owner",{id:"person_a"},true,false)
     await expect(f.authorize()).rejects.toMatchObject({message:"Organization access denied"})

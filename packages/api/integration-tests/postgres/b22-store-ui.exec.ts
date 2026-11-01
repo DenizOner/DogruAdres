@@ -202,6 +202,87 @@ async function verifyOwnerAuditTimelinePolicy({
   }
 }
 
+// Existing native Organization route is deliberately gated by nativeIngress:
+// this checks real Foundation/PG16 authorization without pretending a direct
+// resolver call is an authenticated HTTP request. Do NOT open the native route.
+async function verifyNativeOrganizationReadPolicy({
+  container,ownerActor,memberActor,alphaOrg,betaOrg,foreignOrg,browser,q
+}:{
+  container:any;ownerActor:string;memberActor:string
+  alphaOrg:string;betaOrg:string;foreignOrg:string
+  browser:B06Chrome;q:(sql:string,args?:unknown[])=>Promise<any[]>
+}):Promise<void>{
+  const {requireOrganizationAccess}=await import("../../src/api/dogruadres/authorization")
+  const requestFor=(actor_id:string)=>({
+    auth_context:{actor_id,actor_type:"user"},
+    scope:container.createScope()
+  }) as any
+  const A=requestFor(ownerActor),B=requestFor(memberActor)
+  const old=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+  const before=await q(`select id,role,status,protected_owner,revoked_at
+    from da_organization_membership where organization_id=$1 order by id`,[alphaOrg])
+  const beforeAudit=await q(`select id from da_audit_event
+    where organization_id=$1 order by id`,[alphaOrg])
+  const beforeOutbox=await q(`select x.id from da_audit_outbox x
+    join da_audit_event e on e.id=x.source_audit_event_id
+    where e.organization_id=$1 order by x.id`,[alphaOrg])
+  const nativeGet=async(actor:any,org:string)=>
+    requireOrganizationAccess(actor,org,"organization.read")
+  try{
+    delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    await nativeGet(A,alphaOrg)
+    // The current scoped Medusa native read path remains ingress-closed.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    const nativeHttp=await browser.eval(`(async()=>{
+      const response=await fetch('/dogruadres/organizations/'+${JSON.stringify(alphaOrg)})
+      return {status:response.status,body:await response.json()}
+    })()`)
+    assert.deepEqual(nativeHttp,{status:401,
+      body:{message:"Personal session ingress required"}},
+      "Do not authorize the native HTTP namespace without an approved actor credential adapter")
+    process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=
+      "buyer.purchase,products.edit,invitation.manage,membership.manage,membership.list,audit.timeline.read"
+    await assert.rejects(nativeGet(A,alphaOrg),/Organization access denied/,
+      "The role policy must deny even an actual protected Owner")
+    const member=await nativeGet(B,alphaOrg)
+    assert.equal(member.organizationId,alphaOrg,"Actual active Member retains scoped Organization read")
+    const admin=await nativeGet(A,betaOrg)
+    assert.equal(admin.organizationId,betaOrg,"Actual active Admin retains scoped Organization read")
+    await assert.rejects(nativeGet(B,foreignOrg),/Organization access denied/,
+      "Foreign Organization remains denied regardless of Owner role policy")
+    const roleOnly=await q(`select id from da_organization_membership
+      where organization_id=$1 and person_id=(select person_id from da_actor_mapping
+        where actor_type='user' and actor_id=$2 and revoked_at is null)
+      and status='active'`,[alphaOrg,memberActor])
+    assert.equal(roleOnly.length,1)
+    // The previous role is restored exactly; no protected Owner is mutated.
+    await q("update da_organization_membership set role='owner',protected_owner=false,updated_at=clock_timestamp() where id=$1",[roleOnly[0].id])
+    try{
+      await assert.rejects(nativeGet(B,alphaOrg),/Organization access denied/,
+        "An unprotected Owner role must not read the Organization")
+    }finally{
+      await q("update da_organization_membership set role='member',protected_owner=false,updated_at=clock_timestamp() where id=$1",[roleOnly[0].id])
+    }
+  }finally{
+    if(old===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=old
+  }
+  assert.equal((await nativeGet(A,alphaOrg)).organizationId,alphaOrg,
+    "Restored current protected Owner can again read Organization")
+  assert.deepEqual(await q(`select id,role,status,protected_owner,revoked_at
+    from da_organization_membership where organization_id=$1 order by id`,[alphaOrg]),
+    before,"Denied read must not persist membership state")
+  assert.deepEqual(await q(`select id from da_audit_event
+    where organization_id=$1 order by id`,[alphaOrg]),
+    beforeAudit,"Denied native Organization read must not append canonical audit")
+  assert.deepEqual(await q(`select x.id from da_audit_outbox x
+    join da_audit_event e on e.id=x.source_audit_event_id
+    where e.organization_id=$1 order by x.id`,[alphaOrg]),
+    beforeOutbox,"Denied native Organization read must not append audit outbox")
+  process.stdout.write("PASS B22 native organization.read role policy: real PG16 protected Owner default/restored allow, centrally narrowed deny without private response; active Admin/Member unchanged, foreign and role-only Owner denied; native HTTPS ingress remains 401, zero audit/outbox mutations\n")
+}
+
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   const preparing=process.env.B22_UI_PREPARE==="true"
@@ -3375,6 +3456,11 @@ export default async function({container}:any){
       listPolicyOutboxBefore,"Denied read cannot append outbox")
     process.stdout.write("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 200; restored Owner 200\n")
 
+    await verifyNativeOrganizationReadPolicy({
+      container,ownerActor:A.actor,memberActor:B.actor,
+      alphaOrg:organizations[0].id,betaOrg:organizations[1].id,
+      foreignOrg:organizations[2].id,browser,q,
+    })
     await verifyOwnerAuditTimelinePolicy({
       organizationId:organizations[0].id,adminMembershipId:alphaMember.id,
       browser,reviewer,q,
