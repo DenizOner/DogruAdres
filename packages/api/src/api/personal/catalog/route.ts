@@ -58,8 +58,13 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
          !candidate.approved_at||typeof candidate.name!=="string")continue
       // Foundation's current approved Org→Seller origin and explicit per-Store
       // Buyer Organization block are checked together, never via SellerMember.
+      // One suspended/revoked seller must be absent, not mask other approved
+      // Stores. A Buyer/session revocation is independently rechecked below.
       const choice=await service.personalStoreBuyerBlockDecision(
-        token,organizationId,[candidate.id])
+        token,organizationId,[candidate.id]).catch((error:unknown)=>{
+          if(error instanceof IdentityAccessDenied)return null
+          throw error
+        })
       if(choice?.ownership_verified!==true||choice.blocked!==false)continue
       const found=await offers.listOffers({seller_id:candidate.id},{take:5,skip:0})
       if(!Array.isArray(found)||found.length>5||
