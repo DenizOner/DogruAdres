@@ -451,13 +451,14 @@ describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () =
     }
   });
 
-  it('6. Enforces authorization policy: Owner/Admin allowed, Member forbidden', async () => {
+  it('6. Enforces authorization policy: protected Owner allowed, ungranted Admin/Member forbidden', async () => {
     const createReq = (actorId: string, role: string, status: string = 'active') => ({
       auth_context: { actor_id: actorId, actor_type: 'user' },
       scope: {
         resolve: () => ({
           resolvePersonForActor: async () => ({ id: 'prs_' + actorId }),
-          getActiveMembership: async () => (status === 'active' ? { id: 'mem_' + actorId, role, status } : null),
+          getActiveMembership: async () => (status === 'active' ? { id: 'mem_' + actorId, role, status, protected_owner: role === 'owner' } : null),
+          currentProtectedOwner: async () => role === 'owner',
           getOrganization: async () => ({ id: orgId, status: 'active' }),
         })
       }
@@ -467,9 +468,9 @@ describe('M0 B14 - Audit Timeline Integration Tests (Real PG16 Ephemeral)', () =
     const ownerRes = await requireOrganizationAccess(createReq('owner_1', 'owner'), orgId, 'audit.timeline.read');
     expect(ownerRes.personId).toBe('prs_owner_1');
 
-    // Admin allowed
-    const adminRes = await requireOrganizationAccess(createReq('admin_1', 'admin'), orgId, 'audit.timeline.read');
-    expect(adminRes.personId).toBe('prs_admin_1');
+    // An Admin role alone cannot read another person's audit details.
+    await expect(requireOrganizationAccess(createReq('admin_1', 'admin'), orgId, 'audit.timeline.read'))
+      .rejects.toMatchObject({type:'forbidden'});
 
     // Member forbidden (throws MedusaError FORBIDDEN)
     let memberFailed = false;

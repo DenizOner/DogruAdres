@@ -33,8 +33,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       // personalManagerOrganization already checks a current active Organization
       // and SQL-proven protected Owner; never infer permission from a raw role.
       const role=decision && decision.organizations.length===1?decision.organizations[0].role:null
-      if (!decision || !role || (role!=="admin" &&
-          !organizationActionAllowed(role,"audit.timeline.read",role==="owner",false))) {
+      if (!decision || !role ||
+          !organizationActionAllowed(role,"audit.timeline.read",role==="owner",false)) {
         throw new TimelineError(403)
       }
       return { personId: decision.person_id, organizationId: orgId }

@@ -177,16 +177,16 @@ async function run(){
           "Missing role-only Owner HTTP/PG16 management and privacy negative evidence")
         assert.ok(result.split("\n").includes("PASS B22 protected Owner management: real pending invitation HTTP 403 for role-only Owner with no DB/audit mutation; same invitation HTTPS 200 revoked by protected Owner with single audit/outbox"),
           "Missing real pending invitation, denied role-only Owner and authorized protected Owner revoke/PG16 audit evidence")
-        assert.ok(result.includes("PASS B22 protected Owner management: verified protected Owner and ordinary Admin both retain private membership/invitation reads after role-only denial"),
-          "Missing protected Owner and ordinary Admin positive readback evidence")
+        assert.ok(result.includes("PASS B22 explicit permission: protected Owner reads 200; role-only Admin private reads, role edit and invitation create 403; no PG16 writes"),
+          "Missing protected Owner positive and role-only Admin private read/write 403 no-side-effect evidence")
         assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed invitation.manage denies Owner HTTPS list/create/revoke and Foundation writes with unchanged PG16 invitation/audit/outbox; restored Owner revokes"),
           "Missing invitation.manage denied and restored real Chrome/PG16 marker")
         assert.ok(result.split("\n").includes("PASS B22 native organization.read role policy: real PG16 protected Owner default/restored allow, centrally narrowed deny without private response; active Admin/Member unchanged, foreign and role-only Owner denied; native HTTPS ingress remains 401, zero audit/outbox mutations"),
           "Missing real PG16 Owner organization.read policy/role boundaries with native HTTP ingress still closed")
-        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed audit.timeline.read denies Owner HTTPS GET 403 without private audit items; Admin 200; restored Owner 200; PG16 membership/audit/outbox unchanged"),
-          "Missing real Chrome audit.timeline.read narrowed Owner 403/no data, Admin 200, restored Owner 200, PG16 zero write")
-        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 200; restored Owner 200"),
-          "Missing protected Owner membership.list 403/private data denial, Admin 200, restore 200 and zero-write PG16 evidence")
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed audit.timeline.read denies Owner HTTPS GET 403 without private audit items; Admin 403; restored Owner 200; PG16 membership/audit/outbox unchanged"),
+          "Missing real Chrome audit.timeline.read narrowed Owner and ungranted Admin 403/no data, restored Owner 200, PG16 zero write")
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 403; restored Owner 200"),
+          "Missing protected Owner and role-only Admin membership.list 403/private data denial, restored Owner 200 and zero-write PG16 evidence")
         assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed membership.manage denies Chrome role/revoke/protected Owner and native Foundation change; PG16 membership/audit/outbox unchanged; restored Owner role changes 200"),
           "Missing owner membership.manage role-policy HTTP/PG16 zero-write and restored positive evidence")
         assert.ok(result.includes("PASS B22 Owner role policy: narrowed buyer.purchase denies real HTTPS and PG16 final checkout L with zero OrderGroup; default restored"),

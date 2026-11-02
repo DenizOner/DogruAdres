@@ -72,12 +72,12 @@ function buildInvitationEmail(inviteUrl: string, recipientEmail: string) {
   return { subject, text, html };
 }
 
-// personalManagerOrganization already proves active Organization and protected
-// Owner status; this additional decision is the centrally changeable role policy.
+// personalManagerOrganization proves a current protected Owner; a plain Admin
+// role is not an invitation permission without an approved explicit grant.
 function invitationManagerAllowed(scoped:Readonly<{organizations:ReadonlyArray<{role:string}>}>|null|undefined):boolean{
   if(!scoped || scoped.organizations.length!==1)return false
   const role=scoped.organizations[0].role
-  return role==="admin" || organizationActionAllowed(role,"invitation.manage",role==="owner",false)
+  return organizationActionAllowed(role,"invitation.manage",role==="owner",false)
 }
 
 // No client-provided actor, Person, role elevation, auth provider, or native JWT.
@@ -152,8 +152,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     if (!configuredOrigin) {
       return res.status(503).json({ message: "Davet bağlantısı şu anda oluşturulamıyor." })
     }
-    // The original Foundation workflow also rechecks Owner/Admin membership
-    // under its own transaction; this read is never a mutation authorization.
+    // The Foundation workflow separately rechecks protected Owner permission
+    // within its transaction; this preliminary read cannot grant a write.
     const { result } = await createInvitationWorkflow(req.scope).run({
       input: {
         organization_id: input.organization_id, email: input.email,

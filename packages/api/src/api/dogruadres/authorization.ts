@@ -58,7 +58,8 @@ export async function requireOrganizationAccess(
             await service.currentProtectedOwner(personId,orgId),false)
       }
       if (requestedAction === "invitation.manage" || requestedAction === "membership.manage" || requestedAction === "membership.list" || requestedAction === "audit.timeline.read") {
-        if (membership.role === "admin") return true
+        // Without a current, audited non-Owner action grant, role-only Admin
+        // cannot read private audit/membership or mutate membership/invitations.
         return membership.role === "owner" && membership.protected_owner === true &&
           organizationActionAllowed("owner",requestedAction,
             await service.currentProtectedOwner(personId,orgId),false)

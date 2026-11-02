@@ -137,7 +137,7 @@ describe("Personal audit timeline route (GET /personal/audit-timeline)", () => {
     expect(getBody()).toEqual({ message: "Access denied" })
   })
 
-  it("denies a centrally narrowed protected Owner before any audit-index read; Admin and restored Owner retain access",async()=>{
+  it("denies narrowed protected Owner and ungranted Admin before Index read; restores Owner",async()=>{
     const original=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     try{
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=
@@ -150,10 +150,11 @@ describe("Personal audit timeline route (GET /personal/audit-timeline)", () => {
       expect(indexService.readOrganizationTimeline).not.toHaveBeenCalled()
 
       const admin=mockRequest({role:"admin"})
-      const allowed=mockResponse()
-      await GET(admin.req,allowed.res)
-      expect(allowed.getStatus()).toBe(200)
-      expect(admin.indexService.readOrganizationTimeline).toHaveBeenCalledTimes(1)
+      const deniedAdmin=mockResponse()
+      await GET(admin.req,deniedAdmin.res)
+      expect(deniedAdmin.getStatus()).toBe(403)
+      expect(deniedAdmin.getBody()).toEqual({message:"Access denied"})
+      expect(admin.indexService.readOrganizationTimeline).not.toHaveBeenCalled()
     }finally{
       if(original===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=original
@@ -272,9 +273,10 @@ describe("Personal audit timeline route (GET /personal/audit-timeline)", () => {
     expect(data.projection).toEqual({ consistency: "eventual", completeness: "not_guaranteed" })
   })
 
-  it.each(["owner", "admin"])(
-    "returns 200 with timeline items and eventual consistency notice for active %s",
-    async (role) => {
+  it(
+    "returns 200 with timeline items and eventual consistency notice for protected Owner",
+    async () => {
+      const role="owner"
       const row = {
         id: "daidx_1",
         source_module: "dogruadres-access",

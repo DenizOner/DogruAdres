@@ -27,17 +27,19 @@ const row = { ...boundary, source_module: "dogruadres-access", source_event_id: 
   action: "organization.provisioned", resource: "organization", target_id: "org_a", actor_person_id: "person_old", envelope: { secret: "excluded" }, actor_id: "excluded" }
 
 describe("Audit timeline current authorization", () => {
-  it.each(["owner", "admin"])("allows active %s including platform user only through membership", async role => {
-    await expect(authFixture(role).authorize()).resolves.toMatchObject(identity)
+  it("allows a current protected Owner through the verified Organization scope", async () => {
+    await expect(authFixture("owner").authorize()).resolves.toMatchObject(identity)
   })
   it.each(["membership.list","membership.manage","invitation.manage","audit.timeline.read"] as const)(
-    "denies role-only Owner and missing protected proof for native action %s while preserving Admin", async action => {
+    "denies role-only Owner, ungranted Admin and missing protected proof for %s", async action => {
       const roleOnly=authFixture("owner",{id:"person_a"},true,false)
       await expect(roleOnly.authorize(action)).rejects.toThrow("Organization access denied")
       const unproved=authFixture()
       unproved.service.currentProtectedOwner.mockResolvedValue(false)
       await expect(unproved.authorize(action)).rejects.toThrow("Organization access denied")
-      await expect(authFixture("admin").authorize(action)).resolves.toMatchObject(identity)
+      const admin=authFixture("admin")
+      await expect(admin.authorize(action)).rejects.toThrow("Organization access denied")
+      expect(admin.service.currentProtectedOwner).not.toHaveBeenCalled()
       await expect(authFixture("owner").authorize(action)).resolves.toMatchObject(identity)
     })
   it("enforces centrally narrowed organization.read for a current protected Owner, without private HTTP body; Member/Admin and restored Owner remain authorized",async()=>{

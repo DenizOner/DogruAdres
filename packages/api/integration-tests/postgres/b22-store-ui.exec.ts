@@ -358,7 +358,7 @@ async function verifyOwnerMembershipManagePolicy({
       await assert.rejects(foundation.changeMembership({
         organization_id:organizationId,membership_id:targetMembershipId,
         actor_person_id:ownerPersonId,actor_type:"user",actor_id:ownerActorId,role:"admin"
-      }),/Active protected Owner or Admin membership is required/)
+      }),/Organization action permission is required/)
       assert.deepEqual(await q(`select id,person_id,role,status,protected_owner,revoked_at
         from da_organization_membership where organization_id=$1 order by id`,
         [organizationId]),membershipPolicyRows,
@@ -453,9 +453,12 @@ async function verifyOwnerAuditTimelinePolicy({
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       const adminRead=await reviewer.eval(`(async()=>{
-        return (await fetch('/personal/audit-timeline?organization='+${JSON.stringify(organizationId)})).status
+        const r=await fetch('/personal/audit-timeline?organization='+${JSON.stringify(organizationId)})
+        const body=await r.json()
+        return {status:r.status,privateItems:Object.hasOwn(body,'items')}
       })()`)
-      assert.equal(adminRead,200,"Current ordinary Organization Admin retains audit read")
+      assert.deepEqual(adminRead,{status:403,privateItems:false},
+        "Role-only Admin must never receive private audit timeline items")
     }finally{
       if(originalOwnerActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=originalOwnerActions
@@ -477,7 +480,7 @@ async function verifyOwnerAuditTimelinePolicy({
       join da_audit_event e on e.id=x.source_audit_event_id
       where e.organization_id=$1 order by x.id`,[organizationId]),
       outboxBefore,"Audit read permission denial must not write outbox")
-    process.stdout.write("PASS B22 Owner role policy: narrowed audit.timeline.read denies Owner HTTPS GET 403 without private audit items; Admin 200; restored Owner 200; PG16 membership/audit/outbox unchanged\n")
+    process.stdout.write("PASS B22 Owner role policy: narrowed audit.timeline.read denies Owner HTTPS GET 403 without private audit items; Admin 403; restored Owner 200; PG16 membership/audit/outbox unchanged\n")
   }finally{
     if(originalOwnerActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=originalOwnerActions
@@ -3609,11 +3612,11 @@ export default async function({container}:any){
         organization_id:organizations[0].id,
         actor_person_id:A.person,actor_type:"user",actor_id:A.actor,
         email:"role-policy-service-denied@example.invalid",role:"member"
-      }),/Active protected Owner or Admin membership is required/)
+      }),/Organization action permission is required/)
       await assert.rejects(foundation.revokeOrganizationInvitation({
         organization_id:organizations[0].id,invitation_id:pendingInvite.id,
         actor_person_id:A.person,actor_type:"user",actor_id:A.actor
-      }),/Active protected Owner or Admin membership is required/)
+      }),/Organization action permission is required/)
       assert.deepEqual(await q(`select id,status,revoked_at,expires_at
         from da_organization_invitation where organization_id=$1 order by id`,
         [organizations[0].id]),policyInvitations,"Denied invitation must not change any state")
@@ -3691,6 +3694,8 @@ export default async function({container}:any){
       "Real protected Alpha Owner keeps approved membership/invitation read access")
     const listPolicyMembershipBefore=await q(`select id,role,status,protected_owner,revoked_at
       from da_organization_membership where organization_id=$1 order by id`,[organizations[0].id])
+    const listPolicyInvitationsBefore=await q(`select id,status,revoked_at from da_organization_invitation
+      where organization_id=$1 order by id`,[organizations[0].id])
     const listPolicyAuditBefore=await q(`select id from da_audit_event
       where organization_id=$1 order by id`,[organizations[0].id])
     const listPolicyOutboxBefore=await q(`select x.id from da_audit_outbox x
@@ -3713,13 +3718,30 @@ export default async function({container}:any){
       await reviewer.wait("document.visibilityState==='visible'")
       const adminReads=await reviewer.eval(`(async()=>{
         const org=${JSON.stringify(organizations[0].id)}
+        const session=await(await fetch('/personal/session')).json()
+        const post=async(path,payload)=>{
+          const r=await fetch(path,{method:'POST',
+            headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+            body:JSON.stringify(payload)})
+          return r.status
+        }
+        const memberships=await fetch('/personal/memberships?organization='+org)
+        const invitations=await fetch('/personal/invitations?organization='+org)
         return {
-          memberships:(await fetch('/personal/memberships?organization='+org)).status,
-          invitations:(await fetch('/personal/invitations?organization='+org)).status
+          memberships:memberships.status,
+          memberRows:Object.hasOwn(await memberships.json(),'memberships'),
+          invitations:invitations.status,
+          invitationRows:Object.hasOwn(await invitations.json(),'invitations'),
+          roleChange:await post('/personal/memberships',{
+            action:'role',organization_id:org,membership_id:${JSON.stringify(alphaMember.id)},role:'member'}),
+          inviteCreate:await post('/personal/invitations',{
+            action:'create',organization_id:org,email:'admin-role-only@example.invalid',role:'member'})
         }
       })()`)
-      assert.deepEqual(adminReads,{memberships:200,invitations:200},
-        "Ordinary Admin retains private reads while Owner membership.list is narrowed")
+      assert.deepEqual(adminReads,{
+        memberships:403,memberRows:false,invitations:403,invitationRows:false,
+        roleChange:403,inviteCreate:403,
+      },"Role-only Admin must not read private records or change members/invitations")
     }finally{
       if(previousListPolicy===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previousListPolicy
@@ -3727,12 +3749,15 @@ export default async function({container}:any){
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
     }
-    process.stdout.write("PASS B22 protected Owner management: verified protected Owner and ordinary Admin both retain private membership/invitation reads after role-only denial\n")
+    process.stdout.write("PASS B22 explicit permission: protected Owner reads 200; role-only Admin private reads, role edit and invitation create 403; no PG16 writes\n")
 
     const listPolicyRestored=await browser.eval(`(async()=>{
       return (await fetch('/personal/memberships?organization='+${JSON.stringify(organizations[0].id)})).status
     })()`)
     assert.equal(listPolicyRestored,200,"Owner membership.list returns after role policy restoration")
+    assert.deepEqual(await q(`select id,status,revoked_at from da_organization_invitation
+      where organization_id=$1 order by id`,[organizations[0].id]),
+      listPolicyInvitationsBefore,"Admin denial cannot create or revoke invitations")
     assert.deepEqual(await q(`select id,role,status,protected_owner,revoked_at
       from da_organization_membership where organization_id=$1 order by id`,
       [organizations[0].id]),listPolicyMembershipBefore,
@@ -3744,7 +3769,7 @@ export default async function({container}:any){
       join da_audit_event e on e.id=x.source_audit_event_id
       where e.organization_id=$1 order by x.id`,[organizations[0].id]),
       listPolicyOutboxBefore,"Denied read cannot append outbox")
-    process.stdout.write("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 200; restored Owner 200\n")
+    process.stdout.write("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 403; restored Owner 200\n")
 
     await verifyNativeOrganizationReadPolicy({
       container,ownerActor:A.actor,memberActor:B.actor,memberPersonId:B.person,

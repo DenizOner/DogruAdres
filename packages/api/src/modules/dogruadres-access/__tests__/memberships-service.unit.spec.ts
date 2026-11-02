@@ -8,7 +8,8 @@ describe("B05 active membership listing service boundary (mock-only)", () => {
   const context = { transactionManager: { execute: jest.fn(async(sql:string)=>sql.includes("m.protected_owner=true")?[{id:"damem_valid"}]:[]) } } as unknown as Context
   afterEach(() => jest.restoreAllMocks())
 
-  it.each(["owner", "admin"])("authorizes %s and queries only active rows in the exact Organization with the approved projection", async role => {
+  it("authorizes current Owner and queries only active rows in the exact Organization with approved projection", async () => {
+    const role="owner"
     const authorize = jest.spyOn(IdentitySessions.prototype, "organizations").mockResolvedValue({ person_id: "daprs_p", organizations: [{ id: "daorg_test", role }] } as any)
     const list = jest.spyOn(service, "listMemberships").mockResolvedValue([])
     await expect(service.personalMemberships("synthetic", "daorg_test", context)).resolves.toEqual([])
@@ -17,7 +18,7 @@ describe("B05 active membership listing service boundary (mock-only)", () => {
       { select: ["id", "person_id", "role", "status", "protected_owner"] }, context)
   })
 
-  it("denies a narrowed protected Owner before private membership queries, but preserves Admin access",async()=>{
+  it("denies narrowed protected Owner and ungranted Admin before private membership queries",async()=>{
     const previous=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     const authorize=jest.spyOn(IdentitySessions.prototype,"organizations").mockResolvedValue(
       {person_id:"daprs_p",organizations:[{id:"daorg_test",role:"owner"}]} as any)
@@ -29,8 +30,9 @@ describe("B05 active membership listing service boundary (mock-only)", () => {
       expect(list).not.toHaveBeenCalled()
       authorize.mockResolvedValue({person_id:"daprs_p",
         organizations:[{id:"daorg_test",role:"admin"}]} as any)
-      await expect(service.personalMemberships("synthetic","daorg_test",context)).resolves.toEqual([])
-      expect(list).toHaveBeenCalledTimes(1)
+      await expect(service.personalMemberships("synthetic","daorg_test",context))
+        .rejects.toThrow("Access denied")
+      expect(list).not.toHaveBeenCalled()
     }finally{
       if(previous===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previous
@@ -164,21 +166,23 @@ describe("M0 B06 personal membership role change service boundary", () => {
     }
   })
 
-  it("allows Admin to change an active ordinary Admin back to Member", async () => {
+  it("rejects ungranted Admin role changes before target reads and writes", async () => {
     organizationsSpy.mockResolvedValue(orgDecisionAdmin)
     getMembershipSpy.mockResolvedValue(targetAdmin)
-    changeMembershipSpy.mockResolvedValue({ id: memberId, role: "member", status: "active" })
+    await expect(service.personalChangeMembershipRole(token,orgId,memberId,"member",context))
+      .rejects.toThrow("Access denied")
+    await expect(service.personalRevokeMembership(token,orgId,memberId,context))
+      .rejects.toThrow("Access denied")
+    expect(getMembershipSpy).not.toHaveBeenCalled()
+    expect(changeMembershipSpy).not.toHaveBeenCalled()
+  })
 
-    const result = await service.personalChangeMembershipRole(token, orgId, memberId, "member", context)
-    expect(changeMembershipSpy).toHaveBeenCalledWith({
-      organization_id: orgId,
-      membership_id: memberId,
-      actor_person_id: "daprs_owner",
-      actor_type: "user",
-      actor_id: "user_owner",
-      role: "member",
-    }, context)
-    expect(result).toEqual({ id: memberId, role: "member", status: "active" })
+  it("denies an ungranted Admin manager selector while preserving protected Owner",async()=>{
+    organizationsSpy.mockResolvedValue(orgDecisionAdmin)
+    await expect(service.personalManagerOrganization(token,orgId,context)).resolves.toBeNull()
+    organizationsSpy.mockResolvedValue(orgDecisionOwner)
+    await expect(service.personalManagerOrganization(token,orgId,context))
+      .resolves.toMatchObject(orgDecisionOwner)
   })
 
   it("denies ordinary Member from changing membership roles (403 Forbidden)", async () => {

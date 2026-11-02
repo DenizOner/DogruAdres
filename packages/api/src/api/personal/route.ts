@@ -384,7 +384,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if (err.message === 'Access denied' || err.status === 403) {
         entriesEl.replaceChildren();
         el('audit-timeline-section').hidden = true;
-        statusEl.textContent = 'Denetim zaman cizelgesi icin yetki yok (yalnizca Owner ve Admin erisebilir).';
+        statusEl.textContent = 'Denetim zaman cizelgesi icin yetki yok (korunmus Owner yetkisi gereklidir).';
       } else if (err.message === 'Audit timeline unavailable' || err.uncertain || err.status === 503) {
         if (!append) entriesEl.replaceChildren();
         statusEl.textContent = 'Denetim indeksi su anda kullanilamiyor (kesinti/erisilemez). Bu durum kurulusta kayit olmadigi anlamina gelmez.';
@@ -479,7 +479,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       currentOrg=id;el('detail').textContent=JSON.stringify(result.organizations[0],null,2);history.replaceState(null,'','/personal?organization='+encodeURIComponent(id));
       el('notification-bell').hidden=false;void notifications();
       const managerRole=result.organizations[0]?.role;
-      if(['owner','admin'].includes(managerRole)){
+      if(managerRole==='owner'){
         el('memberships-refresh').hidden=false;
         el('invite-member').hidden=false;
         el('pending-invitations-panel').hidden=false;
@@ -496,7 +496,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         el('audit-timeline-entries').replaceChildren();
         el('audit-timeline-status').textContent = '';
       }
-      await memberships(id,request);
+      if(managerRole==='owner')await memberships(id,request);
+      else if(request===organizationRequest&&currentOrg===id){
+        clearMemberships();
+        el('memberships-status').textContent='Uye listesi ve davet yonetimi icin yetki gerekli.';
+      }
       if(request===organizationRequest&&currentOrg===id){
         if(['owner','admin'].includes(managerRole))void storeApplications(id,request,managerRole);
         void organizationStores(id,request);

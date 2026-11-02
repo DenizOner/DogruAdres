@@ -186,10 +186,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   async personalMemberships(token:string,org:string,@MedusaContext() context:Context={}) {
     const db=securitySql(context.transactionManager)
     const decision=await new IdentitySessions(db).organizations(token,org)
-    if(!decision||!['owner','admin'].includes(decision.organizations[0].role)||
-       (decision.organizations[0].role==='owner' &&
-         !organizationActionAllowed("owner","membership.list",
-           await isCurrentProtectedOwner(db,decision.person_id,org),false)))
+    if(!decision||decision.organizations.length!==1||
+       !organizationActionAllowed(decision.organizations[0].role,"membership.list",
+         decision.organizations[0].role==="owner" &&
+           await isCurrentProtectedOwner(db,decision.person_id,org),false))
       throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
     return this.listMemberships({organization_id:org,status:'active'},{select:['id','person_id','role','status','protected_owner']},context)
   }
@@ -199,10 +199,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`,[org])
     const sessions=new IdentitySessions(sql),identity=await sessions.current(token,true)
     const decision=identity?await sessions.organizations(token,org):null
-    if(!identity||!decision||!['owner','admin'].includes(decision.organizations[0].role)||
-       (decision.organizations[0].role==='owner' &&
-         !organizationActionAllowed("owner","membership.manage",
-           await isCurrentProtectedOwner(sql,identity.person_id,org),false)))
+    if(!identity||!decision||decision.organizations.length!==1||
+       !organizationActionAllowed(decision.organizations[0].role,"membership.manage",
+         decision.organizations[0].role==="owner" &&
+           await isCurrentProtectedOwner(sql,identity.person_id,org),false))
       throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
     const result=await this.changeMembership({organization_id:org,membership_id:membership,actor_person_id:identity.person_id,actor_type:identity.actor_type,actor_id:identity.actor_id,status:'revoked'},context)
     return {id:result.id,status:result.status}
@@ -214,10 +214,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`,[org])
     const sessions=new IdentitySessions(sql),identity=await sessions.current(token,true)
     const decision=identity?await sessions.organizations(token,org):null
-    if(!identity||!decision||!['owner','admin'].includes(decision.organizations[0].role)||
-       (decision.organizations[0].role==='owner' &&
-         !organizationActionAllowed("owner","membership.manage",
-           await isCurrentProtectedOwner(sql,identity.person_id,org),false)))
+    if(!identity||!decision||decision.organizations.length!==1||
+       !organizationActionAllowed(decision.organizations[0].role,"membership.manage",
+         decision.organizations[0].role==="owner" &&
+           await isCurrentProtectedOwner(sql,identity.person_id,org),false))
       throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
     const target=await this.getMembershipInOrganization(membership,org,context)
     if(!target)throw new MedusaError(MedusaError.Types.NOT_FOUND,'Membership not found in the selected Organization')
@@ -420,8 +420,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId)
   }
 
-  /** Same session, Organization and protected Owner proof for privileged reads.
-   * Ordinary active Organization Admin remains authorized, without Staff powers.
+  /** Current active Organization and protected Owner proof for privileged reads.
+   * Ordinary Admin role alone is never a private management permission.
    */
   @InjectTransactionManager()
   async personalManagerOrganization(token:string,org:string,@MedusaContext() context:Context={}) {
@@ -429,8 +429,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const decision=await new IdentitySessions(db).organizations(token,org)
     if(!decision||decision.organizations.length!==1)return null
     const role=decision.organizations[0].role
-    if(role!=='admin' && (role!=='owner' ||
-       !await isCurrentProtectedOwner(db,decision.person_id,org)))return null
+    if(role!=="owner" ||
+       !await isCurrentProtectedOwner(db,decision.person_id,org))return null
     return decision
   }
 
@@ -924,11 +924,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Waiting may have allowed an invitation to reactivate this membership.
     // Re-read persisted target and actor authorization before transition decisions.
     const actorMembership = await this.getActiveMembership(input.actor_person_id, input.organization_id, sharedContext)
-    if (!actorMembership || !["owner", "admin"].includes(actorMembership.role) ||
-        (actorMembership.role==="owner" && !organizationActionAllowed(
-          "owner","membership.manage",await isCurrentProtectedOwner(
-            securitySql(sharedContext.transactionManager),input.actor_person_id,input.organization_id),false))) {
-      throw new MedusaError(MedusaError.Types.FORBIDDEN, "Active protected Owner or Admin membership is required")
+    if (!actorMembership || !organizationActionAllowed(
+          actorMembership.role,"membership.manage",
+          actorMembership.role==="owner" && await isCurrentProtectedOwner(
+            securitySql(sharedContext.transactionManager),input.actor_person_id,input.organization_id),false)) {
+      throw new MedusaError(MedusaError.Types.FORBIDDEN, "Organization action permission is required")
     }
     const target = await this.getMembershipInOrganization(input.membership_id, input.organization_id, sharedContext)
     if (!target || target.person_id !== initialTarget.person_id) throw new MedusaError(MedusaError.Types.NOT_FOUND, "Membership not found in the selected Organization")
@@ -986,11 +986,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     @MedusaContext() sharedContext: Context = {}
   ) {
     const actorMembership = await this.getActiveMembership(input.actor_person_id, input.organization_id, sharedContext)
-    if (!actorMembership || !["owner", "admin"].includes(actorMembership.role) ||
-        (actorMembership.role==="owner" && !organizationActionAllowed(
-          "owner","invitation.manage",await isCurrentProtectedOwner(
-            securitySql(sharedContext.transactionManager),input.actor_person_id,input.organization_id),false))) {
-      throw new MedusaError(MedusaError.Types.FORBIDDEN, "Active protected Owner or Admin membership is required")
+    if (!actorMembership || !organizationActionAllowed(
+          actorMembership.role,"invitation.manage",
+          actorMembership.role==="owner" && await isCurrentProtectedOwner(
+            securitySql(sharedContext.transactionManager),input.actor_person_id,input.organization_id),false)) {
+      throw new MedusaError(MedusaError.Types.FORBIDDEN, "Organization action permission is required")
     }
     const organization = await this.getOrganization(input.organization_id, sharedContext)
     const people = await this.listPeople({ id: input.actor_person_id }, { take: 2 }, sharedContext)
@@ -1061,11 +1061,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     @MedusaContext() sharedContext: Context = {}
   ) {
     const actorMembership = await this.getActiveMembership(input.actor_person_id, input.organization_id, sharedContext)
-    if (!actorMembership || !["owner", "admin"].includes(actorMembership.role) ||
-        (actorMembership.role==="owner" && !organizationActionAllowed(
-          "owner","invitation.manage",await isCurrentProtectedOwner(
-            securitySql(sharedContext.transactionManager),input.actor_person_id,input.organization_id),false)))
-      throw new MedusaError(MedusaError.Types.FORBIDDEN, "Active protected Owner or Admin membership is required")
+    if (!actorMembership || !organizationActionAllowed(
+          actorMembership.role,"invitation.manage",
+          actorMembership.role==="owner" && await isCurrentProtectedOwner(
+            securitySql(sharedContext.transactionManager),input.actor_person_id,input.organization_id),false))
+      throw new MedusaError(MedusaError.Types.FORBIDDEN, "Organization action permission is required")
     // Deny before reading a private invitation target.
     const invitation = await this.getInvitationInOrganization(input.invitation_id, input.organization_id, sharedContext)
     if (!invitation) throw new Error("Pending invitation not found")

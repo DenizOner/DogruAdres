@@ -226,10 +226,10 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     )
     expect(mockAcceptRun).not.toHaveBeenCalled()
   })
-  it.each(["owner", "admin"] as const)("allows %s to invite a verified-target Admin without exposing the secret to the inviter", async actorRole => {
+  it("allows protected Owner to invite a verified-target Admin without exposing the secret", async () => {
     service.personalManagerOrganization.mockResolvedValue({
       person_id: principal.person_id,
-      organizations: [{ id: "daorg_allowed", role: actorRole }],
+      organizations: [{ id: "daorg_allowed", role: "owner" }],
     })
     mockCreateRun.mockResolvedValueOnce({
       result: { id: "dainv_admin", role: "admin", status: "pending", expires_at: new Date("2026-11-01T00:00:00Z") },
@@ -247,6 +247,22 @@ describe("session-bound personal invitations (no native bearer delegation)", () 
     expect(sendSmtpEmail).toHaveBeenCalledWith(
       expect.objectContaining({ to: "member@example.invalid", subject: "DoğruAdres Kuruluş Üyelik Daveti" })
     )
+  })
+
+  it("denies role-only Admin invitation list, create and revoke with zero workflow/email calls",async()=>{
+    service.personalManagerOrganization.mockResolvedValue({
+      person_id:principal.person_id,organizations:[{id:"daorg_allowed",role:"admin"}],
+    })
+    const listed=await invokeGet({organization:"daorg_allowed"})
+    expect(listed.status).toHaveBeenCalledWith(403)
+    expect(service.listInvitations).not.toHaveBeenCalled()
+    const created=await invoke(createBody)
+    expect(created.status).toHaveBeenCalledWith(403)
+    expect(mockCreateRun).not.toHaveBeenCalled()
+    const revoked=await invoke(revokeBody)
+    expect(revoked.status).toHaveBeenCalledWith(403)
+    expect(mockRevokeRun).not.toHaveBeenCalled()
+    expect(sendSmtpEmail).not.toHaveBeenCalled()
   })
 
   it("never permits Owner invitation through the personal API", async () => {

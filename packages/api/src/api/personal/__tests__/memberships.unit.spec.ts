@@ -62,7 +62,7 @@ describe("personal memberships route", () => {
   })
 
   describe("GET /personal/memberships", () => {
-    it("returns membership list for authorized Owner/Admin with valid organization query", async () => {
+    it("returns membership list for authorized Owner with valid organization query", async () => {
       req.query = { organization: orgId }
       await GET(req, res)
       expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store")
@@ -291,7 +291,7 @@ describe("personal memberships route", () => {
     const settle = () => new Promise<void>(resolve => setImmediate(resolve))
 
     const ordinary = { id: "mem_ordinary", person_id: "p_ordinary", role: "member", status: "active", protected_owner: false }
-    async function selection(h: ReturnType<typeof createUiHarness>, id = orgId, role = "admin") {
+    async function selection(h: ReturnType<typeof createUiHarness>, id = orgId, role = "owner") {
       const done = h.select(id)
       h.state.pending.filter(p => p.path === `organizations?id=${id}`).at(-1)!.resolve({ organizations: [{ id, name: "Test Org", role }] })
       await settle()
@@ -321,15 +321,15 @@ describe("personal memberships route", () => {
 
       const denied = createUiHarness()
       runInContext("currentPersonId='p_admin'", denied.context)
-      const next = await selection(denied, orgId, "admin")
-      next.read.resolve({ memberships: [
-        { id: "mem_admin", person_id: "p_admin", role: "admin", status: "active", protected_owner: false },
-        { id: "mem_owner", person_id: "p_owner", role: "owner", status: "active", protected_owner: true },
-        ordinary,
-      ] })
-      await next.done
-      expect(denied.el("memberships").children.some((x: any) =>
-        typeof x.textContent === "string" && (x.textContent.startsWith("Korumalı Owner yap") || x.textContent.startsWith("Owner rolünü Admin yap")))).toBe(false)
+      const adminSelection=denied.select(orgId)
+      denied.state.pending.find(p=>p.path===`organizations?id=${orgId}`)!.resolve({
+        organizations:[{id:orgId,name:"Test Org",role:"admin"}],
+      })
+      await adminSelection
+      expect(denied.state.pending.filter(p=>p.path===`memberships?organization=${orgId}`)).toHaveLength(0)
+      expect(denied.el("memberships").children).toHaveLength(0)
+      expect(denied.el("invite-member").hidden).toBe(true)
+      expect(denied.el("audit-timeline-section").hidden).toBe(true)
     })
 
     it("announces pending, populated and genuinely empty results separately", async () => {
@@ -352,14 +352,14 @@ describe("personal memberships route", () => {
     it.each([401, 403, 404, 503, undefined])("shows safe denial/error after HTTP %s or network failure without stale rows", async httpStatus => {
       const h = createUiHarness(), first = await selection(h)
       first.read.resolve({ memberships: [ordinary] }); await first.done
-      const next = await selection(h, orgId, httpStatus === 403 ? "member" : "admin")
+      const next = await selection(h, orgId, "owner")
       expect(h.el("memberships").children).toHaveLength(0)
       next.read.reject(Object.assign(new Error("private upstream diagnostic"), { httpStatus })); await next.done
       expect(h.el("memberships-status").textContent).toBe([401, 403, 404].includes(httpStatus as number)
         ? "Üyelik listesini görüntüleme izniniz yok." : "Üyelik listesi yüklenemedi. Yeniden deneyin.")
       expect(h.el("memberships").children).toHaveLength(0)
       expect(h.el("memberships").ariaBusy).toBe("false")
-      expect(h.el("memberships-refresh").hidden).toBe(httpStatus === 403)
+      expect(h.el("memberships-refresh").hidden).toBe(false)
     })
 
     it("refreshes using the current Organization with fresh scope authorization before listing", async () => {
@@ -370,7 +370,7 @@ describe("personal memberships route", () => {
       expect(h.el("memberships-status").textContent).toBe("Üyelikler yükleniyor…")
       expect(h.el("memberships").ariaBusy).toBe("true")
       expect(h.state.pending.at(-1)!.path).toBe(`organizations?id=${orgId}`)
-      h.state.pending.at(-1)!.resolve({ organizations: [{ id: orgId, role: "admin" }] }); await settle()
+      h.state.pending.at(-1)!.resolve({ organizations: [{ id: orgId, role: "owner" }] }); await settle()
       expect(h.state.pending.at(-1)!.path).toBe(`memberships?organization=${orgId}`)
       h.state.pending.at(-1)!.resolve({ memberships: [] }); await done
       expect(h.el("memberships-status").textContent).toBe("Gösterilecek üyelik bulunmuyor.")

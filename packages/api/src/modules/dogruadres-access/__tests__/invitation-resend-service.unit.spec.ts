@@ -94,11 +94,33 @@ describe("M0 B12 safe invitation resend", () => {
     expect(audit).not.toHaveBeenCalled()
   })
 
+  it("rejects ungranted Admin creation/revocation before private read or mutation",async()=>{
+    const {service,tx,context,create,update,audit}=setup()
+    jest.spyOn(service as any,"getActiveMembership").mockResolvedValue({
+      role:"admin",status:"active",protected_owner:false,
+      person_id:"daprs_owner",organization_id:"daorg_test",
+    })
+    const list=jest.spyOn(service as any,"listInvitations").mockResolvedValue([])
+    const getInvite=jest.spyOn(service as any,"getInvitationInOrganization").mockResolvedValue(null)
+    await expect(service.createOrganizationInvitation(input,context))
+      .rejects.toThrow("Organization action permission is required")
+    await expect(service.revokeOrganizationInvitation({
+      organization_id:"daorg_test",invitation_id:"dainv_test",
+      actor_person_id:"daprs_owner",actor_type:"user",actor_id:"user_owner",
+    },context)).rejects.toThrow("Organization action permission is required")
+    expect(tx.execute).not.toHaveBeenCalled()
+    expect(list).not.toHaveBeenCalled()
+    expect(getInvite).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(audit).not.toHaveBeenCalled()
+  })
+
   it("rejects a role-only, unprotected Owner before reading or writing invitations", async()=>{
     const {service,tx,context,create,update,audit}=setup(false)
     const list=jest.spyOn(service as any,"listInvitations").mockResolvedValue([])
     await expect(service.createOrganizationInvitation(input,context))
-      .rejects.toThrow("Active protected Owner or Admin membership is required")
+      .rejects.toThrow("Organization action permission is required")
     expect(tx.execute).toHaveBeenCalledWith(
       expect.stringContaining("m.protected_owner=true"),
       ["daprs_owner","daorg_test"]
