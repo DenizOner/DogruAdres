@@ -99,7 +99,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       // Medusa validateToken verifies signature, purpose=reset and atomically
       // consumes the persisted jti. A session JWT cannot pass that middleware.
       (!nativeSession && /^\/auth\/(user|member|customer)\/emailpass\/update$/.test(path) && req.method==="POST") ||
-      (anonymous && path==="/store/regions" && req.method==="GET")) return next()
+      (path==="/store/regions" && req.method==="GET")) return next()
   // A machine key is still authenticated by the native framework. No staff or
   // Organization authority is inferred from it. Only this read-only operation.
   if (path === "/admin/api-keys" && req.method === "GET" && /^Basic /i.test(req.headers.authorization ?? "")) {
