@@ -7,6 +7,14 @@ describe("personal ingress (unit contract only)",()=>{
   async function probe(path:string,method="GET",authorization?:string,bound=false){const next=jest.fn();const res:any={status:jest.fn().mockReturnThis(),json:jest.fn()};await nativeIngress({originalUrl:path,method,headers:{authorization},...(authorization?.startsWith('Basic ')?{auth_context:{actor_type:'api-key',actor_id:'key'}}:{}),scope:{resolve:()=>({personalNativeCredential:async()=>bound?{}:null,personalMachineGrant:async()=>true})}} as any,res,next);return {next,res}}
   it.each(["/admin/users/me","/vendor/products","/store/customers/me","/auth/token/refresh","/auth/session","/admin/workflows-executions/a/run"])("rejects unbound native actor credentials: %s",async path=>{const {next,res}=await probe(path,"GET","Bearer native-token");expect(next).not.toHaveBeenCalled();expect(res.status).toHaveBeenCalledWith(401)})
   it.each(["/store/regions","/personal","/personal/session"])("preserves allowed locale/auth surface %s",async path=>expect((await probe(path)).next).toHaveBeenCalled())
+  it("keeps public region bootstrap available even when Medusa resolved a publishable key",async()=>{
+    const next=jest.fn(),res:any={status:jest.fn().mockReturnThis(),json:jest.fn()}
+    await nativeIngress({originalUrl:"/store/regions",method:"GET",
+      headers:{"x-publishable-api-key":"pk_synthetic"},
+      auth_context:{actor_type:"api-key",actor_id:"apk_synthetic"}} as any,res,next)
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(res.status).not.toHaveBeenCalled()
+  })
   it("keeps the approved closed B4B catalog private even with a publishable key or native credential",async()=>{
     const targets:Array<[string,string]>=[
       ["/store/products","GET"],["/store/products/prod_test","GET"],
