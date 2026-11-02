@@ -16,6 +16,7 @@ describe("B22 Store-owned CustomerGroup ↔ audited Buyer Organization grant",()
     ;(sessionToken as jest.Mock).mockReturnValue("opaque")
     service={
       personalActorBinding:jest.fn().mockResolvedValue({
+        id:"dabind_owner",actor_type:"member",
         person_id:"daprs_owner",actor_id:"mem_owner",revoked_at:null
       }),
       personalStorePriceGroupAccess:jest.fn().mockResolvedValue({status:"active"})
@@ -44,7 +45,9 @@ describe("B22 Store-owned CustomerGroup ↔ audited Buyer Organization grant",()
       filters:{seller_id:"sel_a",customer_group_id:"cusgroup_a"}
     })
     expect(service.personalStorePriceGroupAccess).toHaveBeenCalledWith("opaque",{
-      ...group,action:"grant"
+      ...group,action:"grant",
+      member_binding_id:"dabind_owner",
+      member_actor_id:"mem_owner",member_person_id:"daprs_owner"
     })
   })
   it("never writes before Origin+CSRF or from forged seller/Bearer scope",async()=>{
@@ -72,6 +75,45 @@ describe("B22 Store-owned CustomerGroup ↔ audited Buyer Organization grant",()
     expect(res.status).toHaveBeenLastCalledWith(403)
     expect(service.personalStorePriceGroupAccess).not.toHaveBeenCalled()
   })
+  it("F-01 denies reads of suspended and unapproved Seller without disclosing grant status",async()=>{
+    for(const store of [
+      {id:"sel_a",status:"suspended",approved_at:"2026-11-03"},
+      {id:"sel_a",status:"open",approved_at:null}
+    ]){
+      seller.mockResolvedValue([store])
+      res.status.mockClear();res.json.mockClear()
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(403)
+      expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+      expect(service.personalStorePriceGroupAccess).not.toHaveBeenCalled()
+    }
+  })
+  it("F-01 allows authorized revoke for cleanup of suspended native Seller",async()=>{
+    req.body.action="revoke"
+    seller.mockResolvedValue([{id:"sel_a",status:"suspended",approved_at:null}])
+    service.personalStorePriceGroupAccess.mockResolvedValue({status:"revoked"})
+    await POST(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(query).not.toHaveBeenCalled()
+  })
+  it("F-02 refuses successful HTTP confirmation if exact Member binding disappears during request",async()=>{
+    service.personalActorBinding
+      .mockResolvedValueOnce({id:"dabind_owner",actor_type:"member",
+        person_id:"daprs_owner",actor_id:"mem_owner",revoked_at:null})
+      .mockResolvedValueOnce(null)
+    await POST(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(503)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Outcome uncertain; recheck group"})
+    expect(service.personalStorePriceGroupAccess).toHaveBeenCalledTimes(1)
+  })
+  it("F-02 rejects a missing verified binding ID before any native scope lookup",async()=>{
+    service.personalActorBinding.mockResolvedValue({actor_type:"member",
+      person_id:"daprs_owner",actor_id:"mem_owner",revoked_at:null})
+    await POST(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(member).not.toHaveBeenCalled()
+    expect(service.personalStorePriceGroupAccess).not.toHaveBeenCalled()
+  })
   it("allows idempotent revoke even if native group link was retired",async()=>{
     req.body.action="revoke"
     service.personalStorePriceGroupAccess.mockResolvedValue({status:"revoked"})
@@ -84,7 +126,9 @@ describe("B22 Store-owned CustomerGroup ↔ audited Buyer Organization grant",()
     await GET(req,res)
     expect(res.status).toHaveBeenLastCalledWith(200)
     expect(service.personalStorePriceGroupAccess).toHaveBeenCalledWith("opaque",{
-      ...group,action:"read"
+      ...group,action:"read",
+      member_binding_id:"dabind_owner",
+      member_actor_id:"mem_owner",member_person_id:"daprs_owner"
     })
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","private, no-store")
   })

@@ -24,8 +24,9 @@ async function handle(req:MedusaRequest,res:MedusaResponse,action:"read"|"grant"
   const service=access(req),token=sessionToken(req)
   try{
     const binding=await service.personalActorBinding(token,"member")
-    if(!binding||binding.revoked_at||typeof binding.person_id!=="string"||
-       typeof binding.actor_id!=="string")return denied()
+    if(!binding||binding.revoked_at||typeof binding.id!=="string"||
+       typeof binding.person_id!=="string"||typeof binding.actor_id!=="string"||
+       binding.actor_type!=="member")return denied()
     const native=req.scope.resolve<{
       listMembers(f:object):Promise<any[]>
       listSellerMembers(f:object):Promise<any[]>
@@ -45,7 +46,7 @@ async function handle(req:MedusaRequest,res:MedusaResponse,action:"read"|"grant"
          links[0].seller_id!==input.seller_id||
          links[0].member_id!==binding.actor_id||
          stores.length!==1||stores[0].id!==input.seller_id||
-         (action==="grant"&&(stores[0].status!=="open"||!stores[0].approved_at)))
+         (action!=="revoke"&&(stores[0].status!=="open"||!stores[0].approved_at)))
         return false
       // A Seller cannot borrow another Seller's native CustomerGroup,
       // even when both share the same ProductVariant or native Customer.
@@ -60,8 +61,21 @@ async function handle(req:MedusaRequest,res:MedusaResponse,action:"read"|"grant"
         data[0].customer_group_id===input.customer_group_id
     }
     if(!await live())return denied()
-    const result=await service.personalStorePriceGroupAccess(token,{action,...input})
+    const result=await service.personalStorePriceGroupAccess(token,{
+      action,...input,
+      member_binding_id:binding.id,member_actor_id:binding.actor_id,
+      member_person_id:binding.person_id
+    })
     if(!result)return denied()
+    // The HTTP response must never confirm a grant after the exact
+    // Person->Member binding was unlinked while leaving the native
+    // SellerMember in place. This is a second read, not the write lock:
+    // the Foundation transaction serializes with unlink before mutating.
+    const freshBinding=await service.personalActorBinding(token,"member")
+    if(!freshBinding||freshBinding.revoked_at||
+       freshBinding.id!==binding.id||freshBinding.person_id!==binding.person_id||
+       freshBinding.actor_id!==binding.actor_id)
+      return res.status(503).json({message:"Outcome uncertain; recheck group"})
     if(!await live())
       return res.status(503).json({message:"Outcome uncertain; recheck group"})
     return res.status(200).json(result)

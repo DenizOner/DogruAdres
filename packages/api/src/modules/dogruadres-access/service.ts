@@ -1789,17 +1789,37 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalStorePriceGroupAccess(
     token:string,input:{action:"grant"|"revoke"|"read";organization_id:string;
-      seller_id:string;buyer_organization_id:string;customer_group_id:string},
+      seller_id:string;buyer_organization_id:string;customer_group_id:string;
+      member_binding_id:string;member_actor_id:string;member_person_id:string},
     @MedusaContext() context:Context={}
   ){
     if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
        !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.buyer_organization_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
        !/^cusgroup_[A-Za-z0-9_-]+$/.test(input.customer_group_id)||
+       !/^dabind_[A-Za-z0-9_-]+$/.test(input.member_binding_id)||
+       !/^[A-Za-z0-9_-]{1,160}$/.test(input.member_actor_id)||
+       !/^daprs_[A-Za-z0-9_-]+$/.test(input.member_person_id)||
        !["grant","revoke","read"].includes(input.action))throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
     const current=await sessions.current(token,true,false)
-    if(!current)return null
+    if(!current||current.person_id!==input.member_person_id)return null
+
+    // Serialize with supported AccountLinking.unlink() on the exact actor.
+    // The primary session/Person epoch is already locked by current().
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('da-actor-link'),hashtext(?))`,
+      ["member:"+input.member_actor_id])
+    const currentBindings=await db.execute(`select b.id from da_verified_actor_binding b
+      join da_actor_mapping a on a.person_id=b.person_id
+        and a.actor_type=b.actor_type and a.actor_id=b.actor_id
+        and a.deleted_at is null
+      where b.id=? and b.person_id=? and b.actor_type='member'
+        and b.actor_id=? and b.verified_at is not null
+        and b.revoked_at is null for share of b,a`,
+      [input.member_binding_id,current.person_id,input.member_actor_id])
+    if(currentBindings.length!==1||currentBindings[0].id!==input.member_binding_id)
+      return null
     const allowed=async()=>{
       const member=await sessions.organizations(token,input.organization_id,false)
       if(!member||member.person_id!==current.person_id||
@@ -1813,7 +1833,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       hashtext('b22-price-group'),hashtext(?))`,
       [input.seller_id+":"+input.buyer_organization_id+":"+input.customer_group_id])
     if(!await allowed())return null
-    if(input.action==="grant"){
+    // A suspended Buyer cannot read even the existence of a former grant;
+    // revocation remains available for safe administrative cleanup.
+    if(input.action!=="revoke"){
       const target=await db.execute(`select id from da_organization
         where id=? and status='active' and deleted_at is null for share`,
         [input.buyer_organization_id])
