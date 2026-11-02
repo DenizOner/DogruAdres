@@ -1648,7 +1648,7 @@ export default async function({container}:any){
     const directTryOffers:Array<{id:string;seller_id:string;amount:number}>=[]
     for(let i=0;i<2;i++){
       const sku="B22-TRY-OFFER-"+i+"-"+rand
-      const amount=1500+i*500
+      const amount=i===0?1250.5:2000
       const {result:[offer]}=await createOffersWorkflow(container).run({
         input:{offers:[{
           seller_id:cartStoreIds[i],created_by:member.id,
@@ -1718,6 +1718,23 @@ export default async function({container}:any){
       JSON.stringify(sellableProduct.title)+")"),true)
     assert.equal(await browser.eval("document.getElementById('buyer-catalog-items').textContent.includes('TRY referans liste fiyatı:')"),true,
       "Browser must label the native direct TRY price as a reference, not payable")
+    // Real Chrome must render both a fractional TRY amount and another Store's
+    // distinct integer price, bound to the right Store/Offer product label.
+    // This checks the actual generated HTML and browser DOM (not a mocked unit).
+    const displayedTryLines=await browser.eval(
+      "Array.from(document.querySelectorAll('#buyer-catalog-items li'), li=>li.textContent)")
+    assert.ok(Array.isArray(displayedTryLines))
+    for(const store of scopedCatalog.body.stores){
+      const expected=directTryOffers.find(o=>o.seller_id===store.id)
+      assert.ok(expected,"Each approved Store must retain its own native Offer")
+      const rows=displayedTryLines.filter((line:string)=>
+        line.startsWith(store.name+" — "+tryProduct.title+" — TRY referans liste fiyatı: "))
+      assert.equal(rows.length,1,"Chrome must show exactly this Store's TRY Offer")
+      assert.ok(rows[0].includes(expected!.amount===1250.5?"1.250,50":"2.000,00"),
+        "Chrome tr-TR DOM must show the correct fractional/integer TRY amount")
+      assert.ok(rows[0].includes("(ödenecek tutar değil)"),
+        "A list price must not be presented as payable")
+    }
     assert.deepEqual(await q("select count(*)::int n from da_audit_event"),catalogAuditBefore,
       "Read-only Buyer catalogue cannot write canonical audit")
     process.stdout.write("PASS B22 Buyer catalogue: real Chrome HTTPS and PG16 two published Mercur Offers under approved Buyer Org, foreign and forged scopes 403/400, no private inventory leakage and no audit writes\n")
