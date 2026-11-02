@@ -15,9 +15,13 @@ async function call(path,{method='GET',body,headers={}}={}){
   if(!base.startsWith('https:'))return fetch(base+path,{...options,...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(20000)})
   return new Promise((resolve,reject)=>{const req=request(base+path,{...options,ca:readFileSync(process.env.M0_TEST_CA_CERT??(dir+'/dual-proof-tls/cert.pem')),servername:'localhost',timeout:20000},r=>{const chunks=[];r.on('data',v=>chunks.push(v));r.on('end',()=>resolve({status:r.statusCode,json:()=>JSON.parse(Buffer.concat(chunks).toString())}))});req.on('error',reject);req.on('timeout',()=>req.destroy(Error('Task timeout')));if(body)req.write(JSON.stringify(body));req.end()})
 }
-test('public Store catalog retains genuine publishable-key behavior',async()=>{
+test('closed B4B prevents public products/categories but keeps login region bootstrap',async()=>{
   assert.equal((await call('/store/regions')).status,400)
-  for(const route of ['/store/regions','/store/products','/store/product-categories'])assert.equal((await call(route,{headers:{'x-publishable-api-key':c.publishableKey}})).status,200)
+  assert.equal((await call('/store/regions',{headers:{'x-publishable-api-key':c.publishableKey}})).status,200)
+  for(const route of ['/store/products','/store/products/prod_synthetic','/store/product-categories','/store/offers','/store/sellers'])
+    assert.equal((await call(route,{headers:{'x-publishable-api-key':c.publishableKey}})).status,401)
+  assert.equal((await call('/store/search',{method:'POST',
+    headers:{'x-publishable-api-key':c.publishableKey},body:{query:'private'}})).status,401)
 })
 test('public verification and purpose-bound recovery remain functional without actor login',async()=>{
   assert.equal((await call('/auth/user/emailpass/reset-password',{method:'POST',body:{identifier:'unknown-task-only@example.invalid'}})).status,201)
