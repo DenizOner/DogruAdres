@@ -385,7 +385,7 @@ export async function verifyRuntimeEnvironmentOwnership(
   const issued = new Date(manifest.issuedAt).getTime()
   const expires = new Date(manifest.expiresAt).getTime()
 
-  if (isNaN(issued) || isNaN(expires) || now < issued || now > expires) {
+  if (!Number.isFinite(now) || isNaN(issued) || isNaN(expires) || now < issued || now > expires) {
     throw new Error(`REFUSED: Manifest is expired or not yet valid (now: ${nowIso}, valid: ${manifest.issuedAt} to ${manifest.expiresAt})`)
   }
 

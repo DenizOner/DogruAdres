@@ -393,6 +393,20 @@ describe("Operator Audit Protocol & Final Source Trust Boundary", () => {
       expect(nonceStore.claimOnce).not.toHaveBeenCalled()
     })
 
+    it("fails closed when the supplied clock is invalid, without spending the nonce", async () => {
+      const nonceStore = { claimOnce: jest.fn().mockResolvedValue(true) }
+      await expect(
+        verifyRuntimeEnvironmentOwnership(
+          baseManifest,
+          mockAdapter,
+          nonceStore,
+          "postgres://127.0.0.1:55720/task_isolated_authorized_db",
+          "invalid-clock"
+        )
+      ).rejects.toThrow(/Manifest is expired or not yet valid/)
+      expect(nonceStore.claimOnce).not.toHaveBeenCalled()
+    })
+
     it("consumes the nonce once only after resource checks pass", async () => {
       const nonceStore = { claimOnce: jest.fn().mockResolvedValue(true) }
       await verifyRuntimeEnvironmentOwnership(
