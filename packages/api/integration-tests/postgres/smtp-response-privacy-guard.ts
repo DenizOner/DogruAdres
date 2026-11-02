@@ -106,8 +106,11 @@ export class SmtpResponsePrivacyGuard {
     res.once("close",()=>{
       if(!record.finished){
         // Only method and numeric status: never include URL, headers or body.
+        // Safe lifecycle metadata only; never include URL, response headers or data.
         this.fail("SMTP response closed before finish: "+String(req.method??"unknown")+
-          " status="+String(res.statusCode))
+          " status="+String(res.statusCode)+" ended="+String(record.ended)+
+          " wrote="+String(record.size>0)+" headersSent="+String(res.headersSent)+
+          " writableFinished="+String(res.writableFinished))
         this.active.delete(record)
       }
       for(const chunk of record.chunks)chunk.fill(0)
