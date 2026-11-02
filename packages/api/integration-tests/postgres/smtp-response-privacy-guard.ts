@@ -19,6 +19,7 @@ export class SmtpResponsePrivacyGuard {
   private peakBuffered=0
   private started=0
   private finished=0
+  private cancelledBeforeEgress=0
   private failures=new Set<string>()
   constructor(secret:string){
     assert.match(secret,/^b22-smtp-[0-9a-f]{48}$/,"Only task-owned canary is permitted")
@@ -139,9 +140,12 @@ export class SmtpResponsePrivacyGuard {
     })
     res.once("close",()=>{
       if(!record.finished){
-        // Only method and numeric status: never include URL, headers or body.
-        // Safe lifecycle metadata only; never include URL, response headers or data.
-        this.fail("SMTP response closed before finish: "+String(req.method??"unknown")+
+        // A browser can cancel an extra GET before any HTTP response egress.
+        // This is not a partially disclosed response. Written, header-sent,
+        // or end-started responses must still fail closed on early close.
+        if(!record.ended&&record.size===0&&!res.headersSent&&!res.writableFinished)
+          this.cancelledBeforeEgress++
+        else this.fail("SMTP response closed before finish: "+String(req.method??"unknown")+
           " status="+String(res.statusCode)+" ended="+String(record.ended)+
           " wrote="+String(record.size>0)+" headersSent="+String(res.headersSent)+
           " writableFinished="+String(res.writableFinished))
@@ -167,7 +171,8 @@ export class SmtpResponsePrivacyGuard {
     const deadline=Date.now()+timeoutMs
     while(this.active.size&&Date.now()<deadline)await pause(20)
     if(this.active.size)this.fail("SMTP response never reached terminal finish")
-    if(!this.finished||this.started!==this.finished)this.fail("SMTP responses not fully inspected")
+    if(!this.finished||this.started!==this.finished+this.cancelledBeforeEgress)
+      this.fail("SMTP responses not fully inspected")
     if(!this.ciphertext)this.fail("SMTP persisted ciphertext never bound")
     this.assertNoLeaks()
   }
