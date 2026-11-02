@@ -3407,6 +3407,122 @@ export default async function({container}:any){
       [A.person,organizations[0].id,ownerStoreId])
     assert.equal(revokeAudit[0].n,1,"Revocation requires canonical outbox")
     process.stdout.write("PASS B22 Chrome: Owner grants active Member scoped products.edit, retry idempotent, foreign Member/staff 403, Owner revokes with PG16 audit/outbox\n")
+
+    // Verify the PR #256 policy boundary with this SAME active protected Owner:
+    // actual Chrome/HTTPS endpoints, task-only PG16 rows and audit/outbox.
+    const previousPermissionPolicy=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    const policyHttp=async(operations:Array<"list"|"grant"|"revoke">)=>
+      browser.eval(`(async()=>{
+        const org=${{JSON.stringify(organizations[0].id)}
+        const member=${{JSON.stringify(alphaMember.id)}
+        const seller=${{JSON.stringify(ownerStoreId)}
+        const sessionResponse=await fetch('/personal/session')
+        const session=await sessionResponse.json()
+        const result={session:sessionResponse.status}
+        const targets=[
+          ['Buyer','/personal/buyer-permissions',{organization_id:org,membership_id:member}],
+          ['Product','/personal/store-product-permissions',
+            {organization_id:org,membership_id:member,seller_id:seller}]
+        ]
+        for(const action of ${{JSON.stringify(operations)}){
+          for(const [kind,path,scope] of targets){
+            const response=action==='list'
+              ? await fetch(path+'?organization_id='+encodeURIComponent(org))
+              : await fetch(path,{method:'POST',
+                  headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+                  body:JSON.stringify({...scope,action})})
+            result[action+kind]=response.status
+            if(action==='list')
+              result[kind+'PrivateRows']=Object.hasOwn(await response.json(),'grants')
+          }
+        }
+        return result
+      })()`)
+    const policyRows=async()=>({
+      buyer:await q(`select id,person_id,organization_id,permission,issued_by_person_id,
+        source_audit_event_id,revoked_at from da_organization_buyer_permission
+        where organization_id=$1 order by id`,[organizations[0].id]),
+      product:await q(`select id,person_id,organization_id,seller_id,permission,
+        issued_by_person_id,source_audit_event_id,revoked_at
+        from da_store_product_permission where organization_id=$1 order by id`,[organizations[0].id]),
+      memberships:await q(`select id,person_id,role,status,protected_owner,revoked_at
+        from da_organization_membership where organization_id=$1 order by id`,[organizations[0].id]),
+      audit:await q(`select id,action,actor_person_id,organization_id,target_id
+        from da_audit_event where organization_id=$1 order by id`,[organizations[0].id]),
+      outbox:await q(`select x.id,x.source_audit_event_id from da_audit_outbox x
+        join da_audit_event e on e.id=x.source_audit_event_id
+        where e.organization_id=$1 order by x.id`,[organizations[0].id])
+    })
+    try{
+      delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      // Earlier B22 positive tests revoked both grants. Create fresh grants
+      // with real CSRF so denial later tests revoking genuinely ACTIVE rows.
+      const positive=await policyHttp(["list","grant"])
+      for(const name of ["session","listBuyer","listProduct","grantBuyer","grantProduct"])
+        assert.equal(positive[name],200,"Protected Owner positive "+name)
+      const buyerActive=await q(`select g.id,g.issued_by_person_id,e.id audit_id,x.id outbox_id
+        from da_organization_buyer_permission g
+        join da_audit_event e on e.id=g.source_audit_event_id
+          and e.action='organization.buyer_permission_granted'
+          and e.organization_id=g.organization_id
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+        where g.person_id=$1 and g.organization_id=$2
+          and g.permission='buyer.purchase' and g.revoked_at is null`,
+        [B.person,organizations[0].id])
+      const productActive=await q(`select g.id,g.issued_by_person_id,e.id audit_id,x.id outbox_id
+        from da_store_product_permission g
+        join da_audit_event e on e.id=g.source_audit_event_id
+          and e.action='organization.store_product_permission_granted'
+          and e.organization_id=g.organization_id and e.target_id=g.seller_id
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+        where g.person_id=$1 and g.organization_id=$2 and g.seller_id=$3
+          and g.permission='products.edit' and g.revoked_at is null`,
+        [B.person,organizations[0].id,ownerStoreId])
+      assert.equal(buyerActive.length,1)
+      assert.equal(productActive.length,1)
+      assert.equal(buyerActive[0].issued_by_person_id,A.person)
+      assert.equal(productActive[0].issued_by_person_id,A.person)
+      const beforeDenied=await policyRows()
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit"
+      const denied=await policyHttp(["list","grant","revoke"])
+      assert.deepEqual(denied,{
+        session:200,listBuyer:403,BuyerPrivateRows:false,
+        listProduct:403,ProductPrivateRows:false,
+        grantBuyer:403,grantProduct:403,revokeBuyer:403,revokeProduct:403
+      },"Narrowed but protected Owner must lose both membership actions")
+      assert.deepEqual(await policyRows(),beforeDenied,
+        "Denied list/grant/revoke must not mutate permissions, membership, audit or outbox")
+      delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      const restored=await policyHttp(["list","revoke"])
+      for(const name of ["session","listBuyer","listProduct","revokeBuyer","revokeProduct"])
+        assert.equal(restored[name],200,"Restored Owner positive "+name)
+      assert.equal(restored.BuyerPrivateRows,true)
+      assert.equal(restored.ProductPrivateRows,true)
+      const endedBuyer=await q(`select revoked_at from da_organization_buyer_permission where id=$1`,
+        [buyerActive[0].id])
+      const endedProduct=await q(`select revoked_at from da_store_product_permission where id=$1`,
+        [productActive[0].id])
+      assert.equal(endedBuyer.length,1);assert.ok(endedBuyer[0].revoked_at)
+      assert.equal(endedProduct.length,1);assert.ok(endedProduct[0].revoked_at)
+      const revokeProof=await q(`select e.action,e.new_values->>'grant_id' grant_id,x.id
+        from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.organization_id=$1 and e.actor_person_id=$2
+          and e.action in ('organization.buyer_permission_revoked',
+                           'organization.store_product_permission_revoked')
+          and e.new_values->>'grant_id' in ($3,$4)`,
+        [organizations[0].id,A.person,buyerActive[0].id,productActive[0].id])
+      assert.equal(revokeProof.length,2,
+        "Restored Owner revocations require two canonical audit/outbox records")
+      assert.deepEqual((await policyRows()).memberships,beforeDenied.memberships,
+        "Protected Owner state must not be changed by permission-policy tests")
+      process.stdout.write("PASS B22 Owner member-permission policy: protected Owner real HTTPS grant 200, narrowed list/grant/revoke 403 without private rows or PG16 changes, restored revoke 200 with audit/outbox\n")
+    }finally{
+      if(previousPermissionPolicy===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previousPermissionPolicy
+    }
+
     // CR-03: An active role-only "owner" without protected_owner cannot
     // change permissions or Store policy. Only task-owned PG16 rows are
     // temporarily changed; the real protected Alpha Owner stays active.
