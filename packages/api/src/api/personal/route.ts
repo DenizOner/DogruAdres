@@ -212,7 +212,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="buyer-customer-status" role="status" aria-live="polite"></p>
     <section id="buyer-catalog-panel" hidden aria-labelledby="buyer-catalog-title">
       <h4 id="buyer-catalog-title">Bu kuruluşun görebildiği ürünler</h4>
-      <p>İlk onaylı mağazalardaki yayımlanmış ürünler gösterilir. Fiyat, stok, indirim, sepet ve ödeme henüz kullanıma açık değildir.</p>
+      <p>İlk onaylı mağazaların yayımlanmış ürünleri gösterilir. Yalnız doğrudan kaydedilmiş TRY referans liste fiyatı varsa görüntülenir. Bu tutar size özel indirim, vergi veya nihai ödeme tutarı değildir. Sepet ve ödeme kapalıdır.</p>
       <p id="buyer-catalog-status" role="status" aria-live="polite"></p>
       <ul id="buyer-catalog-items"></ul>
       <button id="buyer-catalog-refresh" type="button">Ürünleri güncelle</button>
@@ -867,12 +867,23 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           if(typeof product.title!=='string'||typeof product.product_id!=='string'||
              typeof product.offer_id!=='string')throw Error('Ürün kapsamı doğrulanamadı');
           const li=document.createElement('li');
-          li.textContent=store.name+' — '+product.title;
+          let line=store.name+' — '+product.title;
+          if(product.list_price_try!==undefined){
+            const price=product.list_price_try;
+            if(!price||price.currency_code!=='try'||typeof price.amount!=='number'||
+               !Number.isFinite(price.amount)||price.amount<=0||
+               price.amount>1000000000||!/^\\d+(?:\\.\\d{1,2})?$/.test(String(price.amount)))
+              throw Error('Liste fiyatı doğrulanamadı');
+            line+=' — TRY referans liste fiyatı: '+
+              new Intl.NumberFormat('tr-TR',{style:'currency',currency:'TRY'})
+                .format(price.amount)+' (ödenecek tutar değil)';
+          }
+          li.textContent=line;
           root.append(li);
         }
       }
       statusEl.textContent=root.children.length
-        ? 'Yalnız izinli, yayımlanmış ürün başlıkları gösteriliyor; fiyatlar kapalı.'
+        ? 'İzinli ürünler gösteriliyor. Varsa TRY referans liste fiyatı gösterilir; indirimler, kur dönüşümü ve checkout kapalıdır.'
         : 'İlk mağaza sayfasında gösterilebilir ürün bulunamadı.';
       panel.hidden=false;
     }catch(e){

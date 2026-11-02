@@ -1630,6 +1630,37 @@ export default async function({container}:any){
       assert.equal(offer.seller_id,cartStoreIds[i])
       offerRows.push(offer)
     }
+    // A SECOND published master Product uses the SAME variant-backed native
+    // Mercur workflow but direct TRY Offer prices. Different sellers own
+    // different Price rows in this shared variant PriceSet. EUR price rows
+    // above must NOT be converted into an invented TRY reference amount.
+    const {result:[tryProduct]}=await createProductsWorkflow(container).run({
+      input:{created_by:stores[0].id,products:[{
+        title:"B22 native TRY reference "+rand,status:"published",
+        variants:[{title:"One TRY size",sku:"B22-TRY-NATIVE-"+rand}]
+      }]}
+    })
+    const tryVariants=await container.resolve("product").listProductVariants({
+      product_id:tryProduct.id
+    })
+    assert.equal(tryVariants.length,1)
+    const tryVariant=tryVariants[0]
+    const directTryOffers:Array<{id:string;seller_id:string;amount:number}>=[]
+    for(let i=0;i<2;i++){
+      const sku="B22-TRY-OFFER-"+i+"-"+rand
+      const amount=i===0?1250.5:2000
+      const {result:[offer]}=await createOffersWorkflow(container).run({
+        input:{offers:[{
+          seller_id:cartStoreIds[i],created_by:member.id,
+          sku,variant_id:tryVariant.id,shipping_profile_id:b22Profile.id,
+          inventory_items:[{sku,stock_levels:[]}],
+          prices:[{amount,currency_code:"try"}],
+          manage_inventory:false,allow_backorder:true
+        }]}
+      })
+      assert.equal(offer.seller_id,cartStoreIds[i])
+      directTryOffers.push({id:offer.id,seller_id:offer.seller_id,amount})
+    }
     // Read-only positive B22 discovery: native Mercur Offers (never a public
     // /store route), a published shared master Product and two independently
     // approved Organization-owned Sellers. No prices or checkout enabled.
@@ -1652,6 +1683,18 @@ export default async function({container}:any){
       assert.ok(store.products.some((item:any)=>item.product_id===sellableProduct.id&&
         item.title===sellableProduct.title&&
         offerRows.some(o=>o.id===item.offer_id&&o.seller_id===store.id)))
+      const euroOnly=store.products.find((p:any)=>
+        p.product_id===sellableProduct.id&&offerRows.some(o=>o.id===p.offer_id&&
+          o.seller_id===store.id))
+      assert.equal(euroOnly?.list_price_try,undefined,
+        "Foreign Offer source cannot become an invented TRY price")
+      const expectedTry=directTryOffers.find(o=>o.seller_id===store.id)
+      assert.ok(expectedTry)
+      const direct=store.products.find((p:any)=>
+        p.product_id===tryProduct.id&&p.offer_id===expectedTry!.id)
+      assert.deepEqual(direct?.list_price_try,{
+        amount:expectedTry!.amount,currency_code:"try"
+      },"Native Medusa PriceSet must select only the exact Seller Offer's TRY price")
       assert.equal(JSON.stringify(store).includes("calculated_price"),false)
       assert.equal(JSON.stringify(store).includes("inventory_quantity"),false)
     }
@@ -1673,9 +1716,29 @@ export default async function({container}:any){
     await browser.wait("!document.getElementById('buyer-catalog-panel').hidden && document.getElementById('buyer-catalog-items').children.length>=2")
     assert.equal(await browser.eval("document.getElementById('buyer-catalog-items').textContent.includes("+
       JSON.stringify(sellableProduct.title)+")"),true)
+    assert.equal(await browser.eval("document.getElementById('buyer-catalog-items').textContent.includes('TRY referans liste fiyatı:')"),true,
+      "Browser must label the native direct TRY price as a reference, not payable")
+    // Real Chrome must render both a fractional TRY amount and another Store's
+    // distinct integer price, bound to the right Store/Offer product label.
+    // This checks the actual generated HTML and browser DOM (not a mocked unit).
+    const displayedTryLines=await browser.eval(
+      "Array.from(document.querySelectorAll('#buyer-catalog-items li'), li=>li.textContent)")
+    assert.ok(Array.isArray(displayedTryLines))
+    for(const store of scopedCatalog.body.stores){
+      const expected=directTryOffers.find(o=>o.seller_id===store.id)
+      assert.ok(expected,"Each approved Store must retain its own native Offer")
+      const rows=displayedTryLines.filter((line:string)=>
+        line.startsWith(store.name+" — "+tryProduct.title+" — TRY referans liste fiyatı: "))
+      assert.equal(rows.length,1,"Chrome must show exactly this Store's TRY Offer")
+      assert.ok(rows[0].includes(expected!.amount===1250.5?"1.250,50":"2.000,00"),
+        "Chrome tr-TR DOM must show the correct fractional/integer TRY amount")
+      assert.ok(rows[0].includes("(ödenecek tutar değil)"),
+        "A list price must not be presented as payable")
+    }
     assert.deepEqual(await q("select count(*)::int n from da_audit_event"),catalogAuditBefore,
       "Read-only Buyer catalogue cannot write canonical audit")
-    process.stdout.write("PASS B22 Buyer catalogue: real Chrome HTTPS and PG16 two published Mercur Offers under approved Buyer Org, foreign and forged scopes 403/400, zero prices and audit writes\n")
+    process.stdout.write("PASS B22 Buyer catalogue: real Chrome HTTPS and PG16 two published Mercur Offers under approved Buyer Org, foreign and forged scopes 403/400, no private inventory leakage and no audit writes\n")
+    process.stdout.write("PASS B22 native TRY Offer list price: two seller-scoped Medusa prices on a shared native variant, EUR-only excluded, browser reference display, no checkout\n")
     // Separate legal Seller Organization is part of the current entitlement,
     // not just the native Seller's open flag. Beta remains an active Buyer.
     // Test-only PG16 suspension/restoration never touches production.

@@ -3,6 +3,7 @@ import {z} from "@medusajs/framework/zod"
 import {MercurModules} from "@mercurjs/types"
 import {access,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
+import {nativeDirectTryListPrice,type DirectTryListPrice} from "./native-try-list-price"
 
 export const AUTHENTICATE=false
 const selection=z.object({
@@ -51,7 +52,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
        new Set(candidates.map(s=>s.id)).size!==candidates.length)
       return denied()
     const stores:Array<{
-      id:string;name:string;products:Array<{offer_id:string;product_id:string;title:string}>
+      id:string;name:string;products:Array<{offer_id:string;product_id:string;title:string;list_price_try?:DirectTryListPrice}>
     }>=[]
     for(const candidate of candidates){
       if(!candidate||!sellerId.test(candidate.id)||candidate.status!=="open"||
@@ -86,8 +87,22 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
            typeof row.title!=="string"||row.title.length>500)return denied()
         titles.set(row.id,row.title)
       }
-      const visible=found.filter(o=>titles.has(o.product_id))
-        .map(o=>({offer_id:o.id,product_id:o.product_id,title:titles.get(o.product_id)!}))
+      // Store-specific, direct TRY list price only; no FX/group/checkout
+      // assumptions. The Medusa calculated amount must refer to the Price
+      // linked to THIS Mercur Offer, not to its shared Product/variant.
+      const visible:Array<{
+        offer_id:string;product_id:string;title:string;
+        list_price_try?:DirectTryListPrice
+      }>=[]
+      for(const row of found){
+        const title=titles.get(row.product_id)
+        if(!title)continue
+        const listPrice=await nativeDirectTryListPrice(req,row)
+        visible.push({
+          offer_id:row.id,product_id:row.product_id,title,
+          ...(listPrice?{list_price_try:listPrice}:{})
+        })
+      }
       if(visible.length)stores.push({id:candidate.id,name:candidate.name,products:visible})
     }
 
@@ -115,6 +130,15 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       if(!Array.isArray(freshProducts)||
          store.products.some(p=>!freshProducts.some(item=>item.id===p.product_id&&
            item.status==="published"&&item.title===p.title)))return denied()
+      // Re-read the same linked native price before returning a value. This
+      // protects against ordinary stale reads, not a cross-module price lock.
+      for(const p of store.products){
+        if(!p.list_price_try)continue
+        const [current]=existing.filter(o=>o.id===p.offer_id)
+        const livePrice=await nativeDirectTryListPrice(req,current)
+        if(!livePrice||livePrice.currency_code!==p.list_price_try.currency_code||
+           livePrice.amount!==p.list_price_try.amount)return denied()
+      }
     }
     return res.status(200).json({
       organization_id:organizationId,stores,prices_available:false,
