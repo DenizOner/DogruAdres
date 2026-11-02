@@ -41,7 +41,8 @@ describe('native Authz unsafe SID path remains fail closed at source level',()=>
 
 describe('R1 Windows reader process-token acquisition (source-only)',()=>{
  const source=readFileSync(path.join(__dirname,'..','r1-authz.cs'),'utf8')
- const probe=source.slice(source.indexOf('public static uint CheckVerifiedReaderProcess('),source.indexOf('public static uint Check(byte[] descriptor, string alternate)'))
+ expect(source).not.toContain('public static uint CheckVerifiedReaderProcess(')
+ const probe=source.slice(source.indexOf('private static uint CheckVerifiedReaderProcess('),source.indexOf('public static uint Check(byte[] descriptor, string alternate)'))
  it('binds native token access to a live process ID, start time, image and SID',()=>{
   expect(probe).toContain('UInt64.TryParse(expectedCreationFileTimeUtc')
   expect(probe).toContain('OpenProcess(0x00101000, false')
