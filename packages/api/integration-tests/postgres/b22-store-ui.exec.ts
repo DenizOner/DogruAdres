@@ -1665,6 +1665,39 @@ export default async function({container}:any){
     assert.deepEqual(await q("select count(*)::int n from da_audit_event"),catalogAuditBefore,
       "Read-only Buyer catalogue cannot write canonical audit")
     process.stdout.write("PASS B22 Buyer catalogue: real Chrome HTTPS and PG16 two published Mercur Offers under approved Buyer Org, foreign and forged scopes 403/400, zero prices and audit writes\n")
+    // Separate legal Seller Organization is part of the current entitlement,
+    // not just the native Seller's open flag. Beta remains an active Buyer.
+    // Test-only PG16 suspension/restoration never touches production.
+    const betaPrivateCatalog=()=>reviewer.eval(`(async()=>{
+      const r=await fetch(${JSON.stringify(catalogUrl(organizations[1].id))})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    const betaCatalogBefore=await betaPrivateCatalog()
+    assert.equal(betaCatalogBefore.status,200)
+    assert.deepEqual(new Set(betaCatalogBefore.body.stores.map((s:any)=>s.id)),
+      new Set(cartStoreIds),"Independent Buyer Beta can see two active legal Store offers")
+    await q("update da_organization set status='suspended' where id=$1",
+      [organizations[0].id])
+    try{
+      const deniedSuspendedSeller=await betaPrivateCatalog()
+      assert.equal(deniedSuspendedSeller.status,200,
+        "Suspended Seller must not close another active Buyer's own context")
+      assert.equal(deniedSuspendedSeller.body.organization_id,organizations[1].id)
+      assert.deepEqual(deniedSuspendedSeller.body.stores,[],
+        "Every Store of a suspended seller legal Organization must disappear")
+    }finally{
+      await q("update da_organization set status='active' where id=$1",
+        [organizations[0].id])
+    }
+    const betaRestored=await betaPrivateCatalog()
+    assert.equal(betaRestored.status,200)
+    assert.deepEqual(new Set(betaRestored.body.stores.map((s:any)=>s.id)),
+      new Set(cartStoreIds),"Active legal Seller origin can restore only approved Stores")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    process.stdout.write("PASS B22 suspended Seller Organization: real PG16 legal Owner status hides both approved Offers from active Buyer Beta; reactivation restores, no buyer bypass\\n")
     // Use a task-only sales channel and region for native cart pricing.
     const sales=container.resolve("sales_channel")
     const market=await sales.createSalesChannels({name:"B22 two-Store channel "+rand})
