@@ -709,9 +709,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-price-group-panel').hidden=true;
     el('store-price-group-status').textContent='';
     const gf=el('store-price-group-form');
-    gf.elements.namedItem('seller_id').replaceChildren();
-    for(const button of gf.querySelectorAll('button'))button.disabled=true;
-    if(typeof gf.reset==='function')gf.reset();
+    const gs=gf?.elements&&typeof gf.elements.namedItem==='function'?
+      gf.elements.namedItem('seller_id'):null;
+    if(gs&&typeof gs.replaceChildren==='function')gs.replaceChildren();
+    if(gf&&typeof gf.querySelectorAll==='function')
+      for(const button of gf.querySelectorAll('button'))button.disabled=true;
+    if(gf&&typeof gf.reset==='function')gf.reset();
     const panel=el('store-block-panel'),form=el('store-block-form');
     if(panel)panel.hidden=true;
     const msg=el('store-block-status');if(msg)msg.textContent='';
@@ -747,11 +750,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       for(const button of form.querySelectorAll('button'))
         button.disabled=data.stores.length===0;
       panel.hidden=data.stores.length===0;
-      const gf=el('store-price-group-form'),gs=gf.elements.namedItem('seller_id');
-      gs.replaceChildren();
-      for(const option of select.options)gs.append(option.cloneNode(true));
-      for(const button of gf.querySelectorAll('button'))button.disabled=data.stores.length===0;
-      el('store-price-group-panel').hidden=data.stores.length===0;
+      const gf=el('store-price-group-form');
+      const gs=gf?.elements&&typeof gf.elements.namedItem==='function'?
+        gf.elements.namedItem('seller_id'):null;
+      if(gs&&typeof gs.replaceChildren==='function'){
+        gs.replaceChildren();
+        for(const option of select.options)gs.append(option.cloneNode(true));
+        for(const button of gf.querySelectorAll('button'))button.disabled=data.stores.length===0;
+        el('store-price-group-panel').hidden=data.stores.length===0;
+      }
       msg.textContent=data.stores.length?
         'Yalnız kendi mağazanız için alıcı kuruluş engeli koyabilirsiniz.':
         'Onaylı mağaza bulunamadı.';
