@@ -109,7 +109,7 @@ export default async function({container}:any){
     assert.equal(nativeBearer.status,401,"Native actor bearer must not grant an Organization catalog")
     assert.deepEqual(await rows("select id,action from da_audit_event where organization_id=$1 order by id",[org.id]),
       beforeCatalog,"Denied native catalog cannot change canonical audit")
-    process.stdout.write("PASS B22 closed B4B native HTTP: public catalog/search denied before native data; no Organization audit mutation\\n")
+    process.stdout.write("PASS B22 closed B4B native HTTP: public catalog/search denied before native data; no Organization audit mutation\n")
     assert.equal((await rows("select count(*)::int n from da_verified_actor_binding where person_id=$1",[person.id]))[0].n,0)
     assert.equal((await rows("select count(*)::int n from da_organization_seller_ownership where seller_id=$1",[store.id]))[0].n,0)
     process.stdout.write("PASS B22 native HTTP negative: real personal password session, native SellerMember without verified Member binding denied\n")
