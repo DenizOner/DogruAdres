@@ -20,6 +20,76 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  r1-windows-authz:
+    if: github.event_name != 'workflow_dispatch'
+    name: R1 Windows native Authz — synthetic token/ACL only
+    runs-on: windows-2025
+    timeout-minutes: 6
+    steps:
+      - name: Checkout exact PR merge ref without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compile and execute native Windows Authz against in-memory descriptors
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -Path 'packages/api/src/scripts/r1-authz.cs'
+          $me = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+          $allow = [System.Security.AccessControl.FileSecurity]::new()
+          $allow.SetOwner($me.User)
+          $allow.SetAccessRuleProtection($true, $false)
+          $allow.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($me.User, [System.Security.AccessControl.FileSystemRights]::ReadData, [System.Security.AccessControl.AccessControlType]::Allow))
+          $sd = $allow.GetSecurityDescriptorBinaryForm()
+          $mask = [R1AclProbe]::Check($sd, '')
+          if (($mask -band 1) -ne 1) { throw 'FAIL: native current-token read not granted' }
+          $deny = [System.Security.AccessControl.FileSecurity]::new()
+          $deny.SetOwner($me.User)
+          $deny.SetAccessRuleProtection($true, $false)
+          $deny.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($me.User, [System.Security.AccessControl.FileSystemRights]::ReadData, [System.Security.AccessControl.AccessControlType]::Deny))
+          $denied = [R1AclProbe]::Check($deny.GetSecurityDescriptorBinaryForm(), '')
+          if (($denied -band 1) -ne 0) { throw 'FAIL: native denied read granted' }
+          try {
+            [void][R1AclProbe]::Check($sd, $me.User.Value)
+            throw 'FAIL: uncommissioned SID route accepted'
+          } catch {
+            if ($_.Exception.Message -notlike 'BLOCKED:*') { throw }
+          }
+          $method = [R1AclProbe].GetMethod('CheckVerifiedReaderProcess', [System.Reflection.BindingFlags]::Static -bor [System.Reflection.BindingFlags]::NonPublic)
+          if ($null -eq $method) { throw 'FAIL: actual-token process probe missing' }
+          $proc = [System.Diagnostics.Process]::GetCurrentProcess()
+          $args = [object[]]::new(5)
+          $args[0] = $sd
+          $args[1] = [int]$proc.Id
+          $args[2] = [string]$proc.StartTime.ToUniversalTime().ToFileTimeUtc()
+          $args[3] = [string]$me.User.Value
+          $args[4] = [string]$proc.MainModule.FileName
+          $actual = [uint32]$method.Invoke($null, $args)
+          if (($actual -band 1) -ne 1) { throw 'FAIL: verified real-process token denied synthetic read' }
+          function Assert-Refused([object[]]$values, [string]$label) {
+            try {
+              [void]$method.Invoke($null, $values)
+              throw "FAIL: $label accepted"
+            } catch {
+              $errorValue = $_.Exception
+              if ($errorValue -is [System.Reflection.TargetInvocationException]) { $errorValue = $errorValue.InnerException }
+              if ($errorValue.Message -notlike 'REFUSED:*' -and $errorValue.Message -notlike 'BLOCKED:*') { throw }
+            }
+          }
+          $bad = [object[]]$args.Clone()
+          $bad[2] = [string](([long]$args[2]) + 1)
+          Assert-Refused $bad 'wrong creation time'
+          $bad = [object[]]$args.Clone()
+          $bad[3] = 'S-1-0-0'
+          Assert-Refused $bad 'wrong process SID'
+          $bad = [object[]]$args.Clone()
+          $bad[4] = [string](Join-Path $env:WINDIR 'System32\cmd.exe')
+          Assert-Refused $bad 'wrong executable'
+          $bad = [object[]]$args.Clone()
+          $bad[1] = -1
+          Assert-Refused $bad 'invalid process ID'
+          Write-Output 'PASS: real Windows Authz in-memory allow/deny, private process token and rejected substitutions; protected sandbox NOT TESTED'
+
   static:
     if: github.event_name != 'workflow_dispatch'
     name: Foundation static checks
