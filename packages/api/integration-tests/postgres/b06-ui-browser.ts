@@ -19,6 +19,8 @@ export class B06Chrome {
   private chrome?:ChildProcess;private ws?:WebSocket;private id=0
   private pending=new Map<number,{resolve:(v:any)=>void;reject:(e:Error)=>void;timer:ReturnType<typeof setTimeout>;method:string}>()
   private methods=new Map<string,string>()
+  readonly finishedRequests=new Set<string>()
+  readonly failedRequests=new Set<string>()
   http:any[]=[]; phase='setup'; cleanup=false
   secretCanary='';secretLeaks=false
   runtimeErrors:string[]=[]
@@ -35,6 +37,8 @@ export class B06Chrome {
     await new Promise<void>((resolve,reject)=>{this.ws!.onopen=()=>resolve();this.ws!.onerror=()=>reject(Error('CDP unavailable'))})
     this.ws.onmessage=e=>{const m=JSON.parse(e.data.toString());if(this.secretCanary&&['Runtime.consoleAPICalled','Log.entryAdded'].includes(m.method)&&JSON.stringify(m).includes(this.secretCanary))this.secretLeaks=true;if(m.id){const p=this.pending.get(m.id);if(p){clearTimeout(p.timer);this.pending.delete(m.id);m.error?p.reject(Error(`CDP rejected method=${p.method} code=${Number.isInteger(m.error.code)?m.error.code:'unknown'}`)):p.resolve(m.result)}}
       if(m.method==='Network.requestWillBeSent')this.methods.set(m.params.requestId,m.params.request.method)
+      if(m.method==='Network.loadingFinished')this.finishedRequests.add(m.params.requestId)
+      if(m.method==='Network.loadingFailed')this.failedRequests.add(m.params.requestId)
       if(m.method==='Runtime.exceptionThrown')this.runtimeErrors.push(String(m.params.exceptionDetails?.exception?.description??m.params.exceptionDetails?.text??'').slice(0,300))
       if(m.method==='Network.responseReceived'){const r=m.params.response,u=new URL(r.url);if(u.origin===this.origin)this.http.push({requestId:m.params.requestId,phase:this.phase,method:this.methods.get(m.params.requestId),path:u.pathname,status:r.status,protocol:r.protocol,tls:r.securityDetails?{protocol:r.securityDetails.protocol,issuer:r.securityDetails.issuer}:null})}}
     for(const m of ['Page.enable','Runtime.enable','Network.enable','Security.enable','Log.enable'])await this.send(m)
