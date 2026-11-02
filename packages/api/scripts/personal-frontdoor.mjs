@@ -25,11 +25,11 @@ export function allowedPublicRequest(method,path){
     '/personal/launcher':['GET','POST'],
   }
   if(personal[path]?.includes(method))return true
-  // Installed public read-only Store route classes; customer/cart/order writers
-  // are deliberately absent. Their legal Buyer Organization contract is open.
-  const catalog=/^\/store\/(regions|products|product-categories|collections|currencies|locales|offers|sellers|reviews|product-attributes|product-options|product-tags|product-types|product-variants|shipping-options|payment-providers|return-reasons)(?:\/[^/]+)?$/
+  // #217 closed B4B: no unscoped catalog or seller/offer/search relay.
+  // Region bootstrap supports the existing welcome/login locale middleware;
+  // it contains no authenticated Buyer Organization pricing decision.
   const dashboard=/^\/dashboard(?:\/.*)?$/
-  if(method==='GET' && (catalog.test(path)||['/cloud/auth','/health'].includes(path)||dashboard.test(path)))return true
+  if(method==='GET' && (path==='/store/regions'||['/cloud/auth','/health'].includes(path)||dashboard.test(path)))return true
   if(['GET','POST'].includes(method) && path==='/auth/verify-email')return true
   if(method==='POST' && (path==='/auth/verification/confirm'||/^\/auth\/(user|member|customer)\/emailpass\/(reset-password|update)$/.test(path)))return true
   if(method==='GET' && path==='/admin/api-keys')return 'machine'

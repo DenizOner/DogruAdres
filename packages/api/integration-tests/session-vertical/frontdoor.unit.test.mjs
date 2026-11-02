@@ -64,9 +64,14 @@ test('email verification route allows GET and POST and denies other methods',()=
     assert.equal(allowedPublicRequest(method,'/auth/verify-email'),false)
 })
 
-test('personal, public catalog and purpose-bound recovery are explicit exceptions',()=>{
-  for(const path of ['/personal','/personal/contexts','/personal/memberships','/personal/audit-timeline','/store/regions','/store/products','/store/products/prod_test','/store/sellers','/store/product-categories'])assert.equal(allowedPublicRequest('GET',path),true)
-  for(const path of ['/auth/user/emailpass/reset-password','/auth/customer/emailpass/update','/auth/verification/confirm'])assert.equal(allowedPublicRequest('POST',path),true)
+test('personal, locale bootstrap and purpose-bound recovery remain; B4B catalog stays closed',()=>{
+  for(const path of ['/personal','/personal/contexts','/personal/memberships','/personal/audit-timeline','/store/regions'])
+    assert.equal(allowedPublicRequest('GET',path),true)
+  for(const path of ['/store/products','/store/products/prod_test','/store/offers','/store/sellers','/store/product-categories','/store/reviews','/store/regions/region_test'])
+    assert.equal(allowedPublicRequest('GET',path),false)
+  assert.equal(allowedPublicRequest('POST','/store/search'),false)
+  for(const path of ['/auth/user/emailpass/reset-password','/auth/customer/emailpass/update','/auth/verification/confirm'])
+    assert.equal(allowedPublicRequest('POST',path),true)
   assert.equal(allowedPublicRequest('GET','/admin/api-keys'),'machine')
   assert.equal(allowedPublicRequest('POST','/admin/api-keys'),false)
   assert.equal(allowedPublicRequest('GET','/personal/private'),false)
@@ -85,6 +90,49 @@ test('platform SMTP settings has exact GET/POST relay only', () => {
   for (const method of ['HEAD', 'OPTIONS', 'PUT', 'PATCH', 'DELETE']) assert.equal(allowedPublicRequest(method, '/personal/platform/smtp'), false)
   for (const path of ['/personal/platform/smtp/', '/personal/platform/smtp/extra'])
     assert.equal(allowedPublicRequest('POST', path), false)
+})
+
+// Real HTTP boundary: no catalog/private Store requests may reach the backend,
+// even if a publishable key, native Bearer or personal cookie is supplied.
+test('closed B4B frontdoor rejects catalog and search before contacting native API',async()=>{
+  const seen=[]
+  const upstream=http.createServer((req,res)=>{
+    seen.push(req.url)
+    res.setHeader('Content-Type','application/json')
+    res.end('{"regions":[]}')
+  })
+  upstream.listen(0,'127.0.0.1');await once(upstream,'listening')
+  const reservation=http.createServer()
+  reservation.listen(0,'127.0.0.1');await once(reservation,'listening')
+  const port=reservation.address().port
+  await new Promise(r=>reservation.close(r))
+  const origin='http://127.0.0.1:'+port
+  const front=startFrontdoor({NODE_ENV:'test',DOGRUADRES_PUBLIC_ORIGIN:origin,
+    DOGRUADRES_PRIVATE_API:'http://127.0.0.1:'+upstream.address().port,
+    DOGRUADRES_FRONTDOOR_HOST:'127.0.0.1',DOGRUADRES_FRONTDOOR_PORT:String(port)})
+  await once(front,'listening')
+  try{
+    for(const path of ['/store/products','/store/products/prod_synthetic','/store/offers',
+      '/store/product-categories','/store/sellers','/store/products?fields=*']){
+      const response=await fetch(origin+path,{headers:{
+        'x-publishable-api-key':'pk_synthetic',authorization:'Bearer forged',
+        cookie:'da_session=synthetic'}})
+      assert.equal(response.status,401)
+      assert.equal((await response.json()).message,'Public ingress denied')
+    }
+    const search=await fetch(origin+'/store/search',{method:'POST',headers:{
+      'content-type':'application/json','x-publishable-api-key':'pk_synthetic'
+    },body:'{}'})
+    assert.equal(search.status,401)
+    assert.equal(seen.length,0,'Denied catalog must never reach private upstream')
+    const regions=await fetch(origin+'/store/regions',{headers:{
+      'x-publishable-api-key':'pk_synthetic'}})
+    assert.equal(regions.status,200,'Locale bootstrap remains usable')
+    assert.deepEqual(seen,['/store/regions'])
+  }finally{
+    front.closeAllConnections();upstream.closeAllConnections()
+    await Promise.all([new Promise(r=>front.close(r)),new Promise(r=>upstream.close(r))])
+  }
 })
 
 // Real local relay, controlled upstream: header forwarding contract only.

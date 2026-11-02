@@ -444,6 +444,10 @@ async function run(){
           throw Error("B22 native HTTP negative failed; " +
             sanitized(String(negative.error??("exit "+negative.status))+"\n"+
              String(negative.stderr??"")+"\n"+String(negative.stdout??"")))
+        const closedCatalog="PASS B22 closed B4B native HTTP: public catalog/search denied before native data; no Organization audit mutation"
+        if(!String(negative.stdout??"").split("\n").includes(closedCatalog))
+          throw Error("B22 closed B4B native HTTPS/Organization read gate was not executed")
+        process.stdout.write(closedCatalog+"\n")
         process.stdout.write(marker+"\n")
         process.stdout.write("NOT TESTED B22 native HTTP: real MFA/Chrome, verified Member link, approved Store assignment, authorized Store list\n")
       }
