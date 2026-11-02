@@ -44,6 +44,9 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     for(const r of b.http.filter(r=>r.path==='/personal/platform/smtp')){
       const id=b.actor+':'+r.requestId
       if(inspected.has(id))continue
+      await until(async()=>b.finishedRequests.has(r.requestId)||b.failedRequests.has(r.requestId),
+        10000,'SMTP network response completion')
+      assert.ok(!b.failedRequests.has(r.requestId),'SMTP response failed before privacy inspection')
       const body=await b.send('Network.getResponseBody',{requestId:r.requestId})
       const text=body.base64Encoded?Buffer.from(body.body,'base64').toString():body.body
       assert.ok(!text.includes(secret)&&(!persistedCiphertext||!text.includes(persistedCiphertext)),"Secret in browser response")
@@ -78,7 +81,12 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     }
     assert.equal(await b.eval("location.pathname"),path)
   }
-  const read=async(b:B06Chrome)=>b.eval(`(async()=>{const r=await fetch('/personal/platform/smtp');return {status:r.status,body:await r.json()}})()`)
+  const read=async(b:B06Chrome)=>{
+    const response=await b.eval(`(async()=>{const r=await fetch('/personal/platform/smtp');return {status:r.status,body:await r.json()}})()`)
+    // Inspect while this document still owns the completed response body.
+    await scanResponses(b)
+    return response
+  }
   const hidden=async(b:B06Chrome)=>b.wait("!document.querySelector('#smtp-host') && !document.body.textContent.includes('Yapılandırma yükleniyor')")
   const reload=async(b:B06Chrome,status:number)=>{
     // Inspect response bodies before navigating away from their document.
@@ -154,6 +162,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
       responses,state,rows,consoleSecretLeaked:browser.secretLeaks},null,2).replaceAll(secret,'[redacted]'))
     throw error
   }
+  await scanResponses(browser)
   const saved=await digest()
   assert.equal(saved.length,1);assert.equal(saved[0].enabled,false)
   assert.equal(saved[0].host,"smtp.b22.example.invalid");assert.equal(saved[0].version,1)
@@ -176,7 +185,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     const r=await fetch('/personal/platform/smtp',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
     body:JSON.stringify({action:'save',enabled:false,host:'stale.example.invalid',port:465,security:'ssl',from_email:'b22@example.invalid',expected_version:0})});
     return {status:r.status,body:await r.json()}})()`)
-  assert.equal(stale.status,409);assert.deepEqual(await digest(),saved)
+  assert.equal(stale.status,409);await scanResponses(browser);assert.deepEqual(await digest(),saved)
   mark("Stale HTTP409 with unchanged PG16 settings")
   // Real database read failure, not a mocked successful API or component.
   await q("alter table da_platform_smtp_settings rename to b22_smtp_settings_fault")
