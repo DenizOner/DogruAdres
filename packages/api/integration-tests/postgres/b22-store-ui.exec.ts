@@ -44,8 +44,16 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     for(const r of b.http.filter(r=>r.path==='/personal/platform/smtp')){
       const id=b.actor+':'+r.requestId
       if(inspected.has(id))continue
-      await until(async()=>b.finishedRequests.has(r.requestId)||b.failedRequests.has(r.requestId),
-        10000,'SMTP network response completion')
+      try {
+        await until(async()=>b.finishedRequests.has(r.requestId)||b.failedRequests.has(r.requestId),
+          10000,'SMTP network response completion')
+      } catch {
+        // Only non-sensitive request metadata: no cookies, URL queries, body, or headers.
+        throw Error('SMTP CDP completion missing: actor='+b.actor+
+          ' phase='+r.phase+' method='+r.method+' status='+r.status+
+          ' completed='+b.finishedRequests.size+' failed='+b.failedRequests.size+
+          ' observed='+b.http.filter(v=>v.path==='/personal/platform/smtp').length)
+      }
       assert.ok(!b.failedRequests.has(r.requestId),'SMTP response failed before privacy inspection')
       const body=await b.send('Network.getResponseBody',{requestId:r.requestId})
       const text=body.base64Encoded?Buffer.from(body.body,'base64').toString():body.body
