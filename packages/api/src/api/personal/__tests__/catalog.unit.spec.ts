@@ -1,6 +1,7 @@
 import {GET} from "../catalog/route"
 import {access,enabled,sessionToken} from "../security"
 import {MercurModules} from "@mercurjs/types"
+import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 
 jest.mock("../security",()=>({
   access:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
@@ -113,6 +114,30 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
     svc.personalStoreBuyerBlockDecision.mockImplementation(async()=>{
       calls++;return calls===3?{blocked:true,ownership_verified:true}:
         {blocked:false,ownership_verified:true}
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+  })
+  it("omits an inactive legal Seller Organization while other approved Stores remain visible",async()=>{
+    svc.personalStoreBuyerBlockDecision.mockImplementation(async(_token:string,_org:string,ids:string[])=>{
+      if(ids[0]==="sel_a")throw new IdentityAccessDenied()
+      return {blocked:false,ownership_verified:true}
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.json).toHaveBeenLastCalledWith({
+      organization_id:"daorg_a",stores:[
+        {id:"sel_b",name:"Second",products:[
+          {offer_id:"offer_b",product_id:"prod_b",title:"Published B"}]}
+      ],prices_available:false,checkout_ready:false
+    })
+  })
+  it("denies a Store whose legal Seller Organization is suspended between discovery and response",async()=>{
+    let a=0
+    svc.personalStoreBuyerBlockDecision.mockImplementation(async(_token:string,_org:string,ids:string[])=>{
+      if(ids[0]==="sel_a"&&++a===2)throw new IdentityAccessDenied()
+      return {blocked:false,ownership_verified:true}
     })
     await GET(req,res)
     expect(res.status).toHaveBeenLastCalledWith(403)
