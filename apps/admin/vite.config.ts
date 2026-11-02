@@ -16,6 +16,7 @@ export default defineConfig(({ mode }) => {
   const backendUrl = env.VITE_MERCUR_BACKEND_URL || env.MERCUR_BACKEND_URL
 
   return {
+    base: '/dashboard/',
     plugins: [
       react(),
       mercurDashboardPlugin({
