@@ -125,7 +125,9 @@ export function assertDockerResourceMatchesBinding(
   }
   const pgBindings = actual?.HostConfig?.PortBindings?.["5432/tcp"]
   const volumeMounts = actual?.Mounts ?? []
-  const approvedMount = Array.isArray(volumeMounts) && volumeMounts.some((m: any) =>
+  // Only the single independently approved volume may be mounted.
+  // An additional mount is not covered by the signed resource binding.
+  const approvedMount = Array.isArray(volumeMounts) && volumeMounts.length === 1 && volumeMounts.every((m: any) =>
     m.Type === "volume" &&
     m.Name === expected.volumeName &&
     m.Source === expected.volumeMountSource &&
