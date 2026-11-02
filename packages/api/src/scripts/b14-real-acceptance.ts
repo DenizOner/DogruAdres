@@ -10,6 +10,13 @@ import { randomBytes, createHash } from "node:crypto"
 import assert from "node:assert/strict"
 
 export default async function b14RealAcceptance({ container }: { container: MedusaContainer }) {
+  // RETIRED HISTORICAL DIAGNOSTIC — NOT CURRENT B14 ACCEPTANCE.
+  // Intentionally stop before Medusa service resolution, any database
+  // connection/writes, or the obsolete nine-criteria PASS banner.
+  // Current approved evidence: GitHub Issues #197 (B14) and #253 (permissions).
+  throw new Error(
+    "B14_RETIRED_HISTORICAL_DIAGNOSTIC: not a current B14 acceptance test; see GitHub Issues #197 and #253."
+  )
   console.log("================================================================================")
   console.log("   DOGRUADRES M0 B14 — INTERNAL DISPOSABLE DIAGNOSTIC & RELAY HARNESS           ")
   console.log("   (Notice: Diagnostic only; not a substitute for frontdoor browser acceptance) ")
