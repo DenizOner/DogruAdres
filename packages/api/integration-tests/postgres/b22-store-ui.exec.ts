@@ -34,7 +34,7 @@ function guardSmtpEgress(req:IncomingMessage,res:ServerResponse,guard:SmtpEgress
   let total=0,ended=false
   const collect=(part:unknown,encoding?:string)=>{
     if(part===undefined||part===null||typeof part==="function")return
-    const bytes=Buffer.isBuffer(part)?part:Buffer.from(part as string,encoding??"utf8")
+    const bytes=Buffer.isBuffer(part)?part:Buffer.from(part as string,(encoding??"utf8") as BufferEncoding)
     total+=bytes.length
     if(total>1024*1024){
       if(!guard.failures.includes("SMTP response exceeded inspection bound"))
