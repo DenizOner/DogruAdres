@@ -3413,9 +3413,9 @@ export default async function({container}:any){
     const previousPermissionPolicy=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     const policyHttp=async(operations:Array<"list"|"grant"|"revoke">)=>
       browser.eval(`(async()=>{
-        const org=${{JSON.stringify(organizations[0].id)}
-        const member=${{JSON.stringify(alphaMember.id)}
-        const seller=${{JSON.stringify(ownerStoreId)}
+        const org=${JSON.stringify(organizations[0].id)}
+        const member=${JSON.stringify(alphaMember.id)}
+        const seller=${JSON.stringify(ownerStoreId)}
         const sessionResponse=await fetch('/personal/session')
         const session=await sessionResponse.json()
         const result={session:sessionResponse.status}
@@ -3424,7 +3424,7 @@ export default async function({container}:any){
           ['Product','/personal/store-product-permissions',
             {organization_id:org,membership_id:member,seller_id:seller}]
         ]
-        for(const action of ${{JSON.stringify(operations)}){
+        for(const action of ${JSON.stringify(operations)}){
           for(const [kind,path,scope] of targets){
             const response=action==='list'
               ? await fetch(path+'?organization_id='+encodeURIComponent(org))
