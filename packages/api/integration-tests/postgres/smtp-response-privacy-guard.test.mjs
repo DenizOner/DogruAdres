@@ -140,3 +140,58 @@ test('base64-wrapped secret in valid JSON is rejected',async()=>{
   try {await httpGet(s.port);await expectPrivacyFailure(s.guard)}
   finally {await s.cleanup()}
 })
+
+test('lowercase percent-encoded first-save ciphertext is rejected after readback',async()=>{
+  const s=await setup((req,res)=>json(res,{encoded:'v1%3a'+'b'.repeat(80)}))
+  try {
+    await httpGet(s.port)
+    s.guard.assertNoLeaks()
+    assert.throws(()=>s.guard.bindCiphertext(cipher),/privacy violations/)
+    await assert.rejects(s.guard.assertComplete(100),/privacy violations/)
+  } finally {await s.cleanup()}
+})
+
+test('partially percent-encoded plaintext is rejected in a real HTTP response',async()=>{
+  const encoded=secret.replaceAll('-','%2d')
+  const s=await setup((req,res)=>json(res,{encoded}))
+  try {await httpGet(s.port);await expectPrivacyFailure(s.guard)}
+  finally {await s.cleanup()}
+})
+
+test('nine concurrent unfinished responses cannot exceed shared 8 MiB raw buffer budget',async()=>{
+  const fragment='{"payload":"'+ 'x'.repeat(960*1024)
+  const requests=[]
+  const s=await setup((req,res)=>{
+    res.writeHead(200,{'Content-Type':'application/json; charset=utf-8'})
+    res.write(fragment)
+    // Intentionally keep each response open to distinguish concurrent from
+    // sequential completed/held buffers. Cleanup destroys these sockets.
+  })
+  try {
+    await Promise.all(Array.from({length:9},()=>new Promise((resolve,reject)=>{
+      const req=request({host:'127.0.0.1',port:s.port,path:route},res=>{
+        res.on('error',()=>{})
+        res.resume()
+        resolve()
+      })
+      req.on('error',reject)
+      requests.push(req)
+      req.end()
+    })))
+    assert.ok(s.guard.peakBufferedBytes>0)
+    assert.ok(s.guard.peakBufferedBytes<=8*1024*1024,'Combined observer body buffers must be bounded')
+    await expectPrivacyFailure(s.guard)
+  } finally {
+    for(const req of requests)req.destroy()
+    await s.cleanup()
+  }
+})
+
+test('more than 128 SMTP responses fail without retaining additional response observers',async()=>{
+  const s=await setup((req,res)=>json(res,{ok:true}))
+  try {
+    for(let i=0;i<129;i++)await httpGet(s.port)
+    assert.ok(s.guard.peakBufferedBytes<=8*1024*1024)
+    await expectPrivacyFailure(s.guard)
+  } finally {await s.cleanup()}
+})
