@@ -1462,9 +1462,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!owner||owner.person_id!==current.person_id||owner.organizations.length!==1||
        owner.organizations[0].role!=="owner")return null
     // Serialize with Foundation membership mutations and other grant requests.
-    // Authoritative protected Owner check holds the live membership row lock
-    // in the same Foundation transaction as the domain and audit writes.
-    if(!await isCurrentProtectedOwner(db,current.person_id,input.organization_id))return null
+    // The same central role policy that protects membership changes also
+    // governs Owner management of a member's Store action permissions.
+    // Keep the live protected-Owner row lock for these Foundation writes.
+    if(!organizationActionAllowed("owner","membership.manage",
+       await isCurrentProtectedOwner(db,current.person_id,input.organization_id),false))return null
     const target=await db.execute(`select m.person_id from da_organization_membership m
       join da_person p on p.id=m.person_id
       where m.id=? and m.organization_id=? and m.deleted_at is null
@@ -1533,7 +1535,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const current=await s.organizations(token,organizationId,false)
     if(!current||current.organizations.length!==1||
        current.organizations[0].role!=="owner"||
-       !await isCurrentProtectedOwner(db,current.person_id,organizationId))return null
+       !organizationActionAllowed("owner","membership.list",
+         await isCurrentProtectedOwner(db,current.person_id,organizationId),false))return null
     const rows=await db.execute(`select g.id,g.person_id,g.seller_id
       from da_store_product_permission g
       join da_audit_event e on e.id=g.source_audit_event_id
@@ -1578,7 +1581,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!owner||owner.person_id!==current.person_id||owner.organizations.length!==1||
        owner.organizations[0].role!=="owner")return null
     // Role-only ownership never grants authority to edit member permissions.
-    if(!await isCurrentProtectedOwner(db,current.person_id,input.organization_id))return null
+    // A narrowed Owner role must also deny this buyer grant/revoke writer.
+    if(!organizationActionAllowed("owner","membership.manage",
+       await isCurrentProtectedOwner(db,current.person_id,input.organization_id),false))return null
     const target=await db.execute(`select m.person_id from da_organization_membership m
       join da_person p on p.id=m.person_id
       where m.id=? and m.organization_id=? and m.deleted_at is null
@@ -1649,7 +1654,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const current=await session.organizations(token,organizationId,false)
     if(!current||current.organizations.length!==1||
        current.organizations[0].role!=="owner"||
-       !await isCurrentProtectedOwner(db,current.person_id,organizationId))return null
+       !organizationActionAllowed("owner","membership.list",
+         await isCurrentProtectedOwner(db,current.person_id,organizationId),false))return null
     const rows=await db.execute(`select g.id,g.person_id
       from da_organization_buyer_permission g
       join da_audit_event e on e.id=g.source_audit_event_id
