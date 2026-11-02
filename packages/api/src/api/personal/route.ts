@@ -872,7 +872,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             const price=product.list_price_try;
             if(!price||price.currency_code!=='try'||typeof price.amount!=='number'||
                !Number.isFinite(price.amount)||price.amount<=0||
-               price.amount>1000000000||!/^\d+(?:\.\d{1,2})?$/.test(String(price.amount)))
+               price.amount>1000000000||!/^\\d+(?:\\.\\d{1,2})?$/.test(String(price.amount)))
               throw Error('Liste fiyatı doğrulanamadı');
             line+=' — TRY referans liste fiyatı: '+
               new Intl.NumberFormat('tr-TR',{style:'currency',currency:'TRY'})
