@@ -6,7 +6,32 @@ describe("personal ingress (unit contract only)",()=>{
   afterEach(()=>{delete process.env.DOGRUADRES_IDENTITY_ENABLED;delete process.env.DOGRUADRES_PUBLIC_ORIGIN})
   async function probe(path:string,method="GET",authorization?:string,bound=false){const next=jest.fn();const res:any={status:jest.fn().mockReturnThis(),json:jest.fn()};await nativeIngress({originalUrl:path,method,headers:{authorization},...(authorization?.startsWith('Basic ')?{auth_context:{actor_type:'api-key',actor_id:'key'}}:{}),scope:{resolve:()=>({personalNativeCredential:async()=>bound?{}:null,personalMachineGrant:async()=>true})}} as any,res,next);return {next,res}}
   it.each(["/admin/users/me","/vendor/products","/store/customers/me","/auth/token/refresh","/auth/session","/admin/workflows-executions/a/run"])("rejects unbound native actor credentials: %s",async path=>{const {next,res}=await probe(path,"GET","Bearer native-token");expect(next).not.toHaveBeenCalled();expect(res.status).toHaveBeenCalledWith(401)})
-  it.each(["/store/regions","/store/products","/personal","/personal/session"])("preserves allowed surface %s",async path=>expect((await probe(path)).next).toHaveBeenCalled())
+  it.each(["/store/regions","/personal","/personal/session"])("preserves allowed locale/auth surface %s",async path=>expect((await probe(path)).next).toHaveBeenCalled())
+  it("keeps the approved closed B4B catalog private even with a publishable key or native credential",async()=>{
+    const targets:Array<[string,string]>=[
+      ["/store/products","GET"],["/store/products/prod_test","GET"],
+      ["/store/offers","GET"],["/store/sellers","GET"],
+      ["/store/product-categories","GET"],["/store/reviews","GET"],
+      ["/store/search","POST"],["/store/products?fields=*","GET"],
+      ["/store/regions/region_test","GET"]
+    ]
+    for(const [path,method] of targets){
+      for(const authorization of [undefined,"Bearer stolen"]){
+        const {next,res}=await probe(path,method,authorization)
+        expect(next).not.toHaveBeenCalled()
+        expect(res.status).toHaveBeenCalledWith(401)
+        expect(res.json).toHaveBeenCalledWith({message:"Personal session ingress required"})
+      }
+    }
+    // A public publishable API key is a sales-channel selector, NOT an
+    // active Person/Organization membership or a personal session.
+    const next=jest.fn(),res:any={status:jest.fn().mockReturnThis(),json:jest.fn()}
+    await nativeIngress({originalUrl:"/store/products",method:"GET",
+      headers:{"x-publishable-api-key":"pk_synthetic"},
+      scope:{resolve:()=>{throw Error("No native module must be consulted")}}} as any,res,next)
+    expect(next).not.toHaveBeenCalled()
+    expect(res.status).toHaveBeenCalledWith(401)
+  })
   it("admits only B22 scoped Store application GET/POST and Store read GET (not native Seller mutations)",async()=>{
     for(const method of ["GET","POST"]){
       const {next}=await probe("/personal/store-applications",method)
