@@ -128,6 +128,10 @@ jobs:
       - name: Install locked dependencies
         id: install
         run: bun install --frozen-lockfile
+      - name: Native SMTP HTTPS privacy negative regressions
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: packages/api
+        run: node --test integration-tests/postgres/smtp-response-privacy-guard.test.mjs
       - name: Focused security and authorization unit tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
