@@ -1,6 +1,15 @@
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
 import path from 'node:path'
+/** Rights that could modify or replace protected objects through an ancestor:
+ * ADD_FILE/WRITE_DATA, ADD_SUBDIRECTORY/APPEND_DATA, WRITE_EA,
+ * DELETE_CHILD, WRITE_ATTRIBUTES, DELETE, WRITE_DAC, WRITE_OWNER.
+ * READ_CONTROL or ordinary read access must not be mistaken for a write right.
+ */
+export const R1_ANCESTOR_MUTATION_MASK =
+  0x0002 | 0x0004 | 0x0010 | 0x0040 | 0x0100 |
+  0x10000 | 0x40000 | 0x80000
+
 /** Actual native Authz, including sandbox reader groups; never infer effective
  * permissions from ACE text. No ACL modification or private-content read here.
  */
@@ -23,7 +32,7 @@ export async function assertNativeR1Custody(paths:readonly string[],operatorSid:
   while($cursor){
    if(($cursor.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'R1 reparse ancestor'};
    $a=Get-NativeAcl $cursor.FullName;
-   if(([R1AclProbe]::Check($a.GetSecurityDescriptorBinaryForm(),$reader) -band 0xD0040) -ne 0){throw 'R1 writable ancestor'};
+   if(([R1AclProbe]::Check($a.GetSecurityDescriptorBinaryForm(),$reader) -band 0x${R1_ANCESTOR_MUTATION_MASK.toString(16)}) -ne 0){throw 'R1 writable ancestor'};
    $cursor=if($cursor.PSIsContainer){$cursor.Parent}else{$cursor.Directory};
   }
  }; Write-Output 'R1_NATIVE_AUTHZ_CUSTODY_VERIFIED';`
