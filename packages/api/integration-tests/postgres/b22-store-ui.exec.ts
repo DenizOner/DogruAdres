@@ -1697,7 +1697,7 @@ export default async function({container}:any){
       new Set(cartStoreIds),"Active legal Seller origin can restore only approved Stores")
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
-    process.stdout.write("PASS B22 suspended Seller Organization: real PG16 legal Owner status hides both approved Offers from active Buyer Beta; reactivation restores, no buyer bypass\\n")
+    process.stdout.write("PASS B22 suspended Seller Organization: real PG16 legal Owner status hides both approved Offers from active Buyer Beta; reactivation restores, no buyer bypass\n")
     // Use a task-only sales channel and region for native cart pricing.
     const sales=container.resolve("sales_channel")
     const market=await sales.createSalesChannels({name:"B22 two-Store channel "+rand})
