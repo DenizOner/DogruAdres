@@ -4,7 +4,7 @@ import type {IncomingMessage,ServerResponse} from "node:http"
 import {setTimeout as pause} from "node:timers/promises"
 
 const MAX_BODY=1024*1024
-const MAX_HELD=8*1024*1024
+const MAX_BUFFERED=8*1024*1024
 const MAX_RESPONSES=128
 
 type Tracked={chunks:Buffer[];size:number;ended:boolean;finished:boolean;directHeaders:Map<string,string>}
@@ -15,6 +15,8 @@ export class SmtpResponsePrivacyGuard {
   private readonly active=new Set<Tracked>()
   private readonly held:Buffer[]=[]
   private heldBytes=0
+  private inFlightBytes=0
+  private peakBuffered=0
   private started=0
   private finished=0
   private failures=new Set<string>()
@@ -23,6 +25,16 @@ export class SmtpResponsePrivacyGuard {
     this.secret=secret
   }
   private fail(reason:string){this.failures.add(reason)}
+  // Only retained raw-body buffers are counted; JSON parsing has bounded
+  // additional temporary allocations (at most one MAX_BODY-sized response).
+  get peakBufferedBytes(){return this.peakBuffered}
+  private releaseChunks(record:Tracked){
+    for(const chunk of record.chunks){
+      this.inFlightBytes-=chunk.length
+      chunk.fill(0)
+    }
+    record.chunks=[]
+  }
   private checkBody(body:Buffer){
     let parsed:unknown
     try {
@@ -30,11 +42,18 @@ export class SmtpResponsePrivacyGuard {
       parsed=JSON.parse(decoded)
     } catch {this.fail("uninspectable UTF-8 JSON response");return}
     const semantic=JSON.stringify(parsed)
+    // Only decode ASCII percent escapes; matching does not depend on the case
+    // of hex digits (%3A and %3a), or on a value being wholly URI-encoded.
+    const decodeAsciiPercent=(s:string)=>s.replace(/%([0-7][0-9a-f])/gi,
+      (_,hex:string)=>String.fromCharCode(parseInt(hex,16)))
+    const decodedOnce=decodeAsciiPercent(semantic)
+    const decodedTwice=decodeAsciiPercent(decodedOnce)
+    const forms=[semantic,decodedOnce,decodedTwice]
     const secrets=[this.secret,...(this.ciphertext?[this.ciphertext]:[])]
     for(const value of secrets){
       const variants=[value,encodeURIComponent(value),Buffer.from(value,"utf8").toString("base64"),
         Buffer.from(value,"utf8").toString("hex")]
-      if(variants.some(v=>body.includes(Buffer.from(v,"utf8"))||semantic.includes(v)))
+      if(variants.some(v=>body.includes(Buffer.from(v,"utf8"))||forms.some(form=>form.includes(v))))
         this.fail(value===this.secret?"SMTP plaintext response leak":"SMTP ciphertext response leak")
     }
   }
@@ -52,7 +71,12 @@ export class SmtpResponsePrivacyGuard {
     if((req.url??"").split("?")[0]!=="/personal/platform/smtp")return
     const record:Tracked={chunks:[],size:0,ended:false,finished:false,directHeaders:new Map()}
     this.started++
-    if(this.started>MAX_RESPONSES)this.fail("SMTP response count exceeded bound")
+    if(this.started>MAX_RESPONSES){
+      // Terminal PASS is impossible after this point. Do not allocate state
+      // for unbounded extra concurrent responses.
+      this.fail("SMTP response count exceeded bound")
+      return
+    }
     this.active.add(record)
     const originalWrite=res.write.bind(res),originalEnd=res.end.bind(res)
     const originalWriteHead=res.writeHead.bind(res)
@@ -71,10 +95,19 @@ export class SmtpResponsePrivacyGuard {
       if(typeof chunk!=="string"&&!Buffer.isBuffer(chunk)&&!(chunk instanceof Uint8Array)){
         this.fail("unsupported SMTP response chunk");return
       }
-      const bytes=typeof chunk==="string"?Buffer.from(chunk,(encoding??"utf8") as BufferEncoding):Buffer.from(chunk)
-      record.size+=bytes.length
+      const size=typeof chunk==="string"
+        ?Buffer.byteLength(chunk,(encoding??"utf8") as BufferEncoding):chunk.byteLength
+      record.size+=size
       if(record.size>MAX_BODY){this.fail("SMTP response exceeded body bound");return}
+      if(this.heldBytes+this.inFlightBytes+size>MAX_BUFFERED){
+        this.fail("SMTP combined response buffer exceeded bound");return
+      }
+      // Check the budget before creating our own copy of the HTTP chunk.
+      const bytes=typeof chunk==="string"
+        ?Buffer.from(chunk,(encoding??"utf8") as BufferEncoding):Buffer.from(chunk)
       record.chunks.push(bytes)
+      this.inFlightBytes+=bytes.length
+      this.peakBuffered=Math.max(this.peakBuffered,this.heldBytes+this.inFlightBytes)
     }
     ;(res as any).write=(chunk:unknown,...args:any[])=>{
       collect(chunk,typeof args[0]==="string"?args[0]:undefined)
@@ -92,16 +125,17 @@ export class SmtpResponsePrivacyGuard {
       if(!record.ended)this.fail("SMTP response finish without end")
       this.checkHeaders(res,record)
       if(record.size<=MAX_BODY){
+        // A single MAX_BODY-bounded temporary copy exists only during finish.
         const body=Buffer.concat(record.chunks)
+        this.releaseChunks(record)
         if(this.ciphertext){this.checkBody(body);body.fill(0)}
-        else if(this.heldBytes+body.length<=MAX_HELD){
+        else if(this.heldBytes+this.inFlightBytes+body.length<=MAX_BUFFERED){
           this.checkBody(body)
           this.heldBytes+=body.length
+          this.peakBuffered=Math.max(this.peakBuffered,this.heldBytes+this.inFlightBytes)
           this.held.push(body)
-        }else{this.fail("SMTP pre-ciphertext response buffer exceeded bound");body.fill(0)}
-      }
-      for(const chunk of record.chunks)chunk.fill(0)
-      record.chunks=[]
+        }else{this.fail("SMTP combined response buffer exceeded bound");body.fill(0)}
+      }else this.releaseChunks(record)
     })
     res.once("close",()=>{
       if(!record.finished){
@@ -113,8 +147,7 @@ export class SmtpResponsePrivacyGuard {
           " writableFinished="+String(res.writableFinished))
         this.active.delete(record)
       }
-      for(const chunk of record.chunks)chunk.fill(0)
-      record.chunks=[]
+      this.releaseChunks(record)
     })
     res.once("error",()=>{this.fail("SMTP response transport error")})
   }
