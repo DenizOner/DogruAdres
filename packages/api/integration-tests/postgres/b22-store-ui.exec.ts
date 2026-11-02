@@ -8,7 +8,7 @@
 import assert from "node:assert/strict"
 import {randomBytes,createHash} from "node:crypto"
 import {createServer as tlsServer,request as tlsRequest} from "node:https"
-import {createServer as plainServer,type IncomingMessage,type ServerResponse} from "node:http"
+import {createServer as plainServer} from "node:http"
 import {dirname} from "node:path"
 import {mkdtempSync,readFileSync,rmSync,mkdirSync,writeFileSync} from "node:fs"
 import {join} from "node:path"
@@ -21,53 +21,14 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
+import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
-
-// Check the exact SMTP HTTP bytes before the disposable HTTPS test server
-// sends them to real Chrome. No response body is logged or persisted.
-type SmtpEgressGuard={secret:string;ciphertext:string;responses:number;unfinished:number;failures:string[]}
-function guardSmtpEgress(req:IncomingMessage,res:ServerResponse,guard:SmtpEgressGuard){
-  if((req.url??"").split("?")[0]!=="/personal/platform/smtp")return
-  const originalWrite=res.write.bind(res),originalEnd=res.end.bind(res)
-  const chunks:Buffer[]=[]
-  let total=0,ended=false
-  const collect=(part:unknown,encoding?:string)=>{
-    if(part===undefined||part===null||typeof part==="function")return
-    const bytes=Buffer.isBuffer(part)?part:Buffer.from(part as string,(encoding??"utf8") as BufferEncoding)
-    total+=bytes.length
-    if(total>1024*1024){
-      if(!guard.failures.includes("SMTP response exceeded inspection bound"))
-        guard.failures.push("SMTP response exceeded inspection bound")
-      return
-    }
-    chunks.push(bytes)
-  }
-  ;(res as any).write=(part:unknown,...args:any[])=>{
-    collect(part,typeof args[0]==="string"?args[0]:undefined)
-    return (originalWrite as any)(part,...args)
-  }
-  ;(res as any).end=(part:unknown,...args:any[])=>{
-    collect(part,typeof args[0]==="string"?args[0]:undefined)
-    ended=true
-    const encoding=String(res.getHeader("content-encoding")??"identity").toLowerCase()
-    if(encoding!=="identity")guard.failures.push("SMTP response encoding not inspectable: "+encoding)
-    else if(total<=1024*1024){
-      const response=Buffer.concat(chunks)
-      if(response.includes(Buffer.from(guard.secret,"utf8")))guard.failures.push("SMTP plaintext response leak")
-      if(guard.ciphertext&&response.includes(Buffer.from(guard.ciphertext,"utf8")))
-        guard.failures.push("SMTP stored ciphertext response leak")
-    }
-    guard.responses++
-    return (originalEnd as any)(part,...args)
-  }
-  res.once("close",()=>{if(!ended)guard.unfinished++})
-}
 
 // Uses only the existing Mercur module middleware and its real built dashboard.
 // This dedicated child terminates after invalidating its two genuine MFA sessions.
 async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:any,
-  person:string, otherPerson:string, q:(sql:string,args?:unknown[])=>Promise<any[]>,guard:SmtpEgressGuard) {
+  person:string, otherPerson:string, q:(sql:string,args?:unknown[])=>Promise<any[]>,guard:SmtpResponsePrivacyGuard) {
   assert.equal(container.resolve("admin_ui").getServingMode(),"static")
   const secret=process.env.B22_SMTP_CANARY!
   assert.match(secret,/^b22-smtp-[0-9a-f]{48}$/)
@@ -75,7 +36,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   // Real HTTPS egress is the privacy authority; CDP body request IDs
   // can expire on navigation. Retain separate Chrome console leak checks.
   assert.equal(guard.secret,secret)
-  const assertPrivateResponses=()=>assert.deepEqual(guard.failures,[],"SMTP response privacy")
+  const assertPrivateResponses=()=>guard.assertNoLeaks()
   const path="/dashboard/settings/smtp"
   const evidence=process.env.B06_EVIDENCE_DIR!
   assert.equal(evidence,join(process.env.RUNNER_TEMP!,"b22-admin-smtp-evidence"))
@@ -184,7 +145,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   assert.equal(saved.length,1);assert.equal(saved[0].enabled,false)
   assert.equal(saved[0].host,"smtp.b22.example.invalid");assert.equal(saved[0].version,1)
   assert.match(saved[0].password_encrypted,/^v1:/)
-  guard.ciphertext=saved[0].password_encrypted
+  guard.bindCiphertext(saved[0].password_encrypted)
   assert.ok(!JSON.stringify(saved).includes(secret),"No plaintext persisted")
   const safe=await read(browser)
   assert.equal(safe.status,200);assert.equal(safe.body.settings.has_password,true)
@@ -242,8 +203,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   await reload(browser,403);await hidden(browser)
   mark("Revoked real session GET403 and form hidden")
   assert.deepEqual(await digest(),saved)
-  assert.ok(guard.responses>0,"Native SMTP HTTP egress must be inspected")
-  assert.equal(guard.unfinished,0,"SMTP response interrupted before inspection")
+  await guard.assertComplete()
   for(const b of [browser,denied]){
     assertPrivateResponses()
     assert.equal(b.secretLeaks,false,"Secret in Chrome protocol/console")
@@ -711,6 +671,7 @@ export default async function({container}:any){
   }
     const pg=new Client({connectionString:u.toString()});await pg.connect()
   const q=async(sql:string,args:unknown[]=[]) => (await pg.query(sql,args)).rows
+  let smtpGuard:SmtpResponsePrivacyGuard|undefined
   let app:Awaited<ReturnType<typeof createPersonalHttpApp>>|undefined
   let server:ReturnType<typeof tlsServer>|undefined
   let privateServer:ReturnType<typeof plainServer>|undefined
@@ -882,11 +843,10 @@ export default async function({container}:any){
     })
     const nativePort=(privateServer.address() as {port:number}).port
     process.env.DOGRUADRES_PRIVATE_API="http://127.0.0.1:"+nativePort
-    const smtpGuard:SmtpEgressGuard={
-      secret:process.env.B22_SMTP_CANARY??"",ciphertext:"",responses:0,unfinished:0,failures:[]
-    }
+    if(process.env.B22_ADMIN_SMTP==="true")
+      smtpGuard=new SmtpResponsePrivacyGuard(process.env.B22_SMTP_CANARY??"")
     server=tlsServer({cert:readFileSync(crt),key:readFileSync(key),minVersion:"TLSv1.2"},
-      (req,res)=>{if(process.env.B22_ADMIN_SMTP==="true")guardSmtpEgress(req,res,smtpGuard);app!.app(req,res)})
+      (req,res)=>{smtpGuard?.observe(req,res);app!.app(req,res)})
     await new Promise<void>((resolve,reject)=>{server!.once("error",reject);server!.listen(0,"127.0.0.1",resolve)})
     const host="https://127.0.0.1:"+(server.address() as any).port
     process.env.DOGRUADRES_PUBLIC_ORIGIN=host
@@ -902,7 +862,7 @@ export default async function({container}:any){
     if(process.env.B22_ADMIN_SMTP==="true"){
       const other=new B06Chrome(host,"B");browsers.push(other)
       await other.start(crt);await other.login(B.email,B.password,B.person)
-      await verifyAdminSmtp(browser,other,container,A.person,B.person,q,smtpGuard)
+      await verifyAdminSmtp(browser,other,container,A.person,B.person,q,smtpGuard!)
       return
     }
     // Approved personal workspace has no editable launcher. Its retired
@@ -5149,5 +5109,7 @@ export default async function({container}:any){
     if(app)await app.close()
     await pg.end()
     rmSync(temp,{recursive:true,force:true})
+    // Verify responses that closed during Chrome/server cleanup as well.
+    smtpGuard?.assertNoLeaks()
   }
 }
