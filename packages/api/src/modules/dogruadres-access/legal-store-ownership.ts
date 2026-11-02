@@ -12,6 +12,9 @@ export async function platformApprovedSellerIds(db: SecuritySql, organizationId:
   const rows = await db.execute(
     `select o.seller_id
        from da_organization_seller_ownership o
+       join da_organization current_owner
+         on current_owner.id=o.organization_id
+         and current_owner.status='active' and current_owner.deleted_at is null
        join da_audit_event e
          on e.id=o.verification_audit_event_id
          and e.deleted_at is null

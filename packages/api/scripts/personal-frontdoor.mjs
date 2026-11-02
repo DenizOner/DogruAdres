@@ -14,6 +14,7 @@ export function allowedPublicRequest(method,path){
     '/personal/invitations':['GET','POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
     '/personal/contexts':['GET'],
     '/personal/organization-stores':['GET'],
+    '/personal/catalog':['GET'],
     '/personal/store-applications':['GET','POST'],
     '/personal/store-product-permissions':['GET','POST'],
     '/personal/buyer-permissions':['GET','POST'],
@@ -52,6 +53,13 @@ export function startFrontdoor(env=process.env){
       if(url.origin!==config.publicOrigin){res.writeHead(400).end();return}
       const mode=allowedPublicRequest(req.method,url.pathname)
       if(!mode || mode==='machine'&&!/^Basic /i.test(req.headers.authorization??'')){res.writeHead(401,{'Content-Type':'application/json'}).end('{"message":"Public ingress denied"}');return}
+      // Private B4B catalogue is the only public-facing relay for this data.
+      // Enforce fixed privacy metadata at the HTTPS boundary instead of
+      // forwarding arbitrary upstream Vary / X-Robots-Tag header values.
+      if(req.method==='GET'&&url.pathname==='/personal/catalog'){
+        res.setHeader('Vary','Cookie')
+        res.setHeader('X-Robots-Tag','noindex, nofollow, noarchive')
+      }
       const headers={}
       for(const key of ['origin','content-type','cookie','x-csrf-token','x-publishable-api-key'])if(typeof req.headers[key]==='string')headers[key]=req.headers[key]
       // Only purpose-bound password reset and scoped machine auth need this

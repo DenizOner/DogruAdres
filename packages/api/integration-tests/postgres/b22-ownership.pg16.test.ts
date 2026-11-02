@@ -53,6 +53,14 @@ export async function verifyB22OwnedSellerConstraints(db: Sql, databaseName: str
     return db.unsafe(query,params)
   }}
   assert.deepEqual(await platformApprovedSellerIds(adapter,"daorg_b22_alpha"),["sel_b22_one","sel_b22_two"])
+  // Even an otherwise valid immutable association must disappear while its
+  // legal Store-owning Organization is suspended. Test DB is disposable only.
+  await db.unsafe("update da_organization set status='suspended' where id='daorg_b22_alpha'")
+  assert.deepEqual(await platformApprovedSellerIds(adapter,"daorg_b22_alpha"),[],
+    "Suspended Seller Organization must remove every associated Store candidate")
+  await db.unsafe("update da_organization set status='active' where id='daorg_b22_alpha'")
+  assert.deepEqual(await platformApprovedSellerIds(adapter,"daorg_b22_alpha"),["sel_b22_one","sel_b22_two"],
+    "Reactivated Seller Organization may restore only previously valid Store origins")
   // The FK alone cannot confer approval: mismatched Store or unpublished,
   // pending-request events must not yield any Store candidate.
   await db.unsafe(`insert into da_organization_seller_ownership

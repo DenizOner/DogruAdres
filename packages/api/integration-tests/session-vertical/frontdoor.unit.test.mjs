@@ -8,6 +8,8 @@ test("B22 Store applications and active Store read have exact public method/path
   for(const method of ["GET","POST"])
     assert.equal(allowedPublicRequest(method,"/personal/store-applications"),true)
   assert.equal(allowedPublicRequest("GET","/personal/organization-stores"),true)
+  assert.equal(allowedPublicRequest("GET","/personal/catalog"),true)
+  assert.equal(allowedPublicRequest("POST","/personal/catalog"),false)
   for(const [path,method] of [
     ["/personal/store-applications","PATCH"],["/personal/store-applications","DELETE"],
     ["/personal/store-applications","OPTIONS"],["/personal/store-applications","HEAD"],
@@ -132,6 +134,60 @@ test('closed B4B frontdoor rejects catalog and search before contacting native A
   }finally{
     front.closeAllConnections();upstream.closeAllConnections()
     await Promise.all([new Promise(r=>front.close(r)),new Promise(r=>upstream.close(r))])
+  }
+})
+
+// Verify privacy metadata at the actual public HTTP boundary, including
+// denied requests. Never trust/cache/index an upstream override.
+test('B22 scoped catalogue has fixed noindex and Cookie Vary at the frontdoor',async()=>{
+  const seen=[]
+  const upstream=http.createServer((req,res)=>{
+    seen.push(req.url)
+    res.setHeader('Content-Type','application/json')
+    res.setHeader('Cache-Control','public, max-age=3600')
+    res.setHeader('Vary','Accept')
+    res.setHeader('X-Robots-Tag','index, follow')
+    res.statusCode=req.headers.cookie?200:403
+    res.end(req.headers.cookie?'{"stores":[]}':'{"message":"Access denied"}')
+  })
+  upstream.listen(0,'127.0.0.1');await once(upstream,'listening')
+  const reservation=http.createServer()
+  reservation.listen(0,'127.0.0.1');await once(reservation,'listening')
+  const port=reservation.address().port
+  await new Promise(resolve=>reservation.close(resolve))
+  const origin='http://127.0.0.1:'+port
+  const front=startFrontdoor({NODE_ENV:'test',DOGRUADRES_PUBLIC_ORIGIN:origin,
+    DOGRUADRES_PRIVATE_API:'http://127.0.0.1:'+upstream.address().port,
+    DOGRUADRES_FRONTDOOR_HOST:'127.0.0.1',DOGRUADRES_FRONTDOOR_PORT:String(port)})
+  await once(front,'listening')
+  try{
+    for(const [cookie,expected] of [['da_session=synthetic',200],['',403]]){
+      const response=await fetch(origin+'/personal/catalog?organization_id=daorg_test',{
+        headers:cookie?{cookie}:{}
+      })
+      assert.equal(response.status,expected)
+      assert.match(response.headers.get('cache-control')??'',/no-store/)
+      assert.equal(response.headers.get('vary'),'Cookie')
+      assert.equal(response.headers.get('x-robots-tag'),'noindex, nofollow, noarchive')
+      await response.json()
+    }
+    assert.deepEqual(seen,[
+      '/personal/catalog?organization_id=daorg_test',
+      '/personal/catalog?organization_id=daorg_test'
+    ])
+    // Do not expand the public relay or apply catalogue-specific policy
+    // indiscriminately to unrelated purpose-bound routes.
+    const other=await fetch(origin+'/personal/session')
+    assert.equal(other.status,403)
+    assert.equal(other.headers.get('x-robots-tag'),null)
+    assert.equal(other.headers.get('vary'),null)
+    await other.json()
+  }finally{
+    front.closeAllConnections();upstream.closeAllConnections()
+    await Promise.all([
+      new Promise(resolve=>front.close(resolve)),
+      new Promise(resolve=>upstream.close(resolve))
+    ])
   }
 })
 

@@ -904,7 +904,8 @@ export default async function({container}:any){
     const get=async(path:string,additional:Record<string,string>={})=>{
       return browser.eval(`(async()=>{
         const r=await fetch(${JSON.stringify(path)},{headers:${JSON.stringify(additional)}})
-        return {status:r.status,body:await r.json(),cache:r.headers.get("cache-control")}
+        return {status:r.status,body:await r.json(),cache:r.headers.get("cache-control"),
+          robots:r.headers.get("x-robots-tag"),vary:r.headers.get("vary")}
       })()`)
     }
     const selected=(org:string)=>"/personal/organization-stores?organization="+encodeURIComponent(org)
@@ -1629,6 +1630,85 @@ export default async function({container}:any){
       assert.equal(offer.seller_id,cartStoreIds[i])
       offerRows.push(offer)
     }
+    // Read-only positive B22 discovery: native Mercur Offers (never a public
+    // /store route), a published shared master Product and two independently
+    // approved Organization-owned Sellers. No prices or checkout enabled.
+    const catalogUrl=(org:string)=>"/personal/catalog?organization_id="+
+      encodeURIComponent(org)
+    const catalogAuditBefore=await q("select count(*)::int n from da_audit_event")
+    const scopedCatalog=await get(catalogUrl(organizations[0].id))
+    assert.equal(scopedCatalog.status,200,"Protected Buyer Owner sees approved Store product titles")
+    assert.match(scopedCatalog.cache,/no-store/)
+    assert.equal(scopedCatalog.robots,"noindex, nofollow, noarchive",
+      "B22 HTTPS public ingress must not allow private catalogue SEO indexing")
+    assert.equal(scopedCatalog.vary,"Cookie",
+      "B22 HTTPS public ingress must preserve session-dependent cache partitioning")
+    assert.equal(scopedCatalog.body.organization_id,organizations[0].id)
+    assert.equal(scopedCatalog.body.prices_available,false)
+    assert.equal(scopedCatalog.body.checkout_ready,false)
+    assert.deepEqual(new Set(scopedCatalog.body.stores.map((x:any)=>x.id)),new Set(cartStoreIds),
+      "Unlinked, pending or non-approved Stores must not enter a Buyer catalogue")
+    for(const store of scopedCatalog.body.stores){
+      assert.ok(store.products.some((item:any)=>item.product_id===sellableProduct.id&&
+        item.title===sellableProduct.title&&
+        offerRows.some(o=>o.id===item.offer_id&&o.seller_id===store.id)))
+      assert.equal(JSON.stringify(store).includes("calculated_price"),false)
+      assert.equal(JSON.stringify(store).includes("inventory_quantity"),false)
+    }
+    const foreignCatalog=await get(catalogUrl(organizations[2].id))
+    assert.equal(foreignCatalog.status,403,
+      "Foreign Organization cannot be selected to read private catalogue")
+    assert.match(foreignCatalog.cache,/no-store/)
+    assert.equal(foreignCatalog.robots,"noindex, nofollow, noarchive",
+      "Denied Buyer catalogue must not become indexable at public HTTPS")
+    assert.equal(foreignCatalog.vary,"Cookie",
+      "Denied Buyer catalogue must keep exact Vary at public HTTPS")
+    assert.equal((await get(catalogUrl(organizations[0].id)+"&seller_id="+ownerStoreId)).status,400,
+      "Browser cannot forge native Seller scope")
+    assert.equal((await get(catalogUrl(organizations[0].id),
+      {"x-seller-id":ownerStoreId})).status,400)
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.click("#buyer-catalog-refresh")
+    await browser.wait("!document.getElementById('buyer-catalog-panel').hidden && document.getElementById('buyer-catalog-items').children.length>=2")
+    assert.equal(await browser.eval("document.getElementById('buyer-catalog-items').textContent.includes("+
+      JSON.stringify(sellableProduct.title)+")"),true)
+    assert.deepEqual(await q("select count(*)::int n from da_audit_event"),catalogAuditBefore,
+      "Read-only Buyer catalogue cannot write canonical audit")
+    process.stdout.write("PASS B22 Buyer catalogue: real Chrome HTTPS and PG16 two published Mercur Offers under approved Buyer Org, foreign and forged scopes 403/400, zero prices and audit writes\n")
+    // Separate legal Seller Organization is part of the current entitlement,
+    // not just the native Seller's open flag. Beta remains an active Buyer.
+    // Test-only PG16 suspension/restoration never touches production.
+    const betaPrivateCatalog=()=>reviewer.eval(`(async()=>{
+      const r=await fetch(${JSON.stringify(catalogUrl(organizations[1].id))})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    const betaCatalogBefore=await betaPrivateCatalog()
+    assert.equal(betaCatalogBefore.status,200)
+    assert.deepEqual(new Set(betaCatalogBefore.body.stores.map((s:any)=>s.id)),
+      new Set(cartStoreIds),"Independent Buyer Beta can see two active legal Store offers")
+    await q("update da_organization set status='suspended' where id=$1",
+      [organizations[0].id])
+    try{
+      const deniedSuspendedSeller=await betaPrivateCatalog()
+      assert.equal(deniedSuspendedSeller.status,200,
+        "Suspended Seller must not close another active Buyer's own context")
+      assert.equal(deniedSuspendedSeller.body.organization_id,organizations[1].id)
+      assert.deepEqual(deniedSuspendedSeller.body.stores,[],
+        "Every Store of a suspended seller legal Organization must disappear")
+    }finally{
+      await q("update da_organization set status='active' where id=$1",
+        [organizations[0].id])
+    }
+    const betaRestored=await betaPrivateCatalog()
+    assert.equal(betaRestored.status,200)
+    assert.deepEqual(new Set(betaRestored.body.stores.map((s:any)=>s.id)),
+      new Set(cartStoreIds),"Active legal Seller origin can restore only approved Stores")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    process.stdout.write("PASS B22 suspended Seller Organization: real PG16 legal Owner status hides both approved Offers from active Buyer Beta; reactivation restores, no buyer bypass\n")
     // Use a task-only sales channel and region for native cart pricing.
     const sales=container.resolve("sales_channel")
     const market=await sales.createSalesChannels({name:"B22 two-Store channel "+rand})
@@ -1705,6 +1785,12 @@ export default async function({container}:any){
       x.method==="POST"&&x.status===200),"Owner's visible policy form must POST 200")
     assert.equal((await changeStoreBlock("block")).status,200,
       "Replay must not write another active block")
+    const blockedCatalog=await get(catalogUrl(organizations[0].id))
+    assert.equal(blockedCatalog.status,200)
+    assert.equal(blockedCatalog.body.stores.some((x:any)=>x.id===ownerStoreId),false,
+      "Store block must hide its offers from exactly this Buyer Organization")
+    assert.equal(blockedCatalog.body.stores.some((x:any)=>x.id===secondOwnerStoreId),true,
+      "Another Store must retain its independent Buyer visibility")
     // Admin of the other Organization cannot use the same native member
     // association to manage Alpha's Store, nor can SellerMember alone.
     const wrongOwner=await browser.eval(`(async()=>{
@@ -1749,6 +1835,10 @@ export default async function({container}:any){
     assert.deepEqual((await readNativeCart(
       buyerCart(organizations[0].id,customerCart.id)+"&seller_scope=inspect")).body,
       twoStoreScope.body)
+    const restoredCatalog=await get(catalogUrl(organizations[0].id))
+    assert.equal(restoredCatalog.status,200)
+    assert.equal(restoredCatalog.body.stores.some((x:any)=>x.id===ownerStoreId),true,
+      "Unblock restores only this Store's read access; no checkout activation")
     // Each Store has an independent Buyer Organization policy. B-only block
     // must never be read as an Alpha global organization suspension.
     const changeSecondBlock=async(action:"block"|"unblock")=>browser.eval(`(async()=>{

@@ -210,6 +210,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="buyer-context-refresh" type="button">Satın alma yetkimi yeniden denetle</button>
     <button id="buyer-customer-check" type="button">Doğrulanmış müşteri bağımı kontrol et</button>
     <p id="buyer-customer-status" role="status" aria-live="polite"></p>
+    <section id="buyer-catalog-panel" hidden aria-labelledby="buyer-catalog-title">
+      <h4 id="buyer-catalog-title">Bu kuruluşun görebildiği ürünler</h4>
+      <p>İlk onaylı mağazalardaki yayımlanmış ürünler gösterilir. Fiyat, stok, indirim, sepet ve ödeme henüz kullanıma açık değildir.</p>
+      <p id="buyer-catalog-status" role="status" aria-live="polite"></p>
+      <ul id="buyer-catalog-items"></ul>
+      <button id="buyer-catalog-refresh" type="button">Ürünleri güncelle</button>
+    </section>
   </section>
   <section id="buyer-grants-panel" hidden aria-labelledby="buyer-grants-title" style="grid-column:1/-1">
     <h3 id="buyer-grants-title">Kuruluş satın alma izinleri</h3>
@@ -795,9 +802,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
 
 
 
-  let buyerContextRequest=0;
+  let buyerContextRequest=0,buyerCatalogRequest=0;
   function clearBuyerContext(){
-    buyerContextRequest++;
+    buyerContextRequest++;buyerCatalogRequest++;
+    const catalog=el('buyer-catalog-panel');
+    if(catalog)catalog.hidden=true;
+    const items=el('buyer-catalog-items');
+    if(items)items.replaceChildren();
+    const catalogStatus=el('buyer-catalog-status');
+    if(catalogStatus)catalogStatus.textContent='';
     const panel=el('buyer-context-panel');
     if(panel)panel.hidden=true;
     const statusEl=el('buyer-context-status');
@@ -823,6 +836,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         throw new Error('Kuruluş satın alma yetkisi doğrulanamadı');
       statusEl.textContent='Bu kuruluş adına satın alma izniniz doğrulandı. Sepet ve ödeme henüz kullanıma açık değil.';
       panel.hidden=false;
+      void buyerCatalog(org,request);
     }catch(e){
       if(seq!==buyerContextRequest||request!==organizationRequest||
          currentOrg!==org)return;
@@ -830,6 +844,46 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       panel.hidden=true;
     }
   }
+  async function buyerCatalog(org,request){
+    if(request!==organizationRequest||currentOrg!==org||document.hidden||
+       el('workspace').hidden||el('buyer-context-panel').hidden)return;
+    const panel=el('buyer-catalog-panel'),statusEl=el('buyer-catalog-status');
+    const root=el('buyer-catalog-items'),seq=++buyerCatalogRequest;
+    panel.hidden=true;root.replaceChildren();
+    statusEl.textContent='Yetkili mağaza ürünleri denetleniyor…';
+    try{
+      const data=await api('catalog?organization_id='+encodeURIComponent(org));
+      if(seq!==buyerCatalogRequest||request!==organizationRequest||currentOrg!==org||
+         document.hidden||el('workspace').hidden||
+         el('buyer-context-panel').hidden)return;
+      if(data.organization_id!==org||data.prices_available!==false||
+         data.checkout_ready!==false||!Array.isArray(data.stores)||
+         data.stores.length>20)throw Error('Ürün kapsamı doğrulanamadı');
+      for(const store of data.stores){
+        if(typeof store.id!=='string'||typeof store.name!=='string'||
+           !Array.isArray(store.products)||store.products.length>5)
+          throw Error('Mağaza ürün kapsamı doğrulanamadı');
+        for(const product of store.products){
+          if(typeof product.title!=='string'||typeof product.product_id!=='string'||
+             typeof product.offer_id!=='string')throw Error('Ürün kapsamı doğrulanamadı');
+          const li=document.createElement('li');
+          li.textContent=store.name+' — '+product.title;
+          root.append(li);
+        }
+      }
+      statusEl.textContent=root.children.length
+        ? 'Yalnız izinli, yayımlanmış ürün başlıkları gösteriliyor; fiyatlar kapalı.'
+        : 'İlk mağaza sayfasında gösterilebilir ürün bulunamadı.';
+      panel.hidden=false;
+    }catch(e){
+      if(seq!==buyerCatalogRequest||request!==organizationRequest||currentOrg!==org)return;
+      root.replaceChildren();panel.hidden=true;
+      statusEl.textContent='';
+    }
+  }
+  el('buyer-catalog-refresh').onclick=()=>{
+    if(currentOrg)void buyerCatalog(currentOrg,organizationRequest);
+  };
   el('buyer-context-refresh').onclick=()=>{
     if(currentOrg)void buyerContext(currentOrg,organizationRequest);
   };
