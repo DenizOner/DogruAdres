@@ -1629,6 +1629,42 @@ export default async function({container}:any){
       assert.equal(offer.seller_id,cartStoreIds[i])
       offerRows.push(offer)
     }
+    // Read-only positive B22 discovery: native Mercur Offers (never a public
+    // /store route), a published shared master Product and two independently
+    // approved Organization-owned Sellers. No prices or checkout enabled.
+    const catalogUrl=(org:string)=>"/personal/catalog?organization_id="+
+      encodeURIComponent(org)
+    const catalogAuditBefore=await q("select count(*)::int n from da_audit_event")
+    const scopedCatalog=await get(catalogUrl(organizations[0].id))
+    assert.equal(scopedCatalog.status,200,"Protected Buyer Owner sees approved Store product titles")
+    assert.match(scopedCatalog.cache,/no-store/)
+    assert.equal(scopedCatalog.body.organization_id,organizations[0].id)
+    assert.equal(scopedCatalog.body.prices_available,false)
+    assert.equal(scopedCatalog.body.checkout_ready,false)
+    assert.deepEqual(new Set(scopedCatalog.body.stores.map((x:any)=>x.id)),new Set(cartStoreIds),
+      "Unlinked, pending or non-approved Stores must not enter a Buyer catalogue")
+    for(const store of scopedCatalog.body.stores){
+      assert.ok(store.products.some((item:any)=>item.product_id===sellableProduct.id&&
+        item.title===sellableProduct.title&&
+        offerRows.some(o=>o.id===item.offer_id&&o.seller_id===store.id)))
+      assert.equal(JSON.stringify(store).includes("calculated_price"),false)
+      assert.equal(JSON.stringify(store).includes("inventory_quantity"),false)
+    }
+    assert.equal((await get(catalogUrl(organizations[2].id))).status,403,
+      "Foreign Organization cannot be selected to read private catalogue")
+    assert.equal((await get(catalogUrl(organizations[0].id)+"&seller_id="+ownerStoreId)).status,400,
+      "Browser cannot forge native Seller scope")
+    assert.equal((await get(catalogUrl(organizations[0].id),
+      {"x-seller-id":ownerStoreId})).status,400)
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.click("#buyer-catalog-refresh")
+    await browser.wait("!document.getElementById('buyer-catalog-panel').hidden && document.getElementById('buyer-catalog-items').children.length>=2")
+    assert.equal(await browser.eval("document.getElementById('buyer-catalog-items').textContent.includes("+
+      JSON.stringify(sellableProduct.title)+")"),true)
+    assert.deepEqual(await q("select count(*)::int n from da_audit_event"),catalogAuditBefore,
+      "Read-only Buyer catalogue cannot write canonical audit")
+    process.stdout.write("PASS B22 Buyer catalogue: real Chrome HTTPS and PG16 two published Mercur Offers under approved Buyer Org, foreign and forged scopes 403/400, zero prices and audit writes\n")
     // Use a task-only sales channel and region for native cart pricing.
     const sales=container.resolve("sales_channel")
     const market=await sales.createSalesChannels({name:"B22 two-Store channel "+rand})
@@ -1705,6 +1741,12 @@ export default async function({container}:any){
       x.method==="POST"&&x.status===200),"Owner's visible policy form must POST 200")
     assert.equal((await changeStoreBlock("block")).status,200,
       "Replay must not write another active block")
+    const blockedCatalog=await get(catalogUrl(organizations[0].id))
+    assert.equal(blockedCatalog.status,200)
+    assert.equal(blockedCatalog.body.stores.some((x:any)=>x.id===ownerStoreId),false,
+      "Store block must hide its offers from exactly this Buyer Organization")
+    assert.equal(blockedCatalog.body.stores.some((x:any)=>x.id===secondOwnerStoreId),true,
+      "Another Store must retain its independent Buyer visibility")
     // Admin of the other Organization cannot use the same native member
     // association to manage Alpha's Store, nor can SellerMember alone.
     const wrongOwner=await browser.eval(`(async()=>{
@@ -1749,6 +1791,10 @@ export default async function({container}:any){
     assert.deepEqual((await readNativeCart(
       buyerCart(organizations[0].id,customerCart.id)+"&seller_scope=inspect")).body,
       twoStoreScope.body)
+    const restoredCatalog=await get(catalogUrl(organizations[0].id))
+    assert.equal(restoredCatalog.status,200)
+    assert.equal(restoredCatalog.body.stores.some((x:any)=>x.id===ownerStoreId),true,
+      "Unblock restores only this Store's read access; no checkout activation")
     // Each Store has an independent Buyer Organization policy. B-only block
     // must never be read as an Alpha global organization suspension.
     const changeSecondBlock=async(action:"block"|"unblock")=>browser.eval(`(async()=>{
