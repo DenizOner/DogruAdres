@@ -57,7 +57,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
       await b.screenshot(join(evidence,"native-navigation-failed.png"))
       writeFileSync(join(evidence,"native-navigation-failed.json"),JSON.stringify({
         source:process.env.GITHUB_SHA,
-        document:await b.eval("({path:location.pathname,title:document.title,text:document.body.innerText.slice(0,800)})"),
+        document:await b.eval("({onExpectedPath:location.pathname==='/dashboard/settings/smtp',headingPresent:document.body.textContent.includes('Platform SMTP Ayarları')})"),
         errors:b.runtimeErrors,
         http:b.http.filter(r=>r.phase===b.phase).map(({method,path,status})=>({method,path,status})),
       },null,2))
@@ -129,12 +129,11 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
     // Diagnostic metadata only: never depend on a stale CDP response body.
     const responses=posts.map(post=>({status:post.status}))
     const state=await browser.eval(`({
-      text:document.body.innerText,
+      versionRendered:document.body.textContent.includes('Ayar sürümü: 1'),
       hostMatches:document.querySelector('#smtp-host')?.value==='smtp.b22.example.invalid',
       senderMatches:document.querySelector('#smtp-from-email')?.value==='b22@example.invalid',
-      validity:Array.from(document.querySelectorAll('form input')).map(e=>({id:e.id,valid:e.validity.valid,message:e.validationMessage})),
+      validity:Array.from(document.querySelectorAll('form input')).map(e=>({id:e.id,valid:e.validity.valid})),
     })`)
-    state.text=state.text.replaceAll(secret,'[redacted]').slice(0,1500)
     const rows=await q("select id,enabled,version,host from da_platform_smtp_settings order by id")
     writeFileSync(join(evidence,"save-failed.json"),JSON.stringify({source:process.env.GITHUB_SHA,
       responses,state,rows,consoleSecretLeaked:browser.secretLeaks},null,2).replaceAll(secret,'[redacted]'))

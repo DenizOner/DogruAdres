@@ -39,12 +39,18 @@ export class B06Chrome {
       if(m.method==='Network.requestWillBeSent')this.methods.set(m.params.requestId,m.params.request.method)
       if(m.method==='Network.loadingFinished')this.finishedRequests.add(m.params.requestId)
       if(m.method==='Network.loadingFailed')this.failedRequests.add(m.params.requestId)
-      if(m.method==='Runtime.exceptionThrown')this.runtimeErrors.push(String(m.params.exceptionDetails?.exception?.description??m.params.exceptionDetails?.text??'').slice(0,300))
+      if(m.method==='Runtime.exceptionThrown')this.recordRuntimeException(m.params?.exceptionDetails)
       if(m.method==='Network.responseReceived'){const r=m.params.response,u=new URL(r.url);if(u.origin===this.origin)this.http.push({requestId:m.params.requestId,phase:this.phase,method:this.methods.get(m.params.requestId),path:u.pathname,status:r.status,protocol:r.protocol,tls:r.securityDetails?{protocol:r.securityDetails.protocol,issuer:r.securityDetails.issuer}:null})}}
     for(const m of ['Page.enable','Runtime.enable','Network.enable','Security.enable','Log.enable'])await this.send(m)
     await this.send('Page.navigate',{url:this.origin+'/personal'})
     await this.wait("!!document.querySelector('#login')?.getClientRects().length")
     assert.ok(this.http.some(r=>r.path==='/personal'&&r.status===200&&r.tls),'Chrome trusted HTTPS navigation')
+  }
+  // CDP exception payloads are untrusted. Never retain descriptions, stacks or text.
+  // Check the private canary before reducing evidence to a bounded fixed category.
+  recordRuntimeException(details:any){
+    if(this.secretCanary&&JSON.stringify(details??null).includes(this.secretCanary))this.secretLeaks=true
+    if(this.runtimeErrors.length<8)this.runtimeErrors.push('Runtime.exceptionThrown')
   }
   send(method:string,params:object={}):Promise<any>{return new Promise((resolve,reject)=>{const id=++this.id,timer=setTimeout(()=>{this.pending.delete(id);reject(Error('CDP timeout '+method))},20000);this.pending.set(id,{resolve,reject,timer,method});this.ws!.send(JSON.stringify({id,method,params}))})}
   async eval(expression:string){const r=await this.send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});assert.ok(!r.exceptionDetails,'Browser evaluation failed');return r.result?.value}
