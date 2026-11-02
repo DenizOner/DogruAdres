@@ -108,8 +108,10 @@ describe("smtp-settings unit tests", () => {
 
   it("throws SmtpConcurrentUpdateError when version does not match expected_version", async () => {
     let versionRowRead = false
+    const executedQueries: string[] = []
     const mockDb: SecuritySql = {
       execute: jest.fn().mockImplementation((sql: string) => {
+        executedQueries.push(sql)
         if (sql.includes("select pg_advisory_xact_lock")) return Promise.resolve([])
         if (/from\s+da_platform_smtp_settings\s+where\s+id='current'/.test(sql)) {
           versionRowRead = true
@@ -123,7 +125,7 @@ describe("smtp-settings unit tests", () => {
             },
           ])
         }
-        return Promise.resolve([])
+        throw new Error("Unexpected SQL: stale SMTP settings must be rejected before any write")
       }),
     }
 
@@ -141,5 +143,11 @@ describe("smtp-settings unit tests", () => {
       SmtpConcurrentUpdateError
     )
     expect(versionRowRead).toBe(true)
+    expect(executedQueries).toHaveLength(2) // Advisory lock, then the current-version SELECT only.
+    expect(
+      executedQueries.filter((sql) =>
+        /\b(?:update|insert\s+into|delete\s+from)\s+(?:da_platform_smtp_settings|da_audit_event|da_security_outbox)\b/i.test(sql)
+      )
+    ).toEqual([]) // No settings, audit, or outbox mutation may be attempted.
   })
 })
