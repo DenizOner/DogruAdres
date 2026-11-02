@@ -81,6 +81,35 @@ export default async function({container}:any){
     assert.equal((await get(own,cookie,{"x-seller-id":store.id})).status,400,"Forged seller context must be rejected")
     assert.equal((await get("/personal/organization-stores?organization=daorg_foreign",cookie)).status,403)
     assert.equal((await get(own+"&unexpected=1",cookie)).status,400)
+    // Current #217 closed B4B decision supersedes the old public B2C demo.
+    // Use the real Medusa HTTP stack on this same disposable PostgreSQL DB.
+    const beforeCatalog=await rows("select id,action from da_audit_event where organization_id=$1 order by id",[org.id])
+    const deniedCatalog=[
+      {path:"/store/products",method:"GET"},
+      {path:"/store/products/prod_synthetic",method:"GET"},
+      {path:"/store/offers",method:"GET"},
+      {path:"/store/sellers",method:"GET"},
+      {path:"/store/product-categories",method:"GET"},
+      {path:"/store/search",method:"POST"},
+    ]
+    for(const target of deniedCatalog){
+      const response=await fetch(base+target.path,{method:target.method,
+        headers:{"x-publishable-api-key":"pk_synthetic",
+          ...(target.method==="POST"?{"content-type":"application/json"}:{})},
+        ...(target.method==="POST"?{body:"{}"}:{}),
+        signal:AbortSignal.timeout(15000)})
+      assert.equal(response.status,401,"Anonymous/publishable-key native catalog must be closed: "+target.path)
+      const denied=await response.json()
+      assert.deepEqual(denied,{message:"Personal session ingress required"})
+      assert.equal(JSON.stringify(denied).includes(mail),false)
+    }
+    const nativeBearer=await fetch(base+"/store/products",{
+      headers:{authorization:"Bearer synthetic-native-token"},
+      signal:AbortSignal.timeout(15000)})
+    assert.equal(nativeBearer.status,401,"Native actor bearer must not grant an Organization catalog")
+    assert.deepEqual(await rows("select id,action from da_audit_event where organization_id=$1 order by id",[org.id]),
+      beforeCatalog,"Denied native catalog cannot change canonical audit")
+    process.stdout.write("PASS B22 closed B4B native HTTP: public catalog/search denied before native data; no Organization audit mutation\\n")
     assert.equal((await rows("select count(*)::int n from da_verified_actor_binding where person_id=$1",[person.id]))[0].n,0)
     assert.equal((await rows("select count(*)::int n from da_organization_seller_ownership where seller_id=$1",[store.id]))[0].n,0)
     process.stdout.write("PASS B22 native HTTP negative: real personal password session, native SellerMember without verified Member binding denied\n")
