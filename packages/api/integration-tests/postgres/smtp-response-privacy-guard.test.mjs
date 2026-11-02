@@ -77,6 +77,32 @@ test('unfinished second response cannot hide behind one completed response',asyn
   } finally {req?.destroy();await s.cleanup()}
 })
 
+test('pre-egress cancelled GET is harmless only when a completed JSON response also exists',async()=>{
+  let count=0
+  const s=await setup((req,res)=>{
+    if(++count===1)return res.destroy() // no headers, write, or end
+    json(res,{ok:true})
+  })
+  try {
+    await assert.rejects(httpGet(s.port))
+    assert.equal((await httpGet(s.port)).status,200)
+    s.guard.bindCiphertext(cipher)
+    await s.guard.assertComplete()
+  } finally {await s.cleanup()}
+})
+
+test('early close after headers are sent is still rejected',async()=>{
+  const s=await setup((req,res)=>{
+    res.writeHead(200,{'Content-Type':'application/json'})
+    res.flushHeaders()
+    setImmediate(()=>res.destroy())
+  })
+  try {
+    await assert.rejects(httpGet(s.port))
+    await expectPrivacyFailure(s.guard)
+  } finally {await s.cleanup()}
+})
+
 test('aborted response fails even if part of its body was written',async()=>{
   const s=await setup((req,res)=>{
     res.writeHead(200,{'Content-Type':'application/json; charset=utf-8'})
