@@ -904,7 +904,8 @@ export default async function({container}:any){
     const get=async(path:string,additional:Record<string,string>={})=>{
       return browser.eval(`(async()=>{
         const r=await fetch(${JSON.stringify(path)},{headers:${JSON.stringify(additional)}})
-        return {status:r.status,body:await r.json(),cache:r.headers.get("cache-control")}
+        return {status:r.status,body:await r.json(),cache:r.headers.get("cache-control"),
+          robots:r.headers.get("x-robots-tag"),vary:r.headers.get("vary")}
       })()`)
     }
     const selected=(org:string)=>"/personal/organization-stores?organization="+encodeURIComponent(org)
@@ -1638,6 +1639,10 @@ export default async function({container}:any){
     const scopedCatalog=await get(catalogUrl(organizations[0].id))
     assert.equal(scopedCatalog.status,200,"Protected Buyer Owner sees approved Store product titles")
     assert.match(scopedCatalog.cache,/no-store/)
+    assert.equal(scopedCatalog.robots,"noindex, nofollow, noarchive",
+      "B22 HTTPS public ingress must not allow private catalogue SEO indexing")
+    assert.equal(scopedCatalog.vary,"Cookie",
+      "B22 HTTPS public ingress must preserve session-dependent cache partitioning")
     assert.equal(scopedCatalog.body.organization_id,organizations[0].id)
     assert.equal(scopedCatalog.body.prices_available,false)
     assert.equal(scopedCatalog.body.checkout_ready,false)
@@ -1650,8 +1655,14 @@ export default async function({container}:any){
       assert.equal(JSON.stringify(store).includes("calculated_price"),false)
       assert.equal(JSON.stringify(store).includes("inventory_quantity"),false)
     }
-    assert.equal((await get(catalogUrl(organizations[2].id))).status,403,
+    const foreignCatalog=await get(catalogUrl(organizations[2].id))
+    assert.equal(foreignCatalog.status,403,
       "Foreign Organization cannot be selected to read private catalogue")
+    assert.match(foreignCatalog.cache,/no-store/)
+    assert.equal(foreignCatalog.robots,"noindex, nofollow, noarchive",
+      "Denied Buyer catalogue must not become indexable at public HTTPS")
+    assert.equal(foreignCatalog.vary,"Cookie",
+      "Denied Buyer catalogue must keep exact Vary at public HTTPS")
     assert.equal((await get(catalogUrl(organizations[0].id)+"&seller_id="+ownerStoreId)).status,400,
       "Browser cannot forge native Seller scope")
     assert.equal((await get(catalogUrl(organizations[0].id),
