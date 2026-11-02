@@ -114,10 +114,22 @@ export default async function({container}:any){
       headers:{cookie,"x-publishable-api-key":publishable.token},
       signal:AbortSignal.timeout(15000)})
     assert.equal(personalOnly.status,401,"Personal login alone cannot grant an approved Buyer Organization catalog")
+    // Medusa may reject a malformed native Bearer at the framework boundary
+    // with 400 before nativeIngress can return 401. Either is a closed result.
+    // Pass a genuine publishable key so the test cannot pass simply because
+    // the mandatory Store key was missing.
     const nativeBearer=await fetch(base+"/store/products",{
-      headers:{authorization:"Bearer synthetic-native-token"},
+      headers:{authorization:"Bearer synthetic-native-token",
+        "x-publishable-api-key":publishable.token},
       signal:AbortSignal.timeout(15000)})
-    assert.equal(nativeBearer.status,401,"Native actor bearer must not grant an Organization catalog")
+    assert.ok([400,401].includes(nativeBearer.status),
+      "Malformed native Bearer must be rejected before catalog access")
+    const bearerDenied=await nativeBearer.json()
+    assert.equal(typeof bearerDenied?.message,"string")
+    assert.equal(bearerDenied.products,undefined,"Malformed Bearer cannot obtain Store products")
+    assert.equal(bearerDenied.offers,undefined,"Malformed Bearer cannot obtain Store offers")
+    assert.equal(JSON.stringify(bearerDenied).includes(mail),false,"Private Person data cannot leak")
+    assert.equal(JSON.stringify(bearerDenied).includes(publishable.token),false,"Publishable key cannot be echoed")
     assert.deepEqual(await rows("select id,action from da_audit_event where organization_id=$1 order by id",[org.id]),
       beforeCatalog,"Denied native catalog cannot change canonical audit")
     process.stdout.write("PASS B22 closed B4B native HTTP: public catalog/search denied before native data; no Organization audit mutation\n")
