@@ -49,18 +49,20 @@ jobs:
           $deny.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($me.User, [System.Security.AccessControl.FileSystemRights]::ReadData, [System.Security.AccessControl.AccessControlType]::Deny))
           $denied = [R1AclProbe]::Check($deny.GetSecurityDescriptorBinaryForm(), '')
           if (($denied -band 1) -ne 0) { throw 'FAIL: native denied read granted' }
+          # PowerShell may wrap a native C# exception in multiple layers.
+          function Assert-ExpectedRefusal([System.Exception]$errorValue, [string]$label) {
+            $cursor = $errorValue
+            while ($null -ne $cursor) {
+              if ($cursor.Message -like 'BLOCKED:*' -or $cursor.Message -like 'REFUSED:*') { return }
+              $cursor = $cursor.InnerException
+            }
+            throw "FAIL: unexpected exception for $label"
+          }
           try {
             [void][R1AclProbe]::Check($sd, $me.User.Value)
             throw 'FAIL: uncommissioned SID route accepted'
           } catch {
-            # PowerShell wraps C# exceptions; inspect only the expected inner failure.
-            $caught = $_.Exception
-            $blocked = $false
-            while ($null -ne $caught) {
-              if ($caught.Message -like 'BLOCKED:*') { $blocked = $true; break }
-              $caught = $caught.InnerException
-            }
-            if (-not $blocked) { throw }
+            Assert-ExpectedRefusal $_.Exception 'uncommissioned SID'
           }
           $method = [R1AclProbe].GetMethod('CheckVerifiedReaderProcess', [System.Reflection.BindingFlags]::Static -bor [System.Reflection.BindingFlags]::NonPublic)
           if ($null -eq $method) { throw 'FAIL: actual-token process probe missing' }
@@ -78,9 +80,7 @@ jobs:
               [void]$method.Invoke($null, $values)
               throw "FAIL: $label accepted"
             } catch {
-              $errorValue = $_.Exception
-              if ($errorValue -is [System.Reflection.TargetInvocationException]) { $errorValue = $errorValue.InnerException }
-              if ($errorValue.Message -notlike 'REFUSED:*' -and $errorValue.Message -notlike 'BLOCKED:*') { throw }
+              Assert-ExpectedRefusal $_.Exception $label
             }
           }
           $bad = [object[]]$args.Clone()
