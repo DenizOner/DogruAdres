@@ -77,7 +77,7 @@ export async function nativeDirectTryListPrice(
   // directly stored, non-negative TRY amounts representable to the kuruş.
   if(typeof amount!=="number"||!Number.isFinite(amount)||
      amount<=0||amount>1_000_000_000||
-     !/^\\d+(?:\\.\\d{1,2})?$/.test(String(amount)))
+     !/^\d+(?:\.\d{1,2})?$/.test(String(amount)))
     return null
 
   const selected=await pricing.listPrices({id:[priceId]},{relations:["price_rules"]})
