@@ -17,7 +17,7 @@ function otp(secret:string){
 export class B06Chrome {
   private root=mkdtempSync(join(tmpdir(),'chrome-da-profile-b06-'))
   private chrome?:ChildProcess;private ws?:WebSocket;private id=0
-  private pending=new Map<number,{resolve:(v:any)=>void;reject:(e:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
+  private pending=new Map<number,{resolve:(v:any)=>void;reject:(e:Error)=>void;timer:ReturnType<typeof setTimeout>;method:string}>()
   private methods=new Map<string,string>()
   http:any[]=[]; phase='setup'; cleanup=false
   secretCanary='';secretLeaks=false
@@ -33,7 +33,7 @@ export class B06Chrome {
     const tabs:any=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()
     this.ws=new WebSocket(tabs.find((t:any)=>t.type==='page').webSocketDebuggerUrl)
     await new Promise<void>((resolve,reject)=>{this.ws!.onopen=()=>resolve();this.ws!.onerror=()=>reject(Error('CDP unavailable'))})
-    this.ws.onmessage=e=>{const m=JSON.parse(e.data.toString());if(this.secretCanary&&['Runtime.consoleAPICalled','Log.entryAdded'].includes(m.method)&&JSON.stringify(m).includes(this.secretCanary))this.secretLeaks=true;if(m.id){const p=this.pending.get(m.id);if(p){clearTimeout(p.timer);this.pending.delete(m.id);m.error?p.reject(Error('CDP rejected')):p.resolve(m.result)}}
+    this.ws.onmessage=e=>{const m=JSON.parse(e.data.toString());if(this.secretCanary&&['Runtime.consoleAPICalled','Log.entryAdded'].includes(m.method)&&JSON.stringify(m).includes(this.secretCanary))this.secretLeaks=true;if(m.id){const p=this.pending.get(m.id);if(p){clearTimeout(p.timer);this.pending.delete(m.id);m.error?p.reject(Error(`CDP rejected method=${p.method} code=${Number.isInteger(m.error.code)?m.error.code:'unknown'}`)):p.resolve(m.result)}}
       if(m.method==='Network.requestWillBeSent')this.methods.set(m.params.requestId,m.params.request.method)
       if(m.method==='Runtime.exceptionThrown')this.runtimeErrors.push(String(m.params.exceptionDetails?.exception?.description??m.params.exceptionDetails?.text??'').slice(0,300))
       if(m.method==='Network.responseReceived'){const r=m.params.response,u=new URL(r.url);if(u.origin===this.origin)this.http.push({requestId:m.params.requestId,phase:this.phase,method:this.methods.get(m.params.requestId),path:u.pathname,status:r.status,protocol:r.protocol,tls:r.securityDetails?{protocol:r.securityDetails.protocol,issuer:r.securityDetails.issuer}:null})}}
@@ -42,7 +42,7 @@ export class B06Chrome {
     await this.wait("!!document.querySelector('#login')?.getClientRects().length")
     assert.ok(this.http.some(r=>r.path==='/personal'&&r.status===200&&r.tls),'Chrome trusted HTTPS navigation')
   }
-  send(method:string,params:object={}):Promise<any>{return new Promise((resolve,reject)=>{const id=++this.id,timer=setTimeout(()=>{this.pending.delete(id);reject(Error('CDP timeout '+method))},20000);this.pending.set(id,{resolve,reject,timer});this.ws!.send(JSON.stringify({id,method,params}))})}
+  send(method:string,params:object={}):Promise<any>{return new Promise((resolve,reject)=>{const id=++this.id,timer=setTimeout(()=>{this.pending.delete(id);reject(Error('CDP timeout '+method))},20000);this.pending.set(id,{resolve,reject,timer,method});this.ws!.send(JSON.stringify({id,method,params}))})}
   async eval(expression:string){const r=await this.send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});assert.ok(!r.exceptionDetails,'Browser evaluation failed');return r.result?.value}
   async wait(expression:string){await until(async()=>await this.eval(expression)===true,20000,'B06 '+this.phase)}
   async click(selector:string){const p=await this.eval(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return null;e.scrollIntoView();const r=e.getBoundingClientRect();return r.width&&r.height?{x:r.x+r.width/2,y:r.y+r.height/2}:null})()`);assert.ok(p,'Visible control '+selector);for(const type of ['mousePressed','mouseReleased'])await this.send('Input.dispatchMouseEvent',{type,...p,button:'left',clickCount:1})}
