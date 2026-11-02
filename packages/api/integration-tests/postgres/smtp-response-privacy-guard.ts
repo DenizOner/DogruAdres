@@ -105,7 +105,9 @@ export class SmtpResponsePrivacyGuard {
     })
     res.once("close",()=>{
       if(!record.finished){
-        this.fail("SMTP response closed before finish")
+        // Only method and numeric status: never include URL, headers or body.
+        this.fail("SMTP response closed before finish: "+String(req.method??"unknown")+
+          " status="+String(res.statusCode))
         this.active.delete(record)
       }
       for(const chunk of record.chunks)chunk.fill(0)
