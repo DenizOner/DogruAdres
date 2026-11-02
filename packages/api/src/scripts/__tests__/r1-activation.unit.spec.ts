@@ -37,3 +37,33 @@ describe('native Authz unsafe SID path remains fail closed at source level',()=>
   expect(check).toContain('Marshal.FreeHGlobal(sacl)')
  })
 })
+
+
+describe('R1 Windows reader process-token acquisition (source-only)',()=>{
+ const source=readFileSync(path.join(__dirname,'..','r1-authz.cs'),'utf8')
+ const probe=source.slice(source.indexOf('public static uint CheckVerifiedReaderProcess('),source.indexOf('public static uint Check(byte[] descriptor, string alternate)'))
+ it('binds native token access to a live process ID, start time, image and SID',()=>{
+  expect(probe).toContain('UInt64.TryParse(expectedCreationFileTimeUtc')
+  expect(probe).toContain('OpenProcess(0x00101000, false')
+  expect(probe).toContain('GetProcessTimes(process, out created')
+  expect(probe).toContain('actualCreated != expectedCreated')
+  expect(probe).toContain('QueryFullProcessImageName(process, 0')
+  expect(probe).toContain('String.Equals(actualImage, expectedImage')
+  expect(probe).toContain('OpenProcessToken(process, 0x0008, out token)')
+  expect(probe).toContain('identity.User.Value, pinnedSid')
+  expect(probe).toContain('CheckUsingToken(descriptor, token)')
+  expect(probe.match(/WaitForSingleObject\(process, 0\) != 258/g)).toHaveLength(2)
+ })
+ it('does not activate the process-token route from the uncommissioned R1 caller',()=>{
+  const custody=readFileSync(path.join(__dirname,'..','r1-native-custody.ts'),'utf8')
+  expect(custody).toContain('R1AclProbe]::Check($sd,$reader)')
+  const guard=source.slice(source.indexOf('public static uint Check(byte[] descriptor, string alternate)'))
+  expect(guard.indexOf('if (!String.IsNullOrEmpty(alternate))')).toBeLessThan(guard.indexOf('return CheckUsingToken(descriptor, identity.Token)'))
+  expect(source).not.toContain('AuthzInitializeContextFromSid(')
+ })
+ it('closes both borrowed process and token handles',()=>{
+  expect(probe).toContain('finally')
+  expect(probe).toContain('CloseHandle(token)')
+  expect(probe).toContain('CloseHandle(process)')
+ })
+})
