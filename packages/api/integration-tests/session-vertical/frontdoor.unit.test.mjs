@@ -8,6 +8,8 @@ test("B22 Store applications and active Store read have exact public method/path
   for(const method of ["GET","POST"])
     assert.equal(allowedPublicRequest(method,"/personal/store-applications"),true)
   assert.equal(allowedPublicRequest("GET","/personal/organization-stores"),true)
+  assert.equal(allowedPublicRequest("GET","/personal/catalog"),true)
+  assert.equal(allowedPublicRequest("POST","/personal/catalog"),false)
   for(const [path,method] of [
     ["/personal/store-applications","PATCH"],["/personal/store-applications","DELETE"],
     ["/personal/store-applications","OPTIONS"],["/personal/store-applications","HEAD"],
