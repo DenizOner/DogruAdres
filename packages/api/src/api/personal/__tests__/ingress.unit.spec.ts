@@ -46,6 +46,8 @@ describe("personal ingress (unit contract only)",()=>{
       expect(next).toHaveBeenCalledTimes(1)
     }
     expect((await probe("/personal/organization-stores","GET")).next).toHaveBeenCalledTimes(1)
+    expect((await probe("/personal/catalog","GET")).next).toHaveBeenCalledTimes(1)
+    expect((await probe("/personal/catalog","POST")).res.status).toHaveBeenCalledWith(401)
     for(const [path,method] of [
       ["/personal/store-applications","PATCH"],["/personal/store-applications","DELETE"],
       ["/personal/store-applications","OPTIONS"],["/personal/store-applications","HEAD"],
