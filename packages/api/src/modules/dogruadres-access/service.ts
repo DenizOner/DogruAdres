@@ -1781,6 +1781,116 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {status:"unblocked" as const}
   }
 
+
+  /** Audited Buyer Organization admission into a native Seller-owned group.
+   * Native Seller/Member/CustomerGroup link verified at the first-party edge;
+   * no Person Customer membership, private price or checkout is enabled.
+   */
+  @InjectTransactionManager()
+  async personalStorePriceGroupAccess(
+    token:string,input:{action:"grant"|"revoke"|"read";organization_id:string;
+      seller_id:string;buyer_organization_id:string;customer_group_id:string},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.buyer_organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !/^cusgrp_[A-Za-z0-9_-]+$/.test(input.customer_group_id)||
+       !["grant","revoke","read"].includes(input.action))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const allowed=async()=>{
+      const member=await sessions.organizations(token,input.organization_id,false)
+      if(!member||member.person_id!==current.person_id||
+         member.organizations.length!==1||member.organizations[0].role!=="owner")return false
+      if(!organizationActionAllowed("owner","price.group.manage",
+           await isCurrentProtectedOwner(db,current.person_id,input.organization_id),false))return false
+      return (await platformApprovedSellerIds(db,input.organization_id)).includes(input.seller_id)
+    }
+    if(!await allowed())return null
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-price-group'),hashtext(?))`,
+      [input.seller_id+":"+input.buyer_organization_id+":"+input.customer_group_id])
+    if(!await allowed())return null
+    if(input.action==="grant"){
+      const target=await db.execute(`select id from da_organization
+        where id=? and status='active' and deleted_at is null for share`,
+        [input.buyer_organization_id])
+      if(target.length!==1)return null
+    }
+    const rows=await db.execute(`select g.id,
+      exists(select 1 from da_audit_event e
+        where e.id=g.source_audit_event_id and e.deleted_at is null
+          and e.module='dogruadres-access'
+          and e.action='organization.store_price_group_granted'
+          and e.resource='store-price-group'
+          and e.organization_id=g.owner_organization_id
+          and e.actor_person_id=g.issued_by_person_id
+          and e.target_id=g.seller_id
+          and e.new_values->>'grant_id'=g.id
+          and e.new_values->>'customer_group_id'=g.customer_group_id
+          and e.new_values->>'buyer_organization_id'=g.buyer_organization_id
+          and exists(select 1 from da_audit_outbox o
+            where o.source_audit_event_id=e.id
+              and o.source_module='dogruadres-access' and o.deleted_at is null)
+      ) as proof
+      from da_store_buyer_price_group g
+      where g.owner_organization_id=? and g.seller_id=?
+        and g.buyer_organization_id=? and g.customer_group_id=?
+        and g.revoked_at is null for update of g`,
+      [input.organization_id,input.seller_id,input.buyer_organization_id,
+       input.customer_group_id])
+    if(rows.length>1||rows.some(row=>row.proof!==true||
+       typeof row.id!=="string"||!/^dabpgm_[A-Za-z0-9_-]+$/.test(row.id)))
+      throw new IdentityAccessDenied()
+    if(input.action==="read")return {status:rows.length?"active" as const:"revoked" as const}
+    if(input.action==="grant"){
+      if(rows.length)return {status:"active" as const}
+      const grantId="dabpgm_"+randomUUID()
+      const [audit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:current.person_id,actor_type:current.actor_type,
+        actor_id:current.actor_id,role_context:"owner",
+        organization_id:input.organization_id,
+        action:"organization.store_price_group_granted",
+        module:DOGRUADRES_AUDIT_MODULE,resource:"store-price-group",
+        target_id:input.seller_id,
+        new_values:{grant_id:grantId,customer_group_id:input.customer_group_id,
+          buyer_organization_id:input.buyer_organization_id},occurred_at:new Date()
+      }],context)
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      const inserted=await db.execute(`insert into da_store_buyer_price_group
+        (id,owner_organization_id,seller_id,buyer_organization_id,
+         customer_group_id,issued_by_person_id,source_audit_event_id)
+        values (?,?,?,?,?,?,?) returning id`,
+        [grantId,input.organization_id,input.seller_id,input.buyer_organization_id,
+         input.customer_group_id,current.person_id,audit.id])
+      if(inserted.length!==1)throw new IdentityAccessDenied()
+      return {status:"active" as const}
+    }
+    if(!rows.length)return {status:"revoked" as const}
+    const grantId=rows[0].id as string
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:current.person_id,actor_type:current.actor_type,
+      actor_id:current.actor_id,role_context:"owner",
+      organization_id:input.organization_id,
+      action:"organization.store_price_group_revoked",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"store-price-group",
+      target_id:input.seller_id,
+      previous_values:{grant_id:grantId,customer_group_id:input.customer_group_id,
+        buyer_organization_id:input.buyer_organization_id},
+      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const updated=await db.execute(`update da_store_buyer_price_group
+      set revoked_at=clock_timestamp(),revoked_by_person_id=?,
+        revocation_audit_event_id=?
+      where id=? and revoked_at is null returning id`,
+      [current.person_id,audit.id,grantId])
+    if(updated.length!==1)throw new IdentityAccessDenied()
+    return {status:"revoked" as const}
+  }
+
   /** Read-only native Seller set against Foundation's authoritative Store
    * Buyer Organization block ledger. A missing or malformed audit/outbox
    * never becomes ALLOW; true means any Store denies this Buyer Organization.

@@ -18,7 +18,7 @@ import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
 import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
-import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow} from "@mercurjs/core/workflows"
+import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
@@ -1664,6 +1664,61 @@ export default async function({container}:any){
     // Read-only positive B22 discovery: native Mercur Offers (never a public
     // /store route), a published shared master Product and two independently
     // approved Organization-owned Sellers. No prices or checkout enabled.
+
+    // B22 only: native Seller-owned CustomerGroup plus audited legal Buyer Org.
+    const {result:[priceGroup]}=await createSellerCustomerGroupsWorkflow(container).run({
+      input:{seller_id:ownerStoreId,
+        customer_groups:[{name:"B22 Store buyer group "+rand}]}
+    })
+    assert.match(priceGroup.id,/^cusgrp_[A-Za-z0-9_-]+$/)
+    const {data:groupLink}=await container.resolve("query").graph({
+      entity:"customer_group_seller",fields:["seller_id","customer_group_id"],
+      filters:{seller_id:ownerStoreId,customer_group_id:priceGroup.id}
+    })
+    assert.equal(groupLink.length,1)
+    const groupInput={organization_id:organizations[0].id,
+      seller_id:ownerStoreId,buyer_organization_id:organizations[1].id,
+      customer_group_id:priceGroup.id}
+    const groupChange=async(action:"grant"|"revoke"|"read",
+      input:Record<string,unknown>=groupInput,b=browser)=>{
+      return b.eval("(async()=>{"+
+        "const s=await(await fetch('/personal/session')).json();"+
+        "const action="+JSON.stringify(action)+";"+
+        "const input="+JSON.stringify(input)+";"+
+        "const method=action==='read'?'GET':'POST';"+
+        "const url='/personal/store-price-groups'+(method==='GET'?'?'+new URLSearchParams(input).toString():'');"+
+        "const res=await fetch(url,{method,headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "...(method==='POST'?{body:JSON.stringify({...input,action})}:{})});"+
+        "return {status:res.status,body:await res.json()};})()")
+    }
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("!document.getElementById('store-price-group-panel').hidden")
+    await browser.input("#store-price-group-form input[name=customer_group_id]",priceGroup.id)
+    await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[1].id)
+    const groupAuditStart=(await q("select count(*)::int n from da_audit_event"))[0].n
+    await browser.click('#store-price-group-form button[value="grant"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')")
+    assert.equal((await groupChange("read")).body.status,"active")
+    assert.equal((await groupChange("grant")).status,200)
+    assert.equal((await q("select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n,1)
+    assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
+      groupAuditStart+1,"Idempotent grant writes only one canonical audit")
+    assert.equal((await groupChange("grant",{...groupInput,seller_id:secondOwnerStoreId})).status,403)
+    assert.equal((await groupChange("grant",groupInput,reviewer)).status,403)
+    const missingCsrf=await browser.eval("(async()=>{const r=await fetch('/personal/store-price-groups',{method:'POST',headers:{'content-type':'application/json'},body:"+JSON.stringify(JSON.stringify({...groupInput,action:"grant"}))+"});return r.status})()")
+    assert.equal(missingCsrf,403)
+    await browser.click('#store-price-group-form button[value="revoke"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('üyeliği yok')")
+    assert.equal((await groupChange("read")).body.status,"revoked")
+    assert.equal((await q("select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is not null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n,1)
+    assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
+      groupAuditStart+2,"Revocation retains auditable membership history")
+    process.stdout.write("PASS B22 audited Store price group: real Owner Chrome grant/revoke, Mercur SellerCustomerGroup link, Buyer Org PG16 audit/outbox, foreign Person/Store/CSRF denied; no checkout\n")
+
     const catalogUrl=(org:string)=>"/personal/catalog?organization_id="+
       encodeURIComponent(org)
     const catalogAuditBefore=await q("select count(*)::int n from da_audit_event")

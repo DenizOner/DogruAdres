@@ -76,6 +76,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/store-product-permissions" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/buyer-permissions" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/store-buyer-blocks" && req.method==="POST") ||
+      (path==="/personal/store-price-groups" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/buyer-context" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/product-drafts" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/platform/stores" && ["GET","POST"].includes(req.method)) ||
