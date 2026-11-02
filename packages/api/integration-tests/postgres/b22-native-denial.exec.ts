@@ -7,6 +7,7 @@
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
 import { Client } from "@medusajs/framework/pg"
+import { createApiKeysWorkflow } from "@medusajs/medusa/core-flows"
 import { createPersonalHttpApp } from "../../src/scripts/personal-http-runtime"
 
 export default async function({container}:any){
@@ -81,6 +82,12 @@ export default async function({container}:any){
     assert.equal((await get(own,cookie,{"x-seller-id":store.id})).status,400,"Forged seller context must be rejected")
     assert.equal((await get("/personal/organization-stores?organization=daorg_foreign",cookie)).status,403)
     assert.equal((await get(own+"&unexpected=1",cookie)).status,400)
+    // A genuine, current publishable key still cannot stand in for a Buyer Org.
+    const {result:[publishable]}=await createApiKeysWorkflow(container).run({input:{
+      api_keys:[{title:"B22 closed catalog "+suffix,type:"publishable",created_by:""}]
+    }})
+    assert.ok(publishable?.token && publishable?.id)
+    assert.equal((await rows("select count(*)::int n from api_key where id=$1",[publishable.id]))[0].n,1)
     // Current #217 closed B4B decision supersedes the old public B2C demo.
     // Use the real Medusa HTTP stack on this same disposable PostgreSQL DB.
     const beforeCatalog=await rows("select id,action from da_audit_event where organization_id=$1 order by id",[org.id])
@@ -94,7 +101,7 @@ export default async function({container}:any){
     ]
     for(const target of deniedCatalog){
       const response=await fetch(base+target.path,{method:target.method,
-        headers:{"x-publishable-api-key":"pk_synthetic",
+        headers:{"x-publishable-api-key":publishable.token,
           ...(target.method==="POST"?{"content-type":"application/json"}:{})},
         ...(target.method==="POST"?{body:"{}"}:{}),
         signal:AbortSignal.timeout(15000)})
@@ -103,6 +110,10 @@ export default async function({container}:any){
       assert.deepEqual(denied,{message:"Personal session ingress required"})
       assert.equal(JSON.stringify(denied).includes(mail),false)
     }
+    const personalOnly=await fetch(base+"/store/products",{
+      headers:{cookie,"x-publishable-api-key":publishable.token},
+      signal:AbortSignal.timeout(15000)})
+    assert.equal(personalOnly.status,401,"Personal login alone cannot grant an approved Buyer Organization catalog")
     const nativeBearer=await fetch(base+"/store/products",{
       headers:{authorization:"Bearer synthetic-native-token"},
       signal:AbortSignal.timeout(15000)})
