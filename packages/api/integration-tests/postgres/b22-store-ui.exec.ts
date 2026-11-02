@@ -681,6 +681,7 @@ export default async function({container}:any){
   const previousListenerPort=process.env.DOGRUADRES_FRONTDOOR_PORT
   const browsers:B06Chrome[]=[]
   const temp=mkdtempSync(join(tmpdir(),"b22-task-ca-"))
+  let originalB22Error:unknown
   try{
     assert.equal((await q("select current_database() db"))[0].db,u.pathname.slice(1))
     assert.equal((await q("select mfa_activated from da_session_policy where id='current'"))[0].mfa_activated,!preparing)
@@ -5094,6 +5095,11 @@ export default async function({container}:any){
 
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
 
+  }catch(error){
+    // Preserve the first failed browser/HTTP assertion, rather than replacing
+    // it with a secondary privacy failure observed during Chrome cleanup.
+    originalB22Error=error
+    throw error
   }finally{
     for(const b of browsers)await b.close()
     if(server)await new Promise<void>(r=>server!.close(()=>r()))
@@ -5110,6 +5116,10 @@ export default async function({container}:any){
     await pg.end()
     rmSync(temp,{recursive:true,force:true})
     // Verify responses that closed during Chrome/server cleanup as well.
-    smtpGuard?.assertNoLeaks()
+    // If another test already failed, preserve that primary diagnostic; the
+    // entire job remains FAIL and this secondary error is still reported.
+    if(originalB22Error===undefined)smtpGuard?.assertNoLeaks()
+    else try {smtpGuard?.assertNoLeaks()}
+      catch {process.stderr.write("SECONDARY SMTP privacy failure during cleanup; primary error preserved\n")}
   }
 }
