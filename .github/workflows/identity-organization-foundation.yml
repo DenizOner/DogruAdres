@@ -53,7 +53,14 @@ jobs:
             [void][R1AclProbe]::Check($sd, $me.User.Value)
             throw 'FAIL: uncommissioned SID route accepted'
           } catch {
-            if ($_.Exception.Message -notlike 'BLOCKED:*') { throw }
+            # PowerShell wraps C# exceptions; inspect only the expected inner failure.
+            $caught = $_.Exception
+            $blocked = $false
+            while ($null -ne $caught) {
+              if ($caught.Message -like 'BLOCKED:*') { $blocked = $true; break }
+              $caught = $caught.InnerException
+            }
+            if (-not $blocked) { throw }
           }
           $method = [R1AclProbe].GetMethod('CheckVerifiedReaderProcess', [System.Reflection.BindingFlags]::Static -bor [System.Reflection.BindingFlags]::NonPublic)
           if ($null -eq $method) { throw 'FAIL: actual-token process probe missing' }
