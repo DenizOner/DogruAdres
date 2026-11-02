@@ -23,6 +23,8 @@ describe("B22 legal Organization ownership candidate gate (SQL-mock, NOT Postgre
     expect(ownershipSql).toContain("da_audit_outbox")
     expect(ownershipSql).toContain("e.organization_id=o.organization_id")
     expect(ownershipSql).toContain("e.target_id=o.seller_id")
+    expect(ownershipSql).toContain("current_owner.status='active'")
+    expect(ownershipSql).toContain("current_owner.deleted_at is null")
   })
   it.each([null,{person_id:"person_B",organizations:[]},{person_id:"person_A",organizations:[{id:org,role:"member"}]}])(
     "denies untrusted, foreign or non-manager Organization membership before ownership read",async scope=>{
