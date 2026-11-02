@@ -48,7 +48,7 @@ export function organizationActionAllowed(
   ownerActions: readonly OrganizationAction[] = configuredOwnerActions()
 ): boolean {
   if(role==="owner") return protectedOwner===true && ownerActions.includes(action)
-  if(role==="member" || role==="admin") return !["invitation.manage","membership.manage","membership.list","audit.timeline.read"].includes(action) && auditedMemberGrant===true
+  if(role==="member" || role==="admin") return !["invitation.manage","membership.manage","membership.list","audit.timeline.read","price.group.manage"].includes(action) && auditedMemberGrant===true
   return false
 }
 

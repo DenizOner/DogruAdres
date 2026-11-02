@@ -111,7 +111,7 @@ describe("B22 distinct products.edit grant (SQL mock only)",()=>{
 
 describe("B22 shared Owner action policy (pure decision, NOT live policy administration)",()=>{
   it("grants the currently approved Owner defaults only with fresh protected membership proof",()=>{
-    expect(DEFAULT_OWNER_ACTIONS).toEqual(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read","organization.read"])
+    expect(DEFAULT_OWNER_ACTIONS).toEqual(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read","organization.read","price.group.manage"])
     expect(Object.isFrozen(DEFAULT_OWNER_ACTIONS)).toBe(true)
     for(const action of DEFAULT_OWNER_ACTIONS){
       expect(ownerRoleAllows(action)).toBe(true)
@@ -119,7 +119,7 @@ describe("B22 shared Owner action policy (pure decision, NOT live policy adminis
       expect(organizationActionAllowed("owner",action,false,true)).toBe(false)
       expect(organizationActionAllowed("member",action,false,false)).toBe(false)
       expect(organizationActionAllowed("admin",action,false,false)).toBe(false)
-      expect(organizationActionAllowed("member",action,false,true)).toBe(!["invitation.manage","membership.manage","membership.list","audit.timeline.read"].includes(action))
+      expect(organizationActionAllowed("member",action,false,true)).toBe(!["invitation.manage","membership.manage","membership.list","audit.timeline.read","price.group.manage"].includes(action))
     }
     expect(organizationActionAllowed("platform_staff","products.edit",true,true)).toBe(false)
   })
@@ -168,6 +168,9 @@ describe("B22 trusted Owner role allowlist configuration (no browser setting or 
     expect(ownerRoleAllows("membership.list")).toBe(true)
     expect(ownerRoleAllows("audit.timeline.read")).toBe(true)
     expect(ownerRoleAllows("organization.read")).toBe(true)
+    expect(ownerRoleAllows("price.group.manage")).toBe(true)
+    expect(organizationActionAllowed("member","price.group.manage",false,true)).toBe(false)
+    expect(organizationActionAllowed("admin","price.group.manage",false,true)).toBe(false)
     for(const raw of ["", "admin", "buyer.purchase,buyer.purchase",
       " buyer.purchase", "buyer.purchase,platform.smtp.manage"]){
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=raw
