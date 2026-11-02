@@ -1670,7 +1670,7 @@ export default async function({container}:any){
       input:{seller_id:ownerStoreId,
         customer_groups:[{name:"B22 Store buyer group "+rand}]}
     })
-    assert.match(priceGroup.id,/^cusgrp_[A-Za-z0-9_-]+$/)
+    assert.match(priceGroup.id,/^cusgroup_[A-Za-z0-9_-]+$/)
     const {data:groupLink}=await container.resolve("query").graph({
       entity:"customer_group_seller",fields:["seller_id","customer_group_id"],
       filters:{seller_id:ownerStoreId,customer_group_id:priceGroup.id}

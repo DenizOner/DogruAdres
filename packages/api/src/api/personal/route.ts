@@ -195,7 +195,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <p id="store-price-group-status" role="status" aria-live="polite"></p>
       <form id="store-price-group-form">
         <label>Onaylı mağaza<select name="seller_id" required></select></label>
-        <label>Mevcut müşteri grubu kimliği<input name="customer_group_id" pattern="cusgrp_[A-Za-z0-9_-]+" placeholder="cusgrp_..." required autocomplete="off"></label>
+        <label>Mevcut müşteri grubu kimliği<input name="customer_group_id" pattern="cusgroup_[A-Za-z0-9_-]+" placeholder="cusgroup_..." required autocomplete="off"></label>
         <label>Alıcı işletme kimliği<input name="buyer_organization_id" pattern="daorg_[A-Za-z0-9_-]{1,80}" placeholder="daorg_..." required autocomplete="off"></label>
         <button type="submit" name="action" value="grant">Gruba kabul et</button>
         <button type="submit" name="action" value="revoke">Gruptan çıkar</button>
@@ -815,7 +815,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const customer_group_id=String(form.elements.namedItem('customer_group_id')?.value||'').trim();
     const buyer_organization_id=String(form.elements.namedItem('buyer_organization_id')?.value||'').trim();
     if(!/^sel_[A-Za-z0-9_-]+$/.test(seller_id)||
-       !/^cusgrp_[A-Za-z0-9_-]+$/.test(customer_group_id)||
+       !/^cusgroup_[A-Za-z0-9_-]+$/.test(customer_group_id)||
        !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyer_organization_id))return;
     const message=el('store-price-group-status'),seq=++priceGroupRequest;
     for(const button of form.querySelectorAll('button'))button.disabled=true;

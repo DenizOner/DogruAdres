@@ -11,7 +11,7 @@ export class Migration20261103000000 extends Migration {
       owner_organization_id text not null references da_organization(id),
       seller_id text not null check (seller_id ~ '^sel_[A-Za-z0-9_-]+$'),
       buyer_organization_id text not null references da_organization(id),
-      customer_group_id text not null check (customer_group_id ~ '^cusgrp_[A-Za-z0-9_-]+$'),
+      customer_group_id text not null check (customer_group_id ~ '^cusgroup_[A-Za-z0-9_-]+$'),
       issued_by_person_id text not null references da_person(id),
       source_audit_event_id text not null unique references da_audit_event(id),
       created_at timestamptz not null default clock_timestamp(),

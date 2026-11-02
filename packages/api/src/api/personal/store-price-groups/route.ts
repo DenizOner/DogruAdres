@@ -7,7 +7,7 @@ import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-
 export const AUTHENTICATE=false
 const org=z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/)
 const seller=z.string().regex(/^sel_[A-Za-z0-9_-]+$/)
-const group=z.string().regex(/^cusgrp_[A-Za-z0-9_-]+$/)
+const group=z.string().regex(/^cusgroup_[A-Za-z0-9_-]+$/)
 const ids=z.object({
   organization_id:org,seller_id:seller,
   buyer_organization_id:org,customer_group_id:group

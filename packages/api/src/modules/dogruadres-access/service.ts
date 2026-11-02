@@ -1795,7 +1795,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
        !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.buyer_organization_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
-       !/^cusgrp_[A-Za-z0-9_-]+$/.test(input.customer_group_id)||
+       !/^cusgroup_[A-Za-z0-9_-]+$/.test(input.customer_group_id)||
        !["grant","revoke","read"].includes(input.action))throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
     const current=await sessions.current(token,true,false)

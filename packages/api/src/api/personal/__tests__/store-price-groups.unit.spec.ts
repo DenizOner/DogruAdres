@@ -8,7 +8,7 @@ jest.mock("../security",()=>({
 describe("B22 Store-owned CustomerGroup ↔ audited Buyer Organization grant",()=>{
   let req:any,res:any,service:any,query:jest.Mock,member:jest.Mock,link:jest.Mock,seller:jest.Mock
   const group={organization_id:"daorg_a",seller_id:"sel_a",
-    buyer_organization_id:"daorg_b",customer_group_id:"cusgrp_a"}
+    buyer_organization_id:"daorg_b",customer_group_id:"cusgroup_a"}
   beforeEach(()=>{
     jest.resetAllMocks()
     ;(enabled as jest.Mock).mockReturnValue(true)
@@ -24,7 +24,7 @@ describe("B22 Store-owned CustomerGroup ↔ audited Buyer Organization grant",()
     member=jest.fn().mockResolvedValue([{id:"mem_owner",is_active:true}])
     link=jest.fn().mockResolvedValue([{seller_id:"sel_a",member_id:"mem_owner"}])
     seller=jest.fn().mockResolvedValue([{id:"sel_a",status:"open",approved_at:"2026-11-03"}])
-    query=jest.fn().mockResolvedValue({data:[{seller_id:"sel_a",customer_group_id:"cusgrp_a"}]})
+    query=jest.fn().mockResolvedValue({data:[{seller_id:"sel_a",customer_group_id:"cusgroup_a"}]})
     req={query:{...group},body:{...group,action:"grant"},headers:{},scope:{
       resolve:jest.fn((k:string)=>{
         if(k==="seller")return {listMembers:member,listSellerMembers:link,listSellers:seller}
@@ -41,7 +41,7 @@ describe("B22 Store-owned CustomerGroup ↔ audited Buyer Organization grant",()
     expect(res.json).toHaveBeenLastCalledWith({status:"active"})
     expect(query).toHaveBeenCalledWith({
       entity:"customer_group_seller",fields:["customer_group_id","seller_id"],
-      filters:{seller_id:"sel_a",customer_group_id:"cusgrp_a"}
+      filters:{seller_id:"sel_a",customer_group_id:"cusgroup_a"}
     })
     expect(service.personalStorePriceGroupAccess).toHaveBeenCalledWith("opaque",{
       ...group,action:"grant"
