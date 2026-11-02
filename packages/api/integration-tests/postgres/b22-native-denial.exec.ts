@@ -91,6 +91,16 @@ export default async function({container}:any){
     // Current #217 closed B4B decision supersedes the old public B2C demo.
     // Use the real Medusa HTTP stack on this same disposable PostgreSQL DB.
     const beforeCatalog=await rows("select id,action from da_audit_event where organization_id=$1 order by id",[org.id])
+    // Check the entire serialized response, including nested DTO fields, not
+    // only known top-level product keys. Never print fixture identities.
+    const assertNoPrivateCatalogData=(body:unknown)=>{
+      const serialized=JSON.stringify(body)
+      for(const privateValue of [mail,person.id,org.id,user.id,reg.authIdentity.id,
+        member.id,store.id,publishable.id,publishable.token]){
+        assert.ok(privateValue && !serialized.includes(privateValue),
+          "Denied catalog response must not disclose Person, Organization, Store or API-key fixtures")
+      }
+    }
     const deniedCatalog=[
       {path:"/store/products",method:"GET"},
       {path:"/store/products/prod_synthetic",method:"GET"},
@@ -104,16 +114,21 @@ export default async function({container}:any){
         headers:{"x-publishable-api-key":publishable.token,
           ...(target.method==="POST"?{"content-type":"application/json"}:{})},
         ...(target.method==="POST"?{body:"{}"}:{}),
-        signal:AbortSignal.timeout(15000)})
+        redirect:"manual",signal:AbortSignal.timeout(15000)})
+      assert.equal(response.redirected,false,"Catalog must not follow a redirect")
       assert.equal(response.status,401,"Anonymous/publishable-key native catalog must be closed: "+target.path)
       const denied=await response.json()
       assert.deepEqual(denied,{message:"Personal session ingress required"})
-      assert.equal(JSON.stringify(denied).includes(mail),false)
+      assertNoPrivateCatalogData(denied)
     }
     const personalOnly=await fetch(base+"/store/products",{
       headers:{cookie,"x-publishable-api-key":publishable.token},
-      signal:AbortSignal.timeout(15000)})
+      redirect:"manual",signal:AbortSignal.timeout(15000)})
+    assert.equal(personalOnly.redirected,false,"Personal-only catalog must not follow a redirect")
     assert.equal(personalOnly.status,401,"Personal login alone cannot grant an approved Buyer Organization catalog")
+    const personalDenied=await personalOnly.json()
+    assert.deepEqual(personalDenied,{message:"Personal session ingress required"})
+    assertNoPrivateCatalogData(personalDenied)
     // Medusa may reject a malformed native Bearer at the framework boundary
     // with 400 before nativeIngress can return 401. Either is a closed result.
     // Pass a genuine publishable key so the test cannot pass simply because
@@ -121,15 +136,15 @@ export default async function({container}:any){
     const nativeBearer=await fetch(base+"/store/products",{
       headers:{authorization:"Bearer synthetic-native-token",
         "x-publishable-api-key":publishable.token},
-      signal:AbortSignal.timeout(15000)})
+      redirect:"manual",signal:AbortSignal.timeout(15000)})
+    assert.equal(nativeBearer.redirected,false,"Malformed native Bearer must not follow a redirect")
     assert.ok([400,401].includes(nativeBearer.status),
       "Malformed native Bearer must be rejected before catalog access")
     const bearerDenied=await nativeBearer.json()
     assert.equal(typeof bearerDenied?.message,"string")
     assert.equal(bearerDenied.products,undefined,"Malformed Bearer cannot obtain Store products")
     assert.equal(bearerDenied.offers,undefined,"Malformed Bearer cannot obtain Store offers")
-    assert.equal(JSON.stringify(bearerDenied).includes(mail),false,"Private Person data cannot leak")
-    assert.equal(JSON.stringify(bearerDenied).includes(publishable.token),false,"Publishable key cannot be echoed")
+    assertNoPrivateCatalogData(bearerDenied)
     assert.deepEqual(await rows("select id,action from da_audit_event where organization_id=$1 order by id",[org.id]),
       beforeCatalog,"Denied native catalog cannot change canonical audit")
     process.stdout.write("PASS B22 closed B4B native HTTP: public catalog/search denied before native data; no Organization audit mutation\n")
