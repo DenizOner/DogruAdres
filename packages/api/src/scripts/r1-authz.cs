@@ -1,7 +1,10 @@
 using System;
 using System.ComponentModel;
+using System.Globalization;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Text;
 
 // R1 local Windows authorization probe. Only a real kernel access token is
 // suitable for effective-access proof. A SID-only context is NOT the sandbox
@@ -52,6 +55,105 @@ public class R1AclProbe
     [DllImport("authz.dll")]
     static extern bool AuthzFreeResourceManager(IntPtr manager);
 
+
+    // Available only for an independently pinned, live sandbox process.
+    // This API does NOT commission a PID: the caller must obtain process ID,
+    // creation FILETIME, executable path, and SID from a separately approved
+    // and signed reader binding. Never infer them from an env variable.
+    [StructLayout(LayoutKind.Sequential)]
+    struct FileTime { public uint Low; public uint High; }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetProcessTimes(
+        IntPtr process, out FileTime created, out FileTime exited,
+        out FileTime kernel, out FileTime user);
+
+    [DllImport("kernel32.dll", SetLastError = true,
+        CharSet = CharSet.Unicode, EntryPoint = "QueryFullProcessImageNameW")]
+    static extern bool QueryFullProcessImageName(
+        IntPtr process, uint flags, StringBuilder image, ref uint length);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool CloseHandle(IntPtr handle);
+
+    // This checks ONE actual primary process token, not arbitrary SID groups
+    // or impersonating thread tokens. Caller must separately prove it is the
+    // exact sandbox actor and that the token scope is representative.
+    public static uint CheckVerifiedReaderProcess(
+        byte[] descriptor, int processId, string expectedCreationFileTimeUtc,
+        string expectedSid, string expectedImagePath)
+    {
+        ulong expectedCreated;
+        if (processId <= 0 ||
+            !UInt64.TryParse(expectedCreationFileTimeUtc, NumberStyles.None,
+                CultureInfo.InvariantCulture, out expectedCreated) ||
+            expectedCreated == 0 ||
+            String.IsNullOrWhiteSpace(expectedSid) ||
+            String.IsNullOrWhiteSpace(expectedImagePath) ||
+            !Path.IsPathRooted(expectedImagePath))
+            throw new InvalidOperationException(
+                "BLOCKED: complete independently approved sandbox process identity required");
+
+        // Validate SID syntax before touching a process.
+        string pinnedSid = new SecurityIdentifier(expectedSid).Value;
+        IntPtr process = IntPtr.Zero, token = IntPtr.Zero;
+        try
+        {
+            // PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE; no debug privilege.
+            process = OpenProcess(0x00101000, false, unchecked((uint)processId));
+            if (process == IntPtr.Zero)
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+
+            FileTime created, exited, kernel, user;
+            if (!GetProcessTimes(process, out created, out exited, out kernel, out user))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            ulong actualCreated = ((ulong)created.High << 32) | created.Low;
+            if (actualCreated != expectedCreated)
+                throw new InvalidOperationException("REFUSED: sandbox PID/start-time mismatch");
+
+            StringBuilder executable = new StringBuilder(32768);
+            uint length = (uint)executable.Capacity;
+            if (!QueryFullProcessImageName(process, 0, executable, ref length))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            string actualImage = Path.GetFullPath(executable.ToString());
+            string expectedImage = Path.GetFullPath(expectedImagePath);
+            if (!String.Equals(actualImage, expectedImage, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("REFUSED: sandbox executable mismatch");
+
+            // A terminated or recycled process is not acceptable proof.
+            if (WaitForSingleObject(process, 0) != 258)
+                throw new InvalidOperationException("REFUSED: sandbox process not live");
+            if (!OpenProcessToken(process, 0x0008, out token)) // TOKEN_QUERY only
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            using (WindowsIdentity identity = new WindowsIdentity(token))
+            {
+                if (identity.User == null ||
+                    !String.Equals(identity.User.Value, pinnedSid,
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("REFUSED: sandbox token SID mismatch");
+            }
+
+            uint granted = CheckUsingToken(descriptor, token);
+            if (WaitForSingleObject(process, 0) != 258)
+                throw new InvalidOperationException("REFUSED: sandbox process exited during proof");
+            return granted;
+        }
+        finally
+        {
+            if (token != IntPtr.Zero) CloseHandle(token);
+            if (process != IntPtr.Zero) CloseHandle(process);
+        }
+    }
+
     public static uint Check(byte[] descriptor, string alternate)
     {
         // R1 custody currently supplies the reader's SID, not an independently
@@ -62,6 +164,12 @@ public class R1AclProbe
             throw new InvalidOperationException(
                 "BLOCKED: actual sandbox reader token is not commissioned; SID-only access checks are unsafe");
 
+        using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
+            return CheckUsingToken(descriptor, identity.Token);
+    }
+
+    private static uint CheckUsingToken(byte[] descriptor, IntPtr accessToken)
+    {
         if (descriptor == null || descriptor.Length == 0)
             throw new ArgumentException("REFUSED: missing Windows security descriptor");
 
@@ -83,13 +191,12 @@ public class R1AclProbe
                     1, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, "R1", out manager))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
 
-            using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
-            {
-                if (!AuthzInitializeContextFromToken(
-                        0, identity.Token, manager, IntPtr.Zero,
-                        new LUID(), IntPtr.Zero, out context))
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-            }
+            if (accessToken == IntPtr.Zero)
+                throw new InvalidOperationException("REFUSED: missing actual Windows token");
+            if (!AuthzInitializeContextFromToken(
+                    0, accessToken, manager, IntPtr.Zero,
+                    new LUID(), IntPtr.Zero, out context))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
 
             Req request = new Req { Access = 0x02000000 }; // MAXIMUM_ALLOWED
             Rep reply = new Rep { Count = 1, Mask = granted, Sacl = sacl, Error = error };
