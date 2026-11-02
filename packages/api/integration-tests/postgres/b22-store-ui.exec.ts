@@ -5397,6 +5397,18 @@ export default async function({container}:any){
       await q("drop function b22_mfa_disable_outbox_fault_v1()")
       disableFunctionInstalled=false
       await loginStaffA(staffCodes[2])
+      // A prior native suspension test intentionally left THIS Seller
+      // suspended. Reactivate it only in the disposable PG16 fixture;
+      // otherwise the request correctly stops before the unlink race seam.
+      const priceRaceStore=(await native.listSellers({id:ownerStoreId}))[0]
+      assert.equal(priceRaceStore?.status,"suspended")
+      await unsuspendSellerWorkflow(container).run({input:{seller_id:ownerStoreId}})
+      try{
+        assert.equal((await native.listSellers({id:ownerStoreId}))[0]?.status,"open")
+        const priceRacePrecheck=await groupChange("read")
+        assert.equal(priceRacePrecheck.status,200,
+          "A genuinely authorized active Seller/Member is needed before the unlink race")
+        assert.equal(priceRacePrecheck.body.status,"revoked")
       // F-02: first-party HTTP has already checked the real native Seller,
       // but the Foundation method is paused BEFORE acquiring its actor lock.
       // Complete the supported Person->Member unlink while it is paused.
@@ -5487,6 +5499,11 @@ export default async function({container}:any){
         if(!groupGateReleased)releaseGroupGate()
         foundationPrototype.personalStorePriceGroupAccess=originalGroupMethod
         if(pendingGroupPost)await pendingGroupPost.catch(()=>{})
+      }
+      }finally{
+        await suspendSellerWorkflow(container).run({input:{
+          seller_id:ownerStoreId,reason:"B22 restore earlier native Seller suspension"
+        }})
       }
       const positiveNativeBefore=await auth.listAuthMfa(
         {auth_identity_id:staffAIdentity.auth_identity_id,status:"enabled"},{take:2})
