@@ -88,7 +88,9 @@ public class R1AclProbe
     // This checks ONE actual primary process token, not arbitrary SID groups
     // or impersonating thread tokens. Caller must separately prove it is the
     // exact sandbox actor and that the token scope is representative.
-    public static uint CheckVerifiedReaderProcess(
+    // Inactive until an independent signed process identity is commissioned.
+    // Private prevents accidental use as an activation approval primitive.
+    private static uint CheckVerifiedReaderProcess(
         byte[] descriptor, int processId, string expectedCreationFileTimeUtc,
         string expectedSid, string expectedImagePath)
     {
