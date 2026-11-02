@@ -41,7 +41,7 @@ export async function csrfEnrollment(req:MedusaRequest):Promise<boolean>{
   return timingSafeEqual(Buffer.from(digest(header)),Buffer.from(session.csrf_hash))
 }
 
-/** Explicit native ingress. Public catalog/auth remain available; unsupported
+/** Explicit native ingress. Only public locale bootstrap/auth remain available; unsupported
  * native actor delegation is CLOSED until a verified credential-binding adapter
  * is implemented. This is NOT a claim of full D9/machine compatibility.
  */
@@ -54,7 +54,10 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
   const nativeSession = "session" in req && !!(req.session as {auth_context?:unknown}|undefined)?.auth_context
   const anonymous = !authorization && !nativeSession && !("auth_context" in req && req.auth_context)
   const publicAuth = /^\/auth\/(user|member|customer)\/emailpass(?:\/callback)?$/
-  const publicStore = /^\/store\/(regions|products|product-categories|collections|currencies|locales|offers|sellers|reviews|product-attributes|product-options|product-tags|product-types|product-variants|shipping-options|payment-providers|return-reasons)(?:\/[^/]+)?\/?$/
+  // #217 closed B4B: a publishable key or native Customer token is not a
+  // verified Buyer Organization. Keep only region bootstrap for login locale.
+  // All native catalog, Store, Offer, search and checkout routes stay closed
+  // until a server-owned Organization-scoped reader is accepted.
   // Mercur 2.3.7 can capture payment in processPaymentWorkflow BEFORE the
   // split-cart validate hook runs. No configured provider currently proves an
   // authorization -> accepted order -> capture sequence, so callbacks fail
@@ -96,8 +99,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       // Medusa validateToken verifies signature, purpose=reset and atomically
       // consumes the persisted jti. A session JWT cannot pass that middleware.
       (!nativeSession && /^\/auth\/(user|member|customer)\/emailpass\/update$/.test(path) && req.method==="POST") ||
-      (path==="/store/search" && req.method==="POST") ||
-      (publicStore.test(path) && req.method === "GET")) return next()
+      (anonymous && path==="/store/regions" && req.method==="GET")) return next()
   // A machine key is still authenticated by the native framework. No staff or
   // Organization authority is inferred from it. Only this read-only operation.
   if (path === "/admin/api-keys" && req.method === "GET" && /^Basic /i.test(req.headers.authorization ?? "")) {
