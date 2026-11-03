@@ -5788,8 +5788,27 @@ export default async function({container}:any){
               .includes(row.path)).slice(-8).map((row:any)=>
                 ({method:row.method,path:row.path,status:row.status}))
           const visibility=await browser.eval("document.visibilityState")
+          // Only fixed boolean/status categories; never output private Person,
+          // Organization, cookies, MFA material or response bodies.
+          const ui=await browser.eval(`({
+            loginVisible:!document.getElementById('login').hidden,
+            workspaceVisible:!document.getElementById('workspace').hidden,
+            scopeLoaded:loadedScope!=='',
+            observing:observing,
+            selectedOrganization:!!new URLSearchParams(location.search).get('organization'),
+            statusKind:document.getElementById('status').textContent.includes('Erişim yeniden doğrulanmalı')
+              ?'observer-denied':document.getElementById('status').textContent.includes('Giriş gerekli')
+              ?'load-failed':document.getElementById('status').textContent.includes('Erişim değişti')
+              ?'scope-changed':'other'
+          })`)
+          const sessionState=await q(`select s.status,
+              (s.epoch=e.epoch) as current_epoch,
+              (s.mfa_platform_version=(select version from da_mfa_policy where id='current')) as platform_revision,
+              (s.mfa_person_version=coalesce((select version from da_person_mfa_preference where person_id=s.person_id),0)) as person_revision
+            from da_browser_session s join da_person_security e on e.person_id=s.person_id
+            where s.person_id=$1 order by s.created_at desc limit 2`,[A.person])
           throw new Error("B22 Staff A post-recovery UI did not open: "+
-            JSON.stringify({visibility,http:safe}))
+            JSON.stringify({visibility,http:safe,ui,sessionState}))
         }
         assert.equal(await browser.eval("(async()=> (await fetch('/personal/session')).status)()"),200)
       }
