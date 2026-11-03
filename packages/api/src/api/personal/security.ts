@@ -1,11 +1,28 @@
 import type { MedusaRequest, MedusaResponse, MedusaNextFunction } from "@medusajs/framework/http"
 import { timingSafeEqual } from "node:crypto"
 import { digest } from "../../modules/dogruadres-access/identity-session"
+import { VISITOR_RATE_HEADER, verifyVisitorRateSource } from "../../utils/visitor-rate-source"
 import Access from "../../modules/dogruadres-access/service"
 
 export const enabled = () => process.env.DOGRUADRES_IDENTITY_ENABLED === "true"
 export const secureCookies = () => process.env.NODE_ENV==='production'||process.env.DOGRUADRES_PUBLIC_ORIGIN?.startsWith('https://')===true
 export const access = (req: MedusaRequest): Access => req.scope.resolve("dogruadresAccess")
+
+/** Fail closed on a forged front-door proof; do not trust arbitrary proxy headers.
+ * Private/direct requests share their physical socket address quota.
+ * A normal public request carries the signed, non-reversible TLS source.
+ */
+export function visitorRateAddress(req: MedusaRequest): string | null {
+  const header=req.headers[VISITOR_RATE_HEADER]
+  const remote=req.socket.remoteAddress??"unknown"
+  if(header!==undefined){
+    if(!["127.0.0.1","::1","::ffff:127.0.0.1"].includes(remote))return null
+    const source=verifyVisitorRateSource(
+      header,process.env.COOKIE_SECRET??"",req.method,req.path)
+    return source?"frontdoor:"+source:null
+  }
+  return "private-direct:"+digest(remote)
+}
 export function sessionToken(req: MedusaRequest): string {
   const entries = (req.headers.cookie ?? "").split(";").map(s=>s.trim()).filter(s=>s.startsWith("da_session="))
   return entries.length === 1 ? entries[0].slice("da_session=".length) : ""
