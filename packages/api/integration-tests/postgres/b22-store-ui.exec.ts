@@ -1998,6 +1998,8 @@ export default async function({container}:any){
     assert.equal(Number((await q(
       "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
       "Idempotent grant cannot create an extra audit")
+    // B06Chrome.input appends text, so clear the prior field first.
+    await browser.eval("document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value=''")
     await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[0].id)
     assert.equal(await browser.eval(
       "document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value"),
@@ -2016,6 +2018,8 @@ export default async function({container}:any){
     assert.equal(await browser.eval(
       "document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')"),
       false,"Late grant success must not be shown against the edited Buyer")
+    // B06Chrome.input appends text, so clear the prior field first.
+    await browser.eval("document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value=''")
     await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[1].id)
     await browser.click('#store-price-group-form button[value="read"]')
     await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')&&"+
