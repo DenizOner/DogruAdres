@@ -40,7 +40,7 @@ describe("M0 first-party Person signup with required private mobile",()=>{
       id:"cus_own",email:"test@example.invalid",
     })}
     workflowRun=jest.fn().mockImplementation(async()=>{hasCustomer=true;return {result:{id:"cus_own"}}})
-    ;(createCustomerAccountWorkflow as jest.Mock).mockReturnValue({run:workflowRun})
+    ;(createCustomerAccountWorkflow as unknown as jest.Mock).mockReturnValue({run:workflowRun})
     req={
       body:{...valid},query:{},headers:{},socket:{remoteAddress:"127.0.0.1"},
       protocol:"https",url:"/personal/register",
