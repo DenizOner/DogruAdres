@@ -6297,8 +6297,27 @@ export default async function({container}:any){
         const customerRows=await q("select count(*)::int n from public.customer where email=$1",[signupEmail])
         nativeCustomerCreated=Number(customerRows[0].n)>0
       }catch{}
+      // Read only a fixed, whitelisted server stage from the completed
+      // HTTPS response. Never put raw request/response bodies or PII in CI logs.
+      let serverStage="response-unavailable"
+      try{
+        const last=signupChrome.http.filter(r=>r.path==="/personal/register").at(-1)
+        if(last?.requestId){
+          const raw=await signupChrome.send("Network.getResponseBody",{requestId:last.requestId})
+          const parsed=JSON.parse(raw.body)
+          const stageCodes={
+            "Registration is not yet complete; sign in to resume":"native-workflow",
+            "Native account binding unavailable":"native-actor-binding",
+            "Registration result could not be confirmed; sign in to check":"foundation-commit-or-customer-read",
+            "Registration verification unavailable":"native-verification",
+            "Registration could not be confirmed":"native-authentication",
+            "Access denied":"identity-ownership",
+          }
+          serverStage=stageCodes[parsed.message]??"unclassified-denial"
+        }
+      }catch{}
       throw Error("B22 first Person signup failed: "+JSON.stringify({
-        ui,requests,personCountChange:postPeople-beforePeople,
+        ui,requests,serverStage,personCountChange:postPeople-beforePeople,
         nativeCustomerCreated,registrationRequestCount:requests.length
       }))
     }
