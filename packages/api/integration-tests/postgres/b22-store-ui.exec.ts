@@ -2100,8 +2100,8 @@ export default async function({container}:any){
     assert.ok(Array.isArray(laterWindow.body.stores)&&laterWindow.body.stores.length<=20)
     assert.equal(laterWindow.body.checkout_ready,false)
     assert.equal(laterWindow.body.prices_available,false)
-    assert.ok(!Object.hasOwn(laterWindow.body,"count")&&
-      !Object.hasOwn(laterWindow.body,"has_more"),
+    assert.ok(!Object.prototype.hasOwnProperty.call(laterWindow.body,"count")&&
+      !Object.prototype.hasOwnProperty.call(laterWindow.body,"has_more"),
       "A page must not expose the count of unrelated native Sellers")
     assert.equal((await get(
       "/personal/catalog?organization_id="+encodeURIComponent(organizations[1].id)+"&page=5")).status,400)
