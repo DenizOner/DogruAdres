@@ -78,6 +78,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     </div>
   </section>
   <form id="login"><label>E-posta<input name="email" type="email" autocomplete="username" required></label><label>Parola<input name="password" type="password" autocomplete="current-password" required></label><button>Giriş yap</button></form>
+  <details id="register-details"><summary>Yeni kişi hesabı oluştur</summary>
+    <p>Tek kişisel hesap oluşturun. İşletme ve mağaza yetkileri kayıtla birlikte verilmez; cep telefonu numaranızın sahipliği henüz doğrulanmaz.</p>
+    <form id="register">
+      <label>Ad<input name="first_name" autocomplete="given-name" maxlength="50" required></label>
+      <label>Soyad<input name="last_name" autocomplete="family-name" maxlength="50" required></label>
+      <label>E-posta<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
+      <label>Cep telefonu (zorunlu)<input name="mobile_phone" type="tel" autocomplete="tel" inputmode="tel" pattern="[+]?[0-9]{6,20}" minlength="6" maxlength="20" required></label>
+      <label>Parola (en az 12 karakter)<input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+      <button type="submit">Kişi hesabı oluştur</button>
+    </form>
+    <p id="register-status" role="status" aria-live="polite"></p>
+  </details>
   <form id="challenge" hidden><label>İkinci faktör yöntemi<select name="method">
       <option value="totp">Kimlik doğrulama uygulaması</option>
       <option value="recovery_code">Tek kullanımlık kurtarma kodu</option>
@@ -1657,11 +1669,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
   el('org-stores-refresh').onclick=()=>{if(currentOrg)void organizationStores(currentOrg,organizationRequest)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
-    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;clearNotifications();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPersonMobile();clearPendingInvitations();el('invite-result').textContent='';
+    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;clearNotifications();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('register-details').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPersonMobile();clearPendingInvitations();el('invite-result').textContent='';
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
@@ -1744,6 +1756,40 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('mfa-enroll-verify').hidden=true;el('mfa-enrollment').hidden=true;
       e.target.reset();await load();
     }catch(err){status(err.message);if(!err.uncertain)button.disabled=false}
+  };
+  el('register').onsubmit=async e=>{
+    e.preventDefault();
+    const form=e.currentTarget,button=form.querySelector('button');
+    if(button.disabled || document.hidden)return;
+    button.disabled=true;
+    const feedback=el('register-status');
+    feedback.textContent='Kayıt kontrol ediliyor.';
+    let definite=false;
+    try{
+      const data=Object.fromEntries(new FormData(form));
+      const response=await fetch('/personal/register',{
+        method:'POST',credentials:'omit',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify(data)
+      });
+      let result=null;
+      try{result=await response.json()}catch{}
+      if(response.ok&&result?.registered===true){
+        definite=true;form.reset();el('register-details').open=false;
+        status('Kişi hesabı kaydedildi. Mevcut giriş formundan oturum açın; gerekli MFA kurulumu girişte tamamlanır.');
+        feedback.textContent='';
+      }else if(response.status===400||response.status===403||response.status===409||response.status===429){
+        definite=true;
+        feedback.textContent=response.status===429
+          ?'Çok fazla deneme yapıldı. Bir süre sonra yeniden deneyin.'
+          :response.status===400?'Kayıt bilgileri geçersiz. Cep telefonu ve alanları kontrol edin.'
+          :'Kayıt bu hesapla tamamlanamadı. Mevcut hesabınızla giriş yapın veya yetkili hesap bağlantısı yolunu kullanın.';
+      }else{
+        feedback.textContent='Kayıt sonucu doğrulanamadı. Aynı işlemi yeniden göndermeden önce giriş yaparak mevcut hesabı kontrol edin.';
+      }
+    }catch{
+      feedback.textContent='Bağlantı koptu. Kayıt sonucu belirsiz; otomatik tekrar yapılmadı. Önce giriş yaparak hesabı kontrol edin.';
+    }finally{if(definite)button.disabled=false}
   };
   el('login').onsubmit=async e=>{
     e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;
