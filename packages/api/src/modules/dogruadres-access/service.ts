@@ -444,7 +444,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const db = securitySql(context.transactionManager)
     // A fresh strong personal session is necessary to change this private
     // contact. Row and session locks protect the read / update / audit unit.
-    const session = await new IdentitySessions(db).current(token, true)
+    const session = await new IdentitySessions(db).currentForPersonWrite(token)
     if (!session) return null
     const rows = await db.execute(`select mobile_phone,mobile_version from da_person
       where id=? and disabled_at is null and deleted_at is null for update`,
