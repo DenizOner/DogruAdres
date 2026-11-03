@@ -1840,13 +1840,15 @@ export default async function({container}:any){
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
       privateReadAuditStart,"Real private catalogue read cannot mutate audit")
     await reviewer.send("Page.bringToFront")
-    const selectedBuyerButton=JSON.stringify(organizations[1].name+" — owner")
-    // Backgrounding intentionally conceals private UI; visible does not mean
-    // the async session/workspace/Organization list has finished reloading.
+    // A hidden tab deliberately discards private data. Restart the normal
+    // signed-in HTTPS navigation with an explicit Buyer Organization instead
+    // of trying to revive in-flight background requests or stale DOM.
+    const buyerPersonalUrl=reviewer.origin+"/personal?organization="+
+      encodeURIComponent(organizations[1].id)
+    await reviewer.send("Page.navigate",{url:buyerPersonalUrl})
     await reviewer.wait("document.visibilityState==='visible'&&"+
       "!document.getElementById('workspace').hidden&&"+
-      "Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+selectedBuyerButton+")")
-    await reviewer.select(organizations[1].name,"owner")
+      "JSON.parse(document.getElementById('detail').textContent||'{}').role==='owner'")
     await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden")
     await reviewer.click("#buyer-catalog-refresh")
     await reviewer.wait("document.getElementById('buyer-catalog-items').textContent.includes('Bu işletmeye özel TRY referans fiyatı:')")
@@ -1912,14 +1914,14 @@ export default async function({container}:any){
     assert.equal(revokedOffer?.buyer_reference_try,undefined,
       "Committed Store BuyerOrg group revoke must immediately remove private reference")
     assert.deepEqual(revokedOffer?.list_price_try,{amount:1250.5,currency_code:"try"})
-    // Hidden tabs deliberately discard private Buyer content. Restore the
-    // Buyer's visible session and reselect the authorized Organization through
-    // its real UI; never force hidden catalog DOM to become visible.
+    // Re-enter via real HTTPS after the Seller's revoke action. The backend
+    // must revalidate the Person session, selected Buyer and Store policies,
+    // then render the no-private-price result; no hidden DOM is forced open.
     await reviewer.send("Page.bringToFront")
+    await reviewer.send("Page.navigate",{url:buyerPersonalUrl})
     await reviewer.wait("document.visibilityState==='visible'&&"+
       "!document.getElementById('workspace').hidden&&"+
-      "Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+selectedBuyerButton+")")
-    await reviewer.select(organizations[1].name,"owner")
+      "JSON.parse(document.getElementById('detail').textContent||'{}').role==='owner'")
     await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden")
     await reviewer.click("#buyer-catalog-refresh")
     await reviewer.wait("!document.getElementById('buyer-catalog-items').textContent.includes('Bu işletmeye özel TRY referans fiyatı:')")
