@@ -6405,8 +6405,17 @@ export default async function({container}:any){
         DOGRUADRES_FRONTDOOR_PORT:String(visitorPort)},
       stdio:["ignore","ignore","pipe"],
     })
-    // Do not forward the child stderr: it could contain private network paths.
-    visitorFrontdoor.stderr?.resume()
+    // Never log raw child stderr: it can contain local paths or secrets.
+    let startupClass="none",probeStatus=0,probeErrorClass="none"
+    visitorFrontdoor.stderr?.on("data",(buf:Buffer)=>{
+      const message=String(buf)
+      if(message.includes("ERR_UNKNOWN_FILE_EXTENSION"))startupClass="typescript-loader"
+      else if(message.includes("ERR_MODULE_NOT_FOUND"))startupClass="module-resolution"
+      else if(message.includes("EADDRINUSE"))startupClass="port-collision"
+      else if(message.includes("ENOENT"))startupClass="missing-resource"
+      else if(message.includes("Invalid ingress")||message.includes("Missing ingress"))startupClass="ingress-config"
+    })
+    visitorFrontdoor.on("error",()=>{startupClass="spawn-error"})
     try{
       const visitorHttp=(source:string,path:string,body:unknown,spoof=false):Promise<number>=>
         new Promise((resolve,reject)=>{
@@ -6422,17 +6431,30 @@ export default async function({container}:any){
           request.setTimeout(12000,()=>request.destroy(Error("Visitor quota HTTPS timeout")))
           request.end(JSON.stringify(body))
         })
-      await until(async()=>{
-        try{
-          const response=await new Promise<number>((resolve,reject)=>{
-            const request=tlsRequest(visitorOrigin+"/health",{
-              method:"GET",ca:readFileSync(crt),agent:false,
-            },res=>{res.resume();res.on("end",()=>resolve(res.statusCode??0))})
-            request.on("error",reject);request.end()
-          })
-          return response===200
-        }catch{return false}
-      },16000,"first-party signed rate-source HTTPS frontdoor")
+      try{
+        await until(async()=>{
+          if(visitorFrontdoor.exitCode!==null)return false
+          try{
+            const response=await new Promise<number>((resolve,reject)=>{
+              const request=tlsRequest(visitorOrigin+"/personal",{
+                method:"GET",ca:readFileSync(crt),agent:false,
+              },res=>{res.resume();res.on("end",()=>resolve(res.statusCode??0))})
+              request.on("error",reject);request.end()
+            })
+            probeStatus=response
+            return response===200
+          }catch(error){
+            const c=(error as {code?:unknown})?.code
+            probeErrorClass=typeof c==="string"&&["ECONNREFUSED","ECONNRESET","EPROTO","ETIMEDOUT"].includes(c)?c:"transport-error"
+            return false
+          }
+        },16000,"first-party signed rate-source HTTPS frontdoor")
+      }catch{
+        throw Error("Visitor rate HTTPS frontdoor unavailable: "+JSON.stringify({
+          childExited:visitorFrontdoor.exitCode!==null,exitCode:visitorFrontdoor.exitCode,
+          startupClass,probeStatus,probeErrorClass
+        }))
+      }
       const countBefore=Number((await q(
         "select count(*)::int n from da_person"))[0].n)
       for(let i=0;i<60;i++){
