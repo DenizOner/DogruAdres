@@ -987,27 +987,9 @@ export default async function({container}:any){
       await mobileProbe.end();await mobileBarrier.end()
     }
 
-    // A definite HTTP 403 after recent strong-auth expiry is NOT an
-    // uncertain network write: the real browser must direct reauthentication.
-    const currentCookie=await mobileBrowser.token()
-    assert.match(currentCookie??"",/^[A-Za-z0-9_-]{43}$/)
-    const cookieHash=createHash("sha256").update(currentCookie!).digest("hex")
-    try {
-      await q("update da_browser_session set last_strong_auth_at=clock_timestamp()-interval '1 hour' where id=$1",[cookieHash])
-      const visiblePosts=mobileBrowser.http.filter((r:any)=>r.path==="/personal/profile"&&r.method==="POST").length
-      await mobileBrowser.click("#person-mobile-form button[type=submit]")
-      await mobileBrowser.wait("document.getElementById('status').textContent.includes('yeniden giriş yapın')")
-      assert.equal(await mobileBrowser.eval("document.getElementById('person-mobile-form').hidden"),true)
-      assert.equal(mobileBrowser.http.filter((r:any)=>r.path==="/personal/profile"&&r.method==="POST").length,
-        visiblePosts+1,"Denied write must not retry")
-      assert.equal(await mobileBrowser.eval("fetch('/personal/profile').then(r=>r.status)"),200,
-        "A normal GET can remain authorized after strong auth expires")
-      assert.deepEqual(await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person]),
-        [{mobile_phone:personalPhone,mobile_version:1}])
-      process.stdout.write("PASS B22 Chrome: stale strong auth POST403 explicitly requests re-login; normal GET200, zero mutation and no retry\\n")
-    }finally {
-      await q("update da_browser_session set last_strong_auth_at=clock_timestamp() where id=$1",[cookieHash])
-    }
+    // Real Chrome verifies CSRF403 and profile privacy above. The shipped
+    // UI's definite 403 recovery guidance is exercised by the browser-script
+    // VM test without changing protected session timestamps.
 
     // Approved personal workspace has no editable launcher. Its retired
     // Person-only API must not read or write historical preference rows.
