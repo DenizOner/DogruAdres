@@ -1801,6 +1801,66 @@ export default async function({container}:any){
     await browser.click('#store-price-group-form button[value="grant"]')
     await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')")
     assert.equal((await groupChange("read")).body.status,"active")
+    // Deterministic real-Chrome UI scheduling: the authenticated HTTPS GET
+    // still reaches Medusa, but its response is held only in this test page
+    // until the Store selector changes. No private API or DB is mocked.
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daGroupRaceFetch=window.fetch;"+
+      "window.__daGroupRaceHeld=false;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(typeof url==='string'&&url.startsWith('/personal/store-price-groups?')&&"+
+           "url.includes('buyer_organization_id=')&&!window.__daGroupRaceHeld){"+
+          "window.__daGroupRaceHeld=true;"+
+          "return original(resource,options).then(response=>new Promise(resolve=>{"+
+            "window.__daGroupRaceRelease=()=>resolve(response)"+
+          "}))"+
+        "}"+
+        "return original(resource,options)"+
+      "};return true})()")
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("typeof window.__daGroupRaceRelease==='function'")
+    const switchedGroup=await browser.eval("(()=>{"+
+      "const form=document.getElementById('store-price-group-form');"+
+      "const store=form.elements.namedItem('seller_id');"+
+      "store.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "store.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return {store:store.value,group:form.elements.namedItem('customer_group_id').value,"+
+        "disabled:Array.from(form.querySelectorAll('button'),b=>b.disabled),"+
+        "status:document.getElementById('store-price-group-status').textContent}"+
+    "})()")
+    assert.equal(switchedGroup.store,secondOwnerStoreId)
+    assert.equal(switchedGroup.group,"",
+      "Store switch must erase first Store's group selection")
+    assert.ok(switchedGroup.disabled.every((value:boolean)=>value===false),
+      "Buttons cannot remain locked while old Store read response is pending")
+    assert.match(switchedGroup.status,/Önceki mağazadaki işlem/,
+      "Unknown result of old Store action must not be represented as cancelled")
+    await browser.eval("(()=>{"+
+      "window.__daGroupRaceRelease();"+
+      "window.fetch=window.__daGroupRaceFetch;"+
+      "delete window.__daGroupRaceRelease;delete window.__daGroupRaceFetch;"+
+      "return true})()")
+    await browser.wait("document.getElementById('store-price-group-status').textContent"+
+      ".includes('Önceki mağazadaki işlem')")
+    assert.equal(await browser.eval(
+      "Array.from(document.querySelectorAll('#store-price-group-form button'))"+
+      ".every(b=>!b.disabled)"),true,
+      "Old completed read must not permanently disable next Store controls")
+    await browser.eval("(()=>{"+
+      "const s=document.querySelector('#store-price-group-form select[name=seller_id]');"+
+      "s.value="+JSON.stringify(ownerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    assert.equal(await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value"+
+      "})()"),priceGroup.id)
+    process.stdout.write("PASS B22 Chrome group-picker Store-switch race: pending native HTTPS GET cannot lock new Store controls, previous result remains uncertain, selection resets; original Store works again\\n")
     assert.equal((await groupChange("grant")).status,200)
     assert.equal((await q("select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
       [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n,1)
