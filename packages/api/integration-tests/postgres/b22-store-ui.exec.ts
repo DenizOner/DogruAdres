@@ -1871,7 +1871,7 @@ export default async function({container}:any){
     assert.equal(Number((await q(
       "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
       "Authorized recheck after a committed grant must not write another audit")
-    process.stdout.write("PASS B22 Chrome: pending native grant POST A-B-A retains warning and unlocked controls; authorized HTTPS record recheck clears only after PG16 grant and single audit are confirmed\\n")
+    process.stdout.write("PASS B22 Chrome: pending native grant POST A-B-A retains warning and unlocked controls; authorized HTTPS record recheck clears only after PG16 grant and single audit are confirmed\n")
     assert.equal((await groupChange("read")).body.status,"active")
     // Deterministic real-Chrome UI scheduling: the authenticated HTTPS GET
     // still reaches Medusa, but its response is held only in this test page
