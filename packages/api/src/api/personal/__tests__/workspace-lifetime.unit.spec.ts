@@ -83,6 +83,69 @@ describe('B22 native Store price-group selector request lifetime',()=>{
     await changed
     expect(buttons.every(button=>button.disabled===false)).toBe(true)
   })
+  it('retains unknown A grant across A->B->A, ignores late POST and clears only after a settled scoped read',async()=>{
+    const h=harness()
+    const form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_a'},
+      buyer_organization_id:{value:'daorg_b'}
+    }
+    const buttons=[{disabled:false},{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    ;(h.document as any).createDocumentFragment=()=>({append(){}})
+    runInContext("currentOrg='daorg_a';organizationRequest=1;"+
+      "api=(path,options)=>new Promise(resolve=>{(globalThis.groupCalls??=[]).push({path,options,resolve})})",
+      h.context)
+    const send=(action:string)=>form.onsubmit({
+      preventDefault(){},currentTarget:form,submitter:{value:action}
+    })
+    const oldGrant=send('grant')
+    let calls=(h.context as any).groupCalls as any[]
+    expect(calls).toHaveLength(1)
+    expect(calls[0].options.method).toBe('POST')
+    expect(buttons.every(b=>b.disabled)).toBe(true)
+    fields.seller_id.value='sel_b'
+    const toB=runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    await tick()
+    expect(buttons.every(b=>!b.disabled)).toBe(true)
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    fields.seller_id.value='sel_a'
+    const toA=runInContext("storePriceGroupChoices('daorg_a','sel_a',1)",h.context)
+    await tick()
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    expect(fields.customer_group_id.value).toBe('')
+    expect(buttons.every(b=>!b.disabled)).toBe(true)
+    calls=(h.context as any).groupCalls as any[]
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+    // A recheck started BEFORE the grant settles must not erase its warning,
+    // even if the grant finishes while this earlier read is in flight.
+    fields.customer_group_id.value='cusgroup_a'
+    const tooEarly=send('read')
+    calls=(h.context as any).groupCalls as any[]
+    expect(calls).toHaveLength(4)
+    expect(calls[3].path).toContain('seller_id=sel_a')
+    calls[0].resolve({status:'active'})
+    await oldGrant
+    calls[3].resolve({status:'active'})
+    await tooEarly
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+    const validRead=send('read')
+    calls=(h.context as any).groupCalls as any[]
+    expect(calls).toHaveLength(5)
+    calls[4].resolve({status:'active'})
+    await validRead
+    expect(h.el('store-price-group-status').textContent).toContain('kabul edilmiş')
+    expect(h.el('store-price-group-status').textContent).not.toContain('Önceki mağazadaki işlem')
+    expect(buttons.every(b=>!b.disabled)).toBe(true)
+    calls[1].resolve({organization_id:'daorg_a',seller_id:'sel_b',groups:[]})
+    calls[2].resolve({organization_id:'daorg_a',seller_id:'sel_a',groups:[]})
+    await Promise.all([toB,toA])
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+    expect(h.el('store-price-group-status').textContent).toContain('kabul edilmiş')
+  })
 })
 describe('private workspace lifetime (script regression only)',()=>{
   it('polls with the no-touch header, stops while hidden, and clears private DOM',async()=>{
