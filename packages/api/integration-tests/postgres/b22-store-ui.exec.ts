@@ -1969,6 +1969,61 @@ export default async function({container}:any){
       [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n,1)
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
       groupAuditStart+1,"Idempotent grant writes only one canonical audit")
+    // F-01: an actual authenticated HTTPS idempotent grant commits before
+    // Chrome sees its response. Editing the Buyer input while it is delayed
+    // must not apply the OLD scope's success to the NEW visible Buyer.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'&&"+
+      "document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value==="+
+      JSON.stringify(organizations[1].id))
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daF01Fetch=window.fetch;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+          "JSON.parse(options.body||'{}').action==='grant'&&!window.__daF01Held){"+
+          "window.__daF01Held=true;"+
+          "return original(resource,options).then(response=>new Promise(resolve=>{"+
+            "window.__daF01Release=()=>resolve(response)"+
+          "}))"+
+        "}return original(resource,options)"+
+      "};return true})()")
+    await browser.click('#store-price-group-form button[value="grant"]')
+    await browser.wait("typeof window.__daF01Release==='function'")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n),1,
+      "Real original-scope grant remains persisted during delayed browser reply")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Idempotent grant cannot create an extra audit")
+    await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[0].id)
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value"),
+      organizations[0].id)
+    await browser.eval("(()=>{"+
+      "window.__daF01Release();"+
+      "window.fetch=window.__daF01Fetch;"+
+      "delete window.__daF01Release;delete window.__daF01Fetch;"+
+      "return true})()")
+    await browser.wait("priceGroupUncertain.has(JSON.stringify(["+
+      JSON.stringify(organizations[0].id)+","+
+      JSON.stringify(ownerStoreId)+","+
+      JSON.stringify(priceGroup.id)+","+
+      JSON.stringify(organizations[1].id)+"]))&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(await browser.eval(
+      "document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')"),
+      false,"Late grant success must not be shown against the edited Buyer")
+    await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[1].id)
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')&&"+
+      "!document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "F-01 scoped authorized GET cannot trigger another POST/audit")
+    process.stdout.write("PASS B22 Chrome F-01: real idempotent native grant + PG16, delayed 200 after same-Store Buyer edit cannot claim success for new Buyer; exact original-scope read reconciles, no extra audit\n")
     assert.equal((await groupChange("grant",{...groupInput,seller_id:secondOwnerStoreId})).status,403)
     assert.equal((await groupChange("grant",groupInput,reviewer)).status,403)
     const missingCsrf=await browser.eval("(async()=>{const r=await fetch('/personal/store-price-groups',{method:'POST',headers:{'content-type':'application/json'},body:"+JSON.stringify(JSON.stringify({...groupInput,action:"grant"}))+"});return r.status})()")
@@ -2154,6 +2209,51 @@ export default async function({container}:any){
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
       groupAuditStart+2,"Revocation retains auditable membership history")
     process.stdout.write("PASS B22 audited Store price group: real Owner Chrome grant/revoke, Mercur SellerCustomerGroup link, Buyer Org PG16 audit/outbox, foreign Person/Store/CSRF denied; no checkout\n")
+
+    // F-02: the real native HTTPS revoke returns 200 after a previously
+    // committed revoke. Corrupt ONLY the browser-visible body afterward.
+    // This does not claim Medusa itself sent corrupt JSON.
+    await browser.send("Page.bringToFront")
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daF02Fetch=window.fetch;"+
+      "window.__daF02Posts=0;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+          "JSON.parse(options.body||'{}').action==='revoke'){"+
+          "window.__daF02Posts++;"+
+          "return original(resource,options).then(async response=>{"+
+            "const data=await response.clone().json();"+
+            "if(response.status!==200||data.status!=='revoked')return response;"+
+            "return new Response('{',{status:200,headers:{'Content-Type':'application/json'}})"+
+          "})"+
+        "}return original(resource,options)"+
+      "};return true})()")
+    await browser.click('#store-price-group-form button[value="revoke"]')
+    await browser.wait("window.__daF02Posts===1&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Sonuç belirsiz')")
+    assert.equal(await browser.eval(
+      "document.getElementById('store-price-group-status').textContent.includes('İşlem reddedildi')"),
+      false,"Corrupt successful POST response must not falsely claim rejection")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+2,
+      "F-02 idempotent native revoke plus malformed browser response creates no new audit")
+    await browser.click('#store-price-group-form button[value="revoke"]')
+    assert.equal(await browser.eval("window.__daF02Posts"),1,
+      "F-02 duplicate write guard must prevent a second HTTPS POST")
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(await browser.eval(
+      "priceGroupUncertain.size>0&&Array.from(priceGroupUncertain.values()).some(v=>v.outcomeUnverified===true)"),
+      true,"A post-corruption GET alone cannot prove the original POST ended")
+    await browser.eval("(()=>{"+
+      "window.fetch=window.__daF02Fetch;delete window.__daF02Fetch;"+
+      "return true})()")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+2,
+      "Malformed browser reply, duplicate guard and read cannot create an extra audit")
+    process.stdout.write("PASS B22 Chrome F-02: native HTTPS/PG16 idempotent revoke, browser-only malformed 200 JSON remains uncertain; same-key POST blocked and authorized GET does not guess settlement; no extra audit\n")
 
     const catalogUrl=(org:string)=>"/personal/catalog?organization_id="+
       encodeURIComponent(org)
