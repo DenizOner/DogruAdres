@@ -231,6 +231,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <p id="buyer-catalog-status" role="status" aria-live="polite"></p>
       <ul id="buyer-catalog-items"></ul>
       <button id="buyer-catalog-refresh" type="button">Ürünleri güncelle</button>
+      <button id="buyer-catalog-prev" type="button" disabled>Önceki mağaza dilimi</button>
+      <button id="buyer-catalog-next" type="button" disabled>Sonraki mağaza dilimi</button>
     </section>
   </section>
   <section id="buyer-grants-panel" hidden aria-labelledby="buyer-grants-title" style="grid-column:1/-1">
@@ -1057,9 +1059,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
 
 
 
-  let buyerContextRequest=0,buyerCatalogRequest=0;
+  let buyerContextRequest=0,buyerCatalogRequest=0,buyerCatalogPage=0;
   function clearBuyerContext(){
-    buyerContextRequest++;buyerCatalogRequest++;
+    buyerContextRequest++;buyerCatalogRequest++;buyerCatalogPage=0;
+    el('buyer-catalog-prev').disabled=true;
+    el('buyer-catalog-next').disabled=true;
     const catalog=el('buyer-catalog-panel');
     if(catalog)catalog.hidden=true;
     const items=el('buyer-catalog-items');
@@ -1099,21 +1103,26 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       panel.hidden=true;
     }
   }
-  async function buyerCatalog(org,request){
+  async function buyerCatalog(org,request,page=buyerCatalogPage){
     if(request!==organizationRequest||currentOrg!==org||document.hidden||
-       el('workspace').hidden||el('buyer-context-panel').hidden)return;
+       el('workspace').hidden||el('buyer-context-panel').hidden||
+       !Number.isInteger(page)||page<0||page>4)return;
     const panel=el('buyer-catalog-panel'),statusEl=el('buyer-catalog-status');
     const root=el('buyer-catalog-items'),seq=++buyerCatalogRequest;
+    const previous=el('buyer-catalog-prev'),next=el('buyer-catalog-next');
     panel.hidden=true;root.replaceChildren();
+    previous.disabled=true;next.disabled=true;
     statusEl.textContent='Yetkili mağaza ürünleri denetleniyor…';
     try{
-      const data=await api('catalog?organization_id='+encodeURIComponent(org));
+      const query=new URLSearchParams({organization_id:org,page:String(page)});
+      const data=await api('catalog?'+query.toString());
       if(seq!==buyerCatalogRequest||request!==organizationRequest||currentOrg!==org||
          document.hidden||el('workspace').hidden||
          el('buyer-context-panel').hidden)return;
-      if(data.organization_id!==org||data.prices_available!==false||
-         data.checkout_ready!==false||!Array.isArray(data.stores)||
-         data.stores.length>20)throw Error('Ürün kapsamı doğrulanamadı');
+      if(data.organization_id!==org||data.page!==page||
+         data.prices_available!==false||data.checkout_ready!==false||
+         !Array.isArray(data.stores)||data.stores.length>20)
+        throw Error('Ürün kapsamı doğrulanamadı');
       for(const store of data.stores){
         if(typeof store.id!=='string'||typeof store.name!=='string'||
            !Array.isArray(store.products)||store.products.length>5)
@@ -1149,16 +1158,29 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           root.append(li);
         }
       }
-      statusEl.textContent=root.children.length
-        ? 'İzinli ürünler ve varsa mağazaya özel TRY referansları gösteriliyor; vergi, kur dönüşümü ve ödeme kapalıdır.'
-        : 'İlk mağaza sayfasında gösterilebilir ürün bulunamadı.';
+      buyerCatalogPage=page;
+      previous.disabled=page===0;next.disabled=page===4;
+      statusEl.textContent='Mağaza dilimi '+(page+1)+'/5. '+
+        (root.children.length
+          ? 'İzinli ürünler ve varsa mağazaya özel TRY referansları gösteriliyor.'
+          : 'Bu dilimde gösterilebilir ürün yok; diğer dilimler ayrıca kontrol edilebilir.')+
+        ' Vergi, kur dönüşümü ve ödeme kapalıdır.';
       panel.hidden=false;
     }catch(e){
       if(seq!==buyerCatalogRequest||request!==organizationRequest||currentOrg!==org)return;
       root.replaceChildren();panel.hidden=true;
+      previous.disabled=true;next.disabled=true;
       statusEl.textContent='';
     }
   }
+  el('buyer-catalog-prev').onclick=()=>{
+    if(currentOrg&&buyerCatalogPage>0&&!el('buyer-catalog-panel').hidden)
+      void buyerCatalog(currentOrg,organizationRequest,buyerCatalogPage-1);
+  };
+  el('buyer-catalog-next').onclick=()=>{
+    if(currentOrg&&buyerCatalogPage<4&&!el('buyer-catalog-panel').hidden)
+      void buyerCatalog(currentOrg,organizationRequest,buyerCatalogPage+1);
+  };
   el('buyer-catalog-refresh').onclick=()=>{
     if(currentOrg)void buyerCatalog(currentOrg,organizationRequest);
   };

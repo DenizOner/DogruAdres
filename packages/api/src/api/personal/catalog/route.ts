@@ -8,7 +8,9 @@ import {nativeBuyerGroupTryReference,type BuyerGroupTryReference} from "./native
 
 export const AUTHENTICATE=false
 const selection=z.object({
-  organization_id:z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/)
+  organization_id:z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/),
+  // Deliberately capped. An untrusted client never chooses native take/skip.
+  page:z.enum(["0","1","2","3","4"]).optional()
 }).strict()
 const sellerId=/^sel_[A-Za-z0-9_-]+$/
 const productId=/^prod_[A-Za-z0-9_-]+$/
@@ -48,7 +50,13 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
 
     // Bounded native candidate discovery; open Seller alone is NOT authority.
     // Pagination and full catalogue/search remain a separate acceptance.
-    const candidates=await seller.listSellers({status:"open"},{take:20,skip:0})
+    // Stable unique-ID ordering avoids the non-unique timestamp offset trap.
+    // An authorized buyer may inspect up to five bounded Seller windows.
+    // Do not expose native Seller counts or a global has_more value.
+    const page=Number(parsed.data.page??"0")
+    const candidates=await seller.listSellers({status:"open"},{
+      take:20,skip:page*20,order:{id:"ASC"}
+    })
     if(!Array.isArray(candidates)||candidates.length>20||
        new Set(candidates.map(s=>s.id)).size!==candidates.length)
       return denied()
@@ -179,8 +187,9 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       }
     }
     return res.status(200).json({
-      organization_id:organizationId,stores,prices_available:false,
-      checkout_ready:false
+      organization_id:organizationId,stores,
+      ...(parsed.data.page===undefined?{}:{page}),
+      prices_available:false,checkout_ready:false
     })
   }catch(error){
     return res.status(error instanceof IdentityAccessDenied?403:503)
