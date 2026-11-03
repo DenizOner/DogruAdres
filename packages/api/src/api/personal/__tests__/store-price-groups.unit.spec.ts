@@ -226,6 +226,19 @@ describe("B22 Store-owned CustomerGroup ↔ audited Buyer Organization grant",()
     expect(res.status).toHaveBeenLastCalledWith(403)
     expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
   })
+  it("denies an unlinked group if its native Store link disappears during the read",async()=>{
+    prepareOwnedGroupListing()
+    query.mockResolvedValueOnce({data:[
+      {seller_id:"sel_a",customer_group_id:"cusgroup_a"},
+      {seller_id:"sel_a",customer_group_id:"cusgroup_b"}
+    ]}).mockResolvedValueOnce({data:[
+      {seller_id:"sel_a",customer_group_id:"cusgroup_a"}
+    ]})
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+    expect(service.personalManagerOrganization).toHaveBeenCalledTimes(2)
+  })
   it("requires strict list mode, validated scope and a live Member binding",async()=>{
     prepareOwnedGroupListing()
     req.query={organization_id:"daorg_a",seller_id:"sel_a",view:"list",person_id:"daprs_other"}
