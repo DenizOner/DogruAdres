@@ -448,7 +448,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           where id=? and disabled_at is null and deleted_at is null for update`,
           [bindings[0].person_id])
         if(existing.length===1 && typeof existing[0].mobile_phone==="string" &&
-           /^\\+?[0-9]{6,20}$/.test(existing[0].mobile_phone))
+           /^\+?[0-9]{6,20}$/.test(existing[0].mobile_phone))
           return {created:false as const}
       }
       throw new IdentityAccessDenied()
