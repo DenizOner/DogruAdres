@@ -1907,12 +1907,15 @@ export default async function({container}:any){
     assert.equal(revokedOffer?.buyer_reference_try,undefined,
       "Committed Store BuyerOrg group revoke must immediately remove private reference")
     assert.deepEqual(revokedOffer?.list_price_try,{amount:1250.5,currency_code:"try"})
-    // The Owner just interacted with a different Chrome process. Restore the
-    // Buyer's visible tab and require the real scoped panel before clicking.
+    // Hidden tabs deliberately discard private Buyer content. Restore the
+    // Buyer's visible session and reselect the authorized Organization through
+    // its real UI; never force hidden catalog DOM to become visible.
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'&&"+
-      "!document.getElementById('buyer-catalog-panel').hidden&&"+
-      "!!document.getElementById('buyer-catalog-refresh').getClientRects().length")
+      "!document.getElementById('workspace').hidden&&"+
+      "document.querySelectorAll('#organizations button').length>0")
+    await reviewer.select(organizations[1].name,"owner")
+    await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden")
     await reviewer.click("#buyer-catalog-refresh")
     await reviewer.wait("!document.getElementById('buyer-catalog-items').textContent.includes('Bu işletmeye özel TRY referans fiyatı:')")
     process.stdout.write("PASS B22 BuyerOrg native private TRY reference: real Chrome/HTTPS/PG16 active Store group grants only 950.25 TRY to Beta, other Store and Buyer base TRY; revoke and Seller suspension hide price, no checkout or audit writes\n")
