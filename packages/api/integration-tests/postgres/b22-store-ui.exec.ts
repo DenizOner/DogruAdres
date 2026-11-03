@@ -1702,13 +1702,13 @@ export default async function({container}:any){
       input:{seller_id:ownerStoreId,price_lists_data:[{
         title:"B22 Store/Buyer private TRY "+rand,
         description:"Task-only native group price selection proof",
-        status:"active",type:"sale",
+        status:"active",
         rules:{"customer.groups.id":[priceGroup.id]},
         prices:[{variant_id:tryVariant.id,currency_code:"try",
           amount:groupSpecialAmount,rules:{offer_id:directTryOffers[0].id}}]
       }]}
     })
-    assert.match(storeGroupPriceList.id,/^pl_[A-Za-z0-9_-]+$/)
+    assert.match(storeGroupPriceList.id,/^plist_[A-Za-z0-9_-]+$/)
     const {data:privateListOwners}=await container.resolve("query").graph({
       entity:"price_list_seller",fields:["seller_id","price_list_id"],
       filters:{price_list_id:storeGroupPriceList.id}
