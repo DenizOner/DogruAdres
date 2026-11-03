@@ -6273,7 +6273,30 @@ export default async function({container}:any){
     await signupChrome.input("#register input[name=mobile_phone]",signupPhone)
     await signupChrome.input("#register input[name=password]",signupPassword)
     await signupChrome.click("#register button")
-    await signupChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+    try {
+      await signupChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+    } catch {
+      const ui=await signupChrome.eval(`(()=>{
+        const form=document.getElementById('register');
+        const t=document.getElementById('register-status').textContent;
+        return {visible:!form.hidden,
+          fieldsInvalid:Array.from(form.elements).filter(e=>e.name && !e.checkValidity()).map(e=>e.name),
+          submitDisabled:form.querySelector('button').disabled,
+          statusKind:t.includes('Kayıt bilgileri geçersiz')?'input-rejected':
+            t.includes('bu hesapla tamamlanamadı')?'identity-rejected':
+            t.includes('Çok fazla')?'rate-limited':
+            t.includes('Kayıt sonucu doğrulanamadı')?'server-uncertain':
+            t.includes('Bağlantı koptu')?'network-uncertain':'other',
+          successNotice:document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')};
+      })()`)
+      const requests=signupChrome.http.filter(r=>r.path==="/personal/register")
+        .map(({method,path,status})=>({method,path,status}))
+      const postPeople=Number((await q("select count(*)::int n from da_person"))[0].n)
+      throw Error("B22 first Person signup failed: "+JSON.stringify({
+        ui,requests,personCountChange:postPeople-beforePeople,
+        registrationRequestCount:requests.length
+      }))
+    }
     const registered=await q(`select b.person_id,p.mobile_phone,p.mobile_version,
         b.actor_type,b.actor_id
       from da_login_binding b join da_person p on p.id=b.person_id
