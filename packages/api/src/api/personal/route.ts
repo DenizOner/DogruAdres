@@ -761,9 +761,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
        !/^sel_[A-Za-z0-9_-]+$/.test(seller_id))return;
     // A Store change invalidates the old UI action, not the server write.
     // Its result may be committed: never call the previous action cancelled.
-    if(priceGroupActionPending&&priceGroupCurrentAction&&
-       !priceGroupUncertain.has(priceGroupCurrentAction.key))
-      priceGroupUncertain.set(priceGroupCurrentAction.key,priceGroupCurrentAction);
+    if(priceGroupActionPending&&priceGroupCurrentAction){
+      const older=priceGroupUncertain.get(priceGroupCurrentAction.key);
+      if(!older||(older.kind==='read'&&priceGroupCurrentAction.kind!=='read'))
+        priceGroupUncertain.set(priceGroupCurrentAction.key,priceGroupCurrentAction);
+    }
     ++priceGroupActionRequest;
     priceGroupActionPending=false;priceGroupCurrentAction=null;
     const actionForm=el('store-price-group-form');
@@ -913,13 +915,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const key=JSON.stringify([org,seller_id,customer_group_id,buyer_organization_id]);
     // A Store switch only unlocks OTHER scopes. It must not permit a
     // duplicate grant/revoke while this exact record's outcome is unknown.
-    if(action!=='read'&&(priceGroupUncertain.has(key)||
-       (priceGroupActionPending&&priceGroupCurrentAction?.key===key))){
+    const previous=priceGroupUncertain.get(key);
+    if(action!=='read'&&((previous&&previous.kind!=='read')||
+       (priceGroupActionPending&&priceGroupCurrentAction?.key===key&&
+        priceGroupCurrentAction.kind!=='read'))){
       showPriceGroupStatus('Bu kayıt için önceki değişiklik henüz doğrulanmadı. Yeni işlem göndermeden önce sonucu kontrol edin.');
       return;
     }
+    // An old GET is not a write and cannot bar a new authorized change.
+    if(action!=='read'&&previous?.kind==='read')priceGroupUncertain.delete(key);
     const seq=++priceGroupActionRequest;
-    const currentAction={key,settled:false};
+    const currentAction={key,settled:false,kind:action};
     // A read begun before an older write settles cannot clear an unknown
     // outcome: it could have observed the old state before the write commits.
     const recheck=action==='read'&&priceGroupUncertain.get(key)?.settled===true?
