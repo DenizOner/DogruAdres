@@ -6270,6 +6270,22 @@ export default async function({container}:any){
     })()`)
     assert.equal(badSignup.status,400,"Missing mobile must not create an account")
     assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),beforePeople)
+    // P2: +12345 has six characters but only five digits. It must be
+    // rejected before native AuthIdentity/Customer or Person writes.
+    const shortPhoneEmail="b22-short-mobile-"+randomBytes(10).toString("hex")+"@example.invalid"
+    const shortPhone=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/register',{method:'POST',credentials:'omit',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({first_name:'Synthetic',last_name:'Rejected',
+          email:${JSON.stringify(shortPhoneEmail)},password:'Strong-test-password-123',
+          mobile_phone:'+12345'})});
+      return {status:r.status};
+    })()`)
+    assert.equal(shortPhone.status,400,"Five-digit mobile must fail before native registration")
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),beforePeople)
+    assert.equal(Number((await q(
+      "select count(*)::int n from public.customer where email=$1",
+      [shortPhoneEmail]))[0].n),0,"Invalid mobile must leave no native Customer")
     await signupChrome.click("#register-details summary")
     await signupChrome.input("#register input[name=first_name]","Synthetic")
     await signupChrome.input("#register input[name=last_name]","Registrant")
@@ -6391,12 +6407,23 @@ export default async function({container}:any){
         version:data.version,verified:data.phone_verified};
     })()`)
     assert.deepEqual(ownPhone,{status:200,mobile:signupPhone,version:1,verified:false})
-    const nativeCustomerContext=await signupChrome.eval(`(async()=>{
-      const r=await fetch('/personal/contexts?type=customer');
-      const body=await r.json();
-      return {status:r.status,person_id:body.person_id,
-        actor_id:body.actor_id,context:body.context};
-    })()`)
+    // Reuse the same task-only native Medusa Store publishable token used
+    // by earlier B22 customer-context tests. It was restored after F-02.
+    const priorSignupPublishable=process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY
+    process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY=b22PublishableKey.token
+    let nativeCustomerContext
+    try{
+      nativeCustomerContext=await signupChrome.eval(`(async()=>{
+        const r=await fetch('/personal/contexts?type=customer');
+        const body=await r.json();
+        return {status:r.status,person_id:body.person_id,
+          actor_id:body.actor_id,context:body.context};
+      })()`)
+    }finally{
+      if(priorSignupPublishable===undefined)
+        delete process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY
+      else process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY=priorSignupPublishable
+    }
     assert.deepEqual(nativeCustomerContext,{status:200,person_id:signupPerson,
       actor_id:registered[0].actor_id,context:"customer"},
       "First-party primary Customer proof must authorize native self-context without second login")
