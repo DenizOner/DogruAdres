@@ -922,6 +922,93 @@ export default async function({container}:any){
       [A.person]))[0].n),mobileAuditBefore+1)
     process.stdout.write("PASS B22 Chrome: M0 canonical Person private mobile GET, real UI save and PG16 readback, audit/outbox privacy, foreign query400, CSRF403, stale409, no duplicate mutation\\n")
 
+    // Real PG16 row-lock ordering: pause the Person row while a profile POST
+    // and an independent internal enrollment-session creation contend.
+    // The profile must WAIT for Person BEFORE taking the security epoch lock.
+    // This uses real Foundation transactions, not a mocked SQL scheduler.
+    const binding=await q(`select auth_identity_id from da_login_binding
+      where person_id=$1 and revoked_at is null and verified_at is not null`,[A.person])
+    assert.equal(binding.length,1)
+    const mobileBarrier=new Client({connectionString:u.toString()})
+    const mobileProbe=new Client({connectionString:u.toString()})
+    await mobileBarrier.connect();await mobileProbe.connect()
+    let mobileBarrierHeld=false
+    let mobileProbeHeld=false
+    let concurrentMobile:Promise<any>|undefined
+    let concurrentSession:Promise<any>|undefined
+    try {
+      await mobileBarrier.query("BEGIN");mobileBarrierHeld=true
+      await mobileBarrier.query("select id from da_person where id=$1 for update",[A.person])
+      concurrentMobile=mobileBrowser.eval(`(async()=>{
+        const s=await(await fetch('/personal/session')).json();
+        const r=await fetch('/personal/profile',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+          body:JSON.stringify({mobile_phone:'+905551234567',expected_version:1})});
+        return {status:r.status,body:await r.json()};
+      })()`).then(value=>({value}),error=>({error:String(error)}))
+      await until(async()=>{
+        const rows=await q(`select count(*)::int n from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock'
+            and query ilike '%from da_browser_session s%'
+            and query ilike '%for update of p%'`)
+        return rows[0].n>=1
+      },15000,"M0 mobile POST waits on Person BEFORE session/security")
+      // NOWAIT would fail if the profile already held the epoch lock.
+      await mobileProbe.query("BEGIN");mobileProbeHeld=true
+      await mobileProbe.query("select epoch from da_person_security where person_id=$1 for update nowait",[A.person])
+      await mobileProbe.query("ROLLBACK");mobileProbeHeld=false
+      // Same Person sign-in uses IdentitySessions.create() with Person→epoch
+      // locking; a task-only enrollment session exercises that exact native
+      // creation method without bypassing real visitor MFA credentials.
+      concurrentSession=foundation.openPersonalSession(
+        binding[0].auth_identity_id,"mfa_enroll"
+      ).then(value=>({value}),error=>({error:String(error)}))
+      await until(async()=>{
+        const rows=await q(`select count(*)::int n from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock'
+            and query ilike '%from da_login_binding b%'
+            and query ilike '%for update of b,p%'`)
+        return rows[0].n>=1
+      },15000,"M0 new Person session waits on same Person row")
+      await mobileBarrier.query("COMMIT");mobileBarrierHeld=false
+      const [mobileResult,createdResult]=await Promise.all([concurrentMobile,concurrentSession])
+      assert.equal(mobileResult.value?.status,200,mobileResult.error||"Mobile update must complete")
+      assert.equal(mobileResult.value?.body?.version,1,"Identical mobile write is no-op")
+      assert.match(createdResult.value?.token??"",/^[A-Za-z0-9_-]{43}$/,
+        createdResult.error||"Second native Person session must complete without deadlock")
+      await foundation.closePersonalSession(createdResult.value.token,false)
+      assert.deepEqual(await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person]),
+        [{mobile_phone:personalPhone,mobile_version:1}])
+      process.stdout.write("PASS B22 PG16: concurrent Person session creation and mobile POST obey Person-first lock; one no-op write, no deadlock\\n")
+    }finally {
+      if(mobileProbeHeld)await mobileProbe.query("ROLLBACK")
+      if(mobileBarrierHeld)await mobileBarrier.query("ROLLBACK")
+      await Promise.allSettled([concurrentMobile,concurrentSession].filter(Boolean) as Promise<any>[])
+      await mobileProbe.end();await mobileBarrier.end()
+    }
+
+    // A definite HTTP 403 after recent strong-auth expiry is NOT an
+    // uncertain network write: the real browser must direct reauthentication.
+    const currentCookie=await mobileBrowser.token()
+    assert.match(currentCookie??"",/^[A-Za-z0-9_-]{43}$/)
+    const cookieHash=createHash("sha256").update(currentCookie!).digest("hex")
+    try {
+      await q("update da_browser_session set last_strong_auth_at=clock_timestamp()-interval '1 hour' where id=$1",[cookieHash])
+      const visiblePosts=mobileBrowser.http.filter((r:any)=>r.path==="/personal/profile"&&r.method==="POST").length
+      await mobileBrowser.click("#person-mobile-form button[type=submit]")
+      await mobileBrowser.wait("document.getElementById('status').textContent.includes('yeniden giriş yapın')")
+      assert.equal(await mobileBrowser.eval("document.getElementById('person-mobile-form').hidden"),true)
+      assert.equal(mobileBrowser.http.filter((r:any)=>r.path==="/personal/profile"&&r.method==="POST").length,
+        visiblePosts+1,"Denied write must not retry")
+      assert.equal(await mobileBrowser.eval("fetch('/personal/profile').then(r=>r.status)"),200,
+        "A normal GET can remain authorized after strong auth expires")
+      assert.deepEqual(await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person]),
+        [{mobile_phone:personalPhone,mobile_version:1}])
+      process.stdout.write("PASS B22 Chrome: stale strong auth POST403 explicitly requests re-login; normal GET200, zero mutation and no retry\\n")
+    }finally {
+      await q("update da_browser_session set last_strong_auth_at=clock_timestamp() where id=$1",[cookieHash])
+    }
+
     // Approved personal workspace has no editable launcher. Its retired
     // Person-only API must not read or write historical preference rows.
     const legacyPrefsBefore=await q("select id,person_id,app_ids,collapsed_ids,version from da_launcher_preference order by id")
