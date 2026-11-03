@@ -13,6 +13,117 @@ const ids=z.object({
   buyer_organization_id:org,customer_group_id:group
 }).strict()
 const write=ids.extend({action:z.enum(["grant","revoke"])}).strict()
+const listing=z.object({
+  organization_id:org,seller_id:seller,view:z.literal("list")
+}).strict()
+
+/** First-party, read-only native group choices for one verified Store Owner.
+ * The group link is authoritative; never enumerate global CustomerGroups.
+ * Choosing a group grants neither the Buyer Org nor the Person a price.
+ */
+async function listStoreGroups(req:MedusaRequest,res:MedusaResponse,
+  input:z.infer<typeof listing>){
+  const denied=()=>res.status(403).json({message:"Access denied"})
+  const svc=access(req),token=sessionToken(req)
+  try{
+    const native=req.scope.resolve<{
+      listMembers(f:object):Promise<any[]>
+      listSellerMembers(f:object):Promise<any[]>
+      listSellers(f:object):Promise<any[]>
+    }>("seller")
+    const query=req.scope.resolve<{
+      graph(input:object):Promise<{data:any[]}>
+    }>(ContainerRegistrationKeys.QUERY)
+    const customer=req.scope.resolve<{
+      listCustomerGroups(f:object,config:{skip:number,take:number}):Promise<any[]>
+    }>("customer")
+    const current=async()=>{
+      const [owner,legal,binding]=await Promise.all([
+        svc.personalManagerOrganization(token,input.organization_id),
+        svc.personalLegalSellerIds(token,input.organization_id),
+        svc.personalActorBinding(token,"member")
+      ])
+      if(!owner||!legal||owner.person_id!==legal.person_id||
+         !Array.isArray(legal.seller_ids)||
+         !legal.seller_ids.includes(input.seller_id)||
+         !binding||binding.revoked_at||
+         binding.actor_type!=="member"||
+         typeof binding.id!=="string"||
+         binding.person_id!==owner.person_id||
+         typeof binding.actor_id!=="string")return null
+      const [members,links,stores]=await Promise.all([
+        native.listMembers({id:binding.actor_id,is_active:true}),
+        native.listSellerMembers({seller_id:input.seller_id,
+          member_id:binding.actor_id}),
+        native.listSellers({id:input.seller_id})
+      ])
+      if(members.length!==1||members[0].id!==binding.actor_id||
+         members[0].is_active!==true||
+         links.length!==1||links[0].seller_id!==input.seller_id||
+         links[0].member_id!==binding.actor_id||
+         stores.length!==1||stores[0].id!==input.seller_id||
+         stores[0].status!=="open"||!stores[0].approved_at)return null
+      return {person_id:owner.person_id,
+        binding_id:binding.id,actor_id:binding.actor_id}
+    }
+    const before=await current()
+    if(!before)return denied()
+    // The explicit, bounded native Seller link is the only discovery source.
+    const {data:links}=await query.graph({
+      entity:"customer_group_seller",
+      fields:["seller_id","customer_group_id"],
+      filters:{seller_id:input.seller_id},
+      pagination:{skip:0,take:100}
+    })
+    if(!Array.isArray(links)||links.length>100||
+       links.some(x=>x.seller_id!==input.seller_id||
+         !group.safeParse(x.customer_group_id).success))return denied()
+    const ids=[...new Set(links.map(x=>x.customer_group_id as string))]
+    // Medusa's default page is 15 rows. Ask for precisely the linked IDs
+    // already bounded by the Store's 100-link first-page limit.
+    const records=ids.length?await customer.listCustomerGroups(
+      {id:ids},{skip:0,take:ids.length}
+    ):[]
+    if(!Array.isArray(records))return denied()
+    const allowed=new Set(ids)
+    const groups=records.filter(x=>allowed.has(x.id)&&
+      typeof x.name==="string"&&group.safeParse(x.id).success)
+      .map(x=>({id:String(x.id),name:String(x.name).slice(0,160)}))
+      .sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
+    if(groups.length!==ids.length||new Set(groups.map(x=>x.id)).size!==ids.length)
+      return denied()
+    // A stale or revoked Owner/Member/Store must not receive the names.
+    const after=await current()
+    if(!after||after.person_id!==before.person_id||
+       after.binding_id!==before.binding_id||
+       after.actor_id!==before.actor_id)return denied()
+    // A native group may have been unlinked while names were fetched. A
+    // second read limits that gap without pretending to provide a transaction
+    // spanning independent Medusa/Mercur module writes.
+    const {data:recentLinks}=await query.graph({
+      entity:"customer_group_seller",
+      fields:["seller_id","customer_group_id"],
+      filters:{seller_id:input.seller_id},
+      pagination:{skip:0,take:100}
+    })
+    const recentIds=Array.isArray(recentLinks)?
+      recentLinks.map(x=>x.customer_group_id):[]
+    if(!Array.isArray(recentLinks)||recentLinks.length!==links.length||
+       recentLinks.some(x=>x.seller_id!==input.seller_id||
+         !group.safeParse(x.customer_group_id).success)||
+       recentIds.length!==ids.length||
+       new Set(recentIds).size!==ids.length||
+       recentIds.some(x=>!allowed.has(x)))return denied()
+    return res.status(200).json({
+      organization_id:input.organization_id,
+      seller_id:input.seller_id,groups
+    })
+  }catch(error){
+    return res.status(error instanceof IdentityAccessDenied?403:503)
+      .json({message:error instanceof IdentityAccessDenied?
+        "Access denied":"Unavailable"})
+  }
+}
 
 /** Real first-party SellerOwner -> BuyerOrg -> native SellerCustomerGroup.
  * Native Customer is Person-scoped and cannot represent BuyerOrg membership.
@@ -94,6 +205,11 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   if(req.headers["x-seller-id"]!==undefined||
      req.headers.authorization!==undefined)
     return res.status(403).json({message:"Access denied"})
+  if(req.query.view!==undefined){
+    const selected=listing.safeParse(req.query)
+    if(!selected.success)return res.status(400).json({message:"Invalid input"})
+    return listStoreGroups(req,res,selected.data)
+  }
   const parsed=ids.safeParse(req.query)
   if(!parsed.success)return res.status(400).json({message:"Invalid input"})
   return handle(req,res,"read",parsed.data)

@@ -46,6 +46,340 @@ describe('selected Organization native Seller UI (script regression, not backend
     expect(h.el('actor-result').textContent).toBe('');
   });
 });
+describe('B22 native Store price-group selector request lifetime',()=>{
+  it('does not strand action buttons or show a stale result after switching Stores',async()=>{
+    const h=harness()
+    const form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_a'},
+      buyer_organization_id:{value:'daorg_b'}
+    }
+    const buttons=[{disabled:false},{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    ;(h.document as any).createDocumentFragment=()=>({append(){}})
+    runInContext("currentOrg='daorg_a';organizationRequest=1;"+
+      "api=(path)=>new Promise(resolve=>{(globalThis.groupCalls??=[]).push({path,resolve})})",h.context)
+    const oldAction=form.onsubmit({preventDefault(){},currentTarget:form,
+      submitter:{value:'read'}})
+    expect(buttons.every(button=>button.disabled)).toBe(true)
+    expect(((h.context as any).groupCalls as any[])[0].path).toContain('buyer_organization_id=')
+    fields.seller_id.value='sel_b'
+    const changed=runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    await tick()
+    expect(buttons.every(button=>button.disabled===false)).toBe(true)
+    expect(fields.customer_group_id.value).toBe('')
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    const pending=(h.context as any).groupCalls as any[]
+    expect(pending).toHaveLength(2)
+    expect(pending[1].path).toContain('seller_id=sel_b')
+    expect(pending[1].path).toContain('view=list')
+    pending[0].resolve({status:'active'})
+    await oldAction
+    expect(h.el('store-price-group-status').textContent).not.toContain('kabul edilmiş')
+    expect(buttons.every(button=>button.disabled===false)).toBe(true)
+    pending[1].resolve({organization_id:'daorg_a',seller_id:'sel_b',groups:[]})
+    await changed
+    expect(buttons.every(button=>button.disabled===false)).toBe(true)
+  })
+  it('retains unknown A grant across A->B->A, ignores late POST and clears only after a settled scoped read',async()=>{
+    const h=harness()
+    const form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_a'},
+      buyer_organization_id:{value:'daorg_b'}
+    }
+    const buttons=[{disabled:false},{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    ;(h.document as any).createDocumentFragment=()=>({append(){}})
+    runInContext("currentOrg='daorg_a';organizationRequest=1;"+
+      "api=(path,options)=>new Promise(resolve=>{(globalThis.groupCalls??=[]).push({path,options,resolve})})",
+      h.context)
+    const send=(action:string)=>form.onsubmit({
+      preventDefault(){},currentTarget:form,submitter:{value:action}
+    })
+    const oldGrant=send('grant')
+    let calls=(h.context as any).groupCalls as any[]
+    expect(calls).toHaveLength(1)
+    expect(calls[0].options.method).toBe('POST')
+    expect(buttons.every(b=>b.disabled)).toBe(true)
+    fields.seller_id.value='sel_b'
+    const toB=runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    await tick()
+    expect(buttons.every(b=>!b.disabled)).toBe(true)
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    fields.seller_id.value='sel_a'
+    const toA=runInContext("storePriceGroupChoices('daorg_a','sel_a',1)",h.context)
+    await tick()
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    expect(fields.customer_group_id.value).toBe('')
+    expect(buttons.every(b=>!b.disabled)).toBe(true)
+    calls=(h.context as any).groupCalls as any[]
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+    // A recheck started BEFORE the grant settles must not erase its warning,
+    // even if the grant finishes while this earlier read is in flight.
+    fields.customer_group_id.value='cusgroup_a'
+    const tooEarly=send('read')
+    calls=(h.context as any).groupCalls as any[]
+    expect(calls).toHaveLength(4)
+    expect(calls[3].path).toContain('seller_id=sel_a')
+    calls[0].resolve({status:'active'})
+    await oldGrant
+    calls[3].resolve({status:'active'})
+    await tooEarly
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+    const validRead=send('read')
+    calls=(h.context as any).groupCalls as any[]
+    expect(calls).toHaveLength(5)
+    calls[4].resolve({status:'active'})
+    await validRead
+    expect(h.el('store-price-group-status').textContent).toContain('kabul edilmiş')
+    expect(h.el('store-price-group-status').textContent).not.toContain('Önceki mağazadaki işlem')
+    expect(buttons.every(b=>!b.disabled)).toBe(true)
+    calls[1].resolve({organization_id:'daorg_a',seller_id:'sel_b',groups:[]})
+    calls[2].resolve({organization_id:'daorg_a',seller_id:'sel_a',groups:[]})
+    await Promise.all([toB,toA])
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+    expect(h.el('store-price-group-status').textContent).toContain('kabul edilmiş')
+  })
+
+  it('keeps a transport-uncertain write warning across Store switches without assuming a later read proves commit',async()=>{
+    const h=harness()
+    const form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_a'},
+      buyer_organization_id:{value:'daorg_b'}
+    }
+    const buttons=[{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1;api=async(path,options)=>{if(options?.method==='POST'){const e=new Error('503');e.uncertain=true;throw e}return {status:'active',organization_id:'daorg_a',seller_id:'sel_a',groups:[]}}",h.context)
+    const send=(action:string)=>form.onsubmit({preventDefault(){},currentTarget:form,submitter:{value:action}})
+    await send('grant')
+    expect(h.el('store-price-group-status').textContent).toContain('Sonuç belirsiz')
+    fields.seller_id.value='sel_b'
+    await runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    fields.seller_id.value='sel_a'
+    await runInContext("storePriceGroupChoices('daorg_a','sel_a',1)",h.context)
+    fields.customer_group_id.value='cusgroup_a'
+    await send('read')
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    expect(buttons.every(b=>!b.disabled)).toBe(true)
+  })
+  it('allows authorized verification after a terminal native 503, but blocks duplicate writes before that',async()=>{
+    const h=harness()
+    const form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_a'},
+      buyer_organization_id:{value:'daorg_b'}
+    }
+    const buttons=[{disabled:false},{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1;"+
+      "api=async(path,options)=>{"+
+        "(globalThis.groupCalls??=[]).push({path,options});"+
+        "if(options?.method==='POST'){const e=new Error('Outcome uncertain; recheck group');"+
+          "e.uncertain=true;e.httpStatus=503;throw e}"+
+        "if(path.includes('view=list'))return {organization_id:'daorg_a',"+
+          "seller_id:path.includes('seller_id=sel_b')?'sel_b':'sel_a',groups:[]};"+
+        "return {status:'active'}"+
+      "}",h.context)
+    const send=(action:string)=>form.onsubmit({
+      preventDefault(){},currentTarget:form,submitter:{value:action}
+    })
+    await send('grant')
+    expect(h.el('store-price-group-status').textContent).toContain('Sonuç belirsiz')
+    fields.seller_id.value='sel_b'
+    await runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    fields.seller_id.value='sel_a'
+    await runInContext("storePriceGroupChoices('daorg_a','sel_a',1)",h.context)
+    fields.customer_group_id.value='cusgroup_a'
+    await send('grant')
+    const calls=(h.context as any).groupCalls as any[]
+    expect(calls.filter((c:any)=>c.options?.method==='POST')).toHaveLength(1)
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    await send('read')
+    expect(h.el('store-price-group-status').textContent).toContain('kabul edilmiş')
+    expect(h.el('store-price-group-status').textContent).not.toContain('Önceki mağazadaki işlem')
+    expect(calls.filter((c:any)=>c.options?.method==='POST')).toHaveLength(1)
+    expect(buttons.every((b:any)=>!b.disabled)).toBe(true)
+  })
+  it('does not let an early read overwrite a pending write during additional Store switches',async()=>{
+    const h=harness()
+    const form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_a'},
+      buyer_organization_id:{value:'daorg_b'}
+    }
+    const buttons=[{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1;api=(path,options)=>new Promise(resolve=>{(globalThis.groupCalls??=[]).push({path,options,resolve})})",h.context)
+    const send=(action:string)=>form.onsubmit({preventDefault(){},currentTarget:form,submitter:{value:action}})
+    const grant=send('grant')
+    fields.seller_id.value='sel_b'
+    const toB=runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    fields.seller_id.value='sel_a'
+    const toA=runInContext("storePriceGroupChoices('daorg_a','sel_a',1)",h.context)
+    fields.customer_group_id.value='cusgroup_a'
+    const earlyRead=send('read')
+    fields.seller_id.value='sel_b'
+    const toBAgain=runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    const calls=(h.context as any).groupCalls as any[]
+    calls.find(c=>c.path.includes('buyer_organization_id=')).resolve({status:'active'})
+    await earlyRead
+    fields.seller_id.value='sel_a'
+    const backToA=runInContext("storePriceGroupChoices('daorg_a','sel_a',1)",h.context)
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    calls.find(c=>c.options?.method==='POST').resolve({status:'active'})
+    await grant
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    for(const c of calls.filter(c=>c.path.includes('view=list')))c.resolve({organization_id:'daorg_a',seller_id:'sel_b',groups:[]})
+    await Promise.all([toB,toA,toBAgain,backToA])
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+  })
+  it('F-01: late success belongs to the submitted Group/Buyer, never an edited selection',async()=>{
+    const h=harness(),form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_x'},
+      buyer_organization_id:{value:'daorg_y'}
+    }
+    const buttons=[{disabled:false},{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1;"+
+      "api=(path,options)=>new Promise(resolve=>{(globalThis.groupCalls??=[]).push({path,options,resolve})})",h.context)
+    const send=(action:string)=>form.onsubmit({
+      preventDefault(){},currentTarget:form,submitter:{value:action}
+    })
+    const oldGrant=send('grant')
+    const calls=(h.context as any).groupCalls as any[]
+    expect(calls).toHaveLength(1)
+    const original=JSON.parse(calls[0].options.body)
+    expect([original.customer_group_id,original.buyer_organization_id])
+      .toEqual(['cusgroup_x','daorg_y'])
+    fields.customer_group_id.value='cusgroup_z'
+    fields.buyer_organization_id.value='daorg_w'
+    calls[0].resolve({status:'active'})
+    await oldGrant
+    expect(h.el('store-price-group-status').textContent).not.toContain('kabul edilmiş')
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    expect(runInContext("priceGroupUncertain.has(JSON.stringify(['daorg_a','sel_a','cusgroup_x','daorg_y']))",h.context)).toBe(true)
+    // Current selection's authorized GET is not proof for the older write.
+    const differentRead=send('read')
+    calls[1].resolve({status:'revoked'})
+    await differentRead
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    fields.customer_group_id.value='cusgroup_x'
+    fields.buyer_organization_id.value='daorg_y'
+    await send('grant')
+    expect(calls.filter((x:any)=>x.options?.method==='POST')).toHaveLength(1)
+    const scopedRead=send('read')
+    calls[2].resolve({status:'active'})
+    await scopedRead
+    expect(h.el('store-price-group-status').textContent).toContain('kabul edilmiş')
+    expect(h.el('store-price-group-status').textContent).not.toContain('Önceki mağazadaki işlem')
+    expect(buttons.every(b=>!b.disabled)).toBe(true)
+  })
+  it('F-01: late terminal 503 cannot reject a different Group or Buyer selected in the form',async()=>{
+    const h=harness(),form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_x'},
+      buyer_organization_id:{value:'daorg_y'}
+    }
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>[{disabled:false}]
+    h.el('workspace').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1;"+
+      "api=(path,options)=>new Promise((resolve,reject)=>{(globalThis.groupCalls??=[]).push({path,options,resolve,reject})})",h.context)
+    const pending=form.onsubmit({preventDefault(){},currentTarget:form,submitter:{value:'grant'}})
+    const calls=(h.context as any).groupCalls as any[]
+    fields.customer_group_id.value='cusgroup_z'
+    fields.buyer_organization_id.value='daorg_w'
+    const error:any=new Error('Outcome uncertain; recheck group')
+    error.uncertain=true;error.httpStatus=503
+    calls[0].reject(error)
+    await pending
+    expect(h.el('store-price-group-status').textContent).not.toContain('İşlem reddedildi')
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    expect(runInContext("priceGroupUncertain.get(JSON.stringify(['daorg_a','sel_a','cusgroup_x','daorg_y']))?.settled",h.context)).toBe(true)
+    expect(calls.filter((x:any)=>x.options?.method==='POST')).toHaveLength(1)
+  })
+  it('F-02: unreadable successful POST body stays uncertain across Store switches and cannot be resent',async()=>{
+    const h=harness(),form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_x'},
+      buyer_organization_id:{value:'daorg_y'}
+    }
+    const buttons=[{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    ;(h.document as any).createDocumentFragment=()=>({append(){}})
+    runInContext("currentOrg='daorg_a';organizationRequest=1",h.context)
+    const send=(action:string)=>form.onsubmit({
+      preventDefault(){},currentTarget:form,submitter:{value:action}
+    })
+    const grant=send('grant')
+    const post=h.pending.find(p=>p.path==='/personal/store-price-groups'&&
+      p.options?.method==='POST')!
+    expect(post).toBeDefined()
+    post.resolve({ok:true,status:200,json:async()=>{throw new SyntaxError('truncated JSON')}})
+    await grant
+    expect(h.el('store-price-group-status').textContent).toContain('Sonuç belirsiz')
+    expect(h.el('store-price-group-status').textContent).not.toContain('İşlem reddedildi')
+    fields.seller_id.value='sel_b'
+    const toB=runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    await tick()
+    const listB=h.pending.find(p=>p.path.includes('view=list')&&p.path.includes('seller_id=sel_b'))!
+    listB.resolve({ok:true,status:200,json:async()=>({organization_id:'daorg_a',seller_id:'sel_b',groups:[]})})
+    await toB
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    fields.seller_id.value='sel_a'
+    const toA=runInContext("storePriceGroupChoices('daorg_a','sel_a',1)",h.context)
+    await tick()
+    const listA=h.pending.find(p=>p.path.includes('view=list')&&p.path.includes('seller_id=sel_a'))!
+    listA.resolve({ok:true,status:200,json:async()=>({organization_id:'daorg_a',seller_id:'sel_a',groups:[]})})
+    await toA
+    fields.customer_group_id.value='cusgroup_x'
+    await send('grant')
+    expect(h.pending.filter(p=>p.path==='/personal/store-price-groups'&&
+      p.options?.method==='POST')).toHaveLength(1)
+    const read=send('read')
+    const readCall=h.pending.find(p=>p.path.includes('buyer_organization_id=daorg_y'))!
+    readCall.resolve({ok:true,status:200,json:async()=>({status:'active'})})
+    await read
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    expect(buttons.every(b=>!b.disabled)).toBe(true)
+  })
+  it('F-02: HTTP 200 with an invalid write status is uncertain rather than a rejected grant',async()=>{
+    const h=harness(),form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_x'},
+      buyer_organization_id:{value:'daorg_y'}
+    }
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>[{disabled:false}]
+    h.el('workspace').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1",h.context)
+    const pending=form.onsubmit({preventDefault(){},currentTarget:form,submitter:{value:'grant'}})
+    const post=h.pending.find(p=>p.path==='/personal/store-price-groups'&&p.options?.method==='POST')!
+    post.resolve({ok:true,status:200,json:async()=>({unexpected:true})})
+    await pending
+    expect(h.el('store-price-group-status').textContent).toContain('Sonuç belirsiz')
+    expect(runInContext("priceGroupUncertain.size",h.context)).toBe(1)
+  })
+})
 describe('private workspace lifetime (script regression only)',()=>{
   it('polls with the no-touch header, stops while hidden, and clears private DOM',async()=>{
     const h=harness();await loaded(h)

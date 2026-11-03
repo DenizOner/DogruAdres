@@ -1763,17 +1763,271 @@ export default async function({container}:any){
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
     await browser.wait("!document.getElementById('store-price-group-panel').hidden")
-    await browser.input("#store-price-group-form input[name=customer_group_id]",priceGroup.id)
+    const groupListAuditStart=Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n)
+    const nativeGroupList=async(b:any,orgId:string,sellerId:string)=>b.eval("(async()=>{"+
+      "const p=new URLSearchParams({view:'list',"+
+      "organization_id:"+JSON.stringify(orgId)+","+
+      "seller_id:"+JSON.stringify(sellerId)+"});"+
+      "const r=await fetch('/personal/store-price-groups?'+p.toString());"+
+      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')};})()")
+    const ownedGroupList=await nativeGroupList(browser,organizations[0].id,ownerStoreId)
+    assert.equal(ownedGroupList.status,200)
+    assert.equal(ownedGroupList.body.organization_id,organizations[0].id)
+    assert.equal(ownedGroupList.body.seller_id,ownerStoreId)
+    assert.match(ownedGroupList.cache,/no-store/)
+    assert.ok(ownedGroupList.body.groups.some((g:any)=>g.id===priceGroup.id),
+      "Owned native CustomerGroup must be discoverable without typing its ID")
+    const secondGroupList=await nativeGroupList(browser,organizations[0].id,secondOwnerStoreId)
+    assert.equal(secondGroupList.status,200)
+    assert.ok(secondGroupList.body.groups.every((g:any)=>g.id!==priceGroup.id),
+      "Another Store may not discover this Store's native group")
+    assert.equal((await nativeGroupList(reviewer,organizations[0].id,ownerStoreId)).status,403,
+      "Foreign Person may not enumerate native Store CustomerGroups")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),groupListAuditStart,
+      "Read-only Store group choices must not write canonical audit")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    const choice=await browser.eval("(()=>{"+
+      "const field=document.getElementById('store-price-group-choice');"+
+      "field.value="+JSON.stringify(priceGroup.id)+";"+
+      "field.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value;})()")
+    assert.equal(choice,priceGroup.id,
+      "Real Owner Chrome picker must populate only its selected Store's native group ID")
     await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[1].id)
     const groupAuditStart=(await q("select count(*)::int n from da_audit_event"))[0].n
+    // Hold the FIRST real signed HTTPS POST response after PostgreSQL has
+    // committed. The request, authorization, grant and audit are not mocked.
+    // A->B->A while that reply is held must preserve the uncertainty notice,
+    // and an authorized subsequent GET must reconcile the durable result.
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daWriteRaceFetch=window.fetch;"+
+      "window.__daWriteRaceHeld=false;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+           "!window.__daWriteRaceHeld){"+
+          "window.__daWriteRaceHeld=true;"+
+          "return original(resource,options).then(response=>new Promise(resolve=>{"+
+            "window.__daWriteRaceRelease=()=>resolve(response)"+
+          "}))"+
+        "}"+
+        "return original(resource,options)"+
+      "};return true})()")
     await browser.click('#store-price-group-form button[value="grant"]')
-    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')")
+    await browser.wait("typeof window.__daWriteRaceRelease==='function'")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n),1,
+      "Pending Chrome grant must really commit an authorized PG16 BuyerOrg record")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Pending real grant must create one canonical audit before its reply is released")
+    const doubleSwitch=await browser.eval("(()=>{"+
+      "const form=document.getElementById('store-price-group-form');"+
+      "const store=form.elements.namedItem('seller_id');"+
+      "store.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "store.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "const first=document.getElementById('store-price-group-status').textContent;"+
+      "store.value="+JSON.stringify(ownerStoreId)+";"+
+      "store.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return {first,second:document.getElementById('store-price-group-status').textContent,"+
+        "group:form.elements.namedItem('customer_group_id').value,"+
+        "buttons:Array.from(form.querySelectorAll('button'),b=>b.disabled)}"+
+      "})()")
+    assert.match(doubleSwitch.first,/Önceki mağazadaki işlem/,
+      "First Store switch must report unresolved native grant")
+    assert.match(doubleSwitch.second,/Önceki mağazadaki işlem/,
+      "A->B->A cannot discard an unresolved native grant warning")
+    assert.equal(doubleSwitch.group,"",
+      "Returning to the first Store must not automatically reuse its stale group selection")
+    assert.ok(doubleSwitch.buttons.every((value:boolean)=>value===false),
+      "Multiple Store switches cannot strand group action buttons")
+    // A real authorized GET can finish while the original successful
+    // native POST response is still withheld by Chrome. This early read
+    // MUST NOT settle the write; another A->B->A must retain its warning.
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    assert.equal(await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value"+
+      "})()"),priceGroup.id)
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    const earlyReadSecondSwitch=await browser.eval("(()=>{"+
+      "const s=document.querySelector('#store-price-group-form select[name=seller_id]');"+
+      "s.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "s.value="+JSON.stringify(ownerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return {status:document.getElementById('store-price-group-status').textContent,"+
+      "enabled:Array.from(document.querySelectorAll('#store-price-group-form button'),b=>!b.disabled)}"+
+      "})()")
+    assert.match(earlyReadSecondSwitch.status,/Önceki mağazadaki işlem/,
+      "Early authorized GET and another Store switch cannot erase a pending native POST")
+    assert.ok(earlyReadSecondSwitch.enabled.every(Boolean),
+      "Another Store switch must keep the controls usable")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Early read and repeated Store switches may not create a second audit")
+    process.stdout.write("PASS B22 Chrome: early authorized HTTPS GET plus repeated Store switches cannot clear a still-pending native grant; PG16 one write/one audit\n")
+    await browser.eval("(()=>{"+
+      "window.__daWriteRaceRelease();"+
+      "window.fetch=window.__daWriteRaceFetch;"+
+      "delete window.__daWriteRaceRelease;delete window.__daWriteRaceFetch;"+
+      "return true})()")
+    await browser.wait("priceGroupUncertain.size>0&&"+
+      "Array.from(priceGroupUncertain.values()).every(v=>v.settled)")
+    assert.match(await browser.eval(
+      "document.getElementById('store-price-group-status').textContent"),
+      /Önceki mağazadaki işlem/,
+      "Late native POST reply must not falsely clear the unresolved notice")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    assert.equal(await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value"+
+      "})()"),priceGroup.id)
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')&&"+
+      "!document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Authorized recheck after a committed grant must not write another audit")
+    process.stdout.write("PASS B22 Chrome: pending native grant POST A-B-A retains warning and unlocked controls; authorized HTTPS record recheck clears only after PG16 grant and single audit are confirmed\n")
     assert.equal((await groupChange("read")).body.status,"active")
+    // Deterministic real-Chrome UI scheduling: the authenticated HTTPS GET
+    // still reaches Medusa, but its response is held only in this test page
+    // until the Store selector changes. No private API or DB is mocked.
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daGroupRaceFetch=window.fetch;"+
+      "window.__daGroupRaceHeld=false;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(typeof url==='string'&&url.startsWith('/personal/store-price-groups?')&&"+
+           "url.includes('buyer_organization_id=')&&!window.__daGroupRaceHeld){"+
+          "window.__daGroupRaceHeld=true;"+
+          "return original(resource,options).then(response=>new Promise(resolve=>{"+
+            "window.__daGroupRaceRelease=()=>resolve(response)"+
+          "}))"+
+        "}"+
+        "return original(resource,options)"+
+      "};return true})()")
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("typeof window.__daGroupRaceRelease==='function'")
+    const switchedGroup=await browser.eval("(()=>{"+
+      "const form=document.getElementById('store-price-group-form');"+
+      "const store=form.elements.namedItem('seller_id');"+
+      "store.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "store.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return {store:store.value,group:form.elements.namedItem('customer_group_id').value,"+
+        "disabled:Array.from(form.querySelectorAll('button'),b=>b.disabled),"+
+        "status:document.getElementById('store-price-group-status').textContent}"+
+    "})()")
+    assert.equal(switchedGroup.store,secondOwnerStoreId)
+    assert.equal(switchedGroup.group,"",
+      "Store switch must erase first Store's group selection")
+    assert.ok(switchedGroup.disabled.every((value:boolean)=>value===false),
+      "Buttons cannot remain locked while old Store read response is pending")
+    assert.match(switchedGroup.status,/Önceki mağazadaki işlem/,
+      "Unknown result of old Store action must not be represented as cancelled")
+    await browser.eval("(()=>{"+
+      "window.__daGroupRaceRelease();"+
+      "window.fetch=window.__daGroupRaceFetch;"+
+      "delete window.__daGroupRaceRelease;delete window.__daGroupRaceFetch;"+
+      "return true})()")
+    await browser.wait("document.getElementById('store-price-group-status').textContent"+
+      ".includes('Önceki mağazadaki işlem')")
+    assert.equal(await browser.eval(
+      "Array.from(document.querySelectorAll('#store-price-group-form button'))"+
+      ".every(b=>!b.disabled)"),true,
+      "Old completed read must not permanently disable next Store controls")
+    await browser.eval("(()=>{"+
+      "const s=document.querySelector('#store-price-group-form select[name=seller_id]');"+
+      "s.value="+JSON.stringify(ownerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    assert.equal(await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value"+
+      "})()"),priceGroup.id)
+    process.stdout.write("PASS B22 Chrome: group-picker Store-switch race: pending native HTTPS GET cannot lock new Store controls, previous result remains uncertain, selection resets; original Store works again\n")
     assert.equal((await groupChange("grant")).status,200)
     assert.equal((await q("select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
       [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n,1)
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
       groupAuditStart+1,"Idempotent grant writes only one canonical audit")
+    // F-01: an actual authenticated HTTPS idempotent grant commits before
+    // Chrome sees its response. Editing the Buyer input while it is delayed
+    // must not apply the OLD scope's success to the NEW visible Buyer.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'&&"+
+      "document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value==="+
+      JSON.stringify(organizations[1].id))
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daF01Fetch=window.fetch;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+          "JSON.parse(options.body||'{}').action==='grant'&&!window.__daF01Held){"+
+          "window.__daF01Held=true;"+
+          "return original(resource,options).then(response=>new Promise(resolve=>{"+
+            "window.__daF01Release=()=>resolve(response)"+
+          "}))"+
+        "}return original(resource,options)"+
+      "};return true})()")
+    await browser.click('#store-price-group-form button[value="grant"]')
+    await browser.wait("typeof window.__daF01Release==='function'")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n),1,
+      "Real original-scope grant remains persisted during delayed browser reply")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Idempotent grant cannot create an extra audit")
+    // B06Chrome.input appends text, so clear the prior field first.
+    await browser.eval("document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value=''")
+    await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[0].id)
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value"),
+      organizations[0].id)
+    await browser.eval("(()=>{"+
+      "window.__daF01Release();"+
+      "window.fetch=window.__daF01Fetch;"+
+      "delete window.__daF01Release;delete window.__daF01Fetch;"+
+      "return true})()")
+    await browser.wait("priceGroupUncertain.has(JSON.stringify(["+
+      JSON.stringify(organizations[0].id)+","+
+      JSON.stringify(ownerStoreId)+","+
+      JSON.stringify(priceGroup.id)+","+
+      JSON.stringify(organizations[1].id)+"]))&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(await browser.eval(
+      "document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')"),
+      false,"Late grant success must not be shown against the edited Buyer")
+    // B06Chrome.input appends text, so clear the prior field first.
+    await browser.eval("document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value=''")
+    await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[1].id)
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')&&"+
+      "!document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "F-01 scoped authorized GET cannot trigger another POST/audit")
+    process.stdout.write("PASS B22 Chrome: F-01 real idempotent native grant + PG16, delayed 200 after same-Store Buyer edit cannot claim success for new Buyer; exact original-scope read reconciles, no extra audit\n")
     assert.equal((await groupChange("grant",{...groupInput,seller_id:secondOwnerStoreId})).status,403)
     assert.equal((await groupChange("grant",groupInput,reviewer)).status,403)
     const missingCsrf=await browser.eval("(async()=>{const r=await fetch('/personal/store-price-groups',{method:'POST',headers:{'content-type':'application/json'},body:"+JSON.stringify(JSON.stringify({...groupInput,action:"grant"}))+"});return r.status})()")
@@ -1811,9 +2065,15 @@ export default async function({container}:any){
       "Same Seller's separate buyer Organization must not inherit Beta's group")
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
       privateReadAuditStart,"Real private catalogue read cannot mutate audit")
+    // A background tab deliberately conceals private Buyer content.
+    // Re-enter the real HTTPS page with the authorized Organization.
     await reviewer.send("Page.bringToFront")
-    await reviewer.wait("document.visibilityState==='visible'")
-    await reviewer.select(organizations[1].name,"owner")
+    const buyerPersonalUrl=reviewer.origin+"/personal?organization="+
+      encodeURIComponent(organizations[1].id)
+    await reviewer.send("Page.navigate",{url:buyerPersonalUrl})
+    await reviewer.wait("document.visibilityState==='visible'&&"+
+      "!document.getElementById('workspace').hidden&&"+
+      "JSON.parse(document.getElementById('detail').textContent||'{}').role==='owner'")
     await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden")
     await reviewer.click("#buyer-catalog-refresh")
     await reviewer.wait("document.getElementById('buyer-catalog-items').textContent.includes('Bu işletmeye özel TRY referans fiyatı:')")
@@ -1869,8 +2129,66 @@ export default async function({container}:any){
         [organizations[1].id])
     }
     assert.equal((await groupChange("read")).body.status,"active")
+    // The real authorized native revoke reaches Medusa HTTPS, persists in
+    // PostgreSQL and writes the canonical audit first. In this browser only,
+    // change its already-successful response to the exact terminal native 503
+    // payload. This tests the UI's 503 recovery, NOT an actual server 503.
+    const auditBeforeRevoke503=Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n)
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daRevokeActualFetch=window.fetch;"+
+      "window.__daRevokeSynthetic503=false;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+          "JSON.parse(options.body||'{}').action==='revoke'&&!window.__daRevokeSynthetic503){"+
+          "return original(resource,options).then(async response=>{"+
+            "const body=await response.clone().json();"+
+            "if(response.status!==200||body.status!=='revoked')return response;"+
+            "window.__daRevokeSynthetic503=true;"+
+            "return new Response(JSON.stringify({message:'Outcome uncertain; recheck group'}),"+
+              "{status:503,headers:{'Content-Type':'application/json'}})"+
+          "})"+
+        "}return original(resource,options)"+
+      "};return true})()")
     await browser.click('#store-price-group-form button[value="revoke"]')
-    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('üyeliği yok')")
+    await browser.wait("window.__daRevokeSynthetic503&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Sonuç belirsiz')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is not null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n),1,
+      "The native HTTPS revoke must commit before the synthetic browser 503")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),auditBeforeRevoke503+1,
+      "A disguised 503 must not mask a second audit or duplicated write")
+    await browser.eval("(()=>{"+
+      "window.fetch=window.__daRevokeActualFetch;"+
+      "delete window.__daRevokeActualFetch;"+
+      "return true})()")
+    const revoke503Switch=await browser.eval("(()=>{"+
+      "const s=document.querySelector('#store-price-group-form select[name=seller_id]');"+
+      "s.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "s.value="+JSON.stringify(ownerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.getElementById('store-price-group-status').textContent"+
+      "})()")
+    assert.match(revoke503Switch,/Önceki mağazadaki işlem/,
+      "An uncertain native revoke result must survive Store A-B-A")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('üyeliği yok')&&"+
+      "!document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),auditBeforeRevoke503+1,
+      "Authorized recheck after terminal synthetic 503 is read-only")
+    process.stdout.write("PASS B22 Chrome: real native HTTPS revoke/PG16 single audit with browser-only synthetic terminal 503; A-B-A warning and authorized subsequent GET recovery, no second write\n")
     assert.equal((await groupChange("read")).body.status,"revoked")
     const afterRevoke=await privateCatalogBeta()
     assert.equal(afterRevoke.status,200)
@@ -1879,6 +2197,14 @@ export default async function({container}:any){
     assert.equal(revokedOffer?.buyer_reference_try,undefined,
       "Committed Store BuyerOrg group revoke must immediately remove private reference")
     assert.deepEqual(revokedOffer?.list_price_try,{amount:1250.5,currency_code:"try"})
+    // Retest after Seller's revoke through a fresh HTTPS Buyer navigation,
+    // never by manually undoing the privacy-concealed DOM.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.send("Page.navigate",{url:buyerPersonalUrl})
+    await reviewer.wait("document.visibilityState==='visible'&&"+
+      "!document.getElementById('workspace').hidden&&"+
+      "JSON.parse(document.getElementById('detail').textContent||'{}').role==='owner'")
+    await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden")
     await reviewer.click("#buyer-catalog-refresh")
     await reviewer.wait("!document.getElementById('buyer-catalog-items').textContent.includes('Bu işletmeye özel TRY referans fiyatı:')")
     process.stdout.write("PASS B22 BuyerOrg native private TRY reference: real Chrome/HTTPS/PG16 active Store group grants only 950.25 TRY to Beta, other Store and Buyer base TRY; revoke and Seller suspension hide price, no checkout or audit writes\n")
@@ -1887,6 +2213,51 @@ export default async function({container}:any){
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
       groupAuditStart+2,"Revocation retains auditable membership history")
     process.stdout.write("PASS B22 audited Store price group: real Owner Chrome grant/revoke, Mercur SellerCustomerGroup link, Buyer Org PG16 audit/outbox, foreign Person/Store/CSRF denied; no checkout\n")
+
+    // F-02: the real native HTTPS revoke returns 200 after a previously
+    // committed revoke. Corrupt ONLY the browser-visible body afterward.
+    // This does not claim Medusa itself sent corrupt JSON.
+    await browser.send("Page.bringToFront")
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daF02Fetch=window.fetch;"+
+      "window.__daF02Posts=0;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+          "JSON.parse(options.body||'{}').action==='revoke'){"+
+          "window.__daF02Posts++;"+
+          "return original(resource,options).then(async response=>{"+
+            "const data=await response.clone().json();"+
+            "if(response.status!==200||data.status!=='revoked')return response;"+
+            "return new Response('{',{status:200,headers:{'Content-Type':'application/json'}})"+
+          "})"+
+        "}return original(resource,options)"+
+      "};return true})()")
+    await browser.click('#store-price-group-form button[value="revoke"]')
+    await browser.wait("window.__daF02Posts===1&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Sonuç belirsiz')")
+    assert.equal(await browser.eval(
+      "document.getElementById('store-price-group-status').textContent.includes('İşlem reddedildi')"),
+      false,"Corrupt successful POST response must not falsely claim rejection")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+2,
+      "F-02 idempotent native revoke plus malformed browser response creates no new audit")
+    await browser.click('#store-price-group-form button[value="revoke"]')
+    assert.equal(await browser.eval("window.__daF02Posts"),1,
+      "F-02 duplicate write guard must prevent a second HTTPS POST")
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(await browser.eval(
+      "priceGroupUncertain.size>0&&Array.from(priceGroupUncertain.values()).some(v=>v.outcomeUnverified===true)"),
+      true,"A post-corruption GET alone cannot prove the original POST ended")
+    await browser.eval("(()=>{"+
+      "window.fetch=window.__daF02Fetch;delete window.__daF02Fetch;"+
+      "return true})()")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+2,
+      "Malformed browser reply, duplicate guard and read cannot create an extra audit")
+    process.stdout.write("PASS B22 Chrome: F-02 native HTTPS/PG16 idempotent revoke, browser-only malformed 200 JSON remains uncertain; same-key POST blocked and authorized GET does not guess settlement; no extra audit\n")
 
     const catalogUrl=(org:string)=>"/personal/catalog?organization_id="+
       encodeURIComponent(org)
@@ -4885,7 +5256,15 @@ export default async function({container}:any){
     if(ownerButton){
       // The visible UI path is preferred, but the privacy observer may
       // conceal it BETWEEN the Owner selection and actual button click.
-      await browser.select(organizations[0].name,"owner")
+      try{
+        await browser.select(organizations[0].name,"owner")
+      }catch(error){
+        // The observer can conceal the button after ownerButton was read.
+        // Never ignore a failed selection while the workspace stays visible.
+        const concealed=await browser.eval(
+          "document.getElementById('workspace').hidden===true")
+        if(!concealed)throw error
+      }
       // A real privacy observer may clear the panel after membership revoke.
       // Accept concealment ONLY when the entire workspace is genuinely
       // hidden. Otherwise insist on the correct Organization and both stores.

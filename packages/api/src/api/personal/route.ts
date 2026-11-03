@@ -195,7 +195,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <p id="store-price-group-status" role="status" aria-live="polite"></p>
       <form id="store-price-group-form">
         <label>Onaylı mağaza<select name="seller_id" required></select></label>
-        <label>Mevcut müşteri grubu kimliği<input name="customer_group_id" pattern="cusgroup_[A-Za-z0-9_-]+" placeholder="cusgroup_..." required autocomplete="off"></label>
+        <label>Mağazanın mevcut müşteri grupları<select id="store-price-group-choice" disabled><option value="">Mağazayı seçerek grupları yükleyin</option></select></label>
+        <p id="store-price-group-options-status" role="status" aria-live="polite"></p>
+        <label>Seçilen grubun kimliği<input name="customer_group_id" pattern="cusgroup_[A-Za-z0-9_-]+" placeholder="cusgroup_..." required autocomplete="off"></label>
         <label>Alıcı işletme kimliği<input name="buyer_organization_id" pattern="daorg_[A-Za-z0-9_-]{1,80}" placeholder="daorg_..." required autocomplete="off"></label>
         <button type="submit" name="action" value="grant">Gruba kabul et</button>
         <button type="submit" name="action" value="revoke">Gruptan çıkar</button>
@@ -293,7 +295,32 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <script nonce="${nonce}">
   let viewEpoch=0,loadedScope='',observing=false;
   let csrf=''; const el=id=>document.getElementById(id); const status=t=>el('status').textContent=t;
-  async function api(path,options={}){const epoch=viewEpoch;let r;try{r=await fetch('/personal/'+path,{credentials:'same-origin',...options,headers:{'Content-Type':'application/json','x-csrf-token':csrf,...options.headers}})}catch{const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');e.uncertain=true;throw e}const data=await r.json();if(epoch!==viewEpoch)throw new Error('Görünüm yenilendi');if(!r.ok){const e=new Error(data.message||'İşlem reddedildi');e.httpStatus=r.status;e.uncertain=r.status>=500;throw e}return data}
+  async function api(path,options={}){
+    const epoch=viewEpoch;let r;
+    try{r=await fetch('/personal/'+path,{credentials:'same-origin',...options,
+      headers:{'Content-Type':'application/json','x-csrf-token':csrf,...options.headers}})}
+    catch{const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');
+      e.uncertain=true;throw e}
+    // Even HTTP 200 cannot prove a price-group POST's outcome if its body is
+    // truncated, unreadable or not a JSON object. Do not claim rejection.
+    const groupWrite=path==='store-price-groups'&&options.method==='POST';
+    let data;
+    try{
+      data=await r.json();
+      if(groupWrite&&(!data||typeof data!=='object'||Array.isArray(data)))
+        throw new Error('Geçersiz yazma yanıtı');
+    }catch(error){
+      if(!groupWrite)throw error;
+      const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');
+      e.uncertain=true;throw e;
+    }
+    if(epoch!==viewEpoch)throw new Error('Görünüm yenilendi');
+    if(!r.ok){
+      const e=new Error(data?.message||'İşlem reddedildi');
+      e.httpStatus=r.status;e.uncertain=r.status>=500;throw e
+    }
+    return data;
+  }
   let recoveryCodes=[];
   let notificationRequest=0,notificationOffset=0,notificationNext=null;
   function clearNotifications(){
@@ -703,11 +730,24 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Only this selected legal Organization's Owner sees the controls; the
   // server independently checks fresh Owner, verified Store origin and native
   // Seller/Member before every write. Visibility is NOT authorization.
-  let storeBlockRequest=0,priceGroupRequest=0;
+  let storeBlockRequest=0,priceGroupListRequest=0,priceGroupActionRequest=0;
+  let priceGroupActionPending=false,priceGroupCurrentAction=null;
+  const priceGroupUncertain=new Map();
+  const priceGroupWarning='Önceki mağazadaki işlem veya önceki grup/alıcı seçimi sonuçlanmış olabilir. İlgili kaydı kontrol edin.';
+  function showPriceGroupStatus(value=''){
+    const warning=priceGroupUncertain.size?priceGroupWarning:'';
+    el('store-price-group-status').textContent=
+      value&&warning?value+' '+warning:value||warning;
+  }
   function clearStoreBlock(){
-    storeBlockRequest++;priceGroupRequest++;
+    storeBlockRequest++;priceGroupActionRequest++;
+    priceGroupActionPending=false;priceGroupCurrentAction=null;
+    // Never carry an earlier Person/Organization's private outcome across
+    // the permission boundary or after workspace concealment.
+    priceGroupUncertain.clear();
     el('store-price-group-panel').hidden=true;
     el('store-price-group-status').textContent='';
+    clearStorePriceGroupChoices();
     const gf=el('store-price-group-form');
     const gs=gf?.elements&&typeof gf.elements.namedItem==='function'?
       gf.elements.namedItem('seller_id'):null;
@@ -724,6 +764,84 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(typeof form.reset==='function')form.reset();
     }
   }
+  // This picker is convenience only; the existing grant endpoint still
+  // verifies the current native Seller->CustomerGroup link on every write.
+  function clearStorePriceGroupChoices(){
+    priceGroupListRequest++;
+    const choice=el('store-price-group-choice');
+    if(choice&&typeof choice.replaceChildren==='function'){
+      choice.replaceChildren();choice.disabled=true;
+    }
+    const msg=el('store-price-group-options-status');
+    if(msg)msg.textContent='';
+    const form=el('store-price-group-form');
+    const field=form?.elements&&typeof form.elements.namedItem==='function'?
+      form.elements.namedItem('customer_group_id'):null;
+    if(field)field.value='';
+  }
+  async function storePriceGroupChoices(org,seller_id,request){
+    clearStorePriceGroupChoices();
+    if(request!==organizationRequest||currentOrg!==org||
+       document.hidden||el('workspace').hidden||
+       !/^sel_[A-Za-z0-9_-]+$/.test(seller_id))return;
+    // A Store change invalidates the old UI action, not the server write.
+    // Its result may be committed: never call the previous action cancelled.
+    if(priceGroupActionPending&&priceGroupCurrentAction){
+      const older=priceGroupUncertain.get(priceGroupCurrentAction.key);
+      if(!older||(older.kind==='read'&&priceGroupCurrentAction.kind!=='read'))
+        priceGroupUncertain.set(priceGroupCurrentAction.key,priceGroupCurrentAction);
+    }
+    ++priceGroupActionRequest;
+    priceGroupActionPending=false;priceGroupCurrentAction=null;
+    const actionForm=el('store-price-group-form');
+    if(actionForm)for(const button of actionForm.querySelectorAll('button'))
+      button.disabled=false;
+    // The warning survives A->B->A and other switches until the same
+    // scoped record has been rechecked after its original request settled.
+    showPriceGroupStatus();
+    const seq=priceGroupListRequest;
+    const choice=el('store-price-group-choice'),
+      message=el('store-price-group-options-status');
+    if(!choice||!message)return;
+    message.textContent='Bu mağazanın müşteri grupları kontrol ediliyor…';
+    try{
+      const data=await api('store-price-groups?'+new URLSearchParams({
+        organization_id:org,seller_id,view:'list'
+      }).toString());
+      if(seq!==priceGroupListRequest||request!==organizationRequest||
+         currentOrg!==org||document.hidden||
+         el('store-price-group-form')?.elements?.namedItem('seller_id')?.value!==seller_id)return;
+      if(data.organization_id!==org||data.seller_id!==seller_id||
+         !Array.isArray(data.groups)||data.groups.length>100||
+         data.groups.some(g=>typeof g?.id!=='string'||
+           !/^cusgroup_[A-Za-z0-9_-]+$/.test(g.id)||
+           typeof g.name!=='string'||g.name.length>160)||
+         new Set(data.groups.map(g=>g.id)).size!==data.groups.length)
+        throw Error('Grup yanıtı doğrulanamadı');
+      const options=document.createDocumentFragment();
+      const blank=document.createElement('option');
+      blank.value='';blank.textContent='Grup seçin';options.append(blank);
+      for(const group of data.groups){
+        const option=document.createElement('option');
+        option.value=group.id;option.textContent=group.name;options.append(option);
+      }
+      choice.replaceChildren(options);
+      choice.disabled=data.groups.length===0;
+      message.textContent=data.groups.length?
+        'Bu mağazanın gruplarından birini seçin; seçim başka mağazada geçerli değildir.':
+        'Bu mağazada seçilebilir müşteri grubu bulunamadı.';
+    }catch(e){
+      if(seq!==priceGroupListRequest||request!==organizationRequest||currentOrg!==org)return;
+      choice.replaceChildren();choice.disabled=true;
+      message.textContent='Mağaza grupları yetki nedeniyle yüklenemedi.';
+    }
+  }
+  const priceGroupChoice=el('store-price-group-choice');
+  if(priceGroupChoice)priceGroupChoice.onchange=()=>{
+    const field=el('store-price-group-form')?.elements?.namedItem('customer_group_id');
+    if(field)field.value=/^cusgroup_[A-Za-z0-9_-]+$/.test(priceGroupChoice.value)?
+      priceGroupChoice.value:'';
+  };
   async function storeBlockStores(org,request){
     if(request!==organizationRequest||currentOrg!==org||
       document.hidden||el('workspace').hidden)return;
@@ -758,6 +876,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         for(const option of select.options)gs.append(option.cloneNode(true));
         for(const button of gf.querySelectorAll('button'))button.disabled=data.stores.length===0;
         el('store-price-group-panel').hidden=data.stores.length===0;
+        gs.onchange=()=>storePriceGroupChoices(org,gs.value,request);
+        if(data.stores.length)void storePriceGroupChoices(org,gs.value,request);
       }
       msg.textContent=data.stores.length?
         'Yalnız kendi mağazanız için alıcı kuruluş engeli koyabilirsiniz.':
@@ -817,31 +937,94 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!/^sel_[A-Za-z0-9_-]+$/.test(seller_id)||
        !/^cusgroup_[A-Za-z0-9_-]+$/.test(customer_group_id)||
        !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyer_organization_id))return;
-    const message=el('store-price-group-status'),seq=++priceGroupRequest;
+    const key=JSON.stringify([org,seller_id,customer_group_id,buyer_organization_id]);
+    // A Store switch only unlocks OTHER scopes. It must not permit a
+    // duplicate grant/revoke while this exact record's outcome is unknown.
+    const previous=priceGroupUncertain.get(key);
+    if(action!=='read'&&((previous&&previous.kind!=='read')||
+       (priceGroupActionPending&&priceGroupCurrentAction?.key===key&&
+        priceGroupCurrentAction.kind!=='read'))){
+      showPriceGroupStatus('Bu kayıt için önceki değişiklik henüz doğrulanmadı. Yeni işlem göndermeden önce sonucu kontrol edin.');
+      return;
+    }
+    // An old GET is not a write and cannot bar a new authorized change.
+    if(action!=='read'&&previous?.kind==='read')priceGroupUncertain.delete(key);
+    const seq=++priceGroupActionRequest;
+    const currentAction={key,settled:false,kind:action};
+    const sameSelection=()=>form.elements.namedItem('seller_id')?.value===seller_id&&
+      String(form.elements.namedItem('customer_group_id')?.value||'').trim()===customer_group_id&&
+      String(form.elements.namedItem('buyer_organization_id')?.value||'').trim()===buyer_organization_id;
+    // A read begun before an older write settles cannot clear an unknown
+    // outcome: it could have observed the old state before the write commits.
+    const recheck=action==='read'&&priceGroupUncertain.get(key)?.settled===true?
+      priceGroupUncertain.get(key):null;
+    priceGroupCurrentAction=currentAction;
+    priceGroupActionPending=true;
     for(const button of form.querySelectorAll('button'))button.disabled=true;
-    message.textContent='Yetkili mağaza ve alıcı işletme denetleniyor…';
+    showPriceGroupStatus('Yetkili mağaza ve alıcı işletme denetleniyor…');
     try{
       const data={organization_id:org,seller_id,customer_group_id,buyer_organization_id};
       const result=action==='read'?
         await api('store-price-groups?'+new URLSearchParams(data).toString()):
         await api('store-price-groups',{method:'POST',body:JSON.stringify({...data,action})});
-      if(seq!==priceGroupRequest||request!==organizationRequest||
-         currentOrg!==org||document.hidden)return;
-      if(!['active','revoked'].includes(result.status)||
+      if(seq!==priceGroupActionRequest||request!==organizationRequest||
+         currentOrg!==org||document.hidden||el('workspace').hidden||
+         form.elements.namedItem('seller_id')?.value!==seller_id)return;
+      if(!['active','revoked'].includes(result?.status)||
          (action==='grant'&&result.status!=='active')||
-         (action==='revoke'&&result.status!=='revoked'))
-        throw Error('Yetki sonucu doğrulanamadı');
-      message.textContent=result.status==='active'?
+         (action==='revoke'&&result.status!=='revoked')){
+        const e=new Error('Yetki sonucu doğrulanamadı');
+        // A syntactically valid but unusable POST response is still unknown.
+        e.uncertain=action!=='read';
+        throw e;
+      }
+      if(!sameSelection()){
+        // The response belongs to the submitted tuple, not the fields now
+        // visible in the form. Keep the original write scoped for recheck.
+        if(action!=='read'&&!priceGroupUncertain.has(key))
+          priceGroupUncertain.set(key,currentAction);
+        showPriceGroupStatus(action==='read'?
+          'Seçim değişti. Yeni seçimin kaydını yeniden kontrol edin.':'');
+        return;
+      }
+      if(recheck&&priceGroupUncertain.get(key)===recheck)
+        priceGroupUncertain.delete(key);
+      showPriceGroupStatus(result.status==='active'?
         'Alıcı işletme bu mağazanın özel fiyat grubuna kabul edilmiş.':
-        'Bu işletmenin bu mağaza grubunda geçerli üyeliği yok.';
+        'Bu işletmenin bu mağaza grubunda geçerli üyeliği yok.');
     }catch(e){
-      if(seq!==priceGroupRequest||request!==organizationRequest||currentOrg!==org)return;
-      message.textContent=e.uncertain?
+      if(e.uncertain&&action!=='read'){
+        // A native route's completed 503 is a terminal response. Its
+        // subsequent authorized read can confirm the persisted state. A
+        // transport loss, or an unrelated 503, does not prove the write ended.
+        currentAction.outcomeUnverified=!(
+          e.httpStatus===503&&e.message==='Outcome uncertain; recheck group');
+        currentAction.settled=!currentAction.outcomeUnverified;
+        if(request===organizationRequest&&currentOrg===org&&!document.hidden&&
+           !el('workspace').hidden&&!priceGroupUncertain.has(key))
+          priceGroupUncertain.set(key,currentAction);
+      }
+      if(seq!==priceGroupActionRequest||request!==organizationRequest||currentOrg!==org||
+         document.hidden||el('workspace').hidden||
+         form.elements.namedItem('seller_id')?.value!==seller_id)return;
+      if(!sameSelection()){
+        // Never attach an old rejection or uncertain result to another Buyer
+        // or Group selected while the original request was in flight.
+        showPriceGroupStatus('Seçim değişti. Önceki işlemin sonucunu yalnız ilgili kayıtta kontrol edin.');
+        return;
+      }
+      showPriceGroupStatus(e.uncertain?
         'Sonuç belirsiz. İşlemi tekrarlamadan önce kaydı kontrol edin.':
-        'İşlem reddedildi; mağaza veya grup yetkisi doğrulanamadı.';
+        'İşlem reddedildi; mağaza veya grup yetkisi doğrulanamadı.');
     }finally{
-      if(seq===priceGroupRequest&&request===organizationRequest&&currentOrg===org&&!document.hidden)
-        for(const button of form.querySelectorAll('button'))button.disabled=false;
+      if(!(action!=='read'&&priceGroupUncertain.get(key)===currentAction&&
+           currentAction.outcomeUnverified))currentAction.settled=true;
+      if(seq===priceGroupActionRequest){
+        priceGroupActionPending=false;priceGroupCurrentAction=null;
+        if(request===organizationRequest&&currentOrg===org&&!document.hidden&&
+           form.elements.namedItem('seller_id')?.value===seller_id)
+          for(const button of form.querySelectorAll('button'))button.disabled=false;
+      }
     }
   };
 
