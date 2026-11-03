@@ -6,6 +6,7 @@ describe("canonical Person mobile contact persistence (synthetic transaction)",(
   const mobile="+905551234567"
   const session={person_id:"daprs_self",actor_type:"user",actor_id:"usr_self"}
   let current:jest.SpyInstance
+  let currentForWrite:jest.SpyInstance
   let execute:jest.Mock
   let audit:jest.Mock
   let context:Context
@@ -26,6 +27,8 @@ describe("canonical Person mobile contact persistence (synthetic transaction)",(
     })
     current=jest.spyOn(IdentitySessions.prototype,"current")
       .mockResolvedValue(session as any)
+    currentForWrite=jest.spyOn(IdentitySessions.prototype,"currentForPersonWrite")
+      .mockResolvedValue(session as any)
     audit=jest.fn().mockResolvedValue([])
     service=Object.create(Access.prototype) as Access
     Object.assign(service,{persistAuditEventsWithOutbox_:audit})
@@ -43,7 +46,7 @@ describe("canonical Person mobile contact persistence (synthetic transaction)",(
   it("persists exactly one Person change and emits a private-number-free audit/outbox in the same transaction",async()=>{
     const r=await service.personalSaveMobile("opaque-session",mobile,0,context)
     expect(r).toEqual({mobile_phone:mobile,version:1})
-    expect(current).toHaveBeenCalledWith("opaque-session",true)
+    expect(currentForWrite).toHaveBeenCalledWith("opaque-session")
     expect(execute).toHaveBeenCalledTimes(2)
     expect(audit).toHaveBeenCalledTimes(1)
     const event=audit.mock.calls[0][0][0]
@@ -71,6 +74,7 @@ describe("canonical Person mobile contact persistence (synthetic transaction)",(
   })
   it("never reads or writes for an unbound, revoked or weak session",async()=>{
     current.mockResolvedValue(null)
+    currentForWrite.mockResolvedValue(null)
     expect(await service.personalMobile("expired",context)).toBeNull()
     expect(await service.personalSaveMobile("expired",mobile,0,context)).toBeNull()
     expect(execute).not.toHaveBeenCalled()
