@@ -83,8 +83,15 @@ async function run(){
       DOGRUADRES_MFA_SETTINGS_ENABLED:"false",
       ...(scope==="b22-ui"?{DOGRUADRES_B22_PG_LOCK_TEST:"true"}:{}),
     }
+    // The official Redis Workflow Engine needs its own migration in the
+    // same disposable PG16 database. Native child will use this schema.
+    const migrationEnv=scope==="b22-ui"?{
+      ...env,
+      DOGRUADRES_B22_REDIS_WORKFLOW_MIGRATION:"true",
+      LOCKING_REDIS_URL:"redis://127.0.0.1:6379",
+    }:env
     const result=spawnSync(process.execPath,["run","medusa",...flags],{
-      cwd:process.cwd(),env,encoding:"utf8",timeout:180000,maxBuffer:2*1024*1024,
+      cwd:process.cwd(),env:migrationEnv,encoding:"utf8",timeout:180000,maxBuffer:2*1024*1024,
     })
     if(result.error || result.status!==0){
       const cause=String(result.error??("exit "+result.status))
@@ -101,6 +108,9 @@ async function run(){
       if(scope==="b22-ui"){
         const locks=await target.unsafe("select to_regclass('public.locking') as table_name")
         assert.ok(locks[0].table_name,"Missing official PostgreSQL locking provider migration in disposable B22 CI database")
+        const workflows=await target.unsafe("select to_regclass('public.workflow_execution') as table_name")
+        assert.ok(workflows[0].table_name,
+          "Missing official Redis Workflow Engine execution storage in disposable B22 CI database")
       }
       const ledger=await target.unsafe("select count(*)::int as n from mikro_orm_migrations where name like 'Migration2026102%'")
       assert.ok(Number(ledger[0].n)>=1,"No Foundation migration history from Medusa CLI")
