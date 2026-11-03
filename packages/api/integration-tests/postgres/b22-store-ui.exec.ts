@@ -2027,7 +2027,7 @@ export default async function({container}:any){
     assert.equal(Number((await q(
       "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
       "F-01 scoped authorized GET cannot trigger another POST/audit")
-    process.stdout.write("PASS B22 Chrome F-01: real idempotent native grant + PG16, delayed 200 after same-Store Buyer edit cannot claim success for new Buyer; exact original-scope read reconciles, no extra audit\n")
+    process.stdout.write("PASS B22 Chrome: F-01 real idempotent native grant + PG16, delayed 200 after same-Store Buyer edit cannot claim success for new Buyer; exact original-scope read reconciles, no extra audit\n")
     assert.equal((await groupChange("grant",{...groupInput,seller_id:secondOwnerStoreId})).status,403)
     assert.equal((await groupChange("grant",groupInput,reviewer)).status,403)
     const missingCsrf=await browser.eval("(async()=>{const r=await fetch('/personal/store-price-groups',{method:'POST',headers:{'content-type':'application/json'},body:"+JSON.stringify(JSON.stringify({...groupInput,action:"grant"}))+"});return r.status})()")
@@ -2257,7 +2257,7 @@ export default async function({container}:any){
     assert.equal(Number((await q(
       "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+2,
       "Malformed browser reply, duplicate guard and read cannot create an extra audit")
-    process.stdout.write("PASS B22 Chrome F-02: native HTTPS/PG16 idempotent revoke, browser-only malformed 200 JSON remains uncertain; same-key POST blocked and authorized GET does not guess settlement; no extra audit\n")
+    process.stdout.write("PASS B22 Chrome: F-02 native HTTPS/PG16 idempotent revoke, browser-only malformed 200 JSON remains uncertain; same-key POST blocked and authorized GET does not guess settlement; no extra audit\n")
 
     const catalogUrl=(org:string)=>"/personal/catalog?organization_id="+
       encodeURIComponent(org)
