@@ -427,7 +427,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   ) {
     if (!/^authid_[A-Za-z0-9_-]+$/.test(authIdentityId) ||
         !/^cus_[A-Za-z0-9_-]+$/.test(customerId) ||
-        !/^\\+?[0-9]{6,20}$/.test(mobile) ||
+        !/^\+?[0-9]{6,20}$/.test(mobile) ||
         typeof displayName !== "string" || displayName.length > 101)
       throw new IdentityAccessDenied()
     const sql = securitySql(context.transactionManager)
