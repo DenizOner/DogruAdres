@@ -138,8 +138,8 @@ jobs:
           const fs = require('node:fs')
           const crypto = require('node:crypto')
           const text = fs.readFileSync('bun.lock', 'utf8')
-          const lock = JSON.parse(text)
-          if (text.length < 200000 || lock.workspaces?.['']?.dependencies?.['@mercurjs/client'] !== '2.4.0' || lock.workspaces?.['packages/api']?.dependencies?.['@medusajs/medusa'] !== '2.22.0') throw Error('Upgrade lockfile did not resolve target versions')
+          // Bun 1.4.2 lockfile is JSONC (trailing commas), not strict JSON.
+          if (text.length < 200000 || !text.includes('"@mercurjs/client": "2.4.0"') || !text.includes('"@medusajs/medusa": "2.22.0"')) throw Error('Upgrade lockfile did not resolve target versions')
           if (/https?:\/\/[^\s\/@]+:[^\s\/@]+@/.test(text)) throw Error('Refusing to publish a lockfile containing credential URLs')
           const size = 8000
           const count = Math.ceil(text.length / size)
