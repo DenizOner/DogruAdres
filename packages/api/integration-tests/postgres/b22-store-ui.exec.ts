@@ -18,7 +18,7 @@ import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
 import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
-import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow} from "@mercurjs/core/workflows"
+import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
@@ -1590,6 +1590,12 @@ export default async function({container}:any){
     // Medusa published master variant, Mercur's per-Seller Offer workflow,
     // and Medusa's native addToCartWorkflow with Mercur's Offer hooks.
     // All resources exist solely in this guarded disposable PG16 CI database.
+    // Mercur 2.4.0 needs explicit Seller–Region assignments. These
+    // resources are created only inside the disposable B22 PG16 fixture.
+    const regions=container.resolve("region")
+    const region=await regions.createRegions({
+      name:"B22 two-Store region "+rand,currency_code:"eur",countries:[]
+    })
     const {result:[b22Profile]}=await createShippingProfilesWorkflow(container).run({
       input:{data:[{name:"B22 two-Store Offer profile "+rand,type:"default"}]}
     })
@@ -1609,12 +1615,23 @@ export default async function({container}:any){
     assert.equal(persistedVariants.length,1)
     const variant=persistedVariants[0]
     assert.match(variant.id,/^variant_[A-Za-z0-9_-]+$/)
-    // Mercur 2.3.7 createOffersWorkflow's seller-inventory step obtains
+    // Mercur 2.4.0 createOffersWorkflow's seller-inventory step obtains
     // its Seller from offers[0], so use one run per Seller, not a mixed batch.
     const offerRows:Array<{id:string;seller_id:string}>=[]
     // Both participating native Stores used real Owner application and
     // independent platform approval. Other Sellers are not silently included.
     const cartStoreIds=[ownerStoreId,secondOwnerStoreId]
+    await linkSellerRegionsWorkflow(container).run({input:{
+      add:cartStoreIds.map(seller_id=>({seller_id,region_id:region.id}))
+    }})
+    const {data:ownedRegions}=await container.resolve("query").graph({
+      entity:"region_seller",fields:["seller_id","region_id"],
+      filters:{seller_id:[...cartStoreIds,unapprovedStore.id],region_id:region.id}
+    })
+    assert.deepEqual(ownedRegions.map((row:any)=>row.seller_id).sort(),
+      [...cartStoreIds].sort(),
+      "Mercur 2.4 Store regions must include only explicitly linked approved Sellers")
+    process.stdout.write("PASS B22 Mercur 2.4 Store regions: two approved task-only Sellers explicitly linked to native Region; unapproved Seller excluded\n")
     for(let i=0;i<2;i++){
       const sku="B22-TWO-STORE-"+i+"-"+rand
       const {result:[offer]}=await createOffersWorkflow(container).run({
@@ -1867,10 +1884,6 @@ export default async function({container}:any){
     // Use a task-only sales channel and region for native cart pricing.
     const sales=container.resolve("sales_channel")
     const market=await sales.createSalesChannels({name:"B22 two-Store channel "+rand})
-    const regions=container.resolve("region")
-    const region=await regions.createRegions({
-      name:"B22 two-Store region "+rand,currency_code:"eur",countries:[]
-    })
     await cartService.updateCarts(customerCart.id,{
       region_id:region.id,sales_channel_id:market.id
     })
@@ -3192,8 +3205,8 @@ export default async function({container}:any){
       assert.equal((await q("select count(*)::int n from locking where id=$1",
         [concurrentCart.id]))[0].n,1,
         "First Medusa process must own the PostgreSQL Cart lock at L")
-      // Diagnostic only: Mercur 2.3.7 passes millisecond constants to
-      // Medusa 2.21.2's seconds-based acquireLockStep. Check the real lease.
+      // Mercur 2.4.0 fixes #1677: lock TTL is now SECONDS, not milliseconds.
+      // Assert the real persisted Cart lease while waiting at the PG barrier.
       const nativeLease=await q(
         "select owner_id, extract(epoch from (expiration - now()))::double precision as seconds_left from locking where id=$1",
         [concurrentCart.id])
@@ -3202,9 +3215,9 @@ export default async function({container}:any){
       assert.equal(nativeLease[0].owner_id,null)
       const nativeLeaseSeconds=Number(nativeLease[0].seconds_left)
       assert.ok(Number.isFinite(nativeLeaseSeconds) &&
-        nativeLeaseSeconds>119900 && nativeLeaseSeconds<=120000,
-        "Installed Mercur/Medusa unit mismatch must be observed, not assumed: native Cart lease near 120000 seconds")
-      process.stdout.write("\nOBSERVED B22 native Cart TTL mismatch: PostgreSQL lease near 120000 seconds instead of intended 120 seconds; checkout remains BLOCKED\n")
+        nativeLeaseSeconds>90 && nativeLeaseSeconds<=120,
+        "Native Mercur 2.4 Cart lease must be bounded by roughly 120 seconds")
+      process.stdout.write("\nPASS B22 native Cart TTL units: actual PostgreSQL Cart lease bounded by 120 seconds on Mercur 2.4; checkout/payment still disabled\n")
       let output=""
       let stderr=""
       let started=false

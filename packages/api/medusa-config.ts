@@ -7,6 +7,12 @@ import {ingressConfig} from './src/utils/ingress-config'
 
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
 
+// A newly introduced Mercur 2.4 force-enable flag must not override our
+// explicit no-telemetry policy, including during a production build.
+if (["1", "true", "yes"].includes((process.env.MERCUR_TELEMETRY_FORCE_ENABLED ?? "").toLowerCase())) {
+  throw new Error("Mercur telemetry is not authorized for DoğruAdres")
+}
+
 // Official Medusa locking provider is enabled ONLY inside the previously
 // authorized B22 disposable PostgreSQL acceptance database. Production,
 // protected data, and every other runtime keep their existing configuration.
@@ -62,6 +68,9 @@ const dashboardAppDir = (name: string) => {
 
 module.exports = withMercur({
   projectConfig: {
+    // No anonymous server telemetry. CLI commands additionally require
+    // MERCUR_DISABLE_TELEMETRY=true in their invoking environment.
+    mercur: { telemetry: false },
     databaseUrl: process.env.DATABASE_URL,
     redisUrl: process.env.REDIS_URL,
     workerMode: (process.env.MEDUSA_WORKER_MODE as any) || "shared",

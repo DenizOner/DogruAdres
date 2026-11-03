@@ -58,7 +58,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
   // verified Buyer Organization. Keep only region bootstrap for login locale.
   // All native catalog, Store, Offer, search and checkout routes stay closed
   // until a server-owned Organization-scoped reader is accepted.
-  // Mercur 2.3.7 can capture payment in processPaymentWorkflow BEFORE the
+  // Mercur 2.4.0 still can capture payment in processPaymentWorkflow BEFORE the
   // split-cart validate hook runs. No configured provider currently proves an
   // authorization -> accepted order -> capture sequence, so callbacks fail
   // closed until that provider-specific sequence is implemented and accepted.

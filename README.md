@@ -166,3 +166,12 @@ The DoğruAdres-specific product and engineering collaboration records are manag
 - [Root AGENTS.md](AGENTS.md) for permanent agent workflow, approval boundaries and official version-matched Mercur documentation lookup.
 
 Every approved decision, proposed requirement, test outcome and implementation is tracked separately. Historical issue closure does **not** assert feature delivery; an accepted product decision does **not** imply a test passed. A governance or product PR must not be treated as merged unless GitHub confirms it; reviewed and authorized PRs follow the independent-review, CI and exact-SHA merge policy in Issue #208. Unresolved product decisions remain explicitly open; Discussions are enabled but no Discussion publication is assumed without verified access.
+
+
+## Mercur 2.4 / Medusa 2.22 — yükseltme ve güvenlik sınırı
+
+- **Sürümler:** Mercur 2.4.0, Medusa 2.22.0, Node.js >=22.22.0 (CI Node 24.22.1). Yeni kilit dosyası gerçek Bun 1.4.2 ile üretilmeli; `bun install --frozen-lockfile` asla atlanmamalıdır.
+- **Gizlilik:** Mercur sunucu telemetrisi `medusa-config.ts` içinde kapalıdır. Mercur CLI çalıştırmadan önce işletim sisteminde `MERCUR_DISABLE_TELEMETRY=true` ayarlanmalıdır. `MERCUR_TELEMETRY_FORCE_ENABLED` kullanılmaz.
+- **Mağaza–bölge:** Mercur 2.4.0'da eski mağazalara otomatik satış bölgesi atanmaz. Mevcut mağazaların bölgeleri, ancak platformun yetkili yöneticisi tarafından onaylı bölge politikasıyla açıkça atanabilir. Demo seed yalnız **yeni sentetik mağazalarını**, izole B22 testleri ise yalnız geçici Store'larını kendi geçici bölgelerine bağlar; üretim kayıtları otomatik genişletilmez.
+- **Veritabanı:** Payout, Region/Seller, OrderGroup ve Seller geçişleri önce yalnız izole PostgreSQL'de gerçek `medusa db:migrate` ile denenir. Üretimde migration/korunan veri/yetki değişimi ayrı yetkilendirme ve kurtarma kanıtı ister.
+- **Ödeme:** Kilit süre birimi düzeltilse bile `processPaymentWorkflow` sipariş kaydı kalıcılaşmadan önce capture çalıştırabilir. #254 kapsamında native checkout, payment callback ve ödeme sağlayıcısı etkinleştirilmez. Sürüm yükseltmesi ödeme veya B22 tam kabulü değildir.

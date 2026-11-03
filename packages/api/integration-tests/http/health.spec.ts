@@ -2,7 +2,7 @@ import { medusaIntegrationTestRunner } from "@medusajs/test-utils"
 jest.setTimeout(60 * 1000)
 
 medusaIntegrationTestRunner({
-  inApp: true,
+  // Medusa 2.22 removed the inApp integration test runner option.
   env: {},
   testSuite: ({ api }) => {
     describe("Ping", () => {
