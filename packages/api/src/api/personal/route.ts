@@ -706,10 +706,20 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // server independently checks fresh Owner, verified Store origin and native
   // Seller/Member before every write. Visibility is NOT authorization.
   let storeBlockRequest=0,priceGroupListRequest=0,priceGroupActionRequest=0;
-  let priceGroupActionPending=false;
+  let priceGroupActionPending=false,priceGroupCurrentAction=null;
+  const priceGroupUncertain=new Map();
+  const priceGroupWarning='Önceki mağazadaki işlem sonuçlanmış olabilir. O mağazanın kaydını kontrol edin.';
+  function showPriceGroupStatus(value=''){
+    const warning=priceGroupUncertain.size?priceGroupWarning:'';
+    el('store-price-group-status').textContent=
+      value&&warning?value+' '+warning:value||warning;
+  }
   function clearStoreBlock(){
     storeBlockRequest++;priceGroupActionRequest++;
-    priceGroupActionPending=false;
+    priceGroupActionPending=false;priceGroupCurrentAction=null;
+    // Never carry an earlier Person/Organization's private outcome across
+    // the permission boundary or after workspace concealment.
+    priceGroupUncertain.clear();
     el('store-price-group-panel').hidden=true;
     el('store-price-group-status').textContent='';
     clearStorePriceGroupChoices();
@@ -751,15 +761,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
        !/^sel_[A-Za-z0-9_-]+$/.test(seller_id))return;
     // A Store change invalidates the old UI action, not the server write.
     // Its result may be committed: never call the previous action cancelled.
-    const wasPending=priceGroupActionPending;
+    if(priceGroupActionPending&&priceGroupCurrentAction)
+      priceGroupUncertain.set(priceGroupCurrentAction.key,priceGroupCurrentAction);
     ++priceGroupActionRequest;
-    priceGroupActionPending=false;
+    priceGroupActionPending=false;priceGroupCurrentAction=null;
     const actionForm=el('store-price-group-form');
     if(actionForm)for(const button of actionForm.querySelectorAll('button'))
       button.disabled=false;
-    const actionMessage=el('store-price-group-status');
-    if(actionMessage)actionMessage.textContent=wasPending?
-      'Önceki mağazadaki işlem sonuçlanmış olabilir. O mağazanın kaydını kontrol edin.':'';
+    // The warning survives A->B->A and other switches until the same
+    // scoped record has been rechecked after its original request settled.
+    showPriceGroupStatus();
     const seq=priceGroupListRequest;
     const choice=el('store-price-group-choice'),
       message=el('store-price-group-options-status');
@@ -898,10 +909,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!/^sel_[A-Za-z0-9_-]+$/.test(seller_id)||
        !/^cusgroup_[A-Za-z0-9_-]+$/.test(customer_group_id)||
        !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyer_organization_id))return;
-    const message=el('store-price-group-status'),seq=++priceGroupActionRequest;
+    const seq=++priceGroupActionRequest;
+    const key=JSON.stringify([org,seller_id,customer_group_id,buyer_organization_id]);
+    const currentAction={key,settled:false};
+    // A read begun before an older write settles cannot clear an unknown
+    // outcome: it could have observed the old state before the write commits.
+    const recheck=action==='read'&&priceGroupUncertain.get(key)?.settled===true?
+      priceGroupUncertain.get(key):null;
+    priceGroupCurrentAction=currentAction;
     priceGroupActionPending=true;
     for(const button of form.querySelectorAll('button'))button.disabled=true;
-    message.textContent='Yetkili mağaza ve alıcı işletme denetleniyor…';
+    showPriceGroupStatus('Yetkili mağaza ve alıcı işletme denetleniyor…');
     try{
       const data={organization_id:org,seller_id,customer_group_id,buyer_organization_id};
       const result=action==='read'?
@@ -914,18 +932,21 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          (action==='grant'&&result.status!=='active')||
          (action==='revoke'&&result.status!=='revoked'))
         throw Error('Yetki sonucu doğrulanamadı');
-      message.textContent=result.status==='active'?
+      if(recheck&&priceGroupUncertain.get(key)===recheck)
+        priceGroupUncertain.delete(key);
+      showPriceGroupStatus(result.status==='active'?
         'Alıcı işletme bu mağazanın özel fiyat grubuna kabul edilmiş.':
-        'Bu işletmenin bu mağaza grubunda geçerli üyeliği yok.';
+        'Bu işletmenin bu mağaza grubunda geçerli üyeliği yok.');
     }catch(e){
       if(seq!==priceGroupActionRequest||request!==organizationRequest||currentOrg!==org||
          form.elements.namedItem('seller_id')?.value!==seller_id)return;
-      message.textContent=e.uncertain?
+      showPriceGroupStatus(e.uncertain?
         'Sonuç belirsiz. İşlemi tekrarlamadan önce kaydı kontrol edin.':
-        'İşlem reddedildi; mağaza veya grup yetkisi doğrulanamadı.';
+        'İşlem reddedildi; mağaza veya grup yetkisi doğrulanamadı.');
     }finally{
+      currentAction.settled=true;
       if(seq===priceGroupActionRequest){
-        priceGroupActionPending=false;
+        priceGroupActionPending=false;priceGroupCurrentAction=null;
         if(request===organizationRequest&&currentOrg===org&&!document.hidden&&
            form.elements.namedItem('seller_id')?.value===seller_id)
           for(const button of form.querySelectorAll('button'))button.disabled=false;
