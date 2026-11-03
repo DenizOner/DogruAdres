@@ -1763,7 +1763,40 @@ export default async function({container}:any){
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
     await browser.wait("!document.getElementById('store-price-group-panel').hidden")
-    await browser.input("#store-price-group-form input[name=customer_group_id]",priceGroup.id)
+    const groupListAuditStart=Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n)
+    const nativeGroupList=async(b:any,orgId:string,sellerId:string)=>b.eval("(async()=>{"+
+      "const p=new URLSearchParams("+JSON.stringify({view:"list"})+");"+
+      "p.set('organization_id',"+JSON.stringify("ORG_PLACEHOLDER")+");"+
+      "p.set('seller_id',"+JSON.stringify("SELLER_PLACEHOLDER")+");"+
+      "const r=await fetch('/personal/store-price-groups?'+p.toString());"+
+      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')};})()"
+        .replace("ORG_PLACEHOLDER",orgId).replace("SELLER_PLACEHOLDER",sellerId))
+    const ownedGroupList=await nativeGroupList(browser,organizations[0].id,ownerStoreId)
+    assert.equal(ownedGroupList.status,200)
+    assert.equal(ownedGroupList.body.organization_id,organizations[0].id)
+    assert.equal(ownedGroupList.body.seller_id,ownerStoreId)
+    assert.match(ownedGroupList.cache,/no-store/)
+    assert.ok(ownedGroupList.body.groups.some((g:any)=>g.id===priceGroup.id),
+      "Owned native CustomerGroup must be discoverable without typing its ID")
+    const secondGroupList=await nativeGroupList(browser,organizations[0].id,secondOwnerStoreId)
+    assert.equal(secondGroupList.status,200)
+    assert.ok(secondGroupList.body.groups.every((g:any)=>g.id!==priceGroup.id),
+      "Another Store may not discover this Store's native group")
+    assert.equal((await nativeGroupList(reviewer,organizations[0].id,ownerStoreId)).status,403,
+      "Foreign Person may not enumerate native Store CustomerGroups")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),groupListAuditStart,
+      "Read-only Store group choices must not write canonical audit")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    const choice=await browser.eval("(()=>{"+
+      "const field=document.getElementById('store-price-group-choice');"+
+      "field.value="+JSON.stringify(priceGroup.id)+";"+
+      "field.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value;})()")
+    assert.equal(choice,priceGroup.id,
+      "Real Owner Chrome picker must populate only its selected Store's native group ID")
     await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[1].id)
     const groupAuditStart=(await q("select count(*)::int n from da_audit_event"))[0].n
     await browser.click('#store-price-group-form button[value="grant"]')
