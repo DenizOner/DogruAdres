@@ -618,6 +618,9 @@ export default async function({container}:any){
       }
       // The same transaction ID across crashed and recovery child processes
       // lets Medusa's stored Redis engine resume an invoking workflow.
+      // A read-only phase marker distinguishes failure to boot the separate
+      // Medusa child from a failure inside the native Cart workflow.
+      process.stdout.write("OBSERVED B22 native Redis retry child entered workflow probe\n")
       // Only disclose bounded, non-sensitive error categories; never echo
       // provider messages, SQL identifiers, session tokens or raw stderr.
       const classify=(value:unknown)=>{
@@ -3541,6 +3544,16 @@ export default async function({container}:any){
     const safeEngineState=/^[a-z_-]{1,30}$/.test(engineState)?engineState:"unknown"
     const transcript=String(redisRetry.stdout??"")+"\n"+String(redisRetry.stderr??"")
     const childStatus=String(redisRetry.status??"unknown")
+    const childEntered=String(redisRetry.stdout??"").includes(
+      "OBSERVED B22 native Redis retry child entered workflow probe")
+    const startupCategory=/ECONNREFUSED|ECONNRESET/i.test(transcript)
+      ?"redis-connection":/MODULE_NOT_FOUND|Cannot find module/i.test(transcript)
+      ?"module-load":/SyntaxError|TypeError|ReferenceError/i.test(transcript)
+      ?"runtime-error":/database.*(connection|unavailable)|ECONN/i.test(transcript)
+      ?"database-connection":/Timeout|timed out/i.test(transcript)
+      ?"startup-timeout":/REFUSED:/i.test(transcript)
+      ?"guard-refusal":/Error running script/i.test(transcript)
+      ?"script-execution-error":"unclassified"
     const childErrorCategory=(
       transcript.match(/OBSERVED B22 native Redis retry child: thrown=(?:true|false) errors=[0-9]+ group_id_present=(?:true|false) error_category=([a-z-]+)/)
     )?.[1]??(/Failed to acquire lock/i.test(transcript)?"lock-denied":
@@ -3554,6 +3567,8 @@ export default async function({container}:any){
       " payment_links="+redisRetryPayments.length+
       " cart_completed="+String(nativeCartCompleted)+
       " workflow_state="+safeEngineState+
+      " child_entered="+String(childEntered)+
+      " startup_category="+startupCategory+
       " child_exit="+(/^(?:0|[1-9][0-9]{0,2})$/.test(childStatus)?childStatus:"unknown")+
       " error_category="+childErrorCategory+"\n")
     assert.equal(redisRetryPayments.length,0,
