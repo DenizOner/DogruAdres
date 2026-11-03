@@ -6272,36 +6272,10 @@ export default async function({container}:any){
     await signupChrome.input("#register input[name=email]",signupEmail)
     await signupChrome.input("#register input[name=mobile_phone]",signupPhone)
     await signupChrome.input("#register input[name=password]",signupPassword)
-    // Read-only diagnostic wrapper over the exact real services used by this
-    // disposable CI HTTP request. No args, return values or raw errors are logged.
-    const registrationProto=Object.getPrototypeOf(foundation)
-    const originalRegistration=registrationProto.personalRegisterCustomer
-    const nativeCustomerProto=Object.getPrototypeOf(container.resolve("customer"))
-    const originalCustomerRead=nativeCustomerProto.retrieveCustomer
-    assert.equal(typeof originalRegistration,"function")
-    assert.equal(typeof originalCustomerRead,"function")
-    let foundationStep="not-called",customerReadStep="not-called",foundationDbCode="none"
-    registrationProto.personalRegisterCustomer=async function(this:any,...args:any[]){
-      foundationStep="entered"
-      try{const result=await originalRegistration.apply(this,args);foundationStep="returned";return result}
-      catch(error){
-        foundationStep="rejected"
-        const c=(error as {code?:unknown})?.code
-        if(typeof c==="string" && /^(23|42)[0-9]{3}$/.test(c))foundationDbCode=c
-        else if((error as {name?:unknown})?.name==="IdentityAccessDenied")foundationDbCode="identity-denied"
-        throw error
-      }
-    }
-    nativeCustomerProto.retrieveCustomer=async function(this:any,...args:any[]){
-      customerReadStep="entered"
-      try{const result=await originalCustomerRead.apply(this,args);customerReadStep="returned";return result}
-      catch(error){customerReadStep="rejected";throw error}
-    }
+    await signupChrome.click("#register button")
     try {
-      await signupChrome.click("#register button")
-      try {
-        await signupChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
-      } catch {
+      await signupChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+    } catch {
       const ui=await signupChrome.eval(`(()=>{
         const form=document.getElementById('register');
         const t=document.getElementById('register-status').textContent;
@@ -6344,13 +6318,8 @@ export default async function({container}:any){
       }catch{}
       throw Error("B22 first Person signup failed: "+JSON.stringify({
         ui,requests,serverStage,personCountChange:postPeople-beforePeople,
-        nativeCustomerCreated,registrationRequestCount:requests.length,
-        foundationStep,customerReadStep,foundationDbCode
+        nativeCustomerCreated,registrationRequestCount:requests.length
       }))
-      }
-    }finally{
-      registrationProto.personalRegisterCustomer=originalRegistration
-      nativeCustomerProto.retrieveCustomer=originalCustomerRead
     }
     const registered=await q(`select b.person_id,p.mobile_phone,p.mobile_version,
         b.actor_type,b.actor_id
