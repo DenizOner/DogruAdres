@@ -1846,6 +1846,37 @@ export default async function({container}:any){
       "Returning to the first Store must not automatically reuse its stale group selection")
     assert.ok(doubleSwitch.buttons.every((value:boolean)=>value===false),
       "Multiple Store switches cannot strand group action buttons")
+    // A real authorized GET can finish while the original successful
+    // native POST response is still withheld by Chrome. This early read
+    // MUST NOT settle the write; another A->B->A must retain its warning.
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    assert.equal(await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value"+
+      "})()"),priceGroup.id)
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    const earlyReadSecondSwitch=await browser.eval("(()=>{"+
+      "const s=document.querySelector('#store-price-group-form select[name=seller_id]');"+
+      "s.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "s.value="+JSON.stringify(ownerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return {status:document.getElementById('store-price-group-status').textContent,"+
+      "enabled:Array.from(document.querySelectorAll('#store-price-group-form button'),b=>!b.disabled)}"+
+      "})()")
+    assert.match(earlyReadSecondSwitch.status,/Önceki mağazadaki işlem/,
+      "Early authorized GET and another Store switch cannot erase a pending native POST")
+    assert.ok(earlyReadSecondSwitch.enabled.every(Boolean),
+      "Another Store switch must keep the controls usable")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Early read and repeated Store switches may not create a second audit")
+    process.stdout.write("PASS B22 Chrome: early authorized HTTPS GET plus repeated Store switches cannot clear a still-pending native grant; PG16 one write/one audit\n")
     await browser.eval("(()=>{"+
       "window.__daWriteRaceRelease();"+
       "window.fetch=window.__daWriteRaceFetch;"+
