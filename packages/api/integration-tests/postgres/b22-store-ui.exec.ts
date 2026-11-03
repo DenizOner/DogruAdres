@@ -6292,9 +6292,14 @@ export default async function({container}:any){
       const requests=signupChrome.http.filter(r=>r.path==="/personal/register")
         .map(({method,path,status})=>({method,path,status}))
       const postPeople=Number((await q("select count(*)::int n from da_person"))[0].n)
+      let nativeCustomerCreated:boolean|null=null
+      try{
+        const customerRows=await q("select count(*)::int n from public.customer where email=$1",[signupEmail])
+        nativeCustomerCreated=Number(customerRows[0].n)>0
+      }catch{}
       throw Error("B22 first Person signup failed: "+JSON.stringify({
         ui,requests,personCountChange:postPeople-beforePeople,
-        registrationRequestCount:requests.length
+        nativeCustomerCreated,registrationRequestCount:requests.length
       }))
     }
     const registered=await q(`select b.person_id,p.mobile_phone,p.mobile_version,
