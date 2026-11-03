@@ -46,6 +46,44 @@ describe('selected Organization native Seller UI (script regression, not backend
     expect(h.el('actor-result').textContent).toBe('');
   });
 });
+describe('B22 native Store price-group selector request lifetime',()=>{
+  it('does not strand action buttons or show a stale result after switching Stores',async()=>{
+    const h=harness()
+    const form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_a'},
+      buyer_organization_id:{value:'daorg_b'}
+    }
+    const buttons=[{disabled:false},{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    ;(h.document as any).createDocumentFragment=()=>({append(){}})
+    runInContext("currentOrg='daorg_a';organizationRequest=1;"+
+      "api=(path)=>new Promise(resolve=>{(globalThis.groupCalls??=[]).push({path,resolve})})",h.context)
+    const oldAction=form.onsubmit({preventDefault(){},currentTarget:form,
+      submitter:{value:'read'}})
+    expect(buttons.every(button=>button.disabled)).toBe(true)
+    expect(((h.context as any).groupCalls as any[])[0].path).toContain('buyer_organization_id=')
+    fields.seller_id.value='sel_b'
+    const changed=runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    await tick()
+    expect(buttons.every(button=>button.disabled===false)).toBe(true)
+    expect(fields.customer_group_id.value).toBe('')
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    const pending=(h.context as any).groupCalls as any[]
+    expect(pending).toHaveLength(2)
+    expect(pending[1].path).toContain('seller_id=sel_b')
+    expect(pending[1].path).toContain('view=list')
+    pending[0].resolve({status:'active'})
+    await oldAction
+    expect(h.el('store-price-group-status').textContent).not.toContain('kabul edilmiş')
+    expect(buttons.every(button=>button.disabled===false)).toBe(true)
+    pending[1].resolve({organization_id:'daorg_a',seller_id:'sel_b',groups:[]})
+    await changed
+    expect(buttons.every(button=>button.disabled===false)).toBe(true)
+  })
+})
 describe('private workspace lifetime (script regression only)',()=>{
   it('polls with the no-touch header, stops while hidden, and clears private DOM',async()=>{
     const h=harness();await loaded(h)
