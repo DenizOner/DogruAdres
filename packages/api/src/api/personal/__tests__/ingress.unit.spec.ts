@@ -181,6 +181,16 @@ describe("personal ingress (unit contract only)",()=>{
     expect(res.status).toHaveBeenCalledWith(403)
   })
 
+  it("admits only private Person profile GET and CSRF-protected POST at the outer ingress",async()=>{
+    expect((await probe("/personal/profile","GET")).next).toHaveBeenCalledTimes(1)
+    expect((await probe("/personal/profile","POST")).next).toHaveBeenCalledTimes(1)
+    for(const method of ["PUT","DELETE","PATCH"]){
+      const r=await probe("/personal/profile",method)
+      expect(r.next).not.toHaveBeenCalled()
+      expect(r.res.status).toHaveBeenCalledWith(401)
+    }
+  })
+
 })
 
 describe("personal HTTP error handling (unit contract)", () => {

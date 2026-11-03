@@ -865,6 +865,132 @@ export default async function({container}:any){
       await verifyAdminSmtp(browser,other,container,A.person,B.person,q,smtpGuard!)
       return
     }
+    // M0 private contact slice uses the already strongly authenticated Person.
+    // It does not create a second Customer, Person, Owner or Organization.
+    const mobileBrowser=browser
+    await mobileBrowser.wait("!document.getElementById('person-mobile-form').hidden")
+    const firstMobile=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile');"+
+      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}})()")
+    assert.equal(firstMobile.status,200)
+    assert.equal(firstMobile.body.mobile_phone,null)
+    assert.equal(firstMobile.body.version,0)
+    assert.equal(firstMobile.body.phone_verified,false)
+    assert.match(firstMobile.cache,/no-store/)
+    const mobileAuditBefore=Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='person.mobile_updated'",
+      [A.person]))[0].n)
+    const personalPhone="+905551234567" // synthetic-only CI number
+    await mobileBrowser.input("#person-mobile-form input[name=mobile_phone]",personalPhone)
+    await mobileBrowser.click("#person-mobile-form button[type=submit]")
+    await mobileBrowser.wait("document.getElementById('person-mobile-status').textContent.includes('kayıtlı')")
+    const afterMobile=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile');return {status:r.status,body:await r.json()}})()")
+    assert.deepEqual(afterMobile,{status:200,body:{
+      mobile_phone:personalPhone,version:1,phone_verified:false
+    }})
+    const personMobileRows=await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person])
+    assert.deepEqual(personMobileRows,[{mobile_phone:personalPhone,mobile_version:1}])
+    assert.equal((await q("select mobile_phone from da_person where id=$1",[B.person]))[0].mobile_phone,null)
+    const contactEvents=await q(
+      "select e.new_values,o.envelope from da_audit_event e "+
+      "join da_audit_outbox o on o.source_audit_event_id=e.id "+
+      "where e.actor_person_id=$1 and e.action='person.mobile_updated'",
+      [A.person])
+    assert.equal(contactEvents.length,mobileAuditBefore+1)
+    assert.ok(!JSON.stringify(contactEvents).includes(personalPhone),
+      "Neither audit nor outbox may contain private phone")
+    const deniedForeign=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile?person_id=daprs_foreign');return r.status})()")
+    assert.equal(deniedForeign,400)
+    const blockedPost=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile',{method:'POST',"+
+      "headers:{'content-type':'application/json'},body:JSON.stringify({"+
+      "mobile_phone:'+905551234568',expected_version:1})});return r.status})()")
+    assert.equal(blockedPost,403,"Missing same-origin CSRF must deny a write")
+    const staleMobile=await mobileBrowser.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/profile',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({mobile_phone:'+905551234568',expected_version:0})});"+
+      "return r.status})()")
+    assert.equal(staleMobile,409)
+    assert.deepEqual(await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person]),
+      [{mobile_phone:personalPhone,mobile_version:1}])
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='person.mobile_updated'",
+      [A.person]))[0].n),mobileAuditBefore+1)
+    process.stdout.write("PASS B22 Chrome: M0 canonical Person private mobile GET, real UI save and PG16 readback, audit/outbox privacy, foreign query400, CSRF403, stale409, no duplicate mutation\\n")
+
+    // Real PG16 row-lock ordering: pause the Person row while a profile POST
+    // and an independent internal enrollment-session creation contend.
+    // The profile must WAIT for Person BEFORE taking the security epoch lock.
+    // This uses real Foundation transactions, not a mocked SQL scheduler.
+    const binding=await q(`select auth_identity_id from da_login_binding
+      where person_id=$1 and revoked_at is null and verified_at is not null`,[A.person])
+    assert.equal(binding.length,1)
+    const mobileBarrier=new Client({connectionString:u.toString()})
+    const mobileProbe=new Client({connectionString:u.toString()})
+    await mobileBarrier.connect();await mobileProbe.connect()
+    let mobileBarrierHeld=false
+    let mobileProbeHeld=false
+    let concurrentMobile:Promise<any>|undefined
+    let concurrentSession:Promise<any>|undefined
+    try {
+      await mobileBarrier.query("BEGIN");mobileBarrierHeld=true
+      await mobileBarrier.query("select id from da_person where id=$1 for update",[A.person])
+      concurrentMobile=mobileBrowser.eval(`(async()=>{
+        const s=await(await fetch('/personal/session')).json();
+        const r=await fetch('/personal/profile',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+          body:JSON.stringify({mobile_phone:'+905551234567',expected_version:1})});
+        return {status:r.status,body:await r.json()};
+      })()`).then(value=>({value}),error=>({error:String(error)}))
+      await until(async()=>{
+        const rows=await q(`select count(*)::int n from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock'
+            and query ilike '%from da_browser_session s%'
+            and query ilike '%for update of p%'`)
+        return rows[0].n>=1
+      },15000,"M0 mobile POST waits on Person BEFORE session/security")
+      // NOWAIT would fail if the profile already held the epoch lock.
+      await mobileProbe.query("BEGIN");mobileProbeHeld=true
+      await mobileProbe.query("select epoch from da_person_security where person_id=$1 for update nowait",[A.person])
+      await mobileProbe.query("ROLLBACK");mobileProbeHeld=false
+      // Same Person sign-in uses IdentitySessions.create() with Person→epoch
+      // locking; a task-only enrollment session exercises that exact native
+      // creation method without bypassing real visitor MFA credentials.
+      concurrentSession=foundation.openPersonalSession(
+        binding[0].auth_identity_id,"mfa_enroll"
+      ).then(value=>({value}),error=>({error:String(error)}))
+      await until(async()=>{
+        const rows=await q(`select count(*)::int n from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock'
+            and query ilike '%from da_login_binding b%'
+            and query ilike '%for update of b,p%'`)
+        return rows[0].n>=1
+      },15000,"M0 new Person session waits on same Person row")
+      await mobileBarrier.query("COMMIT");mobileBarrierHeld=false
+      const [mobileResult,createdResult]=await Promise.all([concurrentMobile,concurrentSession])
+      assert.equal(mobileResult.value?.status,200,mobileResult.error||"Mobile update must complete")
+      assert.equal(mobileResult.value?.body?.version,1,"Identical mobile write is no-op")
+      assert.match(createdResult.value?.token??"",/^[A-Za-z0-9_-]{43}$/,
+        createdResult.error||"Second native Person session must complete without deadlock")
+      await foundation.closePersonalSession(createdResult.value.token,false)
+      assert.deepEqual(await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person]),
+        [{mobile_phone:personalPhone,mobile_version:1}])
+      process.stdout.write("PASS B22 PG16: concurrent Person session creation and mobile POST obey Person-first lock; one no-op write, no deadlock\\n")
+    }finally {
+      if(mobileProbeHeld)await mobileProbe.query("ROLLBACK")
+      if(mobileBarrierHeld)await mobileBarrier.query("ROLLBACK")
+      await Promise.allSettled([concurrentMobile,concurrentSession].filter(Boolean) as Promise<any>[])
+      await mobileProbe.end();await mobileBarrier.end()
+    }
+
+    // Real Chrome verifies CSRF403 and profile privacy above. The shipped
+    // UI's definite 403 recovery guidance is exercised by the browser-script
+    // VM test without changing protected session timestamps.
+
     // Approved personal workspace has no editable launcher. Its retired
     // Person-only API must not read or write historical preference rows.
     const legacyPrefsBefore=await q("select id,person_id,app_ids,collapsed_ids,version from da_launcher_preference order by id")
@@ -5662,8 +5788,27 @@ export default async function({container}:any){
               .includes(row.path)).slice(-8).map((row:any)=>
                 ({method:row.method,path:row.path,status:row.status}))
           const visibility=await browser.eval("document.visibilityState")
+          // Only fixed boolean/status categories; never output private Person,
+          // Organization, cookies, MFA material or response bodies.
+          const ui=await browser.eval(`({
+            loginVisible:!document.getElementById('login').hidden,
+            workspaceVisible:!document.getElementById('workspace').hidden,
+            scopeLoaded:loadedScope!=='',
+            observing:observing,
+            selectedOrganization:!!new URLSearchParams(location.search).get('organization'),
+            statusKind:document.getElementById('status').textContent.includes('Erişim yeniden doğrulanmalı')
+              ?'observer-denied':document.getElementById('status').textContent.includes('Giriş gerekli')
+              ?'load-failed':document.getElementById('status').textContent.includes('Erişim değişti')
+              ?'scope-changed':'other'
+          })`)
+          const sessionState=await q(`select s.status,
+              (s.epoch=e.epoch) as current_epoch,
+              (s.mfa_platform_version=(select version from da_mfa_policy where id='current')) as platform_revision,
+              (s.mfa_person_version=coalesce((select version from da_person_mfa_preference where person_id=s.person_id),0)) as person_revision
+            from da_browser_session s join da_person_security e on e.person_id=s.person_id
+            where s.person_id=$1 order by s.created_at desc limit 2`,[A.person])
           throw new Error("B22 Staff A post-recovery UI did not open: "+
-            JSON.stringify({visibility,http:safe}))
+            JSON.stringify({visibility,http:safe,ui,sessionState}))
         }
         assert.equal(await browser.eval("(async()=> (await fetch('/personal/session')).status)()"),200)
       }

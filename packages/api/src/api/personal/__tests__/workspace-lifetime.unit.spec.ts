@@ -7,7 +7,7 @@ function harness() {
   const source=readFileSync(join(__dirname,'../route.ts'),'utf8')
   const nodes=new Map<string,any>(),listeners=new Map<string,Function>(),pending:any[]=[]
   const el=(id:string)=>{
-    if(!nodes.has(id))nodes.set(id,{textContent:'',value:'',hidden:id==='workspace',children:[],elements:{method:{}},setAttribute(){},focus(){},replaceChildren(){this.textContent='';this.children=[]},append(x:any){this.children.push(x)},querySelectorAll(){return []},reset(){},querySelector(){return {disabled:false}}})
+    if(!nodes.has(id))nodes.set(id,{textContent:'',value:'',hidden:id==='workspace',children:[],elements:{method:{},mobile_phone:{value:''}},setAttribute(){},focus(){},replaceChildren(){this.textContent='';this.children=[]},append(x:any){this.children.push(x)},querySelectorAll(){return []},reset(){},querySelector(){return {disabled:false}}})
     return nodes.get(id)
   }
   const document={hidden:false,getElementById:el,createElement:()=>({textContent:''}),addEventListener:(n:string,f:Function)=>listeners.set(n,f)}
@@ -554,4 +554,121 @@ describe('private workspace lifetime (script regression only)',()=>{
     expect(h.el('status').textContent).not.toContain('Oturum kilitlendi.')
   })
 
+})
+
+describe("M0 canonical Person mobile workspace lifetime",()=>{
+  it("treats a definite mobile POST 403 as reauthentication, never as a lost write",async()=>{
+    const h=harness(),form=h.el('person-mobile-form')
+    h.el('workspace').hidden=false
+    runInContext("currentPersonId='daprs_A';viewEpoch=3;"+
+      "api=(path,options)=>new Promise((resolve,reject)=>{(globalThis.mobileCalls??=[]).push({path,options,resolve,reject})})",
+      h.context)
+    const first=runInContext("refreshPersonMobile()",h.context)
+    const calls=(h.context as any).mobileCalls as any[]
+    calls[0].resolve({mobile_phone:"+905551234567",version:1,phone_verified:false})
+    await first
+    form.elements.mobile_phone.value="+905551234568"
+    const save=form.onsubmit({preventDefault(){},target:form})
+    const denied:any=new Error("Access denied or recent strong authentication required")
+    denied.httpStatus=403
+    calls[1].reject(denied)
+    await save
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+    expect(calls).toHaveLength(2)
+    expect(form.hidden).toBe(true)
+    expect(form.elements.mobile_phone.value).toBe('')
+    expect(h.el('status').textContent).toContain('yeniden giriş yapın')
+    expect(h.el('status').textContent).not.toContain('Kaydetme yanıtı alınamadı')
+  })
+
+  it("shows a visible warning when acknowledged mobile save cannot be read back",async()=>{
+    const h=harness(),form=h.el('person-mobile-form')
+    h.el('workspace').hidden=false
+    runInContext("currentPersonId='daprs_A';viewEpoch=3;"+
+      "api=(path,options)=>new Promise((resolve,reject)=>{(globalThis.mobileCalls??=[]).push({path,options,resolve,reject})})",
+      h.context)
+    const first=runInContext("refreshPersonMobile()",h.context)
+    const calls=(h.context as any).mobileCalls as any[]
+    calls[0].resolve({mobile_phone:"+905551234567",version:1,phone_verified:false})
+    await first
+    form.elements.mobile_phone.value="+905551234568"
+    const save=form.onsubmit({preventDefault(){},target:form})
+    calls[1].resolve({mobile_phone:"+905551234568",version:2,phone_verified:false})
+    await tick()
+    expect(calls[2].path).toBe('profile')
+    calls[2].reject(new Error('readback unavailable'))
+    await save
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+    expect(form.hidden).toBe(true)
+    expect(form.elements.mobile_phone.value).toBe('')
+    expect(h.el('status').textContent).toContain('güncel kayıt yeniden okunamadı')
+    expect(h.el('status').textContent).not.toContain('yeniden kontrol edildi')
+  })
+  it.each([true,false])("does not repeat uncertain mobile POST; readback succeeds=%s",async readbackSucceeds=>{
+    const h=harness(),form=h.el('person-mobile-form')
+    h.el('workspace').hidden=false
+    runInContext("currentPersonId='daprs_A';viewEpoch=3;"+
+      "api=(path,options)=>new Promise((resolve,reject)=>{(globalThis.mobileCalls??=[]).push({path,options,resolve,reject})})",
+      h.context)
+    const initial=runInContext("refreshPersonMobile()",h.context)
+    const calls=(h.context as any).mobileCalls as any[]
+    calls[0].resolve({mobile_phone:"+905551234567",version:1,phone_verified:false})
+    await initial
+    expect(form.hidden).toBe(false)
+    form.elements.mobile_phone.value="+905551234568"
+    const save=form.onsubmit({preventDefault(){},target:form})
+    expect(calls[1].options.method).toBe('POST')
+    calls[1].reject(new Error('connection lost after possible commit'))
+    await tick()
+    expect(calls[2].path).toBe('profile')
+    expect(calls[2].options).toBeUndefined()
+    if(readbackSucceeds){
+      calls[2].resolve({mobile_phone:"+905551234568",version:2,phone_verified:false})
+    }else{
+      calls[2].reject(new Error('readback unavailable'))
+    }
+    await save
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+    if(readbackSucceeds){
+      expect(form.hidden).toBe(false)
+      expect(form.elements.mobile_phone.value).toBe("+905551234568")
+      expect(h.el('person-mobile-status').textContent).toContain('Güncel telefon kaydını kontrol edin')
+      expect(h.el('person-mobile-status').textContent).not.toContain('İşlem sonucu yeniden kontrol edildi')
+    }else{
+      expect(form.hidden).toBe(true)
+      expect(form.elements.mobile_phone.value).toBe('')
+      expect(h.el('status').textContent).toContain('sonucu doğrulanamadı')
+      expect(h.el('status').textContent).not.toContain('yeniden kontrol edildi')
+    }
+  })
+  it("loads only a verified current Person contact and clears it before another Person may render",async()=>{
+    const h=harness()
+    h.el('workspace').hidden=false
+    runInContext("currentPersonId='daprs_A';viewEpoch=2;"+
+      "api=path=>new Promise(resolve=>(globalThis.profileReads??=[]).push({path,resolve}))",
+      h.context)
+    const old=runInContext("refreshPersonMobile()",h.context)
+    const reads=(h.context as any).profileReads as any[]
+    expect(reads[0].path).toBe('profile')
+    runInContext("clearPersonMobile();currentPersonId='daprs_B';viewEpoch++",h.context)
+    reads[0].resolve({mobile_phone:"+905551234567",version:1,phone_verified:false})
+    await old
+    expect(h.el('person-mobile-form').hidden).toBe(true)
+    expect(h.el('person-mobile-form').elements.mobile_phone.value).toBe('')
+    const fresh=runInContext("refreshPersonMobile()",h.context)
+    reads[1].resolve({mobile_phone:"+905551234568",version:2,phone_verified:false})
+    await fresh
+    expect(h.el('person-mobile-form').hidden).toBe(false)
+    expect(h.el('person-mobile-form').elements.mobile_phone.value).toBe("+905551234568")
+    expect(h.el('person-mobile-status').textContent).toContain('doğrulanmadı')
+  })
+  it("fails closed for a malformed profile version or false phone-verification claim",async()=>{
+    const h=harness()
+    h.el('workspace').hidden=false
+    runInContext("currentPersonId='daprs_A';viewEpoch=3;"+
+      "api=async()=>({mobile_phone:'+905551234567',version:'1',phone_verified:true})",h.context)
+    await runInContext("refreshPersonMobile()",h.context)
+    expect(h.el('person-mobile-form').hidden).toBe(true)
+    expect(h.el('person-mobile-form').elements.mobile_phone.value).toBe('')
+  })
 })

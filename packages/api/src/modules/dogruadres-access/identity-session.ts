@@ -115,6 +115,24 @@ export class IdentitySessions {
     if(rows.length!==1 || rows[0].mfa_activated!=="true")throw new IdentityAccessDenied()
     return {platform:revision(rows[0].platform),person:revision(rows[0].person)}
   }
+  /**
+   * Contact writes must acquire the canonical Person row before security /
+   * session locks. Session creation already locks Person before security;
+   * reversing that order can deadlock when a user signs in concurrently.
+   * This preliminary lookup grants NO authority: currentHash below performs
+   * the full fresh session, epoch, MFA and actor-binding checks.
+   */
+  async currentForPersonWrite(token: string) {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new IdentityAccessDenied()
+    const hash=digest(token)
+    const rows=await this.db.execute(`select p.id from da_browser_session s
+      join da_person p on p.id=s.person_id and p.deleted_at is null and p.disabled_at is null
+      where s.id=? and s.status='active' for update of p`,[hash])
+    if(rows.length!==1 || typeof rows[0].id!=="string")return null
+    const session=await this.currentHash(hash,true)
+    return session?.person_id===rows[0].id ? session : null
+  }
+
   async current(token: string, sensitive = false, touch = true) {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new IdentityAccessDenied()
     return this.currentHash(digest(token),sensitive,touch)
