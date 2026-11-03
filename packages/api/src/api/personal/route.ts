@@ -761,7 +761,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
        !/^sel_[A-Za-z0-9_-]+$/.test(seller_id))return;
     // A Store change invalidates the old UI action, not the server write.
     // Its result may be committed: never call the previous action cancelled.
-    if(priceGroupActionPending&&priceGroupCurrentAction)
+    if(priceGroupActionPending&&priceGroupCurrentAction&&
+       !priceGroupUncertain.has(priceGroupCurrentAction.key))
       priceGroupUncertain.set(priceGroupCurrentAction.key,priceGroupCurrentAction);
     ++priceGroupActionRequest;
     priceGroupActionPending=false;priceGroupCurrentAction=null;
@@ -940,11 +941,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }catch(e){
       if(seq!==priceGroupActionRequest||request!==organizationRequest||currentOrg!==org||
          form.elements.namedItem('seller_id')?.value!==seller_id)return;
+      if(e.uncertain&&action!=='read'){
+        // A transport/503 response does not prove that a native write aborted.
+        // Retain an unconfirmed record until a separately trusted resolution;
+        // a later read must not treat this client-side completion as settlement.
+        currentAction.outcomeUnverified=true;currentAction.settled=false;
+        if(!priceGroupUncertain.has(key))priceGroupUncertain.set(key,currentAction);
+      }
       showPriceGroupStatus(e.uncertain?
         'Sonuç belirsiz. İşlemi tekrarlamadan önce kaydı kontrol edin.':
         'İşlem reddedildi; mağaza veya grup yetkisi doğrulanamadı.');
     }finally{
-      currentAction.settled=true;
+      if(!(action!=='read'&&priceGroupUncertain.get(key)===currentAction&&
+           currentAction.outcomeUnverified))currentAction.settled=true;
       if(seq===priceGroupActionRequest){
         priceGroupActionPending=false;priceGroupCurrentAction=null;
         if(request===organizationRequest&&currentOrg===org&&!document.hidden&&
