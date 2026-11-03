@@ -1798,8 +1798,80 @@ export default async function({container}:any){
       "Real Owner Chrome picker must populate only its selected Store's native group ID")
     await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[1].id)
     const groupAuditStart=(await q("select count(*)::int n from da_audit_event"))[0].n
+    // Hold the FIRST real signed HTTPS POST response after PostgreSQL has
+    // committed. The request, authorization, grant and audit are not mocked.
+    // A->B->A while that reply is held must preserve the uncertainty notice,
+    // and an authorized subsequent GET must reconcile the durable result.
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daWriteRaceFetch=window.fetch;"+
+      "window.__daWriteRaceHeld=false;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+           "!window.__daWriteRaceHeld){"+
+          "window.__daWriteRaceHeld=true;"+
+          "return original(resource,options).then(response=>new Promise(resolve=>{"+
+            "window.__daWriteRaceRelease=()=>resolve(response)"+
+          "}))"+
+        "}"+
+        "return original(resource,options)"+
+      "};return true})()")
     await browser.click('#store-price-group-form button[value="grant"]')
-    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')")
+    await browser.wait("typeof window.__daWriteRaceRelease==='function'")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n),1,
+      "Pending Chrome grant must really commit an authorized PG16 BuyerOrg record")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Pending real grant must create one canonical audit before its reply is released")
+    const doubleSwitch=await browser.eval("(()=>{"+
+      "const form=document.getElementById('store-price-group-form');"+
+      "const store=form.elements.namedItem('seller_id');"+
+      "store.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "store.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "const first=document.getElementById('store-price-group-status').textContent;"+
+      "store.value="+JSON.stringify(ownerStoreId)+";"+
+      "store.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return {first,second:document.getElementById('store-price-group-status').textContent,"+
+        "group:form.elements.namedItem('customer_group_id').value,"+
+        "buttons:Array.from(form.querySelectorAll('button'),b=>b.disabled)}"+
+      "})()")
+    assert.match(doubleSwitch.first,/Önceki mağazadaki işlem/,
+      "First Store switch must report unresolved native grant")
+    assert.match(doubleSwitch.second,/Önceki mağazadaki işlem/,
+      "A->B->A cannot discard an unresolved native grant warning")
+    assert.equal(doubleSwitch.group,"",
+      "Returning to the first Store must not automatically reuse its stale group selection")
+    assert.ok(doubleSwitch.buttons.every((value:boolean)=>value===false),
+      "Multiple Store switches cannot strand group action buttons")
+    await browser.eval("(()=>{"+
+      "window.__daWriteRaceRelease();"+
+      "window.fetch=window.__daWriteRaceFetch;"+
+      "delete window.__daWriteRaceRelease;delete window.__daWriteRaceFetch;"+
+      "return true})()")
+    await browser.wait("priceGroupUncertain.size>0&&"+
+      "Array.from(priceGroupUncertain.values()).every(v=>v.settled)")
+    assert.match(await browser.eval(
+      "document.getElementById('store-price-group-status').textContent"),
+      /Önceki mağazadaki işlem/,
+      "Late native POST reply must not falsely clear the unresolved notice")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    assert.equal(await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value"+
+      "})()"),priceGroup.id)
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')&&"+
+      "!document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Authorized recheck after a committed grant must not write another audit")
+    process.stdout.write("PASS B22 Chrome: pending native grant POST A-B-A retains warning and unlocked controls; authorized HTTPS record recheck clears only after PG16 grant and single audit are confirmed\\n")
     assert.equal((await groupChange("read")).body.status,"active")
     // Deterministic real-Chrome UI scheduling: the authenticated HTTPS GET
     // still reaches Medusa, but its response is held only in this test page
