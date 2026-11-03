@@ -3,7 +3,7 @@ import Access from "../service"
 
 describe("M0 canonical Person first registration — Foundation transaction",()=>{
   const phone="+905551234567",identity="authid_new",customer="cus_new"
-  let service:Access,execute:jest.Mock,mappings:jest.Mock,people:jest.Mock,audit:jest.Mock,context:Context
+  let service:Access,execute:jest.Mock,flush:jest.Mock,mappings:jest.Mock,people:jest.Mock,audit:jest.Mock,context:Context
   let mappingRows:any[],bindingRows:any[],existingPhone:string|null,existingActive:boolean
   beforeEach(()=>{
     mappingRows=[];bindingRows=[];existingPhone=phone;existingActive=true
@@ -19,6 +19,7 @@ describe("M0 canonical Person first registration — Foundation transaction",()=
         return existingActive?[{mobile_phone:existingPhone}]:[]
       }
       if(sql.includes("insert into da_login_binding")){
+        expect(flush).toHaveBeenCalledTimes(1)
         expect(args).toEqual([identity,"daprs_new",customer]);return []
       }
       throw Error("Unexpected SQL: "+sql)
@@ -32,7 +33,8 @@ describe("M0 canonical Person first registration — Foundation transaction",()=
       createActorMappings:jest.fn().mockResolvedValue([{id:"daact_new"}]),
       persistAuditEventsWithOutbox_:audit,
     })
-    context={transactionManager:{execute}} as unknown as Context
+    flush=jest.fn().mockResolvedValue(undefined)
+    context={transactionManager:{execute,flush}} as unknown as Context
   })
   it("creates exactly one own Person with mandatory private mobile and no Organization/Staff grant",async()=>{
     expect(await service.personalRegisterCustomer(identity,customer,phone,"Test Kişi",context))
@@ -50,6 +52,7 @@ describe("M0 canonical Person first registration — Foundation transaction",()=
       expect.stringContaining("from da_login_binding where auth_identity_id"),
       expect.stringContaining("insert into da_login_binding"),
     ])
+    expect(flush).toHaveBeenCalledTimes(1)
     expect(audit).toHaveBeenCalledTimes(1)
     const event=audit.mock.calls[0][0][0]
     expect(event).toMatchObject({
@@ -107,6 +110,14 @@ describe("M0 canonical Person first registration — Foundation transaction",()=
     }
     expect(execute).not.toHaveBeenCalled()
     expect(people).not.toHaveBeenCalled()
+  })
+  it("refuses to insert login binding if the enclosing EntityManager cannot flush",async()=>{
+    context={transactionManager:{execute}} as unknown as Context
+    await expect(service.personalRegisterCustomer(identity,customer,phone,"Test",context))
+      .rejects.toThrow("Foundation transaction manager unavailable")
+    expect(execute.mock.calls.some(([sql])=>String(sql).includes("insert into da_login_binding")))
+      .toBe(false)
+    expect(audit).not.toHaveBeenCalled()
   })
   it("surfaces audit failure so the enclosing Foundation transaction can roll back",async()=>{
     audit.mockRejectedValue(Error("Outbox unavailable"))
