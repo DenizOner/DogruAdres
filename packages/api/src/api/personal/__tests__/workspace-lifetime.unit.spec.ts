@@ -147,7 +147,7 @@ describe('B22 native Store price-group selector request lifetime',()=>{
     expect(h.el('store-price-group-status').textContent).toContain('kabul edilmiş')
   })
 
-  it('keeps a 503 write outcome warning across Store switches without assuming a later read proves commit',async()=>{
+  it('keeps a transport-uncertain write warning across Store switches without assuming a later read proves commit',async()=>{
     const h=harness()
     const form=h.el('store-price-group-form')
     const fields:Record<string,{value:string}>={
@@ -171,6 +171,46 @@ describe('B22 native Store price-group selector request lifetime',()=>{
     await send('read')
     expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
     expect(buttons.every(b=>!b.disabled)).toBe(true)
+  })
+  it('allows authorized verification after a terminal native 503, but blocks duplicate writes before that',async()=>{
+    const h=harness()
+    const form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_a'},
+      buyer_organization_id:{value:'daorg_b'}
+    }
+    const buttons=[{disabled:false},{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1;"+
+      "api=async(path,options)=>{"+
+        "(globalThis.groupCalls??=[]).push({path,options});"+
+        "if(options?.method==='POST'){const e=new Error('Outcome uncertain; recheck group');"+
+          "e.uncertain=true;e.httpStatus=503;throw e}"+
+        "if(path.includes('view=list'))return {organization_id:'daorg_a',"+
+          "seller_id:path.includes('seller_id=sel_b')?'sel_b':'sel_a',groups:[]};"+
+        "return {status:'active'}"+
+      "}",h.context)
+    const send=(action:string)=>form.onsubmit({
+      preventDefault(){},currentTarget:form,submitter:{value:action}
+    })
+    await send('grant')
+    expect(h.el('store-price-group-status').textContent).toContain('Sonuç belirsiz')
+    fields.seller_id.value='sel_b'
+    await runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    fields.seller_id.value='sel_a'
+    await runInContext("storePriceGroupChoices('daorg_a','sel_a',1)",h.context)
+    fields.customer_group_id.value='cusgroup_a'
+    await send('grant')
+    const calls=(h.context as any).groupCalls as any[]
+    expect(calls.filter((c:any)=>c.options?.method==='POST')).toHaveLength(1)
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    await send('read')
+    expect(h.el('store-price-group-status').textContent).toContain('kabul edilmiş')
+    expect(h.el('store-price-group-status').textContent).not.toContain('Önceki mağazadaki işlem')
+    expect(calls.filter((c:any)=>c.options?.method==='POST')).toHaveLength(1)
+    expect(buttons.every((b:any)=>!b.disabled)).toBe(true)
   })
   it('does not let an early read overwrite a pending write during additional Store switches',async()=>{
     const h=harness()
