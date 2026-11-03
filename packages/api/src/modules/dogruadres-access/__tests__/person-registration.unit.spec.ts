@@ -4,15 +4,19 @@ import Access from "../service"
 describe("M0 canonical Person first registration — Foundation transaction",()=>{
   const phone="+905551234567",identity="authid_new",customer="cus_new"
   let service:Access,execute:jest.Mock,mappings:jest.Mock,people:jest.Mock,audit:jest.Mock,context:Context
-  let mappingRows:any[],bindingRows:any[]
+  let mappingRows:any[],bindingRows:any[],existingPhone:string|null,existingActive:boolean
   beforeEach(()=>{
-    mappingRows=[];bindingRows=[]
+    mappingRows=[];bindingRows=[];existingPhone=phone;existingActive=true
     execute=jest.fn(async(sql:string,args:unknown[]=[])=>{
       if(sql.includes("pg_advisory_xact_lock")){
         expect(args).toEqual([identity]);return [{}]
       }
       if(sql.includes("from da_login_binding where auth_identity_id")){
         expect(args).toEqual([identity]);return bindingRows
+      }
+      if(sql.includes("select mobile_phone from da_person")){
+        expect(args).toEqual(["daprs_new"])
+        return existingActive?[{mobile_phone:existingPhone}]:[]
       }
       if(sql.includes("insert into da_login_binding")){
         expect(args).toEqual([identity,"daprs_new",customer]);return []
@@ -63,6 +67,19 @@ describe("M0 canonical Person first registration — Foundation transaction",()=
       actor_id:customer,revoked_at:null}]
     expect(await service.personalRegisterCustomer(identity,customer,"+905551234568","Other",context))
       .toEqual({created:false})
+    expect(people).not.toHaveBeenCalled()
+    expect(audit).not.toHaveBeenCalled()
+  })
+  it("never treats a disabled or mobile-less legacy Person as registered",async()=>{
+    bindingRows=[{person_id:"daprs_new",actor_type:"customer",
+      actor_id:customer,revoked_at:null}]
+    mappingRows=[{person_id:"daprs_new"}]
+    existingPhone=null
+    await expect(service.personalRegisterCustomer(identity,customer,phone,"Test",context))
+      .rejects.toThrow()
+    existingPhone=phone;existingActive=false
+    await expect(service.personalRegisterCustomer(identity,customer,phone,"Test",context))
+      .rejects.toThrow()
     expect(people).not.toHaveBeenCalled()
     expect(audit).not.toHaveBeenCalled()
   })
