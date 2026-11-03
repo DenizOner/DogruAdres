@@ -146,6 +146,67 @@ describe('B22 native Store price-group selector request lifetime',()=>{
     expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
     expect(h.el('store-price-group-status').textContent).toContain('kabul edilmiş')
   })
+
+  it('keeps a 503 write outcome warning across Store switches without assuming a later read proves commit',async()=>{
+    const h=harness()
+    const form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_a'},
+      buyer_organization_id:{value:'daorg_b'}
+    }
+    const buttons=[{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1;api=async(path,options)=>{if(options?.method==='POST'){const e=new Error('503');e.uncertain=true;throw e}return {status:'active',organization_id:'daorg_a',seller_id:'sel_a',groups:[]}}",h.context)
+    const send=(action:string)=>form.onsubmit({preventDefault(){},currentTarget:form,submitter:{value:action}})
+    await send('grant')
+    expect(h.el('store-price-group-status').textContent).toContain('Sonuç belirsiz')
+    fields.seller_id.value='sel_b'
+    await runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    fields.seller_id.value='sel_a'
+    await runInContext("storePriceGroupChoices('daorg_a','sel_a',1)",h.context)
+    fields.customer_group_id.value='cusgroup_a'
+    await send('read')
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    expect(buttons.every(b=>!b.disabled)).toBe(true)
+  })
+  it('does not let an early read overwrite a pending write during additional Store switches',async()=>{
+    const h=harness()
+    const form=h.el('store-price-group-form')
+    const fields:Record<string,{value:string}>={
+      seller_id:{value:'sel_a'},customer_group_id:{value:'cusgroup_a'},
+      buyer_organization_id:{value:'daorg_b'}
+    }
+    const buttons=[{disabled:false},{disabled:false}]
+    form.elements={namedItem:(name:string)=>fields[name]}
+    form.querySelectorAll=()=>buttons
+    h.el('workspace').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1;api=(path,options)=>new Promise(resolve=>{(globalThis.groupCalls??=[]).push({path,options,resolve})})",h.context)
+    const send=(action:string)=>form.onsubmit({preventDefault(){},currentTarget:form,submitter:{value:action}})
+    const grant=send('grant')
+    fields.seller_id.value='sel_b'
+    const toB=runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    fields.seller_id.value='sel_a'
+    const toA=runInContext("storePriceGroupChoices('daorg_a','sel_a',1)",h.context)
+    fields.customer_group_id.value='cusgroup_a'
+    const earlyRead=send('read')
+    fields.seller_id.value='sel_b'
+    const toBAgain=runInContext("storePriceGroupChoices('daorg_a','sel_b',1)",h.context)
+    const calls=(h.context as any).groupCalls as any[]
+    calls.find(c=>c.path.includes('buyer_organization_id=')).resolve({status:'active'})
+    await earlyRead
+    fields.seller_id.value='sel_a'
+    const backToA=runInContext("storePriceGroupChoices('daorg_a','sel_a',1)",h.context)
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    calls.find(c=>c.options?.method==='POST').resolve({status:'active'})
+    await grant
+    expect(h.el('store-price-group-status').textContent).toContain('Önceki mağazadaki işlem')
+    for(const c of calls.filter(c=>c.path.includes('view=list')))c.resolve({organization_id:'daorg_a',seller_id:'sel_b',groups:[]})
+    await Promise.all([toB,toA,toBAgain,backToA])
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+  })
 })
 describe('private workspace lifetime (script regression only)',()=>{
   it('polls with the no-touch header, stops while hidden, and clears private DOM',async()=>{
