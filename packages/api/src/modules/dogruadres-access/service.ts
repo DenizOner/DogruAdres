@@ -416,6 +416,57 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   }
 
   /**
+   * First-party registration: native Customer is ONLY a technical actor.
+   * Caller must independently authenticate the exact native actor/identity.
+   * Foundation Person, mapping, binding and audit commit in one transaction.
+   */
+  @InjectTransactionManager()
+  async personalRegisterCustomer(
+    authIdentityId: string, customerId: string, mobile: string, displayName: string,
+    @MedusaContext() context: Context = {}
+  ) {
+    if (!/^authid_[A-Za-z0-9_-]+$/.test(authIdentityId) ||
+        !/^cus_[A-Za-z0-9_-]+$/.test(customerId) ||
+        !/^\\+?[0-9]{6,20}$/.test(mobile) ||
+        typeof displayName !== "string" || displayName.length > 101)
+      throw new IdentityAccessDenied()
+    const sql = securitySql(context.transactionManager)
+    await sql.execute(`select pg_advisory_xact_lock(hashtext('da-person-signup'),hashtext(?))`,[authIdentityId])
+    const bindings = await sql.execute(`select person_id,actor_type,actor_id,revoked_at
+      from da_login_binding where auth_identity_id=? for update`,[authIdentityId])
+    const links = await this.listActorMappings(
+      {actor_type:"customer",actor_id:customerId},{take:2},context)
+    // Never overwrite another Person, resurrect a revoked binding, or link by email.
+    if (bindings.length || links.length) {
+      if (bindings.length===1 && links.length===1 && bindings[0].revoked_at===null &&
+          bindings[0].actor_type==="customer" && bindings[0].actor_id===customerId &&
+          bindings[0].person_id===links[0].person_id)
+        return {created:false as const}
+      throw new IdentityAccessDenied()
+    }
+    const [person] = await this.createPeople([{
+      display_name:displayName, mobile_phone:mobile, mobile_version:1,
+    }],context)
+    if (!person?.id) throw new IdentityAccessDenied()
+    await this.createActorMappings([{
+      actor_type:"customer", actor_id:customerId,person_id:person.id,
+      created_by_actor_type:"customer", created_by_actor_id:customerId,
+    }],context)
+    await sql.execute(`insert into da_login_binding
+      (auth_identity_id,person_id,actor_type,actor_id,verified_at)
+      values (?,?,'customer',?,clock_timestamp())`,
+      [authIdentityId,person.id,customerId])
+    await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:person.id,actor_type:"customer",actor_id:customerId,
+      action:"person.registered",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"person-contact",target_id:person.id,
+      new_values:{contact_recorded:true,email_verification_claimed:false},
+      occurred_at:new Date(),
+    }],context)
+    return {created:true as const}
+  }
+
+  /**
    * Canonical Person contact only. Never consult a native Customer by email:
    * an upstream actor is not proof of the Person who owns this session.
    */
