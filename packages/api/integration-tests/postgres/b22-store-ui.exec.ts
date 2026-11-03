@@ -2070,8 +2070,66 @@ export default async function({container}:any){
         [organizations[1].id])
     }
     assert.equal((await groupChange("read")).body.status,"active")
+    // The real authorized native revoke reaches Medusa HTTPS, persists in
+    // PostgreSQL and writes the canonical audit first. In this browser only,
+    // change its already-successful response to the exact terminal native 503
+    // payload. This tests the UI's 503 recovery, NOT an actual server 503.
+    const auditBeforeRevoke503=Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n)
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daRevokeActualFetch=window.fetch;"+
+      "window.__daRevokeSynthetic503=false;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+          "JSON.parse(options.body||'{}').action==='revoke'&&!window.__daRevokeSynthetic503){"+
+          "return original(resource,options).then(async response=>{"+
+            "const body=await response.clone().json();"+
+            "if(response.status!==200||body.status!=='revoked')return response;"+
+            "window.__daRevokeSynthetic503=true;"+
+            "return new Response(JSON.stringify({message:'Outcome uncertain; recheck group'}),"+
+              "{status:503,headers:{'Content-Type':'application/json'}})"+
+          "})"+
+        "}return original(resource,options)"+
+      "};return true})()")
     await browser.click('#store-price-group-form button[value="revoke"]')
-    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('üyeliği yok')")
+    await browser.wait("window.__daRevokeSynthetic503&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Sonuç belirsiz')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is not null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n),1,
+      "The native HTTPS revoke must commit before the synthetic browser 503")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),auditBeforeRevoke503+1,
+      "A disguised 503 must not mask a second audit or duplicated write")
+    await browser.eval("(()=>{"+
+      "window.fetch=window.__daRevokeActualFetch;"+
+      "delete window.__daRevokeActualFetch;"+
+      "return true})()")
+    const revoke503Switch=await browser.eval("(()=>{"+
+      "const s=document.querySelector('#store-price-group-form select[name=seller_id]');"+
+      "s.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "s.value="+JSON.stringify(ownerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.getElementById('store-price-group-status').textContent"+
+      "})()")
+    assert.match(revoke503Switch,/Önceki mağazadaki işlem/,
+      "An uncertain native revoke result must survive Store A-B-A")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('üyeliği yok')&&"+
+      "!document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),auditBeforeRevoke503+1,
+      "Authorized recheck after terminal synthetic 503 is read-only")
+    process.stdout.write("PASS B22 Chrome: real native HTTPS revoke/PG16 single audit with browser-only synthetic terminal 503; A-B-A warning and authorized subsequent GET recovery, no second write\n")
     assert.equal((await groupChange("read")).body.status,"revoked")
     const afterRevoke=await privateCatalogBeta()
     assert.equal(afterRevoke.status,200)
