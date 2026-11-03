@@ -161,6 +161,12 @@ async function run(){
           assert.ok(result.includes("PASS B22 Chrome: native Admin SMTP same-origin MFA/grant GET200"))
           return
         }
+        assert.ok(result.split("\n").some(line=>line.startsWith(
+          "PASS B22 Chrome: first Person signup HTTPS/PG16, mandatory mobile400, native Customer to one Person")),
+          "Missing real Chrome/PG16 successful first Person signup evidence")
+        assert.ok(result.split("\n").some(line=>line.startsWith(
+          "PASS B22 Chrome: distinct real TLS client IPs share login/signup budget per source only;")),
+          "Missing real HTTPS source-isolated 429 and forged-header negative evidence")
         for(const target of ["active","missing","foreign","revoked"])
           assert.ok(result.split("\n").includes("PASS B22 Chrome: membership non-disclosure "+target+
             " target HTTP403 identical safe body; PG16 membership/canonical audit/audit outbox/security outbox unchanged"),
