@@ -14,7 +14,7 @@ const form = z.object({
   last_name:z.string().trim().min(1).max(50),
   email:z.string().trim().email().max(254),
   password:z.string().min(12).max(128),
-  mobile_phone:z.string().min(6).max(20).regex(/^\\+?[0-9]+$/),
+  mobile_phone:z.string().min(6).max(20).regex(/^\+?[0-9]+$/),
 }).strict()
 
 export const POST = async (req:MedusaRequest,res:MedusaResponse) => {
@@ -69,6 +69,9 @@ export const POST = async (req:MedusaRequest,res:MedusaResponse) => {
     const rechecked=await auth.authenticate("emailpass",proof)
     if(!rechecked.success || rechecked.authIdentity?.id!==identity.id)
       return res.status(403).json({message:"Access denied"})
+    if(rechecked.authIdentity.app_metadata?.user_id ||
+       rechecked.authIdentity.app_metadata?.member_id)
+      return res.status(409).json({message:"Use the authorized account linking flow"})
     const actorId=rechecked.authIdentity.app_metadata?.customer_id
     if(typeof actorId!=="string" || !/^cus_[A-Za-z0-9_-]+$/.test(actorId))
       return res.status(503).json({message:"Native account binding unavailable"})
