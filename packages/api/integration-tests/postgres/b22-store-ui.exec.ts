@@ -1860,7 +1860,7 @@ export default async function({container}:any){
       "choice.dispatchEvent(new Event('change',{bubbles:true}));"+
       "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value"+
       "})()"),priceGroup.id)
-    process.stdout.write("PASS B22 Chrome group-picker Store-switch race: pending native HTTPS GET cannot lock new Store controls, previous result remains uncertain, selection resets; original Store works again\\n")
+    process.stdout.write("PASS B22 Chrome: group-picker Store-switch race: pending native HTTPS GET cannot lock new Store controls, previous result remains uncertain, selection resets; original Store works again\n")
     assert.equal((await groupChange("grant")).status,200)
     assert.equal((await q("select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
       [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n,1)
