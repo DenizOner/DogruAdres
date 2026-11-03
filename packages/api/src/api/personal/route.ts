@@ -705,9 +705,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Only this selected legal Organization's Owner sees the controls; the
   // server independently checks fresh Owner, verified Store origin and native
   // Seller/Member before every write. Visibility is NOT authorization.
-  let storeBlockRequest=0,priceGroupRequest=0;
+  let storeBlockRequest=0,priceGroupListRequest=0,priceGroupActionRequest=0;
+  let priceGroupActionPending=false;
   function clearStoreBlock(){
-    storeBlockRequest++;priceGroupRequest++;
+    storeBlockRequest++;priceGroupActionRequest++;
+    priceGroupActionPending=false;
     el('store-price-group-panel').hidden=true;
     el('store-price-group-status').textContent='';
     clearStorePriceGroupChoices();
@@ -730,7 +732,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // This picker is convenience only; the existing grant endpoint still
   // verifies the current native Seller->CustomerGroup link on every write.
   function clearStorePriceGroupChoices(){
-    priceGroupRequest++;
+    priceGroupListRequest++;
     const choice=el('store-price-group-choice');
     if(choice&&typeof choice.replaceChildren==='function'){
       choice.replaceChildren();choice.disabled=true;
@@ -747,7 +749,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(request!==organizationRequest||currentOrg!==org||
        document.hidden||el('workspace').hidden||
        !/^sel_[A-Za-z0-9_-]+$/.test(seller_id))return;
-    const seq=priceGroupRequest;
+    // A Store change invalidates the old UI action, not the server write.
+    // Its result may be committed: never call the previous action cancelled.
+    const wasPending=priceGroupActionPending;
+    ++priceGroupActionRequest;
+    priceGroupActionPending=false;
+    const actionForm=el('store-price-group-form');
+    if(actionForm)for(const button of actionForm.querySelectorAll('button'))
+      button.disabled=false;
+    const actionMessage=el('store-price-group-status');
+    if(actionMessage)actionMessage.textContent=wasPending?
+      'Önceki mağazadaki işlem sonuçlanmış olabilir. O mağazanın kaydını kontrol edin.':'';
+    const seq=priceGroupListRequest;
     const choice=el('store-price-group-choice'),
       message=el('store-price-group-options-status');
     if(!choice||!message)return;
@@ -756,7 +769,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const data=await api('store-price-groups?'+new URLSearchParams({
         organization_id:org,seller_id,view:'list'
       }).toString());
-      if(seq!==priceGroupRequest||request!==organizationRequest||
+      if(seq!==priceGroupListRequest||request!==organizationRequest||
          currentOrg!==org||document.hidden||
          el('store-price-group-form')?.elements?.namedItem('seller_id')?.value!==seller_id)return;
       if(data.organization_id!==org||data.seller_id!==seller_id||
@@ -779,7 +792,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         'Bu mağazanın gruplarından birini seçin; seçim başka mağazada geçerli değildir.':
         'Bu mağazada seçilebilir müşteri grubu bulunamadı.';
     }catch(e){
-      if(seq!==priceGroupRequest||request!==organizationRequest||currentOrg!==org)return;
+      if(seq!==priceGroupListRequest||request!==organizationRequest||currentOrg!==org)return;
       choice.replaceChildren();choice.disabled=true;
       message.textContent='Mağaza grupları yetki nedeniyle yüklenemedi.';
     }
@@ -885,7 +898,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!/^sel_[A-Za-z0-9_-]+$/.test(seller_id)||
        !/^cusgroup_[A-Za-z0-9_-]+$/.test(customer_group_id)||
        !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyer_organization_id))return;
-    const message=el('store-price-group-status'),seq=++priceGroupRequest;
+    const message=el('store-price-group-status'),seq=++priceGroupActionRequest;
+    priceGroupActionPending=true;
     for(const button of form.querySelectorAll('button'))button.disabled=true;
     message.textContent='Yetkili mağaza ve alıcı işletme denetleniyor…';
     try{
@@ -893,8 +907,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const result=action==='read'?
         await api('store-price-groups?'+new URLSearchParams(data).toString()):
         await api('store-price-groups',{method:'POST',body:JSON.stringify({...data,action})});
-      if(seq!==priceGroupRequest||request!==organizationRequest||
-         currentOrg!==org||document.hidden)return;
+      if(seq!==priceGroupActionRequest||request!==organizationRequest||
+         currentOrg!==org||document.hidden||
+         form.elements.namedItem('seller_id')?.value!==seller_id)return;
       if(!['active','revoked'].includes(result.status)||
          (action==='grant'&&result.status!=='active')||
          (action==='revoke'&&result.status!=='revoked'))
@@ -903,13 +918,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         'Alıcı işletme bu mağazanın özel fiyat grubuna kabul edilmiş.':
         'Bu işletmenin bu mağaza grubunda geçerli üyeliği yok.';
     }catch(e){
-      if(seq!==priceGroupRequest||request!==organizationRequest||currentOrg!==org)return;
+      if(seq!==priceGroupActionRequest||request!==organizationRequest||currentOrg!==org||
+         form.elements.namedItem('seller_id')?.value!==seller_id)return;
       message.textContent=e.uncertain?
         'Sonuç belirsiz. İşlemi tekrarlamadan önce kaydı kontrol edin.':
         'İşlem reddedildi; mağaza veya grup yetkisi doğrulanamadı.';
     }finally{
-      if(seq===priceGroupRequest&&request===organizationRequest&&currentOrg===org&&!document.hidden)
-        for(const button of form.querySelectorAll('button'))button.disabled=false;
+      if(seq===priceGroupActionRequest){
+        priceGroupActionPending=false;
+        if(request===organizationRequest&&currentOrg===org&&!document.hidden&&
+           form.elements.namedItem('seller_id')?.value===seller_id)
+          for(const button of form.querySelectorAll('button'))button.disabled=false;
+      }
     }
   };
 
