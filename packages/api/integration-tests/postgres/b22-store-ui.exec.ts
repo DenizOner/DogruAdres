@@ -5152,7 +5152,15 @@ export default async function({container}:any){
     if(ownerButton){
       // The visible UI path is preferred, but the privacy observer may
       // conceal it BETWEEN the Owner selection and actual button click.
-      await browser.select(organizations[0].name,"owner")
+      try{
+        await browser.select(organizations[0].name,"owner")
+      }catch(error){
+        // The observer can conceal the button after ownerButton was read.
+        // Never ignore a failed selection while the workspace stays visible.
+        const concealed=await browser.eval(
+          "document.getElementById('workspace').hidden===true")
+        if(!concealed)throw error
+      }
       // A real privacy observer may clear the panel after membership revoke.
       // Accept concealment ONLY when the entire workspace is genuinely
       // hidden. Otherwise insist on the correct Organization and both stores.
