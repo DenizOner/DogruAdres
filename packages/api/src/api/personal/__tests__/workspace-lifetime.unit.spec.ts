@@ -563,8 +563,8 @@ describe("M0 canonical Person mobile workspace lifetime",()=>{
     runInContext("currentPersonId='daprs_A';viewEpoch=3;"+
       "api=(path,options)=>new Promise((resolve,reject)=>{(globalThis.mobileCalls??=[]).push({path,options,resolve,reject})})",
       h.context)
-    const calls=(h.context as any).mobileCalls as any[]
     const initial=runInContext("refreshPersonMobile()",h.context)
+    const calls=(h.context as any).mobileCalls as any[]
     calls[0].resolve({mobile_phone:"+905551234567",version:1,phone_verified:false})
     await initial
     expect(form.hidden).toBe(false)
