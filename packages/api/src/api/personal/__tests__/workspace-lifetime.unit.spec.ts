@@ -557,6 +557,43 @@ describe('private workspace lifetime (script regression only)',()=>{
 })
 
 describe("M0 canonical Person mobile workspace lifetime",()=>{
+  it.each([true,false])("does not repeat uncertain mobile POST; readback succeeds=%s",async readbackSucceeds=>{
+    const h=harness(),form=h.el('person-mobile-form')
+    h.el('workspace').hidden=false
+    runInContext("currentPersonId='daprs_A';viewEpoch=3;"+
+      "api=(path,options)=>new Promise((resolve,reject)=>{(globalThis.mobileCalls??=[]).push({path,options,resolve,reject})})",
+      h.context)
+    const calls=(h.context as any).mobileCalls as any[]
+    const initial=runInContext("refreshPersonMobile()",h.context)
+    calls[0].resolve({mobile_phone:"+905551234567",version:1,phone_verified:false})
+    await initial
+    expect(form.hidden).toBe(false)
+    form.elements.mobile_phone.value="+905551234568"
+    const save=form.onsubmit({preventDefault(){},target:form})
+    expect(calls[1].options.method).toBe('POST')
+    calls[1].reject(new Error('connection lost after possible commit'))
+    await tick()
+    expect(calls[2].path).toBe('profile')
+    expect(calls[2].options).toBeUndefined()
+    if(readbackSucceeds){
+      calls[2].resolve({mobile_phone:"+905551234568",version:2,phone_verified:false})
+    }else{
+      calls[2].reject(new Error('readback unavailable'))
+    }
+    await save
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+    if(readbackSucceeds){
+      expect(form.hidden).toBe(false)
+      expect(form.elements.mobile_phone.value).toBe("+905551234568")
+      expect(h.el('person-mobile-status').textContent).toContain('Güncel telefon kaydını kontrol edin')
+      expect(h.el('person-mobile-status').textContent).not.toContain('İşlem sonucu yeniden kontrol edildi')
+    }else{
+      expect(form.hidden).toBe(true)
+      expect(form.elements.mobile_phone.value).toBe('')
+      expect(h.el('status').textContent).toContain('sonucu doğrulanamadı')
+      expect(h.el('status').textContent).not.toContain('yeniden kontrol edildi')
+    }
+  })
   it("loads only a verified current Person contact and clears it before another Person may render",async()=>{
     const h=harness()
     h.el('workspace').hidden=false
