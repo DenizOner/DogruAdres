@@ -93,6 +93,22 @@ async function listStoreGroups(req:MedusaRequest,res:MedusaResponse,
     if(!after||after.person_id!==before.person_id||
        after.binding_id!==before.binding_id||
        after.actor_id!==before.actor_id)return denied()
+    // A native group may have been unlinked while names were fetched. A
+    // second read limits that gap without pretending to provide a transaction
+    // spanning independent Medusa/Mercur module writes.
+    const {data:recentLinks}=await query.graph({
+      entity:"customer_group_seller",
+      fields:["seller_id","customer_group_id"],
+      filters:{seller_id:input.seller_id},
+      pagination:{skip:0,take:100}
+    })
+    const recentIds=Array.isArray(recentLinks)?
+      recentLinks.map(x=>x.customer_group_id):[]
+    if(!Array.isArray(recentLinks)||recentLinks.length!==links.length||
+       recentLinks.some(x=>x.seller_id!==input.seller_id||
+         !group.safeParse(x.customer_group_id).success)||
+       recentIds.length!==ids.length||
+       recentIds.some(x=>!allowed.has(x)))return denied()
     return res.status(200).json({
       organization_id:input.organization_id,
       seller_id:input.seller_id,groups
