@@ -598,8 +598,8 @@ export default async function({container}:any){
     assert.ok(["crash","recover","native-lock-check","native-complete"].includes(mode??""))
     const redisLock=container.resolve("locking")
     if(mode==="native-lock-check"||mode==="native-complete"){
-      const cartId=process.env.B22_REDIS_NATIVE_CART_ID
-      assert.match(cartId??"",/^cart_[A-Za-z0-9_-]+$/,
+      const cartId=process.env.B22_REDIS_NATIVE_CART_ID??""
+      assert.match(cartId,/^cart_[A-Za-z0-9_-]+$/,
         "Native Redis probe is restricted to its task-owned Cart")
       if(mode==="native-lock-check"){
         let acquired=false
@@ -3373,7 +3373,7 @@ export default async function({container}:any){
         stdio:["ignore","ignore","ignore"]
       })
       const childGroupId=redisWorker.pid
-      assert.ok(Number.isSafeInteger(childGroupId)&&childGroupId!>=2,
+      assert.ok(Number.isSafeInteger(childGroupId)&&Number(childGroupId)>=2,
         "Only the exact newly spawned disposable process group can be stopped")
       redisWorkerDone=new Promise(resolve=>{
         redisWorker!.once("error",()=>resolve({code:null,signal:null}))
