@@ -189,6 +189,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         <button type="submit" name="action" value="unblock">Engeli kaldır</button>
       </form>
     </section>
+    <section id="store-price-group-panel" hidden aria-labelledby="store-price-group-title">
+      <h3 id="store-price-group-title">Mağazanın özel fiyat grubu alıcıları</h3>
+      <p>Kendi mağazanızın mevcut müşteri grubuna bir alıcı işletmeyi kabul edebilir veya gruptan çıkarabilirsiniz. Bu izin tek başına indirim ve ödeme açmaz.</p>
+      <p id="store-price-group-status" role="status" aria-live="polite"></p>
+      <form id="store-price-group-form">
+        <label>Onaylı mağaza<select name="seller_id" required></select></label>
+        <label>Mevcut müşteri grubu kimliği<input name="customer_group_id" pattern="cusgroup_[A-Za-z0-9_-]+" placeholder="cusgroup_..." required autocomplete="off"></label>
+        <label>Alıcı işletme kimliği<input name="buyer_organization_id" pattern="daorg_[A-Za-z0-9_-]{1,80}" placeholder="daorg_..." required autocomplete="off"></label>
+        <button type="submit" name="action" value="grant">Gruba kabul et</button>
+        <button type="submit" name="action" value="revoke">Gruptan çıkar</button>
+        <button type="submit" name="action" value="read">Kaydı kontrol et</button>
+      </form>
+    </section>
     <section id="product-grants-panel" hidden aria-labelledby="product-grants-title">
       <h3 id="product-grants-title">Mağaza ürün düzenleme yetkileri</h3>
       <p>Korunmuş Owner, kendi kuruluşunun onaylı mağazalarında ayrıca ürün düzenleme izni almadan işlem yapabilir. Diğer aktif üyelere yalnız bu kuruluşun onaylı mağazaları için ayrı izin verilebilir veya izinleri iptal edilebilir.</p>
@@ -690,9 +703,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Only this selected legal Organization's Owner sees the controls; the
   // server independently checks fresh Owner, verified Store origin and native
   // Seller/Member before every write. Visibility is NOT authorization.
-  let storeBlockRequest=0;
+  let storeBlockRequest=0,priceGroupRequest=0;
   function clearStoreBlock(){
-    storeBlockRequest++;
+    storeBlockRequest++;priceGroupRequest++;
+    el('store-price-group-panel').hidden=true;
+    el('store-price-group-status').textContent='';
+    const gf=el('store-price-group-form');
+    const gs=gf?.elements&&typeof gf.elements.namedItem==='function'?
+      gf.elements.namedItem('seller_id'):null;
+    if(gs&&typeof gs.replaceChildren==='function')gs.replaceChildren();
+    if(gf&&typeof gf.querySelectorAll==='function')
+      for(const button of gf.querySelectorAll('button'))button.disabled=true;
+    if(gf&&typeof gf.reset==='function')gf.reset();
     const panel=el('store-block-panel'),form=el('store-block-form');
     if(panel)panel.hidden=true;
     const msg=el('store-block-status');if(msg)msg.textContent='';
@@ -728,6 +750,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       for(const button of form.querySelectorAll('button'))
         button.disabled=data.stores.length===0;
       panel.hidden=data.stores.length===0;
+      const gf=el('store-price-group-form');
+      const gs=gf?.elements&&typeof gf.elements.namedItem==='function'?
+        gf.elements.namedItem('seller_id'):null;
+      if(gs&&typeof gs.replaceChildren==='function'){
+        gs.replaceChildren();
+        for(const option of select.options)gs.append(option.cloneNode(true));
+        for(const button of gf.querySelectorAll('button'))button.disabled=data.stores.length===0;
+        el('store-price-group-panel').hidden=data.stores.length===0;
+      }
       msg.textContent=data.stores.length?
         'Yalnız kendi mağazanız için alıcı kuruluş engeli koyabilirsiniz.':
         'Onaylı mağaza bulunamadı.';
@@ -769,6 +800,47 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         'İşlem reddedildi; mağaza politikasını değiştiremediniz.';
     }finally{
       if(request===organizationRequest&&currentOrg===org&&!document.hidden)
+        for(const button of form.querySelectorAll('button'))button.disabled=false;
+    }
+  };
+
+  const priceGroupForm=el('store-price-group-form');
+  if(priceGroupForm)priceGroupForm.onsubmit=async event=>{
+    event.preventDefault();
+    if(document.hidden||el('workspace').hidden)return;
+    const request=organizationRequest,org=currentOrg,form=event.currentTarget;
+    const action=event.submitter?.value;
+    if(!org||!['grant','revoke','read'].includes(action))return;
+    const seller_id=form.elements.namedItem('seller_id')?.value;
+    const customer_group_id=String(form.elements.namedItem('customer_group_id')?.value||'').trim();
+    const buyer_organization_id=String(form.elements.namedItem('buyer_organization_id')?.value||'').trim();
+    if(!/^sel_[A-Za-z0-9_-]+$/.test(seller_id)||
+       !/^cusgroup_[A-Za-z0-9_-]+$/.test(customer_group_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyer_organization_id))return;
+    const message=el('store-price-group-status'),seq=++priceGroupRequest;
+    for(const button of form.querySelectorAll('button'))button.disabled=true;
+    message.textContent='Yetkili mağaza ve alıcı işletme denetleniyor…';
+    try{
+      const data={organization_id:org,seller_id,customer_group_id,buyer_organization_id};
+      const result=action==='read'?
+        await api('store-price-groups?'+new URLSearchParams(data).toString()):
+        await api('store-price-groups',{method:'POST',body:JSON.stringify({...data,action})});
+      if(seq!==priceGroupRequest||request!==organizationRequest||
+         currentOrg!==org||document.hidden)return;
+      if(!['active','revoked'].includes(result.status)||
+         (action==='grant'&&result.status!=='active')||
+         (action==='revoke'&&result.status!=='revoked'))
+        throw Error('Yetki sonucu doğrulanamadı');
+      message.textContent=result.status==='active'?
+        'Alıcı işletme bu mağazanın özel fiyat grubuna kabul edilmiş.':
+        'Bu işletmenin bu mağaza grubunda geçerli üyeliği yok.';
+    }catch(e){
+      if(seq!==priceGroupRequest||request!==organizationRequest||currentOrg!==org)return;
+      message.textContent=e.uncertain?
+        'Sonuç belirsiz. İşlemi tekrarlamadan önce kaydı kontrol edin.':
+        'İşlem reddedildi; mağaza veya grup yetkisi doğrulanamadı.';
+    }finally{
+      if(seq===priceGroupRequest&&request===organizationRequest&&currentOrg===org&&!document.hidden)
         for(const button of form.querySelectorAll('button'))button.disabled=false;
     }
   };

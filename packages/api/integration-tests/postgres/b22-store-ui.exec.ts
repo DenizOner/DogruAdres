@@ -18,7 +18,7 @@ import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
 import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
-import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow} from "@mercurjs/core/workflows"
+import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
@@ -1664,6 +1664,98 @@ export default async function({container}:any){
     // Read-only positive B22 discovery: native Mercur Offers (never a public
     // /store route), a published shared master Product and two independently
     // approved Organization-owned Sellers. No prices or checkout enabled.
+
+    // B22 only: native Seller-owned CustomerGroup plus audited legal Buyer Org.
+    const {result:[priceGroup]}=await createSellerCustomerGroupsWorkflow(container).run({
+      input:{seller_id:ownerStoreId,
+        customer_groups:[{name:"B22 Store buyer group "+rand}]}
+    })
+    assert.match(priceGroup.id,/^cusgroup_[A-Za-z0-9_-]+$/)
+    const {data:groupLink}=await container.resolve("query").graph({
+      entity:"customer_group_seller",fields:["seller_id","customer_group_id"],
+      filters:{seller_id:ownerStoreId,customer_group_id:priceGroup.id}
+    })
+    assert.equal(groupLink.length,1)
+    const groupInput={organization_id:organizations[0].id,
+      seller_id:ownerStoreId,buyer_organization_id:organizations[1].id,
+      customer_group_id:priceGroup.id}
+    const groupChange=async(action:"grant"|"revoke"|"read",
+      input:Record<string,unknown>=groupInput,b=browser)=>{
+      return b.eval("(async()=>{"+
+        "const s=await(await fetch('/personal/session')).json();"+
+        "const action="+JSON.stringify(action)+";"+
+        "const input="+JSON.stringify(input)+";"+
+        "const method=action==='read'?'GET':'POST';"+
+        "const url='/personal/store-price-groups'+(method==='GET'?'?'+new URLSearchParams(input).toString():'');"+
+        "const res=await fetch(url,{method,headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "...(method==='POST'?{body:JSON.stringify({...input,action})}:{})});"+
+        "return {status:res.status,body:await res.json()};})()")
+    }
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("!document.getElementById('store-price-group-panel').hidden")
+    await browser.input("#store-price-group-form input[name=customer_group_id]",priceGroup.id)
+    await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[1].id)
+    const groupAuditStart=(await q("select count(*)::int n from da_audit_event"))[0].n
+    await browser.click('#store-price-group-form button[value="grant"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')")
+    assert.equal((await groupChange("read")).body.status,"active")
+    assert.equal((await groupChange("grant")).status,200)
+    assert.equal((await q("select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n,1)
+    assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
+      groupAuditStart+1,"Idempotent grant writes only one canonical audit")
+    assert.equal((await groupChange("grant",{...groupInput,seller_id:secondOwnerStoreId})).status,403)
+    assert.equal((await groupChange("grant",groupInput,reviewer)).status,403)
+    const missingCsrf=await browser.eval("(async()=>{const r=await fetch('/personal/store-price-groups',{method:'POST',headers:{'content-type':'application/json'},body:"+JSON.stringify(JSON.stringify({...groupInput,action:"grant"}))+"});return r.status})()")
+    assert.equal(missingCsrf,403)
+    // F-01: a suspended or de-approved Seller must not disclose whether
+    // a Buyer Organization has an active membership. Cleanup revoke remains
+    // intentionally independent of the Seller's current open state.
+    await suspendSellerWorkflow(container).run({input:{
+      seller_id:ownerStoreId,reason:"B22 isolated price-group GET suspension negative"
+    }})
+    try{
+      assert.equal((await groupChange("read")).status,403,
+        "Suspended Seller must not expose even active group membership")
+    }finally{
+      await unsuspendSellerWorkflow(container).run({input:{seller_id:ownerStoreId}})
+    }
+    const sellerAfterUnsuspend=(await native.listSellers({id:ownerStoreId}))[0]
+    assert.equal(sellerAfterUnsuspend?.status,"open")
+    assert.ok(sellerAfterUnsuspend?.approved_at)
+    assert.equal((await groupChange("read")).body.status,"active",
+      "Authorized Owner read must recover only after Seller is open again")
+    const approvalBefore=sellerAfterUnsuspend.approved_at
+    await q("update seller set approved_at=null where id=$1",[ownerStoreId])
+    try{
+      assert.equal((await groupChange("read")).status,403,
+        "Open Seller with removed platform approval must also deny membership read")
+    }finally{
+      await q("update seller set approved_at=$2 where id=$1",
+        [ownerStoreId,approvalBefore])
+    }
+    assert.equal((await groupChange("read")).body.status,"active")
+    await q("update da_organization set status='suspended' where id=$1",
+      [organizations[1].id])
+    try{
+      assert.equal((await groupChange("read")).status,403,
+        "Suspended Buyer Organization cannot read its former group membership")
+    }finally{
+      await q("update da_organization set status='active' where id=$1",
+        [organizations[1].id])
+    }
+    assert.equal((await groupChange("read")).body.status,"active")
+    await browser.click('#store-price-group-form button[value="revoke"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('üyeliği yok')")
+    assert.equal((await groupChange("read")).body.status,"revoked")
+    assert.equal((await q("select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is not null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n,1)
+    assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
+      groupAuditStart+2,"Revocation retains auditable membership history")
+    process.stdout.write("PASS B22 audited Store price group: real Owner Chrome grant/revoke, Mercur SellerCustomerGroup link, Buyer Org PG16 audit/outbox, foreign Person/Store/CSRF denied; no checkout\n")
+
     const catalogUrl=(org:string)=>"/personal/catalog?organization_id="+
       encodeURIComponent(org)
     const catalogAuditBefore=await q("select count(*)::int n from da_audit_event")
@@ -5305,6 +5397,114 @@ export default async function({container}:any){
       await q("drop function b22_mfa_disable_outbox_fault_v1()")
       disableFunctionInstalled=false
       await loginStaffA(staffCodes[2])
+      // A prior native suspension test intentionally left THIS Seller
+      // suspended. Reactivate it only in the disposable PG16 fixture;
+      // otherwise the request correctly stops before the unlink race seam.
+      const priceRaceStore=(await native.listSellers({id:ownerStoreId}))[0]
+      assert.equal(priceRaceStore?.status,"suspended")
+      await unsuspendSellerWorkflow(container).run({input:{seller_id:ownerStoreId}})
+      try{
+        assert.equal((await native.listSellers({id:ownerStoreId}))[0]?.status,"open")
+        const priceRacePrecheck=await groupChange("read")
+        assert.equal(priceRacePrecheck.status,200,
+          "A genuinely authorized active Seller/Member is needed before the unlink race")
+        assert.equal(priceRacePrecheck.body.status,"revoked")
+      // F-02: first-party HTTP has already checked the real native Seller,
+      // but the Foundation method is paused BEFORE acquiring its actor lock.
+      // Complete the supported Person->Member unlink while it is paused.
+      // The resumed real HTTP call must commit NO group grant/audit/outbox.
+      const priceGroupBefore=(await q(
+        "select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
+        [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n
+      assert.equal(priceGroupBefore,0,"Earlier Owner revoke must stay persisted")
+      const groupActionCount=async()=>Number((await q(
+        "select count(*)::int n from da_audit_event where module='dogruadres-access' and action in ('organization.store_price_group_granted','organization.store_price_group_revoked')"
+      ))[0].n)
+      const groupActionBefore=await groupActionCount()
+      const memberBindings=await q(
+        "select id,actor_id from da_verified_actor_binding where person_id=$1 and actor_type='member' and revoked_at is null",
+        [A.person])
+      assert.equal(memberBindings.length,1)
+      const initialGroupCookie=await browser.token()
+      const initialGroupCsrf=await browser.eval(
+        "(async()=>{const r=await fetch('/personal/session');return r.status===200?(await r.json()).csrf_token:null})()")
+      assert.match(initialGroupCookie??"",/^[A-Za-z0-9_-]{43}$/)
+      assert.equal(typeof initialGroupCsrf,"string")
+      const originalGroupMethod=foundationPrototype.personalStorePriceGroupAccess
+      let groupEntered=false,groupGateReleased=false
+      let releaseGroupGate!:()=>void
+      const groupGate=new Promise<void>(resolve=>{
+        releaseGroupGate=()=>{groupGateReleased=true;resolve()}
+      })
+      foundationPrototype.personalStorePriceGroupAccess=async function(this:any,...args:any[]){
+        if(args[1]?.action==="grant"&&args[1]?.customer_group_id===priceGroup.id){
+          groupEntered=true
+          await groupGate
+        }
+        return originalGroupMethod.apply(this,args)
+      }
+      let pendingGroupPost:Promise<{status:number;body:any}>|undefined
+      try{
+        pendingGroupPost=new Promise((resolve,reject)=>{
+          const request=tlsRequest(host+"/personal/store-price-groups",{
+            method:"POST",ca:readFileSync(crt),headers:{
+              Cookie:"da_session="+initialGroupCookie,
+              Origin:host,"Content-Type":"application/json",
+              "x-csrf-token":initialGroupCsrf
+            }
+          },response=>{
+            let body=""
+            response.setEncoding("utf8")
+            response.on("data",chunk=>{body+=chunk})
+            response.on("end",()=>{
+              try{resolve({status:response.statusCode??0,body:JSON.parse(body)})}
+              catch(error){reject(error)}
+            })
+          })
+          request.on("error",reject)
+          request.setTimeout(16000,()=>request.destroy(Error("F-02 price group POST timeout")))
+          request.end(JSON.stringify({...groupInput,action:"grant"}))
+        })
+        await until(async()=>groupEntered,10000,
+          "F-02 exact real Store grant HTTP passed native authority before Foundation write")
+        const unlinked=await browser.eval("(async()=>{"+
+          "const sr=await fetch('/personal/session');"+
+          "if(sr.status!==200)return {status:sr.status};"+
+          "const session=await sr.json();"+
+          "const res=await fetch('/personal/links',{method:'POST',"+
+          "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+          "body:JSON.stringify({action:'unlink',binding_id:"+
+          JSON.stringify(memberBindings[0].id)+"})});return {status:res.status}})()")
+        assert.equal(unlinked.status,200,
+          "Supported Member unlink must commit after initial Store HTTP check")
+        const revoked=await q(
+          "select revoked_at from da_verified_actor_binding where id=$1",
+          [memberBindings[0].id])
+        assert.equal(revoked.length,1)
+        assert.ok(revoked[0].revoked_at,"Member unlink committed to real PG16")
+        releaseGroupGate()
+        const result=await pendingGroupPost
+        assert.equal(result.status,403,
+          "In-flight grant resumed after committed Member unlink must be denied")
+        assert.deepEqual(result.body,{message:"Access denied"})
+        assert.equal((await q(
+          "select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
+          [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n,0)
+        assert.equal(await groupActionCount(),groupActionBefore,
+          "Revoked Member must produce zero price-group audit/outbox writes")
+        assert.equal((await groupChange("read")).status,403,
+          "Subsequent Member group read cannot regain access after unlink")
+        process.stdout.write("PASS B22 Store price group F-01/F-02: suspended/de-approved Seller and suspended Buyer GET403; real first-party Member unlink between native HTTP scope and Foundation write denies grant403, zero group/audit mutation\n")
+      }finally{
+        if(!groupGateReleased)releaseGroupGate()
+        foundationPrototype.personalStorePriceGroupAccess=originalGroupMethod
+        if(pendingGroupPost)await pendingGroupPost.catch(()=>{})
+      }
+      }finally{
+        await suspendSellerWorkflow(container).run({input:{
+          seller_id:ownerStoreId,reason:"B22 restore earlier native Seller suspension"
+        }})
+      }
       const positiveNativeBefore=await auth.listAuthMfa(
         {auth_identity_id:staffAIdentity.auth_identity_id,status:"enabled"},{take:2})
       assert.equal(positiveNativeBefore.length,1)

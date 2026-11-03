@@ -7,9 +7,9 @@
  * future persisted policy editor must replace this source atomically, not
  * introduce another role-only bypass or grant implicit Store approval.
  */
-export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage" | "membership.manage" | "membership.list" | "audit.timeline.read" | "organization.read"
+export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage" | "membership.manage" | "membership.list" | "audit.timeline.read" | "organization.read" | "price.group.manage"
 export const DEFAULT_OWNER_ACTIONS: readonly OrganizationAction[] =
-  Object.freeze(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read","organization.read"])
+  Object.freeze(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read","organization.read","price.group.manage"])
 const DENY_ALL_OWNER_ACTIONS: readonly OrganizationAction[] = Object.freeze([])
 
 /** Optional trusted deployment setting for the Organization Owner ROLE,
@@ -48,7 +48,7 @@ export function organizationActionAllowed(
   ownerActions: readonly OrganizationAction[] = configuredOwnerActions()
 ): boolean {
   if(role==="owner") return protectedOwner===true && ownerActions.includes(action)
-  if(role==="member" || role==="admin") return !["invitation.manage","membership.manage","membership.list","audit.timeline.read"].includes(action) && auditedMemberGrant===true
+  if(role==="member" || role==="admin") return !["invitation.manage","membership.manage","membership.list","audit.timeline.read","price.group.manage"].includes(action) && auditedMemberGrant===true
   return false
 }
 
