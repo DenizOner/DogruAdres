@@ -3369,6 +3369,11 @@ export default async function({container}:any){
     ),true,"Native Redis recovery test needs current Buyer/Store permission")
     const beforeNativeOrderCount=Number((await q(
       'select count(*)::int n from "order"'))[0].n)
+    // Same Customer/Buyer fingerprint distinguishes this Cart's orphan
+    // from any unrelated test order in the disposable database.
+    const beforeNativeBuyerOrderCount=Number((await q(
+      'select count(*)::int n from "order" where customer_id=$1',
+      [nativeCustomer.id]))[0].n)
 
     const redisBarrier=new Client({connectionString:u.toString()})
     await redisBarrier.connect()
@@ -3446,6 +3451,11 @@ export default async function({container}:any){
       entity:"order_cart",fields:["order_id"],filters:{cart_id:redisCart.id}
     })
     assert.equal(redisBeforeOrderLinks.length,0)
+    assert.equal(Number((await q(
+      'select count(*)::int n from "order" where customer_id=$1',
+      [nativeCustomer.id]))[0].n),
+      beforeNativeBuyerOrderCount,
+      "Crashed native Cart must not leave a Seller Order for its Buyer Customer")
     assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),
       beforeNativeOrderCount,
       "Crash must not leave unlinked native Seller Orders without OrderGroup")
