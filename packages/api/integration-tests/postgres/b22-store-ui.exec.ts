@@ -2092,8 +2092,11 @@ export default async function({container}:any){
     // exposed to the Buyer merely because a later page was queried.
     // This real Chrome/HTTPS test checks page switching with disposable PG16.
     // The separate deterministic service test covers the twenty-first Store.
-    const laterWindow=await get(
-      "/personal/catalog?organization_id="+encodeURIComponent(organizations[1].id)+"&page=1")
+    const buyerPageUrl="/personal/catalog?organization_id="+
+      encodeURIComponent(organizations[1].id)
+    const laterWindow=await reviewer.eval("(async()=>{"+
+      "const r=await fetch("+JSON.stringify(buyerPageUrl+"&page=1")+");"+
+      "return {status:r.status,body:await r.json()}})()")
     assert.equal(laterWindow.status,200)
     assert.equal(laterWindow.body.organization_id,organizations[1].id)
     assert.equal(laterWindow.body.page,1)
@@ -2103,8 +2106,9 @@ export default async function({container}:any){
     assert.ok(!Object.prototype.hasOwnProperty.call(laterWindow.body,"count")&&
       !Object.prototype.hasOwnProperty.call(laterWindow.body,"has_more"),
       "A page must not expose the count of unrelated native Sellers")
-    assert.equal((await get(
-      "/personal/catalog?organization_id="+encodeURIComponent(organizations[1].id)+"&page=5")).status,400)
+    assert.equal(await reviewer.eval("(async()=>{"+
+      "const r=await fetch("+JSON.stringify(buyerPageUrl+"&page=5")+");"+
+      "return r.status})()"),400)
     await reviewer.click('#buyer-catalog-next')
     await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden&&"+
       "document.getElementById('buyer-catalog-status').textContent.includes('2/5')")
