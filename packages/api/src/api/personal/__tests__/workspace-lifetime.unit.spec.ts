@@ -7,7 +7,7 @@ function harness() {
   const source=readFileSync(join(__dirname,'../route.ts'),'utf8')
   const nodes=new Map<string,any>(),listeners=new Map<string,Function>(),pending:any[]=[]
   const el=(id:string)=>{
-    if(!nodes.has(id))nodes.set(id,{textContent:'',value:'',hidden:id==='workspace',children:[],elements:{method:{}},setAttribute(){},focus(){},replaceChildren(){this.textContent='';this.children=[]},append(x:any){this.children.push(x)},querySelectorAll(){return []},reset(){},querySelector(){return {disabled:false}}})
+    if(!nodes.has(id))nodes.set(id,{textContent:'',value:'',hidden:id==='workspace',children:[],elements:{method:{},mobile_phone:{value:''}},setAttribute(){},focus(){},replaceChildren(){this.textContent='';this.children=[]},append(x:any){this.children.push(x)},querySelectorAll(){return []},reset(){},querySelector(){return {disabled:false}}})
     return nodes.get(id)
   }
   const document={hidden:false,getElementById:el,createElement:()=>({textContent:''}),addEventListener:(n:string,f:Function)=>listeners.set(n,f)}
@@ -554,4 +554,37 @@ describe('private workspace lifetime (script regression only)',()=>{
     expect(h.el('status').textContent).not.toContain('Oturum kilitlendi.')
   })
 
+})
+
+describe("M0 canonical Person mobile workspace lifetime",()=>{
+  it("loads only a verified current Person contact and clears it before another Person may render",async()=>{
+    const h=harness()
+    h.el('workspace').hidden=false
+    runInContext("currentPersonId='daprs_A';viewEpoch=2;"+
+      "api=path=>new Promise(resolve=>(globalThis.profileReads??=[]).push({path,resolve}))",
+      h.context)
+    const old=runInContext("refreshPersonMobile()",h.context)
+    const reads=(h.context as any).profileReads as any[]
+    expect(reads[0].path).toBe('profile')
+    runInContext("clearPersonMobile();currentPersonId='daprs_B';viewEpoch++",h.context)
+    reads[0].resolve({mobile_phone:"+905551234567",version:1,phone_verified:false})
+    await old
+    expect(h.el('person-mobile-form').hidden).toBe(true)
+    expect(h.el('person-mobile-form').elements.mobile_phone.value).toBe('')
+    const fresh=runInContext("refreshPersonMobile()",h.context)
+    reads[1].resolve({mobile_phone:"+905551234568",version:2,phone_verified:false})
+    await fresh
+    expect(h.el('person-mobile-form').hidden).toBe(false)
+    expect(h.el('person-mobile-form').elements.mobile_phone.value).toBe("+905551234568")
+    expect(h.el('person-mobile-status').textContent).toContain('doğrulanmadı')
+  })
+  it("fails closed for a malformed profile version or false phone-verification claim",async()=>{
+    const h=harness()
+    h.el('workspace').hidden=false
+    runInContext("currentPersonId='daprs_A';viewEpoch=3;"+
+      "api=async()=>({mobile_phone:'+905551234567',version:'1',phone_verified:true})",h.context)
+    await runInContext("refreshPersonMobile()",h.context)
+    expect(h.el('person-mobile-form').hidden).toBe(true)
+    expect(h.el('person-mobile-form').elements.mobile_phone.value).toBe('')
+  })
 })
