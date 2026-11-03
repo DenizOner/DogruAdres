@@ -411,7 +411,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     try{
       const result=await api('profile');
       if(request!==mobileRequest||epoch!==viewEpoch||person!==currentPersonId||
-         document.hidden||el('workspace').hidden)return;
+         document.hidden||el('workspace').hidden)return false;
       if(!result||!Number.isSafeInteger(result.version)||result.version<0||
          (result.mobile_phone!==null&&typeof result.mobile_phone!=='string')||
          result.phone_verified!==false)throw new Error('Kişisel iletişim bilgisi doğrulanamadı');
@@ -422,10 +422,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         ?'Kişisel cep telefonu kayıtlı; numaranın sahipliği doğrulanmadı.'
         :'Kişisel cep telefonu henüz kaydedilmedi.';
       form.hidden=false;
+      return true;
     }catch{
-      if(request!==mobileRequest||epoch!==viewEpoch||person!==currentPersonId)return;
+      if(request!==mobileRequest||epoch!==viewEpoch||person!==currentPersonId)return false;
       clearPersonMobile();
       el('person-mobile-status').textContent='Kişisel iletişim bilgisi şu anda okunamıyor.';
+      return false;
     }
   }
   el('person-mobile-form').onsubmit=async e=>{
@@ -447,9 +449,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(epoch!==viewEpoch||person!==currentPersonId||request!==mobileRequest)return;
       // A missing write response never triggers a second POST. Re-read from
       // the authoritative Person row; do not report success from old UI state.
-      await refreshPersonMobile();
-      if(epoch===viewEpoch&&person===currentPersonId)
-        el('person-mobile-status').textContent='İşlem sonucu yeniden kontrol edildi. Son kayıt durumunu gözden geçirin.';
+      const readbackOk=await refreshPersonMobile();
+      if(epoch!==viewEpoch||person!==currentPersonId||document.hidden||el('workspace').hidden)return;
+      if(readbackOk){
+        el('person-mobile-status').textContent='Kaydetme yanıtı alınamadı. Güncel telefon kaydını kontrol edin; işlem otomatik tekrarlanmadı.';
+      }else{
+        status('Cep telefonu kaydının sonucu doğrulanamadı. Bağlantınızı kontrol edip yeniden giriş yaparak güncel kaydı okuyun; kayıt otomatik tekrarlanmadı.');
+      }
     }finally{
       if(epoch===viewEpoch&&person===currentPersonId&&!form.hidden)
         button.disabled=false;
