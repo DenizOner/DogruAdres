@@ -1840,7 +1840,12 @@ export default async function({container}:any){
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
       privateReadAuditStart,"Real private catalogue read cannot mutate audit")
     await reviewer.send("Page.bringToFront")
-    await reviewer.wait("document.visibilityState==='visible'")
+    const selectedBuyerButton=JSON.stringify(organizations[1].name+" — owner")
+    // Backgrounding intentionally conceals private UI; visible does not mean
+    // the async session/workspace/Organization list has finished reloading.
+    await reviewer.wait("document.visibilityState==='visible'&&"+
+      "!document.getElementById('workspace').hidden&&"+
+      "Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+selectedBuyerButton+")")
     await reviewer.select(organizations[1].name,"owner")
     await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden")
     await reviewer.click("#buyer-catalog-refresh")
@@ -1913,7 +1918,7 @@ export default async function({container}:any){
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'&&"+
       "!document.getElementById('workspace').hidden&&"+
-      "document.querySelectorAll('#organizations button').length>0")
+      "Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+selectedBuyerButton+")")
     await reviewer.select(organizations[1].name,"owner")
     await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden")
     await reviewer.click("#buyer-catalog-refresh")
