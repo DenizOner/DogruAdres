@@ -2088,6 +2088,37 @@ export default async function({container}:any){
       line.includes('Bu işletmeye özel TRY referans fiyatı:')).length,1,
       "Only Seller Alpha's approved group price may appear")
 
+    // B22 bounded native Seller-window navigation: no Seller IDs/counts are
+    // exposed to the Buyer merely because a later page was queried.
+    // This real Chrome/HTTPS test checks page switching with disposable PG16.
+    // The separate deterministic service test covers the twenty-first Store.
+    const laterWindow=await get(
+      "/personal/catalog?organization_id="+encodeURIComponent(organizations[1].id)+"&page=1")
+    assert.equal(laterWindow.status,200)
+    assert.equal(laterWindow.body.organization_id,organizations[1].id)
+    assert.equal(laterWindow.body.page,1)
+    assert.ok(Array.isArray(laterWindow.body.stores)&&laterWindow.body.stores.length<=20)
+    assert.equal(laterWindow.body.checkout_ready,false)
+    assert.equal(laterWindow.body.prices_available,false)
+    assert.ok(!Object.hasOwn(laterWindow.body,"count")&&
+      !Object.hasOwn(laterWindow.body,"has_more"),
+      "A page must not expose the count of unrelated native Sellers")
+    assert.equal((await get(
+      "/personal/catalog?organization_id="+encodeURIComponent(organizations[1].id)+"&page=5")).status,400)
+    await reviewer.click('#buyer-catalog-next')
+    await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden&&"+
+      "document.getElementById('buyer-catalog-status').textContent.includes('2/5')")
+    assert.equal(await reviewer.eval(
+      "document.getElementById('buyer-catalog-prev').disabled"),false)
+    await reviewer.click('#buyer-catalog-prev')
+    await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden&&"+
+      "document.getElementById('buyer-catalog-status').textContent.includes('1/5')&&"+
+      "document.getElementById('buyer-catalog-items').textContent.includes('Bu işletmeye özel TRY referans fiyatı:')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),privateReadAuditStart,
+      "Native catalogue page navigation must be read-only")
+    process.stdout.write("PASS B22 Chrome: Buyer catalogue native Seller page 1 and back to 0, bounded no-count HTTP and page 5 rejected, private TRY remains scoped, PG16 audit unchanged\\n")
+
     // F-01: a suspended or de-approved Seller must not disclose whether
     // a Buyer Organization has an active membership. Cleanup revoke remains
     // intentionally independent of the Seller's current open state.
