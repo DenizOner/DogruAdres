@@ -448,8 +448,17 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           where id=? and disabled_at is null and deleted_at is null for update`,
           [bindings[0].person_id])
         if(existing.length===1 && typeof existing[0].mobile_phone==="string" &&
-           /^\+?[0-9]{6,20}$/.test(existing[0].mobile_phone))
-          return {created:false as const}
+           /^\+?[0-9]{6,20}$/.test(existing[0].mobile_phone)) {
+          // Primary Customer delegation must have its own active verified
+          // binding. Never silently resurrect a missing or revoked proof.
+          const proofs=await sql.execute(`select person_id,auth_identity_id,actor_id,revoked_at
+            from da_verified_actor_binding where person_id=? and actor_type='customer'
+            for update`,[bindings[0].person_id])
+          if(proofs.length===1 && proofs[0].person_id===bindings[0].person_id &&
+             proofs[0].auth_identity_id===authIdentityId &&
+             proofs[0].actor_id===customerId && proofs[0].revoked_at===null)
+            return {created:false as const}
+        }
       }
       throw new IdentityAccessDenied()
     }
@@ -472,6 +481,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       (auth_identity_id,person_id,actor_type,actor_id,verified_at)
       values (?,?,'customer',?,clock_timestamp())`,
       [authIdentityId,person.id,customerId])
+    // The first-party native password/MFA proof establishes this PRIMARY
+    // technical Customer binding. Reuse the existing verified actor and
+    // short-lived server-only credential mechanism; never infer buyer rights.
+    // Both proofs share the same Foundation transaction and audit rollback.
+    await sql.execute(`insert into da_verified_actor_binding
+      (id,person_id,auth_identity_id,actor_type,actor_id,verified_at,proof_reference)
+      values (?,?,?,'customer',?,clock_timestamp(),'primary-emailpass-registration')`,
+      ["dabind_"+randomUUID(),person.id,authIdentityId,customerId])
     await this.persistAuditEventsWithOutbox_([{
       actor_person_id:person.id,actor_type:"customer",actor_id:customerId,
       action:"person.registered",module:DOGRUADRES_AUDIT_MODULE,

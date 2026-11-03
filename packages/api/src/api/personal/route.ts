@@ -84,7 +84,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <label>Ad<input name="first_name" autocomplete="given-name" maxlength="50" required></label>
       <label>Soyad<input name="last_name" autocomplete="family-name" maxlength="50" required></label>
       <label>E-posta<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
-      <label>Cep telefonu (zorunlu)<input name="mobile_phone" type="tel" autocomplete="tel" inputmode="tel" pattern="[+]?[0-9]{6,20}" minlength="6" maxlength="20" required></label>
+      <label>Cep telefonu (zorunlu)<input name="mobile_phone" type="tel" autocomplete="tel" inputmode="tel" pattern="[+]?[0-9]{6,20}" minlength="6" maxlength="21" required></label>
       <label>Parola (en az 12 karakter)<input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
       <button type="submit">Kişi hesabı oluştur</button>
     </form>
@@ -115,7 +115,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <h2>Kişisel cep telefonu</h2>
     <label>Cep telefonu (başında + olabilir; rakamlardan oluşur)
       <input name="mobile_phone" type="tel" autocomplete="tel" inputmode="tel"
-        pattern="[+]?[0-9]{6,20}" minlength="6" maxlength="20" required></label>
+        pattern="[+]?[0-9]{6,20}" minlength="6" maxlength="21" required></label>
     <p>Bu numara kişisel hesabınıza aittir; henüz telefon doğrulaması yapılmıyor ve şirket sabit hattı değildir.</p>
     <button type="submit">Cep telefonumu kaydet</button>
     <p id="person-mobile-status" role="status" aria-live="polite"></p>

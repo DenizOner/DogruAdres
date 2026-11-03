@@ -4,15 +4,24 @@ import Access from "../service"
 describe("M0 canonical Person first registration — Foundation transaction",()=>{
   const phone="+905551234567",identity="authid_new",customer="cus_new"
   let service:Access,execute:jest.Mock,flush:jest.Mock,mappings:jest.Mock,people:jest.Mock,audit:jest.Mock,context:Context
-  let mappingRows:any[],bindingRows:any[],existingPhone:string|null,existingActive:boolean
+  let mappingRows:any[],bindingRows:any[],verifiedRows:any[],existingPhone:string|null,existingActive:boolean
   beforeEach(()=>{
-    mappingRows=[];bindingRows=[];existingPhone=phone;existingActive=true
+    mappingRows=[];bindingRows=[];verifiedRows=[];existingPhone=phone;existingActive=true
     execute=jest.fn(async(sql:string,args:unknown[]=[])=>{
       if(sql.includes("pg_advisory_xact_lock")){
         expect(args).toEqual([identity]);return [{}]
       }
       if(sql.includes("from da_login_binding where auth_identity_id")){
         expect(args).toEqual([identity]);return bindingRows
+      }
+      if(sql.includes("from da_verified_actor_binding where person_id=")){
+        expect(args).toEqual(["daprs_new"]);return verifiedRows
+      }
+      if(sql.includes("insert into da_verified_actor_binding")){
+        expect(args[0]).toMatch(/^dabind_/)
+        expect(args.slice(1)).toEqual(["daprs_new",identity,customer])
+        expect(flush).toHaveBeenCalledTimes(1)
+        return []
       }
       if(sql.includes("select mobile_phone from da_person")){
         expect(args).toEqual(["daprs_new"])
@@ -51,6 +60,7 @@ describe("M0 canonical Person first registration — Foundation transaction",()=
       expect.stringContaining("pg_advisory_xact_lock"),
       expect.stringContaining("from da_login_binding where auth_identity_id"),
       expect.stringContaining("insert into da_login_binding"),
+      expect.stringContaining("insert into da_verified_actor_binding"),
     ])
     expect(flush).toHaveBeenCalledTimes(1)
     expect(audit).toHaveBeenCalledTimes(1)
@@ -68,8 +78,23 @@ describe("M0 canonical Person first registration — Foundation transaction",()=
     mappingRows=[{person_id:"daprs_new"}]
     bindingRows=[{person_id:"daprs_new",actor_type:"customer",
       actor_id:customer,revoked_at:null}]
+    verifiedRows=[{person_id:"daprs_new",auth_identity_id:identity,
+      actor_id:customer,revoked_at:null}]
     expect(await service.personalRegisterCustomer(identity,customer,"+905551234568","Other",context))
       .toEqual({created:false})
+    expect(people).not.toHaveBeenCalled()
+    expect(audit).not.toHaveBeenCalled()
+  })
+  it("does not silently re-create a missing or revoked primary Customer proof",async()=>{
+    mappingRows=[{person_id:"daprs_new"}]
+    bindingRows=[{person_id:"daprs_new",actor_type:"customer",
+      actor_id:customer,revoked_at:null}]
+    await expect(service.personalRegisterCustomer(identity,customer,phone,"Test",context))
+      .rejects.toThrow()
+    verifiedRows=[{person_id:"daprs_new",auth_identity_id:identity,
+      actor_id:customer,revoked_at:new Date()}]
+    await expect(service.personalRegisterCustomer(identity,customer,phone,"Test",context))
+      .rejects.toThrow()
     expect(people).not.toHaveBeenCalled()
     expect(audit).not.toHaveBeenCalled()
   })

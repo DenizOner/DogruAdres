@@ -2313,6 +2313,10 @@ export default async function({container}:any){
           "})"+
         "}return original(resource,options)"+
       "};return true})()")
+    // Native status checks finish separately from the browser's picker refresh.
+    // Wait for the previously authorized visible control; never bypass UI.
+    await browser.wait("(()=>{const e=document.querySelector('#store-price-group-form button[value=\\\"revoke\\\"]');"+
+      "return !!e && !!e.getClientRects().length && !e.disabled})()")
     await browser.click('#store-price-group-form button[value="revoke"]')
     await browser.wait("window.__daRevokeSynthetic503&&"+
       "document.getElementById('store-price-group-status').textContent.includes('Sonuç belirsiz')")
@@ -6322,7 +6326,7 @@ export default async function({container}:any){
       }))
     }
     const registered=await q(`select b.person_id,p.mobile_phone,p.mobile_version,
-        b.actor_type,b.actor_id
+        b.actor_type,b.actor_id,b.auth_identity_id
       from da_login_binding b join da_person p on p.id=b.person_id
       join public.customer c on c.id=b.actor_id
       where b.actor_type='customer' and c.email=$1 and
@@ -6333,7 +6337,13 @@ export default async function({container}:any){
     const signupPerson=registered[0].person_id
     assert.equal((await q("select count(*)::int n from da_organization_membership where person_id=$1",[signupPerson]))[0].n,0)
     assert.equal((await q("select count(*)::int n from da_platform_staff_grant where person_id=$1",[signupPerson]))[0].n,0)
-    assert.equal((await q("select count(*)::int n from da_verified_actor_binding where person_id=$1",[signupPerson]))[0].n,0)
+    const primaryCustomerProof=await q(`select auth_identity_id,actor_id,revoked_at,proof_reference
+      from da_verified_actor_binding where person_id=$1 and actor_type='customer'`,[signupPerson])
+    assert.equal(primaryCustomerProof.length,1)
+    assert.equal(primaryCustomerProof[0].auth_identity_id,registered[0].auth_identity_id)
+    assert.equal(primaryCustomerProof[0].actor_id,registered[0].actor_id)
+    assert.equal(primaryCustomerProof[0].revoked_at,null)
+    assert.equal(primaryCustomerProof[0].proof_reference,"primary-emailpass-registration")
     assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),beforePeople+1)
     const signupAudits=await q(`select new_values::text as value from da_audit_event
       where actor_person_id=$1 and action='person.registered'`,[signupPerson])
@@ -6381,6 +6391,15 @@ export default async function({container}:any){
         version:data.version,verified:data.phone_verified};
     })()`)
     assert.deepEqual(ownPhone,{status:200,mobile:signupPhone,version:1,verified:false})
+    const nativeCustomerContext=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/contexts?type=customer');
+      const body=await r.json();
+      return {status:r.status,person_id:body.person_id,
+        actor_id:body.actor_id,context:body.context};
+    })()`)
+    assert.deepEqual(nativeCustomerContext,{status:200,person_id:signupPerson,
+      actor_id:registered[0].actor_id,context:"customer"},
+      "First-party primary Customer proof must authorize native self-context without second login")
     process.stdout.write("PASS B22 Chrome: first Person signup HTTPS/PG16, mandatory mobile400, native Customer to one Person, persistent private self-read, no Organization/Staff grant, safe retry and audit privacy\n")
 
     // P2 regression: TWO real HTTPS socket origins reach the actual

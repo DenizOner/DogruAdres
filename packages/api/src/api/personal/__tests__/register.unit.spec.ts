@@ -62,13 +62,21 @@ describe("M0 first-party Person signup with required private mobile",()=>{
     expect(auth.register).not.toHaveBeenCalled()
     expect(service.personalRegisterCustomer).not.toHaveBeenCalled()
   })
-  it.each(["+90 abc","", "12345", "abc123", "+".repeat(20)])(
+  it.each(["+90 abc","", "12345", "+12345", "abc123", "+".repeat(20)])(
     "rejects invalid mobile without an account write: %s",async phone=>{
       req.body={...valid,mobile_phone:phone}
       await POST(req,res)
       expect(res.status).toHaveBeenCalledWith(400)
       expect(auth.register).not.toHaveBeenCalled()
     })
+  it("accepts a leading plus with twenty digits, matching Foundation validation",async()=>{
+    req.body={...valid,mobile_phone:"+"+"1".repeat(20)}
+    await POST(req,res)
+    expect(auth.register).toHaveBeenCalledTimes(1)
+    expect(service.personalRegisterCustomer).toHaveBeenCalledWith(
+      "authid_own","cus_own",req.body.mobile_phone,"Test Kişi")
+    expect(res.status).toHaveBeenLastCalledWith(201)
+  })
   it("rejects unauthorized origin and client-supplied identity fields",async()=>{
     ;(trustedOrigin as jest.Mock).mockReturnValue(false)
     await POST(req,res)
