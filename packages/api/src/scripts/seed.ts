@@ -18,6 +18,7 @@ import {
   createSellerAccountWorkflow,
   createSellerShippingOptionsWorkflow,
   createSellerStockLocationsWorkflow,
+  linkSellerRegionsWorkflow,
 } from "@mercurjs/core/workflows";
 import {
   createWorkflow,
@@ -696,6 +697,25 @@ export default async function seedDemoData({ container }: ExecArgs) {
     await approveSellerWorkflow(container).run({
       input: { seller_id: seller.id },
     });
+
+    // Mercur 2.4.0 scopes seller offers and shipping prices to assigned
+    // regions. This seed operates ONLY on its newly created DEMO sellers.
+    // Never use the demo region as an automatic production-seller backfill.
+    const { data: demoRegionLinks } = await query.graph({
+      entity: "region_seller",
+      fields: ["seller_id", "region_id"],
+      filters: { seller_id: seller.id, region_id: region.id },
+    });
+    if (demoRegionLinks.length > 1 || demoRegionLinks.some(
+      row => row.seller_id !== seller.id || row.region_id !== region.id
+    )) {
+      throw new Error("Demo seller has an inconsistent native region link");
+    }
+    if (!demoRegionLinks.length) {
+      await linkSellerRegionsWorkflow(container).run({
+        input: { add: [{ seller_id: seller.id, region_id: region.id }] },
+      });
+    }
 
   const { data: members } = await query.graph({
       entity: "member",
