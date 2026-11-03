@@ -444,7 +444,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(epoch!==viewEpoch||person!==currentPersonId||request!==mobileRequest)return;
       if(!result||result.mobile_phone!==number||result.phone_verified!==false||
          !Number.isSafeInteger(result.version))throw new Error('Kaydetme yanıtı doğrulanamadı');
-      await refreshPersonMobile();
+      const readbackOk=await refreshPersonMobile();
+      if(!readbackOk&&epoch===viewEpoch&&person===currentPersonId&&
+         !document.hidden&&!el('workspace').hidden)
+        status('Cep telefonu için kayıt yanıtı alındı ancak güncel kayıt yeniden okunamadı. Tekrar göndermeden önce oturumunuzu yenileyip kaydı kontrol edin.');
     }catch(err){
       if(epoch!==viewEpoch||person!==currentPersonId||request!==mobileRequest)return;
       // A missing write response never triggers a second POST. Re-read from
