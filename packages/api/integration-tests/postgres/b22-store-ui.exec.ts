@@ -1766,12 +1766,11 @@ export default async function({container}:any){
     const groupListAuditStart=Number((await q(
       "select count(*)::int n from da_audit_event"))[0].n)
     const nativeGroupList=async(b:any,orgId:string,sellerId:string)=>b.eval("(async()=>{"+
-      "const p=new URLSearchParams("+JSON.stringify({view:"list"})+");"+
-      "p.set('organization_id',"+JSON.stringify("ORG_PLACEHOLDER")+");"+
-      "p.set('seller_id',"+JSON.stringify("SELLER_PLACEHOLDER")+");"+
+      "const p=new URLSearchParams({view:'list',"+
+      "organization_id:"+JSON.stringify(orgId)+","+
+      "seller_id:"+JSON.stringify(sellerId)+"});"+
       "const r=await fetch('/personal/store-price-groups?'+p.toString());"+
-      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')};})()"
-        .replace("ORG_PLACEHOLDER",orgId).replace("SELLER_PLACEHOLDER",sellerId))
+      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')};})()")
     const ownedGroupList=await nativeGroupList(browser,organizations[0].id,ownerStoreId)
     assert.equal(ownedGroupList.status,200)
     assert.equal(ownedGroupList.body.organization_id,organizations[0].id)
