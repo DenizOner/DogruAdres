@@ -3424,8 +3424,10 @@ export default async function({container}:any){
       await redisBarrier.query("ROLLBACK")
       redisBarrierHeld=false
     }finally{
-      if(redisWorker && redisWorker.pid && redisWorker.exitCode===null &&
-          redisWorker.signalCode===null){
+      // Kill the exact task-owned process GROUP even if the Bun wrapper exited
+      // first; a surviving child Medusa process must never escape this probe.
+      if(redisWorker?.pid && Number.isSafeInteger(redisWorker.pid)&&
+          redisWorker.pid>=2){
         try{process.kill(-redisWorker.pid,"SIGKILL")}
         catch(error){if((error as NodeJS.ErrnoException).code!=="ESRCH")throw error}
       }
