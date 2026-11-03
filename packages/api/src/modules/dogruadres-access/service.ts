@@ -440,8 +440,17 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if (bindings.length || links.length) {
       if (bindings.length===1 && links.length===1 && bindings[0].revoked_at===null &&
           bindings[0].actor_type==="customer" && bindings[0].actor_id===customerId &&
-          bindings[0].person_id===links[0].person_id)
-        return {created:false as const}
+          bindings[0].person_id===links[0].person_id) {
+        // A matching technical actor is not proof that the current Person is
+        // active or already has the required registration contact. Never
+        // accept a disabled/deleted/incomplete legacy Person as registered.
+        const existing=await sql.execute(`select mobile_phone from da_person
+          where id=? and disabled_at is null and deleted_at is null for update`,
+          [bindings[0].person_id])
+        if(existing.length===1 && typeof existing[0].mobile_phone==="string" &&
+           /^\\+?[0-9]{6,20}$/.test(existing[0].mobile_phone))
+          return {created:false as const}
+      }
       throw new IdentityAccessDenied()
     }
     const [person] = await this.createPeople([{
