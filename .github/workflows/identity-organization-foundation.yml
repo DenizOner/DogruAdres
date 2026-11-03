@@ -125,6 +125,28 @@ jobs:
         with:
           bun-version: '1.4.2'
           no-cache: true
+      # TEMPORARY: one-time upstream upgrade lockfile extraction for PR #261.
+      # Read-only token, exact trusted repository PR, no secrets or external services.
+      # This step MUST be removed after bun.lock has been committed.
+      - name: TEMP PR261 resolve real Bun lockfile for pinned upgrade
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 261 && github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' }}
+        env:
+          MERCUR_DISABLE_TELEMETRY: 'true'
+        run: |
+          bun install
+          node <<'NODE'
+          const fs = require('node:fs')
+          const crypto = require('node:crypto')
+          const text = fs.readFileSync('bun.lock', 'utf8')
+          const lock = JSON.parse(text)
+          if (text.length < 200000 || lock.workspaces?.['']?.dependencies?.['@mercurjs/client'] !== '2.4.0' || lock.workspaces?.['packages/api']?.dependencies?.['@medusajs/medusa'] !== '2.22.0') throw Error('Upgrade lockfile did not resolve target versions')
+          if (/https?:\/\/[^\s\/@]+:[^\s\/@]+@/.test(text)) throw Error('Refusing to publish a lockfile containing credential URLs')
+          const size = 8000
+          const count = Math.ceil(text.length / size)
+          console.log('__DA261_LOCK_META__' + JSON.stringify({ length: text.length, chunks: count, sha256: crypto.createHash('sha256').update(text).digest('hex') }))
+          for (let i = 0; i < text.length; i += size) console.log('__DA261_LOCK_CHUNK__' + (i / size) + '__' + JSON.stringify(text.slice(i, i + size)))
+          console.log('__DA261_LOCK_END__' + count)
+          NODE
       - name: Install locked dependencies
         id: install
         run: bun install --frozen-lockfile
