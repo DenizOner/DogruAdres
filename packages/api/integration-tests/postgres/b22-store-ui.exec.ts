@@ -6301,11 +6301,11 @@ export default async function({container}:any){
       // HTTPS response. Never put raw request/response bodies or PII in CI logs.
       let serverStage="response-unavailable"
       try{
-        const last=signupChrome.http.filter(r=>r.path==="/personal/register").at(-1)
+        const last=signupChrome.http.filter(r=>r.path==="/personal/register").slice(-1)[0]
         if(last?.requestId){
           const raw=await signupChrome.send("Network.getResponseBody",{requestId:last.requestId})
           const parsed=JSON.parse(raw.body)
-          const stageCodes={
+          const stageCodes:Record<string,string>={
             "Registration is not yet complete; sign in to resume":"native-workflow",
             "Native account binding unavailable":"native-actor-binding",
             "Registration result could not be confirmed; sign in to check":"foundation-commit-or-customer-read",
