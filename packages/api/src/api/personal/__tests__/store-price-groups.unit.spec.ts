@@ -183,10 +183,37 @@ describe("B22 Store-owned CustomerGroup ↔ audited Buyer Organization grant",()
       fields:["seller_id","customer_group_id"],
       filters:{seller_id:"sel_a"},pagination:{skip:0,take:100}
     })
-    expect(customerGroups).toHaveBeenCalledWith({id:["cusgroup_a","cusgroup_b"]})
+    expect(customerGroups).toHaveBeenCalledWith(
+      {id:["cusgroup_a","cusgroup_b"]},{skip:0,take:2}
+    )
     expect(service.personalManagerOrganization).toHaveBeenCalledTimes(2)
     expect(service.personalLegalSellerIds).toHaveBeenCalledTimes(2)
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","private, no-store")
+    expect(service.personalStorePriceGroupAccess).not.toHaveBeenCalled()
+  })
+  it("reads all 21 linked native groups despite the default 15-row Medusa page",async()=>{
+    const customerGroups=prepareOwnedGroupListing()
+    const all=Array.from({length:21},(_,i)=>({
+      id:"cusgroup_"+String(i).padStart(2,"0"),
+      name:"Grup "+String(i).padStart(2,"0")
+    }))
+    const links=all.map(g=>({seller_id:"sel_a",customer_group_id:g.id}))
+    query.mockResolvedValue({data:links})
+    // Real Medusa defaults to 15 rows when pagination is not supplied.
+    customerGroups.mockImplementation(async(
+      filters:{id:string[]},config?:{skip?:number,take?:number}
+    )=>all.filter(g=>filters.id.includes(g.id))
+      .slice(config?.skip??0,(config?.skip??0)+(config?.take??15)))
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.json).toHaveBeenLastCalledWith({
+      organization_id:"daorg_a",seller_id:"sel_a",groups:all
+    })
+    expect(customerGroups).toHaveBeenCalledWith(
+      {id:all.map(g=>g.id)},{skip:0,take:21}
+    )
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(service.personalManagerOrganization).toHaveBeenCalledTimes(2)
     expect(service.personalStorePriceGroupAccess).not.toHaveBeenCalled()
   })
   it("does not expose groups for a foreign Owner or unapproved Seller",async()=>{
