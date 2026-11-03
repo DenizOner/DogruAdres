@@ -865,6 +865,63 @@ export default async function({container}:any){
       await verifyAdminSmtp(browser,other,container,A.person,B.person,q,smtpGuard!)
       return
     }
+    // M0 private contact slice uses the already strongly authenticated Person.
+    // It does not create a second Customer, Person, Owner or Organization.
+    const mobileBrowser=browser
+    await mobileBrowser.wait("!document.getElementById('person-mobile-form').hidden")
+    const firstMobile=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile');"+
+      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}})()")
+    assert.equal(firstMobile.status,200)
+    assert.equal(firstMobile.body.mobile_phone,null)
+    assert.equal(firstMobile.body.version,0)
+    assert.equal(firstMobile.body.phone_verified,false)
+    assert.match(firstMobile.cache,/no-store/)
+    const mobileAuditBefore=Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='person.mobile_updated'",
+      [A.person]))[0].n)
+    const personalPhone="+905551234567" // synthetic-only CI number
+    await mobileBrowser.input("#person-mobile-form input[name=mobile_phone]",personalPhone)
+    await mobileBrowser.click("#person-mobile-form button[type=submit]")
+    await mobileBrowser.wait("document.getElementById('person-mobile-status').textContent.includes('kayıtlı')")
+    const afterMobile=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile');return {status:r.status,body:await r.json()}})()")
+    assert.deepEqual(afterMobile,{status:200,body:{
+      mobile_phone:personalPhone,version:1,phone_verified:false
+    }})
+    const personMobileRows=await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person])
+    assert.deepEqual(personMobileRows,[{mobile_phone:personalPhone,mobile_version:1}])
+    assert.equal((await q("select mobile_phone from da_person where id=$1",[B.person]))[0].mobile_phone,null)
+    const contactEvents=await q(
+      "select e.new_values,o.envelope from da_audit_event e "+
+      "join da_security_outbox o on o.source_audit_event_id=e.id "+
+      "where e.actor_person_id=$1 and e.action='person.mobile_updated'",
+      [A.person])
+    assert.equal(contactEvents.length,mobileAuditBefore+1)
+    assert.ok(!JSON.stringify(contactEvents).includes(personalPhone),
+      "Neither audit nor outbox may contain private phone")
+    const deniedForeign=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile?person_id=daprs_foreign');return r.status})()")
+    assert.equal(deniedForeign,400)
+    const blockedPost=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile',{method:'POST',"+
+      "headers:{'content-type':'application/json'},body:JSON.stringify({"+
+      "mobile_phone:'+905551234568',expected_version:1})});return r.status})()")
+    assert.equal(blockedPost,403,"Missing same-origin CSRF must deny a write")
+    const staleMobile=await mobileBrowser.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/profile',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({mobile_phone:'+905551234568',expected_version:0})});"+
+      "return r.status})()")
+    assert.equal(staleMobile,409)
+    assert.deepEqual(await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person]),
+      [{mobile_phone:personalPhone,mobile_version:1}])
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='person.mobile_updated'",
+      [A.person]))[0].n),mobileAuditBefore+1)
+    process.stdout.write("PASS B22 Chrome: M0 canonical Person private mobile GET, real UI save and PG16 readback, audit/outbox privacy, foreign query400, CSRF403, stale409, no duplicate mutation\\n")
+
     // Approved personal workspace has no editable launcher. Its retired
     // Person-only API must not read or write historical preference rows.
     const legacyPrefsBefore=await q("select id,person_id,app_ids,collapsed_ids,version from da_launcher_preference order by id")
@@ -6102,67 +6159,6 @@ export default async function({container}:any){
       if(disableFunctionInstalled)
         await q("drop function b22_mfa_disable_outbox_fault_v1()")
     }
-
-    // M0 first actual contact slice: same canonical Person after a normal
-    // logout/revocation event gets a fresh independent strong browser session.
-    // It does not create a second Customer, Person, Owner or Organization.
-    const mobileBrowser=new B06Chrome(host,"A-mobile")
-    browsers.push(mobileBrowser)
-    await mobileBrowser.start(crt)
-    await mobileBrowser.login(A.email,A.password,A.person)
-    await mobileBrowser.wait("!document.getElementById('person-mobile-form').hidden")
-    const firstMobile=await mobileBrowser.eval("(async()=>{"+
-      "const r=await fetch('/personal/profile');"+
-      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}})()")
-    assert.equal(firstMobile.status,200)
-    assert.equal(firstMobile.body.mobile_phone,null)
-    assert.equal(firstMobile.body.version,0)
-    assert.equal(firstMobile.body.phone_verified,false)
-    assert.match(firstMobile.cache,/no-store/)
-    const mobileAuditBefore=Number((await q(
-      "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='person.mobile_updated'",
-      [A.person]))[0].n)
-    const personalPhone="+905551234567" // synthetic-only CI number
-    await mobileBrowser.input("#person-mobile-form input[name=mobile_phone]",personalPhone)
-    await mobileBrowser.click("#person-mobile-form button[type=submit]")
-    await mobileBrowser.wait("document.getElementById('person-mobile-status').textContent.includes('kayıtlı')")
-    const afterMobile=await mobileBrowser.eval("(async()=>{"+
-      "const r=await fetch('/personal/profile');return {status:r.status,body:await r.json()}})()")
-    assert.deepEqual(afterMobile,{status:200,body:{
-      mobile_phone:personalPhone,version:1,phone_verified:false
-    }})
-    const personMobileRows=await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person])
-    assert.deepEqual(personMobileRows,[{mobile_phone:personalPhone,mobile_version:1}])
-    assert.equal((await q("select mobile_phone from da_person where id=$1",[B.person]))[0].mobile_phone,null)
-    const contactEvents=await q(
-      "select e.new_values,o.envelope from da_audit_event e "+
-      "join da_security_outbox o on o.source_audit_event_id=e.id "+
-      "where e.actor_person_id=$1 and e.action='person.mobile_updated'",
-      [A.person])
-    assert.equal(contactEvents.length,mobileAuditBefore+1)
-    assert.ok(!JSON.stringify(contactEvents).includes(personalPhone),
-      "Neither audit nor outbox may contain private phone")
-    const deniedForeign=await mobileBrowser.eval("(async()=>{"+
-      "const r=await fetch('/personal/profile?person_id=daprs_foreign');return r.status})()")
-    assert.equal(deniedForeign,400)
-    const blockedPost=await mobileBrowser.eval("(async()=>{"+
-      "const r=await fetch('/personal/profile',{method:'POST',"+
-      "headers:{'content-type':'application/json'},body:JSON.stringify({"+
-      "mobile_phone:'+905551234568',expected_version:1})});return r.status})()")
-    assert.equal(blockedPost,403,"Missing same-origin CSRF must deny a write")
-    const staleMobile=await mobileBrowser.eval("(async()=>{"+
-      "const s=await (await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/profile',{method:'POST',"+
-      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-      "body:JSON.stringify({mobile_phone:'+905551234568',expected_version:0})});"+
-      "return r.status})()")
-    assert.equal(staleMobile,409)
-    assert.deepEqual(await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person]),
-      [{mobile_phone:personalPhone,mobile_version:1}])
-    assert.equal(Number((await q(
-      "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='person.mobile_updated'",
-      [A.person]))[0].n),mobileAuditBefore+1)
-    process.stdout.write("PASS B22 Chrome: M0 canonical Person private mobile GET, real UI save and PG16 readback, audit/outbox privacy, foreign query400, CSRF403, stale409, no duplicate mutation\\n")
 
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
 
