@@ -450,6 +450,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         status('Cep telefonu için kayıt yanıtı alındı ancak güncel kayıt yeniden okunamadı. Tekrar göndermeden önce oturumunuzu yenileyip kaydı kontrol edin.');
     }catch(err){
       if(epoch!==viewEpoch||person!==currentPersonId||request!==mobileRequest)return;
+      if(err?.httpStatus===403){
+        // A definite denial is not an uncertain write. Do not retry or
+        // disguise expired strong authentication as a network failure.
+        clearPersonMobile();
+        if(!document.hidden&&!el('workspace').hidden)
+          status('Cep telefonu kaydı reddedildi. Güvenlik doğrulamanız güncel olmayabilir veya oturum erişiminiz reddedilmiş olabilir. Oturumu kilitleyip yeniden giriş yapın; kayıt otomatik tekrarlanmadı.');
+        return;
+      }
       // A missing write response never triggers a second POST. Re-read from
       // the authoritative Person row; do not report success from old UI state.
       const readbackOk=await refreshPersonMobile();
