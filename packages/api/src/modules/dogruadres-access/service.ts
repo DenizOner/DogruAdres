@@ -1913,6 +1913,69 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {status:"revoked" as const}
   }
 
+
+  /**
+   * Server-only active Buyer Organization's Store-specific price group IDs.
+   * This is neither native Person/Customer group membership nor checkout
+   * authority. The catalog checks current Store Buyer block and native scope
+   * separately; each call verifies Foundation's current buyer + Store origin.
+   */
+  @InjectTransactionManager()
+  async personalBuyerStorePriceGroupIds(
+    token:string,buyerOrganizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyerOrganizationId)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const buyer=await authorizedBuyerOrganization(db,token,buyerOrganizationId)
+    if(!buyer)return null
+    const owners=await db.execute(`select organization_id from
+      da_organization_seller_ownership where seller_id=? and revoked_at is null`,
+      [sellerId])
+    if(owners.length!==1||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(owners[0]?.organization_id))
+      throw new IdentityAccessDenied()
+    const ownerOrganizationId=owners[0].organization_id as string
+    if(!(await platformApprovedSellerIds(db,ownerOrganizationId)).includes(sellerId))
+      throw new IdentityAccessDenied()
+    const rows=await db.execute(`select g.id,g.customer_group_id,
+      g.owner_organization_id,
+      exists(select 1 from da_audit_event e
+        where e.id=g.source_audit_event_id and e.deleted_at is null
+          and e.module='dogruadres-access'
+          and e.resource='store-price-group'
+          and e.action='organization.store_price_group_granted'
+          and e.organization_id=g.owner_organization_id
+          and e.actor_person_id=g.issued_by_person_id
+          and e.target_id=g.seller_id
+          and e.new_values->>'grant_id'=g.id
+          and e.new_values->>'buyer_organization_id'=g.buyer_organization_id
+          and e.new_values->>'customer_group_id'=g.customer_group_id
+          and exists(select 1 from da_audit_outbox x
+            where x.source_audit_event_id=e.id
+              and x.source_module='dogruadres-access'
+              and x.deleted_at is null)
+      ) as proof
+      from da_store_buyer_price_group g
+      where g.seller_id=? and g.buyer_organization_id=?
+        and g.revoked_at is null
+      order by g.customer_group_id,g.id limit 21`,
+      [sellerId,buyerOrganizationId])
+    if(rows.length>20||
+       new Set(rows.map(x=>x.customer_group_id)).size!==rows.length||
+       rows.some(x=>x.proof!==true||
+         typeof x.id!=="string"||!/^dabpgm_[A-Za-z0-9_-]+$/.test(x.id)||
+         x.owner_organization_id!==ownerOrganizationId||
+         typeof x.customer_group_id!=="string"||
+         !/^cusgroup_[A-Za-z0-9_-]+$/.test(x.customer_group_id)))
+      throw new IdentityAccessDenied()
+    return {person_id:buyer.person_id,
+      organization_id:buyerOrganizationId,seller_id:sellerId,
+      customer_group_ids:rows.map(x=>x.customer_group_id as string)}
+  }
+
   /** Read-only native Seller set against Foundation's authoritative Store
    * Buyer Organization block ledger. A missing or malformed audit/outbox
    * never becomes ALLOW; true means any Store denies this Buyer Organization.

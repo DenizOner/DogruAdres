@@ -3,12 +3,16 @@ import {access,enabled,sessionToken} from "../security"
 import {MercurModules} from "@mercurjs/types"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 import {nativeDirectTryListPrice} from "../catalog/native-try-list-price"
+import {nativeBuyerGroupTryReference} from "../catalog/native-group-try-reference"
 
 jest.mock("../security",()=>({
   access:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
 jest.mock("../catalog/native-try-list-price",()=>({
   nativeDirectTryListPrice:jest.fn()
+}))
+jest.mock("../catalog/native-group-try-reference",()=>({
+  nativeBuyerGroupTryReference:jest.fn()
 }))
 
 describe("B22 selected Buyer Organization's bounded published Store Offer discovery",()=>{
@@ -40,12 +44,17 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
       }),
       personalStoreBuyerBlockDecision:jest.fn().mockResolvedValue({
         blocked:false,ownership_verified:true
-      })
+      }),
+      personalBuyerStorePriceGroupIds:jest.fn(async(_token:string,_org:string,sid:string)=>({
+        person_id:"daprs_a",organization_id:"daorg_a",
+        seller_id:sid,customer_group_ids:[]
+      }))
     }
     ;(enabled as jest.Mock).mockReturnValue(true)
     ;(sessionToken as jest.Mock).mockReturnValue("opaque")
     ;(access as jest.Mock).mockReturnValue(svc)
     ;(nativeDirectTryListPrice as jest.Mock).mockResolvedValue(null)
+    ;(nativeBuyerGroupTryReference as jest.Mock).mockResolvedValue(null)
     req={query:{organization_id:"daorg_a"},headers:{},scope:{resolve:jest.fn((k:string)=>{
       if(k==="seller")return {listSellers:sellerRead}
       if(k===MercurModules.OFFER)return {listOffers:offerRead}
@@ -88,6 +97,70 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
       ],prices_available:false,checkout_ready:false
     })
     expect(nativeDirectTryListPrice).toHaveBeenCalledTimes(4)
+  })
+  it("displays native private TRY only for current Store-specific Buyer Organization group",async()=>{
+    ;(nativeDirectTryListPrice as jest.Mock).mockImplementation(async(_req:any,o:any)=>({
+      amount:o.id==="offer_a"?1250.5:2000,currency_code:"try"
+    }))
+    svc.personalBuyerStorePriceGroupIds.mockImplementation(async(_t:string,_o:string,sid:string)=>({
+      person_id:"daprs_a",organization_id:"daorg_a",seller_id:sid,
+      customer_group_ids:sid==="sel_a"?["cusgroup_allowed"]:[]
+    }))
+    ;(nativeBuyerGroupTryReference as jest.Mock).mockResolvedValue({
+      amount:950.25,currency_code:"try"
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    const value=res.json.mock.calls.at(-1)?.[0]
+    expect(value.checkout_ready).toBe(false)
+    expect(value.prices_available).toBe(false)
+    expect(value.stores[0].products[0].list_price_try.amount).toBe(1250.5)
+    expect(value.stores[0].products[0].buyer_reference_try).toEqual({
+      amount:950.25,currency_code:"try"
+    })
+    expect(value.stores[1].products[0].buyer_reference_try).toBeUndefined()
+    expect(nativeBuyerGroupTryReference).toHaveBeenCalledTimes(2)
+    expect(nativeBuyerGroupTryReference).toHaveBeenCalledWith(req,offers[0],"cusgroup_allowed")
+  })
+  it("withholds private TRY if Store group was revoked after calculation but before response",async()=>{
+    ;(nativeDirectTryListPrice as jest.Mock).mockResolvedValue({
+      amount:1250.5,currency_code:"try"
+    })
+    let first=true
+    svc.personalBuyerStorePriceGroupIds.mockImplementation(async(_t:string,_o:string,sid:string)=>{
+      const ids=sid==="sel_a"&&first?["cusgroup_allowed"]:[]
+      if(sid==="sel_a")first=false
+      return {person_id:"daprs_a",organization_id:"daorg_a",
+        seller_id:sid,customer_group_ids:ids}
+    })
+    ;(nativeBuyerGroupTryReference as jest.Mock).mockResolvedValue({
+      amount:950.25,currency_code:"try"
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+  })
+  it("does not trust a group grant for another Seller or Person",async()=>{
+    svc.personalBuyerStorePriceGroupIds.mockImplementation(async(_t:string,_o:string,sid:string)=>({
+      person_id:"daprs_wrong",organization_id:"daorg_a",
+      seller_id:sid==="sel_a"?"sel_foreign":sid,customer_group_ids:["cusgroup_allowed"]
+    }))
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(nativeBuyerGroupTryReference).not.toHaveBeenCalled()
+  })
+  it("refuses a native PriceList whose owner or Offer proof fails",async()=>{
+    ;(nativeDirectTryListPrice as jest.Mock).mockResolvedValue({
+      amount:1250.5,currency_code:"try"
+    })
+    svc.personalBuyerStorePriceGroupIds.mockImplementation(async(_t:string,_o:string,sid:string)=>({
+      person_id:"daprs_a",organization_id:"daorg_a",seller_id:sid,
+      customer_group_ids:sid==="sel_a"?["cusgroup_allowed"]:[]
+    }))
+    ;(nativeBuyerGroupTryReference as jest.Mock).mockRejectedValue(
+      new IdentityAccessDenied())
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
   })
   it("fails closed if a Store's native direct TRY price changes before response",async()=>{
     let count=0

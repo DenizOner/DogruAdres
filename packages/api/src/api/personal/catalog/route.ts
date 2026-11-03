@@ -4,6 +4,7 @@ import {MercurModules} from "@mercurjs/types"
 import {access,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 import {nativeDirectTryListPrice,type DirectTryListPrice} from "./native-try-list-price"
+import {nativeBuyerGroupTryReference,type BuyerGroupTryReference} from "./native-group-try-reference"
 
 export const AUTHENTICATE=false
 const selection=z.object({
@@ -52,8 +53,13 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
        new Set(candidates.map(s=>s.id)).size!==candidates.length)
       return denied()
     const stores:Array<{
-      id:string;name:string;products:Array<{offer_id:string;product_id:string;title:string;list_price_try?:DirectTryListPrice}>
+      id:string;name:string;products:Array<{
+        offer_id:string;product_id:string;title:string;
+        list_price_try?:DirectTryListPrice;buyer_reference_try?:BuyerGroupTryReference
+      }>
     }>=[]
+    // Internal-only entitlement IDs. Never serialize group context to clients.
+    const eligibleBySeller=new Map<string,string[]>()
     for(const candidate of candidates){
       if(!candidate||!sellerId.test(candidate.id)||candidate.status!=="open"||
          !candidate.approved_at||typeof candidate.name!=="string")continue
@@ -67,6 +73,16 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
           throw error
         })
       if(choice?.ownership_verified!==true||choice.blocked!==false)continue
+      const grants=await service.personalBuyerStorePriceGroupIds(token,organizationId,candidate.id)
+      if(!grants||grants.person_id!==buyer.person_id||
+         grants.organization_id!==organizationId||grants.seller_id!==candidate.id||
+         !Array.isArray(grants.customer_group_ids)||
+         grants.customer_group_ids.length>20||
+         new Set(grants.customer_group_ids).size!==grants.customer_group_ids.length||
+         grants.customer_group_ids.some((g:unknown)=>typeof g!=="string"||
+           !/^cusgroup_[A-Za-z0-9_-]+$/.test(g)))return denied()
+      const groupIds=grants.customer_group_ids as string[]
+      eligibleBySeller.set(candidate.id,groupIds)
       const found=await offers.listOffers({seller_id:candidate.id},{take:5,skip:0})
       if(!Array.isArray(found)||found.length>5||
          new Set(found.map(o=>o.id)).size!==found.length)return denied()
@@ -92,15 +108,20 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       // linked to THIS Mercur Offer, not to its shared Product/variant.
       const visible:Array<{
         offer_id:string;product_id:string;title:string;
-        list_price_try?:DirectTryListPrice
+        list_price_try?:DirectTryListPrice;buyer_reference_try?:BuyerGroupTryReference
       }>=[]
       for(const row of found){
         const title=titles.get(row.product_id)
         if(!title)continue
         const listPrice=await nativeDirectTryListPrice(req,row)
+        // Only one unambiguous eligible group is supported in this first
+        // slice. No invented priority/FX/tax between multiple price groups.
+        const buyerReference=listPrice&&groupIds.length===1?
+          await nativeBuyerGroupTryReference(req,row,groupIds[0]):null
         visible.push({
           offer_id:row.id,product_id:row.product_id,title,
-          ...(listPrice?{list_price_try:listPrice}:{})
+          ...(listPrice?{list_price_try:listPrice}:{}),
+          ...(buyerReference?{buyer_reference_try:buyerReference}:{})
         })
       }
       if(visible.length)stores.push({id:candidate.id,name:candidate.name,products:visible})
@@ -118,6 +139,15 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       const fresh=await service.personalStoreBuyerBlockDecision(
         token,organizationId,[store.id])
       if(fresh?.ownership_verified!==true||fresh.blocked!==false)return denied()
+      const groupsWas=eligibleBySeller.get(store.id)
+      const groupsNow=await service.personalBuyerStorePriceGroupIds(
+        token,organizationId,store.id)
+      if(!groupsWas||!groupsNow||groupsNow.person_id!==buyer.person_id||
+         groupsNow.organization_id!==organizationId||
+         groupsNow.seller_id!==store.id||
+         !Array.isArray(groupsNow.customer_group_ids)||
+         groupsWas.length!==groupsNow.customer_group_ids.length||
+         groupsWas.some((g,i)=>g!==groupsNow.customer_group_ids[i]))return denied()
       const existing=await offers.listOffers(
         {id:store.products.map(p=>p.offer_id),seller_id:store.id},
         {take:store.products.length})
@@ -138,6 +168,14 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
         const livePrice=await nativeDirectTryListPrice(req,current)
         if(!livePrice||livePrice.currency_code!==p.list_price_try.currency_code||
            livePrice.amount!==p.list_price_try.amount)return denied()
+        if(p.buyer_reference_try){
+          if(groupsWas.length!==1)return denied()
+          const liveReference=await nativeBuyerGroupTryReference(
+            req,current,groupsWas[0])
+          if(!liveReference||
+             liveReference.currency_code!==p.buyer_reference_try.currency_code||
+             liveReference.amount!==p.buyer_reference_try.amount)return denied()
+        }
       }
     }
     return res.status(200).json({
