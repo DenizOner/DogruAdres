@@ -3360,6 +3360,8 @@ export default async function({container}:any){
     assert.equal(await foundation.authorizeBuyerCheckout(
       redisCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Native Redis recovery test needs current Buyer/Store permission")
+    const beforeNativeOrderCount=Number((await q(
+      'select count(*)::int n from "order"'))[0].n)
 
     const redisBarrier=new Client({connectionString:u.toString()})
     await redisBarrier.connect()
@@ -3435,6 +3437,9 @@ export default async function({container}:any){
       entity:"order_cart",fields:["order_id"],filters:{cart_id:redisCart.id}
     })
     assert.equal(redisBeforeOrderLinks.length,0)
+    assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),
+      beforeNativeOrderCount,
+      "Crash must not leave unlinked native Seller Orders without OrderGroup")
     const {data:redisBeforePaymentLinks}=await query.graph({
       entity:"cart_payment_collection",fields:["payment_collection_id"],
       filters:{cart_id:redisCart.id}
@@ -3463,6 +3468,9 @@ export default async function({container}:any){
     assert.equal(redisOrderLinks.length,1,
       "Crash and native retry must persist exactly one Seller Order")
     assert.match(String(redisOrderLinks[0].order_id),/^order_[A-Za-z0-9_-]+$/)
+    assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),
+      beforeNativeOrderCount+1,
+      "Recovery must create only one native Order, including unlinked rows")
     const {data:redisAfterPaymentLinks}=await query.graph({
       entity:"cart_payment_collection",fields:["payment_collection_id"],
       filters:{cart_id:redisCart.id}
