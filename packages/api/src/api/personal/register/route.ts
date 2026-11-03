@@ -2,7 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import type { IAuthModuleService } from "@medusajs/framework/types"
 import { z } from "@medusajs/framework/zod"
 import { createCustomerAccountWorkflow } from "@medusajs/medusa/core-flows"
-import { access, enabled, trustedOrigin } from "../security"
+import { access, enabled, trustedOrigin, visitorRateAddress } from "../security"
 import { digest } from "../../../modules/dogruadres-access/identity-session"
 
 export const AUTHENTICATE = false
@@ -28,10 +28,11 @@ export const POST = async (req:MedusaRequest,res:MedusaResponse) => {
   if(!parsed.success)return res.status(400).json({message:"Invalid registration information"})
   const {first_name,last_name,password,mobile_phone}=parsed.data
   const email=parsed.data.email.trim().toLowerCase()
+  const source=visitorRateAddress(req)
+  if(!source)return res.status(403).json({message:"Access denied"})
   const service=access(req)
   try{
-    if(!await service.personalLoginAttempt(digest("person-register:"+email),
-      digest(req.socket.remoteAddress??"unknown")))
+    if(!await service.personalLoginAttempt(digest("person-register:"+email),source))
       return res.status(429).json({message:"Try again later"})
   }catch{return res.status(503).json({message:"Service unavailable"})}
 
