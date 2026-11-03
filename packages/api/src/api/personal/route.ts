@@ -295,7 +295,32 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <script nonce="${nonce}">
   let viewEpoch=0,loadedScope='',observing=false;
   let csrf=''; const el=id=>document.getElementById(id); const status=t=>el('status').textContent=t;
-  async function api(path,options={}){const epoch=viewEpoch;let r;try{r=await fetch('/personal/'+path,{credentials:'same-origin',...options,headers:{'Content-Type':'application/json','x-csrf-token':csrf,...options.headers}})}catch{const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');e.uncertain=true;throw e}const data=await r.json();if(epoch!==viewEpoch)throw new Error('Görünüm yenilendi');if(!r.ok){const e=new Error(data.message||'İşlem reddedildi');e.httpStatus=r.status;e.uncertain=r.status>=500;throw e}return data}
+  async function api(path,options={}){
+    const epoch=viewEpoch;let r;
+    try{r=await fetch('/personal/'+path,{credentials:'same-origin',...options,
+      headers:{'Content-Type':'application/json','x-csrf-token':csrf,...options.headers}})}
+    catch{const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');
+      e.uncertain=true;throw e}
+    // Even HTTP 200 cannot prove a price-group POST's outcome if its body is
+    // truncated, unreadable or not a JSON object. Do not claim rejection.
+    const groupWrite=path==='store-price-groups'&&options.method==='POST';
+    let data;
+    try{
+      data=await r.json();
+      if(groupWrite&&(!data||typeof data!=='object'||Array.isArray(data)))
+        throw new Error('Geçersiz yazma yanıtı');
+    }catch(error){
+      if(!groupWrite)throw error;
+      const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');
+      e.uncertain=true;throw e;
+    }
+    if(epoch!==viewEpoch)throw new Error('Görünüm yenilendi');
+    if(!r.ok){
+      const e=new Error(data?.message||'İşlem reddedildi');
+      e.httpStatus=r.status;e.uncertain=r.status>=500;throw e
+    }
+    return data;
+  }
   let recoveryCodes=[];
   let notificationRequest=0,notificationOffset=0,notificationNext=null;
   function clearNotifications(){
@@ -708,7 +733,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   let storeBlockRequest=0,priceGroupListRequest=0,priceGroupActionRequest=0;
   let priceGroupActionPending=false,priceGroupCurrentAction=null;
   const priceGroupUncertain=new Map();
-  const priceGroupWarning='Önceki mağazadaki işlem sonuçlanmış olabilir. O mağazanın kaydını kontrol edin.';
+  const priceGroupWarning='Önceki mağazadaki işlem veya önceki grup/alıcı seçimi sonuçlanmış olabilir. İlgili kaydı kontrol edin.';
   function showPriceGroupStatus(value=''){
     const warning=priceGroupUncertain.size?priceGroupWarning:'';
     el('store-price-group-status').textContent=
@@ -926,6 +951,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(action!=='read'&&previous?.kind==='read')priceGroupUncertain.delete(key);
     const seq=++priceGroupActionRequest;
     const currentAction={key,settled:false,kind:action};
+    const sameSelection=()=>form.elements.namedItem('seller_id')?.value===seller_id&&
+      String(form.elements.namedItem('customer_group_id')?.value||'').trim()===customer_group_id&&
+      String(form.elements.namedItem('buyer_organization_id')?.value||'').trim()===buyer_organization_id;
     // A read begun before an older write settles cannot clear an unknown
     // outcome: it could have observed the old state before the write commits.
     const recheck=action==='read'&&priceGroupUncertain.get(key)?.settled===true?
@@ -940,12 +968,25 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         await api('store-price-groups?'+new URLSearchParams(data).toString()):
         await api('store-price-groups',{method:'POST',body:JSON.stringify({...data,action})});
       if(seq!==priceGroupActionRequest||request!==organizationRequest||
-         currentOrg!==org||document.hidden||
+         currentOrg!==org||document.hidden||el('workspace').hidden||
          form.elements.namedItem('seller_id')?.value!==seller_id)return;
-      if(!['active','revoked'].includes(result.status)||
+      if(!['active','revoked'].includes(result?.status)||
          (action==='grant'&&result.status!=='active')||
-         (action==='revoke'&&result.status!=='revoked'))
-        throw Error('Yetki sonucu doğrulanamadı');
+         (action==='revoke'&&result.status!=='revoked')){
+        const e=new Error('Yetki sonucu doğrulanamadı');
+        // A syntactically valid but unusable POST response is still unknown.
+        e.uncertain=action!=='read';
+        throw e;
+      }
+      if(!sameSelection()){
+        // The response belongs to the submitted tuple, not the fields now
+        // visible in the form. Keep the original write scoped for recheck.
+        if(action!=='read'&&!priceGroupUncertain.has(key))
+          priceGroupUncertain.set(key,currentAction);
+        showPriceGroupStatus(action==='read'?
+          'Seçim değişti. Yeni seçimin kaydını yeniden kontrol edin.':'');
+        return;
+      }
       if(recheck&&priceGroupUncertain.get(key)===recheck)
         priceGroupUncertain.delete(key);
       showPriceGroupStatus(result.status==='active'?
@@ -964,7 +1005,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           priceGroupUncertain.set(key,currentAction);
       }
       if(seq!==priceGroupActionRequest||request!==organizationRequest||currentOrg!==org||
+         document.hidden||el('workspace').hidden||
          form.elements.namedItem('seller_id')?.value!==seller_id)return;
+      if(!sameSelection()){
+        // Never attach an old rejection or uncertain result to another Buyer
+        // or Group selected while the original request was in flight.
+        showPriceGroupStatus('Seçim değişti. Önceki işlemin sonucunu yalnız ilgili kayıtta kontrol edin.');
+        return;
+      }
       showPriceGroupStatus(e.uncertain?
         'Sonuç belirsiz. İşlemi tekrarlamadan önce kaydı kontrol edin.':
         'İşlem reddedildi; mağaza veya grup yetkisi doğrulanamadı.');
