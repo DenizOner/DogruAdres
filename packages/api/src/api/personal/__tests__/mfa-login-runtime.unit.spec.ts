@@ -5,7 +5,7 @@ import { readNativeMfaSummary } from "../../../modules/dogruadres-access/native-
 import { verifiedEmailForActorContext } from "../../dogruadres/invitations/accept/route"
 
 jest.mock("../security",()=>({
-  access:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn(),trustedOrigin:jest.fn(),
+  access:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn(),trustedOrigin:jest.fn(),visitorRateAddress:jest.fn(()=>"private-direct:synthetic"),
   secureCookies:jest.fn(()=>true),csrf:jest.fn(),csrfEnrollment:jest.fn(),
 }))
 jest.mock("../server-actor",()=>({bindServerActor:jest.fn()}))
