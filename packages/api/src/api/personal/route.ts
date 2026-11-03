@@ -99,6 +99,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <button>Kurulumu doğrula ve oturumu aç</button></form>
   </section>
   <section id="workspace" hidden><p id="person"></p>
+  <form id="person-mobile-form" hidden>
+    <h2>Kişisel cep telefonu</h2>
+    <label>Cep telefonu (başında + olabilir; rakamlardan oluşur)
+      <input name="mobile_phone" type="tel" autocomplete="tel" inputmode="tel"
+        pattern="[+]?[0-9]{6,20}" minlength="6" maxlength="20" required></label>
+    <p>Bu numara kişisel hesabınıza aittir; henüz telefon doğrulaması yapılmıyor ve şirket sabit hattı değildir.</p>
+    <button type="submit">Cep telefonumu kaydet</button>
+    <p id="person-mobile-status" role="status" aria-live="polite"></p>
+  </form>
   <section id="verification-status" aria-labelledby="verification-status-title">
     <h2 id="verification-status-title">Doğrulama durumları</h2>
     <p id="verification-email" role="status" aria-live="polite"></p>
@@ -387,6 +396,65 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('notification-panel').onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();closeNotifications()}};
   function clearMfaCodes(){recoveryCodes=[];el("mfa-codes-value").textContent="";el("mfa-codes-value").hidden=true;el("mfa-codes").hidden=true}
   let currentOrg='',currentPersonId='',linkIntent='',organizationRequest=0,storeRequest=0,mfaState=null,timelineCursor=null,timelineOrg='',timelineRequest=0;
+  let mobileVersion=null,mobileRequest=0;
+  function clearPersonMobile(){
+    mobileRequest++;mobileVersion=null;
+    const form=el('person-mobile-form');
+    form.hidden=true;form.elements.mobile_phone.value='';
+    form.querySelector('button').disabled=false;
+    el('person-mobile-status').textContent='';
+  }
+  async function refreshPersonMobile(){
+    const request=++mobileRequest,epoch=viewEpoch,person=currentPersonId;
+    const form=el('person-mobile-form');
+    mobileVersion=null;form.hidden=true;
+    try{
+      const result=await api('profile');
+      if(request!==mobileRequest||epoch!==viewEpoch||person!==currentPersonId||
+         document.hidden||el('workspace').hidden)return;
+      if(!result||!Number.isSafeInteger(result.version)||result.version<0||
+         (result.mobile_phone!==null&&typeof result.mobile_phone!=='string')||
+         result.phone_verified!==false)throw new Error('Kişisel iletişim bilgisi doğrulanamadı');
+      mobileVersion=result.version;
+      form.elements.mobile_phone.value=result.mobile_phone||'';
+      form.querySelector('button').disabled=false;
+      el('person-mobile-status').textContent=result.mobile_phone
+        ?'Kişisel cep telefonu kayıtlı; numaranın sahipliği doğrulanmadı.'
+        :'Kişisel cep telefonu henüz kaydedilmedi.';
+      form.hidden=false;
+    }catch{
+      if(request!==mobileRequest||epoch!==viewEpoch||person!==currentPersonId)return;
+      clearPersonMobile();
+      el('person-mobile-status').textContent='Kişisel iletişim bilgisi şu anda okunamıyor.';
+    }
+  }
+  el('person-mobile-form').onsubmit=async e=>{
+    e.preventDefault();
+    const form=e.target,button=form.querySelector('button');
+    if(form.hidden||mobileVersion===null||el('workspace').hidden)return;
+    const version=mobileVersion,number=form.elements.mobile_phone.value;
+    const epoch=viewEpoch,person=currentPersonId,request=++mobileRequest;
+    button.disabled=true;
+    try{
+      const result=await api('profile',{method:'POST',body:JSON.stringify({
+        mobile_phone:number,expected_version:version
+      })});
+      if(epoch!==viewEpoch||person!==currentPersonId||request!==mobileRequest)return;
+      if(!result||result.mobile_phone!==number||result.phone_verified!==false||
+         !Number.isSafeInteger(result.version))throw new Error('Kaydetme yanıtı doğrulanamadı');
+      await refreshPersonMobile();
+    }catch(err){
+      if(epoch!==viewEpoch||person!==currentPersonId||request!==mobileRequest)return;
+      // A missing write response never triggers a second POST. Re-read from
+      // the authoritative Person row; do not report success from old UI state.
+      await refreshPersonMobile();
+      if(epoch===viewEpoch&&person===currentPersonId)
+        el('person-mobile-status').textContent='İşlem sonucu yeniden kontrol edildi. Son kayıt durumunu gözden geçirin.';
+    }finally{
+      if(epoch===viewEpoch&&person===currentPersonId&&!form.hidden)
+        button.disabled=false;
+    }
+  };
   async function loadTimeline(org, cursor = null, append = false) {
     if (!org) return;
     const reqId = ++timelineRequest;
@@ -1572,11 +1640,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
   el('org-stores-refresh').onclick=()=>{if(currentOrg)void organizationStores(currentOrg,organizationRequest)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;status('Oturum açık');await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
-    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;clearNotifications();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPendingInvitations();el('invite-result').textContent='';
+    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;clearNotifications();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPersonMobile();clearPendingInvitations();el('invite-result').textContent='';
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
@@ -1908,7 +1976,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   function concealPrivateView(){
     clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
-    el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPendingInvitations();
+    clearPersonMobile();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPendingInvitations();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');
