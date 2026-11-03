@@ -46,6 +46,101 @@ describe('selected Organization native Seller UI (script regression, not backend
     expect(h.el('actor-result').textContent).toBe('');
   });
 });
+describe('B22 Buyer catalogue Seller-window navigation (shipped browser JS)',()=>{
+  it('moves to a later bounded Store window, back to first, and never enables checkout',async()=>{
+    const h=harness()
+    h.el('workspace').hidden=false
+    h.el('buyer-context-panel').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1;"+
+      "api=(path)=>new Promise(resolve=>{(globalThis.catalogCalls??=[]).push({path,resolve})})",
+      h.context)
+    const first=runInContext("buyerCatalog('daorg_a',1,0)",h.context)
+    const calls=(h.context as any).catalogCalls as any[]
+    expect(calls[0].path).toContain('organization_id=daorg_a')
+    expect(calls[0].path).toContain('page=0')
+    calls[0].resolve({organization_id:'daorg_a',page:0,stores:[
+      {id:'sel_a',name:'Visible A',products:[
+        {offer_id:'offer_a',product_id:'prod_a',title:'Product A'}
+      ]}
+    ],prices_available:false,checkout_ready:false})
+    await first
+    expect(h.el('buyer-catalog-items').children).toHaveLength(1)
+    expect(h.el('buyer-catalog-status').textContent).toContain('1/5')
+    expect(h.el('buyer-catalog-prev').disabled).toBe(true)
+    expect(h.el('buyer-catalog-next').disabled).toBe(false)
+
+    h.el('buyer-catalog-next').onclick()
+    expect(calls).toHaveLength(2)
+    expect(calls[1].path).toContain('page=1')
+    expect(h.el('buyer-catalog-next').disabled).toBe(true)
+    calls[1].resolve({organization_id:'daorg_a',page:1,stores:[
+      {id:'sel_later',name:'Visible Later',products:[
+        {offer_id:'offer_later',product_id:'prod_later',title:'Product Later'}
+      ]}
+    ],prices_available:false,checkout_ready:false})
+    await tick()
+    expect(h.el('buyer-catalog-items').children).toHaveLength(1)
+    expect(h.el('buyer-catalog-items').children[0].textContent).toContain('Product Later')
+    expect(h.el('buyer-catalog-status').textContent).toContain('2/5')
+    expect(h.el('buyer-catalog-prev').disabled).toBe(false)
+
+    h.el('buyer-catalog-prev').onclick()
+    expect(calls).toHaveLength(3)
+    expect(calls[2].path).toContain('page=0')
+    calls[2].resolve({organization_id:'daorg_a',page:0,stores:[],
+      prices_available:false,checkout_ready:false})
+    await tick()
+    expect(h.el('buyer-catalog-status').textContent).toContain('1/5')
+    expect(h.el('buyer-catalog-status').textContent).toContain('Bu dilimde gösterilebilir ürün yok')
+    expect(h.el('buyer-catalog-prev').disabled).toBe(true)
+    expect(h.el('buyer-catalog-panel').hidden).toBe(false)
+  })
+  it('rejects late previous-page and cross-Organization replies without leaking titles',async()=>{
+    const h=harness()
+    h.el('workspace').hidden=false
+    h.el('buyer-context-panel').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1;"+
+      "api=(path)=>new Promise(resolve=>{(globalThis.catalogCalls??=[]).push({path,resolve})})",
+      h.context)
+    const old=runInContext("buyerCatalog('daorg_a',1,0)",h.context)
+    const next=runInContext("buyerCatalog('daorg_a',1,1)",h.context)
+    const calls=(h.context as any).catalogCalls as any[]
+    calls[1].resolve({organization_id:'daorg_a',page:1,stores:[],
+      prices_available:false,checkout_ready:false})
+    await next
+    calls[0].resolve({organization_id:'daorg_a',page:0,stores:[
+      {id:'sel_wrong',name:'Wrong',products:[
+        {offer_id:'offer_wrong',product_id:'prod_wrong',title:'Must not render'}
+      ]}
+    ],prices_available:false,checkout_ready:false})
+    await old
+    expect(h.el('buyer-catalog-items').children).toHaveLength(0)
+    expect(h.el('buyer-catalog-status').textContent).toContain('2/5')
+    const switched=runInContext("buyerCatalog('daorg_a',1,2)",h.context)
+    expect(calls[2].path).toContain('page=2')
+    runInContext("organizationRequest++;currentOrg='daorg_b'",h.context)
+    calls[2].resolve({organization_id:'daorg_a',page:2,stores:[
+      {id:'sel_other',name:'Other',products:[
+        {offer_id:'offer_other',product_id:'prod_other',title:'Private title'}
+      ]}
+    ],prices_available:false,checkout_ready:false})
+    await switched
+    expect(h.el('buyer-catalog-items').children).toHaveLength(0)
+    expect(h.el('buyer-catalog-status').textContent).not.toContain('Private title')
+  })
+  it('fails closed on a response with the wrong page number',async()=>{
+    const h=harness()
+    h.el('workspace').hidden=false
+    h.el('buyer-context-panel').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1;api=async()=>({"+
+      "organization_id:'daorg_a',page:2,stores:[],prices_available:false,checkout_ready:false"+
+      "})",h.context)
+    await runInContext("buyerCatalog('daorg_a',1,1)",h.context)
+    expect(h.el('buyer-catalog-panel').hidden).toBe(true)
+    expect(h.el('buyer-catalog-items').children).toHaveLength(0)
+    expect(h.el('buyer-catalog-next').disabled).toBe(true)
+  })
+})
 describe('B22 native Store price-group selector request lifetime',()=>{
   it('does not strand action buttons or show a stale result after switching Stores',async()=>{
     const h=harness()
