@@ -557,6 +557,29 @@ describe('private workspace lifetime (script regression only)',()=>{
 })
 
 describe("M0 canonical Person mobile workspace lifetime",()=>{
+  it("shows a visible warning when acknowledged mobile save cannot be read back",async()=>{
+    const h=harness(),form=h.el('person-mobile-form')
+    h.el('workspace').hidden=false
+    runInContext("currentPersonId='daprs_A';viewEpoch=3;"+
+      "api=(path,options)=>new Promise((resolve,reject)=>{(globalThis.mobileCalls??=[]).push({path,options,resolve,reject})})",
+      h.context)
+    const first=runInContext("refreshPersonMobile()",h.context)
+    const calls=(h.context as any).mobileCalls as any[]
+    calls[0].resolve({mobile_phone:"+905551234567",version:1,phone_verified:false})
+    await first
+    form.elements.mobile_phone.value="+905551234568"
+    const save=form.onsubmit({preventDefault(){},target:form})
+    calls[1].resolve({mobile_phone:"+905551234568",version:2,phone_verified:false})
+    await tick()
+    expect(calls[2].path).toBe('profile')
+    calls[2].reject(new Error('readback unavailable'))
+    await save
+    expect(calls.filter(c=>c.options?.method==='POST')).toHaveLength(1)
+    expect(form.hidden).toBe(true)
+    expect(form.elements.mobile_phone.value).toBe('')
+    expect(h.el('status').textContent).toContain('güncel kayıt yeniden okunamadı')
+    expect(h.el('status').textContent).not.toContain('yeniden kontrol edildi')
+  })
   it.each([true,false])("does not repeat uncertain mobile POST; readback succeeds=%s",async readbackSucceeds=>{
     const h=harness(),form=h.el('person-mobile-form')
     h.el('workspace').hidden=false
