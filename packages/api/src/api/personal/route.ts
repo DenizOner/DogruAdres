@@ -910,8 +910,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!/^sel_[A-Za-z0-9_-]+$/.test(seller_id)||
        !/^cusgroup_[A-Za-z0-9_-]+$/.test(customer_group_id)||
        !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(buyer_organization_id))return;
-    const seq=++priceGroupActionRequest;
     const key=JSON.stringify([org,seller_id,customer_group_id,buyer_organization_id]);
+    // A Store switch only unlocks OTHER scopes. It must not permit a
+    // duplicate grant/revoke while this exact record's outcome is unknown.
+    if(action!=='read'&&(priceGroupUncertain.has(key)||
+       (priceGroupActionPending&&priceGroupCurrentAction?.key===key))){
+      showPriceGroupStatus('Bu kayıt için önceki değişiklik henüz doğrulanmadı. Yeni işlem göndermeden önce sonucu kontrol edin.');
+      return;
+    }
+    const seq=++priceGroupActionRequest;
     const currentAction={key,settled:false};
     // A read begun before an older write settles cannot clear an unknown
     // outcome: it could have observed the old state before the write commits.
@@ -940,9 +947,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         'Bu işletmenin bu mağaza grubunda geçerli üyeliği yok.');
     }catch(e){
       if(e.uncertain&&action!=='read'){
-        // A 503/transport failure is not proof that the server aborted.
-        // Retain the record even when its response arrives after a Store switch.
-        currentAction.outcomeUnverified=true;currentAction.settled=false;
+        // A native route's completed 503 is a terminal response. Its
+        // subsequent authorized read can confirm the persisted state. A
+        // transport loss, or an unrelated 503, does not prove the write ended.
+        currentAction.outcomeUnverified=!(
+          e.httpStatus===503&&e.message==='Outcome uncertain; recheck group');
+        currentAction.settled=!currentAction.outcomeUnverified;
         if(request===organizationRequest&&currentOrg===org&&!document.hidden&&
            !el('workspace').hidden&&!priceGroupUncertain.has(key))
           priceGroupUncertain.set(key,currentAction);
