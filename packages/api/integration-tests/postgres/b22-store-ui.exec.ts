@@ -1778,6 +1778,56 @@ export default async function({container}:any){
     assert.equal((await groupChange("grant",groupInput,reviewer)).status,403)
     const missingCsrf=await browser.eval("(async()=>{const r=await fetch('/personal/store-price-groups',{method:'POST',headers:{'content-type':'application/json'},body:"+JSON.stringify(JSON.stringify({...groupInput,action:"grant"}))+"});return r.status})()")
     assert.equal(missingCsrf,403)
+    // First real private reference price: only the independently authorized
+    // Buyer Organization Beta was granted Seller Alpha's native CustomerGroup.
+    // Same native Customer and same shared variant never imply entitlement.
+    const privateCatalogBeta=async()=>reviewer.eval("(async()=>{"+
+      "const r=await fetch('/personal/catalog?organization_id="+encodeURIComponent(organizations[1].id)+"');"+
+      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')};})()")
+    const privateReadAuditStart=Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n)
+    const beforeRevoke=await privateCatalogBeta()
+    assert.equal(beforeRevoke.status,200)
+    assert.match(beforeRevoke.cache,/no-store/)
+    const approvedStorePrivate=beforeRevoke.body.stores.find((st:any)=>st.id===ownerStoreId)
+    const otherStorePrivate=beforeRevoke.body.stores.find((st:any)=>st.id===secondOwnerStoreId)
+    const alphaOffer=approvedStorePrivate?.products.find((x:any)=>x.offer_id===directTryOffers[0].id)
+    const gammaOffer=otherStorePrivate?.products.find((x:any)=>x.offer_id===directTryOffers[1].id)
+    assert.deepEqual(alphaOffer?.buyer_reference_try,{
+      amount:groupSpecialAmount,currency_code:"try"
+    },"Beta BuyerOrg's active Seller A group must select native private TRY reference")
+    assert.deepEqual(alphaOffer?.list_price_try,{amount:1250.5,currency_code:"try"})
+    assert.equal(gammaOffer?.buyer_reference_try,undefined,
+      "Other Store's same native variant never inherits Seller A's group price")
+    assert.deepEqual(gammaOffer?.list_price_try,{amount:2000,currency_code:"try"})
+    assert.equal(beforeRevoke.body.checkout_ready,false)
+    assert.equal(beforeRevoke.body.prices_available,false)
+    const buyerAWithoutGroup=await get(
+      "/personal/catalog?organization_id="+encodeURIComponent(organizations[0].id))
+    assert.equal(buyerAWithoutGroup.status,200)
+    const noGroupAlpha=buyerAWithoutGroup.body.stores.find((st:any)=>st.id===ownerStoreId)
+      ?.products.find((x:any)=>x.offer_id===directTryOffers[0].id)
+    assert.equal(noGroupAlpha?.buyer_reference_try,undefined,
+      "Same Seller's separate buyer Organization must not inherit Beta's group")
+    assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
+      privateReadAuditStart,"Real private catalogue read cannot mutate audit")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    await reviewer.select(organizations[1].name,"owner")
+    await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden")
+    await reviewer.click("#buyer-catalog-refresh")
+    await reviewer.wait("document.getElementById('buyer-catalog-items').textContent.includes('Bu işletmeye özel TRY referans fiyatı:')")
+    const buyerPrivateDom=await reviewer.eval(
+      "Array.from(document.querySelectorAll('#buyer-catalog-items li'),el=>el.textContent)")
+    assert.ok(buyerPrivateDom.some((line:string)=>
+      line.includes(tryProduct.title)&&line.includes('950,25')&&
+      line.includes('Bu işletmeye özel TRY referans fiyatı:')&&
+      line.includes('(ödenecek tutar değil)')),
+      "Real Chrome Beta Owner must display 950,25 TRY as non-payable group reference")
+    assert.equal(buyerPrivateDom.filter((line:string)=>
+      line.includes('Bu işletmeye özel TRY referans fiyatı:')).length,1,
+      "Only Seller Alpha's approved group price may appear")
+
     // F-01: a suspended or de-approved Seller must not disclose whether
     // a Buyer Organization has an active membership. Cleanup revoke remains
     // intentionally independent of the Seller's current open state.
@@ -1787,6 +1837,10 @@ export default async function({container}:any){
     try{
       assert.equal((await groupChange("read")).status,403,
         "Suspended Seller must not expose even active group membership")
+      const suspendedCatalog=await privateCatalogBeta()
+      assert.equal(suspendedCatalog.status,200)
+      assert.equal(suspendedCatalog.body.stores.some((x:any)=>x.id===ownerStoreId),false,
+        "Suspended Seller must not reveal its formerly eligible BuyerOrg price")
     }finally{
       await unsuspendSellerWorkflow(container).run({input:{seller_id:ownerStoreId}})
     }
@@ -1818,6 +1872,16 @@ export default async function({container}:any){
     await browser.click('#store-price-group-form button[value="revoke"]')
     await browser.wait("document.getElementById('store-price-group-status').textContent.includes('üyeliği yok')")
     assert.equal((await groupChange("read")).body.status,"revoked")
+    const afterRevoke=await privateCatalogBeta()
+    assert.equal(afterRevoke.status,200)
+    const revokedOffer=afterRevoke.body.stores.find((x:any)=>x.id===ownerStoreId)
+      ?.products.find((x:any)=>x.offer_id===directTryOffers[0].id)
+    assert.equal(revokedOffer?.buyer_reference_try,undefined,
+      "Committed Store BuyerOrg group revoke must immediately remove private reference")
+    assert.deepEqual(revokedOffer?.list_price_try,{amount:1250.5,currency_code:"try"})
+    await reviewer.click("#buyer-catalog-refresh")
+    await reviewer.wait("!document.getElementById('buyer-catalog-items').textContent.includes('Bu işletmeye özel TRY referans fiyatı:')")
+    process.stdout.write("PASS B22 BuyerOrg native private TRY reference: real Chrome/HTTPS/PG16 active Store group grants only 950.25 TRY to Beta, other Store and Buyer base TRY; revoke and Seller suspension hide price, no checkout or audit writes\n")
     assert.equal((await q("select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is not null",
       [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n,1)
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,

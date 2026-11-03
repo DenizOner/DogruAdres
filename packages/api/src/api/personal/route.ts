@@ -225,7 +225,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="buyer-customer-status" role="status" aria-live="polite"></p>
     <section id="buyer-catalog-panel" hidden aria-labelledby="buyer-catalog-title">
       <h4 id="buyer-catalog-title">Bu kuruluşun görebildiği ürünler</h4>
-      <p>İlk onaylı mağazaların yayımlanmış ürünleri gösterilir. Yalnız doğrudan kaydedilmiş TRY referans liste fiyatı varsa görüntülenir. Bu tutar size özel indirim, vergi veya nihai ödeme tutarı değildir. Sepet ve ödeme kapalıdır.</p>
+      <p>İlk onaylı mağazaların yayımlanmış ürünleri gösterilir. Doğrudan TRY liste fiyatı ve yalnız bu işletmeye mağazanın açıkça verdiği geçerli gruba ait özel TRY referans fiyatı varsa gösterilir. Bunlar nihai ödeme tutarı değildir; vergi, kur dönüşümü, sepet ve ödeme kapalıdır.</p>
       <p id="buyer-catalog-status" role="status" aria-live="polite"></p>
       <ul id="buyer-catalog-items"></ul>
       <button id="buyer-catalog-refresh" type="button">Ürünleri güncelle</button>
@@ -950,12 +950,24 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               new Intl.NumberFormat('tr-TR',{style:'currency',currency:'TRY'})
                 .format(price.amount)+' (ödenecek tutar değil)';
           }
+          if(product.buyer_reference_try!==undefined){
+            const price=product.buyer_reference_try;
+            if(!price||price.currency_code!=='try'||typeof price.amount!=='number'||
+               !Number.isFinite(price.amount)||price.amount<=0||
+               price.amount>1000000000||
+               !/^[0-9]+(?:[.][0-9]{1,2})?$/.test(String(price.amount))||
+               product.list_price_try===undefined)
+              throw Error('Bu işletmeye özel fiyat doğrulanamadı');
+            line+=' — Bu işletmeye özel TRY referans fiyatı: '+
+              new Intl.NumberFormat('tr-TR',{style:'currency',currency:'TRY'})
+                .format(price.amount)+' (ödenecek tutar değil)';
+          }
           li.textContent=line;
           root.append(li);
         }
       }
       statusEl.textContent=root.children.length
-        ? 'İzinli ürünler gösteriliyor. Varsa TRY referans liste fiyatı gösterilir; indirimler, kur dönüşümü ve checkout kapalıdır.'
+        ? 'İzinli ürünler ve varsa mağazaya özel TRY referansları gösteriliyor; vergi, kur dönüşümü ve ödeme kapalıdır.'
         : 'İlk mağaza sayfasında gösterilebilir ürün bulunamadı.';
       panel.hidden=false;
     }catch(e){
