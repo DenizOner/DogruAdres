@@ -939,15 +939,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         'Alıcı işletme bu mağazanın özel fiyat grubuna kabul edilmiş.':
         'Bu işletmenin bu mağaza grubunda geçerli üyeliği yok.');
     }catch(e){
+      if(e.uncertain&&action!=='read'){
+        // A 503/transport failure is not proof that the server aborted.
+        // Retain the record even when its response arrives after a Store switch.
+        currentAction.outcomeUnverified=true;currentAction.settled=false;
+        if(request===organizationRequest&&currentOrg===org&&!document.hidden&&
+           !el('workspace').hidden&&!priceGroupUncertain.has(key))
+          priceGroupUncertain.set(key,currentAction);
+      }
       if(seq!==priceGroupActionRequest||request!==organizationRequest||currentOrg!==org||
          form.elements.namedItem('seller_id')?.value!==seller_id)return;
-      if(e.uncertain&&action!=='read'){
-        // A transport/503 response does not prove that a native write aborted.
-        // Retain an unconfirmed record until a separately trusted resolution;
-        // a later read must not treat this client-side completion as settlement.
-        currentAction.outcomeUnverified=true;currentAction.settled=false;
-        if(!priceGroupUncertain.has(key))priceGroupUncertain.set(key,currentAction);
-      }
       showPriceGroupStatus(e.uncertain?
         'Sonuç belirsiz. İşlemi tekrarlamadan önce kaydı kontrol edin.':
         'İşlem reddedildi; mağaza veya grup yetkisi doğrulanamadı.');
