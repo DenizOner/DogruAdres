@@ -3462,14 +3462,17 @@ export default async function({container}:any){
       "Official Redis engine must retain the killed native Cart workflow checkpoint")
     assert.equal(storedExecution[0].workflow_id,"complete-cart-with-split-orders")
     process.stdout.write("OBSERVED B22 native Redis workflow execution persisted after crash\n")
-    assert.equal(Number((await q(
+    const crashedBuyerOrders=Number((await q(
       'select count(*)::int n from "order" where customer_id=$1',
-      [nativeCustomer.id]))[0].n),
-      beforeNativeBuyerOrderCount,
-      "Crashed native Cart must not leave a Seller Order for its Buyer Customer")
-    assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),
-      beforeNativeOrderCount,
-      "Crash must not leave unlinked native Seller Orders without OrderGroup")
+      [nativeCustomer.id]))[0].n)
+    const crashedAllOrders=Number((await q(
+      'select count(*)::int n from "order"'))[0].n)
+    // Keep the original zero-orphan gate. Continue only in this disposable
+    // zero-payment fixture to diagnose whether native Redis checkpoint resume
+    // will link that Order or accidentally create a duplicate.
+    if(crashedBuyerOrders!==beforeNativeBuyerOrderCount ||
+       crashedAllOrders!==beforeNativeOrderCount)
+      process.stdout.write("OBSERVED B22 native Redis crash orphan before retry; diagnosis only, not PASS\n")
     const {data:redisBeforePaymentLinks}=await query.graph({
       entity:"cart_payment_collection",fields:["payment_collection_id"],
       filters:{cart_id:redisCart.id}
@@ -3485,9 +3488,18 @@ export default async function({container}:any){
       encoding:"utf8",stdio:["ignore","pipe","pipe"],
       timeout:90000,maxBuffer:1024*1024
     })
-    assert.ok(!redisRetry.error&&redisRetry.status===0&&
-      String(redisRetry.stdout??"").includes("B22_REDIS_NATIVE_CART_RECOVERED"),
-      "Expired genuine Redis Cart lock must permit the real native retry")
+    const nativeRetrySuccess=!redisRetry.error&&redisRetry.status===0&&
+      String(redisRetry.stdout??"").includes("B22_REDIS_NATIVE_CART_RECOVERED")
+    if(!nativeRetrySuccess){
+      const transcript=String(redisRetry.stdout??"")+"\n"+String(redisRetry.stderr??"")
+      const category=/SkipExecutionError|Transaction already started/i.test(transcript)
+        ?"workflow-resume-conflict":/Failed to acquire lock/i.test(transcript)
+        ?"cart-lock-not-released":/B22_CHECKOUT_AUTHORIZATION_DENIED/i.test(transcript)
+        ?"buyer-authorization-denied":redisRetry.error
+        ?"child-exec-error":"native-retry-failed"
+      throw Error("Native Redis checkpoint resume NOT ACCEPTED; category="+category)
+    }
+    process.stdout.write("OBSERVED B22 native Redis checkpoint retry returned success; checking SQL uniqueness\n")
     const redisGroups=await q("select id from order_group where cart_id=$1",
       [redisCart.id])
     assert.equal(redisGroups.length,1,
@@ -3514,6 +3526,12 @@ export default async function({container}:any){
     assert.equal(redisBuyer.length,1)
     assert.equal(redisBuyer[0].organization_id,organizations[1].id)
     assert.equal(redisBuyer[0].customer_id,nativeCustomer.id)
+    // Reassert the independent crash instant gate LAST, after bounded retry
+    // diagnostics. A transient orphan remains a FAIL even if resumed later.
+    assert.equal(crashedBuyerOrders,beforeNativeBuyerOrderCount,
+      "Native Cart SIGKILL left an unlinked Buyer Order before recovery")
+    assert.equal(crashedAllOrders,beforeNativeOrderCount,
+      "Native Cart SIGKILL left an unlinked Seller Order before recovery")
     process.stdout.write("\nPASS B22 Redis native Cart crash recovery: authorized zero-value Cart blocked before OrderGroup INSERT, independent live lock denied, process group terminated, real 120s TTL recovery, one OrderGroup/Order, unchanged Buyer, zero payment\n")
 
     type NativeCartAttempt={run?:any;error?:string}
