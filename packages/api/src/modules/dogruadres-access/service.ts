@@ -415,6 +415,67 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return new PersonalNotifications(securitySql(context.transactionManager)).read(token, id, organization)
   }
 
+  /**
+   * Canonical Person contact only. Never consult a native Customer by email:
+   * an upstream actor is not proof of the Person who owns this session.
+   */
+  @InjectTransactionManager()
+  async personalMobile(token: string, @MedusaContext() context: Context = {}) {
+    const db = securitySql(context.transactionManager)
+    const session = await new IdentitySessions(db).current(token, false, false)
+    if (!session) return null
+    const rows = await db.execute(`select mobile_phone,mobile_version from da_person
+      where id=? and disabled_at is null and deleted_at is null`, [session.person_id])
+    if (rows.length !== 1 || !Number.isSafeInteger(rows[0].mobile_version))
+      throw new IdentityAccessDenied()
+    return { mobile_phone: rows[0].mobile_phone as string|null,
+      version: rows[0].mobile_version as number }
+  }
+
+  @InjectTransactionManager()
+  async personalSaveMobile(
+    token: string, mobile: string, expectedVersion: number,
+    @MedusaContext() context: Context = {}
+  ) {
+    if (typeof mobile !== "string" || mobile.length < 6 || mobile.length > 20 ||
+        !/^[+]?[0-9]+$/.test(mobile) ||
+        !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 ||
+        expectedVersion > 2147483646) throw new IdentityAccessDenied()
+    const db = securitySql(context.transactionManager)
+    // A fresh strong personal session is necessary to change this private
+    // contact. Row and session locks protect the read / update / audit unit.
+    const session = await new IdentitySessions(db).current(token, true)
+    if (!session) return null
+    const rows = await db.execute(`select mobile_phone,mobile_version from da_person
+      where id=? and disabled_at is null and deleted_at is null for update`,
+      [session.person_id])
+    if (rows.length !== 1 || !Number.isSafeInteger(rows[0].mobile_version))
+      throw new IdentityAccessDenied()
+    if (rows[0].mobile_version !== expectedVersion) return { conflict: true as const }
+    if (rows[0].mobile_phone === mobile)
+      return { mobile_phone: mobile, version: expectedVersion }
+    const changed = await db.execute(`update da_person set mobile_phone=?,
+      mobile_version=mobile_version+1,updated_at=clock_timestamp()
+      where id=? and disabled_at is null and deleted_at is null and mobile_version=?
+      returning mobile_phone,mobile_version`,
+      [mobile,session.person_id,expectedVersion])
+    if (changed.length !== 1) throw new IdentityAccessDenied()
+    await this.persistAuditEventsWithOutbox_([{
+      actor_person_id: session.person_id,
+      actor_type: session.actor_type,
+      actor_id: session.actor_id,
+      action: "person.mobile_updated",
+      module: DOGRUADRES_AUDIT_MODULE,
+      resource: "person-contact",
+      target_id: session.person_id,
+      // No phone number in audit, outbox, query string, or log payload.
+      new_values: { contact_recorded: true },
+      occurred_at: new Date(),
+    }], context)
+    return { mobile_phone: changed[0].mobile_phone as string,
+      version: changed[0].mobile_version as number }
+  }
+
   @InjectTransactionManager()
   async personalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
     return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId)
