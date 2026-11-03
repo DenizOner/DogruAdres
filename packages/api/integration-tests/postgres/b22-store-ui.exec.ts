@@ -18,7 +18,7 @@ import {Client} from "@medusajs/framework/pg"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
 import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
-import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
+import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
@@ -1693,6 +1693,57 @@ export default async function({container}:any){
       filters:{seller_id:ownerStoreId,customer_group_id:priceGroup.id}
     })
     assert.equal(groupLink.length,1)
+    // Native capability proof for the next Buyer Organization slice. The
+    // price list is owned by Seller A and uses a Medusa group rule plus an
+    // exact Mercur Offer price rule; it must NEVER affect Seller B's Offer.
+    // No Person/Medusa Customer is enrolled in the group in this fixture.
+    const groupSpecialAmount=950.25
+    const {result:[storeGroupPriceList]}=await createSellerPriceListsWorkflow(container).run({
+      input:{seller_id:ownerStoreId,price_lists_data:[{
+        title:"B22 Store/Buyer private TRY "+rand,
+        description:"Task-only native group price selection proof",
+        status:"active",type:"sale",
+        rules:{"customer.groups.id":[priceGroup.id]},
+        prices:[{variant_id:tryVariant.id,currency_code:"try",
+          amount:groupSpecialAmount,rules:{offer_id:directTryOffers[0].id}}]
+      }]}
+    })
+    assert.match(storeGroupPriceList.id,/^pl_[A-Za-z0-9_-]+$/)
+    const {data:privateListOwners}=await container.resolve("query").graph({
+      entity:"price_list_seller",fields:["seller_id","price_list_id"],
+      filters:{price_list_id:storeGroupPriceList.id}
+    })
+    assert.deepEqual(privateListOwners.map((x:any)=>x.seller_id),[ownerStoreId])
+    const {data:privateVariant}=await container.resolve("query").graph({
+      entity:"product_variant",fields:["id","price_set.id"],
+      filters:{id:tryVariant.id}
+    })
+    assert.equal(privateVariant.length,1)
+    const nativePriceSetId=privateVariant[0]?.price_set?.id
+    assert.match(nativePriceSetId,/^pset_[A-Za-z0-9_-]+$/)
+    const nativePricing=container.resolve("pricing")
+    const calcGroupTry=async(offer_id:string,groupId?:string)=>{
+      const [value]=await nativePricing.calculatePrices({id:[nativePriceSetId]},{
+        context:{currency_code:"try",offer_id,quantity:1,
+          ...(groupId?{"customer.groups.id":groupId}:{})}
+      })
+      assert.equal(value?.id,nativePriceSetId)
+      return value
+    }
+    const groupSelected=await calcGroupTry(directTryOffers[0].id,priceGroup.id)
+    assert.equal(groupSelected.calculated_amount,groupSpecialAmount,
+      "Native pricing should select ONLY Seller A group-authorized PriceList")
+    assert.equal(groupSelected.calculated_price?.price_list_id,storeGroupPriceList.id)
+    assert.equal(groupSelected.is_calculated_price_price_list,true)
+    const anonymousPrice=await calcGroupTry(directTryOffers[0].id)
+    assert.equal(anonymousPrice.calculated_amount,directTryOffers[0].amount)
+    assert.equal(anonymousPrice.is_calculated_price_price_list,false)
+    const wrongGroupPrice=await calcGroupTry(directTryOffers[0].id,"cusgroup_foreign")
+    assert.equal(wrongGroupPrice.calculated_amount,directTryOffers[0].amount)
+    const crossStorePrice=await calcGroupTry(directTryOffers[1].id,priceGroup.id)
+    assert.equal(crossStorePrice.calculated_amount,directTryOffers[1].amount)
+    assert.equal(crossStorePrice.is_calculated_price_price_list,false)
+    process.stdout.write("PASS B22 native Store BuyerOrg group PriceList capability: native group+Offer-scoped TRY override selected only for matching Store/group; anonymous, foreign group and second Store kept base price; no Person Customer enrollment\n")
     const groupInput={organization_id:organizations[0].id,
       seller_id:ownerStoreId,buyer_organization_id:organizations[1].id,
       customer_group_id:priceGroup.id}
