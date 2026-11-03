@@ -1,5 +1,5 @@
 import { POST,GET,DELETE } from "../session/route"
-import { access,enabled,sessionToken,trustedOrigin,secureCookies,csrf,csrfEnrollment } from "../security"
+import { access,enabled,sessionToken,trustedOrigin,secureCookies,csrf,csrfEnrollment,visitorRateAddress } from "../security"
 import { bindServerActor } from "../server-actor"
 import { readNativeMfaSummary } from "../../../modules/dogruadres-access/native-mfa-summary"
 import { verifiedEmailForActorContext } from "../../dogruadres/invitations/accept/route"
@@ -25,6 +25,7 @@ describe("M0 login MFA runtime policy (rollout-off unless four flags)",()=>{
   const auth={authenticate:jest.fn(),validateAuthIdentity:jest.fn(),listAuthMfa:jest.fn()}
   beforeEach(()=>{
     jest.resetAllMocks()
+    ;(visitorRateAddress as jest.Mock).mockReturnValue("private-direct:synthetic")
     for(const name of ["DOGRUADRES_IDENTITY_ENABLED","DOGRUADRES_MFA_SETTINGS_ENABLED",
       "DOGRUADRES_MFA_ENROLLMENT_ENABLED","DOGRUADRES_MFA_RUNTIME_ENABLED"])
       process.env[name]="true"
