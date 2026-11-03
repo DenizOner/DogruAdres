@@ -1,6 +1,6 @@
 import type { Context } from "@medusajs/framework/types"
 import Access from "../service"
-import { IdentitySessions } from "../identity-session"
+import { IdentitySessions, digest } from "../identity-session"
 
 describe("canonical Person mobile contact persistence (synthetic transaction)",()=>{
   const mobile="+905551234567"
@@ -35,6 +35,27 @@ describe("canonical Person mobile contact persistence (synthetic transaction)",(
     context={transactionManager:{execute}} as unknown as Context
   })
   afterEach(()=>jest.restoreAllMocks())
+  it("acquires the Person row before the security/session validation locks",async()=>{
+    const token="a".repeat(43)
+    const db={execute:jest.fn(async(sql:string,args:unknown[]=[])=>{
+      expect(sql).toContain("from da_browser_session s")
+      expect(sql).toContain("for update of p")
+      expect(sql).toContain("s.status='active'")
+      expect(args).toEqual([digest(token)])
+      return [{id:session.person_id}]
+    })}
+    const checker=new IdentitySessions(db)
+    const verify=jest.spyOn(checker as any,"currentHash")
+      .mockResolvedValue(session as any)
+    expect(await checker.currentForPersonWrite(token)).toEqual(session)
+    expect(db.execute).toHaveBeenCalledTimes(1)
+    expect(verify).toHaveBeenCalledWith(digest(token),true)
+    verify.mockResolvedValue(null)
+    expect(await checker.currentForPersonWrite(token)).toBeNull()
+    expect(db.execute).toHaveBeenCalledTimes(2)
+    await expect(checker.currentForPersonWrite("bad")).rejects.toThrow("Access denied")
+    expect(db.execute).toHaveBeenCalledTimes(2)
+  })
   it("reads a private Person contact using only server-verified session identity",async()=>{
     row={mobile_phone:mobile,mobile_version:9}
     const r=await service.personalMobile("opaque-session",context)
