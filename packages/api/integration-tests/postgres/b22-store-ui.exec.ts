@@ -595,8 +595,36 @@ export default async function({container}:any){
     assert.equal(process.env.LOCKING_REDIS_URL,"redis://127.0.0.1:6379")
     assert.match(redisProbeKey,/^b22-redis-process-exit:[0-9a-f]{16}$/)
     const mode=process.env.B22_REDIS_PROBE_MODE
-    assert.ok(mode==="crash"||mode==="recover")
+    assert.ok(["crash","recover","native-lock-check","native-complete"].includes(mode??""))
     const redisLock=container.resolve("locking")
+    if(mode==="native-lock-check"||mode==="native-complete"){
+      const cartId=process.env.B22_REDIS_NATIVE_CART_ID
+      assert.match(cartId??"",/^cart_[A-Za-z0-9_-]+$/,
+        "Native Redis probe is restricted to its task-owned Cart")
+      if(mode==="native-lock-check"){
+        let acquired=false
+        try{
+          await redisLock.acquire(cartId,{expire:2})
+          acquired=true
+        }catch(error){
+          assert.match(String(error),/Failed to acquire lock/i,
+            "Another Medusa process must own the real native Redis Cart lock")
+        }finally{
+          if(acquired)await redisLock.release(cartId)
+        }
+        assert.equal(acquired,false,"Live native Redis Cart lock may not be stolen")
+        process.stdout.write("B22_REDIS_NATIVE_CART_LOCK_DENIED\\n")
+        return
+      }
+      const completed=await completeCartWithSplitOrdersWorkflow(container).run({
+        input:{cart_id:cartId},throwOnError:false
+      })
+      assert.equal(completed.errors?.length??0,0,
+        "Real native Cart must safely complete after its crashed lock lease expires")
+      assert.match(String(completed.result?.order_group_id??""),/^og_[A-Za-z0-9_-]+$/)
+      process.stdout.write("B22_REDIS_NATIVE_CART_RECOVERED\\n")
+      return
+    }
     if(mode==="crash"){
       await redisLock.acquire(redisProbeKey,{expire:25})
       process.stdout.write("B22_REDIS_NATIVE_LOCK_BEFORE_EXIT\n",()=>process.exit(86))
