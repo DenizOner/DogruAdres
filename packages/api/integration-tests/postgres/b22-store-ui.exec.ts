@@ -6381,7 +6381,98 @@ export default async function({container}:any){
         version:data.version,verified:data.phone_verified};
     })()`)
     assert.deepEqual(ownPhone,{status:200,mobile:signupPhone,version:1,verified:false})
-    process.stdout.write("PASS B22 first Person signup Chrome HTTPS/PG16: mandatory mobile400, native authenticated Customer-to-one-Person linkage, private persistent self-read, no Organization/Staff rights, idempotent retry and no phone audit leak\\n")
+    process.stdout.write("PASS B22 Chrome: first Person signup HTTPS/PG16, mandatory mobile400, native Customer to one Person, persistent private self-read, no Organization/Staff grant, safe retry and audit privacy\n")
+
+    // P2 regression: TWO real HTTPS socket origins reach the actual
+    // first-party front door (not a mocked X-Forwarded-For header).
+    // Each password attempt uses a distinct nonexistent identity, so the
+    // subject 10/minute budget cannot obscure the source 60/minute budget.
+    // This runs only against the disposable task-owned PG16 database.
+    const availablePort=plainServer()
+    await new Promise<void>((resolve,reject)=>{
+      availablePort.once("error",reject)
+      availablePort.listen(0,"127.0.0.1",resolve)
+    })
+    const visitorPort=(availablePort.address() as {port:number}).port
+    await new Promise<void>(resolve=>availablePort.close(()=>resolve()))
+    const visitorOrigin="https://127.0.0.1:"+visitorPort
+    const originalPublicOrigin=process.env.DOGRUADRES_PUBLIC_ORIGIN
+    process.env.DOGRUADRES_PUBLIC_ORIGIN=visitorOrigin
+    const visitorFrontdoor=spawn("node",["scripts/personal-frontdoor.mjs"],{
+      cwd:process.cwd(),env:{...process.env,
+        DOGRUADRES_PUBLIC_ORIGIN:visitorOrigin,
+        DOGRUADRES_FRONTDOOR_HOST:"127.0.0.1",
+        DOGRUADRES_FRONTDOOR_PORT:String(visitorPort)},
+      stdio:["ignore","ignore","pipe"],
+    })
+    // Do not forward the child stderr: it could contain private network paths.
+    visitorFrontdoor.stderr?.resume()
+    try{
+      const visitorHttp=(source:string,path:string,body:unknown,spoof=false):Promise<number>=>
+        new Promise((resolve,reject)=>{
+          const request=tlsRequest(visitorOrigin+path,{
+            method:"POST",ca:readFileSync(crt),localAddress:source,agent:false,
+            headers:{"origin":visitorOrigin,"content-type":"application/json",
+              ...(spoof?{"x-forwarded-for":"127.0.0.3","x-da-visitor-rate-v1":"forged"}:{})},
+          },response=>{
+            response.resume()
+            response.on("end",()=>resolve(response.statusCode??0))
+          })
+          request.on("error",reject)
+          request.setTimeout(12000,()=>request.destroy(Error("Visitor quota HTTPS timeout")))
+          request.end(JSON.stringify(body))
+        })
+      await until(async()=>{
+        try{
+          const response=await new Promise<number>((resolve,reject)=>{
+            const request=tlsRequest(visitorOrigin+"/health",{
+              method:"GET",ca:readFileSync(crt),agent:false,
+            },res=>{res.resume();res.on("end",()=>resolve(res.statusCode??0))})
+            request.on("error",reject);request.end()
+          })
+          return response===200
+        }catch{return false}
+      },16000,"first-party signed rate-source HTTPS frontdoor")
+      const countBefore=Number((await q(
+        "select count(*)::int n from da_person"))[0].n)
+      for(let i=0;i<60;i++){
+        const status=await visitorHttp("127.0.0.2","/personal/session",{
+          email:"visitor-throttle-"+randomBytes(8).toString("hex")+"@example.invalid",
+          password:"deliberately-not-a-real-password",
+        })
+        assert.equal(status,401,"Source A must have 60 independent failed login attempts")
+      }
+      const deniedLogin=await visitorHttp("127.0.0.2","/personal/session",{
+        email:"visitor-throttle-"+randomBytes(8).toString("hex")+"@example.invalid",
+        password:"deliberately-not-a-real-password",
+      })
+      assert.equal(deniedLogin,429,"Source A's 61st login must be throttled")
+      const fakeRegistration=(source:string,spoof=false)=>visitorHttp(source,
+        "/personal/register",{first_name:"Synthetic",last_name:"Rejected",
+          email:signupEmail,password:"intentionally-wrong-password-123",
+          mobile_phone:signupPhone},spoof)
+      assert.equal(await fakeRegistration("127.0.0.2"),429,
+        "Source A must not bypass the shared login/register source quota")
+      assert.equal(await fakeRegistration("127.0.0.2",true),429,
+        "Public spoofed forwarding and rate-source headers must be ignored")
+      const sourceBLogin=await visitorHttp("127.0.0.3","/personal/session",{
+        email:"visitor-independent-"+randomBytes(8).toString("hex")+"@example.invalid",
+        password:"deliberately-not-a-real-password",
+      })
+      assert.equal(sourceBLogin,401,"Source B login must not inherit A's 429")
+      assert.equal(await fakeRegistration("127.0.0.3"),409,
+        "Source B signup reaches native credential check, not A's 429")
+      assert.equal(Number((await q(
+        "select count(*)::int n from da_person"))[0].n),countBefore,
+        "Failed quota probes must not register a Person")
+      process.stdout.write("PASS B22 Chrome: distinct real TLS client IPs share login/signup budget per source only; 61st login 429, forged headers ignored, independent source 401/409, no Person mutation\n")
+    }finally{
+      visitorFrontdoor.kill("SIGTERM")
+      if(visitorFrontdoor.exitCode===null)
+        await new Promise<void>(resolve=>visitorFrontdoor.once("exit",()=>resolve()))
+      if(originalPublicOrigin===undefined)delete process.env.DOGRUADRES_PUBLIC_ORIGIN
+      else process.env.DOGRUADRES_PUBLIC_ORIGIN=originalPublicOrigin
+    }
 
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
 
