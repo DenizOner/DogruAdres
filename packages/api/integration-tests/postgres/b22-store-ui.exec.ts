@@ -1843,9 +1843,15 @@ export default async function({container}:any){
       "Same Seller's separate buyer Organization must not inherit Beta's group")
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
       privateReadAuditStart,"Real private catalogue read cannot mutate audit")
+    // A background tab deliberately conceals private Buyer content.
+    // Re-enter the real HTTPS page with the authorized Organization.
     await reviewer.send("Page.bringToFront")
-    await reviewer.wait("document.visibilityState==='visible'")
-    await reviewer.select(organizations[1].name,"owner")
+    const buyerPersonalUrl=reviewer.origin+"/personal?organization="+
+      encodeURIComponent(organizations[1].id)
+    await reviewer.send("Page.navigate",{url:buyerPersonalUrl})
+    await reviewer.wait("document.visibilityState==='visible'&&"+
+      "!document.getElementById('workspace').hidden&&"+
+      "JSON.parse(document.getElementById('detail').textContent||'{}').role==='owner'")
     await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden")
     await reviewer.click("#buyer-catalog-refresh")
     await reviewer.wait("document.getElementById('buyer-catalog-items').textContent.includes('Bu işletmeye özel TRY referans fiyatı:')")
@@ -1911,6 +1917,14 @@ export default async function({container}:any){
     assert.equal(revokedOffer?.buyer_reference_try,undefined,
       "Committed Store BuyerOrg group revoke must immediately remove private reference")
     assert.deepEqual(revokedOffer?.list_price_try,{amount:1250.5,currency_code:"try"})
+    // Retest after Seller's revoke through a fresh HTTPS Buyer navigation,
+    // never by manually undoing the privacy-concealed DOM.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.send("Page.navigate",{url:buyerPersonalUrl})
+    await reviewer.wait("document.visibilityState==='visible'&&"+
+      "!document.getElementById('workspace').hidden&&"+
+      "JSON.parse(document.getElementById('detail').textContent||'{}').role==='owner'")
+    await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden")
     await reviewer.click("#buyer-catalog-refresh")
     await reviewer.wait("!document.getElementById('buyer-catalog-items').textContent.includes('Bu işletmeye özel TRY referans fiyatı:')")
     process.stdout.write("PASS B22 BuyerOrg native private TRY reference: real Chrome/HTTPS/PG16 active Store group grants only 950.25 TRY to Beta, other Store and Buyer base TRY; revoke and Seller suspension hide price, no checkout or audit writes\n")
