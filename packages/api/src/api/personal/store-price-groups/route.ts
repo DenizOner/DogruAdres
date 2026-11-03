@@ -108,6 +108,7 @@ async function listStoreGroups(req:MedusaRequest,res:MedusaResponse,
        recentLinks.some(x=>x.seller_id!==input.seller_id||
          !group.safeParse(x.customer_group_id).success)||
        recentIds.length!==ids.length||
+       new Set(recentIds).size!==ids.length||
        recentIds.some(x=>!allowed.has(x)))return denied()
     return res.status(200).json({
       organization_id:input.organization_id,
