@@ -616,8 +616,12 @@ export default async function({container}:any){
         process.stdout.write("B22_REDIS_NATIVE_CART_LOCK_DENIED\n")
         return
       }
+      // The same transaction ID across crashed and recovery child processes
+      // lets Medusa's stored Redis engine resume an invoking workflow.
       const completed=await completeCartWithSplitOrdersWorkflow(container).run({
-        input:{cart_id:cartId},throwOnError:false
+        input:{cart_id:cartId},
+        context:{transactionId:"b22-native-redis-cart-"+cartId},
+        throwOnError:false
       })
       assert.equal(completed.errors?.length??0,0,
         "Real native Cart must safely complete after its crashed lock lease expires")
@@ -3451,6 +3455,13 @@ export default async function({container}:any){
       entity:"order_cart",fields:["order_id"],filters:{cart_id:redisCart.id}
     })
     assert.equal(redisBeforeOrderLinks.length,0)
+    const storedExecution=await q(
+      "select workflow_id,transaction_id,state from workflow_execution where transaction_id=$1 and deleted_at is null",
+      ["b22-native-redis-cart-"+redisCart.id])
+    assert.equal(storedExecution.length,1,
+      "Official Redis engine must retain the killed native Cart workflow checkpoint")
+    assert.equal(storedExecution[0].workflow_id,"complete-cart-with-split-orders")
+    process.stdout.write("OBSERVED B22 native Redis workflow execution persisted after crash\n")
     assert.equal(Number((await q(
       'select count(*)::int n from "order" where customer_id=$1',
       [nativeCustomer.id]))[0].n),
