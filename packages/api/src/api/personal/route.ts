@@ -195,7 +195,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <p id="store-price-group-status" role="status" aria-live="polite"></p>
       <form id="store-price-group-form">
         <label>Onaylı mağaza<select name="seller_id" required></select></label>
-        <label>Mevcut müşteri grubu kimliği<input name="customer_group_id" pattern="cusgroup_[A-Za-z0-9_-]+" placeholder="cusgroup_..." required autocomplete="off"></label>
+        <label>Mağazanın mevcut müşteri grupları<select id="store-price-group-choice" disabled><option value="">Mağazayı seçerek grupları yükleyin</option></select></label>
+        <p id="store-price-group-options-status" role="status" aria-live="polite"></p>
+        <label>Seçilen grubun kimliği<input name="customer_group_id" pattern="cusgroup_[A-Za-z0-9_-]+" placeholder="cusgroup_..." required autocomplete="off"></label>
         <label>Alıcı işletme kimliği<input name="buyer_organization_id" pattern="daorg_[A-Za-z0-9_-]{1,80}" placeholder="daorg_..." required autocomplete="off"></label>
         <button type="submit" name="action" value="grant">Gruba kabul et</button>
         <button type="submit" name="action" value="revoke">Gruptan çıkar</button>
@@ -708,6 +710,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     storeBlockRequest++;priceGroupRequest++;
     el('store-price-group-panel').hidden=true;
     el('store-price-group-status').textContent='';
+    clearStorePriceGroupChoices();
     const gf=el('store-price-group-form');
     const gs=gf?.elements&&typeof gf.elements.namedItem==='function'?
       gf.elements.namedItem('seller_id'):null;
@@ -724,6 +727,69 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(typeof form.reset==='function')form.reset();
     }
   }
+  // This picker is convenience only; the existing grant endpoint still
+  // verifies the current native Seller->CustomerGroup link on every write.
+  function clearStorePriceGroupChoices(){
+    priceGroupRequest++;
+    const choice=el('store-price-group-choice');
+    if(choice&&typeof choice.replaceChildren==='function'){
+      choice.replaceChildren();choice.disabled=true;
+    }
+    const msg=el('store-price-group-options-status');
+    if(msg)msg.textContent='';
+    const form=el('store-price-group-form');
+    const field=form?.elements&&typeof form.elements.namedItem==='function'?
+      form.elements.namedItem('customer_group_id'):null;
+    if(field)field.value='';
+  }
+  async function storePriceGroupChoices(org,seller_id,request){
+    clearStorePriceGroupChoices();
+    if(request!==organizationRequest||currentOrg!==org||
+       document.hidden||el('workspace').hidden||
+       !/^sel_[A-Za-z0-9_-]+$/.test(seller_id))return;
+    const seq=priceGroupRequest;
+    const choice=el('store-price-group-choice'),
+      message=el('store-price-group-options-status');
+    if(!choice||!message)return;
+    message.textContent='Bu mağazanın müşteri grupları kontrol ediliyor…';
+    try{
+      const data=await api('store-price-groups?'+new URLSearchParams({
+        organization_id:org,seller_id,view:'list'
+      }).toString());
+      if(seq!==priceGroupRequest||request!==organizationRequest||
+         currentOrg!==org||document.hidden||
+         el('store-price-group-form')?.elements?.namedItem('seller_id')?.value!==seller_id)return;
+      if(data.organization_id!==org||data.seller_id!==seller_id||
+         !Array.isArray(data.groups)||data.groups.length>100||
+         data.groups.some(g=>typeof g?.id!=='string'||
+           !/^cusgroup_[A-Za-z0-9_-]+$/.test(g.id)||
+           typeof g.name!=='string'||g.name.length>160)||
+         new Set(data.groups.map(g=>g.id)).size!==data.groups.length)
+        throw Error('Grup yanıtı doğrulanamadı');
+      const options=document.createDocumentFragment();
+      const blank=document.createElement('option');
+      blank.value='';blank.textContent='Grup seçin';options.append(blank);
+      for(const group of data.groups){
+        const option=document.createElement('option');
+        option.value=group.id;option.textContent=group.name;options.append(option);
+      }
+      choice.replaceChildren(options);
+      choice.disabled=data.groups.length===0;
+      message.textContent=data.groups.length?
+        'Bu mağazanın gruplarından birini seçin; seçim başka mağazada geçerli değildir.':
+        'Bu mağazada seçilebilir müşteri grubu bulunamadı.';
+    }catch(e){
+      if(seq!==priceGroupRequest||request!==organizationRequest||currentOrg!==org)return;
+      choice.replaceChildren();choice.disabled=true;
+      message.textContent='Mağaza grupları yetki nedeniyle yüklenemedi.';
+    }
+  }
+  const priceGroupChoice=el('store-price-group-choice');
+  if(priceGroupChoice)priceGroupChoice.onchange=()=>{
+    const field=el('store-price-group-form')?.elements?.namedItem('customer_group_id');
+    if(field)field.value=/^cusgroup_[A-Za-z0-9_-]+$/.test(priceGroupChoice.value)?
+      priceGroupChoice.value:'';
+  };
   async function storeBlockStores(org,request){
     if(request!==organizationRequest||currentOrg!==org||
       document.hidden||el('workspace').hidden)return;
@@ -758,6 +824,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         for(const option of select.options)gs.append(option.cloneNode(true));
         for(const button of gf.querySelectorAll('button'))button.disabled=data.stores.length===0;
         el('store-price-group-panel').hidden=data.stores.length===0;
+        gs.onchange=()=>storePriceGroupChoices(org,gs.value,request);
+        if(data.stores.length)void storePriceGroupChoices(org,gs.value,request);
       }
       msg.textContent=data.stores.length?
         'Yalnız kendi mağazanız için alıcı kuruluş engeli koyabilirsiniz.':
