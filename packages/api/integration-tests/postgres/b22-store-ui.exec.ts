@@ -6248,6 +6248,94 @@ export default async function({container}:any){
         await q("drop function b22_mfa_disable_outbox_fault_v1()")
     }
 
+    // First Person self-registration on the same real Chrome HTTPS and
+    // isolated PG16 boundary. Native Customer is only an Auth adapter,
+    // not an Organization, Buyer entitlement, Staff or Store owner.
+    const signupChrome=new B06Chrome(host,"B");browsers.push(signupChrome)
+    await signupChrome.start(crt)
+    const signupEmail="b22-signup-"+randomBytes(10).toString("hex")+"@example.invalid"
+    const signupPassword="Task-Strong-"+randomBytes(18).toString("hex")
+    const signupPhone="+905551234569"
+    const beforePeople=Number((await q("select count(*)::int n from da_person"))[0].n)
+    const badSignup=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/register',{method:'POST',credentials:'omit',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({first_name:'Synthetic',last_name:'Person',
+          email:'no-person@example.invalid',password:'Strong-test-password-123'})});
+      return {status:r.status};
+    })()`)
+    assert.equal(badSignup.status,400,"Missing mobile must not create an account")
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),beforePeople)
+    await signupChrome.click("#register-details summary")
+    await signupChrome.input("#register input[name=first_name]","Synthetic")
+    await signupChrome.input("#register input[name=last_name]","Registrant")
+    await signupChrome.input("#register input[name=email]",signupEmail)
+    await signupChrome.input("#register input[name=mobile_phone]",signupPhone)
+    await signupChrome.input("#register input[name=password]",signupPassword)
+    await signupChrome.click("#register button")
+    await signupChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+    const registered=await q(`select b.person_id,p.mobile_phone,p.mobile_version,
+        b.actor_type,b.actor_id
+      from da_login_binding b join da_person p on p.id=b.person_id
+      join public.customer c on c.id=b.actor_id
+      where b.actor_type='customer' and c.email=$1 and
+        b.revoked_at is null and b.verified_at is not null`,[signupEmail])
+    assert.equal(registered.length,1)
+    assert.equal(registered[0].mobile_phone,signupPhone)
+    assert.equal(registered[0].mobile_version,1)
+    const signupPerson=registered[0].person_id
+    assert.equal((await q("select count(*)::int n from da_organization_membership where person_id=$1",[signupPerson]))[0].n,0)
+    assert.equal((await q("select count(*)::int n from da_platform_staff_grant where person_id=$1",[signupPerson]))[0].n,0)
+    assert.equal((await q("select count(*)::int n from da_verified_actor_binding where person_id=$1",[signupPerson]))[0].n,0)
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),beforePeople+1)
+    const signupAudits=await q(`select new_values::text as value from da_audit_event
+      where actor_person_id=$1 and action='person.registered'`,[signupPerson])
+    assert.equal(signupAudits.length,1)
+    assert.ok(!JSON.stringify(signupAudits).includes(signupPhone))
+    const countBeforeRetry=Number((await q("select count(*)::int n from da_person"))[0].n)
+    const repeated=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/register',{method:'POST',credentials:'omit',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({
+          first_name:'Synthetic',last_name:'Registrant',
+          email:${JSON.stringify(signupEmail)},
+          password:${JSON.stringify(signupPassword)},
+          mobile_phone:'+905551234568'
+        })});
+      return {status:r.status,registered:(await r.json()).registered};
+    })()`)
+    assert.equal(repeated.status,200,"Verified same-identity retry must not create Person")
+    assert.equal(repeated.registered,true)
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),countBeforeRetry)
+    assert.equal((await q("select mobile_phone from da_person where id=$1",[signupPerson]))[0].mobile_phone,signupPhone,
+      "Retry must not silently overwrite canonical Person contact")
+    await signupChrome.input("#login input[name=email]",signupEmail)
+    await signupChrome.input("#login input[name=password]",signupPassword)
+    await signupChrome.click("#login button")
+    await signupChrome.wait("!document.getElementById('workspace').hidden || !document.getElementById('mfa-enrollment').hidden")
+    const needMfa=await signupChrome.eval("!document.getElementById('mfa-enrollment').hidden")
+    if(needMfa){
+      await signupChrome.input("#mfa-enroll-start input[name=email]",signupEmail)
+      await signupChrome.input("#mfa-enroll-start input[name=password]",signupPassword)
+      await signupChrome.click("#mfa-enroll-start button")
+      await signupChrome.wait("!document.getElementById('mfa-enroll-verify').hidden&&document.getElementById('mfa-seed').value.length>0")
+      const seedUrl=await signupChrome.eval("document.getElementById('mfa-seed').value")
+      const seed=seedUrl.startsWith("otpauth:")?new URL(seedUrl).searchParams.get("secret"):seedUrl
+      assert.ok(seed)
+      await signupChrome.input("#mfa-enroll-verify input[name=code]",otp(seed!))
+      await signupChrome.click("#mfa-enroll-verify button")
+    }
+    await signupChrome.wait(`!document.getElementById('workspace').hidden&&
+      document.getElementById('person').textContent===${JSON.stringify('Person: '+signupPerson)}`)
+    const ownPhone=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/profile');
+      const data=await r.json();
+      return {status:r.status,mobile:data.mobile_phone,
+        version:data.version,verified:data.phone_verified};
+    })()`)
+    assert.deepEqual(ownPhone,{status:200,mobile:signupPhone,version:1,verified:false})
+    process.stdout.write("PASS B22 first Person signup Chrome HTTPS/PG16: mandatory mobile400, native authenticated Customer-to-one-Person linkage, private persistent self-read, no Organization/Staff rights, idempotent retry and no phone audit leak\\n")
+
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
 
   }catch(error){
