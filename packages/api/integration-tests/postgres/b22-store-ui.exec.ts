@@ -894,7 +894,7 @@ export default async function({container}:any){
     assert.equal((await q("select mobile_phone from da_person where id=$1",[B.person]))[0].mobile_phone,null)
     const contactEvents=await q(
       "select e.new_values,o.envelope from da_audit_event e "+
-      "join da_security_outbox o on o.source_audit_event_id=e.id "+
+      "join da_security_outbox o on o.audit_event_id=e.id "+
       "where e.actor_person_id=$1 and e.action='person.mobile_updated'",
       [A.person])
     assert.equal(contactEvents.length,mobileAuditBefore+1)
