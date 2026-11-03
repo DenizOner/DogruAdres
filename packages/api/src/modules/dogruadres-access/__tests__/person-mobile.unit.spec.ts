@@ -36,6 +36,8 @@ describe("canonical Person mobile contact persistence (synthetic transaction)",(
   })
   afterEach(()=>jest.restoreAllMocks())
   it("acquires the Person row before the security/session validation locks",async()=>{
+    // Exercise the real method, not this suite's service-call spy.
+    currentForWrite.mockRestore()
     const token="a".repeat(43)
     const db={execute:jest.fn(async(sql:string,args:unknown[]=[])=>{
       expect(sql).toContain("from da_browser_session s")
