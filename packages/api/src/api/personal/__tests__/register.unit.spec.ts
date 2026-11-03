@@ -3,7 +3,7 @@ import { access, enabled, trustedOrigin } from "../security"
 import { createCustomerAccountWorkflow } from "@medusajs/medusa/core-flows"
 
 jest.mock("../security",()=>({
-  access:jest.fn(),enabled:jest.fn(),trustedOrigin:jest.fn(),
+  access:jest.fn(),enabled:jest.fn(),trustedOrigin:jest.fn(),visitorRateAddress:jest.fn(()=>"private-direct:synthetic"),
 }))
 jest.mock("@medusajs/medusa/core-flows",()=>({
   createCustomerAccountWorkflow:jest.fn(),
