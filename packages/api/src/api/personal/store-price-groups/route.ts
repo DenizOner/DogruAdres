@@ -35,7 +35,7 @@ async function listStoreGroups(req:MedusaRequest,res:MedusaResponse,
       graph(input:object):Promise<{data:any[]}>
     }>(ContainerRegistrationKeys.QUERY)
     const customer=req.scope.resolve<{
-      listCustomerGroups(f:object):Promise<any[]>
+      listCustomerGroups(f:object,config:{skip:number,take:number}):Promise<any[]>
     }>("customer")
     const current=async()=>{
       const [owner,legal,binding]=await Promise.all([
@@ -79,7 +79,11 @@ async function listStoreGroups(req:MedusaRequest,res:MedusaResponse,
        links.some(x=>x.seller_id!==input.seller_id||
          !group.safeParse(x.customer_group_id).success))return denied()
     const ids=[...new Set(links.map(x=>x.customer_group_id as string))]
-    const records=ids.length?await customer.listCustomerGroups({id:ids}):[]
+    // Medusa's default page is 15 rows. Ask for precisely the linked IDs
+    // already bounded by the Store's 100-link first-page limit.
+    const records=ids.length?await customer.listCustomerGroups(
+      {id:ids},{skip:0,take:ids.length}
+    ):[]
     if(!Array.isArray(records))return denied()
     const allowed=new Set(ids)
     const groups=records.filter(x=>allowed.has(x.id)&&
