@@ -461,6 +461,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       actor_type:"customer", actor_id:customerId,person_id:person.id,
       created_by_actor_type:"customer", created_by_actor_id:customerId,
     }],context)
+    // Native MedusaService writes may still be pending in the EntityManager.
+    // Flush Person and mapping BEFORE inserting the raw SQL login-binding FK.
+    // The same enclosing Foundation transaction owns commit or rollback.
+    const manager=context.transactionManager
+    if(!manager || typeof manager!=="object" || !("flush" in manager) || typeof manager.flush!=="function")
+      throw new Error("Foundation transaction manager unavailable")
+    await manager.flush()
     await sql.execute(`insert into da_login_binding
       (auth_identity_id,person_id,actor_type,actor_id,verified_at)
       values (?,?,'customer',?,clock_timestamp())`,
