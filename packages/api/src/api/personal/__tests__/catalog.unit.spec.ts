@@ -32,8 +32,12 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
       {id:"prod_a",title:"Published A",status:"published"},
       {id:"prod_b",title:"Published B",status:"published"}
     ]
-    sellerRead=jest.fn(async(filter:any)=>filter.id?
-      stores.filter(s=>s.id===filter.id):stores.filter(s=>s.status===filter.status))
+    sellerRead=jest.fn(async(filter:any,config:any={})=>{
+      const found=filter.id?stores.filter(s=>s.id===filter.id):
+        stores.filter(s=>s.status===filter.status).sort((a,b)=>a.id.localeCompare(b.id))
+      const skip=config.skip??0,take=config.take??found.length
+      return found.slice(skip,skip+take)
+    })
     offerRead=jest.fn(async(filter:any)=>offers.filter(o=>o.seller_id===filter.seller_id&&
       (!filter.id||filter.id.includes(o.id))))
     productRead=jest.fn(async(filter:any)=>products.filter(p=>filter.id.includes(p.id)&&
@@ -178,6 +182,76 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
     expect(sellerRead).not.toHaveBeenCalled()
     expect(offerRead).not.toHaveBeenCalled()
     expect(productRead).not.toHaveBeenCalled()
+  })
+  it("lets an authorized Buyer reach the twenty-first native Store without exposing global Seller counts",async()=>{
+    stores=Array.from({length:21},(_,i)=>({
+      id:"sel_"+String(i).padStart(3,"0"),
+      name:"Store "+i,status:"open",approved_at:"2026-11-02"
+    }))
+    offers=[{id:"offer_last",seller_id:"sel_020",
+      product_id:"prod_last",variant_id:"variant_last"}]
+    products=[{id:"prod_last",title:"Later visible Offer",status:"published"}]
+    req.query={organization_id:"daorg_a",page:"1"}
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(sellerRead).toHaveBeenCalledWith({status:"open"},{
+      take:20,skip:20,order:{id:"ASC"}
+    })
+    expect(res.json).toHaveBeenLastCalledWith({
+      organization_id:"daorg_a",page:1,
+      stores:[{id:"sel_020",name:"Store 20",products:[
+        {offer_id:"offer_last",product_id:"prod_last",title:"Later visible Offer"}
+      ]}],
+      prices_available:false,checkout_ready:false
+    })
+    const payload=res.json.mock.lastCall?.[0]
+    expect(payload).not.toHaveProperty("count")
+    expect(payload).not.toHaveProperty("has_more")
+    expect(payload).not.toHaveProperty("next_seller")
+    expect(svc.personalBuyerStorePriceGroupIds).toHaveBeenCalledWith(
+      "opaque","daorg_a","sel_020"
+    )
+    expect(svc.personalStoreBuyerBlockDecision).toHaveBeenCalledTimes(2)
+  })
+  it("keeps foreign/blocked Stores invisible on later Seller windows",async()=>{
+    stores=Array.from({length:21},(_,i)=>({
+      id:"sel_"+String(i).padStart(3,"0"),
+      name:"Store "+i,status:"open",approved_at:"2026-11-02"
+    }))
+    offers=[{id:"offer_last",seller_id:"sel_020",
+      product_id:"prod_last",variant_id:"variant_last"}]
+    products=[{id:"prod_last",title:"Private",status:"published"}]
+    req.query={organization_id:"daorg_a",page:"1"}
+    svc.personalStoreBuyerBlockDecision.mockResolvedValue({
+      ownership_verified:true,blocked:true
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.json).toHaveBeenLastCalledWith({
+      organization_id:"daorg_a",page:1,stores:[],
+      prices_available:false,checkout_ready:false
+    })
+    expect(offerRead).not.toHaveBeenCalled()
+    svc.personalStoreBuyerBlockDecision.mockResolvedValue({
+      ownership_verified:true,blocked:false
+    })
+    svc.personalBuyerOrganization.mockResolvedValueOnce({
+      person_id:"daprs_a",organization_id:"daorg_a"
+    }).mockResolvedValueOnce(null)
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+  })
+  it("rejects unbounded or forged Seller-page parameters before native service reads",async()=>{
+    for(const page of ["-1","5","10000","1.5","00","01","",["1","2"]]){
+      req.query={organization_id:"daorg_a",page}
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(400)
+    }
+    req.query={organization_id:"daorg_a",page:"1",seller_id:"sel_foreign"}
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(400)
+    expect(sellerRead).not.toHaveBeenCalled()
   })
   it("requires exact Organization query and refuses forged native context",async()=>{
     for(const query of [{},{organization_id:"daorg_a",seller_id:"sel_a"},
