@@ -1792,14 +1792,14 @@ export default async function({container}:any){
     const approvedStorePrivate=beforeRevoke.body.stores.find((st:any)=>st.id===ownerStoreId)
     const otherStorePrivate=beforeRevoke.body.stores.find((st:any)=>st.id===secondOwnerStoreId)
     const alphaOffer=approvedStorePrivate?.products.find((x:any)=>x.offer_id===directTryOffers[0].id)
-    const gammaOffer=otherStorePrivate?.products.find((x:any)=>x.offer_id===directTryOffers[1].id)
+    const otherStoreTryReference=otherStorePrivate?.products.find((x:any)=>x.offer_id===directTryOffers[1].id)
     assert.deepEqual(alphaOffer?.buyer_reference_try,{
       amount:groupSpecialAmount,currency_code:"try"
     },"Beta BuyerOrg's active Seller A group must select native private TRY reference")
     assert.deepEqual(alphaOffer?.list_price_try,{amount:1250.5,currency_code:"try"})
-    assert.equal(gammaOffer?.buyer_reference_try,undefined,
+    assert.equal(otherStoreTryReference?.buyer_reference_try,undefined,
       "Other Store's same native variant never inherits Seller A's group price")
-    assert.deepEqual(gammaOffer?.list_price_try,{amount:2000,currency_code:"try"})
+    assert.deepEqual(otherStoreTryReference?.list_price_try,{amount:2000,currency_code:"try"})
     assert.equal(beforeRevoke.body.checkout_ready,false)
     assert.equal(beforeRevoke.body.prices_available,false)
     const buyerAWithoutGroup=await get(
