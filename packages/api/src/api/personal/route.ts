@@ -371,13 +371,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     // truncated, unreadable or not a JSON object. Do not claim rejection.
     const groupWrite=path==='store-price-groups'&&options.method==='POST';
     const draftWrite=path==='organization-applications'&&options.method==='POST';
+    const followWrite=path==='store-follows'&&options.method==='POST';
     let data;
     try{
       data=await r.json();
-      if((groupWrite||draftWrite)&&(!data||typeof data!=='object'||Array.isArray(data)))
+      if((groupWrite||draftWrite||followWrite)&&(!data||typeof data!=='object'||Array.isArray(data)))
         throw new Error('Geçersiz yazma yanıtı');
     }catch(error){
-      if(!(groupWrite||draftWrite))throw error;
+      if(!(groupWrite||draftWrite||followWrite))throw error;
       const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');
       e.uncertain=true;throw e;
     }
@@ -1516,6 +1517,68 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           li.textContent=line;
           root.append(li);
         }
+        // A follow belongs to the selected Buyer Organization, not to
+        // this Person or to a Medusa Customer account. Unauthorized Members
+        // never receive a follow button; Server authorizes every mutation.
+        const followRow=document.createElement('li');
+        const button=document.createElement('button');
+        const feedback=document.createElement('span');
+        button.type='button';button.disabled=true;
+        button.textContent='Mağaza takip durumu kontrol ediliyor';
+        feedback.setAttribute('role','status');
+        followRow.append(button,feedback);root.append(followRow);
+        const current=()=>seq===buyerCatalogRequest&&
+          request===organizationRequest&&currentOrg===org&&
+          !document.hidden&&!el('workspace').hidden&&
+          !el('buyer-context-panel').hidden;
+        const sellerId=store.id;
+        void (async()=>{
+          try{
+            const q=new URLSearchParams({organization_id:org,seller_id:sellerId});
+            const state=await api('store-follows?'+q.toString());
+            if(!current())return;
+            if(state.organization_id!==org||state.seller_id!==sellerId||
+               typeof state.following!=='boolean'||!Number.isSafeInteger(state.version)||
+               state.version<0||state.version>=2147483647)
+              throw new Error('Takip durumu doğrulanamadı');
+            let following=state.following,version=state.version;
+            const label=()=>button.textContent=following?'Takipten çık':'Mağazayı takip et';
+            label();button.disabled=false;
+            button.onclick=async()=>{
+              if(!current()||button.disabled)return;
+              const action=following?'unfollow':'follow';
+              const oldVersion=version;
+              button.disabled=true;feedback.textContent='Takip işlemi kaydediliyor…';
+              let uncertain=false;
+              try{
+                const result=await api('store-follows',{method:'POST',
+                  body:JSON.stringify({action,organization_id:org,
+                    seller_id:sellerId,expected_version:oldVersion})});
+                if(!current())return;
+                if(result.organization_id!==org||result.seller_id!==sellerId||
+                   result.following!==(action==='follow')||
+                   result.version!==oldVersion+1)
+                  throw new Error('Takip sonucu doğrulanamadı');
+                following=result.following;version=result.version;label();
+                feedback.textContent=following?
+                  'Bu işletme mağazayı takip ediyor. Özel fiyat veya ödeme hakkı verilmedi.':
+                  'Bu işletme mağazayı takipten çıktı.';
+              }catch(error){
+                if(!current())return;
+                uncertain=!!error.uncertain;
+                feedback.textContent=uncertain?
+                  'Sonuç belirsiz; yeniden göndermeyin. Ürünleri güncelleyerek kontrol edin.':
+                  error.httpStatus===409?
+                    'Takip durumu değişmiş; Ürünleri güncelleyerek kontrol edin.':
+                    'Takip işlemi reddedildi. Güncel yetkiyi ve mağazayı kontrol edin.';
+              }finally{
+                if(current()&&!uncertain)button.disabled=false;
+              }
+            };
+          }catch(error){
+            if(current())followRow.remove();
+          }
+        })();
       }
       buyerCatalogPage=page;
       previous.disabled=page===0;next.disabled=page===4;
