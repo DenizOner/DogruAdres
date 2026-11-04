@@ -2666,7 +2666,7 @@ export default async function({container}:any){
       assert.deepEqual(new Set(betaFollowAudit.map((x:any)=>x.action)),
         new Set(["organization.store_followed","organization.store_unfollowed"]))
       assert.equal(betaFollowAudit.length,2)
-      process.stdout.write("PASS B22 Chrome: active Beta Owner follows Store then unfollows after Seller Organization suspension removes all catalogue rows; selected Buyer-only list, PG16 v2 and two audits/outboxes, no checkout\\n")
+      process.stdout.write("PASS B22 Chrome: active Beta Owner follows Store then unfollows after Seller Organization suspension removes all catalogue rows; selected Buyer-only list, PG16 v2 and two audits/outboxes, no checkout\n")
     }finally{
       await q("update da_organization set status='active' where id=$1",
         [organizations[0].id])
