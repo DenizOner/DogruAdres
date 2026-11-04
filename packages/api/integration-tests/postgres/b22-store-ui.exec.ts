@@ -5788,6 +5788,9 @@ export default async function({container}:any){
       const staffGrantId="da_staff_mfa_race_"+rand
       await q("insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason) values($1,$2,'security.mfa.manage','platform',$2,'B22 disposable independent MFA policy race actor')",
         [staffGrantId,A.person])
+      // Only classify observed Chrome requests in this disposable A recovery
+      // path. The Browser never writes Cookie, token or digest into the log.
+      browser.captureSessionProof=true
       const loginStaffA=async(recoveryCode:string)=>{
         // These are repeated independent strong logins in a single real CI
         // suite. Respect the SERVER's existing per-minute 10/60 abuse caps:
@@ -5892,8 +5895,30 @@ export default async function({container}:any){
               (s.mfa_person_version=coalesce((select version from da_person_mfa_preference where person_id=s.person_id),0)) as person_revision
             from da_browser_session s join da_person_security e on e.person_id=s.person_id
             where s.person_id=$1 order by s.created_at desc limit 2`,[A.person])
+          // A 403 for a revoked prior cookie is correct; a 403 for the
+          // post-recovery active current session would be a real auth defect.
+          // Chrome CDP request IDs are joined to transient hashes in memory.
+          // Do not print request IDs, hashes, cookies, tokens or Person IDs.
+          const scoped=browser.http.filter((row:any)=>
+            row.method==="GET"&&row.path==="/personal/organizations").slice(-8)
+          const organizationRequests=await Promise.all(scoped.map(async(row:any)=>{
+            const proof=browser.requestSessionProof(row.requestId)
+            const [state]=proof.digest?await q(`select s.status,
+                (s.epoch=e.epoch) as epoch_matches,
+                (s.mfa_platform_version=(select version from da_mfa_policy where id='current')) as platform_matches,
+                (s.mfa_person_version=coalesce((select version from da_person_mfa_preference where person_id=s.person_id),0)) as person_matches
+              from da_browser_session s join da_person_security e on e.person_id=s.person_id
+              where s.id=$1`,[proof.digest]):[]
+            const sessionClass=!state?"unclassified":
+              state.status==="revoked"?"revoked":
+              state.status==="active"&&state.epoch_matches&&
+                state.platform_matches&&state.person_matches?"active-current":
+              "other"
+            return {status:row.status,observer:proof.observer,
+              sessionClass}
+          }))
           throw new Error("B22 Staff A post-recovery UI did not open: "+
-            JSON.stringify({visibility,http:safe,ui,sessionState}))
+            JSON.stringify({visibility,http:safe,ui,sessionState,organizationRequests}))
         }
         assert.equal(await browser.eval("(async()=> (await fetch('/personal/session')).status)()"),200)
       }
