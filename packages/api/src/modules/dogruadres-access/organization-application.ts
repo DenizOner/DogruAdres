@@ -25,6 +25,12 @@ export const draftPayload=z.object({
     .refine(s=>(s.match(/[0-9]/g)||[]).length>=7),
 }).strict().refine(v=>v.declared_activities.includes(v.primary_activity))
 export type DraftPayload=z.infer<typeof draftPayload>
+export const withdrawDraftPayload=z.object({
+  action:z.literal("withdraw"),
+  application_id:z.string().regex(/^daorgapp_[0-9a-f]{32}$/),
+  expected_version:z.number().int().min(1).max(2147483646),
+}).strict()
+export type WithdrawDraftPayload=z.infer<typeof withdrawDraftPayload>
 
 // Cursor is an untrusted position, never an authority or Person selector.
 export type OrganizationDraftCursor=Readonly<{updatedAt:string;id:string}>
@@ -57,7 +63,7 @@ export async function listOrganizationDrafts(
       declared_activities,primary_activity,status,version,created_at,updated_at,
       to_char(updated_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_time
     from da_organization_application
-    where applicant_person_id=? and status='draft'
+    where applicant_person_id=? and status in ('draft','withdrawn')
     ${cursor?"and (updated_at < ?::timestamptz or (updated_at = ?::timestamptz and id > ?))":""}
     order by updated_at desc,id asc limit 101`,
     cursor?[session.person_id,cursor.updatedAt,cursor.updatedAt,cursor.id]:
@@ -125,4 +131,45 @@ export async function saveOrganizationDraft(db:SecuritySql,token:string,value:un
     values(?,?,now())`,[randomUUID(),auditId])
   return {conflict:false as const,application_id:input.application_id,
     status:"draft" as const,version:input.expected_version+1}
+}
+
+/** Withdraw only this Person's saved draft; retain the private row and audit.
+ * Caller runs this within the same Foundation transaction as the audit/outbox.
+ * A withdrawal never creates a commercial Organization or any Owner rights.
+ */
+export async function withdrawOrganizationDraft(
+  db:SecuritySql,token:string,value:unknown
+) {
+  const parsed=withdrawDraftPayload.safeParse(value)
+  if(!parsed.success)throw new IdentityAccessDenied()
+  const input=parsed.data
+  const session=await new IdentitySessions(db).current(token,false,false)
+  if(!session)return null
+  // Serialize against both draft save and another withdrawal of the same ID.
+  await db.execute(`select pg_advisory_xact_lock(hashtext('da-org-draft'),hashtext(?))`,
+    [input.application_id])
+  const rows=await db.execute(`select applicant_person_id,status,version
+    from da_organization_application where id=? for update`,[input.application_id])
+  if(rows.length>1)throw new IdentityAccessDenied()
+  // Do not disclose existence or status of another Person's application.
+  if(rows.length!==1||rows[0].applicant_person_id!==session.person_id)return null
+  if(rows[0].status!=="draft"||
+     Number(rows[0].version)!==input.expected_version)
+    return {conflict:true as const}
+  const updated=await db.execute(`update da_organization_application
+    set status='withdrawn',version=version+1,updated_at=clock_timestamp()
+    where id=? and applicant_person_id=? and status='draft' and version=?
+    returning version`,[input.application_id,session.person_id,input.expected_version])
+  if(updated.length!==1) return {conflict:true as const}
+  const auditId="daaud_"+randomUUID()
+  await db.execute(`insert into da_audit_event
+    (id,actor_person_id,actor_type,actor_id,action,module,resource,
+      target_id,occurred_at,created_at,updated_at)
+    values (?,?,?,?,'organization.application_draft_withdrawn',
+      'dogruadres-access','organization-application',?,clock_timestamp(),now(),now())`,
+    [auditId,session.person_id,session.actor_type,session.actor_id,input.application_id])
+  await db.execute(`insert into da_security_outbox(id,audit_event_id,created_at)
+    values(?,?,now())`,[randomUUID(),auditId])
+  return {conflict:false as const,application_id:input.application_id,
+    status:"withdrawn" as const,version:Number(updated[0].version)}
 }
