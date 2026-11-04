@@ -559,6 +559,54 @@ describe('B22 native Store price-group selector request lifetime',()=>{
     expect(runInContext("priceGroupUncertain.size",h.context)).toBe(1)
   })
 })
+describe('B22 Store follow management outside catalogue visibility',()=>{
+  it('shows a followed but catalog-invisible Store and sends one safe unfollow',async()=>{
+    const h=harness(true),org='daorg_a',seller='sel_hidden'
+    h.el('workspace').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1",h.context)
+    const first=runInContext("buyerFollowList('daorg_a',1)",h.context)
+    await answer(h,'/personal/store-follows?organization_id='+org,{
+      organization_id:org,stores:[{seller_id:seller,version:7}],next_cursor:null
+    });await first
+    expect(h.el('buyer-follow-panel').hidden).toBe(false)
+    expect(h.el('buyer-catalog-items').children).toHaveLength(0)
+    const item=h.el('buyer-follow-items').children[0],button=item.children[0]
+    expect(button.dataset.unfollowSellerId).toBe(seller)
+    expect(button.textContent).toContain('Takipten çık')
+    const mutation=button.onclick()
+    const writes=h.pending.filter(p=>p.path==='/personal/store-follows'&&
+      p.options?.method==='POST')
+    expect(writes).toHaveLength(1)
+    expect(JSON.parse(writes[0].options.body)).toEqual({
+      action:'unfollow',organization_id:org,seller_id:seller,expected_version:7
+    })
+    await answer(h,'/personal/store-follows',{
+      organization_id:org,seller_id:seller,following:false,version:8
+    })
+    await tick()
+    await answer(h,'/personal/store-follows?organization_id='+org,{
+      organization_id:org,stores:[],next_cursor:null
+    })
+    await mutation
+    expect(h.el('buyer-follow-items').children).toHaveLength(0)
+    expect(h.pending.filter(p=>p.path==='/personal/store-follows'&&
+      p.options?.method==='POST')).toHaveLength(1)
+  })
+  it('does not show an old Organization follow list after switching context',async()=>{
+    const h=harness(true)
+    h.el('workspace').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1",h.context)
+    const old=runInContext("buyerFollowList('daorg_a',1)",h.context)
+    runInContext("currentOrg='daorg_b';organizationRequest++;clearBuyerFollowList()",h.context)
+    await answer(h,'/personal/store-follows?organization_id=daorg_a',{
+      organization_id:'daorg_a',stores:[{seller_id:'sel_private',version:1}],
+      next_cursor:null
+    });await old
+    expect(h.el('buyer-follow-panel').hidden).toBe(true)
+    expect(h.el('buyer-follow-items').children).toHaveLength(0)
+  })
+})
+
 describe('private workspace lifetime (script regression only)',()=>{
   it('polls with the no-touch header, stops while hidden, and clears private DOM',async()=>{
     const h=harness();await loaded(h)

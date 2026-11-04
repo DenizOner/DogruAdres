@@ -11,6 +11,9 @@ describe("B22 Buyer Organization × Store follow private ingress",()=>{
   beforeEach(()=>{
     jest.resetAllMocks()
     service={
+      personalBuyerStoreFollows:jest.fn().mockResolvedValue({
+        organization_id,stores:[{seller_id,version:1}],next_cursor:null
+      }),
       personalBuyerStoreFollowState:jest.fn().mockResolvedValue({
         organization_id,seller_id,following:false,version:0
       }),
@@ -45,6 +48,26 @@ describe("B22 Buyer Organization × Store follow private ingress",()=>{
     service.personalBuyerStoreFollowState.mockResolvedValueOnce(null)
     await GET(req,res)
     expect(res.status).toHaveBeenLastCalledWith(403)
+  })
+  it("lists only active follows for a selected Owner Organization, never a catalog",async()=>{
+    req.query={organization_id}
+    await GET(req,res)
+    expect(service.personalBuyerStoreFollows)
+      .toHaveBeenCalledWith("opaque",organization_id,undefined)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.json).toHaveBeenLastCalledWith({
+      organization_id,stores:[{seller_id,version:1}],next_cursor:null
+    })
+    req.query={organization_id,after:seller_id}
+    await GET(req,res)
+    expect(service.personalBuyerStoreFollows)
+      .toHaveBeenLastCalledWith("opaque",organization_id,seller_id)
+    req.query={organization_id,after:"wrong-id"}
+    await GET(req,res);expect(res.status).toHaveBeenLastCalledWith(400)
+    req.query={organization_id}
+    service.personalBuyerStoreFollows.mockResolvedValueOnce(null)
+    await GET(req,res);expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","private, no-store")
   })
   it("rejects forged query, Bearer, Seller selector and unknown scope",async()=>{
     req.query={organization_id,seller_id,owner:"true"}

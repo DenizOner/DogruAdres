@@ -297,6 +297,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <button id="buyer-catalog-next" type="button" disabled>Sonraki mağaza dilimi</button>
     </section>
   </section>
+  <section id="buyer-follow-panel" hidden aria-labelledby="buyer-follow-title" style="grid-column:1/-1">
+    <h3 id="buyer-follow-title">Bu işletmenin takip ettiği mağazalar</h3>
+    <p>Katalogdan kaldırılmış veya askıya alınmış mağazaları da takipten çıkarabilirsiniz. Bu liste yalnız seçili işletmenin kayıtlarını gösterir; mağaza veya alışveriş yetkisi vermez.</p>
+    <p id="buyer-follow-status" role="status" aria-live="polite"></p>
+    <ul id="buyer-follow-items"></ul>
+    <button id="buyer-follow-refresh" type="button">Takipleri baştan yenile</button>
+    <button id="buyer-follow-next" type="button" disabled>Sonraki takipler</button>
+  </section>
   <section id="buyer-grants-panel" hidden aria-labelledby="buyer-grants-title" style="grid-column:1/-1">
     <h3 id="buyer-grants-title">Kuruluş satın alma izinleri</h3>
     <p>Korunmuş Owner, kendi aktif kuruluşu için ayrıca satın alma izni almaz. Diğer aktif üyeler için satın alma iznini Owner verir veya iptal eder. Kişisel müşteri bağlantısı tek başına kuruluş adına işlem yetkisi vermez. Mağazanın alıcı kuruluş engeli herkese uygulanır. Bu ekrandan sipariş veya ödeme yapılamaz.</p>
@@ -915,6 +923,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         void organizationStores(id,request);
         void productDraftStores(id,request);
         void buyerContext(id,request);
+        if(managerRole==='owner')void buyerFollowList(id,request);
         if(managerRole==='owner')void productPermissions(id,request);
         if(managerRole==='owner')void buyerPermissions(id,request);
         if(managerRole==='owner')void storeBlockStores(id,request);
@@ -941,6 +950,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     clearProductPermissions();
     clearBuyerPermissions();
     clearBuyerContext();
+    clearBuyerFollowList();
     clearProductDraft();
     storeRequest++;
     el('org-stores-panel').hidden=true;
@@ -1418,6 +1428,111 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
 
 
+
+  // Follow management is independent of the visible catalogue. A Store
+  // may disappear from catalog while its Organization-owned follow persists.
+  let buyerFollowRequest=0,buyerFollowCursor=null,buyerFollowNext=null;
+  function clearBuyerFollowList(){
+    buyerFollowRequest++;buyerFollowCursor=null;buyerFollowNext=null;
+    el('buyer-follow-panel').hidden=true;
+    el('buyer-follow-items').replaceChildren();
+    el('buyer-follow-status').textContent='';
+    el('buyer-follow-next').disabled=true;
+  }
+  async function buyerFollowList(org,request,after=null){
+    if(request!==organizationRequest||currentOrg!==org||
+       document.hidden||el('workspace').hidden)return;
+    const seq=++buyerFollowRequest,panel=el('buyer-follow-panel');
+    const root=el('buyer-follow-items'),message=el('buyer-follow-status');
+    const next=el('buyer-follow-next');
+    panel.hidden=true;root.replaceChildren();next.disabled=true;
+    message.textContent='Bu işletmenin takipleri doğrulanıyor…';
+    const current=()=>seq===buyerFollowRequest&&request===organizationRequest&&
+      currentOrg===org&&!document.hidden&&!el('workspace').hidden;
+    try{
+      const q=new URLSearchParams({organization_id:org});
+      if(after!==null)q.set('after',after);
+      const data=await api('store-follows?'+q.toString());
+      if(!current())return;
+      if(data.organization_id!==org||!Array.isArray(data.stores)||
+         data.stores.length>20||
+         !(data.next_cursor===null||
+           (typeof data.next_cursor==='string'&&
+            /^sel_[A-Za-z0-9_-]+$/.test(data.next_cursor))))
+        throw new Error('Takip listesi doğrulanamadı');
+      let previous=after;
+      for(const store of data.stores){
+        if(typeof store.seller_id!=='string'||
+           !/^sel_[A-Za-z0-9_-]+$/.test(store.seller_id)||
+           (previous!==null&&store.seller_id<=previous)||
+           !Number.isSafeInteger(store.version)||store.version<1||
+           store.version>=2147483647)
+          throw new Error('Takip kaydı doğrulanamadı');
+        previous=store.seller_id;
+      }
+      if((data.next_cursor!==null&&
+          (!data.stores.length||
+           data.next_cursor!==data.stores[data.stores.length-1].seller_id))||
+         (data.stores.length<20&&data.next_cursor!==null))
+        throw new Error('Takip sayfası doğrulanamadı');
+      buyerFollowCursor=after;buyerFollowNext=data.next_cursor;
+      for(const store of data.stores){
+        const row=document.createElement('li'),button=document.createElement('button');
+        const feedback=document.createElement('span');
+        if(typeof row.append!=='function'||!button.dataset||
+           typeof feedback.setAttribute!=='function')continue;
+        const sellerId=store.seller_id,version=store.version;
+        button.type='button';button.textContent='Takipten çık: '+sellerId;
+        button.dataset.unfollowSellerId=sellerId;
+        feedback.setAttribute('role','status');
+        row.append(button,feedback);root.append(row);
+        button.onclick=async()=>{
+          if(!current()||button.disabled)return;
+          button.disabled=true;feedback.textContent='Takipten çıkılıyor…';
+          let uncertain=false;
+          try{
+            const result=await api('store-follows',{method:'POST',
+              body:JSON.stringify({action:'unfollow',organization_id:org,
+                seller_id:sellerId,expected_version:version})});
+            if(!current())return;
+            if(result.organization_id!==org||result.seller_id!==sellerId||
+               result.following!==false||result.version!==version+1){
+              const e=new Error('Takip sonucu doğrulanamadı');
+              e.uncertain=true;throw e;
+            }
+            // Re-read authorized persistent state; do not infer another Store
+            // became visible, or silently repeat an uncertain write.
+            await buyerFollowList(org,request,after);
+          }catch(error){
+            if(!current())return;
+            uncertain=!!error.uncertain;
+            feedback.textContent=uncertain?
+              'Sonuç belirsiz; yeniden göndermeyin. Takipleri yenileyerek kontrol edin.':
+              error.httpStatus===409?
+                'Takip değişmiş; takipleri yenileyerek kontrol edin.':
+                'Takipten çıkılamadı. Güncel yetkiyi kontrol edin.';
+          }finally{
+            if(current()&&!uncertain)button.disabled=false;
+          }
+        };
+      }
+      panel.hidden=false;next.disabled=data.next_cursor===null;
+      message.textContent=data.stores.length?
+        'Bu işletmenin takipleri listelendi. Mağaza kimliği yalnız kayıt tanımlayıcısıdır.':
+        'Bu sayfada takip edilen mağaza bulunmuyor.';
+    }catch(error){
+      if(!current())return;
+      root.replaceChildren();panel.hidden=true;next.disabled=true;
+      message.textContent='';
+    }
+  }
+  el('buyer-follow-refresh').onclick=()=>{
+    if(currentOrg)void buyerFollowList(currentOrg,organizationRequest);
+  };
+  el('buyer-follow-next').onclick=()=>{
+    if(currentOrg&&buyerFollowNext&&!el('buyer-follow-panel').hidden)
+      void buyerFollowList(currentOrg,organizationRequest,buyerFollowNext);
+  };
 
   let buyerContextRequest=0,buyerCatalogRequest=0,buyerCatalogPage=0;
   function clearBuyerContext(){

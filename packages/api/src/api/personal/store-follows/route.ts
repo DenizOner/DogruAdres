@@ -7,6 +7,7 @@ export const AUTHENTICATE=false
 const organization=z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/)
 const seller=z.string().regex(/^sel_[A-Za-z0-9_-]+$/)
 const query=z.object({organization_id:organization,seller_id:seller}).strict()
+const listQuery=z.object({organization_id:organization,after:seller.optional()}).strict()
 const payload=z.object({
   action:z.enum(["follow","unfollow"]),organization_id:organization,
   seller_id:seller,expected_version:z.number().int().min(0).max(2147483646)
@@ -26,13 +27,22 @@ const denied=(res:MedusaResponse)=>res.status(403).json({message:"Access denied"
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   headers(res)
   if(!enabled())return res.status(503).json({message:"Unavailable"})
-  const q=query.safeParse(req.query)
-  if(!q.success||req.headers.authorization!==undefined||
+  if(req.headers.authorization!==undefined||
      req.headers["x-seller-id"]!==undefined)
     return res.status(400).json({message:"Invalid context"})
+  const listed=req.query?.seller_id===undefined
+  const q=listed?listQuery.safeParse(req.query):query.safeParse(req.query)
+  if(!q.success)return res.status(400).json({message:"Invalid context"})
   try{
+    if(listed){
+      const values=q.data as {organization_id:string;after?:string}
+      const result=await access(req).personalBuyerStoreFollows(
+        sessionToken(req),values.organization_id,values.after)
+      return result?res.status(200).json(result):denied(res)
+    }
+    const values=q.data as {organization_id:string;seller_id:string}
     const state=await access(req).personalBuyerStoreFollowState(
-      sessionToken(req),q.data.organization_id,q.data.seller_id)
+      sessionToken(req),values.organization_id,values.seller_id)
     return state?res.status(200).json(state):denied(res)
   }catch(error){
     return error instanceof IdentityAccessDenied?denied(res):

@@ -2293,6 +2293,42 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       version:row?Number(row.version):0}
   }
 
+  /** Only the current protected Owner may enumerate their own active follows.
+   * Catalog visibility is deliberately irrelevant: suspended/blocked Stores
+   * must remain removable. Return IDs only, not Store names or other Buyers.
+   * The cursor is a validated Seller ID; the composite key bounds each page.
+   */
+  @InjectTransactionManager()
+  async personalBuyerStoreFollows(
+    token:string,organizationId:string,after:string|undefined,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       (after!==undefined&&!/^sel_[A-Za-z0-9_-]+$/.test(after)))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    if(!await this.currentStoreFollowOwner_(db,token,organizationId))return null
+    const rows=await db.execute(
+      "select seller_id from da_buyer_store_follow "+
+      "where buyer_organization_id=? and revoked_at is null "+
+      (after===undefined?"":"and seller_id>? ")+
+      "order by seller_id limit 21",
+      after===undefined?[organizationId]:[organizationId,after])
+    if(!Array.isArray(rows)||rows.length>21||
+       rows.some(r=>typeof r.seller_id!=="string"||
+         !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id)))
+      throw new IdentityAccessDenied()
+    const stores:{seller_id:string;version:number}[]=[]
+    for(const item of rows.slice(0,20)){
+      const row=await this.storeFollowRow_(db,organizationId,item.seller_id)
+      if(!row||row.revoked_at!==null||Number(row.version)>=2147483647)
+        throw new IdentityAccessDenied()
+      stores.push({seller_id:item.seller_id,version:Number(row.version)})
+    }
+    return {organization_id:organizationId,stores,
+      next_cursor:rows.length>20?stores[stores.length-1].seller_id:null}
+  }
+
   @InjectTransactionManager()
   async personalChangeBuyerStoreFollow(
     token:string,input:{action:"follow"|"unfollow";organization_id:string;
