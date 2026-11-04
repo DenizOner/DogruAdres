@@ -164,6 +164,10 @@ async function run(){
         assert.ok(result.split("\n").some(line=>line.startsWith(
           "PASS B22 Chrome: first Person signup HTTPS/PG16, mandatory mobile400, native Customer to one Person")),
           "Missing real Chrome/PG16 successful first Person signup evidence")
+        assert.ok(result.includes("PASS B22 PG16: duplicate activity direct SQL 23514; original private draft unchanged"),
+          "Missing direct PostgreSQL 16 CHECK rejection evidence for duplicate activity")
+        assert.ok(result.includes("PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner"),
+          "Missing PG16 legacy-shaped default/read and Chrome edit persistence evidence")
         assert.ok(result.includes("PASS B22 Chrome: declared activities and primary activity saved in PG16; foreign and invalid primary denied; reload restores selection"),
           "Missing actual Chrome/PG16 activity declaration/save/denial/reload proof")
         assert.ok(result.includes("PASS B22 Chrome: Person private Organization draft save/edit, foreign/unauthenticated/CSRF/replay denies, PG16 audit without Organization or Owner"),
