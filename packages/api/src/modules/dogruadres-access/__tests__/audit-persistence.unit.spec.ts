@@ -94,7 +94,9 @@ describe("Foundation canonical audit and outbox persistence contract", () => {
     const member={id:"daorg_member",name:"Member Organization",
       membership_id:"damem_member",role:"member"}
     const probe=jest.spyOn(IdentitySessions.prototype,"organizations")
-      .mockResolvedValue({person_id:"daprs_owner",organizations:[owner,member]})
+      .mockImplementation(async(_token,organizationId)=>
+        ({person_id:"daprs_owner",organizations:
+          [owner,member].filter(item=>!organizationId||item.id===organizationId)}))
     const f=fixture()
     const manager=f.context.transactionManager as any
     manager.execute.mockImplementation(async(sql:string)=>
