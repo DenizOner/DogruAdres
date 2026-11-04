@@ -3,14 +3,17 @@ import { join } from 'node:path'
 import { createContext, runInContext } from 'node:vm'
 
 // Execute the shipped browser script; scheduling is controlled, not authorization.
-function harness() {
+function harness(interactiveFollowDom=false) {
   const source=readFileSync(join(__dirname,'../route.ts'),'utf8')
   const nodes=new Map<string,any>(),listeners=new Map<string,Function>(),pending:any[]=[]
   const el=(id:string)=>{
     if(!nodes.has(id))nodes.set(id,{textContent:'',value:'',hidden:id==='workspace',children:[],elements:{method:{},mobile_phone:{value:''}},setAttribute(){},focus(){},replaceChildren(){this.textContent='';this.children=[]},append(x:any){this.children.push(x)},querySelectorAll(){return []},reset(){},querySelector(){return {disabled:false}}})
     return nodes.get(id)
   }
-  const document={hidden:false,getElementById:el,createElement:()=>({textContent:''}),addEventListener:(n:string,f:Function)=>listeners.set(n,f)}
+  const document={hidden:false,getElementById:el,createElement:()=>interactiveFollowDom?
+    ({textContent:'',dataset:{},disabled:false,children:[],
+      setAttribute(){},append(...items:any[]){this.children.push(...items)},remove(){this.removed=true}}):
+    ({textContent:''}),addEventListener:(n:string,f:Function)=>listeners.set(n,f)}
   const context=createContext({document,window:{addEventListener:(n:string,f:Function)=>listeners.set(n,f)},location:new URL('https://app.example.invalid/personal'),URL,history:{replaceState(){}},URLSearchParams,setInterval:(f:Function)=>listeners.set('poll',f),fetch:(path:string,options:any)=>new Promise(resolve=>pending.push({path,options,resolve}))})
   const scripts=[...source.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1])
   // Execute the early token capture too; workspace lifetime keeps its original assertions.
@@ -141,6 +144,87 @@ describe('B22 Buyer catalogue Seller-window navigation (shipped browser JS)',()=
     expect(h.el('buyer-catalog-next').disabled).toBe(true)
   })
 })
+describe('B22 Store follow malformed HTTP 200 (shipped UI + real api() wrapper)',()=>{
+  const org='daorg_a',seller='sel_a'
+  const catalogPath='/personal/catalog?organization_id='+org+'&page=0'
+  const followPath='/personal/store-follows'
+  const statePath=followPath+'?organization_id='+org+'&seller_id='+seller
+  const catalog={organization_id:org,page:0,stores:[{
+    id:seller,name:'Store A',products:[{offer_id:'offer_a',product_id:'prod_a',title:'Product A'}]
+  }],prices_available:false,checkout_ready:false}
+  const originalState={organization_id:org,seller_id:seller,following:false,version:0}
+  const persistedState={organization_id:org,seller_id:seller,following:true,version:1}
+  const buttonFrom=(h:ReturnType<typeof harness>)=>
+    h.el('buyer-catalog-items').children[1].children[0]
+
+  it.each([
+    ['missing all fields',{}],
+    ['foreign Organization',{...persistedState,organization_id:'daorg_foreign'}],
+    ['foreign Store',{...persistedState,seller_id:'sel_foreign'}],
+    ['wrong follow flag',{...persistedState,following:false}],
+    ['wrong version',{...persistedState,version:0}],
+    ['valid JSON array',[]]
+  ])('keeps the submitted result uncertain for HTTP 200 %s, and confirms persisted state only after refresh',async(_name,invalid)=>{
+    const h=harness(true)
+    h.el('workspace').hidden=false
+    h.el('buyer-context-panel').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1",h.context)
+    const first=runInContext("buyerCatalog('daorg_a',1,0)",h.context)
+    await answer(h,catalogPath,catalog);await first
+    await answer(h,statePath,originalState)
+    const button=buttonFrom(h),feedback=h.el('buyer-catalog-items').children[1].children[1]
+    expect(button.disabled).toBe(false)
+    expect(button.textContent).toContain('takip et')
+    const mutation=button.onclick()
+    const writes=h.pending.filter(x=>x.path===followPath)
+    expect(writes).toHaveLength(1)
+    expect(writes[0].options.method).toBe('POST')
+    expect(JSON.parse(writes[0].options.body)).toEqual({
+      action:'follow',organization_id:org,seller_id:seller,expected_version:0
+    })
+    // The server has committed one follow and audit; only its HTTP 200 body
+    // is malformed or inconsistent. The UI must never claim a rejection.
+    await answer(h,followPath,invalid)
+    await mutation
+    expect(feedback.textContent).toContain('Sonuç belirsiz')
+    expect(feedback.textContent).toContain('Ürünleri güncelleyerek kontrol edin')
+    expect(feedback.textContent).not.toContain('reddedildi')
+    expect(button.disabled).toBe(true)
+    expect(button.textContent).toContain('takip et')
+    await button.onclick()
+    expect(h.pending.filter(x=>x.path===followPath)).toHaveLength(1)
+
+    // A new authorized GET may now reveal the previously committed version 1.
+    h.el('buyer-catalog-refresh').onclick()
+    await answer(h,catalogPath,catalog)
+    await tick()
+    await answer(h,statePath,persistedState)
+    const fresh=buttonFrom(h)
+    expect(fresh.disabled).toBe(false)
+    expect(fresh.textContent).toContain('takipten çık')
+    expect(h.pending.filter(x=>x.path===followPath)).toHaveLength(1)
+    expect(h.el('buyer-catalog-items').children[0].textContent).toContain('Product A')
+  })
+
+  it('preserves the normal confirmed HTTP 200 follow success path',async()=>{
+    const h=harness(true)
+    h.el('workspace').hidden=false
+    h.el('buyer-context-panel').hidden=false
+    runInContext("currentOrg='daorg_a';organizationRequest=1",h.context)
+    const first=runInContext("buyerCatalog('daorg_a',1,0)",h.context)
+    await answer(h,catalogPath,catalog);await first
+    await answer(h,statePath,originalState)
+    const button=buttonFrom(h),feedback=h.el('buyer-catalog-items').children[1].children[1]
+    const mutation=button.onclick()
+    await answer(h,followPath,persistedState)
+    await mutation
+    expect(feedback.textContent).toContain('Bu işletme mağazayı takip ediyor')
+    expect(feedback.textContent).not.toContain('Sonuç belirsiz')
+    expect(button.disabled).toBe(false)
+    expect(button.textContent).toContain('takipten çık')
+  })
+})
+
 describe('B22 native Store price-group selector request lifetime',()=>{
   it('does not strand action buttons or show a stale result after switching Stores',async()=>{
     const h=harness()
