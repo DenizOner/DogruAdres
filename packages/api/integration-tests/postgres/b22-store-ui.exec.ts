@@ -857,7 +857,9 @@ export default async function({container}:any){
     assert.equal(topology.privateOrigin,process.env.DOGRUADRES_PRIVATE_API)
     assert.equal(topology.publicOrigin,host)
     const browser=new B06Chrome(host,"A");browsers.push(browser)
-    await browser.start(crt)
+    // Existing free CI runner may need longer for real Chrome CDP startup.
+    // This bounded allowance affects only this disposable B22 first browser.
+    await browser.start(crt,30000)
     await browser.login(A.email,A.password,A.person)
     if(process.env.B22_ADMIN_SMTP==="true"){
       const other=new B06Chrome(host,"B");browsers.push(other)
@@ -2510,6 +2512,76 @@ export default async function({container}:any){
       "Read-only Buyer catalogue cannot write canonical audit")
     process.stdout.write("PASS B22 Buyer catalogue: real Chrome HTTPS and PG16 two published Mercur Offers under approved Buyer Org, foreign and forged scopes 403/400, no private inventory leakage and no audit writes\n")
     process.stdout.write("PASS B22 native TRY Offer list price: two seller-scoped Medusa prices on a shared native variant, EUR-only excluded, browser reference display, no checkout\n")
+
+    // B22 follow is a Buyer Organization-owned relationship (not a Person
+    // wishlist, native Customer permission, group price or checkout grant).
+    const followSeller=ownerStoreId,followBuyer=organizations[0].id
+    assert.ok(scopedCatalog.body.stores.some((s:any)=>s.id===followSeller),
+      "The followed native Store must be visible in the authorized catalogue")
+    const followRowsBefore=await q(
+      "select version from da_buyer_store_follow where buyer_organization_id=$1 and seller_id=$2",
+      [followBuyer,followSeller])
+    assert.deepEqual(followRowsBefore,[],"Fixture starts without an automatic follow")
+    const followSelector="#buyer-catalog-items button[data-follow-seller-id='"+followSeller+"']"
+    await browser.wait("Array.from(document.querySelectorAll('#buyer-catalog-items button'))"+
+      ".some(b=>b.dataset.followSellerId==="+JSON.stringify(followSeller)+
+      " && !b.disabled && b.textContent.includes('takip et'))")
+    const foreignFollowGet=await reviewer.eval("(async()=>{"+
+      "const r=await fetch('/personal/store-follows?organization_id="+
+      encodeURIComponent(followBuyer)+"&seller_id="+encodeURIComponent(followSeller)+"');"+
+      "return {status:r.status,body:await r.json()};})()")
+    assert.equal(foreignFollowGet.status,403,"Another Person cannot inspect a foreign Buyer follow")
+    const wrongCsrfFollow=await browser.eval("(async()=>{"+
+      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "headers:{'content-type':'application/json'},"+
+      "body:JSON.stringify({action:'follow',organization_id:"+JSON.stringify(followBuyer)+
+      ",seller_id:"+JSON.stringify(followSeller)+",expected_version:0})});return r.status;})()")
+    assert.equal(wrongCsrfFollow,403)
+    await browser.click(followSelector)
+    await browser.wait("Array.from(document.querySelectorAll('#buyer-catalog-items button'))"+
+      ".some(b=>b.dataset.followSellerId==="+JSON.stringify(followSeller)+
+      " && !b.disabled && b.textContent.includes('takipten çık'))")
+    const followedRows=await q("select version,revoked_at,source_audit_event_id "+
+      "from da_buyer_store_follow where buyer_organization_id=$1 and seller_id=$2",
+      [followBuyer,followSeller])
+    assert.equal(followedRows.length,1)
+    assert.equal(followedRows[0].version,1)
+    assert.equal(followedRows[0].revoked_at,null)
+    const replayFollow=await browser.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'follow',organization_id:"+JSON.stringify(followBuyer)+
+      ",seller_id:"+JSON.stringify(followSeller)+",expected_version:0})});return r.status;})()")
+    assert.equal(replayFollow,409,"A stale follow cannot create a second audit or record")
+    const foreignMutation=await reviewer.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'unfollow',organization_id:"+JSON.stringify(followBuyer)+
+      ",seller_id:"+JSON.stringify(followSeller)+",expected_version:1})});return r.status;})()")
+    assert.equal(foreignMutation,403)
+    await browser.click(followSelector)
+    await browser.wait("Array.from(document.querySelectorAll('#buyer-catalog-items button'))"+
+      ".some(b=>b.dataset.followSellerId==="+JSON.stringify(followSeller)+
+      " && !b.disabled && b.textContent.includes('takip et'))")
+    const unfollowedRows=await q("select version,revoked_at from da_buyer_store_follow "+
+      "where buyer_organization_id=$1 and seller_id=$2",[followBuyer,followSeller])
+    assert.equal(unfollowedRows.length,1)
+    assert.equal(unfollowedRows[0].version,2)
+    assert.ok(unfollowedRows[0].revoked_at,"Unfollow retains the private history row")
+    const followAudit=await q("select e.action from da_audit_event e "+
+      "join da_audit_outbox o on o.source_audit_event_id=e.id "+
+      "where e.organization_id=$1 and e.target_id=$2 and e.resource='buyer-store-follow' "+
+      "order by e.occurred_at,e.id",[followBuyer,followSeller])
+    assert.deepEqual(new Set(followAudit.map((x:any)=>x.action)),
+      new Set(["organization.store_followed","organization.store_unfollowed"]))
+    assert.equal(followAudit.length,2,"Follow and unfollow each require one canonical audit")
+    assert.deepEqual(await q("select version from da_buyer_store_follow "+
+      "where buyer_organization_id=$1 and seller_id=$2",[followBuyer,followSeller]),
+      [{version:2}])
+    process.stdout.write("PASS B22 Chrome: Buyer Organization Owner follows and unfollows approved Store; foreign/CSRF/replay denied, PG16 v1-v2 and two outboxed audits, no checkout\n")
+
     // Separate legal Seller Organization is part of the current entitlement,
     // not just the native Seller's open flag. Beta remains an active Buyer.
     // Test-only PG16 suspension/restoration never touches production.
@@ -2523,6 +2595,32 @@ export default async function({container}:any){
     assert.equal(betaCatalogBefore.status,200)
     assert.deepEqual(new Set(betaCatalogBefore.body.stores.map((s:any)=>s.id)),
       new Set(cartStoreIds),"Independent Buyer Beta can see two active legal Store offers")
+    // An approved Store may disappear from the Buyer's catalogue while
+    // its Buyer Organization follow remains. Use the real protected Beta
+    // Owner UI to unfollow without a product or Seller catalog row.
+    const betaFollowBuyer=organizations[1].id
+    const betaFollowBefore=await reviewer.eval(`(async()=>{
+      const r=await fetch('/personal/store-follows?organization_id='+
+        ${JSON.stringify(organizations[1].id)}+'&seller_id='+
+        ${JSON.stringify(ownerStoreId)})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    assert.equal(betaFollowBefore.status,200)
+    assert.deepEqual(betaFollowBefore.body,{
+      organization_id:betaFollowBuyer,seller_id:ownerStoreId,following:false,version:0
+    })
+    const betaFollow=await reviewer.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      const r=await fetch('/personal/store-follows',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify({action:'follow',
+          organization_id:${JSON.stringify(organizations[1].id)},
+          seller_id:${JSON.stringify(ownerStoreId)},expected_version:0})})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    assert.equal(betaFollow.status,200)
+    assert.equal(betaFollow.body.following,true)
+    assert.equal(betaFollow.body.version,1)
     await q("update da_organization set status='suspended' where id=$1",
       [organizations[0].id])
     try{
@@ -2532,6 +2630,52 @@ export default async function({container}:any){
       assert.equal(deniedSuspendedSeller.body.organization_id,organizations[1].id)
       assert.deepEqual(deniedSuspendedSeller.body.stores,[],
         "Every Store of a suspended seller legal Organization must disappear")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      await reviewer.click("#buyer-catalog-refresh")
+      await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden&&"+
+        "document.getElementById('buyer-catalog-items').children.length===0")
+      await reviewer.click("#buyer-follow-refresh")
+      await reviewer.wait("!document.getElementById('buyer-follow-panel').hidden&&"+
+        "Array.from(document.querySelectorAll('#buyer-follow-items button'))"+
+        ".some(b=>b.dataset.unfollowSellerId==="+JSON.stringify(ownerStoreId)+
+        "&&!b.disabled)")
+      const betaFollowList=await reviewer.eval(`(async()=>{
+        const r=await fetch('/personal/store-follows?organization_id='+
+          ${JSON.stringify(organizations[1].id)})
+        return {status:r.status,body:await r.json()}
+      })()`)
+      assert.equal(betaFollowList.status,200)
+      const nativeFollowSeller=(await native.listSellers({id:ownerStoreId}))[0]
+      assert.ok(nativeFollowSeller?.name)
+      assert.deepEqual(betaFollowList.body,{
+        organization_id:betaFollowBuyer,
+        stores:[{seller_id:ownerStoreId,version:1,
+          name:nativeFollowSeller.name,handle:nativeFollowSeller.handle}],next_cursor:null
+      })
+      const followLabel=await reviewer.eval(
+        "document.querySelector('#buyer-follow-items button').textContent")
+      assert.ok(followLabel.includes(nativeFollowSeller.name),
+        "Suspended native Seller name must remain recognizable in authorized Buyer follow list")
+      assert.ok(!followLabel.includes(ownerStoreId),
+        "Visible unfollow button must not show raw native Seller ID")
+      await reviewer.click("#buyer-follow-items button[data-unfollow-seller-id='"+
+        ownerStoreId+"']")
+      await reviewer.wait("!document.getElementById('buyer-follow-panel').hidden&&"+
+        "document.getElementById('buyer-follow-status').textContent.includes('bulunmuyor')")
+      assert.deepEqual(await q("select version,revoked_at is not null as revoked "+
+        "from da_buyer_store_follow where buyer_organization_id=$1 and seller_id=$2",
+        [betaFollowBuyer,ownerStoreId]),[{version:2,revoked:true}],
+        "Suspended Seller unfollow retains correct Buyer Organization history")
+      const betaFollowAudit=await q(
+        "select e.action from da_audit_event e "+
+        "join da_audit_outbox o on o.source_audit_event_id=e.id "+
+        "where e.organization_id=$1 and e.target_id=$2 and e.resource='buyer-store-follow' "+
+        "order by e.occurred_at,e.id",[betaFollowBuyer,ownerStoreId])
+      assert.deepEqual(new Set(betaFollowAudit.map((x:any)=>x.action)),
+        new Set(["organization.store_followed","organization.store_unfollowed"]))
+      assert.equal(betaFollowAudit.length,2)
+      process.stdout.write("PASS B22 Chrome: active Beta Owner follows Store then unfollows after Seller Organization suspension removes all catalogue rows; selected Buyer-only list, PG16 v2 and two audits/outboxes, no checkout\n")
     }finally{
       await q("update da_organization set status='active' where id=$1",
         [organizations[0].id])
@@ -4851,6 +4995,10 @@ export default async function({container}:any){
     assert.equal(restoredOwnerDraft.status,200)
     assert.ok(restoredOwnerDraft.body.stores.some((row:any)=>row.id===ownerStoreId))
     process.stdout.write("PASS B22 Owner role policy: narrowed products.edit denies real HTTP POST and native PG16 product/intent writes, restored default lists approved Store\n")
+    // The role-policy change is server-side. Reopen the current real personal
+    // document so its authorized Organization/Store read refreshes the hidden
+    // draft panel; a server GET alone cannot update the already rendered DOM.
+    await browser.send("Page.reload",{ignoreCache:true})
     await browser.wait("!document.getElementById('product-draft-panel').hidden")
     const draftTitle="B22 browser product draft "+rand
     await browser.input("#product-draft-form input[name=title]",draftTitle)
@@ -5718,6 +5866,9 @@ export default async function({container}:any){
       const staffGrantId="da_staff_mfa_race_"+rand
       await q("insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason) values($1,$2,'security.mfa.manage','platform',$2,'B22 disposable independent MFA policy race actor')",
         [staffGrantId,A.person])
+      // Only classify observed Chrome requests in this disposable A recovery
+      // path. The Browser never writes Cookie, token or digest into the log.
+      browser.captureSessionProof=true
       const loginStaffA=async(recoveryCode:string)=>{
         // These are repeated independent strong logins in a single real CI
         // suite. Respect the SERVER's existing per-minute 10/60 abuse caps:
@@ -5822,8 +5973,30 @@ export default async function({container}:any){
               (s.mfa_person_version=coalesce((select version from da_person_mfa_preference where person_id=s.person_id),0)) as person_revision
             from da_browser_session s join da_person_security e on e.person_id=s.person_id
             where s.person_id=$1 order by s.created_at desc limit 2`,[A.person])
+          // A 403 for a revoked prior cookie is correct; a 403 for the
+          // post-recovery active current session would be a real auth defect.
+          // Chrome CDP request IDs are joined to transient hashes in memory.
+          // Do not print request IDs, hashes, cookies, tokens or Person IDs.
+          const scoped=browser.http.filter((row:any)=>
+            row.method==="GET"&&row.path==="/personal/organizations").slice(-8)
+          const organizationRequests=await Promise.all(scoped.map(async(row:any)=>{
+            const proof=browser.requestSessionProof(row.requestId)
+            const [state]=proof.digest?await q(`select s.status,
+                (s.epoch=e.epoch) as epoch_matches,
+                (s.mfa_platform_version=(select version from da_mfa_policy where id='current')) as platform_matches,
+                (s.mfa_person_version=coalesce((select version from da_person_mfa_preference where person_id=s.person_id),0)) as person_matches
+              from da_browser_session s join da_person_security e on e.person_id=s.person_id
+              where s.id=$1`,[proof.digest]):[]
+            const sessionClass=!state?"unclassified":
+              state.status==="revoked"?"revoked":
+              state.status==="active"&&state.epoch_matches&&
+                state.platform_matches&&state.person_matches?"active-current":
+              "other"
+            return {status:row.status,observer:proof.observer,
+              sessionClass}
+          }))
           throw new Error("B22 Staff A post-recovery UI did not open: "+
-            JSON.stringify({visibility,http:safe,ui,sessionState}))
+            JSON.stringify({visibility,http:safe,ui,sessionState,organizationRequests}))
         }
         assert.equal(await browser.eval("(async()=> (await fetch('/personal/session')).status)()"),200)
       }
@@ -5880,6 +6053,82 @@ export default async function({container}:any){
       // platform staff API. This permits the pre-existing post-native fault
       // regression to run with a fresh B session and its original invariants.
       await loginStaffA(staffCodes[1])
+      // The historical 403 had two possible sessions but no request-to-cookie
+      // binding. Control both sides using ONLY native, genuinely issued Staff A
+      // recovery sessions in the existing disposable HTTPS/PG16 fixture.
+      const revokedStaffCookie=await browser.token()
+      assert.ok(typeof revokedStaffCookie==="string"&&
+        /^[A-Za-z0-9_-]{43}$/.test(revokedStaffCookie),
+        "Staff A must have a genuine full MFA session before revocation")
+      const revokedStaffId=createHash("sha256").update(revokedStaffCookie).digest("hex")
+      const lockStaff=await browser.eval(`(async()=>{
+        const response=await fetch('/personal/session')
+        if(response.status!==200)return response.status
+        const session=await response.json()
+        const locked=await fetch('/personal/session?action=lock',{
+          method:'DELETE',headers:{'x-csrf-token':session.csrf_token}
+        })
+        return locked.status
+      })()`)
+      assert.equal(lockStaff,200,"Real CSRF-protected Staff A session lock must succeed")
+      const revokedStaff=await q(
+        "select status from da_browser_session where id=$1 and person_id=$2",
+        [revokedStaffId,A.person])
+      assert.equal(revokedStaff.length,1)
+      assert.equal(revokedStaff[0].status,"revoked")
+      const oldOrganizationStatus=async(observe:boolean)=>new Promise<number>((resolve,reject)=>{
+        const req=tlsRequest(host+"/personal/organizations",{
+          method:"GET",ca:readFileSync(crt),headers:{
+            cookie:"da_session="+revokedStaffCookie,
+            ...(observe?{"x-da-observe":"1"}:{})
+          }
+        },res=>{res.resume();res.on("end",()=>resolve(res.statusCode??0))})
+        req.on("error",reject)
+        req.setTimeout(10000,()=>req.destroy(Error("B22 revoked Staff A probe timed out")))
+        req.end()
+      })
+      assert.equal(await oldOrganizationStatus(false),403,
+        "Real revoked Staff A cookie must be denied on ordinary Organization GET")
+      assert.equal(await oldOrganizationStatus(true),403,
+        "Real revoked Staff A cookie must be denied on observer Organization GET")
+      // Unused recovery code, same real Chrome profile, no fake auth/session
+      // writes, no rate-limit bypass. loginStaffA retains the normal caps.
+      await loginStaffA(staffCodes[6])
+      const currentStaffCookie=await browser.token()
+      assert.ok(typeof currentStaffCookie==="string"&&
+        /^[A-Za-z0-9_-]{43}$/.test(currentStaffCookie)&&
+        currentStaffCookie!==revokedStaffCookie,
+        "Post-recovery cookie must be a distinct real native MFA session")
+      const currentStaffId=createHash("sha256").update(currentStaffCookie).digest("hex")
+      const [currentStaff]=await q(`select s.status,
+          s.person_id=$2 as same_person,
+          s.epoch=e.epoch as current_epoch,
+          s.mfa_platform_version=(select version from da_mfa_policy where id='current') as current_platform,
+          s.mfa_person_version=coalesce((select version from da_person_mfa_preference where person_id=s.person_id),0) as current_person
+        from da_browser_session s join da_person_security e on e.person_id=s.person_id
+        where s.id=$1`,[currentStaffId,A.person])
+      assert.ok(currentStaff?.status==="active"&&currentStaff.same_person&&
+        currentStaff.current_epoch&&currentStaff.current_platform&&currentStaff.current_person,
+        "Post-recovery Staff A cookie must be active and current in actual PG16")
+      const organizationProbeStart=browser.http.length
+      const currentNormal=await browser.eval(
+        "(async()=> (await fetch('/personal/organizations',{cache:'no-store'})).status)()")
+      const currentObserver=await browser.eval(
+        "(async()=> (await fetch('/personal/organizations',{cache:'no-store',headers:{'x-da-observe':'1'}})).status)()")
+      assert.equal(currentNormal,200,"Current Staff A ordinary Organization GET must succeed")
+      assert.equal(currentObserver,200,"Current Staff A observer Organization GET must succeed")
+      await until(async()=>{
+        const observed=browser.http.slice(organizationProbeStart).filter((row:any)=>
+          row.method==="GET"&&row.path==="/personal/organizations"&&row.status===200)
+        return [false,true].every(observer=>observed.some((row:any)=>{
+          const proof=browser.requestSessionProof(row.requestId)
+          return proof.digest===currentStaffId&&proof.observer===observer
+        }))
+      },10000,"B22 real CDP exact-request fresh Staff A cookie/observer correlation")
+      assert.equal((await q("select status from da_browser_session where id=$1",
+        [revokedStaffId]))[0]?.status,"revoked",
+        "Old Staff A session must remain revoked after genuine new recovery")
+      process.stdout.write("PASS B22 Chrome: MFA session differential, real revoked Staff A cookie ordinary/observer Organization GET403; distinct active-current post-recovery Chrome cookie ordinary/observer GET200, CDP requestId correlated and PG16 verified; no secrets logged\n")
       const [requiredPolicy]=await q("select version,platform_mode from da_mfa_policy where id='current'")
       assert.equal(requiredPolicy.platform_mode,"required")
       assert.equal((await staffSetPlatform("optional",Number(requiredPolicy.version))).status,200)

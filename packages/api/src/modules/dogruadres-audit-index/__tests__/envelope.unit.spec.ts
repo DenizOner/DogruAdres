@@ -77,6 +77,32 @@ describe("Audit Index version 1 validation and redaction", () => {
       ...legitimate, actor: { ...legitimate.actor, role_context: "platform_staff" },
     })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
+  it.each(["organization.store_followed","organization.store_unfollowed"])(
+    "projects a canonical Owner %s without private source data", action => {
+      const e = projectFoundationAuditEvent({
+        ...source(), action, resource:"buyer-store-follow", target_id:"sel_followed",
+        previous_values:{secret:"private"},new_values:{price:"private"},
+      })
+      expect(e.action).toBe(action)
+      expect(e.resource).toBe("buyer-store-follow")
+      expect(e.target_id).toBe("sel_followed")
+      expect(JSON.stringify(e)).not.toContain("private")
+      expect(validateAuditIndexEnvelope(e)).toEqual(e)
+      expect(() => projectFoundationAuditEvent({
+        ...source(), action, resource:"membership",target_id:"sel_followed"
+      })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+      expect(() => projectFoundationAuditEvent({
+        ...source(), action, resource:"buyer-store-follow",target_id:"sel_followed",
+        role_context:"member"
+      })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+      expect(() => projectFoundationAuditEvent({
+        ...source(), action, resource:"buyer-store-follow",target_id:"sel_followed",
+        role_context:"platform_staff"
+      })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+      expect(() => projectFoundationAuditEvent({
+        ...source(), action, resource:"buyer-store-follow",target_id:"not_a_seller"
+      })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+    })
   it.each(["root", "platform-staff", "platform_staff ", "superuser"])("still rejects unsupported role %s", role => {
     expect(() => projectFoundationAuditEvent({ ...source(), role_context: role })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })

@@ -12,7 +12,7 @@ import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, has
 import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
-import { IdentitySessions, securitySql, isCurrentProtectedOwner, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced } from "./identity-session"
+import { IdentitySessions, securitySql, isCurrentProtectedOwner, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced, type SecuritySql } from "./identity-session"
 import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
 import { MfaEnrollmentTickets } from "./mfa-enrollment-ticket"
 import { resolveMfaPolicy, type MfaPlatformMode } from "./mfa-policy"
@@ -2236,6 +2236,177 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       if(!confirmed.includes(row.seller_id))throw new IdentityAccessDenied()
     }
     return {blocked:rows.length!==0,ownership_verified:ownershipVerified}
+  }
+
+
+  /** First B22 Store-follow slice. A follow is a Buyer Organization relation,
+   * never a Person wishlist, native Seller grant or buyer price permission.
+   * Member delegation awaits the separately approved action-grant UX.
+   */
+  private async currentStoreFollowOwner_(
+    db:SecuritySql,token:string,organizationId:string
+  ){
+    const sessions=new IdentitySessions(db)
+    const actor=await sessions.current(token,false,false)
+    if(!actor)return null
+    const member=await sessions.organizations(token,organizationId,false)
+    if(!member||member.person_id!==actor.person_id||
+       member.organizations.length!==1||
+       member.organizations[0].role!=="owner")return null
+    const owner=await isCurrentProtectedOwner(db,actor.person_id,organizationId)
+    if(!organizationActionAllowed("owner","store.follow",owner,false))return null
+    return actor
+  }
+
+  private async storeFollowRow_(db:SecuritySql,organizationId:string,sellerId:string){
+    const rows=await db.execute(
+      "select f.version,f.revoked_at,exists(select 1 from da_audit_event e "+
+      "where e.id=f.source_audit_event_id and e.deleted_at is null "+
+      "and e.organization_id=f.buyer_organization_id "+
+      "and e.module='dogruadres-access' and e.resource='buyer-store-follow' "+
+      "and e.target_id=f.seller_id and e.actor_person_id is not null "+
+      "and e.action in ('organization.store_followed','organization.store_unfollowed') "+
+      "and exists(select 1 from da_audit_outbox o "+
+      "where o.source_audit_event_id=e.id and o.source_module='dogruadres-access' "+
+      "and o.deleted_at is null)) as proof "+
+      "from da_buyer_store_follow f "+
+      "where f.buyer_organization_id=? and f.seller_id=?",
+      [organizationId,sellerId])
+    if(rows.length>1||rows.some(x=>x.proof!==true||
+      !Number.isInteger(Number(x.version))||Number(x.version)<1))
+      throw new IdentityAccessDenied()
+    return rows.length?rows[0]:null
+  }
+
+  @InjectTransactionManager()
+  async personalBuyerStoreFollowState(
+    token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    if(!await this.currentStoreFollowOwner_(db,token,organizationId))return null
+    const row=await this.storeFollowRow_(db,organizationId,sellerId)
+    return {organization_id:organizationId,seller_id:sellerId,
+      following:!!row&&row.revoked_at===null,
+      version:row?Number(row.version):0}
+  }
+
+  /** Only the current protected Owner may enumerate their own active follows.
+   * Catalog visibility is deliberately irrelevant: suspended/blocked Stores
+   * must remain removable. Return IDs only, not Store names or other Buyers.
+   * The cursor is a validated Seller ID; the composite key bounds each page.
+   */
+  @InjectTransactionManager()
+  async personalBuyerStoreFollows(
+    token:string,organizationId:string,after:string|undefined,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       (after!==undefined&&!/^sel_[A-Za-z0-9_-]+$/.test(after)))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    if(!await this.currentStoreFollowOwner_(db,token,organizationId))return null
+    const rows=await db.execute(
+      "select seller_id from da_buyer_store_follow "+
+      "where buyer_organization_id=? and revoked_at is null "+
+      (after===undefined?"":"and seller_id>? ")+
+      "order by seller_id limit 21",
+      after===undefined?[organizationId]:[organizationId,after])
+    if(!Array.isArray(rows)||rows.length>21||
+       rows.some(r=>typeof r.seller_id!=="string"||
+         !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id)))
+      throw new IdentityAccessDenied()
+    const stores:{seller_id:string;version:number}[]=[]
+    for(const item of rows.slice(0,20)){
+      const row=await this.storeFollowRow_(db,organizationId,item.seller_id)
+      if(!row||row.revoked_at!==null||Number(row.version)>=2147483647)
+        throw new IdentityAccessDenied()
+      stores.push({seller_id:item.seller_id,version:Number(row.version)})
+    }
+    return {organization_id:organizationId,stores,
+      next_cursor:rows.length>20?stores[stores.length-1].seller_id:null}
+  }
+
+  @InjectTransactionManager()
+  async personalChangeBuyerStoreFollow(
+    token:string,input:{action:"follow"|"unfollow";organization_id:string;
+      seller_id:string;expected_version:number},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !["follow","unfollow"].includes(input.action)||
+       !Number.isInteger(input.expected_version)||
+       input.expected_version<0||input.expected_version>=2147483647)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    // All Owner/Store policy writers lock Person/session/Owner first, then
+    // Store×Buyer. Reversing this order deadlocks follow against Store block.
+    const actor=await this.currentStoreFollowOwner_(db,token,input.organization_id)
+    if(!actor)return null
+    // Block and follow operations serialize on the same Store×Buyer pair.
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-buyer-block'),hashtext(?))",
+      [input.seller_id+":"+input.organization_id])
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-buyer-store-follow'),hashtext(?))",
+      [input.organization_id+":"+input.seller_id])
+    if(input.action==="follow"){
+      const origins=await db.execute(
+        "select organization_id from da_organization_seller_ownership "+
+        "where seller_id=? and revoked_at is null",[input.seller_id])
+      if(origins.length!==1||
+         typeof origins[0].organization_id!=="string"||
+         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(origins[0].organization_id))
+        return null
+      const approved=await platformApprovedSellerIds(db,origins[0].organization_id)
+      if(!approved.includes(input.seller_id))return null
+      const blocked=await db.execute(
+        "select id from da_store_buyer_organization_block "+
+        "where seller_id=? and buyer_organization_id=? and revoked_at is null limit 2",
+        [input.seller_id,input.organization_id])
+      if(blocked.length)return null
+    }
+    const row=await this.storeFollowRow_(db,input.organization_id,input.seller_id)
+    const previousVersion=row?Number(row.version):0
+    const wasFollowing=!!row&&row.revoked_at===null
+    if(previousVersion!==input.expected_version||
+       wasFollowing===(input.action==="follow"))
+      return {conflict:true as const}
+    const version=previousVersion+1
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:actor.person_id,actor_type:actor.actor_type,
+      actor_id:actor.actor_id,role_context:"owner",
+      organization_id:input.organization_id,
+      action:input.action==="follow"?"organization.store_followed":
+        "organization.store_unfollowed",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"buyer-store-follow",
+      target_id:input.seller_id,
+      previous_values:{following:wasFollowing,version:previousVersion},
+      new_values:{following:input.action==="follow",version},
+      occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    if(!row){
+      const inserted=await db.execute(
+        "insert into da_buyer_store_follow "+
+        "(buyer_organization_id,seller_id,version,source_audit_event_id) "+
+        "values (?,?,1,?) returning version",
+        [input.organization_id,input.seller_id,audit.id])
+      if(inserted.length!==1)throw new IdentityAccessDenied()
+    }else{
+      const updated=await db.execute(
+        "update da_buyer_store_follow set version=?,source_audit_event_id=?, "+
+        "updated_at=clock_timestamp(), "+
+        "followed_at=case when ?='follow' then clock_timestamp() else followed_at end, "+
+        "revoked_at=case when ?='unfollow' then clock_timestamp() else null end "+
+        "where buyer_organization_id=? and seller_id=? and version=? returning version",
+        [version,audit.id,input.action,input.action,input.organization_id,
+          input.seller_id,previousVersion])
+      if(updated.length!==1)throw new IdentityAccessDenied()
+    }
+    return {conflict:false as const,organization_id:input.organization_id,
+      seller_id:input.seller_id,following:input.action==="follow",version}
   }
 
   @InjectTransactionManager()

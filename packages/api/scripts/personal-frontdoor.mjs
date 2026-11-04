@@ -16,7 +16,7 @@ export function allowedPublicRequest(method,path){
     '/personal/invitations':['GET','POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
     '/personal/contexts':['GET'],
     '/personal/organization-stores':['GET'],
-    '/personal/catalog':['GET'],
+    '/personal/catalog':['GET'], '/personal/store-follows':['GET','POST'],
     '/personal/store-applications':['GET','POST'],
     '/personal/platform/stores':['GET','POST'],
     '/personal/store-buyer-blocks':['POST'],

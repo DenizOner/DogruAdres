@@ -1,4 +1,5 @@
-import {B06Chrome} from "../../../integration-tests/postgres/b06-ui-browser"
+import {B06Chrome,classifyRequestSessionHeaders} from "../../../integration-tests/postgres/b06-ui-browser"
+import {createHash} from "node:crypto"
 import taskMfaBootstrap from "../task-mfa-bootstrap"
 import {assertSessionProvenance} from "../native-fixture-runtime"
 import {assertDockerResourceMatchesBinding, type ApprovedRuntimeResourceBinding} from "../native-runtime-adapters"
@@ -60,6 +61,51 @@ describe("independently approved Docker mount boundary", () => {
     } } }
     expect(() => assertDockerResourceMatchesBinding(replaced, expected)).toThrow(/REFUSED/)
     expect(() => assertDockerResourceMatchesBinding(exposed, expected)).toThrow(/REFUSED/)
+  })
+})
+
+describe("B22 MFA request diagnostic header parsing",()=>{
+  // Purely synthetic CDP header data: no live session, cookie or Personal data.
+  const token=Buffer.alloc(32,23).toString("base64url")
+  const expectedDigest=createHash("sha256").update(token).digest("hex")
+  it.each(["CoOkIe","COOKIE","Cookie","cookie"])(
+    "recognizes %s and mixed-case observer headers without retaining cookie values",key=>{
+      const result=classifyRequestSessionHeaders({[key]:`other=x; da_session=${token}; flag=1`,
+        "X-Da-Observe":"1"})
+      expect(result).toEqual({digest:expectedDigest,observer:true})
+      expect(JSON.stringify(result)).not.toContain(token)
+    })
+  it("marks normal GET without observer and missing cookie as unknown session",()=>{
+    expect(classifyRequestSessionHeaders({Cookie:`da_session=${token}`,Accept:"*/*"}))
+      .toEqual({digest:expectedDigest,observer:false})
+    expect(classifyRequestSessionHeaders({"X-Da-Observe":"1"}))
+      .toEqual({digest:null,observer:true})
+    expect(classifyRequestSessionHeaders(undefined)).toEqual({digest:null,observer:null})
+  })
+  it("never turns ambiguous duplicate headers, malformed tokens or unknown observer into a known session",()=>{
+    expect(classifyRequestSessionHeaders({Cookie:`da_session=${token}`,cOOkie:"da_session=bogus",
+      "x-da-observe":"1","X-Da-Observe":"0"}))
+      .toEqual({digest:null,observer:null})
+    expect(classifyRequestSessionHeaders({COOKIE:"da_session=invalid","X-Da-Observe":"0"}))
+      .toEqual({digest:null,observer:null})
+    expect(classifyRequestSessionHeaders({Cookie:`da_session=${token}; da_session=${token}`}))
+      .toEqual({digest:null,observer:false})
+  })
+  it("correlates only the matching request ID, respects opt-in and bounds eviction without logging secrets",async()=>{
+    const browser=new B06Chrome("https://127.0.0.1:19444","A")
+    try{
+      browser.recordRequestSessionProof("not-opted-in",{Cookie:`da_session=${token}`})
+      expect(browser.requestSessionProof("not-opted-in")).toEqual({digest:null,observer:null})
+      browser.captureSessionProof=true
+      browser.recordRequestSessionProof("target",{CoOkIe:`da_session=${token}`,
+        "X-Da-Observe":"1"})
+      expect(browser.requestSessionProof("target")).toEqual({digest:expectedDigest,observer:true})
+      expect(browser.requestSessionProof("unrelated")).toEqual({digest:null,observer:null})
+      for(let i=0;i<161;i++)browser.recordRequestSessionProof("later-"+i,{Accept:"*/*"})
+      expect(browser.requestSessionProof("target")).toEqual({digest:null,observer:null})
+      expect(browser.requestSessionProof("later-160")).toEqual({digest:null,observer:false})
+      expect(JSON.stringify({http:browser.http,errors:browser.runtimeErrors})).not.toContain(token)
+    }finally{await browser.close()}
   })
 })
 

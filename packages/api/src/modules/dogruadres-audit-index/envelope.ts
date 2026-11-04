@@ -15,6 +15,8 @@ const resources = {
   "organization.invitation_created": "invitation",
   "organization.invitation_revoked": "invitation",
   "organization.invitation_accepted": "invitation",
+  "organization.store_followed": "buyer-store-follow",
+  "organization.store_unfollowed": "buyer-store-follow",
 } as const
 const schema = z.object({
   version: z.literal(1),
@@ -28,11 +30,17 @@ const schema = z.object({
     role_context: z.enum(["platform_administrator", "platform_staff", "owner", "admin", "member"]).nullable(),
   }).strict(),
   action: z.enum(Object.keys(resources) as [keyof typeof resources, ...(keyof typeof resources)[]]),
-  resource: z.enum(["organization", "membership", "invitation"]),
+  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow"]),
   target_id: reference,
   occurred_at: timestamp,
 }).strict()
   .refine(value => resources[value.action] === value.resource)
+  // A Buyer Organization follow is emitted only by an active protected Owner.
+  // Keep the canonical Seller target and Organization scope distinct.
+  .refine(value => value.resource !== "buyer-store-follow" ||
+    (value.actor.role_context === "owner" &&
+     /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
   // Only the two provisioning actions are emitted by the canonical Staff
   // producer. A valid role alone must not make a different action authentic.
   .refine(value => value.actor.role_context !== "platform_staff" ||

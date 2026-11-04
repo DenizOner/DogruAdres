@@ -99,6 +99,61 @@ export default async function({container}:any){
       assert.equal((await q("select count(*)::int n from da_audit_index_entry where source_event_id=$1",[staffEvents[0].id]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_audit_event where id=any($1::text[])",[staffEvents.map(e=>e.id)]))[0].n,2)
       process.stdout.write("PASS B22 audit worker: real Medusa Access/Index job delivered canonical Staff events, ACK and single Index entry on lost-ACK replay; crash recovery NOT TESTED\n")
+      // Real Owner-created follow/unfollow events must reach Index as well.
+      // Exercise the installed Access/Index relay on the same disposable DB.
+      const followEvents=await q(
+        "select e.id,e.organization_id,e.target_id,e.action,e.resource,"+
+        " o.id as outbox_id,o.created_at,o.status"+
+        " from da_audit_event e join da_audit_outbox o on o.source_audit_event_id=e.id"+
+        " where e.module='dogruadres-access' and e.resource='buyer-store-follow'"+
+        " and e.role_context='owner' and e.action in"+
+        " ('organization.store_followed','organization.store_unfollowed')"+
+        " and o.status='pending' order by e.occurred_at,e.id")
+      const followed=followEvents.find(e=>e.action==='organization.store_followed')
+      const unfollowed=followEvents.find(e=>
+        e.action==='organization.store_unfollowed'&&
+        e.organization_id===followed?.organization_id&&
+        e.target_id===followed?.target_id)
+      assert.ok(followed&&unfollowed,"Real B22 Buyer×Store follow/unfollow source pair required")
+      const pair=[followed,unfollowed]
+      const outboxOriginal=await q("select id,created_at from da_audit_outbox where id=any($1::text[])",
+        [pair.map(x=>x.outbox_id)])
+      assert.equal(outboxOriginal.length,2)
+      try{
+        const due=await q(
+          "update da_audit_outbox set created_at=(select min(created_at) from da_audit_outbox)-interval '2 days'"+
+          " + case when id=$1 then interval '0 seconds' else interval '1 second' end"+
+          " where id in ($1,$2) and status='pending' returning id",
+          pair.map(x=>x.outbox_id))
+        assert.equal(due.length,2)
+        const batch=await runAuditRelayBatch(container,2)
+        assert.equal(batch.delivered,2)
+        for(const event of pair){
+          const rows=await q(
+            "select o.status,i.source_event_id,i.organization_id,i.target_id,"+
+            " i.action,i.resource,i.envelope from da_audit_outbox o"+
+            " join da_audit_index_entry i on i.source_event_id=o.source_audit_event_id"+
+            " where o.id=$1",[event.outbox_id])
+          assert.equal(rows.length,1)
+          assert.equal(rows[0].status,'delivered')
+          assert.equal(rows[0].source_event_id,event.id)
+          assert.equal(rows[0].organization_id,event.organization_id)
+          assert.equal(rows[0].target_id,event.target_id)
+          assert.equal(rows[0].action,event.action)
+          assert.equal(rows[0].resource,'buyer-store-follow')
+          const envelope=typeof rows[0].envelope==='string'?
+            JSON.parse(rows[0].envelope):rows[0].envelope
+          assert.equal(envelope.actor.role_context,'owner')
+          assert.deepEqual(Object.keys(envelope).sort(),
+            ['action','actor','occurred_at','organization_id','resource',
+             'source_event_id','source_module','target_id','version'])
+        }
+        process.stdout.write("PASS B22 real audit relay: native Owner Store follow/unfollow delivered by Medusa worker to Buyer-only Audit Index, two matching envelopes and durable ACKs\n")
+      }finally{
+        for(const original of outboxOriginal)
+          await q("update da_audit_outbox set created_at=$2 where id=$1",
+            [original.id,original.created_at])
+      }
       await realAuditRelayRecovery(container,q)
     }finally{
       for(const row of originals)
