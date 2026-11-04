@@ -1,4 +1,5 @@
 import net from "node:net"
+import { PassThrough } from "node:stream"
 import dns from "node:dns"
 import { isPrivateIp, resolveAndValidateHost, getResolvedSmtpConfig, SmtpConnection } from "../smtp-client"
 
@@ -77,6 +78,30 @@ describe("smtp-client unit tests", () => {
       await expect(connection.connect()).rejects.toThrow(
         "Unencrypted SMTP is prohibited outside isolated loopback tests"
       )
+    })
+  })
+
+  describe("SMTP TCP fragment boundaries", () => {
+    it("does not accept a partial final reply line or drop its STARTTLS capability", async () => {
+      const connection = new SmtpConnection({
+        enabled:true,host:"127.0.0.1",port:25,security:"none",
+        fromEmail:"sender@example.invalid",socketTimeoutMs:1500,
+      })
+      const socket=new PassThrough()
+      ;(connection as any).socket=socket
+      try {
+        let resolved=false
+        const replyPromise:(Promise<{code:number;message:string}>)=
+          (connection as any).readReply()
+        void replyPromise.then(()=>{resolved=true})
+        socket.write(Buffer.from("250-mail.synthetic\\r\\n250 "))
+        await Promise.resolve()
+        expect(resolved).toBe(false)
+        socket.write(Buffer.from("STARTTLS\\r\\n"))
+        const reply=await replyPromise
+        expect(reply.code).toBe(250)
+        expect(reply.message).toBe("250-mail.synthetic\\r\\n250 STARTTLS\\r\\n")
+      } finally { connection.close() }
     })
   })
 
