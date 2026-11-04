@@ -27,12 +27,16 @@ export function readOnlyGitTimeoutMs(args) {
   return args[0] === "ls-files" && args.includes("--ignored") ? 60_000 : 15_000;
 }
 
-function git(root, ...args) {
-  return execFileSync("git", ["--no-optional-locks", "-C", root, ...args], {
+// Captured Git diagnostics may include private checkout paths and filenames.
+// Never allow execFileSync to echo stderr to the caller's public log on failure.
+export function readOnlyGit(root, args, run = execFileSync) {
+  return run("git", ["--no-optional-locks", "-C", root, ...args], {
     encoding: "utf8", timeout: readOnlyGitTimeoutMs(args), maxBuffer: 8 * 1024 * 1024, windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" }
   }).trim();
 }
+const git = (root, ...args) => readOnlyGit(root, args);
 const items = (v) => v ? v.split("\0").filter(Boolean).length : 0;
 const lines = (v) => v ? v.split("\n").filter(Boolean).length : 0;
 
@@ -42,6 +46,9 @@ export function collectLocalEvidence(root, read = git) {
   const target = resolve(root), physical = realpathSync(target);
   const topLevel = read(target, "rev-parse", "--show-toplevel");
   const gitCommon = read(target, "rev-parse", "--git-common-dir");
+  // Normal checkouts report relative ".git"; linked worktrees may report
+  // absolute paths. Hash the same physical common Git directory in both cases.
+  const commonPhysical = realpathSync(resolve(target, gitCommon));
   const sha = read(target, "rev-parse", "HEAD");
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error("Invalid local HEAD");
   const branch = read(target, "branch", "--show-current") || "DETACHED";
@@ -62,7 +69,7 @@ export function collectLocalEvidence(root, read = git) {
     // Private local directories are represented by nonreversible digests;
     // the CLI intentionally does not emit paths, remote URLs or file names.
     rootDigest: createHash("sha256").update(physical).digest("hex").slice(0, 20),
-    commonDirDigest: createHash("sha256").update(gitCommon).digest("hex").slice(0, 20),
+    commonDirDigest: createHash("sha256").update(commonPhysical).digest("hex").slice(0, 20),
     trackedChanges: Math.max(0, items(status) - items(untracked)),
     untracked: items(untracked), ignored: items(ignored),
     stashes: lines(stash), localOnlyCommits: Number(localOnly),

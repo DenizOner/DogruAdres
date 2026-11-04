@@ -6740,6 +6740,116 @@ export default async function({container}:any){
       draftMembershipsBefore,"Legacy draft edit cannot create Owner")
     process.stdout.write("PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner\n")
 
+    // Codex #269 P2: hold a REAL committed POST response while the browser
+    // remains in saving state. A second draft selection/new action must not
+    // consume the old form with the newer server version.
+    await signupChrome.click("#organization-draft-form input[name=legal_name]")
+    await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').select()")
+    await signupChrome.send("Input.insertText",{text:"B22 Gecikmeli Kaydedilen Taslak"})
+    await signupChrome.eval(`(()=>{
+      const original=window.fetch.bind(window);
+      const hold={original,used:false,release:null};
+      window.__daDraftHold=hold;
+      window.fetch=(...args)=>{
+        const path=String(args[0]);
+        if(!hold.used && path.includes('/personal/organization-applications') &&
+          args[1]?.method==='POST'){
+          hold.used=true;
+          return original(...args).then(response=>new Promise(resolve=>{
+            hold.release=()=>resolve(response);
+          }));
+        }
+        return original(...args);
+      };
+    })()`)
+    try{
+      await signupChrome.click("#organization-draft-form button[type=submit]")
+      await signupChrome.wait("!!window.__daDraftHold?.release")
+      const committed=await q("select version,legal_name from da_organization_application where id=$1",[legacyDraftId])
+      assert.deepEqual(committed,[{version:3,legal_name:"B22 Gecikmeli Kaydedilen Taslak"}])
+      const protectedForm=await signupChrome.eval(`(()=>{
+        const f=document.getElementById('organization-draft-form');
+        const current={id:f.elements.legal_name.value,
+          newDisabled:document.getElementById('organization-draft-new').disabled,
+          refreshDisabled:document.getElementById('organization-draft-refresh').disabled,
+          editDisabled:Array.from(document.querySelectorAll('#organization-draft-list button'))
+            .every(x=>x.disabled),
+          inputsDisabled:Array.from(f.querySelectorAll('input,select,button'))
+            .every(x=>x.disabled)};
+        document.getElementById('organization-draft-new').click();
+        document.querySelector('#organization-draft-list button')?.click();
+        return {...current,after:f.elements.legal_name.value};
+      })()`)
+      assert.equal(protectedForm.id,"B22 Gecikmeli Kaydedilen Taslak")
+      assert.equal(protectedForm.after,protectedForm.id,"Blocked selection may not restore stale form")
+      for(const key of ["newDisabled","refreshDisabled","editDisabled","inputsDisabled"])
+        assert.equal(protectedForm[key],true,"Pending draft save must lock "+key)
+      await signupChrome.eval("window.__daDraftHold.release()")
+      await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
+      assert.deepEqual(await q("select version,legal_name from da_organization_application where id=$1",[legacyDraftId]),
+        committed,"Delayed HTTP response cannot undo a committed draft")
+      assert.equal(await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').value"),
+        committed[0].legal_name)
+      process.stdout.write("PASS B22 Chrome: delayed real draft POST locks selection/form; no stale-value rewrite or silent version overwrite\n")
+    }finally{
+      await signupChrome.eval(`(()=>{
+        const hold=window.__daDraftHold;
+        if(hold?.release)hold.release();
+        if(hold?.original)window.fetch=hold.original;
+        delete window.__daDraftHold;
+      })()`)
+    }
+
+    // Codex #269 P2: 101 older task-owned drafts must remain reachable in
+    // actual Chrome. Seed private disposable PG16 rows only; no production
+    // data, migration or real user records. Delete exactly these fixture IDs.
+    const overflowIds=Array.from({length:101},()=> "daorgapp_"+randomBytes(16).toString("hex"))
+    try{
+      await q(`insert into da_organization_application
+        (id,applicant_person_id,business_kind,legal_name,landline_phone,status,version,updated_at)
+        select x.id,$2,'individual_business','B22 Eski Sentetik Taslak',$3,'draft',1,
+          clock_timestamp()-interval '30 days'-(x.ordinality*interval '1 second')
+        from unnest($1::text[]) with ordinality as x(id,ordinality)`,
+        [overflowIds,signupPerson,draftLandline])
+      const pages=await signupChrome.eval(`(async()=>{
+        const first=await (await fetch('/personal/organization-applications')).json();
+        const second=await (await fetch('/personal/organization-applications?cursor='+
+          encodeURIComponent(first.next_cursor))).json();
+        return {firstCount:first.drafts.length,secondCount:second.drafts.length,
+          unique:new Set([...first.drafts,...second.drafts].map(x=>x.id)).size,
+          firstCursor:!!first.next_cursor,lastCursor:second.next_cursor,
+          secondIds:second.drafts.map(x=>x.id)};
+      })()`)
+      assert.deepEqual({firstCount:pages.firstCount,secondCount:pages.secondCount,
+        unique:pages.unique,firstCursor:pages.firstCursor,lastCursor:pages.lastCursor},
+        {firstCount:100,secondCount:3,unique:103,firstCursor:true,lastCursor:null})
+      assert.ok(pages.secondIds.some((id:string)=>overflowIds.includes(id)))
+      const foreignPage=await foreignDraftChrome.eval(`(async()=>{
+        const first=await (await fetch('/personal/organization-applications')).json();
+        return {count:first.drafts.length,more:first.next_cursor};
+      })()`)
+      assert.deepEqual(foreignPage,{count:0,more:null},
+        "Another genuine Person may not read the original Person's pagination")
+      await signupChrome.click("#organization-draft-refresh")
+      await signupChrome.wait("document.querySelectorAll('#organization-draft-list button').length===100 && !document.querySelector('#organization-draft-more').hidden")
+      await signupChrome.click("#organization-draft-more")
+      await signupChrome.wait("document.querySelectorAll('#organization-draft-list button').length===103 && document.querySelector('#organization-draft-more').hidden")
+      await signupChrome.click("#organization-draft-list p:last-child button")
+      assert.equal(await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').value"),
+        "B22 Eski Sentetik Taslak")
+      assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+        draftOrganizationsBefore)
+      assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
+        draftMembershipsBefore)
+      process.stdout.write("PASS B22 Chrome: 103 private drafts across keyset pages; oldest opened via visible button; foreign Person empty; no Organization/Owner\n")
+    }finally{
+      await q("delete from da_organization_application where applicant_person_id=$1 and id=any($2::text[])",
+        [signupPerson,overflowIds])
+      await signupChrome.click("#organization-draft-new")
+      await signupChrome.click("#organization-draft-refresh")
+    }
+
+
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
     assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
       "Primary Customer cannot offer an unlink button")

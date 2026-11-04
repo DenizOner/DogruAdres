@@ -30,7 +30,7 @@ import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedS
 import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
-import {listOrganizationDrafts,saveOrganizationDraft,type DraftPayload} from "./organization-application"
+import {listOrganizationDrafts,saveOrganizationDraft,type DraftPayload,type OrganizationDraftCursor} from "./organization-application"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -416,8 +416,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   }
 
   @InjectTransactionManager()
-  async personalOrganizationApplicationDrafts(token:string,@MedusaContext() context:Context={}) {
-    return listOrganizationDrafts(securitySql(context.transactionManager),token)
+  async personalOrganizationApplicationDrafts(token:string,cursor?:OrganizationDraftCursor,@MedusaContext() context:Context={}) {
+    return listOrganizationDrafts(securitySql(context.transactionManager),token,cursor)
   }
 
   @InjectTransactionManager()
@@ -580,9 +580,30 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       version: changed[0].mobile_version as number }
   }
 
+  // Personal and observer reads must obey the same centrally adjustable
+  // organization.read policy as requireOrganizationAccess. Never let a
+  // narrowed Owner policy leak names or memberships through the launcher.
+  private async readablePersonalOrganizations_(
+    token:string,organizationId:string|undefined,touch:boolean,context:Context
+  ){
+    const db=securitySql(context.transactionManager)
+    const result=await new IdentitySessions(db).organizations(token,organizationId,touch)
+    if(!result)return null
+    const visible: typeof result.organizations = []
+    for(const item of result.organizations){
+      if(item.role==="owner"){
+        if(!organizationActionAllowed("owner","organization.read",
+          await isCurrentProtectedOwner(db,result.person_id,item.id),false))continue
+      }else if(item.role!=="admin"&&item.role!=="member")continue
+      visible.push(item)
+    }
+    if(organizationId&&visible.length!==1)return null
+    return {...result,organizations:visible}
+  }
+
   @InjectTransactionManager()
   async personalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
-    return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId)
+    return this.readablePersonalOrganizations_(token,organizationId,true,context)
   }
 
   /** Current active Organization and protected Owner proof for privileged reads.
@@ -607,7 +628,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   // Background privacy checks must not extend the user's idle session.
   @InjectTransactionManager()
   async observePersonalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
-    return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId, false)
+    return this.readablePersonalOrganizations_(token,organizationId,false,context)
   }
 
   @InjectTransactionManager()
@@ -1279,6 +1300,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     })) {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "Invitation is invalid, expired, revoked, or already used")
     }
+    // The Organization can be suspended or soft-deleted after invitation
+    // issuance. Lock its live row in this SAME transaction before touching
+    // Person/membership/invitation. A concurrent suspension must serialize.
+    const available = await securitySql(sharedContext.transactionManager).execute(`select id
+      from da_organization where id=? and status='active' and deleted_at is null
+      for share`,[invitation.organization_id])
+    if(available.length!==1 || available[0].id!==invitation.organization_id)
+      throw new MedusaError(MedusaError.Types.FORBIDDEN,"Invitation Organization is unavailable")
     const person = await this.ensureActorPerson_(input.actor, input.actor, sharedContext)
     await this.lockMembership_(person.id, invitation.organization_id, sharedContext)
     // Read after the shared lock: a different invitation may have activated the

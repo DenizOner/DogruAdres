@@ -18,6 +18,8 @@ export function allowedPublicRequest(method,path){
     '/personal/organization-stores':['GET'],
     '/personal/catalog':['GET'],
     '/personal/store-applications':['GET','POST'],
+    '/personal/platform/stores':['GET','POST'],
+    '/personal/store-buyer-blocks':['POST'],
     '/personal/store-product-permissions':['GET','POST'],
     '/personal/buyer-permissions':['GET','POST'],
     '/personal/buyer-context':['GET','POST'],
@@ -33,10 +35,25 @@ export function allowedPublicRequest(method,path){
   // it contains no authenticated Buyer Organization pricing decision.
   const dashboard=/^\/dashboard(?:\/.*)?$/
   if(method==='GET' && (path==='/store/regions'||['/cloud/auth','/health'].includes(path)||dashboard.test(path)))return true
-  if(['GET','POST'].includes(method) && path==='/auth/verify-email')return true
+  if(['GET','POST','OPTIONS'].includes(method) && path==='/auth/verify-email')return true
   if(method==='POST' && (path==='/auth/verification/confirm'||/^\/auth\/(user|member|customer)\/emailpass\/(reset-password|update)$/.test(path)))return true
   if(method==='GET' && path==='/admin/api-keys')return 'machine'
   return false
+}
+// Never reflect arbitrary Origin or an unrestricted CORS wildcard. The
+// storefront must be explicitly included in Medusa's configured STORE_CORS.
+function verifiedStorefrontOrigin(origin,env) {
+  if(typeof origin!=='string'||!origin)return null
+  return (env.STORE_CORS??'').split(',').some(entry=>{
+    const allowed=entry.trim()
+    try{
+      const url=new URL(allowed)
+      const local=env.NODE_ENV!=='production' && url.protocol==='http:' &&
+        ['localhost','127.0.0.1','[::1]'].includes(url.hostname)
+      return allowed===url.origin && allowed===origin &&
+        (url.protocol==='https:'||local)
+    }catch{return false}
+  })?origin:null
 }
 export function startFrontdoor(env=process.env){
   const config=ingressConfig(env),upstream=config.privateOrigin
@@ -55,6 +72,31 @@ export function startFrontdoor(env=process.env){
       if(url.origin!==config.publicOrigin){res.writeHead(400).end();return}
       const mode=allowedPublicRequest(req.method,url.pathname)
       if(!mode || mode==='machine'&&!/^Basic /i.test(req.headers.authorization??'')){res.writeHead(401,{'Content-Type':'application/json'}).end('{"message":"Public ingress denied"}');return}
+      const verifyEmail=url.pathname==='/auth/verify-email'
+      const requestedOrigin=req.headers.origin
+      const storeOrigin=verifyEmail?verifiedStorefrontOrigin(requestedOrigin,env):null
+      if(verifyEmail && requestedOrigin && !storeOrigin){res.writeHead(403).end();return}
+      if(req.method==='OPTIONS'){
+        // No general OPTIONS proxy: the one single-use email token workflow
+        // only needs a POST JSON browser preflight from a configured storefront.
+        const method=req.headers['access-control-request-method']
+        const asked=req.headers['access-control-request-headers']
+        const requestedHeaders=typeof asked==='string'?asked.split(',').map(x=>x.trim().toLowerCase()):[]
+        if(!verifyEmail||!storeOrigin||method!=='POST'||
+          requestedHeaders.some(x=>!['content-type','accept'].includes(x))||
+          requestedHeaders.includes('')){
+          res.writeHead(403).end();return
+        }
+        res.setHeader('Access-Control-Allow-Origin',storeOrigin)
+        res.setHeader('Vary','Origin')
+        res.setHeader('Access-Control-Allow-Methods','GET, POST')
+        res.setHeader('Access-Control-Allow-Headers','content-type, accept')
+        res.writeHead(204).end();return
+      }
+      if(storeOrigin){
+        res.setHeader('Access-Control-Allow-Origin',storeOrigin)
+        res.setHeader('Vary','Origin')
+      }
       // Private B4B catalogue is the only public-facing relay for this data.
       // Enforce fixed privacy metadata at the HTTPS boundary instead of
       // forwarding arbitrary upstream Vary / X-Robots-Tag header values.

@@ -160,6 +160,32 @@ moduleIntegrationTestRunner<AccessService>({
       const unchanged=await q("select count(*)::int as n from da_audit_event where target_id=? and action='organization.invitation_revoked'",[invitation.id])
       expect(Number(unchanged[0].n)).toBe(1)
     })
+    it.each(["suspended","soft-deleted"])(
+      "denies a pending invitation after Organization becomes %s without consuming the token",
+      async unavailable=>{
+        const provisioned=await service.provisionOrganization(operation)
+        const owner=await service.resolvePersonForActor(actor)
+        expect(owner?.id).toBeTruthy()
+        const email="unavailable-organization@example.invalid"
+        const invitation=await service.createOrganizationInvitation({
+          organization_id:provisioned.organization.id,actor_person_id:owner!.id,
+          actor_type:"user",actor_id:actor.actor_id,email,role:"member",
+        })
+        if(unavailable==="suspended")
+          await q("update da_organization set status='suspended' where id=?",[provisioned.organization.id])
+        else
+          await q("update da_organization set deleted_at=clock_timestamp() where id=?",[provisioned.organization.id])
+        await expect(service.acceptOrganizationInvitation({
+          token:deriveInvitationToken(invitation.id),email,email_verified:true,
+          actor:{actor_type:"user",actor_id:"synthetic_inactive_invitee"}
+        })).rejects.toThrow("Invitation Organization is unavailable")
+        const [stored]=await q("select status,accepted_at from da_organization_invitation where id=?",[invitation.id])
+        expect(stored.status).toBe("pending")
+        expect(stored.accepted_at).toBeNull()
+        expect(await q("select id from da_organization_membership where organization_id=? and role='member'",[provisioned.organization.id])).toHaveLength(0)
+        expect(await q("select id from da_audit_event where action='organization.invitation_accepted' and target_id=?",[invitation.id])).toHaveLength(0)
+      }
+    )
     it("accepts one invited membership only with caller-asserted email proof, denies mismatch and replay",async()=>{
       const provisioned=await service.provisionOrganization(operation)
       const current=await service.resolvePersonForActor(actor)

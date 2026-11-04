@@ -1,3 +1,5 @@
+import { decodeOrganizationDraftCursor, listOrganizationDrafts } from "../../../modules/dogruadres-access/organization-application"
+import { IdentitySessions } from "../../../modules/dogruadres-access/identity-session"
 import {GET,POST} from "../organization-applications/route"
 import {access,csrf,enabled,sessionToken} from "../security"
 
@@ -17,7 +19,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
   beforeEach(()=>{
     jest.resetAllMocks()
     service={
-      personalOrganizationApplicationDrafts:jest.fn().mockResolvedValue([]),
+      personalOrganizationApplicationDrafts:jest.fn().mockResolvedValue({drafts:[],next_cursor:null}),
       personalSaveOrganizationApplicationDraft:jest.fn().mockResolvedValue({
         conflict:false,application_id:payload.application_id,status:"draft",version:1
       }),
@@ -72,15 +74,15 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     expect(service.personalSaveOrganizationApplicationDraft).not.toHaveBeenCalled()
   })
   it("reads only through server-held person session",async()=>{
-    service.personalOrganizationApplicationDrafts.mockResolvedValue([{
+    service.personalOrganizationApplicationDrafts.mockResolvedValue({drafts:[{
       id:payload.application_id,status:"draft",version:1,
       business_kind:payload.business_kind,legal_name:payload.legal_name,
       landline_phone:payload.landline_phone,
       declared_activities:payload.declared_activities,
       primary_activity:payload.primary_activity
-    }])
+    }],next_cursor:null})
     await GET(req,res)
-    expect(service.personalOrganizationApplicationDrafts).toHaveBeenCalledWith("opaque")
+    expect(service.personalOrganizationApplicationDrafts).toHaveBeenCalledWith("opaque",undefined)
     expect(res.status).toHaveBeenLastCalledWith(200)
     req.query={organization_id:"daorg_other"}
     await GET(req,res)
@@ -88,6 +90,57 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     req.query={};req.headers.authorization="Bearer cross-person"
     await GET(req,res)
     expect(res.status).toHaveBeenLastCalledWith(400)
+  })
+  it("validates cursor and rejects forged Organization selectors before private reads",async()=>{
+    const decoded={t:"2026-11-04T11:34:56.123456Z",id:payload.application_id}
+    const cursor=Buffer.from(JSON.stringify(decoded)).toString("base64url")
+    req.query={cursor}
+    await GET(req,res)
+    expect(service.personalOrganizationApplicationDrafts).toHaveBeenCalledWith(
+      "opaque",{updatedAt:decoded.t,id:decoded.id})
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    const old=service.personalOrganizationApplicationDrafts.mock.calls.length
+    for(const invalid of ["garbage","%",
+      Buffer.from(JSON.stringify({...decoded,id:"daorg_other"})).toString("base64url"),
+      "A".repeat(300)]){
+      req.query={cursor:invalid}
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(400)
+    }
+    req.query={cursor,organization_id:"daorg_other"}
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(400)
+    expect(service.personalOrganizationApplicationDrafts).toHaveBeenCalledTimes(old)
+  })
+  it("returns a second private page after 100 drafts with exact microsecond cursor",async()=>{
+    const original=jest.spyOn(IdentitySessions.prototype,"current")
+      .mockResolvedValue({person_id:"daprs_owner"} as any)
+    const stamp="2026-11-04T11:34:56.123456Z"
+    const rows=Array.from({length:101},(_,i)=>({
+      id:"daorgapp_"+(i+1).toString(16).padStart(32,"0"),
+      legal_name:"Synthetic "+i,landline_phone:"+90 212 555 00 00",
+      business_kind:"individual_business",declared_activities:["service_repair"],
+      primary_activity:"service_repair",status:"draft",version:1,
+      cursor_time:stamp,created_at:new Date(),updated_at:new Date()
+    }))
+    const sql={execute:jest.fn().mockResolvedValueOnce(rows).mockResolvedValueOnce([rows[100]])}
+    try{
+      const first=await listOrganizationDrafts(sql,"opaque")
+      expect(first?.drafts).toHaveLength(100)
+      expect(first?.next_cursor).toMatch(/^[A-Za-z0-9_-]+$/)
+      const cursor=decodeOrganizationDraftCursor(first?.next_cursor)
+      expect(cursor).toEqual({updatedAt:stamp,id:rows[99].id})
+      const second=await listOrganizationDrafts(sql,"opaque",cursor!)
+      expect(second?.drafts).toHaveLength(1)
+      expect(second?.next_cursor).toBeNull()
+      expect(sql.execute).toHaveBeenCalledTimes(2)
+      expect(sql.execute.mock.calls[0][1]).toEqual(["daprs_owner"])
+      expect(sql.execute.mock.calls[1][1]).toEqual(
+        ["daprs_owner",stamp,stamp,rows[99].id])
+      expect(sql.execute.mock.calls[1][0]).toContain("and id > ?")
+      expect(sql.execute.mock.calls[1][0]).toContain("limit 101")
+      expect(sql.execute.mock.calls[1][0]).toContain("applicant_person_id=?")
+    }finally{original.mockRestore()}
   })
   it("never discloses another person's draft or hidden server faults",async()=>{
     service.personalOrganizationApplicationDrafts.mockResolvedValue(null)

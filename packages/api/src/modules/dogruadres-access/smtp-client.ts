@@ -232,13 +232,15 @@ export class SmtpConnection {
       const onData = (data: Buffer) => {
         this.buffer += data.toString("utf-8")
         const lines = this.buffer.split("\r\n")
-        for (let i = 0; i < lines.length; i++) {
+        // The final split segment has not yet received CRLF. SMTP must not
+        // accept a partial "250 " as the end of a response.
+        for (let i = 0; i < lines.length - 1; i++) {
           const line = lines[i]
           if (line.length >= 4 && line[3] === " ") {
             const code = parseInt(line.substring(0, 3), 10)
             if (!isNaN(code)) {
               cleanup()
-              const message = this.buffer
+              const message = lines.slice(0, i + 1).join("\r\n") + "\r\n"
               this.buffer = lines.slice(i + 1).join("\r\n")
               resolve({ code, message })
               return

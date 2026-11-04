@@ -207,6 +207,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="organization-draft-new">Yeni taslak</button>
     <button type="button" id="organization-draft-refresh">Taslaklarımı yenile</button>
     <div id="organization-draft-list"></div>
+    <button id="organization-draft-more" type="button" hidden>Daha eski taslakları göster</button>
   </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
 
@@ -392,20 +393,40 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     'service_repair','retail_store','wholesale_distribution',
     'manufacturing','fleet_operations','insurance_claims'];
   let organizationDraftId='',organizationDraftVersion=0,organizationDraftRequest=0;
-  function clearOrganizationDrafts(){
-    organizationDraftRequest++;organizationDraftId='';organizationDraftVersion=0;
-    el('organization-draft-list').replaceChildren();el('organization-draft-status').textContent='';
-    el('organization-draft-form').reset();
-    el('organization-draft-form').querySelector('button').disabled=false;
+  let organizationDraftCursor=null,organizationDraftSaving=false,organizationDraftMutation=0;
+  function lockOrganizationDraftSelection(busy){
+    organizationDraftSaving=busy;
+    for(const control of el('organization-draft-form').querySelectorAll('input,select,button'))
+      control.disabled=busy;
+    for(const id of ['organization-draft-new','organization-draft-refresh','organization-draft-more'])
+      el(id).disabled=busy;
+    for(const button of el('organization-draft-list').querySelectorAll('button'))
+      button.disabled=busy;
   }
-  async function refreshOrganizationDrafts(){
-    const request=++organizationDraftRequest,epoch=viewEpoch;
+  function clearOrganizationDrafts(){
+    organizationDraftMutation++;organizationDraftRequest++;
+    organizationDraftId='';organizationDraftVersion=0;organizationDraftCursor=null;
     el('organization-draft-list').replaceChildren();
+    el('organization-draft-more').hidden=true;
+    el('organization-draft-status').textContent='';
+    el('organization-draft-form').reset();
+    lockOrganizationDraftSelection(false);
+  }
+  async function refreshOrganizationDrafts(append=false){
+    const cursor=append?organizationDraftCursor:null;
+    if(append&&!cursor)return;
+    const request=++organizationDraftRequest,epoch=viewEpoch;
+    if(!append)el('organization-draft-list').replaceChildren();
+    el('organization-draft-more').disabled=true;
     el('organization-draft-status').textContent='Taslaklar kontrol ediliyor…';
     try{
-      const data=await api('organization-applications');
+      const data=await api('organization-applications'+
+        (cursor?'?cursor='+encodeURIComponent(cursor):''));
       if(request!==organizationDraftRequest||epoch!==viewEpoch)return;
-      if(!Array.isArray(data.drafts))throw Error('Taslaklar doğrulanamadı');
+      if(!Array.isArray(data.drafts)||
+        !(data.next_cursor===null||typeof data.next_cursor==='string'&&
+          /^[A-Za-z0-9_-]{1,256}$/.test(data.next_cursor)))
+        throw Error('Taslaklar doğrulanamadı');
       for(const item of data.drafts){
         if(!item||typeof item.id!=='string'||item.status!=='draft'||
           !Number.isSafeInteger(item.version)||item.version<1||
@@ -418,7 +439,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const row=document.createElement('p'),button=document.createElement('button');
         row.textContent=item.legal_name+' — Taslak (henüz gönderilmedi)';
         button.type='button';button.textContent='Taslağı düzenle';
+        button.disabled=organizationDraftSaving;
         button.onclick=()=>{
+          if(organizationDraftSaving)return;
           organizationDraftId=item.id;organizationDraftVersion=item.version;
           const form=el('organization-draft-form');
           for(const input of form.querySelectorAll('input[name=declared_activities]'))
@@ -433,27 +456,38 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         };
         row.append(button);el('organization-draft-list').append(row);
       }
+      organizationDraftCursor=data.next_cursor;
+      el('organization-draft-more').hidden=!organizationDraftCursor;
       el('organization-draft-status').textContent=data.drafts.length?
-        'Yalnız size ait taslaklar yüklendi.':'Henüz taslağınız yok.';
+        'Yalnız size ait taslaklar yüklendi.':'Başka taslak bulunamadı.';
     }catch(error){
       if(request!==organizationDraftRequest||epoch!==viewEpoch)return;
       if([401,403].includes(error.httpStatus)){
         concealPrivateView();el('login').hidden=false;return;
       }
       el('organization-draft-status').textContent='Taslaklar yüklenemedi. Yenileyin.';
+    }finally{
+      if(request===organizationDraftRequest&&epoch===viewEpoch)
+        el('organization-draft-more').disabled=organizationDraftSaving;
     }
   }
   el('organization-draft-new').onclick=()=>{
+    if(organizationDraftSaving)return;
     organizationDraftId='';organizationDraftVersion=0;
     el('organization-draft-form').reset();
     el('organization-draft-form').querySelector('button').disabled=false;
     el('organization-draft-status').textContent='Yeni taslak; hiçbir başvuru henüz gönderilmedi.';
   };
-  el('organization-draft-refresh').onclick=()=>void refreshOrganizationDrafts();
+  el('organization-draft-refresh').onclick=()=>{
+    if(!organizationDraftSaving)void refreshOrganizationDrafts();
+  };
+  el('organization-draft-more').onclick=()=>{
+    if(!organizationDraftSaving)void refreshOrganizationDrafts(true);
+  };
   el('organization-draft-form').onsubmit=async e=>{
     e.preventDefault();
     const form=e.currentTarget,button=form.querySelector('button');
-    if(button.disabled||document.hidden||el('workspace').hidden)return;
+    if(organizationDraftSaving||button.disabled||document.hidden||el('workspace').hidden)return;
     const selectedActivities=Array.from(
       form.querySelectorAll('input[name=declared_activities]:checked'),x=>x.value);
     const primaryActivity=form.elements.primary_activity.value;
@@ -462,28 +496,39 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         'En az bir faaliyet ve bu faaliyetlerden birini ana faaliyet olarak seçin.';
       return;
     }
-    button.disabled=true;
+    // Capture the exact payload before disabling fields, then block selection
+    // and edits until the HTTP result has been processed.
+    const payload={...Object.fromEntries(new FormData(form)),
+      declared_activities:selectedActivities,primary_activity:primaryActivity};
     const id=organizationDraftId||'daorgapp_'+crypto.randomUUID().replaceAll('-','');
     organizationDraftId=id;
-    const version=organizationDraftVersion;
+    const version=organizationDraftVersion,epoch=viewEpoch;
+    const mutation=++organizationDraftMutation;
+    lockOrganizationDraftSelection(true);
+    let uncertain=false;
     try{
       const data=await api('organization-applications',{method:'POST',
-        body:JSON.stringify({...Object.fromEntries(new FormData(form)),
-          declared_activities:selectedActivities,primary_activity:primaryActivity,
-          application_id:id,expected_version:version})});
+        body:JSON.stringify({...payload,application_id:id,expected_version:version})});
+      if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
       if(data.application_id!==id||data.status!=='draft'||data.version!==version+1)
         throw Error('Taslak sonucu belirsiz');
       organizationDraftVersion=data.version;
       await refreshOrganizationDrafts();
+      if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
       el('organization-draft-status').textContent='Taslak kaydedildi. Belge ve başvuru gönderilmedi.';
-      button.disabled=false;
     }catch(error){
-      el('organization-draft-status').textContent=error.uncertain?
+      if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
+      uncertain=!!error.uncertain;
+      el('organization-draft-status').textContent=uncertain?
         'Kayıt sonucu belirsiz; yeniden göndermeyin. Taslaklarımı yenile ile kontrol edin.':
         error.httpStatus===409?
           'Taslak başka bir sürümde. Taslaklarımı yenile ile güncel kaydı açın.':
           'Taslak kaydedilemedi. Bilgileri ve oturumunuzu kontrol edin.';
-      if(!error.uncertain)button.disabled=false;
+    }finally{
+      if(mutation===organizationDraftMutation&&epoch===viewEpoch){
+        lockOrganizationDraftSelection(false);
+        if(uncertain)button.disabled=true;
+      }
     }
   };
   function clearNotifications(){
