@@ -6850,6 +6850,62 @@ export default async function({container}:any){
     }
 
 
+
+    // B22 approved, non-deleting applicant draft withdrawal; no documents or privileges.
+    await signupChrome.click("#organization-draft-refresh")
+    await signupChrome.wait("document.querySelector('#organization-draft-list p:first-child')?.textContent.includes('B22 Gecikmeli Kaydedilen Taslak')")
+    const withdrawBefore=await q("select status,version from da_organization_application where id=$1",[legacyDraftId])
+    assert.deepEqual(withdrawBefore,[{status:"draft",version:3}])
+    const withdrawal={action:"withdraw",application_id:legacyDraftId,expected_version:3}
+    const payloadLiteral=JSON.stringify(withdrawal)
+    const foreignWithdrawal=await foreignDraftChrome.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify("+payloadLiteral+")});"+
+      "return {status:r.status,body:await r.json()};})()")
+    assert.equal(foreignWithdrawal.status,403)
+    assert.equal(JSON.stringify(foreignWithdrawal.body).includes("B22 Gecikmeli"),false)
+    const rejectedWithdrawal=await signupChrome.eval("(async()=>{"+
+      "const payload="+payloadLiteral+";"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const missing=await fetch('/personal/organization-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json'},body:JSON.stringify(payload)});"+
+      "const stale=await fetch('/personal/organization-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({...payload,expected_version:2})});"+
+      "return {csrf:missing.status,stale:stale.status};})()")
+    assert.deepEqual(rejectedWithdrawal,{csrf:403,stale:409})
+    assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[legacyDraftId]),
+      withdrawBefore,"Denials may not mutate the private application")
+    await signupChrome.click("#organization-draft-list p:first-child button")
+    await signupChrome.wait("!document.querySelector('#organization-draft-withdraw').hidden")
+    await signupChrome.click("#organization-draft-withdraw")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak geri çekildi')")
+    assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[legacyDraftId]),
+      [{status:"withdrawn",version:4}])
+    const afterWithdrawal=await signupChrome.eval("(async()=>{"+
+      "const r=await fetch('/personal/organization-applications');"+
+      "const d=await r.json();"+
+      "const row=Array.from(document.querySelectorAll('#organization-draft-list p'))"+
+        ".find(x=>x.textContent.includes('B22 Gecikmeli Kaydedilen Taslak'));"+
+      "return {status:r.status,saved:d.drafts?.find(x=>x.id==="+JSON.stringify(legacyDraftId)+")?.status,"+
+        "visible:row?.textContent.includes('Geri çekildi'),"+
+        "editButtons:row?.querySelectorAll('button').length};})()")
+    assert.deepEqual(afterWithdrawal,{status:200,saved:"withdrawn",visible:true,editButtons:0})
+    const replayWithdrawal=await signupChrome.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify("+payloadLiteral+")});return r.status;})()")
+    assert.equal(replayWithdrawal,409)
+    const withdrawalAudit=await q("select action,target_id from da_audit_event "+
+      "where target_id=$1 and action='organization.application_draft_withdrawn'",[legacyDraftId])
+    assert.deepEqual(withdrawalAudit,[{action:"organization.application_draft_withdrawn",target_id:legacyDraftId}])
+    assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),draftOrganizationsBefore)
+    assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),draftMembershipsBefore)
+    process.stdout.write("PASS B22 Chrome/PG16: private applicant withdraws draft; foreign/CSRF/stale/replay denied; persisted audit, no Organization/Owner\\n")
+
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
     assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
       "Primary Customer cannot offer an unlink button")
