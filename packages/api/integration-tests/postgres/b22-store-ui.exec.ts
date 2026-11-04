@@ -6581,8 +6581,10 @@ export default async function({container}:any){
       "Reload must populate form with persisted version-2 legal name")
     assert.equal(reloadFormValues.landline_phone,draftLandline,
       "Reload must populate form with persisted landline")
-    assert.ok(reloadFormValues.business_kind,
-      "Reload must populate business kind from persisted draft")
+    assert.equal(reloadedDraft.business_kind,"individual_business",
+      "Reload GET must preserve the persisted real-person business kind")
+    assert.equal(reloadFormValues.business_kind,reloadedDraft.business_kind,
+      "Reloaded edit form must restore the exact persisted business kind")
     // PG16 invariants: reload must not create any new rows.
     assert.equal(Number((await q(
       "select count(*)::int n from da_organization_application where applicant_person_id=$1",[signupPerson]))[0].n),
