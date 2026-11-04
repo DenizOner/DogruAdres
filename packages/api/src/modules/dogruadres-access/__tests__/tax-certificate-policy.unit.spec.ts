@@ -117,3 +117,54 @@ describe("B22 lossless private-document preparation — no storage or upload",()
     expect(()=>restoreTaxCertificate(bomb)).toThrow(InvalidTaxCertificate)
   })
 })
+
+
+/**
+ * A native provider contract probe against the installed, version-pinned
+ * Medusa module, not a browser/private-URL security acceptance.
+ * Uses only a fresh disposable OS temp directory with synthetic bytes.
+ */
+it("Medusa LocalFileService v2.22.0 native contract: private bytes, prefixed key, public-shaped URL",async()=>{
+  const fs=require("node:fs/promises") as typeof import("node:fs/promises")
+  const os=require("node:os") as typeof import("node:os")
+  const path=require("node:path") as typeof import("node:path")
+  const medusaPackage=require("@medusajs/medusa/package.json")
+  const localPackage=require("@medusajs/file-local/package.json")
+  expect(medusaPackage.version).toBe("2.22.0")
+  expect(localPackage.version).toBe("2.22.0")
+  const {LocalFileService}=require("@medusajs/file-local")
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),"da-b22-cert-"))
+  try{
+    const publicDir=path.join(root,"static")
+    const privateDir=path.join(root,"documents-private")
+    await fs.mkdir(publicDir,{recursive:true})
+    const provider=new LocalFileService({},{
+      upload_dir:publicDir,
+      private_upload_dir:privateDir,
+      backend_url:"https://assets.example.invalid/static",
+    })
+    const prepared=prepareTaxCertificate("synthetic.pdf",pdf)
+    const uploaded=await provider.upload({
+      filename:prepared.internalName,
+      mimeType:prepared.mimeType,
+      content:prepared.storedBytes.toString("base64"),
+      access:"private",
+    })
+    // Medusa prepends a timestamp; the physical key is NOT exactly UUID v4.
+    expect(uploaded.key).toMatch(/^private-[0-9]+-[0-9a-f-]+\.pdf$/)
+    expect(uploaded.key).not.toBe(prepared.internalName)
+    expect(await fs.readdir(publicDir)).toEqual([])
+    expect(await fs.readdir(privateDir)).toEqual([uploaded.key])
+    const returned=await provider.getAsBuffer({fileKey:uploaded.key})
+    expect(returned).toEqual(prepared.storedBytes)
+    expect(restoreTaxCertificate({...prepared,storedBytes:returned})).toEqual(pdf)
+    // Native local provider gives a URL shaped like a PUBLIC static URL,
+    // regardless of the private data root. Never forward this URL.
+    expect(uploaded.url).toContain("https://assets.example.invalid/static/")
+    expect(await provider.getPresignedDownloadUrl({fileKey:uploaded.key}))
+      .toBe(uploaded.url)
+  }finally{
+    // This exact disposable directory was created by this test.
+    await fs.rm(root,{recursive:true,force:true})
+  }
+})
