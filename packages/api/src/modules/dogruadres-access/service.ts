@@ -30,7 +30,7 @@ import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedS
 import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
-import {listOrganizationDrafts,saveOrganizationDraft,type DraftPayload,type OrganizationDraftCursor} from "./organization-application"
+import {listOrganizationDrafts,saveOrganizationDraft,withdrawOrganizationDraft,type DraftPayload,type WithdrawDraftPayload,type OrganizationDraftCursor} from "./organization-application"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -423,6 +423,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalSaveOrganizationApplicationDraft(token:string,input:DraftPayload,@MedusaContext() context:Context={}) {
     return saveOrganizationDraft(securitySql(context.transactionManager),token,input)
+  }
+
+  @InjectTransactionManager()
+  async personalWithdrawOrganizationApplicationDraft(token:string,input:WithdrawDraftPayload,@MedusaContext() context:Context={}) {
+    return withdrawOrganizationDraft(securitySql(context.transactionManager),token,input)
   }
 
   @InjectTransactionManager()
