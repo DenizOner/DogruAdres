@@ -143,7 +143,7 @@ async function run(){
                   primary_activity='service_repair'`)
           }catch(error:any){
             duplicateRejected=true
-            if(typeof error?.code==="string")duplicateSqlState=error.code
+            if(typeof error?.errno==="string")duplicateSqlState=error.errno
           }
           const after=await target.unsafe(`select declared_activities::text as activities,
             primary_activity,status,version from "${probe}"`)
@@ -152,8 +152,7 @@ async function run(){
             ", unchanged="+(JSON.stringify(JSON.parse(String(after[0]?.activities)))===
               JSON.stringify(["service_repair","insurance_claims"]))+"\n")
           assert.ok(duplicateRejected,"Migrated PG16 CHECK accepted duplicate activity codes")
-          if(duplicateSqlState!=="not-exposed")
-            assert.equal(duplicateSqlState,"23514","Unexpected SQLSTATE on duplicate CHECK")
+          assert.equal(duplicateSqlState,"23514","Unexpected PostgreSQL CHECK SQLSTATE")
           assert.equal(after.length,1)
           assert.deepEqual(JSON.parse(String(after[0].activities)),
             ["service_repair","insurance_claims"],
