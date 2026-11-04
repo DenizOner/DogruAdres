@@ -9,6 +9,8 @@ describe("B22 private business application DRAFT — never an Organization",()=>
   const payload={
     application_id:"daorgapp_"+"a".repeat(32),expected_version:0,
     business_kind:"individual_business",legal_name:"Sentetik Ticari İşletme",
+    declared_activities:["service_repair","insurance_claims"],
+    primary_activity:"insurance_claims",
     landline_phone:"+90 212 555 00 00",
   }
   let req:any,res:any,service:any
@@ -54,6 +56,11 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       {landline_phone:""},
       {landline_phone:"123456"},
       {business_kind:"store"},
+      {declared_activities:[]},
+      {declared_activities:["service_repair","service_repair"]},
+      {declared_activities:["invented_activity"]},
+      {primary_activity:"wholesale_distribution"},
+      {primary_activity:"unapproved"},
       {person_id:"daprs_forged"},
       {expected_version:-1},
       {application_id:"daorg_forged"},
@@ -68,7 +75,9 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     service.personalOrganizationApplicationDrafts.mockResolvedValue([{
       id:payload.application_id,status:"draft",version:1,
       business_kind:payload.business_kind,legal_name:payload.legal_name,
-      landline_phone:payload.landline_phone
+      landline_phone:payload.landline_phone,
+      declared_activities:payload.declared_activities,
+      primary_activity:payload.primary_activity
     }])
     await GET(req,res)
     expect(service.personalOrganizationApplicationDrafts).toHaveBeenCalledWith("opaque")
