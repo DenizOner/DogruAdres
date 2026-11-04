@@ -12,7 +12,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   if(Object.keys(query).some(key=>key!=="cursor")||req.headers.authorization)
     return res.status(400).json({message:"Invalid request"})
   const cursor=query.cursor===undefined?undefined:decodeOrganizationDraftCursor(query.cursor)
-  if(query.cursor!==undefined&&!cursor)
+  if(cursor===null)
     return res.status(400).json({message:"Invalid request"})
   try{
     const page=await access(req).personalOrganizationApplicationDrafts(sessionToken(req),cursor)
