@@ -26,18 +26,55 @@ export const draftPayload=z.object({
 }).strict().refine(v=>v.declared_activities.includes(v.primary_activity))
 export type DraftPayload=z.infer<typeof draftPayload>
 
-export async function listOrganizationDrafts(db:SecuritySql,token:string) {
+// Cursor is an untrusted position, never an authority or Person selector.
+export type OrganizationDraftCursor=Readonly<{updatedAt:string;id:string}>
+const cursorTime=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
+const draftId=/^daorgapp_[0-9a-f]{32}$/
+export function decodeOrganizationDraftCursor(value:unknown):OrganizationDraftCursor|null {
+  if(typeof value!=="string"||value.length<1||value.length>256||
+     !/^[A-Za-z0-9_-]+$/.test(value))return null
+  try {
+    const decoded=Buffer.from(value,"base64url").toString("utf8")
+    if(Buffer.from(decoded,"utf8").toString("base64url")!==value)return null
+    const item=JSON.parse(decoded)
+    if(!item||typeof item!=="object"||Array.isArray(item)||
+       Object.keys(item).sort().join(",")!=="id,t"||
+       typeof item.t!=="string"||!cursorTime.test(item.t)||
+       !Number.isFinite(Date.parse(item.t))||
+       typeof item.id!=="string"||!draftId.test(item.id))return null
+    return {updatedAt:item.t,id:item.id}
+  }catch{return null}
+}
+
+export async function listOrganizationDrafts(
+  db:SecuritySql,token:string,cursor?:OrganizationDraftCursor
+) {
   const session=await new IdentitySessions(db).current(token,false,false)
   if(!session)return null
+  // Stable keyset: newest first, IDs break equal-timestamp ties.
+  // PostgreSQL microseconds must not be truncated to JS Date milliseconds.
   const rows=await db.execute(`select id,business_kind,legal_name,landline_phone,
-      declared_activities,primary_activity,status,version,created_at,updated_at from da_organization_application
+      declared_activities,primary_activity,status,version,created_at,updated_at,
+      to_char(updated_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_time
+    from da_organization_application
     where applicant_person_id=? and status='draft'
-    order by updated_at desc,id limit 100`,[session.person_id])
-  if(!Array.isArray(rows)||rows.length>100)throw new IdentityAccessDenied()
-  return rows.map(r=>({id:r.id,business_kind:r.business_kind,
-    legal_name:r.legal_name,landline_phone:r.landline_phone,
-    declared_activities:r.declared_activities,primary_activity:r.primary_activity,status:r.status,
-    version:Number(r.version),created_at:r.created_at,updated_at:r.updated_at}))
+    ${cursor?"and (updated_at < ?::timestamptz or (updated_at = ?::timestamptz and id > ?))":""}
+    order by updated_at desc,id asc limit 101`,
+    cursor?[session.person_id,cursor.updatedAt,cursor.updatedAt,cursor.id]:
+      [session.person_id])
+  if(!Array.isArray(rows)||rows.length>101)throw new IdentityAccessDenied()
+  const page=rows.slice(0,100)
+  const last=page[page.length-1]
+  if(rows.length>100 && (!last||!draftId.test(last.id)||
+      typeof last.cursor_time!=="string"||!cursorTime.test(last.cursor_time)))
+    throw new IdentityAccessDenied()
+  const next_cursor=rows.length>100
+    ? Buffer.from(JSON.stringify({t:last.cursor_time,id:last.id}),"utf8").toString("base64url")
+    : null
+  return {drafts:page.map(r=>({id:r.id,business_kind:r.business_kind,
+      legal_name:r.legal_name,landline_phone:r.landline_phone,
+      declared_activities:r.declared_activities,primary_activity:r.primary_activity,status:r.status,
+      version:Number(r.version),created_at:r.created_at,updated_at:r.updated_at})),next_cursor}
 }
 
 export async function saveOrganizationDraft(db:SecuritySql,token:string,value:unknown) {

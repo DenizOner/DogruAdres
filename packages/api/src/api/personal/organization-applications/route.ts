@@ -1,18 +1,22 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { access, csrf, enabled, sessionToken } from "../security"
 import { IdentityAccessDenied } from "../../../modules/dogruadres-access/identity-session"
-import { draftPayload } from "../../../modules/dogruadres-access/organization-application"
+import { draftPayload, decodeOrganizationDraftCursor } from "../../../modules/dogruadres-access/organization-application"
 
 export const AUTHENTICATE=false
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Cache-Control","no-store")
   res.setHeader("Referrer-Policy","no-referrer")
   if(!enabled())return res.status(503).json({message:"Unavailable"})
-  if(Object.keys(req.query??{}).length || req.headers.authorization)
+  const query=req.query??{}
+  if(Object.keys(query).some(key=>key!=="cursor")||req.headers.authorization)
+    return res.status(400).json({message:"Invalid request"})
+  const cursor=query.cursor===undefined?undefined:decodeOrganizationDraftCursor(query.cursor)
+  if(query.cursor!==undefined&&!cursor)
     return res.status(400).json({message:"Invalid request"})
   try{
-    const drafts=await access(req).personalOrganizationApplicationDrafts(sessionToken(req))
-    return drafts?res.status(200).json({drafts}):
+    const page=await access(req).personalOrganizationApplicationDrafts(sessionToken(req),cursor)
+    return page?res.status(200).json(page):
       res.status(403).json({message:"Access denied"})
   }catch(error){
     return res.status(error instanceof IdentityAccessDenied?403:503)
