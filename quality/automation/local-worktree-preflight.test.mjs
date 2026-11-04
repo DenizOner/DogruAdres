@@ -90,7 +90,7 @@ test("common Git directory digest distinguishes clones and matches linked worktr
       if(args[0]==="rev-parse")throw Error("Unexpected rev-parse command");
       if(args[0]==="branch")return "synthetic";
       if(args[0]==="rev-list")return "0";
-      if(args[0]==="worktree"&&args[1]==="list")return "worktree "+checkout+"\\nHEAD "+"a".repeat(40)+"\\n\\0";
+      if(args[0]==="worktree"&&args[1]==="list")return "worktree "+checkout+"\nHEAD "+"a".repeat(40)+"\n\0";
       return "";
     };
     const first=collectLocalEvidence(a,fake(a,".git"));
