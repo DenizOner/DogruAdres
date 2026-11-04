@@ -6474,7 +6474,42 @@ export default async function({container}:any){
         badPhone:badPhone.status,noCookie:noCookie.status};
     })()`)
     assert.deepEqual(draftReplay,{stale:409,badCsrf:403,badPhone:400,noCookie:403})
-    const otherDrafts=await reviewer.eval(`(async()=>{
+    // Earlier B22 MFA-disabling tests deliberately REVOKED both A and B.
+    // A revoked browser must not be used as proof of cross-Person isolation.
+    // Register a genuinely distinct second Person over the same real HTTPS
+    // route and native MFA flow, not a fabricated browser cookie or actor.
+    const foreignDraftChrome=new B06Chrome(host,"B");browsers.push(foreignDraftChrome)
+    await foreignDraftChrome.start(crt)
+    const foreignEmail="b22-foreign-draft-"+randomBytes(10).toString("hex")+"@example.invalid"
+    const foreignPassword="Task-Strong-"+randomBytes(18).toString("hex")
+    await foreignDraftChrome.click("#register-details summary")
+    await foreignDraftChrome.input("#register input[name=first_name]","Synthetic")
+    await foreignDraftChrome.input("#register input[name=last_name]","Other")
+    await foreignDraftChrome.input("#register input[name=email]",foreignEmail)
+    await foreignDraftChrome.input("#register input[name=mobile_phone]","+905551234578")
+    await foreignDraftChrome.input("#register input[name=password]",foreignPassword)
+    await foreignDraftChrome.click("#register button")
+    await foreignDraftChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+    await foreignDraftChrome.input("#login input[name=email]",foreignEmail)
+    await foreignDraftChrome.input("#login input[name=password]",foreignPassword)
+    await foreignDraftChrome.click("#login button")
+    await foreignDraftChrome.wait("!document.getElementById('workspace').hidden || !document.getElementById('mfa-enrollment').hidden")
+    if(await foreignDraftChrome.eval("!document.getElementById('mfa-enrollment').hidden")){
+      await foreignDraftChrome.input("#mfa-enroll-start input[name=email]",foreignEmail)
+      await foreignDraftChrome.input("#mfa-enroll-start input[name=password]",foreignPassword)
+      await foreignDraftChrome.click("#mfa-enroll-start button")
+      await foreignDraftChrome.wait("!document.getElementById('mfa-enroll-verify').hidden&&document.getElementById('mfa-seed').value.length>0")
+      const seedUrl=await foreignDraftChrome.eval("document.getElementById('mfa-seed').value")
+      const seed=seedUrl.startsWith("otpauth:")?new URL(seedUrl).searchParams.get("secret"):seedUrl
+      assert.ok(seed)
+      await foreignDraftChrome.input("#mfa-enroll-verify input[name=code]",otp(seed!))
+      await foreignDraftChrome.click("#mfa-enroll-verify button")
+    }
+    await foreignDraftChrome.wait("!document.getElementById('workspace').hidden")
+    assert.equal(await foreignDraftChrome.eval(
+      "(async()=> (await fetch('/personal/session')).status)()"),200,
+      "Cross-Person denial must be tested from a real active second session")
+    const otherDrafts=await foreignDraftChrome.eval(`(async()=>{
       const r=await fetch('/personal/organization-applications');
       const s=await (await fetch('/personal/session')).json();
       const edit=await fetch('/personal/organization-applications',{method:'POST',
