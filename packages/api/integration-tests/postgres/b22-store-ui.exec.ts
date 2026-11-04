@@ -6050,7 +6050,7 @@ export default async function({container}:any){
       assert.equal((await q("select status from da_browser_session where id=$1",
         [revokedStaffId]))[0]?.status,"revoked",
         "Old Staff A session must remain revoked after genuine new recovery")
-      process.stdout.write("PASS B22 MFA session differential: real revoked Staff A cookie ordinary/observer Organization GET403; distinct active-current post-recovery Chrome cookie ordinary/observer GET200, CDP requestId correlated and PG16 verified; no secrets logged\\n")
+      process.stdout.write("PASS B22 Chrome: MFA session differential, real revoked Staff A cookie ordinary/observer Organization GET403; distinct active-current post-recovery Chrome cookie ordinary/observer GET200, CDP requestId correlated and PG16 verified; no secrets logged\n")
       const [requiredPolicy]=await q("select version,platform_mode from da_mfa_policy where id='current'")
       assert.equal(requiredPolicy.platform_mode,"required")
       assert.equal((await staffSetPlatform("optional",Number(requiredPolicy.version))).status,200)
