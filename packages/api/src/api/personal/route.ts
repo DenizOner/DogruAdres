@@ -1532,6 +1532,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           !document.hidden&&!el('workspace').hidden&&
           !el('buyer-context-panel').hidden;
         const sellerId=store.id;
+        button.dataset.followSellerId=sellerId;
         void (async()=>{
           try{
             const q=new URLSearchParams({organization_id:org,seller_id:sellerId});
@@ -1542,7 +1543,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                state.version<0||state.version>=2147483647)
               throw new Error('Takip durumu doğrulanamadı');
             let following=state.following,version=state.version;
-            const label=()=>button.textContent=following?'Takipten çık':'Mağazayı takip et';
+            const label=()=>button.textContent=following?
+              store.name+' mağazasını takipten çık':
+              store.name+' mağazasını takip et';
             label();button.disabled=false;
             button.onclick=async()=>{
               if(!current()||button.disabled)return;
