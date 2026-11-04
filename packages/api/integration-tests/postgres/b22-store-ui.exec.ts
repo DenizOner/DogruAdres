@@ -6904,7 +6904,7 @@ export default async function({container}:any){
     assert.deepEqual(withdrawalAudit,[{action:"organization.application_draft_withdrawn",target_id:legacyDraftId}])
     assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),draftOrganizationsBefore)
     assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),draftMembershipsBefore)
-    process.stdout.write("PASS B22 Chrome/PG16: private applicant withdraws draft; foreign/CSRF/stale/replay denied; persisted audit, no Organization/Owner\\n")
+    process.stdout.write("PASS B22 Chrome/PG16: private applicant withdraws draft; foreign/CSRF/stale/replay denied; persisted audit, no Organization/Owner\n")
 
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
     assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
