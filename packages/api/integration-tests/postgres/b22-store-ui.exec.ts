@@ -6448,13 +6448,25 @@ export default async function({container}:any){
     await signupChrome.click("#organization-draft-form input[name=legal_name]")
     await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').select()")
     await signupChrome.send("Input.insertText",{text:"B22 Düzenlenmiş Sentetik İşletme"})
+    // Choose the NON-default business kind with native Chromium keyboard input.
+    // Reuse the proven B06Chrome.role() select interaction, not a DOM mutation.
+    await signupChrome.click("#organization-draft-form select[name=business_kind]")
+    for(const key of ["End","Enter"]){
+      for(const type of ["keyDown","keyUp"])
+        await signupChrome.send("Input.dispatchKeyEvent",{type,key,code:key})
+    }
+    assert.equal(await signupChrome.eval(
+      "document.querySelector('#organization-draft-form select[name=business_kind]').value"),
+      "legal_company","The real Chrome edit must choose the non-default legal-company kind")
     await signupChrome.click("#organization-draft-form button[type=submit]")
     await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
-    const revisedDraft=await q(`select version,legal_name from da_organization_application
+    const revisedDraft=await q(`select version,legal_name,business_kind from da_organization_application
       where id=$1 and applicant_person_id=$2`,[draftId,signupPerson])
     assert.equal(revisedDraft.length,1)
     assert.equal(revisedDraft[0].version,2)
     assert.equal(revisedDraft[0].legal_name,"B22 Düzenlenmiş Sentetik İşletme")
+    assert.equal(revisedDraft[0].business_kind,"legal_company",
+      "PG16 must persist the non-default legal-company kind at version 2")
     const draftReplay=await signupChrome.eval(`(async()=>{
       const s=await (await fetch('/personal/session')).json();
       const body={application_id:${JSON.stringify(draftId)},expected_version:1,
@@ -6563,6 +6575,11 @@ export default async function({container}:any){
     const reloadedDraft=reloadListResponse.drafts.find((x:any)=>x.id===draftId)
     assert.ok(reloadedDraft,"Same draft id must survive a full page reload")
     assert.equal(reloadedDraft.version,2,"Draft version must remain 2 after reload (no new write)")
+    // After a full reload the untouched form starts at its original default.
+    // Removing the UI's item.business_kind restoration must now FAIL this test.
+    assert.equal(await signupChrome.eval(
+      "document.querySelector('#organization-draft-form select[name=business_kind]').value"),
+      "individual_business","Fresh form must begin on its default kind before edit")
     // Click the visible "Taslağı düzenle" control -- a real Chromium user action.
     await signupChrome.click("#organization-draft-list button")
     // After clicking, the form must populate with the persisted values.
@@ -6581,8 +6598,8 @@ export default async function({container}:any){
       "Reload must populate form with persisted version-2 legal name")
     assert.equal(reloadFormValues.landline_phone,draftLandline,
       "Reload must populate form with persisted landline")
-    assert.equal(reloadedDraft.business_kind,"individual_business",
-      "Reload GET must preserve the persisted real-person business kind")
+    assert.equal(reloadedDraft.business_kind,"legal_company",
+      "Reload GET must preserve the persisted NON-default legal-company kind")
     assert.equal(reloadFormValues.business_kind,reloadedDraft.business_kind,
       "Reloaded edit form must restore the exact persisted business kind")
     // PG16 invariants: reload must not create any new rows.
