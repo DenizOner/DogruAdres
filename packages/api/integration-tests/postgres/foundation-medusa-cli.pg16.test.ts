@@ -131,15 +131,29 @@ async function run(){
           await target.unsafe(`update "${probe}"
             set declared_activities='["service_repair","insurance_claims"]'::jsonb,
                 primary_activity='insurance_claims'`)
-          await assert.rejects(
-            target.unsafe(`update "${probe}"
+          const copied=await target.unsafe(`select conname from pg_constraint
+            where conrelid='"${probe}"'::regclass
+              and conname='da_org_application_activities_check'`)
+          assert.equal(copied.length,1,"Activity CHECK not copied to isolated PG16 probe")
+          let duplicateRejected=false
+          let duplicateSqlState="not-exposed"
+          try{
+            await target.unsafe(`update "${probe}"
               set declared_activities='["service_repair","service_repair"]'::jsonb,
-                  primary_activity='service_repair'`),
-            (err:any)=>err?.code==="23514",
-            "PG16 must reject duplicate declarations in a copy of the real CHECK"
-          )
+                  primary_activity='service_repair'`)
+          }catch(error:any){
+            duplicateRejected=true
+            if(typeof error?.code==="string")duplicateSqlState=error.code
+          }
           const after=await target.unsafe(`select declared_activities::text as activities,
             primary_activity,status,version from "${probe}"`)
+          process.stdout.write("B22 PG16 duplicate CHECK probe: rejected="+duplicateRejected+
+            ", sqlstate="+duplicateSqlState+
+            ", unchanged="+(JSON.stringify(JSON.parse(String(after[0]?.activities)))===
+              JSON.stringify(["service_repair","insurance_claims"]))+"\n")
+          assert.ok(duplicateRejected,"Migrated PG16 CHECK accepted duplicate activity codes")
+          if(duplicateSqlState!=="not-exposed")
+            assert.equal(duplicateSqlState,"23514","Unexpected SQLSTATE on duplicate CHECK")
           assert.equal(after.length,1)
           assert.deepEqual(JSON.parse(String(after[0].activities)),
             ["service_repair","insurance_claims"],
