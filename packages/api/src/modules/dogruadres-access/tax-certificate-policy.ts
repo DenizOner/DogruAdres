@@ -1,3 +1,6 @@
+import { createHash, randomUUID } from "node:crypto"
+import { gzipSync, gunzipSync } from "node:zlib"
+
 /**
  * B22 verification of the approved tax-certificate file type and 10 MiB limit.
  * NOT an antivirus scan, PDF/image decoder, storage provider or upload endpoint.
@@ -57,4 +60,68 @@ export function inspectTaxCertificate(
       throw new InvalidTaxCertificate()
   }
   return {mimeType:actual,extension:extension==='jpeg'?'jpg':extension as TaxCertificateFormat['extension'],byteLength:content.length}
+}
+
+
+/**
+ * Private storage preparation only. Does not write files, publish a URL,
+ * grant access, or replace malware/PDF/image validation.
+ * The returned bytes are opaque: no consumer may serve them directly.
+ */
+export type PreparedTaxCertificate = Readonly<{
+  internalName: string
+  mimeType: TaxCertificateFormat["mimeType"]
+  compression: "gzip" | "none"
+  originalByteLength: number
+  originalSha256: string
+  storedBytes: Buffer
+}>
+
+const UUID_V4_FILE=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:pdf|jpg|png)$/
+
+export function prepareTaxCertificate(
+  originalFilename: unknown, content: unknown, claimedMime?: unknown
+): PreparedTaxCertificate {
+  const kind=inspectTaxCertificate(originalFilename,content,claimedMime)
+  const source=content as Buffer
+  // PDF/JPEG/PNG are commonly already compressed. Try lossless gzip, but
+  // retain original bytes if gzip would waste space.
+  const compressed=gzipSync(source)
+  const useful=compressed.length<source.length
+  return {
+    internalName: randomUUID()+"."+kind.extension,
+    mimeType: kind.mimeType,
+    compression: useful?"gzip":"none",
+    originalByteLength: source.length,
+    originalSha256: createHash("sha256").update(source).digest("hex"),
+    storedBytes: useful?compressed:Buffer.from(source),
+  }
+}
+
+/**
+ * Restore exactly the submitted document, failing closed on corruption or
+ * expansion beyond the approved ORIGINAL 10 MiB limit.
+ */
+export function restoreTaxCertificate(record: PreparedTaxCertificate): Buffer {
+  if(!record||typeof record!=="object"||
+     typeof record.internalName!=="string"||!UUID_V4_FILE.test(record.internalName)||
+     !Buffer.isBuffer(record.storedBytes)||
+     record.storedBytes.length<1||record.storedBytes.length>TAX_CERTIFICATE_MAX_BYTES||
+     !Number.isSafeInteger(record.originalByteLength)||
+     record.originalByteLength<8||record.originalByteLength>TAX_CERTIFICATE_MAX_BYTES||
+     typeof record.originalSha256!=="string"||
+     !/^[0-9a-f]{64}$/.test(record.originalSha256)||
+     !["gzip","none"].includes(record.compression))throw new InvalidTaxCertificate()
+  let original: Buffer
+  try {
+    original=record.compression==="gzip"?
+      gunzipSync(record.storedBytes,{maxOutputLength:TAX_CERTIFICATE_MAX_BYTES}):
+      Buffer.from(record.storedBytes)
+  } catch {throw new InvalidTaxCertificate()}
+  if(original.length!==record.originalByteLength ||
+     createHash("sha256").update(original).digest("hex")!==record.originalSha256)
+    throw new InvalidTaxCertificate()
+  const kind=inspectTaxCertificate(record.internalName,original,record.mimeType)
+  if(kind.byteLength!==record.originalByteLength)throw new InvalidTaxCertificate()
+  return original
 }

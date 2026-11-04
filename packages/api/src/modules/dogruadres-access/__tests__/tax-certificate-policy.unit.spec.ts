@@ -1,5 +1,7 @@
+import { gzipSync } from "node:zlib"
 import {
-  inspectTaxCertificate, InvalidTaxCertificate, TAX_CERTIFICATE_MAX_BYTES
+  inspectTaxCertificate, InvalidTaxCertificate, TAX_CERTIFICATE_MAX_BYTES,
+  prepareTaxCertificate, restoreTaxCertificate, type PreparedTaxCertificate
 } from "../tax-certificate-policy"
 
 const pdf=Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n","ascii")
@@ -57,5 +59,61 @@ describe("B22 tax certificate ingress format gate (NOT a public upload)",()=>{
     expect(JSON.stringify(info)).not.toContain("123456")
     expect(()=>inspectTaxCertificate("../gizli-123456.pdf",pdf))
       .toThrow("Invalid tax certificate")
+  })
+})
+
+
+describe("B22 lossless private-document preparation — no storage or upload",()=>{
+  it("assigns independent UUID v4 names without applicant PII or predictable names",()=>{
+    const a=prepareTaxCertificate("Ozel-Isletme-VKN12345.pdf",pdf)
+    const b=prepareTaxCertificate("Ozel-Isletme-VKN12345.pdf",pdf)
+    const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.pdf$/
+    expect(a.internalName).toMatch(uuid)
+    expect(b.internalName).toMatch(uuid)
+    expect(a.internalName).not.toBe(b.internalName)
+    expect(JSON.stringify({name:a.internalName,mime:a.mimeType})).not.toContain("VKN")
+    expect(restoreTaxCertificate(a)).toEqual(pdf)
+  })
+  it("tries lossless compression but keeps already-small documents intact",()=>{
+    const a=prepareTaxCertificate("belge.pdf",pdf)
+    expect(a.compression).toBe("none")
+    expect(a.storedBytes).toEqual(pdf)
+    expect(a.storedBytes).not.toBe(pdf)
+    expect(restoreTaxCertificate(a)).toEqual(pdf)
+  })
+  it("roundtrips a compressible approved PDF exactly with gzip and SHA-256",()=>{
+    const large=Buffer.concat([
+      Buffer.from("%PDF-1.7\n","ascii"),
+      Buffer.alloc(250_000,32),
+      Buffer.from("%%EOF","ascii"),
+    ])
+    const stored=prepareTaxCertificate("vergi.pdf",large)
+    expect(stored.compression).toBe("gzip")
+    expect(stored.storedBytes.length).toBeLessThan(large.length)
+    expect(restoreTaxCertificate(stored)).toEqual(large)
+  })
+  it("denies altered content, metadata, wrong type and over-limit expansion",()=>{
+    const large=Buffer.concat([
+      Buffer.from("%PDF-1.7\n","ascii"),
+      Buffer.alloc(250_000,32),
+      Buffer.from("%%EOF","ascii"),
+    ])
+    const prepared=prepareTaxCertificate("belge.pdf",large)
+    for(const changed of [
+      {storedBytes:Buffer.from("corrupt gzip")},
+      {originalSha256:"a".repeat(64)},
+      {originalByteLength:large.length-1},
+      {internalName:"path/belge.pdf"},
+      {internalName:"00000000-0000-0000-0000-000000000000.pdf"},
+      {mimeType:"image/jpeg"},
+    ])expect(()=>restoreTaxCertificate({...prepared,...changed} as PreparedTaxCertificate))
+      .toThrow(InvalidTaxCertificate)
+    const oversized=Buffer.concat([
+      Buffer.from("%PDF-1.7\n","ascii"),
+      Buffer.alloc(TAX_CERTIFICATE_MAX_BYTES,32),
+      Buffer.from("%%EOF","ascii"),
+    ])
+    const bomb={...prepared,storedBytes:gzipSync(oversized)}
+    expect(()=>restoreTaxCertificate(bomb)).toThrow(InvalidTaxCertificate)
   })
 })
