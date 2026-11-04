@@ -43,7 +43,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       // Buyer Organization follow list. No catalogue/public Seller search.
       // Suspended/blocked Stores may remain followed and must stay removable.
       const native=req.scope.resolve<{listSellers(filters:object,config?:object):Promise<any[]>}>("seller")
-      const stores=[]
+      const stores:Array<{seller_id:string;version:number;name:string;handle:string|null}>=[]
       for(const item of result.stores){
         const found=await native.listSellers({id:item.seller_id},{take:2})
         if(!Array.isArray(found)||found.length!==1||found[0]?.id!==item.seller_id||
