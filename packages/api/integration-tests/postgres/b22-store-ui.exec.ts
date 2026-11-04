@@ -6603,33 +6603,59 @@ export default async function({container}:any){
       }
       const countBefore=Number((await q(
         "select count(*)::int n from da_person"))[0].n)
-      for(let i=0;i<60;i++){
-        const status=await visitorHttp("127.0.0.2","/personal/session",{
-          email:"visitor-throttle-"+randomBytes(8).toString("hex")+"@example.invalid",
-          password:"deliberately-not-a-real-password",
-        })
-        assert.equal(status,401,"Source A must have 60 independent failed login attempts")
-      }
-      const deniedLogin=await visitorHttp("127.0.0.2","/personal/session",{
-        email:"visitor-throttle-"+randomBytes(8).toString("hex")+"@example.invalid",
-        password:"deliberately-not-a-real-password",
-      })
-      assert.equal(deniedLogin,429,"Source A's 61st login must be throttled")
+      // Rate quotas use PostgreSQL clock minutes, not elapsed 60-second TTL.
+      // A rollover among 60 HTTPS probes can legitimately return 401 again.
+      // Retry at most once with a FRESH real loopback source, so partial
+      // requests from the crossed minute cannot contaminate the new pass.
+      const quotaMinute=async()=>Number((await q(
+        "select floor(extract(epoch from clock_timestamp())/60)::bigint as bucket"
+      ))[0].bucket)
       const fakeRegistration=(source:string,spoof=false)=>visitorHttp(source,
         "/personal/register",{first_name:"Synthetic",last_name:"Rejected",
           email:signupEmail,password:"intentionally-wrong-password-123",
           mobile_phone:signupPhone},spoof)
-      assert.equal(await fakeRegistration("127.0.0.2"),429,
-        "Source A must not bypass the shared login/register source quota")
-      assert.equal(await fakeRegistration("127.0.0.2",true),429,
-        "Public spoofed forwarding and rate-source headers must be ignored")
-      const sourceBLogin=await visitorHttp("127.0.0.3","/personal/session",{
-        email:"visitor-independent-"+randomBytes(8).toString("hex")+"@example.invalid",
-        password:"deliberately-not-a-real-password",
-      })
-      assert.equal(sourceBLogin,401,"Source B login must not inherit A's 429")
-      assert.equal(await fakeRegistration("127.0.0.3"),409,
-        "Source B signup reaches native credential check, not A's 429")
+      let quotaVerified=false
+      for(let pass=0;pass<2&&!quotaVerified;pass++){
+        const sourceA=pass===0?"127.0.0.2":"127.0.0.4"
+        const startMinute=await quotaMinute()
+        const failedLogins:number[]=[]
+        for(let i=0;i<60;i++){
+          failedLogins.push(await visitorHttp(sourceA,"/personal/session",{
+            email:"visitor-throttle-"+randomBytes(8).toString("hex")+"@example.invalid",
+            password:"deliberately-not-a-real-password",
+          }))
+        }
+        const deniedLogin=await visitorHttp(sourceA,"/personal/session",{
+          email:"visitor-throttle-"+randomBytes(8).toString("hex")+"@example.invalid",
+          password:"deliberately-not-a-real-password",
+        })
+        const deniedSignup=await fakeRegistration(sourceA)
+        const deniedSpoof=await fakeRegistration(sourceA,true)
+        const sourceBLogin=await visitorHttp("127.0.0.3","/personal/session",{
+          email:"visitor-independent-"+randomBytes(8).toString("hex")+"@example.invalid",
+          password:"deliberately-not-a-real-password",
+        })
+        const sourceBSignup=await fakeRegistration("127.0.0.3")
+        if(await quotaMinute()!==startMinute){
+          if(pass===1)throw Error(
+            "B22 HTTPS quota check crossed two database-minute windows; inconclusive")
+          // Not a rate-limit failure: a new clock minute resets the quota.
+          // Source 127.0.0.4 has no prior counter in the replacement window.
+          continue
+        }
+        assert.ok(failedLogins.every(code=>code===401),
+          "Source A must have 60 independent failed logins in one PG minute")
+        assert.equal(deniedLogin,429,"Source A's 61st login must be throttled")
+        assert.equal(deniedSignup,429,
+          "Source A must not bypass the shared login/register source quota")
+        assert.equal(deniedSpoof,429,
+          "Public spoofed forwarding and rate-source headers must be ignored")
+        assert.equal(sourceBLogin,401,"Source B login must not inherit A's 429")
+        assert.equal(sourceBSignup,409,
+          "Source B signup reaches native credential check, not A's 429")
+        quotaVerified=true
+      }
+      assert.ok(quotaVerified,"No complete PostgreSQL-minute quota evidence")
       assert.equal(Number((await q(
         "select count(*)::int n from da_person"))[0].n),countBefore,
         "Failed quota probes must not register a Person")
