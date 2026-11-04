@@ -589,7 +589,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const db=securitySql(context.transactionManager)
     const result=await new IdentitySessions(db).organizations(token,organizationId,touch)
     if(!result)return null
-    const visible=[]
+    const visible: typeof result.organizations = []
     for(const item of result.organizations){
       if(item.role==="owner"){
         if(!organizationActionAllowed("owner","organization.read",
