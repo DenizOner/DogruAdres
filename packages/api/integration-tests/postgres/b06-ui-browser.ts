@@ -4,7 +4,7 @@ import {spawn,spawnSync,type ChildProcess} from 'node:child_process'
 import {mkdtempSync,mkdirSync,rmSync,existsSync,writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {createHmac} from 'node:crypto'
+import {createHmac,createHash} from 'node:crypto'
 import {findChromeBinary,getFreePort,until,killProcess} from './native-verification-browser'
 
 function otp(secret:string){
@@ -22,6 +22,13 @@ export class B06Chrome {
   readonly finishedRequests=new Set<string>()
   readonly failedRequests=new Set<string>()
   http:any[]=[]; phase='setup'; cleanup=false
+  // Opt-in isolated-test metadata only. Never persist raw Cookie headers or
+  // credentials; the digest is transient and must never be printed.
+  captureSessionProof=false
+  private readonly requestProof=new Map<string,{digest:string|null;observer:boolean|null}>()
+  requestSessionProof(requestId:string){
+    return this.requestProof.get(requestId)??{digest:null,observer:null}
+  }
   secretCanary='';secretLeaks=false
   runtimeErrors:string[]=[]
   constructor(readonly origin:string,readonly actor:'A'|'B'){}
@@ -37,6 +44,21 @@ export class B06Chrome {
     await new Promise<void>((resolve,reject)=>{this.ws!.onopen=()=>resolve();this.ws!.onerror=()=>reject(Error('CDP unavailable'))})
     this.ws.onmessage=e=>{const m=JSON.parse(e.data.toString());if(this.secretCanary&&['Runtime.consoleAPICalled','Log.entryAdded'].includes(m.method)&&JSON.stringify(m).includes(this.secretCanary))this.secretLeaks=true;if(m.id){const p=this.pending.get(m.id);if(p){clearTimeout(p.timer);this.pending.delete(m.id);m.error?p.reject(Error(`CDP rejected method=${p.method} code=${Number.isInteger(m.error.code)?m.error.code:'unknown'}`)):p.resolve(m.result)}}
       if(m.method==='Network.requestWillBeSent')this.methods.set(m.params.requestId,m.params.request.method)
+      if(m.method==='Network.requestWillBeSentExtraInfo'&&this.captureSessionProof){
+        const headers=m.params?.headers??{}
+        const raw=typeof headers.Cookie==='string'?headers.Cookie:
+          typeof headers.cookie==='string'?headers.cookie:''
+        const token=raw.split(';').map((v:string)=>v.trim())
+          .find((v:string)=>v.startsWith('da_session='))?.slice('da_session='.length)??''
+        const digest=/^[A-Za-z0-9_-]{43}$/.test(token)
+          ?createHash('sha256').update(token).digest('hex'):null
+        const observer=headers['x-da-observe']==='1'?true:
+          headers['x-da-observe']===undefined?false:null
+        this.requestProof.set(m.params.requestId,{digest,observer})
+        // Bound transient metadata while preserving the latest MFA requests.
+        if(this.requestProof.size>160)
+          this.requestProof.delete(this.requestProof.keys().next().value!)
+      }
       if(m.method==='Network.loadingFinished')this.finishedRequests.add(m.params.requestId)
       if(m.method==='Network.loadingFailed')this.failedRequests.add(m.params.requestId)
       if(m.method==='Runtime.exceptionThrown')this.recordRuntimeException(m.params?.exceptionDetails)
