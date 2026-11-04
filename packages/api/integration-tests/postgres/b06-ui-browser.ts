@@ -61,13 +61,21 @@ export class B06Chrome {
   secretCanary='';secretLeaks=false
   runtimeErrors:string[]=[]
   constructor(readonly origin:string,readonly actor:'A'|'B'){}
-  async start(ca:string){
+  async start(ca:string,cdpStartupTimeoutMs=15000){
     const nss=join(this.root,'.pki','nssdb');mkdirSync(nss,{recursive:true})
     for(const args of [['-N','--empty-password','-d','sql:'+nss],['-A','-d','sql:'+nss,'-n','B06 task CA','-t','C,,','-i',ca]])
       assert.equal(spawnSync('certutil',args,{stdio:'ignore'}).status,0,'Task NSS trust setup')
     const port=await getFreePort()
     this.chrome=spawn(findChromeBinary(),['--headless=new',`--remote-debugging-port=${port}`,'--remote-debugging-address=127.0.0.1','--no-sandbox','--disable-gpu','--disable-dev-shm-usage',`--user-data-dir=${join(this.root,'profile')}`,'about:blank'],{stdio:'ignore',env:{...process.env,HOME:this.root}})
-    await until(async()=> (await fetch(`http://127.0.0.1:${port}/json/version`,{signal:AbortSignal.timeout(1000)})).ok,15000,'B06 CDP')
+    try {
+      await until(async()=> (await fetch(`http://127.0.0.1:${port}/json/version`,{signal:AbortSignal.timeout(1000)})).ok,cdpStartupTimeoutMs,'B06 CDP')
+    } catch {
+      // Fixed, non-sensitive classification only. Chrome stderr remains hidden;
+      // no arguments, session credentials, URLs or secrets enter CI logs.
+      const stopped=this.chrome.exitCode!==null||this.chrome.signalCode!==null
+      throw Error(stopped?'B06 CDP startup failed: Chrome exited':
+        'B06 CDP startup timed out: Chrome process still running')
+    }
     const tabs:any=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()
     this.ws=new WebSocket(tabs.find((t:any)=>t.type==='page').webSocketDebuggerUrl)
     await new Promise<void>((resolve,reject)=>{this.ws!.onopen=()=>resolve();this.ws!.onerror=()=>reject(Error('CDP unavailable'))})
