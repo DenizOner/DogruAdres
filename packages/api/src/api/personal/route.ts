@@ -1564,8 +1564,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                 if(!current())return;
                 if(result.organization_id!==org||result.seller_id!==sellerId||
                    result.following!==(action==='follow')||
-                   result.version!==oldVersion+1)
-                  throw new Error('Takip sonucu doğrulanamadı');
+                   result.version!==oldVersion+1){
+                  // A successful write may return a malformed 200 response.
+                  // Keep the button disabled until a fresh authorized GET.
+                  const mismatch=new Error('Takip sonucu doğrulanamadı');
+                  mismatch.uncertain=true;
+                  throw mismatch;
+                }
                 following=result.following;version=result.version;label();
                 feedback.textContent=following?
                   'Bu işletme mağazayı takip ediyor. Özel fiyat veya ödeme hakkı verilmedi.':
