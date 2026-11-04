@@ -164,6 +164,8 @@ async function run(){
         assert.ok(result.split("\n").some(line=>line.startsWith(
           "PASS B22 Chrome: first Person signup HTTPS/PG16, mandatory mobile400, native Customer to one Person")),
           "Missing real Chrome/PG16 successful first Person signup evidence")
+        assert.ok(result.includes("PASS B22 Chrome: declared activities and primary activity saved in PG16; foreign and invalid primary denied; reload restores selection"),
+          "Missing actual Chrome/PG16 activity declaration/save/denial/reload proof")
         assert.ok(result.includes("PASS B22 Chrome: Person private Organization draft save/edit, foreign/unauthenticated/CSRF/replay denies, PG16 audit without Organization or Owner"),
           "Missing real Chrome/PG16 applicant-private draft, edit, CSRF/foreign/replay denial and no auto Organization/Owner")
         assert.ok(result.includes("PASS B22 Chrome: Person private Organization draft reload; version-2 reappears in list; Taslağı düzenle opens populated form; zero new draft/Organization/Owner/audit write"),
