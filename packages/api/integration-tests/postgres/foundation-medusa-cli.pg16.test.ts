@@ -240,6 +240,9 @@ async function run(){
         assert.ok(result.split("\n").includes(
           "PASS B22 Chrome: private applicant withdraws draft; foreign/CSRF/stale/replay denied; persisted audit, no Organization/Owner"),
           "Missing real Chrome/PG16 private draft withdrawal acceptance")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome: Buyer Organization Owner follows and unfollows approved Store; foreign/CSRF/replay denied, PG16 v1-v2 and two outboxed audits, no checkout"),
+          "Missing real Chrome/PG16 Store follow persistence and foreign/replay rejection")
         assert.ok(result.includes("PASS B22 Chrome: declared activities and primary activity saved in PG16; foreign and invalid primary denied; reload restores selection"),
           "Missing actual Chrome/PG16 activity declaration/save/denial/reload proof")
         assert.ok(result.includes("PASS B22 Chrome: Person private Organization draft save/edit, foreign/unauthenticated/CSRF/replay denies, PG16 audit without Organization or Owner"),
