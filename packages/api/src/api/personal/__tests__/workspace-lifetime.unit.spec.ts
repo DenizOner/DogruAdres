@@ -600,6 +600,45 @@ describe('private workspace lifetime (script regression only)',()=>{
     const h=harness();await loaded(h)
     const poll=h.listeners.get('poll')!();await tick();await answer(h,'/personal/organizations',{message:'Access denied'},false);await poll
     expect(h.el('workspace').hidden).toBe(true);expect(h.el('organizations').children).toHaveLength(0);expect(h.el('person').textContent).toBe('')
+    expect(h.el('login').hidden).toBe(false)
+  })
+  it('ignores an old observer 403 that arrives after a newer successful workspace load',async()=>{
+    // Exercise the shipped browser script. This is a timing regression, not
+    // a substitute for the separate real Chrome/native MFA acceptance.
+    const h=harness();await loaded(h)
+    expect(h.el('workspace').hidden).toBe(false)
+    const oldObserver=h.listeners.get('poll')!()
+    await tick()
+    const old=h.pending.find(p=>p.path==='/personal/organizations'&&
+      !p.answered&&p.options?.headers?.['x-da-observe']==='1')!
+    expect(old).toBeDefined()
+
+    // A fresh successful session/workspace load advances the view epoch.
+    // Its normal Organization read finishes BEFORE the old observer's 403.
+    const freshLoad=runInContext('load()',h.context)
+    await answer(h,'/personal/session',{person_id:'private-person',csrf_token:'fresh-csrf'})
+    const fresh=h.pending.find(p=>p.path==='/personal/organizations'&&
+      !p.answered&&p!==old)!
+    expect(fresh).toBeDefined()
+    expect(fresh.options.headers['x-da-observe']).toBeUndefined()
+    fresh.answered=true
+    fresh.resolve({ok:true,status:200,json:async()=>({
+      person_id:'private-person',
+      organizations:[{id:'A',name:'new-private-org',role:'owner'}]
+    })})
+    await freshLoad
+    expect(h.el('workspace').hidden).toBe(false)
+    expect(h.el('login').hidden).toBe(true)
+    expect(h.el('organizations').children[0].textContent).toContain('new-private-org')
+
+    // A 403 from the superseded request must not hide the new workspace.
+    old.answered=true
+    old.resolve({ok:false,status:403,json:async()=>({message:'Access denied'})})
+    await oldObserver
+    expect(h.el('workspace').hidden).toBe(false)
+    expect(h.el('login').hidden).toBe(true)
+    expect(h.el('organizations').children[0].textContent).toContain('new-private-org')
+    expect(h.el('status').textContent).not.toContain('Erişim yeniden doğrulanmalı')
   })
   it('does not touch the session by automatically loading after an observed scope change',async()=>{
     const h=harness();await loaded(h)
