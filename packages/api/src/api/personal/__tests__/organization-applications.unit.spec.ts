@@ -1,4 +1,4 @@
-import { decodeOrganizationDraftCursor, listOrganizationDrafts } from "../../../modules/dogruadres-access/organization-application"
+import { decodeOrganizationDraftCursor, listOrganizationDrafts, withdrawOrganizationDraft } from "../../../modules/dogruadres-access/organization-application"
 import { IdentitySessions } from "../../../modules/dogruadres-access/identity-session"
 import {GET,POST} from "../organization-applications/route"
 import {access,csrf,enabled,sessionToken} from "../security"
@@ -22,6 +22,9 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       personalOrganizationApplicationDrafts:jest.fn().mockResolvedValue({drafts:[],next_cursor:null}),
       personalSaveOrganizationApplicationDraft:jest.fn().mockResolvedValue({
         conflict:false,application_id:payload.application_id,status:"draft",version:1
+      }),
+      personalWithdrawOrganizationApplicationDraft:jest.fn().mockResolvedValue({
+        conflict:false,application_id:payload.application_id,status:"withdrawn",version:2
       }),
     }
     ;(access as jest.Mock).mockReturnValue(service)
@@ -164,4 +167,76 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       message:"Draft changed; read the current version"
     })
   })
+  it("withdraws only the selected Person's draft through the same CSRF-protected POST",async()=>{
+    req.body={action:"withdraw",application_id:payload.application_id,expected_version:1}
+    await POST(req,res)
+    expect(service.personalWithdrawOrganizationApplicationDraft).toHaveBeenCalledWith(
+      "opaque",req.body)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.json).toHaveBeenLastCalledWith({
+      application_id:payload.application_id,status:"withdrawn",version:2
+    })
+    expect(service.personalSaveOrganizationApplicationDraft).not.toHaveBeenCalled()
+    expect(JSON.stringify(res.json.mock.calls)).not.toContain(payload.landline_phone)
+  })
+  it("rejects malformed withdrawal, missing CSRF, foreign Person and stale version",async()=>{
+    req.body={action:"withdraw",application_id:payload.application_id,expected_version:1}
+    for(const bad of [
+      {expected_version:0},{expected_version:-1},{person_id:"daprs_other"},
+      {application_id:"daorg_invalid"},{status:"approved"}
+    ]){
+      req.body={action:"withdraw",application_id:payload.application_id,
+        expected_version:1,...bad}
+      await POST(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(400)
+    }
+    expect(service.personalWithdrawOrganizationApplicationDraft).not.toHaveBeenCalled()
+    req.body={action:"withdraw",application_id:payload.application_id,expected_version:1}
+    ;(csrf as jest.Mock).mockResolvedValue(false)
+    await POST(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    ;(csrf as jest.Mock).mockResolvedValue(true)
+    service.personalWithdrawOrganizationApplicationDraft.mockResolvedValueOnce(null)
+    await POST(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    service.personalWithdrawOrganizationApplicationDraft.mockResolvedValueOnce({conflict:true})
+    await POST(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(409)
+  })
+  it("serializes withdrawal with draft writes; one private audit/outbox, no privilege changes",async()=>{
+    const spy=jest.spyOn(IdentitySessions.prototype,"current").mockResolvedValue({
+      person_id:"daprs_owner",actor_type:"customer",actor_id:"cus_owner"
+    } as any)
+    const id=payload.application_id
+    const input={action:"withdraw",application_id:id,expected_version:3}
+    let owner="daprs_owner",state="draft",version=3
+    const exec=jest.fn(async(sql:string)=>{
+      if(sql.includes("from da_organization_application where id=? for update"))
+        return [{applicant_person_id:owner,status:state,version}]
+      if(sql.includes("update da_organization_application"))
+        return [{version:4}]
+      return []
+    })
+    try{
+      const db:any={execute:exec}
+      owner="daprs_foreign"
+      expect(await withdrawOrganizationDraft(db,"opaque",input)).toBeNull()
+      expect(exec.mock.calls.every(args=>!String(args[0]).includes("update da_organization_application"))).toBe(true)
+      owner="daprs_owner";version=4
+      expect(await withdrawOrganizationDraft(db,"opaque",input)).toEqual({conflict:true})
+      version=3;state="withdrawn"
+      expect(await withdrawOrganizationDraft(db,"opaque",input)).toEqual({conflict:true})
+      state="draft"
+      const result=await withdrawOrganizationDraft(db,"opaque",input)
+      expect(result).toEqual({conflict:false,application_id:id,status:"withdrawn",version:4})
+      const statements=exec.mock.calls.map(args=>String(args[0]))
+      expect(statements.filter(sql=>sql.includes("pg_advisory_xact_lock"))).toHaveLength(4)
+      expect(statements.filter(sql=>sql.includes("update da_organization_application"))).toHaveLength(1)
+      expect(statements.filter(sql=>sql.includes("insert into da_audit_event"))).toHaveLength(1)
+      expect(statements.filter(sql=>sql.includes("insert into da_security_outbox"))).toHaveLength(1)
+      expect(statements.join(" ")).not.toContain("createOrganizations")
+      expect(statements.join(" ")).not.toContain("createMemberships")
+    }finally{spy.mockRestore()}
+  })
+
 })
