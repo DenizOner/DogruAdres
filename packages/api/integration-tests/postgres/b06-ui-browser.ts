@@ -14,6 +14,29 @@ function otp(secret:string){
   const h=createHmac('sha1',key).update(counter).digest(),i=h[h.length-1]&15
   return ((h.readUInt32BE(i)&0x7fffffff)%1000000).toString().padStart(6,'0')
 }
+// CDP request headers are case-insensitive. Classify only fixed metadata;
+// never keep or log the raw Cookie header, token, or other header values.
+export function classifyRequestSessionHeaders(headers:unknown):{digest:string|null;observer:boolean|null}{
+  if(!headers||typeof headers!=='object'||Array.isArray(headers))
+    return {digest:null,observer:null}
+  const entries=Object.entries(headers)
+  const header=(name:string):string|null|undefined=>{
+    const matches=entries.filter(([key])=>key.toLowerCase()===name)
+    if(matches.length===0)return undefined
+    return matches.length===1&&typeof matches[0][1]==='string'?matches[0][1]:null
+  }
+  const raw=header('cookie')
+  const cookies=typeof raw==='string'?raw.split(';').map(v=>v.trim())
+    .filter(v=>v.startsWith('da_session=')):[]
+  const token=cookies.length===1?cookies[0].slice('da_session='.length):''
+  const digest=/^[A-Za-z0-9_-]{43}$/.test(token)
+    ?createHash('sha256').update(token).digest('hex'):null
+  const observed=header('x-da-observe')
+  const observer=observed===undefined?false:
+    observed===null?null:observed.trim()==='1'?true:null
+  return {digest,observer}
+}
+
 export class B06Chrome {
   private root=mkdtempSync(join(tmpdir(),'chrome-da-profile-b06-'))
   private chrome?:ChildProcess;private ws?:WebSocket;private id=0
@@ -22,12 +45,18 @@ export class B06Chrome {
   readonly finishedRequests=new Set<string>()
   readonly failedRequests=new Set<string>()
   http:any[]=[]; phase='setup'; cleanup=false
-  // Opt-in isolated-test metadata only. Never persist raw Cookie headers or
-  // credentials; the digest is transient and must never be printed.
+  // Enabled only for disposable Staff A recovery diagnosis. Unknown events
+  // remain unknown; no raw Cookie or header values are retained.
   captureSessionProof=false
   private readonly requestProof=new Map<string,{digest:string|null;observer:boolean|null}>()
   requestSessionProof(requestId:string){
     return this.requestProof.get(requestId)??{digest:null,observer:null}
+  }
+  recordRequestSessionProof(requestId:string,headers:unknown){
+    if(!this.captureSessionProof||!requestId)return
+    this.requestProof.set(requestId,classifyRequestSessionHeaders(headers))
+    if(this.requestProof.size>160)
+      this.requestProof.delete(this.requestProof.keys().next().value!)
   }
   secretCanary='';secretLeaks=false
   runtimeErrors:string[]=[]
@@ -44,21 +73,8 @@ export class B06Chrome {
     await new Promise<void>((resolve,reject)=>{this.ws!.onopen=()=>resolve();this.ws!.onerror=()=>reject(Error('CDP unavailable'))})
     this.ws.onmessage=e=>{const m=JSON.parse(e.data.toString());if(this.secretCanary&&['Runtime.consoleAPICalled','Log.entryAdded'].includes(m.method)&&JSON.stringify(m).includes(this.secretCanary))this.secretLeaks=true;if(m.id){const p=this.pending.get(m.id);if(p){clearTimeout(p.timer);this.pending.delete(m.id);m.error?p.reject(Error(`CDP rejected method=${p.method} code=${Number.isInteger(m.error.code)?m.error.code:'unknown'}`)):p.resolve(m.result)}}
       if(m.method==='Network.requestWillBeSent')this.methods.set(m.params.requestId,m.params.request.method)
-      if(m.method==='Network.requestWillBeSentExtraInfo'&&this.captureSessionProof){
-        const headers=m.params?.headers??{}
-        const raw=typeof headers.Cookie==='string'?headers.Cookie:
-          typeof headers.cookie==='string'?headers.cookie:''
-        const token=raw.split(';').map((v:string)=>v.trim())
-          .find((v:string)=>v.startsWith('da_session='))?.slice('da_session='.length)??''
-        const digest=/^[A-Za-z0-9_-]{43}$/.test(token)
-          ?createHash('sha256').update(token).digest('hex'):null
-        const observer=headers['x-da-observe']==='1'?true:
-          headers['x-da-observe']===undefined?false:null
-        this.requestProof.set(m.params.requestId,{digest,observer})
-        // Bound transient metadata while preserving the latest MFA requests.
-        if(this.requestProof.size>160)
-          this.requestProof.delete(this.requestProof.keys().next().value!)
-      }
+      if(m.method==='Network.requestWillBeSentExtraInfo')
+        this.recordRequestSessionProof(m.params.requestId,m.params?.headers)
       if(m.method==='Network.loadingFinished')this.finishedRequests.add(m.params.requestId)
       if(m.method==='Network.loadingFailed')this.failedRequests.add(m.params.requestId)
       if(m.method==='Runtime.exceptionThrown')this.recordRuntimeException(m.params?.exceptionDetails)
