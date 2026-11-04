@@ -580,9 +580,30 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       version: changed[0].mobile_version as number }
   }
 
+  // Personal and observer reads must obey the same centrally adjustable
+  // organization.read policy as requireOrganizationAccess. Never let a
+  // narrowed Owner policy leak names or memberships through the launcher.
+  private async readablePersonalOrganizations_(
+    token:string,organizationId:string|undefined,touch:boolean,context:Context
+  ){
+    const db=securitySql(context.transactionManager)
+    const result=await new IdentitySessions(db).organizations(token,organizationId,touch)
+    if(!result)return null
+    const visible=[]
+    for(const item of result.organizations){
+      if(item.role==="owner"){
+        if(!organizationActionAllowed("owner","organization.read",
+          await isCurrentProtectedOwner(db,result.person_id,item.id),false))continue
+      }else if(item.role!=="admin"&&item.role!=="member")continue
+      visible.push(item)
+    }
+    if(organizationId&&visible.length!==1)return null
+    return {...result,organizations:visible}
+  }
+
   @InjectTransactionManager()
   async personalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
-    return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId)
+    return this.readablePersonalOrganizations_(token,organizationId,true,context)
   }
 
   /** Current active Organization and protected Owner proof for privileged reads.
@@ -607,7 +628,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   // Background privacy checks must not extend the user's idle session.
   @InjectTransactionManager()
   async observePersonalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
-    return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId, false)
+    return this.readablePersonalOrganizations_(token,organizationId,false,context)
   }
 
   @InjectTransactionManager()
