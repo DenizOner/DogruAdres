@@ -104,6 +104,53 @@ async function run(){
       }
       const ledger=await target.unsafe("select count(*)::int as n from mikro_orm_migrations where name like 'Migration2026102%'")
       assert.ok(Number(ledger[0].n)>=1,"No Foundation migration history from Medusa CLI")
+      if(scope==="b22-ui"){
+        // SQL-only acceptance before the long, unrelated native Chrome flow:
+        // LIKE copies the ACTUAL migrated CHECK and defaults, but NOT foreign
+        // keys. The task-owned scratch table never contains a real Person.
+        const probe="b22_activity_constraint_probe_"+randomBytes(6).toString("hex")
+        const source=await target.unsafe(`select conname from pg_constraint
+          where conrelid='da_organization_application'::regclass
+            and conname='da_org_application_activities_check'`)
+        assert.equal(source.length,1,"B22 activity CHECK missing from native migration")
+        await target.unsafe(`create table "${probe}"
+          (like da_organization_application including defaults including constraints)`)
+        try{
+          await target.unsafe(`insert into "${probe}"
+            (id,applicant_person_id,business_kind,legal_name,landline_phone)
+            values('daorgapp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              'daprs_b22synthetic','individual_business','B22 sentetik eski taslak',
+              '+90 212 555 00 00')`)
+          const old=await target.unsafe(`select declared_activities::text as activities,
+            primary_activity,status,version from "${probe}"`)
+          assert.equal(old.length,1)
+          assert.equal(old[0].activities,"[]")
+          assert.equal(old[0].primary_activity,null)
+          assert.equal(old[0].status,"draft")
+          assert.equal(Number(old[0].version),1)
+          await target.unsafe(`update "${probe}"
+            set declared_activities='["service_repair","insurance_claims"]'::jsonb,
+                primary_activity='insurance_claims'`)
+          await assert.rejects(
+            target.unsafe(`update "${probe}"
+              set declared_activities='["service_repair","service_repair"]'::jsonb,
+                  primary_activity='service_repair'`),
+            (err:any)=>err?.code==="23514",
+            "PG16 must reject duplicate declarations in a copy of the real CHECK"
+          )
+          const after=await target.unsafe(`select declared_activities::text as activities,
+            primary_activity,status,version from "${probe}"`)
+          assert.equal(after.length,1)
+          assert.equal(after[0].activities,'["service_repair", "insurance_claims"]'.replace(", ",","),
+            "Failed duplicate update must preserve existing valid activities")
+          assert.equal(after[0].primary_activity,"insurance_claims")
+          assert.equal(after[0].status,"draft")
+          assert.equal(Number(after[0].version),1)
+          process.stdout.write("PASS B22 PG16 migrated CHECK: valid multi-activity, duplicate 23514 and unchanged row; legacy-shaped []/NULL default on isolated copy\n")
+        }finally{
+          await target.unsafe(`drop table if exists "${probe}"`)
+        }
+      }
       process.stdout.write("PASS Medusa 2.21.2 CLI db:migrate: Foundation discovered and ledger recorded on disposable PG16\n")
       // Execute native AuthIdentity TOTP/recovery with this exact disposable
       // database. Only this child enables the local Auth module MFA options;
