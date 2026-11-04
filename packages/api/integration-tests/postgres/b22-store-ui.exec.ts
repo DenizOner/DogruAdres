@@ -2578,7 +2578,7 @@ export default async function({container}:any){
     assert.deepEqual(await q("select version from da_buyer_store_follow "+
       "where buyer_organization_id=$1 and seller_id=$2",[followBuyer,followSeller]),
       [{version:2}])
-    process.stdout.write("PASS B22 Chrome: Buyer Organization Owner follows and unfollows approved Store; foreign/CSRF/replay denied, PG16 v1-v2 and two outboxed audits, no checkout\\n")
+    process.stdout.write("PASS B22 Chrome: Buyer Organization Owner follows and unfollows approved Store; foreign/CSRF/replay denied, PG16 v1-v2 and two outboxed audits, no checkout\n")
 
     // Separate legal Seller Organization is part of the current entitlement,
     // not just the native Seller's open flag. Beta remains an active Buyer.
