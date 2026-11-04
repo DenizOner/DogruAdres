@@ -204,6 +204,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <button type="submit">Taslağı kaydet</button>
     </form>
     <p id="organization-draft-status" role="status" aria-live="polite"></p>
+    <button type="button" id="organization-draft-withdraw" hidden>Seçili taslağı geri çek</button>
     <button type="button" id="organization-draft-new">Yeni taslak</button>
     <button type="button" id="organization-draft-refresh">Taslaklarımı yenile</button>
     <div id="organization-draft-list"></div>
@@ -398,7 +399,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     organizationDraftSaving=busy;
     for(const control of el('organization-draft-form').querySelectorAll('input,select,button'))
       control.disabled=busy;
-    for(const id of ['organization-draft-new','organization-draft-refresh','organization-draft-more'])
+    for(const id of ['organization-draft-new','organization-draft-refresh','organization-draft-more','organization-draft-withdraw'])
       el(id).disabled=busy;
     for(const button of el('organization-draft-list').querySelectorAll('button'))
       button.disabled=busy;
@@ -408,6 +409,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     organizationDraftId='';organizationDraftVersion=0;organizationDraftCursor=null;
     el('organization-draft-list').replaceChildren();
     el('organization-draft-more').hidden=true;
+    el('organization-draft-withdraw').hidden=true;
     el('organization-draft-status').textContent='';
     el('organization-draft-form').reset();
     lockOrganizationDraftSelection(false);
@@ -416,7 +418,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const cursor=append?organizationDraftCursor:null;
     if(append&&!cursor)return;
     const request=++organizationDraftRequest,epoch=viewEpoch;
-    if(!append)el('organization-draft-list').replaceChildren();
+    if(!append){
+      el('organization-draft-list').replaceChildren();
+      el('organization-draft-withdraw').hidden=true;
+    }
     el('organization-draft-more').disabled=true;
     el('organization-draft-status').textContent='Taslaklar kontrol ediliyor…';
     try{
@@ -428,7 +433,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           /^[A-Za-z0-9_-]{1,256}$/.test(data.next_cursor)))
         throw Error('Taslaklar doğrulanamadı');
       for(const item of data.drafts){
-        if(!item||typeof item.id!=='string'||item.status!=='draft'||
+        if(!item||typeof item.id!=='string'||!['draft','withdrawn'].includes(item.status)||
           !Number.isSafeInteger(item.version)||item.version<1||
           !['individual_business','legal_company'].includes(item.business_kind)||
           !Array.isArray(item.declared_activities)||item.declared_activities.length>6||
@@ -437,10 +442,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             item.primary_activity!==null:!item.declared_activities.includes(item.primary_activity)))
           throw Error('Taslaklar doğrulanamadı');
         const row=document.createElement('p'),button=document.createElement('button');
-        row.textContent=item.legal_name+' — Taslak (henüz gönderilmedi)';
-        button.type='button';button.textContent='Taslağı düzenle';
-        button.disabled=organizationDraftSaving;
-        button.onclick=()=>{
+        row.textContent=item.legal_name+(item.status==='draft'?
+          ' — Taslak (henüz gönderilmedi)':' — Geri çekildi (yeniden düzenlenemez)');
+        if(item.status==='draft'){
+          button.type='button';button.textContent='Taslağı düzenle';
+          button.disabled=organizationDraftSaving;
+          button.onclick=()=>{
           if(organizationDraftSaving)return;
           organizationDraftId=item.id;organizationDraftVersion=item.version;
           const form=el('organization-draft-form');
@@ -451,10 +458,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           form.elements.legal_name.value=item.legal_name;
           form.elements.landline_phone.value=item.landline_phone;
           form.querySelector('button').disabled=false;
+          el('organization-draft-withdraw').hidden=false;
           el('organization-draft-status').textContent='Seçilen özel taslak düzenlenebilir; gönderilmedi.';
           form.elements.legal_name.focus();
         };
-        row.append(button);el('organization-draft-list').append(row);
+          row.append(button);
+        }
+        el('organization-draft-list').append(row);
       }
       organizationDraftCursor=data.next_cursor;
       el('organization-draft-more').hidden=!organizationDraftCursor;
@@ -476,6 +486,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     organizationDraftId='';organizationDraftVersion=0;
     el('organization-draft-form').reset();
     el('organization-draft-form').querySelector('button').disabled=false;
+    el('organization-draft-withdraw').hidden=true;
     el('organization-draft-status').textContent='Yeni taslak; hiçbir başvuru henüz gönderilmedi.';
   };
   el('organization-draft-refresh').onclick=()=>{
@@ -483,6 +494,41 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   };
   el('organization-draft-more').onclick=()=>{
     if(!organizationDraftSaving)void refreshOrganizationDrafts(true);
+  };
+  el('organization-draft-withdraw').onclick=async()=>{
+    if(organizationDraftSaving||!organizationDraftId||organizationDraftVersion<1||
+       document.hidden||el('workspace').hidden)return;
+    const id=organizationDraftId,version=organizationDraftVersion,epoch=viewEpoch;
+    const mutation=++organizationDraftMutation;
+    lockOrganizationDraftSelection(true);
+    let uncertain=false;
+    try{
+      const result=await api('organization-applications',{method:'POST',
+        body:JSON.stringify({action:'withdraw',application_id:id,expected_version:version})});
+      if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
+      if(result.application_id!==id||result.status!=='withdrawn'||
+         result.version!==version+1)throw Error('Geri çekme sonucu belirsiz');
+      organizationDraftId='';organizationDraftVersion=0;
+      el('organization-draft-withdraw').hidden=true;
+      el('organization-draft-form').reset();
+      await refreshOrganizationDrafts();
+      if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
+      el('organization-draft-status').textContent=
+        'Taslak geri çekildi ve özel geçmişte saklandı; başvuru gönderilmedi.';
+    }catch(error){
+      if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
+      uncertain=!!error.uncertain;
+      el('organization-draft-status').textContent=uncertain?
+        'Geri çekme sonucu belirsiz; tekrar göndermeyin. Taslakları yenileyip durumu kontrol edin.':
+        error.httpStatus===409?
+          'Taslak değişmiş. Taslakları yenileyip güncel durumu kontrol edin.':
+          'Geri çekme yapılamadı. Oturumu ve taslak durumunu kontrol edin.';
+    }finally{
+      if(mutation===organizationDraftMutation&&epoch===viewEpoch){
+        lockOrganizationDraftSelection(false);
+        if(uncertain)el('organization-draft-withdraw').disabled=true;
+      }
+    }
   };
   el('organization-draft-form').onsubmit=async e=>{
     e.preventDefault();
