@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
-import { classifyLocalEvidence, collectLocalEvidence, main, readOnlyGitTimeoutMs } from "./local-worktree-preflight.mjs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { classifyLocalEvidence, collectLocalEvidence, main, readOnlyGit, readOnlyGitTimeoutMs } from "./local-worktree-preflight.mjs";
 
 const clean = { trackedChanges: 0, untracked: 0, ignored: 0,
   stashes: 0, localOnlyCommits: 0, reflogEntries: 0,
@@ -65,4 +66,38 @@ test("slow Windows ignored scan gets a bounded read-only 60s budget, all others 
     assert.equal(readOnlyGitTimeoutMs(args), 15_000);
   }
   assert.equal(classifyLocalEvidence(clean).deletion, "BLOCKED");
+});
+
+test("Git stderr is explicitly captured and not inherited by public inventory logs",()=>{
+  let options;
+  const result=readOnlyGit("/synthetic-private-checkout",["status","--porcelain=v1"],
+    (_bin,_args,opts)=>{options=opts;return "  ";});
+  assert.equal(result,"");
+  assert.deepEqual(options.stdio,["ignore","pipe","pipe"]);
+  assert.equal(options.env.GIT_TERMINAL_PROMPT,"0");
+});
+
+test("common Git directory digest distinguishes clones and matches linked worktrees",()=>{
+  const parent=mkdtempSync(join(tmpdir(),"da-common-git-"));
+  try {
+    const a=join(parent,"clone-a"),b=join(parent,"clone-b"),linked=join(parent,"linked");
+    for(const root of [a,b,linked])mkdirSync(root);
+    for(const root of [a,b])mkdirSync(join(root,".git"));
+    const fake=(checkout,common)=>(_,...args)=>{
+      if(args[0]==="rev-parse"&&args[1]==="--show-toplevel")return checkout;
+      if(args[0]==="rev-parse"&&args[1]==="--git-common-dir")return common;
+      if(args[0]==="rev-parse"&&args[1]==="HEAD")return "a".repeat(40);
+      if(args[0]==="rev-parse")throw Error("Unexpected rev-parse command");
+      if(args[0]==="branch")return "synthetic";
+      if(args[0]==="rev-list")return "0";
+      if(args[0]==="worktree"&&args[1]==="list")return "worktree "+checkout+"\\nHEAD "+"a".repeat(40)+"\\n\\0";
+      return "";
+    };
+    const first=collectLocalEvidence(a,fake(a,".git"));
+    const second=collectLocalEvidence(b,fake(b,".git"));
+    const worktree=collectLocalEvidence(linked,fake(linked,join(a,".git")));
+    assert.notEqual(first.commonDirDigest,second.commonDirDigest);
+    assert.equal(first.commonDirDigest,worktree.commonDirDigest);
+    for(const result of [first,second,worktree])assert.equal(result.deletion,"BLOCKED");
+  }finally{rmSync(parent,{recursive:true,force:true});}
 });
