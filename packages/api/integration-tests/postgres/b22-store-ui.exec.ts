@@ -5975,6 +5975,82 @@ export default async function({container}:any){
       // platform staff API. This permits the pre-existing post-native fault
       // regression to run with a fresh B session and its original invariants.
       await loginStaffA(staffCodes[1])
+      // The historical 403 had two possible sessions but no request-to-cookie
+      // binding. Control both sides using ONLY native, genuinely issued Staff A
+      // recovery sessions in the existing disposable HTTPS/PG16 fixture.
+      const revokedStaffCookie=await browser.token()
+      assert.ok(typeof revokedStaffCookie==="string"&&
+        /^[A-Za-z0-9_-]{43}$/.test(revokedStaffCookie),
+        "Staff A must have a genuine full MFA session before revocation")
+      const revokedStaffId=createHash("sha256").update(revokedStaffCookie).digest("hex")
+      const lockStaff=await browser.eval(`(async()=>{
+        const response=await fetch('/personal/session')
+        if(response.status!==200)return response.status
+        const session=await response.json()
+        const locked=await fetch('/personal/session?action=lock',{
+          method:'DELETE',headers:{'x-csrf-token':session.csrf_token}
+        })
+        return locked.status
+      })()`)
+      assert.equal(lockStaff,200,"Real CSRF-protected Staff A session lock must succeed")
+      const revokedStaff=await q(
+        "select status from da_browser_session where id=$1 and person_id=$2",
+        [revokedStaffId,A.person])
+      assert.equal(revokedStaff.length,1)
+      assert.equal(revokedStaff[0].status,"revoked")
+      const oldOrganizationStatus=async(observe:boolean)=>new Promise<number>((resolve,reject)=>{
+        const req=tlsRequest(host+"/personal/organizations",{
+          method:"GET",ca:readFileSync(crt),headers:{
+            cookie:"da_session="+revokedStaffCookie,
+            ...(observe?{"x-da-observe":"1"}:{})
+          }
+        },res=>{res.resume();res.on("end",()=>resolve(res.statusCode??0))})
+        req.on("error",reject)
+        req.setTimeout(10000,()=>req.destroy(Error("B22 revoked Staff A probe timed out")))
+        req.end()
+      })
+      assert.equal(await oldOrganizationStatus(false),403,
+        "Real revoked Staff A cookie must be denied on ordinary Organization GET")
+      assert.equal(await oldOrganizationStatus(true),403,
+        "Real revoked Staff A cookie must be denied on observer Organization GET")
+      // Unused recovery code, same real Chrome profile, no fake auth/session
+      // writes, no rate-limit bypass. loginStaffA retains the normal caps.
+      await loginStaffA(staffCodes[3])
+      const currentStaffCookie=await browser.token()
+      assert.ok(typeof currentStaffCookie==="string"&&
+        /^[A-Za-z0-9_-]{43}$/.test(currentStaffCookie)&&
+        currentStaffCookie!==revokedStaffCookie,
+        "Post-recovery cookie must be a distinct real native MFA session")
+      const currentStaffId=createHash("sha256").update(currentStaffCookie).digest("hex")
+      const [currentStaff]=await q(`select s.status,
+          s.person_id=$2 as same_person,
+          s.epoch=e.epoch as current_epoch,
+          s.mfa_platform_version=(select version from da_mfa_policy where id='current') as current_platform,
+          s.mfa_person_version=coalesce((select version from da_person_mfa_preference where person_id=s.person_id),0) as current_person
+        from da_browser_session s join da_person_security e on e.person_id=s.person_id
+        where s.id=$1`,[currentStaffId,A.person])
+      assert.ok(currentStaff?.status==="active"&&currentStaff.same_person&&
+        currentStaff.current_epoch&&currentStaff.current_platform&&currentStaff.current_person,
+        "Post-recovery Staff A cookie must be active and current in actual PG16")
+      const organizationProbeStart=browser.http.length
+      const currentNormal=await browser.eval(
+        "(async()=> (await fetch('/personal/organizations',{cache:'no-store'})).status)()")
+      const currentObserver=await browser.eval(
+        "(async()=> (await fetch('/personal/organizations',{cache:'no-store',headers:{'x-da-observe':'1'}})).status)()")
+      assert.equal(currentNormal,200,"Current Staff A ordinary Organization GET must succeed")
+      assert.equal(currentObserver,200,"Current Staff A observer Organization GET must succeed")
+      await until(async()=>{
+        const observed=browser.http.slice(organizationProbeStart).filter((row:any)=>
+          row.method==="GET"&&row.path==="/personal/organizations"&&row.status===200)
+        return [false,true].every(observer=>observed.some((row:any)=>{
+          const proof=browser.requestSessionProof(row.requestId)
+          return proof.digest===currentStaffId&&proof.observer===observer
+        }))
+      },10000,"B22 real CDP exact-request fresh Staff A cookie/observer correlation")
+      assert.equal((await q("select status from da_browser_session where id=$1",
+        [revokedStaffId]))[0]?.status,"revoked",
+        "Old Staff A session must remain revoked after genuine new recovery")
+      process.stdout.write("PASS B22 MFA session differential: real revoked Staff A cookie ordinary/observer Organization GET403; distinct active-current post-recovery Chrome cookie ordinary/observer GET200, CDP requestId correlated and PG16 verified; no secrets logged\\n")
       const [requiredPolicy]=await q("select version,platform_mode from da_mfa_policy where id='current'")
       assert.equal(requiredPolicy.platform_mode,"required")
       assert.equal((await staffSetPlatform("optional",Number(requiredPolicy.version))).status,200)
