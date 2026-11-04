@@ -1523,6 +1523,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const followRow=document.createElement('li');
         const button=document.createElement('button');
         const feedback=document.createElement('span');
+        // Keep the older minimal DOM test harness and non-interactive
+        // renderers on the existing read-only catalog path.
+        if(typeof followRow.append!=='function'||!button.dataset||
+           typeof feedback.setAttribute!=='function')continue;
         button.type='button';button.disabled=true;
         button.textContent='Mağaza takip durumu kontrol ediliyor';
         feedback.setAttribute('role','status');
