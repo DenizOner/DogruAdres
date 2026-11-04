@@ -11,8 +11,8 @@ function harness(interactiveFollowDom=false) {
     return nodes.get(id)
   }
   const document={hidden:false,getElementById:el,createElement:()=>interactiveFollowDom?
-    ({textContent:'',dataset:{},disabled:false,children:[],
-      setAttribute(){},append(...items:any[]){this.children.push(...items)},remove(){this.removed=true}}):
+    ({textContent:'',dataset:{},disabled:false,children:[] as any[],
+      setAttribute(){},append(...items:any[]){this.children.push(...items)},remove(){}}):
     ({textContent:''}),addEventListener:(n:string,f:Function)=>listeners.set(n,f)}
   const context=createContext({document,window:{addEventListener:(n:string,f:Function)=>listeners.set(n,f)},location:new URL('https://app.example.invalid/personal'),URL,history:{replaceState(){}},URLSearchParams,setInterval:(f:Function)=>listeners.set('poll',f),fetch:(path:string,options:any)=>new Promise(resolve=>pending.push({path,options,resolve}))})
   const scripts=[...source.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1])
