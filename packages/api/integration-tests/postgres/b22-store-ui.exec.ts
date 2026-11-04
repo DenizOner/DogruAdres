@@ -857,7 +857,9 @@ export default async function({container}:any){
     assert.equal(topology.privateOrigin,process.env.DOGRUADRES_PRIVATE_API)
     assert.equal(topology.publicOrigin,host)
     const browser=new B06Chrome(host,"A");browsers.push(browser)
-    await browser.start(crt)
+    // Existing free CI runner may need longer for real Chrome CDP startup.
+    // This bounded allowance affects only this disposable B22 first browser.
+    await browser.start(crt,30000)
     await browser.login(A.email,A.password,A.person)
     if(process.env.B22_ADMIN_SMTP==="true"){
       const other=new B06Chrome(host,"B");browsers.push(other)
