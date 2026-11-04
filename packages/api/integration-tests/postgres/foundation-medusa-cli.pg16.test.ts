@@ -166,6 +166,8 @@ async function run(){
           "Missing real Chrome/PG16 successful first Person signup evidence")
         assert.ok(result.includes("PASS B22 Chrome: Person private Organization draft save/edit, foreign/unauthenticated/CSRF/replay denies, PG16 audit without Organization or Owner"),
           "Missing real Chrome/PG16 applicant-private draft, edit, CSRF/foreign/replay denial and no auto Organization/Owner")
+        assert.ok(result.includes("PASS B22 Chrome: Person private Organization draft reload; version-2 reappears in list; Taslağı düzenle opens populated form; zero new draft/Organization/Owner/audit write"),
+          "Missing real Chrome/PG16 draft reload persistence: same draft (v2) in list, Taslağı düzenle form populated, zero new DB rows")
         assert.ok(result.includes("PASS B22 Chrome: primary Customer protected in UI, no unlink control, forged unlink403 and unchanged PG16 login/proof/audit"),
           "Missing real browser primary/secondary distinction, forged unlink denial and PG16 non-mutation")
         assert.ok(result.includes("PASS B22 real PG16: post-primary-proof forced audit failure rolls back six Foundation tables"),

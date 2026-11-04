@@ -6535,6 +6535,71 @@ export default async function({container}:any){
     assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
       draftMembershipsBefore,"Draft cannot assign first Owner")
     assert.equal((await q("select version from da_organization_application where id=$1",[draftId]))[0].version,2)
+
+    // --- B22 RELOAD PROOF ---
+    // The same authenticated Person reloads the page with cache bypass.
+    // The previously saved draft (version 2) must reappear in the draft list
+    // exactly as persisted -- no new draft, Organization, Owner or audit write.
+    const reloadDraftCountBefore=Number((await q(
+      "select count(*)::int n from da_organization_application where applicant_person_id=$1",[signupPerson]))[0].n)
+    const reloadOrgsBefore=Number((await q("select count(*)::int n from da_organization"))[0].n)
+    const reloadMembsBefore=Number((await q("select count(*)::int n from da_organization_membership"))[0].n)
+    const reloadAuditsBefore=Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1",[signupPerson]))[0].n)
+    const reloadHttpStart=signupChrome.http.length
+    await signupChrome.send("Page.reload",{ignoreCache:true})
+    // Wait for the fresh authenticated workspace (not the login screen).
+    await signupChrome.wait(`!document.getElementById('workspace').hidden&&document.getElementById('person').textContent==='Person: '+${JSON.stringify(signupPerson)}`)
+    // Wait for the private draft list to render the persisted draft entry.
+    await signupChrome.wait("document.querySelector('#organization-draft-list button')?.textContent.includes('Taslağı düzenle')")
+    // Verify: same draft appears (version 2) in the UI list via the GET endpoint.
+    const reloadListResponse=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/organization-applications');
+      const data=await r.json();
+      return {status:r.status,drafts:data.drafts};
+    })()`)
+    assert.equal(reloadListResponse.status,200,"Fresh reload must return 200 for draft list")
+    assert.ok(Array.isArray(reloadListResponse.drafts),"Draft list must be an array after reload")
+    const reloadedDraft=reloadListResponse.drafts.find((x:any)=>x.id===draftId)
+    assert.ok(reloadedDraft,"Same draft id must survive a full page reload")
+    assert.equal(reloadedDraft.version,2,"Draft version must remain 2 after reload (no new write)")
+    // Click the visible "Taslağı düzenle" control -- a real Chromium user action.
+    await signupChrome.click("#organization-draft-list button")
+    // After clicking, the form must populate with the persisted values.
+    await signupChrome.wait("document.querySelector('#organization-draft-form input[name=legal_name]')?.value.length>0")
+    const reloadFormValues=await signupChrome.eval(`(()=>{
+      const form=document.getElementById('organization-draft-form');
+      return {
+        business_kind:form?.querySelector('select[name=business_kind]')?.value??
+                      form?.querySelector('input[name=business_kind]')?.value??null,
+        legal_name:form?.querySelector('input[name=legal_name]')?.value??null,
+        landline_phone:form?.querySelector('input[name=landline_phone]')?.value??null,
+      };
+    })()`)
+    // The form must reflect the version-2 legal_name (edited value), not the original draft.
+    assert.equal(reloadFormValues.legal_name,"B22 Düzenlenmiş Sentetik İşletme",
+      "Reload must populate form with persisted version-2 legal name")
+    assert.equal(reloadFormValues.landline_phone,draftLandline,
+      "Reload must populate form with persisted landline")
+    assert.ok(reloadFormValues.business_kind,
+      "Reload must populate business kind from persisted draft")
+    // PG16 invariants: reload must not create any new rows.
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_organization_application where applicant_person_id=$1",[signupPerson]))[0].n),
+      reloadDraftCountBefore,"Reload must not create a second draft row")
+    assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+      reloadOrgsBefore,"Reload must not create a legal Organization")
+    assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
+      reloadMembsBefore,"Reload must not assign an Owner membership")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1",[signupPerson]))[0].n),
+      reloadAuditsBefore,"Reload must not emit a new audit write")
+    // Confirm: no POST to organization-applications was issued during reload.
+    const reloadPosts=signupChrome.http.slice(reloadHttpStart).filter(
+      (r:any)=>r.method==="POST"&&r.path==="/personal/organization-applications")
+    assert.equal(reloadPosts.length,0,"Page reload must issue zero POSTs to organization-applications")
+    process.stdout.write("PASS B22 Chrome: Person private Organization draft reload; version-2 reappears in list; Taslağı düzenle opens populated form; zero new draft/Organization/Owner/audit write\n")
+    // --- END B22 RELOAD PROOF ---
     process.stdout.write("PASS B22 Chrome: Person private Organization draft save/edit, foreign/unauthenticated/CSRF/replay denies, PG16 audit without Organization or Owner\n")
 
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
