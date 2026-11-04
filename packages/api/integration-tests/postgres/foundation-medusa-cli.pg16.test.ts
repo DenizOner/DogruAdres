@@ -141,7 +141,8 @@ async function run(){
           const after=await target.unsafe(`select declared_activities::text as activities,
             primary_activity,status,version from "${probe}"`)
           assert.equal(after.length,1)
-          assert.equal(after[0].activities,'["service_repair", "insurance_claims"]'.replace(", ",","),
+          assert.deepEqual(JSON.parse(String(after[0].activities)),
+            ["service_repair","insurance_claims"],
             "Failed duplicate update must preserve existing valid activities")
           assert.equal(after[0].primary_activity,"insurance_claims")
           assert.equal(after[0].status,"draft")
