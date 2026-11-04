@@ -1279,6 +1279,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     })) {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "Invitation is invalid, expired, revoked, or already used")
     }
+    // The Organization can be suspended or soft-deleted after invitation
+    // issuance. Lock its live row in this SAME transaction before touching
+    // Person/membership/invitation. A concurrent suspension must serialize.
+    const available = await securitySql(sharedContext.transactionManager).execute(`select id
+      from da_organization where id=? and status='active' and deleted_at is null
+      for share`,[invitation.organization_id])
+    if(available.length!==1 || available[0].id!==invitation.organization_id)
+      throw new MedusaError(MedusaError.Types.FORBIDDEN,"Invitation Organization is unavailable")
     const person = await this.ensureActorPerson_(input.actor, input.actor, sharedContext)
     await this.lockMembership_(person.id, invitation.organization_id, sharedContext)
     // Read after the shared lock: a different invitation may have activated the
