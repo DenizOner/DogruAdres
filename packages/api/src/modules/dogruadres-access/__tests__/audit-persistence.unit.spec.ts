@@ -2,6 +2,7 @@ import type { Context } from "@medusajs/framework/types"
 import { randomBytes } from "node:crypto"
 import AccessService, { DOGRUADRES_AUDIT_MODULE } from "../service"
 import { hashInvitationToken } from "../security"
+import { IdentitySessions } from "../identity-session"
 
 // Isolated method doubles test context/cardinality/error propagation, NOT SQL
 // rollback or the trigger. No module/container/bootstrap/database is initialized.
@@ -83,6 +84,42 @@ describe("Foundation canonical audit and outbox persistence contract", () => {
       expect(f.audits).not.toHaveBeenCalled()
       expect(f.outbox).not.toHaveBeenCalled()
       expect((f.service as any).updateInvitations).not.toHaveBeenCalled()
+    }
+  })
+
+  it("applies owner organization.read policy to personal and background observer lists",async()=>{
+    const previous=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+    const owner={id:"daorg_owner",name:"Private Owner Organization",
+      membership_id:"damem_owner",role:"owner"}
+    const member={id:"daorg_member",name:"Member Organization",
+      membership_id:"damem_member",role:"member"}
+    const probe=jest.spyOn(IdentitySessions.prototype,"organizations")
+      .mockResolvedValue({person_id:"daprs_owner",organizations:[owner,member]})
+    const f=fixture()
+    const manager=f.context.transactionManager as any
+    manager.execute.mockImplementation(async(sql:string)=>
+      sql.includes("m.protected_owner=true")?[{id:"damem_owner"}]:[])
+    try{
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase"
+      const noRead=await f.service.personalOrganizations("synthetic-session",undefined,f.context)
+      expect(noRead?.organizations.map(x=>x.id)).toEqual(["daorg_member"])
+      const noReadOne=await f.service.personalOrganizations("synthetic-session","daorg_owner",f.context)
+      expect(noReadOne).toBeNull()
+      const observed=await f.service.observePersonalOrganizations("synthetic-session",undefined,f.context)
+      expect(observed?.organizations.map(x=>x.id)).toEqual(["daorg_member"])
+      expect(probe).toHaveBeenCalledWith("synthetic-session",undefined,false)
+      // Restore the canonical Owner default, but still demand actual
+      // protected Owner membership evidence for every Owner read.
+      delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      const allowed=await f.service.personalOrganizations("synthetic-session",undefined,f.context)
+      expect(allowed?.organizations.map(x=>x.id)).toEqual(["daorg_owner","daorg_member"])
+      manager.execute.mockResolvedValue([])
+      const unprotected=await f.service.personalOrganizations("synthetic-session","daorg_owner",f.context)
+      expect(unprotected).toBeNull()
+    }finally{
+      probe.mockRestore()
+      if(previous===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+      else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previous
     }
   })
 
