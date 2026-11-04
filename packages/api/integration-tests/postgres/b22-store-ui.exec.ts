@@ -6427,15 +6427,29 @@ export default async function({container}:any){
       "select count(*)::int n from da_organization_membership"))[0].n)
     const draftLegalName="B22 Sentetik İşletme Taslağı"
     const draftLandline="+90 212 555 00 00"
+    await signupChrome.click('#organization-draft-form input[value=service_repair]')
+    await signupChrome.click('#organization-draft-form input[value=insurance_claims]')
+    await signupChrome.click('#organization-draft-form select[name=primary_activity]')
+    for(const key of ["End","Enter"]){
+      for(const type of ["keyDown","keyUp"])
+        await signupChrome.send("Input.dispatchKeyEvent",{type,key,code:key})
+    }
+    assert.equal(await signupChrome.eval(
+      "document.querySelector('#organization-draft-form select[name=primary_activity]').value"),
+      "insurance_claims","Chrome must choose a non-default primary activity")
     await signupChrome.input("#organization-draft-form input[name=legal_name]",draftLegalName)
     await signupChrome.input("#organization-draft-form input[name=landline_phone]",draftLandline)
     await signupChrome.click("#organization-draft-form button[type=submit]")
     await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
-    const firstDraft=await q(`select id,applicant_person_id,business_kind,legal_name,landline_phone,status,version
+    const firstDraft=await q(`select id,applicant_person_id,business_kind,legal_name,landline_phone,
+       declared_activities,primary_activity,status,version
       from da_organization_application where applicant_person_id=$1`,[signupPerson])
     assert.equal(firstDraft.length,1)
     assert.equal(firstDraft[0].applicant_person_id,signupPerson)
     assert.equal(firstDraft[0].business_kind,"individual_business")
+    assert.deepEqual(firstDraft[0].declared_activities,
+      ["service_repair","insurance_claims"])
+    assert.equal(firstDraft[0].primary_activity,"insurance_claims")
     assert.equal(firstDraft[0].legal_name,draftLegalName)
     assert.equal(firstDraft[0].landline_phone,draftLandline)
     assert.equal(firstDraft[0].status,"draft")
@@ -6460,17 +6474,22 @@ export default async function({container}:any){
       "legal_company","The real Chrome edit must choose the non-default legal-company kind")
     await signupChrome.click("#organization-draft-form button[type=submit]")
     await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
-    const revisedDraft=await q(`select version,legal_name,business_kind from da_organization_application
+    const revisedDraft=await q(`select version,legal_name,business_kind,declared_activities,primary_activity from da_organization_application
       where id=$1 and applicant_person_id=$2`,[draftId,signupPerson])
     assert.equal(revisedDraft.length,1)
     assert.equal(revisedDraft[0].version,2)
     assert.equal(revisedDraft[0].legal_name,"B22 Düzenlenmiş Sentetik İşletme")
+    assert.deepEqual(revisedDraft[0].declared_activities,
+      ["service_repair","insurance_claims"])
+    assert.equal(revisedDraft[0].primary_activity,"insurance_claims")
     assert.equal(revisedDraft[0].business_kind,"legal_company",
       "PG16 must persist the non-default legal-company kind at version 2")
     const draftReplay=await signupChrome.eval(`(async()=>{
       const s=await (await fetch('/personal/session')).json();
       const body={application_id:${JSON.stringify(draftId)},expected_version:1,
-        business_kind:'legal_company',legal_name:'Should not overwrite',
+        business_kind:'legal_company',
+        declared_activities:['service_repair','insurance_claims'],
+        primary_activity:'insurance_claims',legal_name:'Should not overwrite',
         landline_phone:'+90 212 555 00 00'};
       const stale=await fetch('/personal/organization-applications',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
@@ -6481,11 +6500,15 @@ export default async function({container}:any){
       const badPhone=await fetch('/personal/organization-applications',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
         body:JSON.stringify({...body,landline_phone:'12',expected_version:2})});
+      const badActivity=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify({...body,expected_version:2,
+          primary_activity:'manufacturing'})});
       const noCookie=await fetch('/personal/organization-applications',{credentials:'omit'});
       return {stale:stale.status,badCsrf:badCsrf.status,
-        badPhone:badPhone.status,noCookie:noCookie.status};
+        badPhone:badPhone.status,badActivity:badActivity.status,noCookie:noCookie.status};
     })()`)
-    assert.deepEqual(draftReplay,{stale:409,badCsrf:403,badPhone:400,noCookie:403})
+    assert.deepEqual(draftReplay,{stale:409,badCsrf:403,badPhone:400,badActivity:400,noCookie:403})
     // Earlier B22 MFA-disabling tests deliberately REVOKED both A and B.
     // A revoked browser must not be used as proof of cross-Person isolation.
     // Register a genuinely distinct second Person over the same real HTTPS
@@ -6528,6 +6551,8 @@ export default async function({container}:any){
         headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
         body:JSON.stringify({application_id:${JSON.stringify(draftId)},
           expected_version:2,business_kind:'legal_company',
+           declared_activities:['service_repair','insurance_claims'],
+           primary_activity:'insurance_claims',
           legal_name:'Foreign rewrite forbidden',landline_phone:'+90 212 555 00 00'})});
       const data=await r.json();
       return {status:r.status,items:data.drafts,foreignEdit:edit.status};
@@ -6575,6 +6600,9 @@ export default async function({container}:any){
     const reloadedDraft=reloadListResponse.drafts.find((x:any)=>x.id===draftId)
     assert.ok(reloadedDraft,"Same draft id must survive a full page reload")
     assert.equal(reloadedDraft.version,2,"Draft version must remain 2 after reload (no new write)")
+    assert.deepEqual(reloadedDraft.declared_activities,
+      ["service_repair","insurance_claims"])
+    assert.equal(reloadedDraft.primary_activity,"insurance_claims")
     // After a full reload the untouched form starts at its original default.
     // Removing the UI's item.business_kind restoration must now FAIL this test.
     assert.equal(await signupChrome.eval(
@@ -6587,6 +6615,9 @@ export default async function({container}:any){
     const reloadFormValues=await signupChrome.eval(`(()=>{
       const form=document.getElementById('organization-draft-form');
       return {
+        declared_activities:Array.from(form.querySelectorAll(
+          'input[name=declared_activities]:checked'),x=>x.value),
+        primary_activity:form.elements.primary_activity.value,
         business_kind:form?.querySelector('select[name=business_kind]')?.value??
                       form?.querySelector('input[name=business_kind]')?.value??null,
         legal_name:form?.querySelector('input[name=legal_name]')?.value??null,
@@ -6600,8 +6631,14 @@ export default async function({container}:any){
       "Reload must populate form with persisted landline")
     assert.equal(reloadedDraft.business_kind,"legal_company",
       "Reload GET must preserve the persisted NON-default legal-company kind")
+    assert.deepEqual(reloadFormValues.declared_activities,
+      reloadedDraft.declared_activities,
+      "Reloaded edit form must restore declared activity selections")
+    assert.equal(reloadFormValues.primary_activity,reloadedDraft.primary_activity,
+      "Reloaded edit form must restore the primary activity")
     assert.equal(reloadFormValues.business_kind,reloadedDraft.business_kind,
       "Reloaded edit form must restore the exact persisted business kind")
+    process.stdout.write("PASS B22 Chrome: declared activities and primary activity saved in PG16; foreign and invalid primary denied; reload restores selection\n")
     // PG16 invariants: reload must not create any new rows.
     assert.equal(Number((await q(
       "select count(*)::int n from da_organization_application where applicant_person_id=$1",[signupPerson]))[0].n),
