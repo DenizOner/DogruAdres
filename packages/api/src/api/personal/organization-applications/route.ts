@@ -31,7 +31,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   try{allowed=await csrf(req)}catch{}
   if(!allowed||req.headers.authorization)return res.status(403).json({message:"Access denied"})
   if(Object.keys(req.query??{}).length)return res.status(400).json({message:"Invalid request"})
-  if(req.body?.action==="withdraw"){
+  if((req.body as {action?:unknown}|undefined)?.action==="withdraw"){
     const parsedWithdraw=withdrawDraftPayload.safeParse(req.body)
     if(!parsedWithdraw.success)return res.status(400).json({message:"Invalid request"})
     try{
