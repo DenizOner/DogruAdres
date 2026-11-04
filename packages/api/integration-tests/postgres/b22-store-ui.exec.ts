@@ -6015,7 +6015,7 @@ export default async function({container}:any){
         "Real revoked Staff A cookie must be denied on observer Organization GET")
       // Unused recovery code, same real Chrome profile, no fake auth/session
       // writes, no rate-limit bypass. loginStaffA retains the normal caps.
-      await loginStaffA(staffCodes[3])
+      await loginStaffA(staffCodes[6])
       const currentStaffCookie=await browser.token()
       assert.ok(typeof currentStaffCookie==="string"&&
         /^[A-Za-z0-9_-]{43}$/.test(currentStaffCookie)&&
