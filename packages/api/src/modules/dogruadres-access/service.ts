@@ -171,7 +171,16 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   async personalActorLinks(token:string,@MedusaContext() context:Context={}) {
     const sql=securitySql(context.transactionManager),s=await new IdentitySessions(sql).current(token)
     if(!s)return null // Preserve terminal expiry when returning denial.
-    return sql.execute(`select id,actor_type,actor_id,revoked_at from da_verified_actor_binding where person_id=? order by verified_at`,[s.person_id])
+    // Match the active first-party login proof server-side, not a browser claim.
+    // A primary Customer is a verified technical actor, never an unlinkable
+    // secondary. Protect every active login actor of this Person.
+    return sql.execute(`select b.id,b.actor_type,b.actor_id,b.revoked_at,
+      exists(select 1 from da_login_binding l
+        where l.person_id=b.person_id and l.auth_identity_id=b.auth_identity_id
+          and l.actor_type=b.actor_type and l.actor_id=b.actor_id
+          and l.verified_at is not null and l.revoked_at is null) as is_primary
+      from da_verified_actor_binding b where b.person_id=?
+      order by b.verified_at`,[s.person_id])
   }
   @InjectTransactionManager()
   async personalActorBinding(token:string,type:string,@MedusaContext() context:Context={}) {
@@ -413,6 +422,90 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async readPersonalNotification(token: string, id: string, organization?: string, @MedusaContext() context: Context = {}) {
     return new PersonalNotifications(securitySql(context.transactionManager)).read(token, id, organization)
+  }
+
+  /**
+   * First-party registration: native Customer is ONLY a technical actor.
+   * Caller must independently authenticate the exact native actor/identity.
+   * Foundation Person, mapping, binding and audit commit in one transaction.
+   */
+  @InjectTransactionManager()
+  async personalRegisterCustomer(
+    authIdentityId: string, customerId: string, mobile: string, displayName: string,
+    @MedusaContext() context: Context = {}
+  ) {
+    if (!/^authid_[A-Za-z0-9_-]+$/.test(authIdentityId) ||
+        !/^cus_[A-Za-z0-9_-]+$/.test(customerId) ||
+        !/^\+?[0-9]{6,20}$/.test(mobile) ||
+        typeof displayName !== "string" || displayName.length > 101)
+      throw new IdentityAccessDenied()
+    const sql = securitySql(context.transactionManager)
+    await sql.execute(`select pg_advisory_xact_lock(hashtext('da-person-signup'),hashtext(?))`,[authIdentityId])
+    const bindings = await sql.execute(`select person_id,actor_type,actor_id,revoked_at
+      from da_login_binding where auth_identity_id=? for update`,[authIdentityId])
+    const links = await this.listActorMappings(
+      {actor_type:"customer",actor_id:customerId},{take:2},context)
+    // Never overwrite another Person, resurrect a revoked binding, or link by email.
+    if (bindings.length || links.length) {
+      if (bindings.length===1 && links.length===1 && bindings[0].revoked_at===null &&
+          bindings[0].actor_type==="customer" && bindings[0].actor_id===customerId &&
+          bindings[0].person_id===links[0].person_id) {
+        // A matching technical actor is not proof that the current Person is
+        // active or already has the required registration contact. Never
+        // accept a disabled/deleted/incomplete legacy Person as registered.
+        const existing=await sql.execute(`select mobile_phone from da_person
+          where id=? and disabled_at is null and deleted_at is null for update`,
+          [bindings[0].person_id])
+        if(existing.length===1 && typeof existing[0].mobile_phone==="string" &&
+           /^\+?[0-9]{6,20}$/.test(existing[0].mobile_phone)) {
+          // Primary Customer delegation must have its own active verified
+          // binding. Never silently resurrect a missing or revoked proof.
+          const proofs=await sql.execute(`select person_id,auth_identity_id,actor_id,revoked_at
+            from da_verified_actor_binding where person_id=? and actor_type='customer'
+            for update`,[bindings[0].person_id])
+          if(proofs.length===1 && proofs[0].person_id===bindings[0].person_id &&
+             proofs[0].auth_identity_id===authIdentityId &&
+             proofs[0].actor_id===customerId && proofs[0].revoked_at===null)
+            return {created:false as const}
+        }
+      }
+      throw new IdentityAccessDenied()
+    }
+    const [person] = await this.createPeople([{
+      display_name:displayName, mobile_phone:mobile, mobile_version:1,
+    }],context)
+    if (!person?.id) throw new IdentityAccessDenied()
+    await this.createActorMappings([{
+      actor_type:"customer", actor_id:customerId,person_id:person.id,
+      created_by_actor_type:"customer", created_by_actor_id:customerId,
+    }],context)
+    // Native MedusaService writes may still be pending in the EntityManager.
+    // Flush Person and mapping BEFORE inserting the raw SQL login-binding FK.
+    // The same enclosing Foundation transaction owns commit or rollback.
+    const manager=context.transactionManager
+    if(!manager || typeof manager!=="object" || !("flush" in manager) || typeof manager.flush!=="function")
+      throw new Error("Foundation transaction manager unavailable")
+    await manager.flush()
+    await sql.execute(`insert into da_login_binding
+      (auth_identity_id,person_id,actor_type,actor_id,verified_at)
+      values (?,?,'customer',?,clock_timestamp())`,
+      [authIdentityId,person.id,customerId])
+    // The first-party native password/MFA proof establishes this PRIMARY
+    // technical Customer binding. Reuse the existing verified actor and
+    // short-lived server-only credential mechanism; never infer buyer rights.
+    // Both proofs share the same Foundation transaction and audit rollback.
+    await sql.execute(`insert into da_verified_actor_binding
+      (id,person_id,auth_identity_id,actor_type,actor_id,verified_at,proof_reference)
+      values (?,?,?,'customer',?,clock_timestamp(),'primary-emailpass-registration')`,
+      ["dabind_"+randomUUID(),person.id,authIdentityId,customerId])
+    await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:person.id,actor_type:"customer",actor_id:customerId,
+      action:"person.registered",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"person-contact",target_id:person.id,
+      new_values:{contact_recorded:true,email_verification_claimed:false},
+      occurred_at:new Date(),
+    }],context)
+    return {created:true as const}
   }
 
   /**

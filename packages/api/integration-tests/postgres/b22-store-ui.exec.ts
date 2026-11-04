@@ -1534,6 +1534,17 @@ export default async function({container}:any){
     assert.equal(verifiedCustomerBinding.length,1)
     assert.equal(verifiedCustomerBinding[0].actor_id,nativeCustomer.id)
     assert.match(verifiedCustomerBinding[0].proof_reference,/^dual-proof:/)
+    const secondaryLinks=await reviewer.eval(`(async()=>{
+      const r=await fetch('/personal/links');
+      const body=await r.json();
+      return {status:r.status,bindings:body.bindings};
+    })()`)
+    assert.equal(secondaryLinks.status,200)
+    assert.equal(secondaryLinks.bindings.filter((b:any)=>
+      b.actor_type==='customer'&&b.actor_id===nativeCustomer.id&&
+      b.is_primary===false&&b.revoked_at===null).length,1,
+      "Independently linked Customer must remain a removable secondary")
+    await reviewer.wait("document.querySelector('#bindings p')?.textContent.includes('Doğrulanmış ek müşteri hesabı') && document.querySelector('#bindings button')?.disabled===false")
     const readyCustomer=await reviewer.eval(`(async()=>{
       const r=await fetch(${JSON.stringify(customerContext(organizations[0].id))})
       return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}
@@ -2313,6 +2324,10 @@ export default async function({container}:any){
           "})"+
         "}return original(resource,options)"+
       "};return true})()")
+    // Native status checks finish separately from the browser's picker refresh.
+    // Wait for the previously authorized visible control; never bypass UI.
+    await browser.wait("(()=>{const e=document.querySelector('#store-price-group-form button[value=\\\"revoke\\\"]');"+
+      "return !!e && !!e.getClientRects().length && !e.disabled})()")
     await browser.click('#store-price-group-form button[value="revoke"]')
     await browser.wait("window.__daRevokeSynthetic503&&"+
       "document.getElementById('store-price-group-status').textContent.includes('Sonuç belirsiz')")
@@ -6246,6 +6261,411 @@ export default async function({container}:any){
         await q("drop trigger b22_mfa_disable_outbox_fault_v1 on da_security_outbox")
       if(disableFunctionInstalled)
         await q("drop function b22_mfa_disable_outbox_fault_v1()")
+    }
+
+    // First Person self-registration on the same real Chrome HTTPS and
+    // isolated PG16 boundary. Native Customer is only an Auth adapter,
+    // not an Organization, Buyer entitlement, Staff or Store owner.
+    const signupChrome=new B06Chrome(host,"B");browsers.push(signupChrome)
+    await signupChrome.start(crt)
+    const signupEmail="b22-signup-"+randomBytes(10).toString("hex")+"@example.invalid"
+    const signupPassword="Task-Strong-"+randomBytes(18).toString("hex")
+    const signupPhone="+905551234569"
+    const beforePeople=Number((await q("select count(*)::int n from da_person"))[0].n)
+    const badSignup=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/register',{method:'POST',credentials:'omit',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({first_name:'Synthetic',last_name:'Person',
+          email:'no-person@example.invalid',password:'Strong-test-password-123'})});
+      return {status:r.status};
+    })()`)
+    assert.equal(badSignup.status,400,"Missing mobile must not create an account")
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),beforePeople)
+    // P2: +12345 has six characters but only five digits. It must be
+    // rejected before native AuthIdentity/Customer or Person writes.
+    const shortPhoneEmail="b22-short-mobile-"+randomBytes(10).toString("hex")+"@example.invalid"
+    const shortPhone=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/register',{method:'POST',credentials:'omit',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({first_name:'Synthetic',last_name:'Rejected',
+          email:${JSON.stringify(shortPhoneEmail)},password:'Strong-test-password-123',
+          mobile_phone:'+12345'})});
+      return {status:r.status};
+    })()`)
+    assert.equal(shortPhone.status,400,"Five-digit mobile must fail before native registration")
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),beforePeople)
+    assert.equal(Number((await q(
+      "select count(*)::int n from public.customer where email=$1",
+      [shortPhoneEmail]))[0].n),0,"Invalid mobile must leave no native Customer")
+    await signupChrome.click("#register-details summary")
+    await signupChrome.input("#register input[name=first_name]","Synthetic")
+    await signupChrome.input("#register input[name=last_name]","Registrant")
+    await signupChrome.input("#register input[name=email]",signupEmail)
+    await signupChrome.input("#register input[name=mobile_phone]",signupPhone)
+    await signupChrome.input("#register input[name=password]",signupPassword)
+    await signupChrome.click("#register button")
+    try {
+      await signupChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+    } catch {
+      const ui=await signupChrome.eval(`(()=>{
+        const form=document.getElementById('register');
+        const t=document.getElementById('register-status').textContent;
+        return {visible:!form.hidden,
+          fieldsInvalid:Array.from(form.elements).filter(e=>e.name && !e.checkValidity()).map(e=>e.name),
+          submitDisabled:form.querySelector('button').disabled,
+          statusKind:t.includes('Kayıt bilgileri geçersiz')?'input-rejected':
+            t.includes('bu hesapla tamamlanamadı')?'identity-rejected':
+            t.includes('Çok fazla')?'rate-limited':
+            t.includes('Kayıt sonucu doğrulanamadı')?'server-uncertain':
+            t.includes('Bağlantı koptu')?'network-uncertain':'other',
+          successNotice:document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')};
+      })()`)
+      const requests=signupChrome.http.filter(r=>r.path==="/personal/register")
+        .map(({method,path,status})=>({method,path,status}))
+      const postPeople=Number((await q("select count(*)::int n from da_person"))[0].n)
+      let nativeCustomerCreated:boolean|null=null
+      try{
+        const customerRows=await q("select count(*)::int n from public.customer where email=$1",[signupEmail])
+        nativeCustomerCreated=Number(customerRows[0].n)>0
+      }catch{}
+      // Read only a fixed, whitelisted server stage from the completed
+      // HTTPS response. Never put raw request/response bodies or PII in CI logs.
+      let serverStage="response-unavailable"
+      try{
+        const last=signupChrome.http.filter(r=>r.path==="/personal/register").slice(-1)[0]
+        if(last?.requestId){
+          const raw=await signupChrome.send("Network.getResponseBody",{requestId:last.requestId})
+          const parsed=JSON.parse(raw.body)
+          const stageCodes:Record<string,string>={
+            "Registration is not yet complete; sign in to resume":"native-workflow",
+            "Native account binding unavailable":"native-actor-binding",
+            "Registration result could not be confirmed; sign in to check":"foundation-commit-or-customer-read",
+            "Registration verification unavailable":"native-verification",
+            "Registration could not be confirmed":"native-authentication",
+            "Access denied":"identity-ownership",
+          }
+          serverStage=stageCodes[parsed.message]??"unclassified-denial"
+        }
+      }catch{}
+      throw Error("B22 first Person signup failed: "+JSON.stringify({
+        ui,requests,serverStage,personCountChange:postPeople-beforePeople,
+        nativeCustomerCreated,registrationRequestCount:requests.length
+      }))
+    }
+    const registered=await q(`select b.person_id,p.mobile_phone,p.mobile_version,
+        b.actor_type,b.actor_id,b.auth_identity_id
+      from da_login_binding b join da_person p on p.id=b.person_id
+      join public.customer c on c.id=b.actor_id
+      where b.actor_type='customer' and c.email=$1 and
+        b.revoked_at is null and b.verified_at is not null`,[signupEmail])
+    assert.equal(registered.length,1)
+    assert.equal(registered[0].mobile_phone,signupPhone)
+    assert.equal(registered[0].mobile_version,1)
+    const signupPerson=registered[0].person_id
+    assert.equal((await q("select count(*)::int n from da_organization_membership where person_id=$1",[signupPerson]))[0].n,0)
+    assert.equal((await q("select count(*)::int n from da_platform_staff_grant where person_id=$1",[signupPerson]))[0].n,0)
+    const primaryCustomerProof=await q(`select id,auth_identity_id,actor_id,revoked_at,proof_reference
+      from da_verified_actor_binding where person_id=$1 and actor_type='customer'`,[signupPerson])
+    assert.equal(primaryCustomerProof.length,1)
+    assert.equal(primaryCustomerProof[0].auth_identity_id,registered[0].auth_identity_id)
+    assert.equal(primaryCustomerProof[0].actor_id,registered[0].actor_id)
+    assert.equal(primaryCustomerProof[0].revoked_at,null)
+    assert.equal(primaryCustomerProof[0].proof_reference,"primary-emailpass-registration")
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),beforePeople+1)
+    const signupAudits=await q(`select new_values::text as value from da_audit_event
+      where actor_person_id=$1 and action='person.registered'`,[signupPerson])
+    assert.equal(signupAudits.length,1)
+    assert.ok(!JSON.stringify(signupAudits).includes(signupPhone))
+    const countBeforeRetry=Number((await q("select count(*)::int n from da_person"))[0].n)
+    const repeated=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/register',{method:'POST',credentials:'omit',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({
+          first_name:'Synthetic',last_name:'Registrant',
+          email:${JSON.stringify(signupEmail)},
+          password:${JSON.stringify(signupPassword)},
+          mobile_phone:'+905551234568'
+        })});
+      return {status:r.status,registered:(await r.json()).registered};
+    })()`)
+    assert.equal(repeated.status,200,"Verified same-identity retry must not create Person")
+    assert.equal(repeated.registered,true)
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),countBeforeRetry)
+    assert.equal((await q("select mobile_phone from da_person where id=$1",[signupPerson]))[0].mobile_phone,signupPhone,
+      "Retry must not silently overwrite canonical Person contact")
+    await signupChrome.input("#login input[name=email]",signupEmail)
+    await signupChrome.input("#login input[name=password]",signupPassword)
+    await signupChrome.click("#login button")
+    await signupChrome.wait("!document.getElementById('workspace').hidden || !document.getElementById('mfa-enrollment').hidden")
+    const needMfa=await signupChrome.eval("!document.getElementById('mfa-enrollment').hidden")
+    if(needMfa){
+      await signupChrome.input("#mfa-enroll-start input[name=email]",signupEmail)
+      await signupChrome.input("#mfa-enroll-start input[name=password]",signupPassword)
+      await signupChrome.click("#mfa-enroll-start button")
+      await signupChrome.wait("!document.getElementById('mfa-enroll-verify').hidden&&document.getElementById('mfa-seed').value.length>0")
+      const seedUrl=await signupChrome.eval("document.getElementById('mfa-seed').value")
+      const seed=seedUrl.startsWith("otpauth:")?new URL(seedUrl).searchParams.get("secret"):seedUrl
+      assert.ok(seed)
+      await signupChrome.input("#mfa-enroll-verify input[name=code]",otp(seed!))
+      await signupChrome.click("#mfa-enroll-verify button")
+    }
+    await signupChrome.wait(`!document.getElementById('workspace').hidden&&
+      document.getElementById('person').textContent===${JSON.stringify('Person: '+signupPerson)}`)
+    const ownPhone=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/profile');
+      const data=await r.json();
+      return {status:r.status,mobile:data.mobile_phone,
+        version:data.version,verified:data.phone_verified};
+    })()`)
+    assert.deepEqual(ownPhone,{status:200,mobile:signupPhone,version:1,verified:false})
+    await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
+    assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
+      "Primary Customer cannot offer an unlink button")
+    const signupLinks=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/links');
+      const body=await r.json();
+      return {status:r.status,bindings:body.bindings};
+    })()`)
+    assert.equal(signupLinks.status,200)
+    assert.equal(signupLinks.bindings.length,1)
+    assert.equal(signupLinks.bindings[0].id,primaryCustomerProof[0].id)
+    assert.equal(signupLinks.bindings[0].actor_id,registered[0].actor_id)
+    assert.equal(signupLinks.bindings[0].is_primary,true)
+    const primaryAuditBefore=Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1",[signupPerson]))[0].n)
+    const primaryProofBefore=await q(
+      "select id,revoked_at from da_verified_actor_binding where person_id=$1",[signupPerson])
+    const deniedPrimaryUnlink=await signupChrome.eval(`(async()=>{
+      const response=await fetch('/personal/session');
+      const session=await response.json();
+      const r=await fetch('/personal/links',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify({action:'unlink',binding_id:${JSON.stringify(primaryCustomerProof[0].id)}})});
+      return r.status;
+    })()`)
+    assert.equal(deniedPrimaryUnlink,403,"Primary unlink must fail server-side")
+    assert.deepEqual(await q(
+      "select id,revoked_at from da_verified_actor_binding where person_id=$1",[signupPerson]),
+      primaryProofBefore)
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1",[signupPerson]))[0].n),
+      primaryAuditBefore,"Primary unlink cannot emit audit or mutate identity")
+    assert.equal((await q(
+      "select count(*)::int n from da_login_binding where person_id=$1 and revoked_at is null",
+      [signupPerson]))[0].n,1)
+    process.stdout.write("PASS B22 Chrome: primary Customer protected in UI, no unlink control, forged unlink403 and unchanged PG16 login/proof/audit\n")
+    // Reuse the same task-only native Medusa Store publishable token used
+    // by earlier B22 customer-context tests. It was restored after F-02.
+    const priorSignupPublishable=process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY
+    process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY=b22PublishableKey.token
+    let nativeCustomerContext
+    try{
+      nativeCustomerContext=await signupChrome.eval(`(async()=>{
+        const r=await fetch('/personal/contexts?type=customer');
+        const body=await r.json();
+        return {status:r.status,person_id:body.person_id,
+          actor_id:body.actor_id,context:body.context};
+      })()`)
+    }finally{
+      if(priorSignupPublishable===undefined)
+        delete process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY
+      else process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY=priorSignupPublishable
+    }
+    assert.deepEqual(nativeCustomerContext,{status:200,person_id:signupPerson,
+      actor_id:registered[0].actor_id,context:"customer"},
+      "First-party primary Customer proof must authorize native self-context without second login")
+    process.stdout.write("PASS B22 Chrome: first Person signup HTTPS/PG16, mandatory mobile400, native Customer to one Person, persistent private self-read, no Organization/Staff grant, safe retry and audit privacy\n")
+
+    // Isolated fault AFTER inserting the primary verified proof: fail the
+    // canonical audit insert and independently observe complete PG16 rollback.
+    // Native Medusa AuthIdentity/Customer creation is not in this transaction.
+    const faultIdentity="authid_b22rollback_"+rand
+    const faultCustomer="cus_b22rollback_"+rand
+    const countRegistrationRows=async()=> (await q(`select
+      (select count(*)::int from da_person) as persons,
+      (select count(*)::int from da_actor_mapping) as mappings,
+      (select count(*)::int from da_login_binding) as logins,
+      (select count(*)::int from da_verified_actor_binding) as proofs,
+      (select count(*)::int from da_audit_event) as audits,
+      (select count(*)::int from da_audit_outbox) as outboxes`))[0]
+    const beforeFaultCounts=await countRegistrationRows()
+    let faultFnInstalled=false,faultTriggerInstalled=false
+    try{
+      await q(`create function b22_signup_post_proof_fault_v1() returns trigger
+        language plpgsql as $b22$
+        begin
+          if NEW.action='person.registered' and NEW.actor_type='customer'
+            and NEW.actor_id='${faultCustomer}' then
+            if not exists(select 1 from da_verified_actor_binding
+              where auth_identity_id='${faultIdentity}' and actor_id='${faultCustomer}'
+                and revoked_at is null) then
+              raise exception 'B22_SIGNUP_PRIMARY_PROOF_NOT_INSERTED';
+            end if;
+            raise exception 'B22_SIGNUP_POST_PROOF_FORCED_ROLLBACK';
+          end if;
+          return NEW;
+        end $b22$`)
+      faultFnInstalled=true
+      await q("create trigger b22_signup_post_proof_fault_v1 before insert on da_audit_event for each row execute function b22_signup_post_proof_fault_v1()")
+      faultTriggerInstalled=true
+      await assert.rejects(
+        ()=>foundation.personalRegisterCustomer(
+          faultIdentity,faultCustomer,"+905551234570","Synthetic rollback"),
+        /B22_SIGNUP_POST_PROOF_FORCED_ROLLBACK/,
+        "Post-primary-proof failure must abort the Foundation transaction")
+    }finally{
+      if(faultTriggerInstalled)
+        await q("drop trigger b22_signup_post_proof_fault_v1 on da_audit_event")
+      if(faultFnInstalled)
+        await q("drop function b22_signup_post_proof_fault_v1()")
+    }
+    assert.deepEqual(await countRegistrationRows(),beforeFaultCounts,
+      "Forced post-proof failure must roll back Person/mapping/login/proof/audit/outbox")
+    assert.equal((await q(
+      "select count(*)::int n from da_login_binding where auth_identity_id=$1",
+      [faultIdentity]))[0].n,0)
+    assert.equal((await q(
+      "select count(*)::int n from da_verified_actor_binding where auth_identity_id=$1",
+      [faultIdentity]))[0].n,0)
+    process.stdout.write("PASS B22 real PG16: post-primary-proof forced audit failure rolls back six Foundation tables\n")
+
+    // P2 regression: TWO real HTTPS socket origins reach the actual
+    // first-party front door (not a mocked X-Forwarded-For header).
+    // Each password attempt uses a distinct nonexistent identity, so the
+    // subject 10/minute budget cannot obscure the source 60/minute budget.
+    // This runs only against the disposable task-owned PG16 database.
+    const availablePort=plainServer()
+    await new Promise<void>((resolve,reject)=>{
+      availablePort.once("error",reject)
+      availablePort.listen(0,"127.0.0.1",resolve)
+    })
+    const visitorPort=(availablePort.address() as {port:number}).port
+    await new Promise<void>(resolve=>availablePort.close(()=>resolve()))
+    const visitorOrigin="https://127.0.0.1:"+visitorPort
+    const originalPublicOrigin=process.env.DOGRUADRES_PUBLIC_ORIGIN
+    process.env.DOGRUADRES_PUBLIC_ORIGIN=visitorOrigin
+    const visitorFrontdoor=spawn("node",["scripts/personal-frontdoor.mjs"],{
+      cwd:process.cwd(),env:{...process.env,
+        DOGRUADRES_PUBLIC_ORIGIN:visitorOrigin,
+        DOGRUADRES_FRONTDOOR_HOST:"127.0.0.1",
+        DOGRUADRES_FRONTDOOR_PORT:String(visitorPort)},
+      stdio:["ignore","ignore","pipe"],
+    })
+    // Never log raw child stderr: it can contain local paths or secrets.
+    let startupClass="none",probeStatus=0,probeErrorClass="none"
+    visitorFrontdoor.stderr?.on("data",(buf:Buffer)=>{
+      const message=String(buf)
+      if(message.includes("ERR_UNKNOWN_FILE_EXTENSION"))startupClass="typescript-loader"
+      else if(message.includes("ERR_MODULE_NOT_FOUND"))startupClass="module-resolution"
+      else if(message.includes("EADDRINUSE"))startupClass="port-collision"
+      else if(message.includes("ENOENT"))startupClass="missing-resource"
+      else if(message.includes("Invalid ingress")||message.includes("Missing ingress"))startupClass="ingress-config"
+    })
+    visitorFrontdoor.on("error",()=>{startupClass="spawn-error"})
+    try{
+      const visitorHttp=(source:string,path:string,body:unknown,spoof=false):Promise<number>=>
+        new Promise((resolve,reject)=>{
+          const request=tlsRequest(visitorOrigin+path,{
+            method:"POST",ca:readFileSync(crt),localAddress:source,agent:false,
+            headers:{"origin":visitorOrigin,"content-type":"application/json",
+              ...(spoof?{"x-forwarded-for":"127.0.0.3","x-da-visitor-rate-v1":"forged"}:{})},
+          },response=>{
+            response.resume()
+            response.on("end",()=>resolve(response.statusCode??0))
+          })
+          request.on("error",reject)
+          request.setTimeout(12000,()=>request.destroy(Error("Visitor quota HTTPS timeout")))
+          request.end(JSON.stringify(body))
+        })
+      try{
+        await until(async()=>{
+          if(visitorFrontdoor.exitCode!==null)return false
+          try{
+            const response=await new Promise<number>((resolve,reject)=>{
+              const request=tlsRequest(visitorOrigin+"/personal",{
+                method:"GET",ca:readFileSync(crt),agent:false,
+              },res=>{res.resume();res.on("end",()=>resolve(res.statusCode??0))})
+              request.on("error",reject);request.end()
+            })
+            probeStatus=response
+            return response===200
+          }catch(error){
+            const c=(error as {code?:unknown})?.code
+            probeErrorClass=typeof c==="string"&&["ECONNREFUSED","ECONNRESET","EPROTO","ETIMEDOUT"].includes(c)?c:"transport-error"
+            return false
+          }
+        },16000,"first-party signed rate-source HTTPS frontdoor")
+      }catch{
+        throw Error("Visitor rate HTTPS frontdoor unavailable: "+JSON.stringify({
+          childExited:visitorFrontdoor.exitCode!==null,exitCode:visitorFrontdoor.exitCode,
+          startupClass,probeStatus,probeErrorClass
+        }))
+      }
+      const countBefore=Number((await q(
+        "select count(*)::int n from da_person"))[0].n)
+      // Rate quotas use PostgreSQL clock minutes, not elapsed 60-second TTL.
+      // A rollover among 60 HTTPS probes can legitimately return 401 again.
+      // Retry at most once with a FRESH real loopback source, so partial
+      // requests from the crossed minute cannot contaminate the new pass.
+      const quotaMinute=async()=>Number((await q(
+        "select floor(extract(epoch from clock_timestamp())/60)::bigint as bucket"
+      ))[0].bucket)
+      const fakeRegistration=(source:string,spoof=false)=>visitorHttp(source,
+        "/personal/register",{first_name:"Synthetic",last_name:"Rejected",
+          email:signupEmail,password:"intentionally-wrong-password-123",
+          mobile_phone:signupPhone},spoof)
+      let quotaVerified=false
+      for(let pass=0;pass<2&&!quotaVerified;pass++){
+        const sourceA=pass===0?"127.0.0.2":"127.0.0.4"
+        const startMinute=await quotaMinute()
+        const failedLogins:number[]=[]
+        for(let i=0;i<60;i++){
+          failedLogins.push(await visitorHttp(sourceA,"/personal/session",{
+            email:"visitor-throttle-"+randomBytes(8).toString("hex")+"@example.invalid",
+            password:"deliberately-not-a-real-password",
+          }))
+        }
+        const deniedLogin=await visitorHttp(sourceA,"/personal/session",{
+          email:"visitor-throttle-"+randomBytes(8).toString("hex")+"@example.invalid",
+          password:"deliberately-not-a-real-password",
+        })
+        const deniedSignup=await fakeRegistration(sourceA)
+        const deniedSpoof=await fakeRegistration(sourceA,true)
+        const sourceBLogin=await visitorHttp("127.0.0.3","/personal/session",{
+          email:"visitor-independent-"+randomBytes(8).toString("hex")+"@example.invalid",
+          password:"deliberately-not-a-real-password",
+        })
+        const sourceBSignup=await fakeRegistration("127.0.0.3")
+        if(await quotaMinute()!==startMinute){
+          if(pass===1)throw Error(
+            "B22 HTTPS quota check crossed two database-minute windows; inconclusive")
+          // Not a rate-limit failure: a new clock minute resets the quota.
+          // Source 127.0.0.4 has no prior counter in the replacement window.
+          continue
+        }
+        assert.ok(failedLogins.every(code=>code===401),
+          "Source A must have 60 independent failed logins in one PG minute")
+        assert.equal(deniedLogin,429,"Source A's 61st login must be throttled")
+        assert.equal(deniedSignup,429,
+          "Source A must not bypass the shared login/register source quota")
+        assert.equal(deniedSpoof,429,
+          "Public spoofed forwarding and rate-source headers must be ignored")
+        assert.equal(sourceBLogin,401,"Source B login must not inherit A's 429")
+        assert.equal(sourceBSignup,409,
+          "Source B signup reaches native credential check, not A's 429")
+        quotaVerified=true
+      }
+      assert.ok(quotaVerified,"No complete PostgreSQL-minute quota evidence")
+      assert.equal(Number((await q(
+        "select count(*)::int n from da_person"))[0].n),countBefore,
+        "Failed quota probes must not register a Person")
+      process.stdout.write("PASS B22 Chrome: distinct real TLS client IPs share login/signup budget per source only; 61st login 429, forged headers ignored, independent source 401/409, no Person mutation\n")
+    }finally{
+      visitorFrontdoor.kill("SIGTERM")
+      if(visitorFrontdoor.exitCode===null)
+        await new Promise<void>(resolve=>visitorFrontdoor.once("exit",()=>resolve()))
+      if(originalPublicOrigin===undefined)delete process.env.DOGRUADRES_PUBLIC_ORIGIN
+      else process.env.DOGRUADRES_PUBLIC_ORIGIN=originalPublicOrigin
     }
 
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")

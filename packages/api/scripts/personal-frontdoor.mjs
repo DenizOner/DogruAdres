@@ -4,12 +4,13 @@ import {readFileSync} from 'node:fs'
 import {pathToFileURL} from 'node:url'
 // Node 24's supported type-stripping loads this dependency-free shared contract.
 import {ingressConfig} from '../src/utils/ingress-config.ts'
+import {signVisitorRateSource,VISITOR_RATE_HEADER} from '../src/utils/visitor-rate-source.ts'
 
 /** Closed method/path relay, never a general-purpose reverse proxy. */
 export function allowedPublicRequest(method,path){
   const personal={
     '/personal':['GET'], '/personal/session':['GET','POST','DELETE'],
-    '/personal/challenge':['POST'], '/personal/organizations':['GET'],
+    '/personal/challenge':['POST'], '/personal/register':['POST'], '/personal/organizations':['GET'],
     '/personal/platform':['GET','POST'], '/personal/platform/smtp':['GET','POST'], '/personal/memberships':['GET','POST'],
     '/personal/invitations':['GET','POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
     '/personal/contexts':['GET'],
@@ -65,6 +66,13 @@ export function startFrontdoor(env=process.env){
       // Only purpose-bound password reset and scoped machine auth need this
       // header. No browser actor header or seller context is forwarded.
       if(mode==='machine'||url.pathname.endsWith('/emailpass/update'))headers.authorization=req.headers.authorization??''
+      // Rate-limit source is derived ONLY from the public TLS socket. Never
+      // forward incoming X-Forwarded-For or an incoming visitor-rate header.
+      // The short-lived proof contains no raw client address and uses the
+      // existing cookie secret with a distinct cryptographic purpose.
+      if(req.method==='POST'&&['/personal/session','/personal/register'].includes(url.pathname))
+        headers[VISITOR_RATE_HEADER]=signVisitorRateSource(
+          req.socket.remoteAddress,env.COOKIE_SECRET??'',req.method,url.pathname)
       // The privacy observer retains the same session authorization as normal reads.
       if(req.method==='GET'&&url.pathname==='/personal/organizations'&&req.headers['x-da-observe']==='1')headers['x-da-observe']='1'
       const chunks=[];let size=0
