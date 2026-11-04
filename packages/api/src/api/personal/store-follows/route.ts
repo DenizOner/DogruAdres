@@ -38,7 +38,24 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       const values=q.data as {organization_id:string;after?:string}
       const result=await access(req).personalBuyerStoreFollows(
         sessionToken(req),values.organization_id,values.after)
-      return result?res.status(200).json(result):denied(res)
+      if(!result)return denied(res)
+      // Reuse native Mercur Seller labels only AFTER verifying the private
+      // Buyer Organization follow list. No catalogue/public Seller search.
+      // Suspended/blocked Stores may remain followed and must stay removable.
+      const native=req.scope.resolve<{listSellers(filters:object,config?:object):Promise<any[]>}>("seller")
+      const stores=[]
+      for(const item of result.stores){
+        const found=await native.listSellers({id:item.seller_id},{take:2})
+        if(!Array.isArray(found)||found.length!==1||found[0]?.id!==item.seller_id||
+           typeof found[0].name!=="string"||
+           !found[0].name.trim()||found[0].name.length>120)
+          return res.status(503).json({message:"Store label unavailable"})
+        const handle=typeof found[0].handle==="string"&&
+          /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(found[0].handle)?
+          found[0].handle:null
+        stores.push({...item,name:found[0].name.trim(),handle})
+      }
+      return res.status(200).json({...result,stores})
     }
     const values=q.data as {organization_id:string;seller_id:string}
     const state=await access(req).personalBuyerStoreFollowState(

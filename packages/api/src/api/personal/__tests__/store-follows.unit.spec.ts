@@ -51,12 +51,18 @@ describe("B22 Buyer Organization × Store follow private ingress",()=>{
   })
   it("lists only active follows for a selected Owner Organization, never a catalog",async()=>{
     req.query={organization_id}
+    native.listSellers.mockResolvedValueOnce([{
+      id:seller_id,name:"Örnek Mağaza",handle:"ornek-magaza",
+      status:"suspended",approved_at:null
+    }])
     await GET(req,res)
+    expect(native.listSellers).toHaveBeenCalledWith({id:seller_id},{take:2})
     expect(service.personalBuyerStoreFollows)
       .toHaveBeenCalledWith("opaque",organization_id,undefined)
     expect(res.status).toHaveBeenLastCalledWith(200)
     expect(res.json).toHaveBeenLastCalledWith({
-      organization_id,stores:[{seller_id,version:1}],next_cursor:null
+      organization_id,stores:[{seller_id,version:1,
+        name:"Örnek Mağaza",handle:"ornek-magaza"}],next_cursor:null
     })
     req.query={organization_id,after:seller_id}
     await GET(req,res)
@@ -65,8 +71,13 @@ describe("B22 Buyer Organization × Store follow private ingress",()=>{
     req.query={organization_id,after:"wrong-id"}
     await GET(req,res);expect(res.status).toHaveBeenLastCalledWith(400)
     req.query={organization_id}
+    native.listSellers.mockClear()
     service.personalBuyerStoreFollows.mockResolvedValueOnce(null)
     await GET(req,res);expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(native.listSellers).not.toHaveBeenCalled()
+    native.listSellers.mockResolvedValueOnce([])
+    await GET(req,res);expect(res.status).toHaveBeenLastCalledWith(503)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Store label unavailable"})
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","private, no-store")
   })
   it("rejects forged query, Bearer, Seller selector and unknown scope",async()=>{

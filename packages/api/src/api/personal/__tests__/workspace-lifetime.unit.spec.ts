@@ -566,12 +566,16 @@ describe('B22 Store follow management outside catalogue visibility',()=>{
     runInContext("currentOrg='daorg_a';organizationRequest=1",h.context)
     const first=runInContext("buyerFollowList('daorg_a',1)",h.context)
     await answer(h,'/personal/store-follows?organization_id='+org,{
-      organization_id:org,stores:[{seller_id:seller,version:7}],next_cursor:null
+      organization_id:org,stores:[{seller_id:seller,version:7,
+        name:'Önceki Mağaza',handle:'onceki-magaza'}],next_cursor:null
     });await first
     expect(h.el('buyer-follow-panel').hidden).toBe(false)
     expect(h.el('buyer-catalog-items').children).toHaveLength(0)
     const item=h.el('buyer-follow-items').children[0],button=item.children[0]
     expect(button.dataset.unfollowSellerId).toBe(seller)
+    expect(button.textContent).toContain('Önceki Mağaza')
+    expect(button.textContent).toContain('onceki-magaza')
+    expect(button.textContent).not.toContain(seller)
     expect(button.textContent).toContain('Takipten çık')
     const mutation=button.onclick()
     const writes=h.pending.filter(p=>p.path==='/personal/store-follows'&&

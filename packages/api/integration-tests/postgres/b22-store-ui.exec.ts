@@ -2646,10 +2646,19 @@ export default async function({container}:any){
         return {status:r.status,body:await r.json()}
       })()`)
       assert.equal(betaFollowList.status,200)
+      const nativeFollowSeller=(await native.listSellers({id:ownerStoreId}))[0]
+      assert.ok(nativeFollowSeller?.name)
       assert.deepEqual(betaFollowList.body,{
         organization_id:betaFollowBuyer,
-        stores:[{seller_id:ownerStoreId,version:1}],next_cursor:null
+        stores:[{seller_id:ownerStoreId,version:1,
+          name:nativeFollowSeller.name,handle:nativeFollowSeller.handle}],next_cursor:null
       })
+      const followLabel=await reviewer.eval(
+        "document.querySelector('#buyer-follow-items button').textContent")
+      assert.ok(followLabel.includes(nativeFollowSeller.name),
+        "Suspended native Seller name must remain recognizable in authorized Buyer follow list")
+      assert.ok(!followLabel.includes(ownerStoreId),
+        "Visible unfollow button must not show raw native Seller ID")
       await reviewer.click("#buyer-follow-items button[data-unfollow-seller-id='"+
         ownerStoreId+"']")
       await reviewer.wait("!document.getElementById('buyer-follow-panel').hidden&&"+

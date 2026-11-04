@@ -328,6 +328,8 @@ async function run(){
             DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true"})
         assert.ok(audit.includes("PASS B22 audit worker: real Medusa Access/Index job delivered canonical Staff events, ACK and single Index entry on lost-ACK replay; crash recovery NOT TESTED"),
           "Missing native worker crash/Index/ACK/replay evidence")
+        assert.ok(audit.includes("PASS B22 real audit relay: native Owner Store follow/unfollow delivered by Medusa worker to Buyer-only Audit Index, two matching envelopes and durable ACKs"),
+          "Missing real indexed Store-follow audit delivery and ACK")
         for(const proof of ["PASS B22 audit real ACK: committed receipt lost,",
           "PASS B22 audit natural lease: DB clock 60s,",
           "PASS B22 audit native scheduler and crash restart: true Medusa cron,"])

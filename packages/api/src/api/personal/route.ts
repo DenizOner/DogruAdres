@@ -1462,7 +1462,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         throw new Error('Takip listesi doğrulanamadı');
       let previous=after;
       for(const store of data.stores){
-        if(typeof store.seller_id!=='string'||
+        if(typeof store.name!=='string'||store.name.trim()!==store.name||
+           !store.name.length||store.name.length>120||
+           (store.handle!==null&&(typeof store.handle!=='string'||
+             !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(store.handle)))||
+           typeof store.seller_id!=='string'||
            !/^sel_[A-Za-z0-9_-]+$/.test(store.seller_id)||
            (previous!==null&&store.seller_id<=previous)||
            !Number.isSafeInteger(store.version)||store.version<1||
@@ -1482,7 +1486,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         if(typeof row.append!=='function'||!button.dataset||
            typeof feedback.setAttribute!=='function')continue;
         const sellerId=store.seller_id,version=store.version;
-        button.type='button';button.textContent='Takipten çık: '+sellerId;
+        button.type='button';
+        button.textContent='Takipten çık: '+store.name+
+          (store.handle?' ('+store.handle+')':'');
         button.dataset.unfollowSellerId=sellerId;
         feedback.setAttribute('role','status');
         row.append(button,feedback);root.append(row);
@@ -1518,7 +1524,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       panel.hidden=false;next.disabled=data.next_cursor===null;
       message.textContent=data.stores.length?
-        'Bu işletmenin takipleri listelendi. Mağaza kimliği yalnız kayıt tanımlayıcısıdır.':
+        'Bu işletmenin takip ettiği mağazalar listelendi.':
         'Bu sayfada takip edilen mağaza bulunmuyor.';
     }catch(error){
       if(!current())return;
