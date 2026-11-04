@@ -6790,7 +6790,7 @@ export default async function({container}:any){
         committed,"Delayed HTTP response cannot undo a committed draft")
       assert.equal(await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').value"),
         committed[0].legal_name)
-      process.stdout.write("PASS B22 Chrome/PG16: delayed real draft POST locks selection/form; no stale-value rewrite or silent version overwrite\\n")
+      process.stdout.write("PASS B22 Chrome: delayed real draft POST locks selection/form; no stale-value rewrite or silent version overwrite\n")
     }finally{
       await signupChrome.eval(`(()=>{
         const hold=window.__daDraftHold;
@@ -6841,7 +6841,7 @@ export default async function({container}:any){
         draftOrganizationsBefore)
       assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
         draftMembershipsBefore)
-      process.stdout.write("PASS B22 Chrome/PG16: 103 private drafts across keyset pages; oldest opened via visible button; foreign Person empty; no Organization/Owner\\n")
+      process.stdout.write("PASS B22 Chrome: 103 private drafts across keyset pages; oldest opened via visible button; foreign Person empty; no Organization/Owner\n")
     }finally{
       await q("delete from da_organization_application where applicant_person_id=$1 and id=any($2::text[])",
         [signupPerson,overflowIds])
