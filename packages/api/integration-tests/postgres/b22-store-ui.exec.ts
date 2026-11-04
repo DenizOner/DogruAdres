@@ -2510,6 +2510,76 @@ export default async function({container}:any){
       "Read-only Buyer catalogue cannot write canonical audit")
     process.stdout.write("PASS B22 Buyer catalogue: real Chrome HTTPS and PG16 two published Mercur Offers under approved Buyer Org, foreign and forged scopes 403/400, no private inventory leakage and no audit writes\n")
     process.stdout.write("PASS B22 native TRY Offer list price: two seller-scoped Medusa prices on a shared native variant, EUR-only excluded, browser reference display, no checkout\n")
+
+    // B22 follow is a Buyer Organization-owned relationship (not a Person
+    // wishlist, native Customer permission, group price or checkout grant).
+    const followSeller=ownerStoreId,followBuyer=organizations[0].id
+    assert.ok(scopedCatalog.body.stores.some((s:any)=>s.id===followSeller),
+      "The followed native Store must be visible in the authorized catalogue")
+    const followRowsBefore=await q(
+      "select version from da_buyer_store_follow where buyer_organization_id=$1 and seller_id=$2",
+      [followBuyer,followSeller])
+    assert.deepEqual(followRowsBefore,[],"Fixture starts without an automatic follow")
+    const followSelector="#buyer-catalog-items button[data-follow-seller-id='"+followSeller+"']"
+    await browser.wait("Array.from(document.querySelectorAll('#buyer-catalog-items button'))"+
+      ".some(b=>b.dataset.followSellerId==="+JSON.stringify(followSeller)+
+      " && !b.disabled && b.textContent.includes('takip et'))")
+    const foreignFollowGet=await reviewer.eval("(async()=>{"+
+      "const r=await fetch('/personal/store-follows?organization_id="+
+      encodeURIComponent(followBuyer)+"&seller_id="+encodeURIComponent(followSeller)+"');"+
+      "return {status:r.status,body:await r.json()};})()")
+    assert.equal(foreignFollowGet.status,403,"Another Person cannot inspect a foreign Buyer follow")
+    const wrongCsrfFollow=await browser.eval("(async()=>{"+
+      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "headers:{'content-type':'application/json'},"+
+      "body:JSON.stringify({action:'follow',organization_id:"+JSON.stringify(followBuyer)+
+      ",seller_id:"+JSON.stringify(followSeller)+",expected_version:0})});return r.status;})()")
+    assert.equal(wrongCsrfFollow,403)
+    await browser.click(followSelector)
+    await browser.wait("Array.from(document.querySelectorAll('#buyer-catalog-items button'))"+
+      ".some(b=>b.dataset.followSellerId==="+JSON.stringify(followSeller)+
+      " && !b.disabled && b.textContent.includes('takipten çık'))")
+    const followedRows=await q("select version,revoked_at,source_audit_event_id "+
+      "from da_buyer_store_follow where buyer_organization_id=$1 and seller_id=$2",
+      [followBuyer,followSeller])
+    assert.equal(followedRows.length,1)
+    assert.equal(followedRows[0].version,1)
+    assert.equal(followedRows[0].revoked_at,null)
+    const replayFollow=await browser.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'follow',organization_id:"+JSON.stringify(followBuyer)+
+      ",seller_id:"+JSON.stringify(followSeller)+",expected_version:0})});return r.status;})()")
+    assert.equal(replayFollow,409,"A stale follow cannot create a second audit or record")
+    const foreignMutation=await reviewer.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'unfollow',organization_id:"+JSON.stringify(followBuyer)+
+      ",seller_id:"+JSON.stringify(followSeller)+",expected_version:1})});return r.status;})()")
+    assert.equal(foreignMutation,403)
+    await browser.click(followSelector)
+    await browser.wait("Array.from(document.querySelectorAll('#buyer-catalog-items button'))"+
+      ".some(b=>b.dataset.followSellerId==="+JSON.stringify(followSeller)+
+      " && !b.disabled && b.textContent.includes('takip et'))")
+    const unfollowedRows=await q("select version,revoked_at from da_buyer_store_follow "+
+      "where buyer_organization_id=$1 and seller_id=$2",[followBuyer,followSeller])
+    assert.equal(unfollowedRows.length,1)
+    assert.equal(unfollowedRows[0].version,2)
+    assert.ok(unfollowedRows[0].revoked_at,"Unfollow retains the private history row")
+    const followAudit=await q("select e.action from da_audit_event e "+
+      "join da_audit_outbox o on o.source_audit_event_id=e.id "+
+      "where e.organization_id=$1 and e.target_id=$2 and e.resource='buyer-store-follow' "+
+      "order by e.occurred_at,e.id",[followBuyer,followSeller])
+    assert.deepEqual(new Set(followAudit.map((x:any)=>x.action)),
+      new Set(["organization.store_followed","organization.store_unfollowed"]))
+    assert.equal(followAudit.length,2,"Follow and unfollow each require one canonical audit")
+    assert.deepEqual(await q("select version from da_buyer_store_follow "+
+      "where buyer_organization_id=$1 and seller_id=$2",[followBuyer,followSeller]),
+      [{version:2}])
+    process.stdout.write("PASS B22 Chrome: Buyer Organization Owner follows and unfollows approved Store; foreign/CSRF/replay denied, PG16 v1-v2 and two outboxed audits, no checkout\\n")
+
     // Separate legal Seller Organization is part of the current entitlement,
     // not just the native Seller's open flag. Beta remains an active Buyer.
     // Test-only PG16 suspension/restoration never touches production.
