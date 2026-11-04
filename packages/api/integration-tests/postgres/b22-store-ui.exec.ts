@@ -6443,7 +6443,11 @@ export default async function({container}:any){
     const draftId=firstDraft[0].id
     await signupChrome.wait("document.querySelector('#organization-draft-list button')?.textContent.includes('Taslağı düzenle')")
     await signupChrome.click("#organization-draft-list button")
-    await signupChrome.input("#organization-draft-form input[name=legal_name]","B22 Düzenlenmiş Sentetik İşletme")
+    // B06Chrome.input appends text; select the existing form value first,
+    // then send actual Chromium input (not a synthetic DOM/server mutation).
+    await signupChrome.click("#organization-draft-form input[name=legal_name]")
+    await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').select()")
+    await signupChrome.send("Input.insertText",{text:"B22 Düzenlenmiş Sentetik İşletme"})
     await signupChrome.click("#organization-draft-form button[type=submit]")
     await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
     const revisedDraft=await q(`select version,legal_name from da_organization_application
