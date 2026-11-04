@@ -129,10 +129,11 @@ it("Medusa LocalFileService v2.22.0 native contract: private bytes, prefixed key
   const os=require("node:os") as typeof import("node:os")
   const path=require("node:path") as typeof import("node:path")
   const medusaPackage=require("@medusajs/medusa/package.json")
-  const localPackage=require("@medusajs/file-local/package.json")
   expect(medusaPackage.version).toBe("2.22.0")
-  expect(localPackage.version).toBe("2.22.0")
-  const {LocalFileService}=require("@medusajs/file-local")
+  // Medusa's documented module export forwards the installed provider.
+  // It resolves through our declared @medusajs/medusa dependency.
+  const {LocalFileService}=require("@medusajs/medusa/file-local")
+  expect(typeof LocalFileService).toBe("function")
   const root=await fs.mkdtemp(path.join(os.tmpdir(),"da-b22-cert-"))
   try{
     const publicDir=path.join(root,"static")
