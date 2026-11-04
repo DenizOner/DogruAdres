@@ -7,7 +7,10 @@ import { hashInvitationToken } from "../security"
 // rollback or the trigger. No module/container/bootstrap/database is initialized.
 function fixture() {
   const context = { transactionManager: {
-    execute: jest.fn(async(sql:string)=>sql.includes("m.protected_owner=true")?[{id:"damem_protected"}]:[]),
+    execute: jest.fn(async(sql:string)=>
+      sql.includes("from da_organization where id=? and status='active'")
+        ? [{id:"daorg_test"}]
+        : sql.includes("m.protected_owner=true")?[{id:"damem_protected"}]:[]),
     flush: jest.fn(async () => undefined)
   } } as unknown as Context
   const service = Object.create(AccessService.prototype) as AccessService
@@ -62,6 +65,25 @@ describe("Foundation canonical audit and outbox persistence contract", () => {
     ])
     expect(f.outbox).toHaveBeenCalledTimes(4)
     for (const call of [...f.audits.mock.calls, ...f.outbox.mock.calls]) { expect(call[0]).toHaveLength(1); expect(call[1]).toBe(f.context) }
+  })
+
+  it("denies accepting an invitation for suspended/deleted/missing Organization before any write",async()=>{
+    for(const unavailable of ["suspended","soft-deleted","missing"]){
+      const f=fixture()
+      const manager=f.context.transactionManager as any
+      const original=manager.execute.getMockImplementation()
+      manager.execute.mockImplementation(async(sql:string,...rest:unknown[])=>
+        sql.includes("from da_organization where id=? and status='active'")
+          ? []:original(sql,...rest))
+      await expect(f.service.acceptOrganizationInvitation({
+        token:"unit-token",email:"recipient@example.invalid",
+        email_verified:true,actor
+      },f.context)).rejects.toThrow("Invitation Organization is unavailable")
+      expect(f.memberships).not.toHaveBeenCalled()
+      expect(f.audits).not.toHaveBeenCalled()
+      expect(f.outbox).not.toHaveBeenCalled()
+      expect((f.service as any).updateInvitations).not.toHaveBeenCalled()
+    }
   })
 
   it("allowlists the envelope and excludes arbitrary before/after values and secrets", async () => {
