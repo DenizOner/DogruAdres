@@ -6455,6 +6455,24 @@ export default async function({container}:any){
     assert.equal(firstDraft[0].status,"draft")
     assert.equal(firstDraft[0].version,1)
     const draftId=firstDraft[0].id
+    // This must be rejected by the PG16 CHECK itself, not just by HTTP/Zod.
+    // A failed statement uses the existing disposable CI database only.
+    await assert.rejects(
+      q(`update da_organization_application
+        set declared_activities=$2::jsonb,primary_activity='service_repair'
+        where id=$1`,[draftId,JSON.stringify(["service_repair","service_repair"])]),
+      (error:any)=>error?.code==="23514" &&
+        error?.constraint==="da_org_application_activities_check",
+      "PG16 must reject duplicate approved activity codes directly"
+    )
+    const afterDuplicate=await q(`select declared_activities,primary_activity,version
+      from da_organization_application where id=$1`,[draftId])
+    assert.equal(afterDuplicate.length,1)
+    assert.deepEqual(afterDuplicate[0].declared_activities,
+      ["service_repair","insurance_claims"])
+    assert.equal(afterDuplicate[0].primary_activity,"insurance_claims")
+    assert.equal(afterDuplicate[0].version,1)
+    process.stdout.write("PASS B22 PG16: duplicate activity direct SQL 23514; original private draft unchanged\n")
     await signupChrome.wait("document.querySelector('#organization-draft-list button')?.textContent.includes('Taslağı düzenle')")
     await signupChrome.click("#organization-draft-list button")
     // B06Chrome.input appends text; select the existing form value first,
@@ -6657,6 +6675,70 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Chrome: Person private Organization draft reload; version-2 reappears in list; Taslağı düzenle opens populated form; zero new draft/Organization/Owner/audit write\n")
     // --- END B22 RELOAD PROOF ---
     process.stdout.write("PASS B22 Chrome: Person private Organization draft save/edit, foreign/unauthenticated/CSRF/replay denies, PG16 audit without Organization or Owner\n")
+
+    // Legacy-shaped draft: omit BOTH columns added by the activity migration.
+    // PG16 must supply []/NULL, preserve the original Person, ID and version,
+    // allow a private read, and let Chrome upgrade the same row via normal POST.
+    // This is a post-migration compatibility fixture, not an asserted
+    // pre-migration database upgrade simulation.
+    const legacyDraftId="daorgapp_"+randomBytes(16).toString("hex")
+    await q(`insert into da_organization_application
+      (id,applicant_person_id,business_kind,legal_name,landline_phone,status,version)
+      values($1,$2,'individual_business','B22 Önceki Taslak',$3,'draft',1)`,
+      [legacyDraftId,signupPerson,draftLandline])
+    const legacyBefore=await q(`select id,applicant_person_id,
+      declared_activities,primary_activity,status,version
+      from da_organization_application where id=$1`,[legacyDraftId])
+    assert.equal(legacyBefore.length,1)
+    assert.equal(legacyBefore[0].id,legacyDraftId)
+    assert.equal(legacyBefore[0].applicant_person_id,signupPerson)
+    assert.deepEqual(legacyBefore[0].declared_activities,[])
+    assert.equal(legacyBefore[0].primary_activity,null)
+    assert.equal(legacyBefore[0].status,"draft")
+    assert.equal(legacyBefore[0].version,1)
+    const legacyVisible=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/organization-applications');
+      const data=await r.json();
+      return {status:r.status,draft:data.drafts?.find(
+        x=>x.id===${JSON.stringify(legacyDraftId)})};
+    })()`)
+    assert.equal(legacyVisible.status,200)
+    assert.deepEqual(legacyVisible.draft.declared_activities,[])
+    assert.equal(legacyVisible.draft.primary_activity,null)
+    assert.equal(legacyVisible.draft.version,1)
+    await signupChrome.click("#organization-draft-refresh")
+    await signupChrome.wait("document.querySelector('#organization-draft-list p:first-child')?.textContent.includes('B22 Önceki Taslak')")
+    await signupChrome.click("#organization-draft-list p:first-child button")
+    const legacyFormBefore=await signupChrome.eval(`(()=>{
+      const form=document.getElementById('organization-draft-form');
+      return {name:form.elements.legal_name.value,
+        selected:form.querySelectorAll('input[name=declared_activities]:checked').length,
+        primary:form.elements.primary_activity.value};
+    })()`)
+    assert.deepEqual(legacyFormBefore,{name:"B22 Önceki Taslak",selected:0,primary:""})
+    await signupChrome.click('#organization-draft-form input[value=insurance_claims]')
+    await signupChrome.click('#organization-draft-form select[name=primary_activity]')
+    for(const key of ["End","Enter"]){
+      for(const type of ["keyDown","keyUp"])
+        await signupChrome.send("Input.dispatchKeyEvent",{type,key,code:key})
+    }
+    await signupChrome.click("#organization-draft-form button[type=submit]")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
+    const legacyAfter=await q(`select id,applicant_person_id,declared_activities,
+      primary_activity,status,version from da_organization_application
+      where id=$1`,[legacyDraftId])
+    assert.equal(legacyAfter.length,1)
+    assert.equal(legacyAfter[0].id,legacyDraftId)
+    assert.equal(legacyAfter[0].applicant_person_id,signupPerson)
+    assert.deepEqual(legacyAfter[0].declared_activities,["insurance_claims"])
+    assert.equal(legacyAfter[0].primary_activity,"insurance_claims")
+    assert.equal(legacyAfter[0].status,"draft")
+    assert.equal(legacyAfter[0].version,2)
+    assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+      draftOrganizationsBefore,"Legacy draft edit cannot create Organization")
+    assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
+      draftMembershipsBefore,"Legacy draft edit cannot create Owner")
+    process.stdout.write("PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner\n")
 
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
     assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
