@@ -6418,6 +6418,86 @@ export default async function({container}:any){
         version:data.version,verified:data.phone_verified};
     })()`)
     assert.deepEqual(ownPhone,{status:200,mobile:signupPhone,version:1,verified:false})
+
+    // One Person starts and reopens an Organization application DRAFT only.
+    // No tax document, legal approval, protected Owner or commerce right yet.
+    const draftOrganizationsBefore=Number((await q(
+      "select count(*)::int n from da_organization"))[0].n)
+    const draftMembershipsBefore=Number((await q(
+      "select count(*)::int n from da_organization_membership"))[0].n)
+    const draftLegalName="B22 Sentetik İşletme Taslağı"
+    const draftLandline="+90 212 555 00 00"
+    await signupChrome.input("#organization-draft-form input[name=legal_name]",draftLegalName)
+    await signupChrome.input("#organization-draft-form input[name=landline_phone]",draftLandline)
+    await signupChrome.click("#organization-draft-form button[type=submit]")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
+    const firstDraft=await q(`select id,applicant_person_id,business_kind,legal_name,landline_phone,status,version
+      from da_organization_application where applicant_person_id=$1`,[signupPerson])
+    assert.equal(firstDraft.length,1)
+    assert.equal(firstDraft[0].applicant_person_id,signupPerson)
+    assert.equal(firstDraft[0].business_kind,"individual_business")
+    assert.equal(firstDraft[0].legal_name,draftLegalName)
+    assert.equal(firstDraft[0].landline_phone,draftLandline)
+    assert.equal(firstDraft[0].status,"draft")
+    assert.equal(firstDraft[0].version,1)
+    const draftId=firstDraft[0].id
+    await signupChrome.wait("document.querySelector('#organization-draft-list button')?.textContent.includes('Taslağı düzenle')")
+    await signupChrome.click("#organization-draft-list button")
+    await signupChrome.input("#organization-draft-form input[name=legal_name]","B22 Düzenlenmiş Sentetik İşletme")
+    await signupChrome.click("#organization-draft-form button[type=submit]")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
+    const revisedDraft=await q(`select version,legal_name from da_organization_application
+      where id=$1 and applicant_person_id=$2`,[draftId,signupPerson])
+    assert.equal(revisedDraft.length,1)
+    assert.equal(revisedDraft[0].version,2)
+    assert.equal(revisedDraft[0].legal_name,"B22 Düzenlenmiş Sentetik İşletme")
+    const draftReplay=await signupChrome.eval(`(async()=>{
+      const s=await (await fetch('/personal/session')).json();
+      const body={application_id:${JSON.stringify(draftId)},expected_version:1,
+        business_kind:'legal_company',legal_name:'Should not overwrite',
+        landline_phone:'+90 212 555 00 00'};
+      const stale=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify(body)});
+      const badCsrf=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':'forged'},
+        body:JSON.stringify({...body,expected_version:2})});
+      const badPhone=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify({...body,landline_phone:'12',expected_version:2})});
+      const noCookie=await fetch('/personal/organization-applications',{credentials:'omit'});
+      return {stale:stale.status,badCsrf:badCsrf.status,
+        badPhone:badPhone.status,noCookie:noCookie.status};
+    })()`)
+    assert.deepEqual(draftReplay,{stale:409,badCsrf:403,badPhone:400,noCookie:403})
+    const otherDrafts=await reviewer.eval(`(async()=>{
+      const r=await fetch('/personal/organization-applications');
+      const s=await (await fetch('/personal/session')).json();
+      const edit=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify({application_id:${JSON.stringify(draftId)},
+          expected_version:2,business_kind:'legal_company',
+          legal_name:'Foreign rewrite forbidden',landline_phone:'+90 212 555 00 00'})});
+      const data=await r.json();
+      return {status:r.status,items:data.drafts,foreignEdit:edit.status};
+    })()`)
+    assert.equal(otherDrafts.status,200)
+    assert.ok(Array.isArray(otherDrafts.items))
+    assert.ok(!otherDrafts.items.some((x:any)=>x.id===draftId))
+    assert.equal(otherDrafts.foreignEdit,403)
+    const draftAudits=await q(`select e.new_values::text as details
+      from da_audit_event e join da_security_outbox o on o.audit_event_id=e.id
+      where e.target_id=$1 and e.action='organization.application_draft_saved'`,[draftId])
+    assert.equal(draftAudits.length,2)
+    assert.ok(!JSON.stringify(draftAudits).includes(draftLandline))
+    assert.ok(!JSON.stringify(draftAudits).includes(draftLegalName))
+    assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+      draftOrganizationsBefore,"Draft cannot create legal Organization")
+    assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
+      draftMembershipsBefore,"Draft cannot assign first Owner")
+    assert.equal((await q("select version from da_organization_application where id=$1",[draftId]))[0].version,2)
+    process.stdout.write("PASS B22 Chrome: Person private Organization draft save/edit, foreign/unauthenticated/CSRF/replay denies, PG16 audit without Organization or Owner\n")
+
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
     assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
       "Primary Customer cannot offer an unlink button")
