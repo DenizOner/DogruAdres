@@ -4923,6 +4923,10 @@ export default async function({container}:any){
     assert.equal(restoredOwnerDraft.status,200)
     assert.ok(restoredOwnerDraft.body.stores.some((row:any)=>row.id===ownerStoreId))
     process.stdout.write("PASS B22 Owner role policy: narrowed products.edit denies real HTTP POST and native PG16 product/intent writes, restored default lists approved Store\n")
+    // The role-policy change is server-side. Reopen the current real personal
+    // document so its authorized Organization/Store read refreshes the hidden
+    // draft panel; a server GET alone cannot update the already rendered DOM.
+    await browser.send("Page.reload",{ignoreCache:true})
     await browser.wait("!document.getElementById('product-draft-panel').hidden")
     const draftTitle="B22 browser product draft "+rand
     await browser.input("#product-draft-form input[name=title]",draftTitle)
