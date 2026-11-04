@@ -4,6 +4,17 @@ import http from 'node:http'
 import {once} from 'node:events'
 import {allowedPublicRequest,startFrontdoor} from '../../scripts/personal-frontdoor.mjs'
 
+test("B22 Store follow has exact private GET and CSRF POST ingress only",()=>{
+  for(const method of ["GET","POST"])
+    assert.equal(allowedPublicRequest(method,"/personal/store-follows"),true)
+  for(const method of ["PUT","PATCH","DELETE","HEAD","OPTIONS"])
+    assert.equal(allowedPublicRequest(method,"/personal/store-follows"),false)
+  for(const path of ["/personal/store-follows/","/personal/store-follows/sel_other",
+    "/store/sellers/sel_other/follow","/vendor/sellers/sel_other/follow"])
+    for(const method of ["GET","POST"])
+      assert.equal(allowedPublicRequest(method,path),false)
+})
+
 test("B22 Store applications and active Store read have exact public method/path contracts",()=>{
   for(const method of ["GET","POST"])
     assert.equal(allowedPublicRequest(method,"/personal/store-applications"),true)
