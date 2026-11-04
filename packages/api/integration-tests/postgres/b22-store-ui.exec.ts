@@ -6418,6 +6418,209 @@ export default async function({container}:any){
         version:data.version,verified:data.phone_verified};
     })()`)
     assert.deepEqual(ownPhone,{status:200,mobile:signupPhone,version:1,verified:false})
+
+    // One Person starts and reopens an Organization application DRAFT only.
+    // No tax document, legal approval, protected Owner or commerce right yet.
+    const draftOrganizationsBefore=Number((await q(
+      "select count(*)::int n from da_organization"))[0].n)
+    const draftMembershipsBefore=Number((await q(
+      "select count(*)::int n from da_organization_membership"))[0].n)
+    const draftLegalName="B22 Sentetik İşletme Taslağı"
+    const draftLandline="+90 212 555 00 00"
+    await signupChrome.input("#organization-draft-form input[name=legal_name]",draftLegalName)
+    await signupChrome.input("#organization-draft-form input[name=landline_phone]",draftLandline)
+    await signupChrome.click("#organization-draft-form button[type=submit]")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
+    const firstDraft=await q(`select id,applicant_person_id,business_kind,legal_name,landline_phone,status,version
+      from da_organization_application where applicant_person_id=$1`,[signupPerson])
+    assert.equal(firstDraft.length,1)
+    assert.equal(firstDraft[0].applicant_person_id,signupPerson)
+    assert.equal(firstDraft[0].business_kind,"individual_business")
+    assert.equal(firstDraft[0].legal_name,draftLegalName)
+    assert.equal(firstDraft[0].landline_phone,draftLandline)
+    assert.equal(firstDraft[0].status,"draft")
+    assert.equal(firstDraft[0].version,1)
+    const draftId=firstDraft[0].id
+    await signupChrome.wait("document.querySelector('#organization-draft-list button')?.textContent.includes('Taslağı düzenle')")
+    await signupChrome.click("#organization-draft-list button")
+    // B06Chrome.input appends text; select the existing form value first,
+    // then send actual Chromium input (not a synthetic DOM/server mutation).
+    await signupChrome.click("#organization-draft-form input[name=legal_name]")
+    await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').select()")
+    await signupChrome.send("Input.insertText",{text:"B22 Düzenlenmiş Sentetik İşletme"})
+    // Choose the NON-default business kind with native Chromium keyboard input.
+    // Reuse the proven B06Chrome.role() select interaction, not a DOM mutation.
+    await signupChrome.click("#organization-draft-form select[name=business_kind]")
+    for(const key of ["End","Enter"]){
+      for(const type of ["keyDown","keyUp"])
+        await signupChrome.send("Input.dispatchKeyEvent",{type,key,code:key})
+    }
+    assert.equal(await signupChrome.eval(
+      "document.querySelector('#organization-draft-form select[name=business_kind]').value"),
+      "legal_company","The real Chrome edit must choose the non-default legal-company kind")
+    await signupChrome.click("#organization-draft-form button[type=submit]")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
+    const revisedDraft=await q(`select version,legal_name,business_kind from da_organization_application
+      where id=$1 and applicant_person_id=$2`,[draftId,signupPerson])
+    assert.equal(revisedDraft.length,1)
+    assert.equal(revisedDraft[0].version,2)
+    assert.equal(revisedDraft[0].legal_name,"B22 Düzenlenmiş Sentetik İşletme")
+    assert.equal(revisedDraft[0].business_kind,"legal_company",
+      "PG16 must persist the non-default legal-company kind at version 2")
+    const draftReplay=await signupChrome.eval(`(async()=>{
+      const s=await (await fetch('/personal/session')).json();
+      const body={application_id:${JSON.stringify(draftId)},expected_version:1,
+        business_kind:'legal_company',legal_name:'Should not overwrite',
+        landline_phone:'+90 212 555 00 00'};
+      const stale=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify(body)});
+      const badCsrf=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':'forged'},
+        body:JSON.stringify({...body,expected_version:2})});
+      const badPhone=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify({...body,landline_phone:'12',expected_version:2})});
+      const noCookie=await fetch('/personal/organization-applications',{credentials:'omit'});
+      return {stale:stale.status,badCsrf:badCsrf.status,
+        badPhone:badPhone.status,noCookie:noCookie.status};
+    })()`)
+    assert.deepEqual(draftReplay,{stale:409,badCsrf:403,badPhone:400,noCookie:403})
+    // Earlier B22 MFA-disabling tests deliberately REVOKED both A and B.
+    // A revoked browser must not be used as proof of cross-Person isolation.
+    // Register a genuinely distinct second Person over the same real HTTPS
+    // route and native MFA flow, not a fabricated browser cookie or actor.
+    const foreignDraftChrome=new B06Chrome(host,"B");browsers.push(foreignDraftChrome)
+    await foreignDraftChrome.start(crt)
+    const foreignEmail="b22-foreign-draft-"+randomBytes(10).toString("hex")+"@example.invalid"
+    const foreignPassword="Task-Strong-"+randomBytes(18).toString("hex")
+    await foreignDraftChrome.click("#register-details summary")
+    await foreignDraftChrome.input("#register input[name=first_name]","Synthetic")
+    await foreignDraftChrome.input("#register input[name=last_name]","Other")
+    await foreignDraftChrome.input("#register input[name=email]",foreignEmail)
+    await foreignDraftChrome.input("#register input[name=mobile_phone]","+905551234578")
+    await foreignDraftChrome.input("#register input[name=password]",foreignPassword)
+    await foreignDraftChrome.click("#register button")
+    await foreignDraftChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+    await foreignDraftChrome.input("#login input[name=email]",foreignEmail)
+    await foreignDraftChrome.input("#login input[name=password]",foreignPassword)
+    await foreignDraftChrome.click("#login button")
+    await foreignDraftChrome.wait("!document.getElementById('workspace').hidden || !document.getElementById('mfa-enrollment').hidden")
+    if(await foreignDraftChrome.eval("!document.getElementById('mfa-enrollment').hidden")){
+      await foreignDraftChrome.input("#mfa-enroll-start input[name=email]",foreignEmail)
+      await foreignDraftChrome.input("#mfa-enroll-start input[name=password]",foreignPassword)
+      await foreignDraftChrome.click("#mfa-enroll-start button")
+      await foreignDraftChrome.wait("!document.getElementById('mfa-enroll-verify').hidden&&document.getElementById('mfa-seed').value.length>0")
+      const seedUrl=await foreignDraftChrome.eval("document.getElementById('mfa-seed').value")
+      const seed=seedUrl.startsWith("otpauth:")?new URL(seedUrl).searchParams.get("secret"):seedUrl
+      assert.ok(seed)
+      await foreignDraftChrome.input("#mfa-enroll-verify input[name=code]",otp(seed!))
+      await foreignDraftChrome.click("#mfa-enroll-verify button")
+    }
+    await foreignDraftChrome.wait("!document.getElementById('workspace').hidden")
+    assert.equal(await foreignDraftChrome.eval(
+      "(async()=> (await fetch('/personal/session')).status)()"),200,
+      "Cross-Person denial must be tested from a real active second session")
+    const otherDrafts=await foreignDraftChrome.eval(`(async()=>{
+      const r=await fetch('/personal/organization-applications');
+      const s=await (await fetch('/personal/session')).json();
+      const edit=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify({application_id:${JSON.stringify(draftId)},
+          expected_version:2,business_kind:'legal_company',
+          legal_name:'Foreign rewrite forbidden',landline_phone:'+90 212 555 00 00'})});
+      const data=await r.json();
+      return {status:r.status,items:data.drafts,foreignEdit:edit.status};
+    })()`)
+    assert.equal(otherDrafts.status,200)
+    assert.ok(Array.isArray(otherDrafts.items))
+    assert.ok(!otherDrafts.items.some((x:any)=>x.id===draftId))
+    assert.equal(otherDrafts.foreignEdit,403)
+    const draftAudits=await q(`select e.new_values::text as details
+      from da_audit_event e join da_security_outbox o on o.audit_event_id=e.id
+      where e.target_id=$1 and e.action='organization.application_draft_saved'`,[draftId])
+    assert.equal(draftAudits.length,2)
+    assert.ok(!JSON.stringify(draftAudits).includes(draftLandline))
+    assert.ok(!JSON.stringify(draftAudits).includes(draftLegalName))
+    assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+      draftOrganizationsBefore,"Draft cannot create legal Organization")
+    assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
+      draftMembershipsBefore,"Draft cannot assign first Owner")
+    assert.equal((await q("select version from da_organization_application where id=$1",[draftId]))[0].version,2)
+
+    // --- B22 RELOAD PROOF ---
+    // The same authenticated Person reloads the page with cache bypass.
+    // The previously saved draft (version 2) must reappear in the draft list
+    // exactly as persisted -- no new draft, Organization, Owner or audit write.
+    const reloadDraftCountBefore=Number((await q(
+      "select count(*)::int n from da_organization_application where applicant_person_id=$1",[signupPerson]))[0].n)
+    const reloadOrgsBefore=Number((await q("select count(*)::int n from da_organization"))[0].n)
+    const reloadMembsBefore=Number((await q("select count(*)::int n from da_organization_membership"))[0].n)
+    const reloadAuditsBefore=Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1",[signupPerson]))[0].n)
+    const reloadHttpStart=signupChrome.http.length
+    await signupChrome.send("Page.reload",{ignoreCache:true})
+    // Wait for the fresh authenticated workspace (not the login screen).
+    await signupChrome.wait(`!document.getElementById('workspace').hidden&&document.getElementById('person').textContent==='Person: '+${JSON.stringify(signupPerson)}`)
+    // Wait for the private draft list to render the persisted draft entry.
+    await signupChrome.wait("document.querySelector('#organization-draft-list button')?.textContent.includes('Taslağı düzenle')")
+    // Verify: same draft appears (version 2) in the UI list via the GET endpoint.
+    const reloadListResponse=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/organization-applications');
+      const data=await r.json();
+      return {status:r.status,drafts:data.drafts};
+    })()`)
+    assert.equal(reloadListResponse.status,200,"Fresh reload must return 200 for draft list")
+    assert.ok(Array.isArray(reloadListResponse.drafts),"Draft list must be an array after reload")
+    const reloadedDraft=reloadListResponse.drafts.find((x:any)=>x.id===draftId)
+    assert.ok(reloadedDraft,"Same draft id must survive a full page reload")
+    assert.equal(reloadedDraft.version,2,"Draft version must remain 2 after reload (no new write)")
+    // After a full reload the untouched form starts at its original default.
+    // Removing the UI's item.business_kind restoration must now FAIL this test.
+    assert.equal(await signupChrome.eval(
+      "document.querySelector('#organization-draft-form select[name=business_kind]').value"),
+      "individual_business","Fresh form must begin on its default kind before edit")
+    // Click the visible "Taslağı düzenle" control -- a real Chromium user action.
+    await signupChrome.click("#organization-draft-list button")
+    // After clicking, the form must populate with the persisted values.
+    await signupChrome.wait("document.querySelector('#organization-draft-form input[name=legal_name]')?.value.length>0")
+    const reloadFormValues=await signupChrome.eval(`(()=>{
+      const form=document.getElementById('organization-draft-form');
+      return {
+        business_kind:form?.querySelector('select[name=business_kind]')?.value??
+                      form?.querySelector('input[name=business_kind]')?.value??null,
+        legal_name:form?.querySelector('input[name=legal_name]')?.value??null,
+        landline_phone:form?.querySelector('input[name=landline_phone]')?.value??null,
+      };
+    })()`)
+    // The form must reflect the version-2 legal_name (edited value), not the original draft.
+    assert.equal(reloadFormValues.legal_name,"B22 Düzenlenmiş Sentetik İşletme",
+      "Reload must populate form with persisted version-2 legal name")
+    assert.equal(reloadFormValues.landline_phone,draftLandline,
+      "Reload must populate form with persisted landline")
+    assert.equal(reloadedDraft.business_kind,"legal_company",
+      "Reload GET must preserve the persisted NON-default legal-company kind")
+    assert.equal(reloadFormValues.business_kind,reloadedDraft.business_kind,
+      "Reloaded edit form must restore the exact persisted business kind")
+    // PG16 invariants: reload must not create any new rows.
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_organization_application where applicant_person_id=$1",[signupPerson]))[0].n),
+      reloadDraftCountBefore,"Reload must not create a second draft row")
+    assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+      reloadOrgsBefore,"Reload must not create a legal Organization")
+    assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
+      reloadMembsBefore,"Reload must not assign an Owner membership")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1",[signupPerson]))[0].n),
+      reloadAuditsBefore,"Reload must not emit a new audit write")
+    // Confirm: no POST to organization-applications was issued during reload.
+    const reloadPosts=signupChrome.http.slice(reloadHttpStart).filter(
+      (r:any)=>r.method==="POST"&&r.path==="/personal/organization-applications")
+    assert.equal(reloadPosts.length,0,"Page reload must issue zero POSTs to organization-applications")
+    process.stdout.write("PASS B22 Chrome: Person private Organization draft reload; version-2 reappears in list; Taslağı düzenle opens populated form; zero new draft/Organization/Owner/audit write\n")
+    // --- END B22 RELOAD PROOF ---
+    process.stdout.write("PASS B22 Chrome: Person private Organization draft save/edit, foreign/unauthenticated/CSRF/replay denies, PG16 audit without Organization or Owner\n")
+
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
     assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
       "Primary Customer cannot offer an unlink button")

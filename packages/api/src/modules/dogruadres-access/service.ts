@@ -30,6 +30,7 @@ import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedS
 import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
+import {listOrganizationDrafts,saveOrganizationDraft,type DraftPayload} from "./organization-application"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -412,6 +413,16 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async lockPersonalSession(token: string, @MedusaContext() context: Context = {}) {
     return new IdentitySessions(securitySql(context.transactionManager)).logout(token, false, true)
+  }
+
+  @InjectTransactionManager()
+  async personalOrganizationApplicationDrafts(token:string,@MedusaContext() context:Context={}) {
+    return listOrganizationDrafts(securitySql(context.transactionManager),token)
+  }
+
+  @InjectTransactionManager()
+  async personalSaveOrganizationApplicationDraft(token:string,input:DraftPayload,@MedusaContext() context:Context={}) {
+    return saveOrganizationDraft(securitySql(context.transactionManager),token,input)
   }
 
   @InjectTransactionManager()
