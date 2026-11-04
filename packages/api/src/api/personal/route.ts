@@ -173,6 +173,26 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <h2>Yeni Şirket Oluştur — özel başvuru taslağı</h2>
     <p>Gerçek kişi ticari işletmesi ve tüzel şirket aynı başvuru yolunu kullanır. Bu aşama yalnız taslaktır: vergi levhası henüz yüklenmez, başvuru gönderilmez ve işletme/Owner/alışveriş yetkisi oluşmaz.</p>
     <form id="organization-draft-form">
+      <fieldset><legend>Faaliyet alanları (bir veya birkaçını seçin)</legend>
+        <label><input type="checkbox" name="declared_activities" value="service_repair"> Servis ve Onarım</label>
+        <label><input type="checkbox" name="declared_activities" value="retail_store"> Perakende Mağazası</label>
+        <label><input type="checkbox" name="declared_activities" value="wholesale_distribution"> Toptancı / Distribütör</label>
+        <label><input type="checkbox" name="declared_activities" value="manufacturing"> Üretici</label>
+        <label><input type="checkbox" name="declared_activities" value="fleet_operations"> Filo / Kurumsal Araç İşletmecisi</label>
+        <label><input type="checkbox" name="declared_activities" value="insurance_claims"> Sigorta / Hasar Yönetimi</label>
+      </fieldset>
+      <label>Ana faaliyet (işaretlediğiniz faaliyetlerden biri)
+        <select name="primary_activity" required>
+          <option value="">Ana faaliyeti seçin</option>
+          <option value="service_repair">Servis ve Onarım</option>
+          <option value="retail_store">Perakende Mağazası</option>
+          <option value="wholesale_distribution">Toptancı / Distribütör</option>
+          <option value="manufacturing">Üretici</option>
+          <option value="fleet_operations">Filo / Kurumsal Araç İşletmecisi</option>
+          <option value="insurance_claims">Sigorta / Hasar Yönetimi</option>
+        </select>
+      </label>
+      <p>Faaliyet seçimleri beyan niteliğindedir; doğrulanmadan indirim veya ticari yetki vermez.</p>
       <label>İşletme türü
         <select name="business_kind" required>
           <option value="individual_business">Gerçek kişi ticari işletmesi</option>
@@ -368,6 +388,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   let recoveryCodes=[];
   let notificationRequest=0,notificationOffset=0,notificationNext=null;
+  const organizationActivityCodes=[
+    'service_repair','retail_store','wholesale_distribution',
+    'manufacturing','fleet_operations','insurance_claims'];
   let organizationDraftId='',organizationDraftVersion=0,organizationDraftRequest=0;
   function clearOrganizationDrafts(){
     organizationDraftRequest++;organizationDraftId='';organizationDraftVersion=0;
@@ -386,7 +409,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       for(const item of data.drafts){
         if(!item||typeof item.id!=='string'||item.status!=='draft'||
           !Number.isSafeInteger(item.version)||item.version<1||
-          !['individual_business','legal_company'].includes(item.business_kind))
+          !['individual_business','legal_company'].includes(item.business_kind)||
+          !Array.isArray(item.declared_activities)||item.declared_activities.length>6||
+          !item.declared_activities.every(v=>organizationActivityCodes.includes(v))||
+          (item.declared_activities.length===0?
+            item.primary_activity!==null:!item.declared_activities.includes(item.primary_activity)))
           throw Error('Taslaklar doğrulanamadı');
         const row=document.createElement('p'),button=document.createElement('button');
         row.textContent=item.legal_name+' — Taslak (henüz gönderilmedi)';
@@ -394,6 +421,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         button.onclick=()=>{
           organizationDraftId=item.id;organizationDraftVersion=item.version;
           const form=el('organization-draft-form');
+          for(const input of form.querySelectorAll('input[name=declared_activities]'))
+            input.checked=item.declared_activities.includes(input.value);
+          form.elements.primary_activity.value=item.primary_activity||'';
           form.elements.business_kind.value=item.business_kind;
           form.elements.legal_name.value=item.legal_name;
           form.elements.landline_phone.value=item.landline_phone;
@@ -424,6 +454,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     e.preventDefault();
     const form=e.currentTarget,button=form.querySelector('button');
     if(button.disabled||document.hidden||el('workspace').hidden)return;
+    const selectedActivities=Array.from(
+      form.querySelectorAll('input[name=declared_activities]:checked'),x=>x.value);
+    const primaryActivity=form.elements.primary_activity.value;
+    if(!selectedActivities.length||!selectedActivities.includes(primaryActivity)){
+      el('organization-draft-status').textContent=
+        'En az bir faaliyet ve bu faaliyetlerden birini ana faaliyet olarak seçin.';
+      return;
+    }
     button.disabled=true;
     const id=organizationDraftId||'daorgapp_'+crypto.randomUUID().replaceAll('-','');
     organizationDraftId=id;
@@ -431,6 +469,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     try{
       const data=await api('organization-applications',{method:'POST',
         body:JSON.stringify({...Object.fromEntries(new FormData(form)),
+          declared_activities:selectedActivities,primary_activity:primaryActivity,
           application_id:id,expected_version:version})});
       if(data.application_id!==id||data.status!=='draft'||data.version!==version+1)
         throw Error('Taslak sonucu belirsiz');
