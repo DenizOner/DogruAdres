@@ -2306,13 +2306,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        input.expected_version<0||input.expected_version>=2147483647)
       throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager)
+    // All Owner/Store policy writers lock Person/session/Owner first, then
+    // Store×Buyer. Reversing this order deadlocks follow against Store block.
+    const actor=await this.currentStoreFollowOwner_(db,token,input.organization_id)
+    if(!actor)return null
     // Block and follow operations serialize on the same Store×Buyer pair.
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-buyer-block'),hashtext(?))",
       [input.seller_id+":"+input.organization_id])
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-buyer-store-follow'),hashtext(?))",
       [input.organization_id+":"+input.seller_id])
-    const actor=await this.currentStoreFollowOwner_(db,token,input.organization_id)
-    if(!actor)return null
     if(input.action==="follow"){
       const origins=await db.execute(
         "select organization_id from da_organization_seller_ownership "+
