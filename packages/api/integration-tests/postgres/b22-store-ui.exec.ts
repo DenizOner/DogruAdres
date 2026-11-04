@@ -2595,6 +2595,32 @@ export default async function({container}:any){
     assert.equal(betaCatalogBefore.status,200)
     assert.deepEqual(new Set(betaCatalogBefore.body.stores.map((s:any)=>s.id)),
       new Set(cartStoreIds),"Independent Buyer Beta can see two active legal Store offers")
+    // An approved Store may disappear from the Buyer's catalogue while
+    // its Buyer Organization follow remains. Use the real protected Beta
+    // Owner UI to unfollow without a product or Seller catalog row.
+    const betaFollowBuyer=organizations[1].id
+    const betaFollowBefore=await reviewer.eval(`(async()=>{
+      const r=await fetch('/personal/store-follows?organization_id='+
+        ${JSON.stringify(organizations[1].id)}+'&seller_id='+
+        ${JSON.stringify(ownerStoreId)})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    assert.equal(betaFollowBefore.status,200)
+    assert.deepEqual(betaFollowBefore.body,{
+      organization_id:betaFollowBuyer,seller_id:ownerStoreId,following:false,version:0
+    })
+    const betaFollow=await reviewer.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      const r=await fetch('/personal/store-follows',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify({action:'follow',
+          organization_id:${JSON.stringify(organizations[1].id)},
+          seller_id:${JSON.stringify(ownerStoreId)},expected_version:0})})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    assert.equal(betaFollow.status,200)
+    assert.equal(betaFollow.body.following,true)
+    assert.equal(betaFollow.body.version,1)
     await q("update da_organization set status='suspended' where id=$1",
       [organizations[0].id])
     try{
@@ -2604,6 +2630,43 @@ export default async function({container}:any){
       assert.equal(deniedSuspendedSeller.body.organization_id,organizations[1].id)
       assert.deepEqual(deniedSuspendedSeller.body.stores,[],
         "Every Store of a suspended seller legal Organization must disappear")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      await reviewer.click("#buyer-catalog-refresh")
+      await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden&&"+
+        "document.getElementById('buyer-catalog-items').children.length===0")
+      await reviewer.click("#buyer-follow-refresh")
+      await reviewer.wait("!document.getElementById('buyer-follow-panel').hidden&&"+
+        "Array.from(document.querySelectorAll('#buyer-follow-items button'))"+
+        ".some(b=>b.dataset.unfollowSellerId==="+JSON.stringify(ownerStoreId)+
+        "&&!b.disabled)")
+      const betaFollowList=await reviewer.eval(`(async()=>{
+        const r=await fetch('/personal/store-follows?organization_id='+
+          ${JSON.stringify(organizations[1].id)})
+        return {status:r.status,body:await r.json()}
+      })()`)
+      assert.equal(betaFollowList.status,200)
+      assert.deepEqual(betaFollowList.body,{
+        organization_id:betaFollowBuyer,
+        stores:[{seller_id:ownerStoreId,version:1}],next_cursor:null
+      })
+      await reviewer.click("#buyer-follow-items button[data-unfollow-seller-id='"+
+        ownerStoreId+"']")
+      await reviewer.wait("!document.getElementById('buyer-follow-panel').hidden&&"+
+        "document.getElementById('buyer-follow-status').textContent.includes('bulunmuyor')")
+      assert.deepEqual(await q("select version,revoked_at is not null as revoked "+
+        "from da_buyer_store_follow where buyer_organization_id=$1 and seller_id=$2",
+        [betaFollowBuyer,ownerStoreId]),[{version:2,revoked:true}],
+        "Suspended Seller unfollow retains correct Buyer Organization history")
+      const betaFollowAudit=await q(
+        "select e.action from da_audit_event e "+
+        "join da_audit_outbox o on o.source_audit_event_id=e.id "+
+        "where e.organization_id=$1 and e.target_id=$2 and e.resource='buyer-store-follow' "+
+        "order by e.occurred_at,e.id",[betaFollowBuyer,ownerStoreId])
+      assert.deepEqual(new Set(betaFollowAudit.map((x:any)=>x.action)),
+        new Set(["organization.store_followed","organization.store_unfollowed"]))
+      assert.equal(betaFollowAudit.length,2)
+      process.stdout.write("PASS B22 Chrome: active Beta Owner follows Store then unfollows after Seller Organization suspension removes all catalogue rows; selected Buyer-only list, PG16 v2 and two audits/outboxes, no checkout\\n")
     }finally{
       await q("update da_organization set status='active' where id=$1",
         [organizations[0].id])
