@@ -94,13 +94,13 @@ describe("smtp-client unit tests", () => {
         const replyPromise:(Promise<{code:number;message:string}>)=
           (connection as any).readReply()
         void replyPromise.then(()=>{resolved=true})
-        socket.write(Buffer.from("250-mail.synthetic\\r\\n250 "))
+        socket.write(Buffer.from("250-mail.synthetic\r\n250 "))
         await Promise.resolve()
         expect(resolved).toBe(false)
-        socket.write(Buffer.from("STARTTLS\\r\\n"))
+        socket.write(Buffer.from("STARTTLS\r\n"))
         const reply=await replyPromise
         expect(reply.code).toBe(250)
-        expect(reply.message).toBe("250-mail.synthetic\\r\\n250 STARTTLS\\r\\n")
+        expect(reply.message).toBe("250-mail.synthetic\r\n250 STARTTLS\r\n")
       } finally { connection.close() }
     })
   })
