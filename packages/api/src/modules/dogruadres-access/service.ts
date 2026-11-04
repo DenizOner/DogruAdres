@@ -171,7 +171,16 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   async personalActorLinks(token:string,@MedusaContext() context:Context={}) {
     const sql=securitySql(context.transactionManager),s=await new IdentitySessions(sql).current(token)
     if(!s)return null // Preserve terminal expiry when returning denial.
-    return sql.execute(`select id,actor_type,actor_id,revoked_at from da_verified_actor_binding where person_id=? order by verified_at`,[s.person_id])
+    // Match the active first-party login proof server-side, not a browser claim.
+    // A primary Customer is a verified technical actor, never an unlinkable
+    // secondary. Protect every active login actor of this Person.
+    return sql.execute(`select b.id,b.actor_type,b.actor_id,b.revoked_at,
+      exists(select 1 from da_login_binding l
+        where l.person_id=b.person_id and l.auth_identity_id=b.auth_identity_id
+          and l.actor_type=b.actor_type and l.actor_id=b.actor_id
+          and l.verified_at is not null and l.revoked_at is null) as is_primary
+      from da_verified_actor_binding b where b.person_id=?
+      order by b.verified_at`,[s.person_id])
   }
   @InjectTransactionManager()
   async personalActorBinding(token:string,type:string,@MedusaContext() context:Context={}) {

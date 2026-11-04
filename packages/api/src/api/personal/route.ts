@@ -311,7 +311,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <h2>Kuruluş oluşturma</h2><p>Bu işlem açık platform görevi ve güncel güçlü doğrulama gerektirir. İlk iki Owner sunucuda doğrulanır.</p>
   <form id="provision"><label>Yeni kuruluş adı<input name="name" maxlength="200" required></label><label>Birinci Owner türü<select name="type1"><option>user</option><option>member</option><option>customer</option></select></label><label>Birinci Owner kimliği<input name="owner1" required></label><label>İkinci Owner türü<select name="type2"><option>user</option><option>member</option><option>customer</option></select></label><label>İkinci Owner kimliği<input name="owner2" required></label><button>Kuruluş oluştur</button></form><pre id="provision-result"></pre>
   <h2>Satıcı ve müşteri çalışma bağlamı</h2><form id="seller"><label>Satıcı kimliği<input name="seller" required></label><button>Satıcı erişimini doğrula</button></form><button id="customer">Müşteri bağlamımı aç</button><pre id="actor-result"></pre>
-  <h2>Doğrulanmış hesap bağlantıları</h2><div id="bindings"></div>
+  <h2>Kişisel giriş ve doğrulanmış hesaplar</h2>
+  <p>Giriş hesabına bağlı kayıt korunur; yalnız ayrıca doğrulanmış ek hesap bağlantıları kaldırılabilir.</p>
+  <div id="bindings"></div>
   <form id="link-account"><label>Bağlanacak hesap türü<select name="actor_type"><option>member</option><option>customer</option></select></label><label>İkincil hesap e-postası<input name="email" type="email" autocomplete="off" required></label><label>İkincil hesap parolası<input name="password" type="password" autocomplete="off" required></label><button>İkincil hesabı doğrula</button></form>
   <form id="link-confirm" hidden><p>İki hesap sahipliği sunucuda doğrulanır; kuruluş veya platform yetkisi verilmez.</p><label>İkincil hesap TOTP kodu<input name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code"></label><button>Hesap bağlantısını tamamla</button></form>
   <button id="logout">Bu cihazdan çık</button><button id="logout-all">Tüm cihazlardan çık</button></section>
@@ -566,7 +568,38 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('mfa-info').textContent='MFA ayarları henüz hizmete açılmadı.';
     }
   }
-  async function links(){el('bindings').replaceChildren();const data=await api('links');for(const item of data.bindings){const p=document.createElement('p');p.textContent=item.actor_type+' '+item.actor_id+' — '+(item.revoked_at?'revoked':'active');el('bindings').append(p);if(!item.revoked_at){const b=document.createElement('button');b.textContent='Bağı kaldır '+item.id;b.onclick=async()=>{b.disabled=true;try{await api('links',{method:'POST',body:JSON.stringify({action:'unlink',binding_id:item.id})});await links();el('actor-result').textContent='';status('Hesap bağı kaldırıldı')}catch(e){status(e.message);if(!e.uncertain)b.disabled=false}};el('bindings').append(b)}}}
+  async function links(){
+    const root=el('bindings');root.replaceChildren();
+    const data=await api('links');
+    if(!Array.isArray(data.bindings)||data.bindings.some(item=>
+      !item||typeof item.is_primary!=='boolean'||
+      !['member','customer'].includes(item.actor_type)||
+      typeof item.id!=='string'||typeof item.actor_id!=='string'))
+      throw Error('Hesap bağlantıları doğrulanamadı');
+    for(const item of data.bindings){
+      const primary=item.is_primary===true,active=!item.revoked_at;
+      const p=document.createElement('p');
+      const label=item.actor_type==='customer'?'müşteri':'satıcı';
+      p.textContent=(primary?'Giriş hesabına bağlı '+label+' kaydı':'Doğrulanmış ek '+label+' hesabı')+
+        ' — '+(active?'etkin':'bağlantısı kaldırılmış');
+      root.append(p);
+      // Only server-classified secondary bindings get a removal control.
+      // AccountLinking.unlink independently rejects live login bindings.
+      if(active&&item.is_primary===false){
+        const b=document.createElement('button');
+        b.textContent='Bağı kaldır '+item.id;
+        b.onclick=async()=>{
+          b.disabled=true;
+          try{
+            await api('links',{method:'POST',body:JSON.stringify({action:'unlink',binding_id:item.id})});
+            await links();el('actor-result').textContent='';
+            status('Hesap bağı kaldırıldı');
+          }catch(e){status(e.message);if(!e.uncertain)b.disabled=false}
+        };
+        root.append(b);
+      }
+    }
+  }
   function clearPendingInvitations(){
     el('pending-invitations-panel').hidden=true;
     el('pending-invitations').replaceChildren();
