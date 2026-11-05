@@ -7254,15 +7254,52 @@ export default async function({container}:any){
     `})()`)
     assert.equal(foreignUploadRes, 403, "Foreign Person must be denied document upload")
 
-    // 4. Upload exactly 10 MiB valid synthetic PDF (10485760 bytes)
-    const pdfHead=Buffer.from("%PDF-1.4\n%B22 synthetic tax certificate\n")
-    const pdfTail=Buffer.from("\n%%EOF\n")
-    const exact10MibPdf = Buffer.concat([
-      pdfHead,
-      Buffer.alloc(10485760 - pdfHead.length - pdfTail.length, 0x20),
-      pdfTail
-    ])
-    assert.equal(exact10MibPdf.length, 10485760, "Exact 10 MiB PDF test asset")
+    // 4. Upload an actual structurally readable PDF at exactly 10 MiB.
+    // The earlier header + spaces + %%EOF fixture was not a parseable PDF.
+    // Generate one-page PDF objects/xref with a harmless padded content
+    // stream; this remains an entirely synthetic, private CI-only document.
+    const exact10MibPdf=(()=>{
+      const target=10485760
+      const build=(streamLength:number)=>{
+        const parts:Buffer[]=[]
+        const offsets:number[]=[0]
+        let length=0
+        const add=(value:Buffer|string)=>{
+          const bytes=typeof value==="string"?Buffer.from(value,"ascii"):value
+          parts.push(bytes);length+=bytes.length
+        }
+        const obj=(n:number,body:string)=>{
+          offsets.push(length)
+          add(n+" 0 obj\n"+body+"\nendobj\n")
+        }
+        add("%PDF-1.4\n%Synthetic certificate for isolated B22 tests\n")
+        obj(1,"<< /Type /Catalog /Pages 2 0 R >>")
+        obj(2,"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        obj(3,"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>")
+        obj(4,"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        const content=Buffer.from("BT /F1 12 Tf 36 700 Td (Synthetic certificate) Tj ET\n","ascii")
+        assert.ok(streamLength>=content.length)
+        offsets.push(length)
+        add("5 0 obj\n<< /Length "+streamLength+" >>\nstream\n")
+        add(content)
+        add(Buffer.alloc(streamLength-content.length,0x20))
+        add("\nendstream\nendobj\n")
+        const xref=length
+        add("xref\n0 6\n0000000000 65535 f \n")
+        for(const off of offsets.slice(1))
+          add(String(off).padStart(10,"0")+" 00000 n \n")
+        add("trailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n"+xref+"\n%%EOF\n")
+        return Buffer.concat(parts)
+      }
+      let streamLength=target-600
+      for(let attempt=0;attempt<8;attempt++){
+        const bytes=build(streamLength)
+        if(bytes.length===target)return bytes
+        streamLength+=target-bytes.length
+      }
+      throw Error("Unable to construct exact-size valid synthetic PDF")
+    })()
+    assert.equal(exact10MibPdf.length,10485760,"Exact 10 MiB real-structure PDF test asset")
     const exact10MibBase64 = exact10MibPdf.toString("base64")
 
     const uploadRes = await signupChrome.eval(`(async()=>{`+
