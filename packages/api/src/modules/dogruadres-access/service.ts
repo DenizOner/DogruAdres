@@ -1,4 +1,4 @@
-﻿import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
+import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
 import type { OutboxClaim, DeliveryErrorCode } from "./audit-delivery-policy"
 import { hasRecentMfaProof } from "./mfa-management"
 import {
@@ -37,6 +37,7 @@ import {
   saveOrganizationDocument,
   submitOrganizationApplication,
   readOrganizationApplicationDocument,
+  listSubmittedOrganizationApplications,
   type DraftPayload,
   type WithdrawDraftPayload,
   type UploadDocumentPayload,
@@ -451,9 +452,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
 
   @InjectTransactionManager()
   async personalSubmitOrganizationApplication(
-    token:string,input:SubmitApplicationPayload,@MedusaContext() context:Context={}
+    token:string,input:SubmitApplicationPayload,overrideRoot?:string,@MedusaContext() context:Context={}
   ) {
-    return submitOrganizationApplication(securitySql(context.transactionManager),token,input)
+    return submitOrganizationApplication(securitySql(context.transactionManager),token,input,overrideRoot)
   }
 
   @InjectTransactionManager()
@@ -461,6 +462,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     token:string,applicationId:string,overrideRoot?:string,@MedusaContext() context:Context={}
   ) {
     return readOrganizationApplicationDocument(securitySql(context.transactionManager),token,applicationId,overrideRoot)
+  }
+
+  @InjectTransactionManager()
+  async personalSubmittedOrganizationApplications(
+    token:string,cursor?:OrganizationDraftCursor,@MedusaContext() context:Context={}
+  ) {
+    return listSubmittedOrganizationApplications(securitySql(context.transactionManager),token,cursor)
   }
 
   @InjectTransactionManager()

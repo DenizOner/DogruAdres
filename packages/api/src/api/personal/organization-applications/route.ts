@@ -41,6 +41,23 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     }
   }
 
+  // Admin submitted queue request: ?action=review_queue
+  if(query.action==="review_queue"){
+    if(Object.keys(query).some(key=>!["action","cursor"].includes(key)))
+      return res.status(400).json({message:"Invalid request"})
+    const cursor=query.cursor===undefined?undefined:decodeOrganizationDraftCursor(query.cursor)
+    if(cursor===null)
+      return res.status(400).json({message:"Invalid request"})
+    try{
+      const page=await access(req).personalSubmittedOrganizationApplications(sessionToken(req),cursor)
+      return page?res.status(200).json(page):
+        res.status(403).json({message:"Access denied"})
+    }catch(error){
+      return res.status(error instanceof IdentityAccessDenied?403:503)
+        .json({message:error instanceof IdentityAccessDenied?"Access denied":"Unavailable"})
+    }
+  }
+
   if(Object.keys(query).some(key=>key!=="cursor"))
     return res.status(400).json({message:"Invalid request"})
   const cursor=query.cursor===undefined?undefined:decodeOrganizationDraftCursor(query.cursor)
@@ -84,6 +101,9 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   }
 
   if(action==="upload_document"){
+    const cl=req.headers["content-length"]
+    if(cl && Number(cl)>15*1024*1024)
+      return res.status(413).json({message:"Payload too large"})
     const parsedUpload=uploadDocumentPayload.safeParse(req.body)
     if(!parsedUpload.success)return res.status(400).json({message:"Invalid document upload"})
     try{
@@ -106,6 +126,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
         sessionToken(req),parsedSubmit.data)
       if(!result)return res.status(403).json({message:"Access denied"})
       if(result.conflict)return res.status(409).json({message:"Draft changed; read the current version"})
+      if(result.missing_tax_identifier)return res.status(400).json({message:"Tax identifier (VKN/TCKN) required before submission"})
       if(result.missing_document)return res.status(400).json({message:"Tax certificate required before submission"})
       return res.status(200).json({application_id:result.application_id,status:"submitted",version:result.version})
     }catch(error){

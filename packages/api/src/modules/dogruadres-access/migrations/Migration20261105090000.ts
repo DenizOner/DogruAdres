@@ -13,6 +13,18 @@ export class Migration20261105090000 extends Migration {
       add constraint da_organization_application_status_check
       check (status in ('draft','withdrawn','submitted'));`)
 
+    this.addSql(`alter table da_organization_application
+      add column tax_identifier text check(tax_identifier is null or tax_identifier ~ '^[0-9]{10,11}$'),
+      add column duplicate_review_required boolean not null default false;`)
+
+    this.addSql(`create index da_org_application_tax_id
+      on da_organization_application(tax_identifier)
+      where tax_identifier is not null;`)
+
+    this.addSql(`create index da_org_application_submitted
+      on da_organization_application(updated_at desc, id desc)
+      where status = 'submitted';`)
+
     this.addSql(`create table da_organization_application_document (
       id text primary key check(id ~ '^da_doc_[0-9a-f]{32}$'),
       application_id text not null references da_organization_application(id),

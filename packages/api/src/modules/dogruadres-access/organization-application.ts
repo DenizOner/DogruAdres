@@ -33,7 +33,20 @@ export const draftPayload=z.object({
   landline_phone:z.string().trim().min(7).max(40)
     .regex(/^[+0-9 ()-]+$/)
     .refine(s=>(s.match(/[0-9]/g)||[]).length>=7),
-}).strict().refine(v=>v.declared_activities.includes(v.primary_activity))
+  tax_identifier:z.string().trim().regex(/^[0-9]{10,11}$/).optional(),
+}).strict().superRefine((data,ctx)=>{
+  if(!data.declared_activities.includes(data.primary_activity)){
+    ctx.addIssue({code:z.ZodIssueCode.custom,message:"Primary activity must be declared",path:["primary_activity"]})
+  }
+  if(data.tax_identifier!==undefined){
+    if(data.business_kind==="legal_company"&&data.tax_identifier.length!==10){
+      ctx.addIssue({code:z.ZodIssueCode.custom,message:"Legal company requires 10-digit VKN",path:["tax_identifier"]})
+    }
+    if(data.business_kind==="individual_business"&&![10,11].includes(data.tax_identifier.length)){
+      ctx.addIssue({code:z.ZodIssueCode.custom,message:"Individual business requires 10-digit VKN or 11-digit TCKN",path:["tax_identifier"]})
+    }
+  }
+})
 export type DraftPayload=z.infer<typeof draftPayload>
 
 export const withdrawDraftPayload=z.object({
@@ -86,7 +99,7 @@ export async function listOrganizationDrafts(
   if(!session)return null
   // Stable keyset: newest first, IDs break equal-timestamp ties.
   // PostgreSQL microseconds must not be truncated to JS Date milliseconds.
-  const rows=await db.execute(`select id,business_kind,legal_name,landline_phone,
+  const rows=await db.execute(`select id,business_kind,legal_name,landline_phone,tax_identifier,
       declared_activities,primary_activity,status,version,created_at,updated_at,
       to_char(updated_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_time,
       (select mime_type from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_mime,
@@ -111,6 +124,7 @@ export async function listOrganizationDrafts(
   return {drafts:page.map(r=>({
       id:r.id,business_kind:r.business_kind,
       legal_name:r.legal_name,landline_phone:r.landline_phone,
+      tax_identifier:r.tax_identifier??null,
       declared_activities:r.declared_activities,primary_activity:r.primary_activity,status:r.status,
       version:Number(r.version),created_at:r.created_at,updated_at:r.updated_at,
       has_document: r.doc_mime !== null && r.doc_mime !== undefined,
@@ -139,21 +153,21 @@ export async function saveOrganizationDraft(db:SecuritySql,token:string,value:un
   if(!found.length){
     if(input.expected_version!==0)return {conflict:true as const}
     await db.execute(`insert into da_organization_application
-      (id,applicant_person_id,business_kind,legal_name,landline_phone,
+      (id,applicant_person_id,business_kind,legal_name,landline_phone,tax_identifier,
        declared_activities,primary_activity,status,version)
-      values(?,?,?,?,?,?::jsonb,?,'draft',1)`,
+      values(?,?,?,?,?,?,?::jsonb,?,'draft',1)`,
       [input.application_id,session.person_id,input.business_kind,
-        input.legal_name,input.landline_phone,JSON.stringify(input.declared_activities),
-        input.primary_activity])
+        input.legal_name,input.landline_phone,input.tax_identifier??null,
+        JSON.stringify(input.declared_activities),input.primary_activity])
   }else{
     if(Number(found[0].version)!==input.expected_version)return {conflict:true as const}
     const updated=await db.execute(`update da_organization_application
-      set business_kind=?,legal_name=?,landline_phone=?,
+      set business_kind=?,legal_name=?,landline_phone=?,tax_identifier=?,
         declared_activities=?::jsonb,primary_activity=?,
         version=version+1,updated_at=clock_timestamp()
       where id=? and applicant_person_id=? and status='draft' and version=?
       returning id`,
-      [input.business_kind,input.legal_name,input.landline_phone,
+      [input.business_kind,input.legal_name,input.landline_phone,input.tax_identifier??null,
         JSON.stringify(input.declared_activities),input.primary_activity,
         input.application_id,session.person_id,input.expected_version])
     if(updated.length!==1)return {conflict:true as const}
@@ -331,13 +345,15 @@ export async function saveOrganizationDocument(
 
 /**
  * Submit the application for platform review.
- * Requires mandatory completed fields and at least one uploaded document.
+ * Requires mandatory completed fields, valid tax identifier (VKN/TCKN) and at least one verified stored document.
  * Transition to 'submitted' locks the draft against further client modification.
+ * Duplicate VKN/TCKN is marked for confidential admin review without leaking existence to applicant.
  */
 export async function submitOrganizationApplication(
   db:SecuritySql,
   token:string,
-  value:unknown
+  value:unknown,
+  overrideRoot?:string
 ) {
   const parsed=submitApplicationPayload.safeParse(value)
   if(!parsed.success)throw new IdentityAccessDenied()
@@ -349,31 +365,72 @@ export async function submitOrganizationApplication(
     [input.application_id])
 
   const rows=await db.execute(`select applicant_person_id, status, version,
-      business_kind, legal_name, landline_phone, declared_activities, primary_activity
+      business_kind, legal_name, landline_phone, tax_identifier, declared_activities, primary_activity
     from da_organization_application where id=? for update`,[input.application_id])
   if(rows.length>1)throw new IdentityAccessDenied()
   if(rows.length!==1||rows[0].applicant_person_id!==session.person_id)return null
-  if(rows[0].status!=="draft")return {conflict:true as const, missing_document:false as const}
-  if(Number(rows[0].version)!==input.expected_version)return {conflict:true as const, missing_document:false as const}
+  if(rows[0].status!=="draft")return {conflict:true as const, missing_document:false as const, missing_tax_identifier:false as const}
+  if(Number(rows[0].version)!==input.expected_version)return {conflict:true as const, missing_document:false as const, missing_tax_identifier:false as const}
 
-  // Verify mandatory current document
-  const docs=await db.execute(
-    `select id from da_organization_application_document where application_id=? and is_current=true`,
-    [input.application_id]
-  )
-  if(!docs.length){
-    return {missing_document:true as const, conflict:false as const}
+  const app=rows[0]
+  // 1. Mandatory Türkiye tax identifier (10-digit VKN or 11-digit TCKN per #44/#252)
+  if(!app.tax_identifier||!/^[0-9]{10,11}$/.test(app.tax_identifier)){
+    return {conflict:false as const, missing_document:false as const, missing_tax_identifier:true as const}
+  }
+  if(app.business_kind==="legal_company"&&app.tax_identifier.length!==10){
+    return {conflict:false as const, missing_document:false as const, missing_tax_identifier:true as const}
   }
 
-  // Update status to 'submitted'
+  // 2. Verify current document metadata
+  const docRows=await db.execute(
+    `select storage_key, internal_name, mime_type, compression, original_byte_length, original_sha256, stored_byte_length, version
+     from da_organization_application_document where application_id=? and is_current=true`,
+    [input.application_id]
+  )
+  if(docRows.length!==1){
+    return {missing_document:true as const, missing_tax_identifier:false as const, conflict:false as const}
+  }
+  const doc=docRows[0]
+
+  // 3. Fail-closed verification of actual immutable private file, size, gzip restoration and SHA-256
+  const rootDir=overrideRoot??process.env.DOGRUADRES_TAX_CERTIFICATE_DIR
+  if(!rootDir){
+    return {missing_document:true as const, missing_tax_identifier:false as const, conflict:false as const}
+  }
+  try{
+    const verified=await readPrivateTaxCertificate(rootDir,{
+      storageKey:doc.storage_key,
+      internalName:doc.internal_name,
+      mimeType:doc.mime_type,
+      compression:doc.compression,
+      originalByteLength:Number(doc.original_byte_length),
+      originalSha256:doc.original_sha256,
+      storedByteLength:Number(doc.stored_byte_length),
+    })
+    if(!verified||verified.length!==Number(doc.original_byte_length)){
+      return {missing_document:true as const, missing_tax_identifier:false as const, conflict:false as const}
+    }
+  }catch{
+    return {missing_document:true as const, missing_tax_identifier:false as const, conflict:false as const}
+  }
+
+  // 4. Confidential duplicate review check (#44)
+  const duplicates=await db.execute(
+    `select id from da_organization_application
+     where tax_identifier=? and status='submitted' and id<>?`,
+    [app.tax_identifier, input.application_id]
+  )
+  const duplicateReviewRequired = duplicates.length > 0
+
+  // 5. Update status to 'submitted'
   const updated=await db.execute(
     `update da_organization_application
-      set status='submitted', version=version+1, updated_at=clock_timestamp()
+      set status='submitted', duplicate_review_required=?, version=version+1, updated_at=clock_timestamp()
       where id=? and applicant_person_id=? and status='draft' and version=?
       returning version`,
-    [input.application_id, session.person_id, input.expected_version]
+    [duplicateReviewRequired, input.application_id, session.person_id, input.expected_version]
   )
-  if(updated.length!==1)return {conflict:true as const, missing_document:false as const}
+  if(updated.length!==1)return {conflict:true as const, missing_document:false as const, missing_tax_identifier:false as const}
 
   const auditId="daaud_"+randomUUID()
   await db.execute(
@@ -390,6 +447,7 @@ export async function submitOrganizationApplication(
   return {
     conflict:false as const,
     missing_document:false as const,
+    missing_tax_identifier:false as const,
     application_id:input.application_id,
     status:"submitted" as const,
     version:Number(updated[0].version)
@@ -398,7 +456,7 @@ export async function submitOrganizationApplication(
 
 /**
  * Read the current tax certificate document for an application.
- * Permitted only to the authorized applicant Person OR platform Admin with a staff grant.
+ * Permitted only to the authorized applicant Person OR platform Admin with explicit organization.review staff grant.
  */
 export async function readOrganizationApplicationDocument(
   db:SecuritySql,
@@ -418,14 +476,14 @@ export async function readOrganizationApplicationDocument(
   if(appRows.length!==1)return null
 
   const isApplicant=appRows[0].applicant_person_id===session.person_id
-  let isAdmin=false
+  let isReviewStaff=false
   if(!isApplicant){
-    const staff=await new IdentitySessions(db).staff(token,"organization.review","platform")??
-                await new IdentitySessions(db).staff(token,"organization.provision","platform")
-    if(staff)isAdmin=true
+    // Strictly organization.review on platform scope (no broad organization.provision bypass)
+    const staff=await new IdentitySessions(db).staff(token,"organization.review","platform")
+    if(staff)isReviewStaff=true
   }
 
-  if(!isApplicant&&!isAdmin)return null
+  if(!isApplicant&&!isReviewStaff)return null
 
   // Fetch current document record
   const docRows=await db.execute(
@@ -456,5 +514,69 @@ export async function readOrganizationApplicationDocument(
     mimeType:doc.mime_type as TaxCertificateFormat["mimeType"],
     filename:`vergi-levhasi-${doc.version}.${extension}`,
     version:Number(doc.version),
+  }
+}
+
+/**
+ * List submitted applications queue for authorized platform review staff.
+ * Permitted only with active organization.review grant on platform scope.
+ */
+export async function listSubmittedOrganizationApplications(
+  db:SecuritySql,
+  token:string,
+  cursor?:OrganizationDraftCursor
+) {
+  const staff=await new IdentitySessions(db).staff(token,"organization.review","platform")
+  if(!staff)return null
+
+  const rows=await db.execute(
+    `select id,applicant_person_id,business_kind,legal_name,landline_phone,tax_identifier,
+       declared_activities,primary_activity,status,version,duplicate_review_required,
+       created_at,updated_at,
+       to_char(updated_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_time,
+       (select mime_type from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_mime,
+       (select original_byte_length from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_bytes,
+       (select original_sha256 from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_sha256,
+       (select version from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_version
+     from da_organization_application
+     where status = 'submitted'
+     ${cursor?"and (updated_at < ?::timestamptz or (updated_at = ?::timestamptz and id > ?))":""}
+     order by updated_at desc, id asc limit 101`,
+    cursor?[cursor.updatedAt,cursor.updatedAt,cursor.id]:[]
+  )
+  if(!Array.isArray(rows)||rows.length>101)throw new IdentityAccessDenied()
+  const page=rows.slice(0,100)
+  const last=page[page.length-1]
+  if(rows.length>100 && (!last||!draftId.test(last.id)||
+      typeof last.cursor_time!=="string"||!cursorTime.test(last.cursor_time)))
+    throw new IdentityAccessDenied()
+  const next_cursor=rows.length>100
+    ? Buffer.from(JSON.stringify({t:last.cursor_time,id:last.id}),"utf8").toString("base64url")
+    : null
+
+  return {
+    applications:page.map(r=>({
+      id:r.id,
+      applicant_person_id:r.applicant_person_id,
+      business_kind:r.business_kind,
+      legal_name:r.legal_name,
+      landline_phone:r.landline_phone,
+      tax_identifier:r.tax_identifier??null,
+      declared_activities:r.declared_activities,
+      primary_activity:r.primary_activity,
+      status:r.status,
+      version:Number(r.version),
+      duplicate_review_required:Boolean(r.duplicate_review_required),
+      created_at:r.created_at,
+      updated_at:r.updated_at,
+      has_document: r.doc_mime !== null && r.doc_mime !== undefined,
+      document: (r.doc_mime !== null && r.doc_mime !== undefined) ? {
+        mime_type: r.doc_mime,
+        original_byte_length: Number(r.doc_bytes),
+        original_sha256: r.doc_sha256,
+        version: Number(r.doc_version),
+      } : undefined
+    })),
+    next_cursor
   }
 }

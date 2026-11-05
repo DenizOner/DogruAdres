@@ -12,6 +12,10 @@ export default defineMiddlewares({
   errorHandler: (error,req,res,next) => {
     if(req.path.toLowerCase().startsWith("/personal")) {
       res.setHeader("Cache-Control","no-store")
+      if(error?.status===413 || error?.type==="entity.too.large") {
+        res.status(413).json({message:"Payload too large"})
+        return
+      }
       const denial=error?.name==="IdentityAccessDenied" || error?.message==="Access denied" || ["unauthorized","forbidden","not_allowed"].includes(error?.type)
       const status=error?.type==="invalid_data"?400:["forbidden","not_allowed"].includes(error?.type)?403:error?.type==="not_found"?404:denial?401:503
       res.status(status).json({message:status===400?"Invalid input":status===404?"Not found":denial?"Access denied":"Service unavailable"})
@@ -21,6 +25,11 @@ export default defineMiddlewares({
   },
   routes: [
     { matcher: "/*", middlewares: [nativeIngress] },
+    {
+      matcher: "/personal/organization-applications",
+      methods: ["POST"],
+      bodyParser: { sizeLimit: "15mb" },
+    },
     {
       matcher: "/admin/dogruadres/organizations",
       methods: ["POST"],

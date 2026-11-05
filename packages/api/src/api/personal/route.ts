@@ -1,4 +1,4 @@
-﻿import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { randomBytes } from "node:crypto"
 import { enabled } from "./security"
 export const AUTHENTICATE = false
@@ -201,6 +201,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       </label>
       <label>Resmî ticari unvan (taslak)<input name="legal_name" minlength="2" maxlength="200" required></label>
       <label>İşletmenin sabit hattı (zorunlu; doğrulanmış değildir)<input name="landline_phone" type="tel" autocomplete="off" minlength="7" maxlength="40" required></label>
+      <label>Vergi Kimlik Numarası (VKN 10 hane / Şahıs işletmesi için TCKN 11 hane)<input name="tax_identifier" pattern="[0-9]{10,11}" maxlength="11" minlength="10" autocomplete="off" required placeholder="10 veya 11 haneli vergi kimliği"></label>
       <button type="submit">Taslağı kaydet</button>
     </form>
     <div id="organization-document-section" hidden style="margin-top:1em;padding:1em;border:1px solid #ccc">
@@ -220,6 +221,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="organization-draft-refresh">Taslaklarımı yenile</button>
     <div id="organization-draft-list"></div>
     <button id="organization-draft-more" type="button" hidden>Daha eski taslakları göster</button>
+  </section>
+  <section id="organization-review-panel" hidden style="grid-column:1/-1">
+    <h2>İncelenecek işletme başvuruları</h2>
+    <p>Yalnız açık platform organization.review görevi olan yetkili personel için gönderilmiş başvurular listelenir. Bu liste otomatik kuruluş veya mağaza yetkisi açmaz.</p>
+    <p id="organization-review-status" role="status" aria-live="polite"></p>
+    <div id="organization-review-list"></div>
+    <button id="organization-review-refresh" type="button">Başvuru kuyruğunu yenile</button>
   </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
 
@@ -493,6 +501,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           form.elements.business_kind.value=item.business_kind;
           form.elements.legal_name.value=item.legal_name;
           form.elements.landline_phone.value=item.landline_phone;
+          if(form.elements.tax_identifier)form.elements.tax_identifier.value=item.tax_identifier||'';
           form.querySelector('button').disabled=false;
           el('organization-draft-withdraw').hidden=false;
           el('organization-document-section').hidden=false;
@@ -533,6 +542,36 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('organization-draft-withdraw').hidden=true;
     el('organization-draft-status').textContent='Yeni taslak; hiçbir başvuru henüz gönderilmedi.';
   };
+  async function refreshOrganizationReviews(){
+    const panel=el('organization-review-panel');
+    if(!panel)return;
+    try{
+      const data=await api('organization-applications?action=review_queue');
+      if(!Array.isArray(data.applications)){panel.hidden=true;return;}
+      panel.hidden=false;
+      const list=el('organization-review-list');
+      list.replaceChildren();
+      for(const item of data.applications){
+        const row=document.createElement('p');
+        const dupText=item.duplicate_review_required?' [Mükerrerlik İncelemesi Gerekli]':'';
+        row.textContent=item.legal_name+' ('+item.business_kind+', VKN/TCKN: '+item.tax_identifier+')'+dupText+' — Durum: '+item.status;
+        if(item.has_document){
+          const dl=document.createElement('button');
+          dl.type='button';dl.textContent='Vergi Levhasını İncele (İndir)';
+          dl.onclick=()=>{
+            window.open('/personal/organization-applications?action=document&application_id='+encodeURIComponent(item.id),'_blank');
+          };
+          row.append(dl);
+        }
+        list.append(row);
+      }
+      el('organization-review-status').textContent=data.applications.length?
+        data.applications.length+' başvuru inceleme bekliyor.':'İnceleme bekleyen başvuru yok.';
+    }catch{
+      panel.hidden=true;
+    }
+  }
+  el('organization-review-refresh').onclick=refreshOrganizationReviews;
   el('organization-draft-refresh').onclick=()=>{
     if(!organizationDraftSaving)void refreshOrganizationDrafts();
   };
@@ -2260,7 +2299,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
   el('org-stores-refresh').onclick=()=>{if(currentOrg)void organizationStores(currentOrg,organizationRequest)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshOrganizationReviews();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
@@ -2630,7 +2669,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   function concealPrivateView(){
     clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
-    clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPendingInvitations();
+    clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPendingInvitations();if(el('organization-review-panel'))el('organization-review-panel').hidden=true;
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');

@@ -4,7 +4,8 @@ import {
   withdrawOrganizationDraft,
   saveOrganizationDocument,
   submitOrganizationApplication,
-  readOrganizationApplicationDocument
+  readOrganizationApplicationDocument,
+  listSubmittedOrganizationApplications
 } from "../../../modules/dogruadres-access/organization-application"
 import { IdentitySessions } from "../../../modules/dogruadres-access/identity-session"
 import {GET,POST} from "../organization-applications/route"
@@ -21,12 +22,14 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     declared_activities:["service_repair","insurance_claims"],
     primary_activity:"insurance_claims",
     landline_phone:"+90 212 555 00 00",
+    tax_identifier:"12345678901",
   }
   let req:any,res:any,service:any
   beforeEach(()=>{
     jest.resetAllMocks()
     service={
       personalOrganizationApplicationDrafts:jest.fn().mockResolvedValue({drafts:[],next_cursor:null}),
+      personalSubmittedOrganizationApplications:jest.fn().mockResolvedValue({applications:[],next_cursor:null}),
       personalSaveOrganizationApplicationDraft:jest.fn().mockResolvedValue({
         conflict:false,application_id:payload.application_id,status:"draft",version:1
       }),
@@ -302,6 +305,24 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     expect(res.json).toHaveBeenLastCalledWith({
       message: "Tax certificate required before submission"
     })
+
+    // Missing tax identifier rejects with 400
+    service.personalSubmitOrganizationApplication.mockResolvedValueOnce({
+      conflict: false, missing_document: false, missing_tax_identifier: true
+    })
+    await POST(req, res)
+    expect(res.status).toHaveBeenLastCalledWith(400)
+    expect(res.json).toHaveBeenLastCalledWith({
+      message: "Tax identifier (VKN/TCKN) required before submission"
+    })
+
+    // Upload with oversize Content-Length returns 413
+    req.headers["content-length"] = String(16 * 1024 * 1024)
+    req.body = { action: "upload_document" }
+    await POST(req, res)
+    expect(res.status).toHaveBeenLastCalledWith(413)
+    expect(res.json).toHaveBeenLastCalledWith({ message: "Payload too large" })
+    delete req.headers["content-length"]
   })
 
   it("retrieves document with secure binary attachment headers for authorized caller and denies invalid requests", async () => {
@@ -324,6 +345,26 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     req.query = { action: "document", application_id: "invalid_id" }
     await GET(req, res)
     expect(res.status).toHaveBeenLastCalledWith(400)
+  })
+
+  it("allows platform review staff to list submitted applications and denies unauthorized callers", async () => {
+    req.query = { action: "review_queue" }
+    service.personalSubmittedOrganizationApplications.mockResolvedValueOnce({
+      applications: [{ id: payload.application_id, status: "submitted", tax_identifier: "12345678901", duplicate_review_required: true }],
+      next_cursor: null
+    })
+    await GET(req, res)
+    expect(service.personalSubmittedOrganizationApplications).toHaveBeenCalledWith("opaque", undefined)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.json).toHaveBeenLastCalledWith({
+      applications: [{ id: payload.application_id, status: "submitted", tax_identifier: "12345678901", duplicate_review_required: true }],
+      next_cursor: null
+    })
+
+    // Denied caller
+    service.personalSubmittedOrganizationApplications.mockResolvedValueOnce(null)
+    await GET(req, res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
   })
 
   it("saveOrganizationDocument persists to private storage outside checkout and links metadata with max version", async () => {
@@ -380,7 +421,18 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     }
   })
 
-  it("submitOrganizationApplication verifies presence of current document before status transition", async () => {
+  it("submitOrganizationApplication verifies tax identifier, private file integrity and confidential duplicates", async () => {
+    const os = require("node:os")
+    const path = require("node:path")
+    const fsp = require("node:fs/promises")
+    const crypto = require("node:crypto")
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "da-b22-test-submit-"))
+    const validPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\n0 1\n0000000000 65535 f\ntrailer\n<<>>\nstartxref\n9\n%%EOF\n", "ascii")
+    const storageKey = crypto.randomUUID()
+    const filePath = path.join(root, storageKey)
+    await fsp.writeFile(filePath, validPdf)
+    const sha = crypto.createHash("sha256").update(validPdf).digest("hex")
+
     const spy = jest.spyOn(IdentitySessions.prototype, "current").mockResolvedValue({
       person_id: "daprs_applicant", actor_type: "customer", actor_id: "cus_app"
     } as any)
@@ -391,18 +443,33 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       expected_version: 2
     }
 
+    let taxId: string | null = "12345678901"
     let hasDoc = false
+    let hasDuplicates = false
+
     const exec = jest.fn(async (sql: string) => {
       if (sql.includes("from da_organization_application where id=? for update")) {
         return [{
           applicant_person_id: "daprs_applicant", status: "draft", version: 2,
           business_kind: "individual_business", legal_name: "Test Ltd",
-          landline_phone: "+90 212 555 00 00", declared_activities: ["service_repair"],
-          primary_activity: "service_repair"
+          landline_phone: "+90 212 555 00 00", tax_identifier: taxId,
+          declared_activities: ["service_repair"], primary_activity: "service_repair"
         }]
       }
       if (sql.includes("from da_organization_application_document where application_id=? and is_current=true")) {
-        return hasDoc ? [{ id: "da_doc_1" }] : []
+        return hasDoc ? [{
+          storage_key: storageKey,
+          internal_name: `${storageKey}.pdf`,
+          mime_type: "application/pdf",
+          compression: "none",
+          original_byte_length: validPdf.length,
+          original_sha256: sha,
+          stored_byte_length: validPdf.length,
+          version: 1
+        }] : []
+      }
+      if (sql.includes("where tax_identifier=? and status='submitted' and id<>?")) {
+        return hasDuplicates ? [{ id: "daorgapp_other123" }] : []
       }
       if (sql.includes("update da_organization_application")) {
         return [{ version: 3 }]
@@ -412,24 +479,103 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     const db: any = { execute: exec }
 
     try {
-      // 1. Without document -> missing_document: true
-      const denied = await submitOrganizationApplication(db, "opaque", input)
-      expect(denied).toEqual({ missing_document: true, conflict: false })
+      // 1. Missing tax identifier -> missing_tax_identifier: true
+      taxId = null
+      const missingTax = await submitOrganizationApplication(db, "opaque", input, root)
+      expect(missingTax).toEqual({ missing_tax_identifier: true, missing_document: false, conflict: false })
 
-      // 2. With document -> status: 'submitted'
+      // 2. Missing document in DB -> missing_document: true
+      taxId = "12345678901"
+      hasDoc = false
+      const missingDoc = await submitOrganizationApplication(db, "opaque", input, root)
+      expect(missingDoc).toEqual({ missing_document: true, missing_tax_identifier: false, conflict: false })
+
+      // 3. Document in DB, but file corrupted on disk -> missing_document: true (fail closed)
       hasDoc = true
-      const accepted = await submitOrganizationApplication(db, "opaque", input)
+      await fsp.writeFile(filePath, Buffer.from("corrupted bytes"))
+      const corruptedDoc = await submitOrganizationApplication(db, "opaque", input, root)
+      expect(corruptedDoc).toEqual({ missing_document: true, missing_tax_identifier: false, conflict: false })
+
+      // Restore valid file
+      await fsp.writeFile(filePath, validPdf)
+
+      // 4. Document in DB, valid file, no duplicates -> submitted, version 3
+      const accepted = await submitOrganizationApplication(db, "opaque", input, root)
       expect(accepted).toEqual({
         conflict: false,
         missing_document: false,
+        missing_tax_identifier: false,
         application_id: payload.application_id,
         status: "submitted",
         version: 3
       })
-      const statements = exec.mock.calls.map(c => String(c[0]))
-      expect(statements.filter(s => s.includes("organization.application_submitted"))).toHaveLength(1)
+
+      // 5. Document in DB, valid file, duplicate tax identifier exists -> submitted without leaking duplicate
+      hasDuplicates = true
+      const duplicateAccepted = await submitOrganizationApplication(db, "opaque", input, root)
+      expect(duplicateAccepted).toEqual({
+        conflict: false,
+        missing_document: false,
+        missing_tax_identifier: false,
+        application_id: payload.application_id,
+        status: "submitted",
+        version: 3
+      })
+
+      // Verify that duplicate_review_required was recorded in da_organization_application
+      const updateCalls = exec.mock.calls.filter(c => String(c[0]).includes("update da_organization_application"))
+      expect(updateCalls.some((c: any) => c[1]?.[0] === true)).toBe(true)
     } finally {
       spy.mockRestore()
+      await fsp.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("listSubmittedOrganizationApplications allows organization.review staff and denies unauthorized users", async () => {
+    const spyStaff = jest.spyOn(IdentitySessions.prototype, "staff")
+    const exec = jest.fn(async (sql: string) => {
+      if (sql.includes("from da_organization_application") && sql.includes("where status = 'submitted'")) {
+        return [{
+          id: payload.application_id,
+          applicant_person_id: "daprs_applicant",
+          business_kind: "individual_business",
+          legal_name: "Test Ltd",
+          landline_phone: "+90 212 555 00 00",
+          tax_identifier: "12345678901",
+          declared_activities: ["service_repair"],
+          primary_activity: "service_repair",
+          status: "submitted",
+          version: 3,
+          duplicate_review_required: true,
+          created_at: new Date(),
+          updated_at: new Date(),
+          cursor_time: "2026-11-05T12:00:00.000000Z",
+          doc_mime: "application/pdf",
+          doc_bytes: 1000,
+          doc_sha256: "a".repeat(64),
+          doc_version: 1
+        }]
+      }
+      return []
+    })
+    const db: any = { execute: exec }
+
+    try {
+      // 1. Authorized platform staff with organization.review grant
+      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
+      const queue = await listSubmittedOrganizationApplications(db, "opaque")
+      expect(queue).not.toBeNull()
+      expect(queue?.applications).toHaveLength(1)
+      expect(queue?.applications[0].tax_identifier).toBe("12345678901")
+      expect(queue?.applications[0].duplicate_review_required).toBe(true)
+      expect(queue?.applications[0].has_document).toBe(true)
+
+      // 2. Staff without organization.review (returns null)
+      spyStaff.mockResolvedValueOnce(null)
+      const denied = await listSubmittedOrganizationApplications(db, "opaque")
+      expect(denied).toBeNull()
+    } finally {
+      spyStaff.mockRestore()
     }
   })
 
@@ -482,7 +628,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       spyCurrent.mockResolvedValueOnce({
         person_id: "daprs_other", actor_type: "customer", actor_id: "cus_other"
       } as any)
-      spyStaff.mockResolvedValueOnce(null).mockResolvedValueOnce(null)
+      spyStaff.mockResolvedValueOnce(null)
       const asStranger = await readOrganizationApplicationDocument(db, "opaque", payload.application_id, root)
       expect(asStranger).toBeNull()
 
