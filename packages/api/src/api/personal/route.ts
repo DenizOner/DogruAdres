@@ -465,7 +465,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           /^[A-Za-z0-9_-]{1,256}$/.test(data.next_cursor)))
         throw Error('Taslaklar doğrulanamadı');
       for(const item of data.drafts){
-        if(!item||typeof item.id!=='string'||!['draft','withdrawn','submitted'].includes(item.status)||
+        if(!item||typeof item.id!=='string'||!['draft','withdrawn','submitted','correction_requested','rejected','approved'].includes(item.status)||
           !Number.isSafeInteger(item.version)||item.version<1||
           !['individual_business','legal_company'].includes(item.business_kind)||
           !Array.isArray(item.declared_activities)||item.declared_activities.length>6||
@@ -477,8 +477,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         row.textContent=item.legal_name+(
           item.status==='draft'?' — Taslak (henüz gönderilmedi)':
           item.status==='submitted'?' — Başvuru gönderildi (onay bekliyor)':
+          item.status==='correction_requested'?' — Düzeltme istendi':
+          item.status==='rejected'?' — Başvuru reddedildi':
+          item.status==='approved'?' — Başvuru onaylandı':
           ' — Geri çekildi (yeniden düzenlenemez)'
         );
+        if(item.review_notes && ['correction_requested','rejected'].includes(item.status)){
+          const detail=document.createElement('span');
+          detail.textContent=' — İnceleme açıklaması: '+item.review_notes;
+          row.append(detail);
+        }
         if(item.has_document){
           const dlBtn=document.createElement('button');
           dlBtn.type='button';dlBtn.textContent='Belgeyi indir';
@@ -488,8 +496,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           };
           row.append(dlBtn);
         }
-        if(item.status==='draft'){
-          button.type='button';button.textContent='Taslağı düzenle';
+        if(['draft','correction_requested'].includes(item.status)){
+          button.type='button';button.textContent=item.status==='correction_requested'?'Düzelt ve yeniden gönder':'Taslağı düzenle';
           button.disabled=organizationDraftSaving;
           button.onclick=()=>{
           if(organizationDraftSaving)return;
@@ -512,7 +520,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             el('organization-document-info').textContent='Henüz vergi levhası yüklenmedi (zorunlu).';
             el('organization-application-submit').hidden=true;
           }
-          el('organization-draft-status').textContent='Seçilen özel taslak düzenlenebilir; gönderilmedi.';
+          el('organization-draft-status').textContent=item.status==='correction_requested'?
+            'Düzeltme istendi. Düzenleyip taslağı kaydedin; ardından başvuruyu yeniden gönderin.':
+            'Seçilen özel taslak düzenlenebilir; gönderilmedi.';
           form.elements.legal_name.focus();
         };
           row.append(button);
