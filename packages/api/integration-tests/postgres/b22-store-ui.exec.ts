@@ -7756,7 +7756,7 @@ export default async function({container}:any){
       await signupChrome.click("#organization-draft-refresh")
       await signupChrome.wait(
         "Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('B22 Sahis Isletmesi')&&p.textContent.includes('Başvuru onaylandı'))")
-      process.stdout.write("PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied\\n")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied\n")
     } finally {
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
     }
