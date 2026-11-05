@@ -492,14 +492,13 @@ export async function readOrganizationApplicationDocument(
   if(appRows.length!==1)return null
 
   const isApplicant=appRows[0].applicant_person_id===session.person_id
-  let isReviewStaff=false
   if(!isApplicant){
-    // Strictly organization.review on platform scope (no broad organization.provision bypass)
+    // A reviewer is authorized only once the applicant actually submits.
+    // Pre-submission, correction and terminal private documents remain applicant-only.
+    if(appRows[0].status!=="submitted")return null
     const staff=await new IdentitySessions(db).staff(token,"organization.review","platform")
-    if(staff)isReviewStaff=true
+    if(!staff)return null
   }
-
-  if(!isApplicant&&!isReviewStaff)return null
 
   // Fetch current document record
   const docRows=await db.execute(

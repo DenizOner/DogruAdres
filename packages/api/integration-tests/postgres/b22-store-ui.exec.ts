@@ -7494,6 +7494,42 @@ export default async function({container}:any){
       assert.equal(qApp1.duplicate_review_required, false)
       assert.equal(qApp2.duplicate_review_required, true)
 
+      // A real privileged queue response arrives after privacy concealment.
+      // Do not allow stale data from a prior session/Person to re-enter the DOM.
+      await reviewChrome.click("#organization-review-refresh")
+      await reviewChrome.wait("document.getElementById('organization-review-list').textContent.includes('B22 Vergi Levhası Test Şirketi')")
+      const delayedReviewReady=await reviewChrome.eval(`(()=>{
+        const original=window.fetch;
+        window.__b22ReviewLag={waiting:false,release:null,original};
+        window.fetch=(...args)=>{
+          const gate=window.__b22ReviewLag;
+          if(gate && !gate.waiting && String(args[0]).includes('organization-applications?action=review_queue')){
+            gate.waiting=true;
+            return original(...args).then(response=>new Promise(resolve=>{gate.release=()=>resolve(response)}));
+          }
+          return original(...args);
+        };
+        return true;
+      })()`)
+      assert.equal(delayedReviewReady,true)
+      try{
+        await reviewChrome.click("#organization-review-refresh")
+        await reviewChrome.wait("!!window.__b22ReviewLag?.release")
+        await reviewChrome.eval("window.dispatchEvent(new Event('pagehide'))")
+        assert.equal(await reviewChrome.eval("document.getElementById('organization-review-list').textContent"),"")
+        assert.equal(await reviewChrome.eval("document.getElementById('organization-review-panel').hidden"),true)
+        await reviewChrome.eval("window.__b22ReviewLag.release()")
+        await reviewChrome.eval("(async()=>{await new Promise(r=>setTimeout(r,250));return true})()")
+        assert.equal(await reviewChrome.eval("document.getElementById('organization-review-list').textContent"),"",
+          "Delayed former privileged review response must not restore private tax identifiers")
+        assert.equal(await reviewChrome.eval("document.getElementById('organization-review-panel').hidden"),true)
+      }finally{
+        await reviewChrome.eval("(()=>{if(window.__b22ReviewLag){window.fetch=window.__b22ReviewLag.original;delete window.__b22ReviewLag}return true})()")
+      }
+      await reviewChrome.send("Page.reload",{ignoreCache:true})
+      await reviewChrome.wait("!document.getElementById('workspace').hidden")
+      process.stdout.write("PASS B22 Chrome: delayed reviewer response after pagehide cannot repopulate private application DOM\\n")
+
       const staffDocDownload = await reviewChrome.eval(`(async()=>{`+
         `const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(b22TaxAppId)}));`+
         `return r.status;`+
@@ -7517,6 +7553,11 @@ export default async function({container}:any){
       `})()`)
       assert.equal(correctionRes.status, 200)
       assert.equal(correctionRes.body.status, "correction_requested")
+      const correctionDocumentDenied=await reviewChrome.eval(`(async()=>{
+        const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(foreignAppId)}));return r.status
+      })()`)
+      assert.equal(correctionDocumentDenied,403,"Review staff may not read correction-requested private documents")
+
       assert.equal((await q("select status,review_notes from da_organization_application where id=$1",[foreignAppId]))[0].status, "correction_requested")
       await foreignDraftChrome.click("#organization-draft-refresh")
       await foreignDraftChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&p.textContent.includes('Düzeltme istendi'))")

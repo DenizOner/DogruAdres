@@ -626,10 +626,11 @@ describe("B22 private business application DRAFT — never an Organization",()=>
 
     const spyCurrent = jest.spyOn(IdentitySessions.prototype, "current")
     const spyStaff = jest.spyOn(IdentitySessions.prototype, "staff")
+    let appStatus="submitted"
 
     const exec = jest.fn(async (sql: string, params?: any[]) => {
       if (sql.includes("from da_organization_application where id=?")) {
-        return [{ applicant_person_id: "daprs_applicant", status: "submitted" }]
+        return [{ applicant_person_id: "daprs_applicant", status: appStatus }]
       }
       if (sql.includes("from da_organization_application_document where application_id=? and is_current=true")) {
         return [{
@@ -676,6 +677,21 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       const asStaff = await readOrganizationApplicationDocument(db, "opaque", payload.application_id, root)
       expect(asStaff).not.toBeNull()
       expect(asStaff?.content).toEqual(validPdf)
+
+      for(const disallowed of ["draft","correction_requested","withdrawn","rejected","approved"]){
+        appStatus=disallowed
+        spyCurrent.mockResolvedValueOnce({
+          person_id:"daprs_staff",actor_type:"user",actor_id:"usr_admin"
+        } as any)
+        const denied=await readOrganizationApplicationDocument(db,"opaque",payload.application_id,root)
+        expect(denied).toBeNull()
+      }
+      appStatus="draft"
+      spyCurrent.mockResolvedValueOnce({
+        person_id:"daprs_applicant",actor_type:"customer",actor_id:"cus_app"
+      } as any)
+      expect((await readOrganizationApplicationDocument(db,"opaque",payload.application_id,root))?.content)
+        .toEqual(validPdf)
     } finally {
       spyCurrent.mockRestore()
       spyStaff.mockRestore()
