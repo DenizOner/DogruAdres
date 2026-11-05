@@ -203,7 +203,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <label>İşletmenin sabit hattı (zorunlu; doğrulanmış değildir)<input name="landline_phone" type="tel" autocomplete="off" minlength="7" maxlength="40" required></label>
       <button type="submit">Taslağı kaydet</button>
     </form>
+    <div id="organization-document-section" hidden style="margin-top:1em;padding:1em;border:1px solid #ccc">
+      <h3>Vergi Levhası (Onaylı Belge)</h3>
+      <p>PDF, JPEG veya PNG biçiminde, en fazla 10 MiB. Belge güvenli özel alanda saklanır; başvuru gönderilmeden işletme yetkisi verilmez.</p>
+      <label>Belge dosyası seçin
+        <input type="file" id="organization-document-file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
+      </label>
+      <button type="button" id="organization-document-upload">Belgeyi yükle</button>
+      <p id="organization-document-status" role="status" aria-live="polite"></p>
+      <div id="organization-document-info"></div>
+    </div>
     <p id="organization-draft-status" role="status" aria-live="polite"></p>
+    <button type="button" id="organization-application-submit" hidden>Başvuruyu platform incelemesine gönder</button>
     <button type="button" id="organization-draft-withdraw" hidden>Seçili taslağı geri çek</button>
     <button type="button" id="organization-draft-new">Yeni taslak</button>
     <button type="button" id="organization-draft-refresh">Taslaklarımı yenile</button>
@@ -408,8 +419,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     organizationDraftSaving=busy;
     for(const control of el('organization-draft-form').querySelectorAll('input,select,button'))
       control.disabled=busy;
-    for(const id of ['organization-draft-new','organization-draft-refresh','organization-draft-more','organization-draft-withdraw'])
-      el(id).disabled=busy;
+    for(const id of ['organization-draft-new','organization-draft-refresh','organization-draft-more','organization-draft-withdraw','organization-application-submit','organization-document-upload','organization-document-file'])
+      if(el(id)) el(id).disabled=busy;
     for(const button of el('organization-draft-list').querySelectorAll('button'))
       button.disabled=busy;
   }
@@ -419,6 +430,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('organization-draft-list').replaceChildren();
     el('organization-draft-more').hidden=true;
     el('organization-draft-withdraw').hidden=true;
+    el('organization-application-submit').hidden=true;
+    el('organization-document-section').hidden=true;
+    el('organization-document-status').textContent='';
+    el('organization-document-info').textContent='';
     el('organization-draft-status').textContent='';
     el('organization-draft-form').reset();
     lockOrganizationDraftSelection(false);
@@ -442,7 +457,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           /^[A-Za-z0-9_-]{1,256}$/.test(data.next_cursor)))
         throw Error('Taslaklar doğrulanamadı');
       for(const item of data.drafts){
-        if(!item||typeof item.id!=='string'||!['draft','withdrawn'].includes(item.status)||
+        if(!item||typeof item.id!=='string'||!['draft','withdrawn','submitted'].includes(item.status)||
           !Number.isSafeInteger(item.version)||item.version<1||
           !['individual_business','legal_company'].includes(item.business_kind)||
           !Array.isArray(item.declared_activities)||item.declared_activities.length>6||
@@ -451,8 +466,20 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             item.primary_activity!==null:!item.declared_activities.includes(item.primary_activity)))
           throw Error('Taslaklar doğrulanamadı');
         const row=document.createElement('p'),button=document.createElement('button');
-        row.textContent=item.legal_name+(item.status==='draft'?
-          ' — Taslak (henüz gönderilmedi)':' — Geri çekildi (yeniden düzenlenemez)');
+        row.textContent=item.legal_name+(
+          item.status==='draft'?' — Taslak (henüz gönderilmedi)':
+          item.status==='submitted'?' — Başvuru gönderildi (onay bekliyor)':
+          ' — Geri çekildi (yeniden düzenlenemez)'
+        );
+        if(item.has_document){
+          const dlBtn=document.createElement('button');
+          dlBtn.type='button';dlBtn.textContent='Belgeyi indir';
+          dlBtn.disabled=organizationDraftSaving;
+          dlBtn.onclick=()=>{
+            window.open('/personal/organization-applications?action=document&application_id='+encodeURIComponent(item.id),'_blank');
+          };
+          row.append(dlBtn);
+        }
         if(item.status==='draft'){
           button.type='button';button.textContent='Taslağı düzenle';
           button.disabled=organizationDraftSaving;
@@ -468,6 +495,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           form.elements.landline_phone.value=item.landline_phone;
           form.querySelector('button').disabled=false;
           el('organization-draft-withdraw').hidden=false;
+          el('organization-document-section').hidden=false;
+          if(item.has_document){
+            el('organization-document-info').textContent='Yüklü vergi levhası: v'+item.document.version+' ('+item.document.mime_type+', '+item.document.original_byte_length+' bayt)';
+            el('organization-application-submit').hidden=false;
+          } else {
+            el('organization-document-info').textContent='Henüz vergi levhası yüklenmedi (zorunlu).';
+            el('organization-application-submit').hidden=true;
+          }
           el('organization-draft-status').textContent='Seçilen özel taslak düzenlenebilir; gönderilmedi.';
           form.elements.legal_name.focus();
         };
@@ -568,9 +603,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(data.application_id!==id||data.status!=='draft'||data.version!==version+1)
         throw Error('Taslak sonucu belirsiz');
       organizationDraftVersion=data.version;
+      el('organization-document-section').hidden=false;
+      el('organization-document-info').textContent='Henüz vergi levhası yüklenmedi (zorunlu).';
+      el('organization-application-submit').hidden=true;
       await refreshOrganizationDrafts();
       if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
-      el('organization-draft-status').textContent='Taslak kaydedildi. Belge ve başvuru gönderilmedi.';
+      el('organization-draft-status').textContent='Taslak kaydedildi. Vergi levhası yükleyip başvuruyu gönderebilirsiniz.';
     }catch(error){
       if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
       uncertain=!!error.uncertain;
@@ -586,6 +624,101 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
     }
   };
+  el('organization-document-upload').onclick=async()=>{
+    const fileInput=el('organization-document-file');
+    const file=fileInput.files?.[0];
+    if(!file){
+      el('organization-document-status').textContent='Lütfen bir PDF, JPEG veya PNG dosyası seçin.';
+      return;
+    }
+    if(file.size > 10 * 1024 * 1024){
+      el('organization-document-status').textContent='Dosya boyutu 10 MiB sınırını aşıyor.';
+      return;
+    }
+    if(organizationDraftSaving||!organizationDraftId||organizationDraftVersion<1)return;
+    const id=organizationDraftId,version=organizationDraftVersion,epoch=viewEpoch;
+    const mutation=++organizationDraftMutation;
+    lockOrganizationDraftSelection(true);
+    el('organization-document-status').textContent='Belge yükleniyor…';
+    try{
+      const reader=new FileReader();
+      const base64Promise=new Promise((resolve,reject)=>{
+        reader.onload=()=>resolve(String(reader.result).split(',')[1]);
+        reader.onerror=reject;
+      });
+      reader.readAsDataURL(file);
+      const file_base64=await base64Promise;
+      const result=await api('organization-applications',{
+        method:'POST',
+        body:JSON.stringify({
+          action:'upload_document',
+          application_id:id,
+          expected_version:version,
+          filename:file.name,
+          file_base64:file_base64
+        })
+      });
+      if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
+      organizationDraftVersion=result.version;
+      el('organization-document-status').textContent='Vergi levhası başarıyla yüklendi.';
+      el('organization-document-info').textContent='Yüklü vergi levhası: v'+result.document.version+' ('+result.document.mime_type+', '+result.document.original_byte_length+' bayt)';
+      el('organization-application-submit').hidden=false;
+      fileInput.value='';
+      await refreshOrganizationDrafts();
+    }catch(err){
+      if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
+      el('organization-document-status').textContent='Belge yüklenemedi: '+(err.message||'Geçersiz belge');
+    }finally{
+      if(mutation===organizationDraftMutation&&epoch===viewEpoch){
+        lockOrganizationDraftSelection(false);
+      }
+    }
+  };
+
+  el('organization-application-submit').onclick=async()=>{
+    if(organizationDraftSaving||!organizationDraftId||organizationDraftVersion<1||
+       document.hidden||el('workspace').hidden)return;
+    const id=organizationDraftId,version=organizationDraftVersion,epoch=viewEpoch;
+    const mutation=++organizationDraftMutation;
+    lockOrganizationDraftSelection(true);
+    let uncertain=false;
+    try{
+      const result=await api('organization-applications',{
+        method:'POST',
+        body:JSON.stringify({
+          action:'submit',
+          application_id:id,
+          expected_version:version
+        })
+      });
+      if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
+      if(result.application_id!==id||result.status!=='submitted'||result.version!==version+1)
+        throw Error('Başvuru sonucu belirsiz');
+      organizationDraftId='';organizationDraftVersion=0;
+      el('organization-draft-withdraw').hidden=true;
+      el('organization-application-submit').hidden=true;
+      el('organization-document-section').hidden=true;
+      el('organization-draft-form').reset();
+      await refreshOrganizationDrafts();
+      if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
+      el('organization-draft-status').textContent=
+        'Başvuru platform incelemesine başarıyla gönderildi. Yönetici onayı bekleniyor; işletme yetkisi henüz verilmedi.';
+    }catch(error){
+      if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
+      uncertain=!!error.uncertain;
+      el('organization-draft-status').textContent=uncertain?
+        'Başvuru sonucu belirsiz; tekrar göndermeyin. Taslakları yenileyip durumu kontrol edin.':
+        error.httpStatus===409?
+          'Taslak değişmiş. Taslakları yenileyip güncel durumu kontrol edin.':
+          'Başvuru gönderilemedi. Zorunlu alanları ve vergi levhasını kontrol edin.';
+    }finally{
+      if(mutation===organizationDraftMutation&&epoch===viewEpoch){
+        lockOrganizationDraftSelection(false);
+        if(uncertain)el('organization-application-submit').disabled=true;
+      }
+    }
+  };
+
   function clearNotifications(){
     notificationRequest++;notificationOffset=0;notificationNext=null;
     el('notification-bell').hidden=true;el('notification-bell').setAttribute('aria-expanded','false');

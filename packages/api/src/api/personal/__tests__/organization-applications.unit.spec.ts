@@ -1,4 +1,11 @@
-import { decodeOrganizationDraftCursor, listOrganizationDrafts, withdrawOrganizationDraft } from "../../../modules/dogruadres-access/organization-application"
+import {
+  decodeOrganizationDraftCursor,
+  listOrganizationDrafts,
+  withdrawOrganizationDraft,
+  saveOrganizationDocument,
+  submitOrganizationApplication,
+  readOrganizationApplicationDocument
+} from "../../../modules/dogruadres-access/organization-application"
 import { IdentitySessions } from "../../../modules/dogruadres-access/identity-session"
 import {GET,POST} from "../organization-applications/route"
 import {access,csrf,enabled,sessionToken} from "../security"
@@ -26,6 +33,16 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       personalWithdrawOrganizationApplicationDraft:jest.fn().mockResolvedValue({
         conflict:false,application_id:payload.application_id,status:"withdrawn",version:2
       }),
+      personalSaveOrganizationApplicationDocument:jest.fn().mockResolvedValue({
+        conflict:false,application_id:payload.application_id,status:"draft",version:2,
+        document:{mime_type:"application/pdf",original_byte_length:1000,original_sha256:"a".repeat(64),version:1}
+      }),
+      personalSubmitOrganizationApplication:jest.fn().mockResolvedValue({
+        conflict:false,missing_document:false,application_id:payload.application_id,status:"submitted",version:3
+      }),
+      personalReadOrganizationApplicationDocument:jest.fn().mockResolvedValue({
+        content:Buffer.from("%PDF-1.7..."),mimeType:"application/pdf",filename:"vergi-levhasi-1.pdf",version:1
+      }),
     }
     ;(access as jest.Mock).mockReturnValue(service)
     ;(csrf as jest.Mock).mockResolvedValue(true)
@@ -33,7 +50,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     ;(sessionToken as jest.Mock).mockReturnValue("opaque")
     req={body:{...payload},query:{},headers:{}}
     res={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),
-      json:jest.fn().mockReturnThis()}
+      json:jest.fn().mockReturnThis(),send:jest.fn().mockReturnThis()}
   })
   it("accepts one private draft, without direct Organization or owner provisioning",async()=>{
     await POST(req,res)
@@ -237,6 +254,253 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       expect(statements.join(" ")).not.toContain("createOrganizations")
       expect(statements.join(" ")).not.toContain("createMemberships")
     }finally{spy.mockRestore()}
+  })
+
+
+  it("uploads a valid tax certificate through CSRF-protected POST action upload_document", async () => {
+    const validPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\n0 1\n0000000000 65535 f\ntrailer\n<<>>\nstartxref\n9\n%%EOF\n", "ascii")
+    req.body = {
+      action: "upload_document",
+      application_id: payload.application_id,
+      expected_version: 1,
+      filename: "vergi_levhasi.pdf",
+      file_base64: validPdf.toString("base64")
+    }
+    await POST(req, res)
+    expect(service.personalSaveOrganizationApplicationDocument).toHaveBeenCalledWith("opaque", req.body)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.json).toHaveBeenLastCalledWith({
+      conflict: false,
+      application_id: payload.application_id,
+      status: "draft",
+      version: 2,
+      document: expect.objectContaining({ mime_type: "application/pdf", version: 1 })
+    })
+  })
+
+  it("submits the application only when document is present and locks status to submitted", async () => {
+    req.body = {
+      action: "submit",
+      application_id: payload.application_id,
+      expected_version: 2
+    }
+    await POST(req, res)
+    expect(service.personalSubmitOrganizationApplication).toHaveBeenCalledWith("opaque", req.body)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.json).toHaveBeenLastCalledWith({
+      application_id: payload.application_id,
+      status: "submitted",
+      version: 3
+    })
+
+    // Missing document rejects with 400
+    service.personalSubmitOrganizationApplication.mockResolvedValueOnce({
+      conflict: false, missing_document: true
+    })
+    await POST(req, res)
+    expect(res.status).toHaveBeenLastCalledWith(400)
+    expect(res.json).toHaveBeenLastCalledWith({
+      message: "Tax certificate required before submission"
+    })
+  })
+
+  it("retrieves document with secure binary attachment headers for authorized caller and denies invalid requests", async () => {
+    req.query = { action: "document", application_id: payload.application_id }
+    await GET(req, res)
+    expect(service.personalReadOrganizationApplicationDocument).toHaveBeenCalledWith("opaque", payload.application_id)
+    expect(res.setHeader).toHaveBeenCalledWith("Content-Type", "application/pdf")
+    expect(res.setHeader).toHaveBeenCalledWith("Content-Disposition", 'attachment; filename="vergi-levhasi-1.pdf"')
+    expect(res.setHeader).toHaveBeenCalledWith("X-Content-Type-Options", "nosniff")
+    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store")
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.send).toHaveBeenCalled()
+
+    // Denied caller
+    service.personalReadOrganizationApplicationDocument.mockResolvedValueOnce(null)
+    await GET(req, res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+
+    // Invalid appId format
+    req.query = { action: "document", application_id: "invalid_id" }
+    await GET(req, res)
+    expect(res.status).toHaveBeenLastCalledWith(400)
+  })
+
+  it("saveOrganizationDocument persists to private storage outside checkout and links metadata with max version", async () => {
+    const os = require("node:os")
+    const path = require("node:path")
+    const fsp = require("node:fs/promises")
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "da-b22-test-doc-"))
+    const spy = jest.spyOn(IdentitySessions.prototype, "current").mockResolvedValue({
+      person_id: "daprs_applicant", actor_type: "customer", actor_id: "cus_app"
+    } as any)
+    const validPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\n0 1\n0000000000 65535 f\ntrailer\n<<>>\nstartxref\n9\n%%EOF\n", "ascii")
+
+    const input = {
+      action: "upload_document" as const,
+      application_id: payload.application_id,
+      expected_version: 1,
+      filename: "levha.pdf",
+      file_base64: validPdf.toString("base64")
+    }
+
+    const exec = jest.fn(async (sql: string, params?: any[]) => {
+      if (sql.includes("from da_organization_application where id=? for update")) {
+        return [{ applicant_person_id: "daprs_applicant", status: "draft", version: 1 }]
+      }
+      if (sql.includes("max(version)")) {
+        return [{ max_v: 0 }]
+      }
+      if (sql.includes("update da_organization_application")) {
+        return [{ version: 2 }]
+      }
+      return []
+    })
+    const db: any = { execute: exec }
+
+    try {
+      const res = await saveOrganizationDocument(db, "opaque", input, root)
+      expect(res).toEqual({
+        conflict: false,
+        application_id: payload.application_id,
+        status: "draft",
+        version: 2,
+        document: expect.objectContaining({
+          mime_type: "application/pdf",
+          version: 1,
+          original_byte_length: validPdf.length
+        })
+      })
+      const files = await fsp.readdir(root)
+      expect(files).toHaveLength(1)
+      expect(files[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    } finally {
+      spy.mockRestore()
+      await fsp.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("submitOrganizationApplication verifies presence of current document before status transition", async () => {
+    const spy = jest.spyOn(IdentitySessions.prototype, "current").mockResolvedValue({
+      person_id: "daprs_applicant", actor_type: "customer", actor_id: "cus_app"
+    } as any)
+
+    const input = {
+      action: "submit" as const,
+      application_id: payload.application_id,
+      expected_version: 2
+    }
+
+    let hasDoc = false
+    const exec = jest.fn(async (sql: string) => {
+      if (sql.includes("from da_organization_application where id=? for update")) {
+        return [{
+          applicant_person_id: "daprs_applicant", status: "draft", version: 2,
+          business_kind: "individual_business", legal_name: "Test Ltd",
+          landline_phone: "+90 212 555 00 00", declared_activities: ["service_repair"],
+          primary_activity: "service_repair"
+        }]
+      }
+      if (sql.includes("from da_organization_application_document where application_id=? and is_current=true")) {
+        return hasDoc ? [{ id: "da_doc_1" }] : []
+      }
+      if (sql.includes("update da_organization_application")) {
+        return [{ version: 3 }]
+      }
+      return []
+    })
+    const db: any = { execute: exec }
+
+    try {
+      // 1. Without document -> missing_document: true
+      const denied = await submitOrganizationApplication(db, "opaque", input)
+      expect(denied).toEqual({ missing_document: true, conflict: false })
+
+      // 2. With document -> status: 'submitted'
+      hasDoc = true
+      const accepted = await submitOrganizationApplication(db, "opaque", input)
+      expect(accepted).toEqual({
+        conflict: false,
+        missing_document: false,
+        application_id: payload.application_id,
+        status: "submitted",
+        version: 3
+      })
+      const statements = exec.mock.calls.map(c => String(c[0]))
+      expect(statements.filter(s => s.includes("organization.application_submitted"))).toHaveLength(1)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it("readOrganizationApplicationDocument allows applicant and authorized platform staff, but denies unauthorized third-party", async () => {
+    const os = require("node:os")
+    const path = require("node:path")
+    const fsp = require("node:fs/promises")
+    const crypto = require("node:crypto")
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "da-b22-test-read-"))
+    const validPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\n0 1\n0000000000 65535 f\ntrailer\n<<>>\nstartxref\n9\n%%EOF\n", "ascii")
+    const storageKey = crypto.randomUUID()
+    await fsp.writeFile(path.join(root, storageKey), validPdf)
+    const sha = crypto.createHash("sha256").update(validPdf).digest("hex")
+
+    const spyCurrent = jest.spyOn(IdentitySessions.prototype, "current")
+    const spyStaff = jest.spyOn(IdentitySessions.prototype, "staff")
+
+    const exec = jest.fn(async (sql: string, params?: any[]) => {
+      if (sql.includes("from da_organization_application where id=?")) {
+        return [{ applicant_person_id: "daprs_applicant", status: "submitted" }]
+      }
+      if (sql.includes("from da_organization_application_document where application_id=? and is_current=true")) {
+        return [{
+          storage_key: storageKey,
+          internal_name: `${storageKey}.pdf`,
+          mime_type: "application/pdf",
+          compression: "none",
+          original_byte_length: validPdf.length,
+          original_sha256: sha,
+          stored_byte_length: validPdf.length,
+          version: 1
+        }]
+      }
+      return []
+    })
+    const db: any = { execute: exec }
+
+    try {
+      // 1. Applicant can read
+      spyCurrent.mockResolvedValueOnce({
+        person_id: "daprs_applicant", actor_type: "customer", actor_id: "cus_app"
+      } as any)
+      const asApplicant = await readOrganizationApplicationDocument(db, "opaque", payload.application_id, root)
+      expect(asApplicant).not.toBeNull()
+      expect(asApplicant?.filename).toBe("vergi-levhasi-1.pdf")
+      expect(asApplicant?.mimeType).toBe("application/pdf")
+      expect(asApplicant?.content).toEqual(validPdf)
+
+      // 2. Foreign person without staff grant is denied (returns null)
+      spyCurrent.mockResolvedValueOnce({
+        person_id: "daprs_other", actor_type: "customer", actor_id: "cus_other"
+      } as any)
+      spyStaff.mockResolvedValueOnce(null).mockResolvedValueOnce(null)
+      const asStranger = await readOrganizationApplicationDocument(db, "opaque", payload.application_id, root)
+      expect(asStranger).toBeNull()
+
+      // 3. Platform staff with organization.review can read
+      spyCurrent.mockResolvedValueOnce({
+        person_id: "daprs_staff", actor_type: "user", actor_id: "usr_admin"
+      } as any)
+      spyStaff.mockResolvedValueOnce({
+        staff_grant_id: "stg_1", grant_name: "organization.review"
+      } as any)
+      const asStaff = await readOrganizationApplicationDocument(db, "opaque", payload.application_id, root)
+      expect(asStaff).not.toBeNull()
+      expect(asStaff?.content).toEqual(validPdf)
+    } finally {
+      spyCurrent.mockRestore()
+      spyStaff.mockRestore()
+      await fsp.rm(root, { recursive: true, force: true })
+    }
   })
 
 })

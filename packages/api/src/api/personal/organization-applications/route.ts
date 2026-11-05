@@ -1,7 +1,14 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { access, csrf, enabled, sessionToken } from "../security"
 import { IdentityAccessDenied } from "../../../modules/dogruadres-access/identity-session"
-import { draftPayload, withdrawDraftPayload, decodeOrganizationDraftCursor } from "../../../modules/dogruadres-access/organization-application"
+import { InvalidTaxCertificate } from "../../../modules/dogruadres-access/tax-certificate-policy"
+import {
+  draftPayload,
+  withdrawDraftPayload,
+  uploadDocumentPayload,
+  submitApplicationPayload,
+  decodeOrganizationDraftCursor
+} from "../../../modules/dogruadres-access/organization-application"
 
 export const AUTHENTICATE=false
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
@@ -9,7 +16,32 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Referrer-Policy","no-referrer")
   if(!enabled())return res.status(503).json({message:"Unavailable"})
   const query=req.query??{}
-  if(Object.keys(query).some(key=>key!=="cursor")||req.headers.authorization)
+  if(req.headers.authorization)
+    return res.status(400).json({message:"Invalid request"})
+
+  // Document download request: ?action=document&application_id=...
+  if(query.action==="document"){
+    if(Object.keys(query).some(key=>!["action","application_id"].includes(key)))
+      return res.status(400).json({message:"Invalid request"})
+    const appId=typeof query.application_id==="string"?query.application_id:""
+    if(!/^daorgapp_[0-9a-f]{32}$/.test(appId))
+      return res.status(400).json({message:"Invalid request"})
+    try{
+      const doc=await access(req).personalReadOrganizationApplicationDocument(
+        sessionToken(req),appId
+      )
+      if(!doc)return res.status(403).json({message:"Access denied"})
+      res.setHeader("Content-Type",doc.mimeType)
+      res.setHeader("Content-Disposition",`attachment; filename="${doc.filename}"`)
+      res.setHeader("X-Content-Type-Options","nosniff")
+      return res.status(200).send(doc.content)
+    }catch(error){
+      return res.status(error instanceof IdentityAccessDenied?403:503)
+        .json({message:error instanceof IdentityAccessDenied?"Access denied":"Unavailable"})
+    }
+  }
+
+  if(Object.keys(query).some(key=>key!=="cursor"))
     return res.status(400).json({message:"Invalid request"})
   const cursor=query.cursor===undefined?undefined:decodeOrganizationDraftCursor(query.cursor)
   if(cursor===null)
@@ -23,6 +55,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       .json({message:error instanceof IdentityAccessDenied?"Access denied":"Unavailable"})
   }
 }
+
 export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Cache-Control","no-store")
   res.setHeader("Referrer-Policy","no-referrer")
@@ -31,7 +64,10 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   try{allowed=await csrf(req)}catch{}
   if(!allowed||req.headers.authorization)return res.status(403).json({message:"Access denied"})
   if(Object.keys(req.query??{}).length)return res.status(400).json({message:"Invalid request"})
-  if((req.body as {action?:unknown}|undefined)?.action==="withdraw"){
+
+  const action=(req.body as {action?:unknown}|undefined)?.action
+
+  if(action==="withdraw"){
     const parsedWithdraw=withdrawDraftPayload.safeParse(req.body)
     if(!parsedWithdraw.success)return res.status(400).json({message:"Invalid request"})
     try{
@@ -46,6 +82,38 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
         .json({message:error instanceof IdentityAccessDenied?"Access denied":"Outcome uncertain; read drafts"})
     }
   }
+
+  if(action==="upload_document"){
+    const parsedUpload=uploadDocumentPayload.safeParse(req.body)
+    if(!parsedUpload.success)return res.status(400).json({message:"Invalid document upload"})
+    try{
+      const result=await access(req).personalSaveOrganizationApplicationDocument(
+        sessionToken(req),parsedUpload.data)
+      if(!result)return res.status(403).json({message:"Access denied"})
+      if(result.conflict)return res.status(409).json({message:"Draft changed; read the current version"})
+      return res.status(200).json(result)
+    }catch(error){
+      return res.status(error instanceof IdentityAccessDenied?403:error instanceof InvalidTaxCertificate?400:503)
+        .json({message:error instanceof IdentityAccessDenied?"Access denied":error instanceof InvalidTaxCertificate?"Invalid tax certificate":"Outcome uncertain; read drafts"})
+    }
+  }
+
+  if(action==="submit"){
+    const parsedSubmit=submitApplicationPayload.safeParse(req.body)
+    if(!parsedSubmit.success)return res.status(400).json({message:"Invalid submit request"})
+    try{
+      const result=await access(req).personalSubmitOrganizationApplication(
+        sessionToken(req),parsedSubmit.data)
+      if(!result)return res.status(403).json({message:"Access denied"})
+      if(result.conflict)return res.status(409).json({message:"Draft changed; read the current version"})
+      if(result.missing_document)return res.status(400).json({message:"Tax certificate required before submission"})
+      return res.status(200).json({application_id:result.application_id,status:"submitted",version:result.version})
+    }catch(error){
+      return res.status(error instanceof IdentityAccessDenied?403:503)
+        .json({message:error instanceof IdentityAccessDenied?"Access denied":"Outcome uncertain; read drafts"})
+    }
+  }
+
   const parsed=draftPayload.safeParse(req.body)
   if(!parsed.success)return res.status(400).json({message:"Invalid draft"})
   try{
