@@ -248,18 +248,8 @@ export async function saveOrganizationDocument(
   const session=await new IdentitySessions(db).current(token,false,false)
   if(!session)return null
 
-  // Refuse excessive base64 strings early before Buffer allocation
-  if(input.file_base64.length>Math.ceil(TAX_CERTIFICATE_MAX_BYTES*4/3)+64){
-    throw new InvalidTaxCertificate()
-  }
-  const fileBytes=Buffer.from(input.file_base64,"base64")
-  if(fileBytes.length<8||fileBytes.length>TAX_CERTIFICATE_MAX_BYTES){
-    throw new InvalidTaxCertificate()
-  }
-
-  // Pre-validate file bytes format (PDF/JPEG/PNG) and prepare record
-  const prepared=prepareTaxCertificate(input.filename,fileBytes)
-
+  // Authorize the exact Person/application BEFORE processing untrusted
+  // document bytes. Foreign/removed drafts must not consume gzip CPU.
   // Serialize application writes
   await db.execute(`select pg_advisory_xact_lock(hashtext('da-org-draft'),hashtext(?))`,
     [input.application_id])
@@ -270,6 +260,16 @@ export async function saveOrganizationDocument(
   if(rows.length!==1||rows[0].applicant_person_id!==session.person_id)return null
   if(rows[0].status!=="draft")return {conflict:true as const}
   if(Number(rows[0].version)!==input.expected_version)return {conflict:true as const}
+
+  // Only the confirmed draft owner may spend CPU/memory decoding and gzipping.
+  if(input.file_base64.length>Math.ceil(TAX_CERTIFICATE_MAX_BYTES*4/3)+64){
+    throw new InvalidTaxCertificate()
+  }
+  const fileBytes=Buffer.from(input.file_base64,"base64")
+  if(fileBytes.length<8||fileBytes.length>TAX_CERTIFICATE_MAX_BYTES){
+    throw new InvalidTaxCertificate()
+  }
+  const prepared=prepareTaxCertificate(input.filename,fileBytes)
 
   // Persist to private directory outside checkout and public static
   const rootDir=overrideRoot??process.env.DOGRUADRES_TAX_CERTIFICATE_DIR
