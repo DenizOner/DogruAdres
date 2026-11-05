@@ -7478,6 +7478,19 @@ export default async function({container}:any){
     const [strongProof]=await q(`select last_strong_auth_at from da_browser_session
       where id=$1`,[createHash("sha256").update(beforeStrong!).digest("hex")])
     if(!strongProof?.last_strong_auth_at){
+      // The workspace becomes visible BEFORE load() awaits refreshMfa().
+      // Wait for the real authenticated MFA policy response; never make an
+      // enrolment button visible when policy genuinely forbids it.
+      const mfaPolicy=await reviewChrome.eval(`(async()=>{
+        const r=await fetch('/personal/mfa');
+        const body=r.status===200?await r.json():{};
+        return {status:r.status,mode:body.platform?.platform_mode};
+      })()`)
+      assert.equal(mfaPolicy.status,200,"Native MFA policy must remain readable")
+      assert.ok(["required","optional"].includes(mfaPolicy.mode),
+        "Independent reviewer must not bypass a disabled platform MFA policy")
+      await reviewChrome.wait(
+        "!document.getElementById('workspace').hidden && !document.getElementById('mfa-person').hidden")
       assert.equal(await reviewChrome.eval(
         "!document.getElementById('mfa-enroll-launch').hidden"),true,
         "Reviewer requires an enabled, user-visible native MFA enrollment path")
