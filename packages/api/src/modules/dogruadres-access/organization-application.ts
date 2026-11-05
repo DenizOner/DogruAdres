@@ -190,7 +190,7 @@ export async function saveOrganizationDraft(db:SecuritySql,token:string,value:un
     status:"draft" as const,version:input.expected_version+1}
 }
 
-/** Withdraw only this Person's saved draft; retain the private row and audit.
+/** Withdraw only this Person's pre-decision application; retain every document and audit.
  * Caller runs this within the same Foundation transaction as the audit/outbox.
  * A withdrawal never creates a commercial Organization or any Owner rights.
  */
@@ -202,7 +202,7 @@ export async function withdrawOrganizationDraft(
   const input=parsed.data
   const session=await new IdentitySessions(db).current(token,false,false)
   if(!session)return null
-  // Serialize against both draft save and another withdrawal of the same ID.
+  // Serialize against draft save, submit, staff review and another withdrawal.
   await db.execute(`select pg_advisory_xact_lock(hashtext('da-org-draft'),hashtext(?))`,
     [input.application_id])
   const rows=await db.execute(`select applicant_person_id,status,version
@@ -210,21 +210,23 @@ export async function withdrawOrganizationDraft(
   if(rows.length>1)throw new IdentityAccessDenied()
   // Do not disclose existence or status of another Person's application.
   if(rows.length!==1||rows[0].applicant_person_id!==session.person_id)return null
-  if(rows[0].status!=="draft"||
+  if(!["draft","submitted","correction_requested"].includes(rows[0].status)||
      Number(rows[0].version)!==input.expected_version)
     return {conflict:true as const}
   const updated=await db.execute(`update da_organization_application
     set status='withdrawn',version=version+1,updated_at=clock_timestamp()
-    where id=? and applicant_person_id=? and status='draft' and version=?
+    where id=? and applicant_person_id=? and status in ('draft','submitted','correction_requested') and version=?
     returning version`,[input.application_id,session.person_id,input.expected_version])
   if(updated.length!==1) return {conflict:true as const}
   const auditId="daaud_"+randomUUID()
+  const auditAction=rows[0].status==="draft"
+    ?"organization.application_draft_withdrawn"
+    :"organization.application_withdrawn"
   await db.execute(`insert into da_audit_event
     (id,actor_person_id,actor_type,actor_id,action,module,resource,
       target_id,occurred_at,created_at,updated_at)
-    values (?,?,?,?,'organization.application_draft_withdrawn',
-      'dogruadres-access','organization-application',?,clock_timestamp(),now(),now())`,
-    [auditId,session.person_id,session.actor_type,session.actor_id,input.application_id])
+    values (?,?,?,?,?,'dogruadres-access','organization-application',?,clock_timestamp(),now(),now())`,
+    [auditId,session.person_id,session.actor_type,session.actor_id,auditAction,input.application_id])
   await db.execute(`insert into da_security_outbox(id,audit_event_id,created_at)
     values(?,?,now())`,[randomUUID(),auditId])
   return {conflict:false as const,application_id:input.application_id,

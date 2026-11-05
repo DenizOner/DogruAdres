@@ -527,6 +527,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         };
           row.append(button);
         }
+        if(item.status==='submitted'){
+          const withdrawSubmitted=document.createElement('button');
+          withdrawSubmitted.type='button';withdrawSubmitted.textContent='Başvuruyu geri çek';
+          withdrawSubmitted.disabled=organizationDraftSaving;
+          withdrawSubmitted.onclick=()=>void withdrawOrganizationApplication(item.id,item.version);
+          row.append(withdrawSubmitted);
+        }
         el('organization-draft-list').append(row);
       }
       organizationDraftCursor=data.next_cursor;
@@ -623,10 +630,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('organization-draft-more').onclick=()=>{
     if(!organizationDraftSaving)void refreshOrganizationDrafts(true);
   };
-  el('organization-draft-withdraw').onclick=async()=>{
-    if(organizationDraftSaving||!organizationDraftId||organizationDraftVersion<1||
+  async function withdrawOrganizationApplication(id,version){
+    if(organizationDraftSaving||!id||!Number.isSafeInteger(version)||version<1||
        document.hidden||el('workspace').hidden)return;
-    const id=organizationDraftId,version=organizationDraftVersion,epoch=viewEpoch;
+    const epoch=viewEpoch;
     const mutation=++organizationDraftMutation;
     lockOrganizationDraftSelection(true);
     let uncertain=false;
@@ -638,11 +645,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          result.version!==version+1)throw Error('Geri çekme sonucu belirsiz');
       organizationDraftId='';organizationDraftVersion=0;
       el('organization-draft-withdraw').hidden=true;
+      el('organization-application-submit').hidden=true;
+      el('organization-document-section').hidden=true;
       el('organization-draft-form').reset();
       await refreshOrganizationDrafts();
       if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
       el('organization-draft-status').textContent=
-        'Taslak geri çekildi ve özel geçmişte saklandı; başvuru gönderilmedi.';
+        'Başvuru/taslak geri çekildi; belge ve denetim geçmişi korundu.';
     }catch(error){
       if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
       uncertain=!!error.uncertain;
@@ -657,7 +666,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         if(uncertain)el('organization-draft-withdraw').disabled=true;
       }
     }
-  };
+  }
+  el('organization-draft-withdraw').onclick=()=>
+    void withdrawOrganizationApplication(organizationDraftId,organizationDraftVersion);
   el('organization-draft-form').onsubmit=async e=>{
     e.preventDefault();
     const form=e.currentTarget,button=form.querySelector('button');

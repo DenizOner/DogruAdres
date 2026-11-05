@@ -225,7 +225,7 @@ async function run(){
           return
         }
         assert.ok(result.split("\n").includes(
-          "PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, secure download, fail-closed corrupt doc, duplicate tax id race-safe, admin review correction/rejection/approval with Organization & protected Owner"),
+          "PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner"),
           "Missing real Chrome/HTTP/PG16 tax certificate application, independent reviewer decision and protected Owner acceptance")
         assert.ok(result.split("\n").some(line=>line.startsWith(
           "PASS B22 Chrome: first Person signup HTTPS/PG16, mandatory mobile400, native Customer to one Person")),

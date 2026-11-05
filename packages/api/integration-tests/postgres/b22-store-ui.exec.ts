@@ -7364,6 +7364,10 @@ export default async function({container}:any){
     const app2Row=(await q("select duplicate_review_required from da_organization_application where id=$1",[foreignAppId]))[0]
     assert.equal(app1Row.duplicate_review_required, false)
     assert.equal(app2Row.duplicate_review_required, true, "Duplicate VKN must set confidential review flag in PG16")
+    await foreignDraftChrome.click("#organization-draft-refresh")
+    await foreignDraftChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&p.textContent.includes('Başvuru gönderildi'))")
+    const submittedCanWithdraw=await foreignDraftChrome.eval("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&Array.from(p.querySelectorAll('button')).some(b=>b.textContent==='Başvuruyu geri çek'))")
+    assert.equal(submittedCanWithdraw,true,"A submitted application must offer applicant cancellation before staff approval")
 
     // 10. Platform Staff Review Journey:
     // The two applicants cannot review their own applications. Register a
@@ -7485,6 +7489,19 @@ export default async function({container}:any){
       assert.equal(correctionRes.status, 200)
       assert.equal(correctionRes.body.status, "correction_requested")
       assert.equal((await q("select status,review_notes from da_organization_application where id=$1",[foreignAppId]))[0].status, "correction_requested")
+      await foreignDraftChrome.click("#organization-draft-refresh")
+      await foreignDraftChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&p.textContent.includes('Düzeltme istendi'))")
+      await foreignDraftChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-draft-list p')).find(p=>p.textContent.includes('Foreign Duplicate Company'));const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='Düzelt ve yeniden gönder');if(!button)throw Error('Missing correction selector');button.click();return true})()")
+      await foreignDraftChrome.wait("!document.getElementById('organization-draft-withdraw').hidden")
+      await foreignDraftChrome.click("#organization-draft-withdraw")
+      await foreignDraftChrome.wait("document.getElementById('organization-draft-status').textContent.includes('geri çekildi')")
+      const withdrawn=await q("select status,version from da_organization_application where id=$1",[foreignAppId])
+      assert.deepEqual(withdrawn,[{status:"withdrawn",version:5}])
+      assert.equal(Number((await q("select count(*)::int n from da_organization_application_document where application_id=$1",[foreignAppId]))[0].n),1,"Withdraw must retain private tax certificate history")
+      const withdrawOutbox=await q("select x.id from da_audit_event a join da_security_outbox x on x.audit_event_id=a.id where a.target_id=$1 and a.action='organization.application_withdrawn'",[foreignAppId])
+      assert.equal(withdrawOutbox.length,1,"Withdraw requires one durable outboxed audit")
+      const deniedAfterWithdraw=await reviewChrome.eval(`(async()=>{const s=await (await fetch('/personal/session')).json();const r=await fetch('/personal/organization-applications',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},body:JSON.stringify({action:'review_decision',application_id:${JSON.stringify(foreignAppId)},expected_version:5,decision:'approve'})});return r.status})()`)
+      assert.equal(deniedAfterWithdraw,409,"Staff may not approve an applicant-withdrawn application")
 
       const orgsCountBefore = Number((await q("select count(*)::int n from da_organization"))[0].n)
       const membsCountBefore = Number((await q("select count(*)::int n from da_organization_membership"))[0].n)
@@ -7529,7 +7546,7 @@ export default async function({container}:any){
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
     }
 
-    process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, secure download, fail-closed corrupt doc, duplicate tax id race-safe, admin review correction/rejection/approval with Organization & protected Owner\n")
+    process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner\n")
 
 
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")

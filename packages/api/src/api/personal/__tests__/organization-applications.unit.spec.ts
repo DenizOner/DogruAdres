@@ -231,7 +231,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     const id=payload.application_id
     const input={action:"withdraw",application_id:id,expected_version:3}
     let owner="daprs_owner",state="draft",version=3
-    const exec=jest.fn(async(sql:string)=>{
+    const exec=jest.fn(async(sql:string,_params?:any[])=>{
       if(sql.includes("from da_organization_application where id=? for update"))
         return [{applicant_person_id:owner,status:state,version}]
       if(sql.includes("update da_organization_application"))
@@ -247,14 +247,25 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       expect(await withdrawOrganizationDraft(db,"opaque",input)).toEqual({conflict:true})
       version=3;state="withdrawn"
       expect(await withdrawOrganizationDraft(db,"opaque",input)).toEqual({conflict:true})
+      for(const terminal of ["approved","rejected"]){
+        state=terminal
+        expect(await withdrawOrganizationDraft(db,"opaque",input)).toEqual({conflict:true})
+      }
+      for(const permitted of ["submitted","correction_requested"]){
+        state=permitted
+        const granted=await withdrawOrganizationDraft(db,"opaque",input)
+        expect(granted).toEqual({conflict:false,application_id:id,status:"withdrawn",version:4})
+      }
       state="draft"
       const result=await withdrawOrganizationDraft(db,"opaque",input)
       expect(result).toEqual({conflict:false,application_id:id,status:"withdrawn",version:4})
       const statements=exec.mock.calls.map(args=>String(args[0]))
-      expect(statements.filter(sql=>sql.includes("pg_advisory_xact_lock"))).toHaveLength(4)
-      expect(statements.filter(sql=>sql.includes("update da_organization_application"))).toHaveLength(1)
-      expect(statements.filter(sql=>sql.includes("insert into da_audit_event"))).toHaveLength(1)
-      expect(statements.filter(sql=>sql.includes("insert into da_security_outbox"))).toHaveLength(1)
+      expect(statements.filter(sql=>sql.includes("pg_advisory_xact_lock"))).toHaveLength(8)
+      expect(statements.filter(sql=>sql.includes("update da_organization_application"))).toHaveLength(3)
+      expect(statements.filter(sql=>sql.includes("insert into da_audit_event"))).toHaveLength(3)
+      expect(statements.filter(sql=>sql.includes("insert into da_security_outbox"))).toHaveLength(3)
+      const actions=exec.mock.calls.filter(([sql])=>sql.includes("insert into da_audit_event")).map(([,params])=>params?.[4])
+      expect(actions).toEqual(["organization.application_withdrawn","organization.application_withdrawn","organization.application_draft_withdrawn"])
       expect(statements.join(" ")).not.toContain("createOrganizations")
       expect(statements.join(" ")).not.toContain("createMemberships")
     }finally{spy.mockRestore()}
