@@ -104,11 +104,72 @@ function validPng(bytes:Buffer):boolean{
   return false
 }
 const PDF_EOF = Buffer.from('%%EOF','ascii')
+/**
+ * Require a JPEG frame, quantization/Huffman tables and entropy scan markers;
+ * never accept an SOI/EOI shell as a picture. This is structural screening,
+ * NOT complete pixel decoding, virus detection or PDF verification.
+ */
+function validJpeg(bytes:Buffer):boolean{
+  if(bytes.length<16||bytes[0]!==0xff||bytes[1]!==0xd8||
+     bytes[bytes.length-2]!==0xff||bytes[bytes.length-1]!==0xd9)return false
+  let pos=2,frame=false,scan=false,quant=false,huffman=false,segments=0
+  while(pos<bytes.length&&++segments<=2048){
+    if(bytes[pos++]!==0xff)return false
+    while(pos<bytes.length&&bytes[pos]===0xff)pos++
+    if(pos>=bytes.length)return false
+    const marker=bytes[pos++]
+    if(marker===0xd9)return frame&&scan&&pos===bytes.length
+    if(marker===0x00||marker===0xd8||(marker>=0xd0&&marker<=0xd7)||
+       marker===0x01)return false
+    if(pos+2>bytes.length)return false
+    const length=bytes.readUInt16BE(pos)
+    if(length<2||length>bytes.length-pos)return false
+    const data=pos+2,end=pos+length
+    if([0xc0,0xc1,0xc2].includes(marker)){
+      if(frame||length<11||bytes[data]!==8)return false
+      const height=bytes.readUInt16BE(data+1),width=bytes.readUInt16BE(data+3)
+      const count=bytes[data+5]
+      if(!width||!height||!count||count>4||length!==8+count*3||
+         width*height>40_000_000)return false
+      frame=true
+    }else if(marker===0xda){
+      const count=bytes[data]
+      if(!frame||!quant||!huffman||count<1||count>4||
+         length!==6+2*count)return false
+      scan=true;pos=end
+      let entropy=false
+      while(pos<bytes.length){
+        if(bytes[pos++]!==0xff){entropy=true;continue}
+        const prefix=pos-1
+        while(pos<bytes.length&&bytes[pos]===0xff)pos++
+        if(pos>=bytes.length)return false
+        const next=bytes[pos]
+        if(next===0x00){pos++;entropy=true;continue}
+        if(next>=0xd0&&next<=0xd7){pos++;continue}
+        pos=prefix;break
+      }
+      if(!entropy)return false
+      continue
+    }else if(marker===0xdb){
+      if(length<6)return false
+      quant=true
+    }else if(marker===0xc4){
+      if(length<20)return false
+      huffman=true
+    }else if(marker===0xdd){
+      if(length!==4)return false
+    }else if(marker===0xfe||(marker>=0xe0&&marker<=0xef)){
+      // Optional JPEG comments or APP metadata are bounded by total size.
+    }else return false
+    pos=end
+  }
+  return false
+}
+
 
 function detect(bytes: Buffer): TaxCertificateFormat['mimeType'] | null {
   if(validPng(bytes))return 'image/png'
-  if (bytes.length>=8 && bytes[0]===255 && bytes[1]===216 && bytes[2]===255 &&
-      bytes[bytes.length-2]===255 && bytes[bytes.length-1]===217) return 'image/jpeg'
+  if(validJpeg(bytes))return 'image/jpeg'
   if (bytes.length>=14 && /^%PDF-(1\.[0-7]|2\.0)/.test(bytes.toString('ascii',0,8))) {
     const end=bytes.lastIndexOf(PDF_EOF)
     if (end>=bytes.length-2048 && end>=0 &&

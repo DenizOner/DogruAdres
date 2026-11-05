@@ -5,7 +5,10 @@ import {
 } from "../tax-certificate-policy"
 
 const pdf=Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n","ascii")
-const jpg=Buffer.from([255,216,255,224,0,2,255,217])
+// Actual 1×1 JPEG test file, not the former SOI/APP0/EOI skeleton.
+const jpg=Buffer.from(
+  "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD6pooooA//2Q==","base64"
+)
 // True one-pixel 8-bit RGB PNG with a CRC-checked IHDR/IDAT/IEND and
 // a valid zlib scanline; not the previous fake header-only fixture.
 const png=Buffer.from(
@@ -67,6 +70,19 @@ describe("B22 tax certificate ingress format gate (NOT a public upload)",()=>{
     ]
     for(const [name,bytes,mime] of invalid)
       expect(()=>inspectTaxCertificate(name,bytes,mime)).toThrow(InvalidTaxCertificate)
+  })
+  it("rejects invalid JPEG skeleton, truncated data and appended executable bytes",()=>{
+    const skeleton=Buffer.from([255,216,255,224,0,2,255,217])
+    const truncated=jpg.subarray(0,jpg.length-3)
+    const trailing=Buffer.concat([jpg,Buffer.from("MZ executable")])
+    const brokenSegment=Buffer.from(jpg)
+    brokenSegment.writeUInt16BE(0xffff,4)
+    for(const bytes of [skeleton,truncated,trailing,brokenSegment])
+      expect(()=>inspectTaxCertificate("belge.jpeg",bytes,"image/jpeg"))
+        .toThrow(InvalidTaxCertificate)
+    expect(inspectTaxCertificate("belge.jpeg",jpg).mimeType).toBe("image/jpeg")
+    expect(restoreTaxCertificate(prepareTaxCertificate("belge.jpeg",jpg)))
+      .toEqual(jpg)
   })
   it("does not disclose original private filenames or byte contents",()=>{
     const info=inspectTaxCertificate("gizli-vergi-123456.pdf",pdf)
