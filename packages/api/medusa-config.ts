@@ -85,9 +85,8 @@ module.exports = withMercur({
   },
   featureFlags: {
     seller_registration: true,
-    // Mercur 2.4.1 enables response caching by default. Keep it disabled
-    // until Person/Organization/Store isolation and invalidation are verified.
-    // The upstream index engine remains enabled for the required index sync.
+    // Mercur 2.4.1 defaults to caching. Keep it off until tenant isolation
+    // and permission-revocation invalidation pass real acceptance tests.
     caching: false
   },
   modules: [
