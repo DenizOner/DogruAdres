@@ -7397,6 +7397,31 @@ export default async function({container}:any){
       await reviewChrome.click("#mfa-enroll-verify button")
     }
     await reviewChrome.wait("!document.getElementById('workspace').hidden")
+    // Optional platform MFA can open a normal, non-strong Person session.
+    // A reviewer must voluntarily complete real native TOTP enrollment before
+    // the platform staff grant can authorize sensitive review work. Never
+    // insert last_strong_auth_at directly or relax IdentitySessions.staff().
+    const beforeStrong=await reviewChrome.token()
+    assert.match(beforeStrong??"",/^[A-Za-z0-9_-]{43}$/)
+    const [strongProof]=await q(`select last_strong_auth_at from da_browser_session
+      where id=$1`,[createHash("sha256").update(beforeStrong!).digest("hex")])
+    if(!strongProof?.last_strong_auth_at){
+      assert.equal(await reviewChrome.eval(
+        "!document.getElementById('mfa-enroll-launch').hidden"),true,
+        "Reviewer requires an enabled, user-visible native MFA enrollment path")
+      await reviewChrome.click("#mfa-enroll-launch")
+      await reviewChrome.input("#mfa-enroll-start input[name=email]",reviewEmail)
+      await reviewChrome.input("#mfa-enroll-start input[name=password]",reviewPassword)
+      await reviewChrome.click("#mfa-enroll-start button")
+      await reviewChrome.wait("!document.getElementById('mfa-enroll-verify').hidden&&document.getElementById('mfa-seed').value.length>0")
+      const enrolled=await reviewChrome.eval("document.getElementById('mfa-seed').value")
+      const enrolledSecret=enrolled.startsWith("otpauth:")
+        ?new URL(enrolled).searchParams.get("secret"):enrolled
+      assert.ok(enrolledSecret)
+      await reviewChrome.input("#mfa-enroll-verify input[name=code]",otp(enrolledSecret!))
+      await reviewChrome.click("#mfa-enroll-verify button")
+      await reviewChrome.wait("!document.getElementById('workspace').hidden")
+    }
     const reviewerRows=await q(`select b.person_id from da_login_binding b
       join public.customer c on c.id=b.actor_id
       where b.actor_type='customer' and c.email=$1
