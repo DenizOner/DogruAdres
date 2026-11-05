@@ -5,7 +5,8 @@ import {
   saveOrganizationDocument,
   submitOrganizationApplication,
   readOrganizationApplicationDocument,
-  listSubmittedOrganizationApplications
+  listSubmittedOrganizationApplications,
+  reviewOrganizationApplication
 } from "../../../modules/dogruadres-access/organization-application"
 import { IdentitySessions } from "../../../modules/dogruadres-access/identity-session"
 import {GET,POST} from "../organization-applications/route"
@@ -446,6 +447,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     let taxId: string | null = "12345678901"
     let hasDoc = false
     let hasDuplicates = false
+    let hasOrgDuplicates = false
 
     const exec = jest.fn(async (sql: string) => {
       if (sql.includes("from da_organization_application where id=? for update")) {
@@ -468,8 +470,11 @@ describe("B22 private business application DRAFT — never an Organization",()=>
           version: 1
         }] : []
       }
-      if (sql.includes("where tax_identifier=? and status='submitted' and id<>?")) {
+      if (sql.includes("where tax_identifier=? and status in ('submitted','approved') and id<>?")) {
         return hasDuplicates ? [{ id: "daorgapp_other123" }] : []
+      }
+      if (sql.includes("from da_organization") && sql.includes("where tax_identifier=? and status='active'")) {
+        return hasOrgDuplicates ? [{ id: "daorg_existing" }] : []
       }
       if (sql.includes("update da_organization_application")) {
         return [{ version: 3 }]
@@ -525,6 +530,24 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       // Verify that duplicate_review_required was recorded in da_organization_application
       const updateCalls = exec.mock.calls.filter(c => String(c[0]).includes("update da_organization_application"))
       expect(updateCalls.some((c: any) => c[1]?.[0] === true)).toBe(true)
+
+      // Verify serialization against concurrent submissions via pg_advisory_xact_lock on da-org-tax-id
+      expect(exec.mock.calls.some(c => String(c[0]).includes("da-org-tax-id"))).toBe(true)
+
+      // 6. Document in DB, valid file, duplicate exists in active da_organization -> sets duplicate review
+      hasDuplicates = false
+      hasOrgDuplicates = true
+      const orgDuplicateAccepted = await submitOrganizationApplication(db, "opaque", input, root)
+      expect(orgDuplicateAccepted).toEqual({
+        conflict: false,
+        missing_document: false,
+        missing_tax_identifier: false,
+        application_id: payload.application_id,
+        status: "submitted",
+        version: 3
+      })
+      const updateCalls2 = exec.mock.calls.filter(c => String(c[0]).includes("update da_organization_application"))
+      expect(updateCalls2.some((c: any) => c[1]?.[0] === true)).toBe(true)
     } finally {
       spy.mockRestore()
       await fsp.rm(root, { recursive: true, force: true })
@@ -646,6 +669,122 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       spyCurrent.mockRestore()
       spyStaff.mockRestore()
       await fsp.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("reviewOrganizationApplication handles correction_requested, rejection and approval with audit", async () => {
+    const spyStaff = jest.spyOn(IdentitySessions.prototype, "staff")
+    const spyCurrent = jest.spyOn(IdentitySessions.prototype, "current")
+
+    let appStatus = "submitted"
+    let appVersion = 3
+
+    const exec = jest.fn(async (sql: string) => {
+      if (sql.includes("from da_organization_application where id=? for update")) {
+        return [{
+          id: payload.application_id,
+          applicant_person_id: "daprs_applicant",
+          business_kind: "individual_business",
+          legal_name: "Test Ltd",
+          landline_phone: "+90 212 555 00 00",
+          tax_identifier: "12345678901",
+          declared_activities: ["service_repair"],
+          primary_activity: "service_repair",
+          status: appStatus,
+          version: appVersion,
+          duplicate_review_required: false
+        }]
+      }
+      if (sql.includes("update da_organization_application")) {
+        return [{ version: appVersion + 1 }]
+      }
+      return []
+    })
+    const db: any = { execute: exec }
+
+    try {
+      // 1. Non-staff is denied (returns null)
+      spyStaff.mockResolvedValueOnce(null)
+      const nonStaff = await reviewOrganizationApplication(db, "opaque", {
+        application_id: payload.application_id,
+        expected_version: 3,
+        decision: "request_correction",
+        notes: "Lütfen vergi levhanızı güncelleyin"
+      })
+      expect(nonStaff).toBeNull()
+
+      // 2. Staff requests correction -> status becomes correction_requested, audit logged
+      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
+      spyCurrent.mockResolvedValueOnce({ person_id: "daprs_admin", actor_type: "user", actor_id: "usr_admin" } as any)
+      const correctionResult = await reviewOrganizationApplication(db, "opaque", {
+        application_id: payload.application_id,
+        expected_version: 3,
+        decision: "request_correction",
+        notes: "Lütfen vergi levhasını yeniden yükleyin"
+      })
+      expect(correctionResult).toEqual({
+        conflict: false,
+        application_id: payload.application_id,
+        status: "correction_requested",
+        version: 4
+      })
+      expect(exec.mock.calls.some(c => String(c[0]).includes("organization.application_correction_requested"))).toBe(true)
+
+      // 3. Stale version returns conflict: true
+      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
+      const staleResult = await reviewOrganizationApplication(db, "opaque", {
+        application_id: payload.application_id,
+        expected_version: 1,
+        decision: "reject",
+        notes: "Reddedildi"
+      })
+      expect(staleResult).toEqual({ conflict: true })
+
+      // 4. Staff rejects application -> status becomes rejected, audit logged
+      appVersion = 4
+      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
+      spyCurrent.mockResolvedValueOnce({ person_id: "daprs_admin", actor_type: "user", actor_id: "usr_admin" } as any)
+      const rejectResult = await reviewOrganizationApplication(db, "opaque", {
+        application_id: payload.application_id,
+        expected_version: 4,
+        decision: "reject",
+        notes: "Faaliyet belgesi uyumsuz"
+      })
+      expect(rejectResult).toEqual({
+        conflict: false,
+        application_id: payload.application_id,
+        status: "rejected",
+        version: 5
+      })
+      expect(exec.mock.calls.some(c => String(c[0]).includes("organization.application_rejected"))).toBe(true)
+
+      // 5. Staff approves application -> creates da_organization & da_organization_membership (protected owner), status becomes approved
+      appVersion = 5
+      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
+      spyCurrent.mockResolvedValueOnce({ person_id: "daprs_admin", actor_type: "user", actor_id: "usr_admin" } as any)
+      const approveResult = await reviewOrganizationApplication(db, "opaque", {
+        application_id: payload.application_id,
+        expected_version: 5,
+        decision: "approve",
+        notes: "Tüm belgeler onaylandı"
+      })
+      expect(approveResult).toMatchObject({
+        conflict: false,
+        application_id: payload.application_id,
+        status: "approved",
+        version: 6
+      })
+      // Verify da_organization insert
+      expect(exec.mock.calls.some(c => String(c[0]).includes("insert into da_organization"))).toBe(true)
+      // Verify da_organization_membership insert with protected_owner
+      expect(exec.mock.calls.some(c => String(c[0]).includes("insert into da_organization_membership"))).toBe(true)
+      // Verify 3 audit events: application_approved, provisioned, owner_assigned
+      expect(exec.mock.calls.some(c => String(c[0]).includes("organization.application_approved"))).toBe(true)
+      expect(exec.mock.calls.some(c => String(c[0]).includes("organization.provisioned"))).toBe(true)
+      expect(exec.mock.calls.some(c => String(c[0]).includes("organization.owner_assigned"))).toBe(true)
+    } finally {
+      spyStaff.mockRestore()
+      spyCurrent.mockRestore()
     }
   })
 

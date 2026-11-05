@@ -201,7 +201,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       </label>
       <label>Resmî ticari unvan (taslak)<input name="legal_name" minlength="2" maxlength="200" required></label>
       <label>İşletmenin sabit hattı (zorunlu; doğrulanmış değildir)<input name="landline_phone" type="tel" autocomplete="off" minlength="7" maxlength="40" required></label>
-      <label>Vergi Kimlik Numarası (VKN 10 hane / Şahıs işletmesi için TCKN 11 hane)<input name="tax_identifier" pattern="[0-9]{10,11}" maxlength="11" minlength="10" autocomplete="off" required placeholder="10 veya 11 haneli vergi kimliği"></label>
+      <label>Vergi Kimlik Numarası (VKN 10 hane / Şahıs işletmesi için TCKN 11 hane)<input name="tax_identifier" pattern="[0-9]{10,11}" maxlength="11" minlength="10" autocomplete="off" placeholder="10 veya 11 haneli vergi kimliği (başvuru gönderimi için zorunlu)"></label>
       <button type="submit">Taslağı kaydet</button>
     </form>
     <div id="organization-document-section" hidden style="margin-top:1em;padding:1em;border:1px solid #ccc">
@@ -563,6 +563,41 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           };
           row.append(dl);
         }
+        const notesInput=document.createElement('input');
+        notesInput.placeholder='İnceleme / düzeltme notu';
+        row.append(notesInput);
+        const correctBtn=document.createElement('button');
+        correctBtn.type='button';correctBtn.textContent='Düzeltme İste';
+        correctBtn.onclick=async()=>{
+          if(!notesInput.value.trim()){alert('Düzeltme notu zorunludur.');return;}
+          await api('organization-applications',{method:'POST',body:JSON.stringify({
+            action:'review_decision',application_id:item.id,expected_version:item.version,
+            decision:'request_correction',notes:notesInput.value.trim()
+          })});
+          await refreshOrganizationReviews();
+        };
+        row.append(correctBtn);
+        const rejectBtn=document.createElement('button');
+        rejectBtn.type='button';rejectBtn.textContent='Reddet';
+        rejectBtn.onclick=async()=>{
+          if(!notesInput.value.trim()){alert('Ret gerekçesi zorunludur.');return;}
+          await api('organization-applications',{method:'POST',body:JSON.stringify({
+            action:'review_decision',application_id:item.id,expected_version:item.version,
+            decision:'reject',notes:notesInput.value.trim()
+          })});
+          await refreshOrganizationReviews();
+        };
+        row.append(rejectBtn);
+        const approveBtn=document.createElement('button');
+        approveBtn.type='button';approveBtn.textContent='Onayla ve Kuruluş Oluştur';
+        approveBtn.onclick=async()=>{
+          await api('organization-applications',{method:'POST',body:JSON.stringify({
+            action:'review_decision',application_id:item.id,expected_version:item.version,
+            decision:'approve',notes:notesInput.value.trim()||undefined
+          })});
+          await refreshOrganizationReviews();
+        };
+        row.append(approveBtn);
         list.append(row);
       }
       el('organization-review-status').textContent=data.applications.length?
@@ -629,6 +664,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     // and edits until the HTTP result has been processed.
     const payload={...Object.fromEntries(new FormData(form)),
       declared_activities:selectedActivities,primary_activity:primaryActivity};
+    if(!payload.tax_identifier)delete payload.tax_identifier;
     const id=organizationDraftId||'daorgapp_'+crypto.randomUUID().replaceAll('-','');
     organizationDraftId=id;
     const version=organizationDraftVersion,epoch=viewEpoch;

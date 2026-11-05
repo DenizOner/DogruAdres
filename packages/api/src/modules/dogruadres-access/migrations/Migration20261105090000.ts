@@ -11,11 +11,22 @@ export class Migration20261105090000 extends Migration {
       drop constraint da_organization_application_status_check;`)
     this.addSql(`alter table da_organization_application
       add constraint da_organization_application_status_check
-      check (status in ('draft','withdrawn','submitted'));`)
+      check (status in ('draft','withdrawn','submitted','correction_requested','rejected','approved'));`)
 
     this.addSql(`alter table da_organization_application
       add column tax_identifier text check(tax_identifier is null or tax_identifier ~ '^[0-9]{10,11}$'),
-      add column duplicate_review_required boolean not null default false;`)
+      add column duplicate_review_required boolean not null default false,
+      add column review_notes text,
+      add column reviewed_by_person_id text references da_person(id),
+      add column reviewed_at timestamptz,
+      add column organization_id text references da_organization(id);`)
+
+    this.addSql(`alter table da_organization
+      add column if not exists tax_identifier text check(tax_identifier is null or tax_identifier ~ '^[0-9]{10,11}$');`)
+
+    this.addSql(`create index if not exists da_org_tax_id
+      on da_organization(tax_identifier)
+      where tax_identifier is not null;`)
 
     this.addSql(`create index da_org_application_tax_id
       on da_organization_application(tax_identifier)

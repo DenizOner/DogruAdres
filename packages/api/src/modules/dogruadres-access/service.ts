@@ -38,6 +38,8 @@ import {
   submitOrganizationApplication,
   readOrganizationApplicationDocument,
   listSubmittedOrganizationApplications,
+  reviewOrganizationApplication,
+  type ReviewApplicationPayload,
   type DraftPayload,
   type WithdrawDraftPayload,
   type UploadDocumentPayload,
@@ -469,6 +471,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     token:string,cursor?:OrganizationDraftCursor,@MedusaContext() context:Context={}
   ) {
     return listSubmittedOrganizationApplications(securitySql(context.transactionManager),token,cursor)
+  }
+
+  @InjectTransactionManager()
+  async personalReviewOrganizationApplication(
+    token:string,input:ReviewApplicationPayload,@MedusaContext() context:Context={}
+  ) {
+    return reviewOrganizationApplication(securitySql(context.transactionManager),token,input)
   }
 
   @InjectTransactionManager()

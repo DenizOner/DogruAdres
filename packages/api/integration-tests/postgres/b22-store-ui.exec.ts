@@ -680,6 +680,10 @@ export default async function({container}:any){
   const previousListenerPort=process.env.DOGRUADRES_FRONTDOOR_PORT
   const browsers:B06Chrome[]=[]
   const temp=mkdtempSync(join(tmpdir(),"b22-task-ca-"))
+  const taxDir=join(temp,"private-tax-certificates")
+  mkdirSync(taxDir,{recursive:true,mode:0o700})
+  const previousTaxDir=process.env.DOGRUADRES_TAX_CERTIFICATE_DIR
+  process.env.DOGRUADRES_TAX_CERTIFICATE_DIR=taxDir
   let originalB22Error:unknown
   try{
     assert.equal((await q("select current_database() db"))[0].db,u.pathname.slice(1))
@@ -7155,6 +7159,302 @@ export default async function({container}:any){
     assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),draftMembershipsBefore)
     process.stdout.write("PASS B22 Chrome: private applicant withdraws draft; foreign/CSRF/stale/replay denied; persisted audit, no Organization/Owner\n")
 
+    // =========================================================================
+    // B22 REAL HTTP / CHROME / PG16 TAX CERTIFICATE & SUBMISSION ACCEPTANCE JOURNEY
+    // =========================================================================
+    const b22TaxAppId="daorgapp_"+randomBytes(16).toString("hex")
+    const b22TaxId="1234567890"
+
+    // 1. Create fresh draft for tax certificate upload journey
+    const draftCreateRes=await signupChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `const r=await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:0,`+
+          `business_kind:'legal_company',`+
+          `legal_name:'B22 Vergi Levhası Test Şirketi',`+
+          `landline_phone:'+90 212 555 12 34',`+
+          `tax_identifier:${JSON.stringify(b22TaxId)},`+
+          `declared_activities:['service_repair'],`+
+          `primary_activity:'service_repair'`+
+        `})`+
+      `});`+
+      `return {status:r.status,body:await r.json()};`+
+    `})()`)
+    assert.equal(draftCreateRes.status,200)
+    assert.equal(draftCreateRes.body.version,1)
+
+    // 2. Reject 10 MiB + 1 byte upload (10485761 bytes)
+    const oversizeBase64 = Buffer.alloc(10485761, 65).toString("base64")
+    const oversizeUploadRes = await signupChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `const r=await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `action:'upload_document',`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:1,`+
+          `mime_type:'application/pdf',`+
+          `file_base64:${JSON.stringify(oversizeBase64)}`+
+        `})`+
+      `});`+
+      `return r.status;`+
+    `})()`)
+    assert.equal(oversizeUploadRes, 400, "10 MiB + 1 byte document must be rejected with 400")
+
+    // 3. Foreign Person cannot upload to another Person's draft
+    const foreignUploadRes = await foreignDraftChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `const r=await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `action:'upload_document',`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:1,`+
+          `mime_type:'application/pdf',`+
+          `file_base64:'JVBERi0xLjQKJcTl8uXrCgoxIDAgb2JqCjw8L1R5cGUvQ2F0YWxvZwovUGFnZXMgMiAwIFI+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzCi9LaWRzWzMgMCBSXQovQ291bnQgMQo+PgplbmRvYmoKMyAwIG9iago8PC9UeXBlL1BhZ2UKL1BhcmVudCAyIDAgUgovTWVkaWFCb3hbMCAwIDYxMiA3OTJdCi9SZXNvdXJjZXM8PD4+Cj4+CmVuZG9iagp4cmVmCjAgNAowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUgMDAwMDAgbiAKMDAwMDAwMDA2OCAwMDAwMCBuIAowMDAwMDAwMTI1IDAwMDAwIG4gCnRyYWlsZXIKPDwvU2l6ZSA0Ci9Sb290IDEgMCBSPj4Kc3RhcnR4cmVmCjIxMwprfUVPZgo='`+
+        `})`+
+      `});`+
+      `return r.status;`+
+    `})()`)
+    assert.equal(foreignUploadRes, 403, "Foreign Person must be denied document upload")
+
+    // 4. Upload exactly 10 MiB valid synthetic PDF (10485760 bytes)
+    const exact10MibPdf = Buffer.concat([
+      Buffer.from("%PDF-1.4\n%B22 synthetic tax certificate\n"),
+      Buffer.alloc(10485760 - 45 - 6, 0x20),
+      Buffer.from("\n%%EOF\n")
+    ])
+    assert.equal(exact10MibPdf.length, 10485760, "Exact 10 MiB PDF test asset")
+    const exact10MibBase64 = exact10MibPdf.toString("base64")
+
+    const uploadRes = await signupChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `const r=await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `action:'upload_document',`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:1,`+
+          `mime_type:'application/pdf',`+
+          `file_base64:${JSON.stringify(exact10MibBase64)}`+
+        `})`+
+      `});`+
+      `return {status:r.status,body:await r.json()};`+
+    `})()`)
+    assert.equal(uploadRes.status, 200, "10 MiB upload must succeed via real HTTP")
+    assert.equal(uploadRes.body.version, 2)
+    assert.equal(uploadRes.body.document.original_byte_length, 10485760)
+
+    // 5. Authorized download by applicant
+    const downloadRes = await signupChrome.eval(`(async()=>{`+
+      `const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(b22TaxAppId)}));`+
+      `const blob=await r.blob();`+
+      `return {status:r.status,type:r.headers.get('content-type'),size:blob.size};`+
+    `})()`)
+    assert.equal(downloadRes.status, 200)
+    assert.equal(downloadRes.type, "application/pdf")
+    assert.equal(downloadRes.size, 10485760)
+
+    // 6. Foreign download denied
+    const foreignDownloadRes = await foreignDraftChrome.eval(`(async()=>{`+
+      `const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(b22TaxAppId)}));`+
+      `return r.status;`+
+    `})()`)
+    assert.equal(foreignDownloadRes, 403, "Foreign Person must not download applicant document")
+
+    // 7. Submit verification fail-closed: corrupt stored file on disk
+    const storedDoc = (await q("select storage_key,internal_name from da_organization_application_document where application_id=$1 and is_current=true",[b22TaxAppId]))[0]
+    const storedPath = join(taxDir, storedDoc.internal_name)
+    const backupBytes = readFileSync(storedPath)
+    try {
+      writeFileSync(storedPath, Buffer.from("corrupted file bytes"))
+      const failClosedSubmit = await signupChrome.eval(`(async()=>{`+
+        `const s=await (await fetch('/personal/session')).json();`+
+        `const r=await fetch('/personal/organization-applications',{`+
+          `method:'POST',`+
+          `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+          `body:JSON.stringify({`+
+            `action:'submit',`+
+            `application_id:${JSON.stringify(b22TaxAppId)},`+
+            `expected_version:2`+
+          `})`+
+        `});`+
+        `return r.status;`+
+      `})()`)
+      assert.equal(failClosedSubmit, 400, "Submission with corrupted private file must fail closed (400)")
+      assert.equal((await q("select status from da_organization_application where id=$1",[b22TaxAppId]))[0].status, "draft")
+    } finally {
+      writeFileSync(storedPath, backupBytes)
+    }
+
+    // 8. Submit successfully with intact file
+    const validSubmitRes = await signupChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `const r=await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `action:'submit',`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:2`+
+        `})`+
+      `});`+
+      `return {status:r.status,body:await r.json()};`+
+    `})()`)
+    assert.equal(validSubmitRes.status, 200)
+    assert.equal(validSubmitRes.body.status, "submitted")
+    assert.equal(validSubmitRes.body.version, 3)
+
+    // 9. Confidential duplicate tax-identifier check:
+    const foreignAppId="daorgapp_"+randomBytes(16).toString("hex")
+    await foreignDraftChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `application_id:${JSON.stringify(foreignAppId)},`+
+          `expected_version:0,`+
+          `business_kind:'legal_company',`+
+          `legal_name:'Foreign Duplicate Company',`+
+          `landline_phone:'+90 212 555 99 99',`+
+          `tax_identifier:${JSON.stringify(b22TaxId)},`+
+          `declared_activities:['service_repair'],`+
+          `primary_activity:'service_repair'`+
+        `})`+
+      `});`+
+      `await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `action:'upload_document',`+
+          `application_id:${JSON.stringify(foreignAppId)},`+
+          `expected_version:1,`+
+          `mime_type:'application/pdf',`+
+          `file_base64:${JSON.stringify(exact10MibBase64)}`+
+        `})`+
+      `});`+
+    `})()`)
+
+    const duplicateSubmitRes = await foreignDraftChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `const r=await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `action:'submit',`+
+          `application_id:${JSON.stringify(foreignAppId)},`+
+          `expected_version:2`+
+        `})`+
+      `});`+
+      `return {status:r.status,body:await r.json()};`+
+    `})()`)
+    assert.equal(duplicateSubmitRes.status, 200)
+    assert.equal(duplicateSubmitRes.body.status, "submitted")
+    const app1Row=(await q("select duplicate_review_required from da_organization_application where id=$1",[b22TaxAppId]))[0]
+    const app2Row=(await q("select duplicate_review_required from da_organization_application where id=$1",[foreignAppId]))[0]
+    assert.equal(app1Row.duplicate_review_required, false)
+    assert.equal(app2Row.duplicate_review_required, true, "Duplicate VKN must set confidential review flag in PG16")
+
+    // 10. Platform Staff Review Journey:
+    const foreignPersonId = (await q("select applicant_person_id from da_organization_application where id=$1",[foreignAppId]))[0].applicant_person_id
+    const reviewGrantId = "da_staff_review_" + randomBytes(8).toString("hex")
+    await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
+      values($1,$2,'organization.review','platform',$2,'B22 real review journey acceptance fixture')`,
+      [reviewGrantId, foreignPersonId])
+
+    try {
+      const reviewQueue = await foreignDraftChrome.eval(`(async()=>{`+
+        `const r=await fetch('/personal/organization-applications?action=review_queue');`+
+        `return {status:r.status,body:await r.json()};`+
+      `})()`)
+      assert.equal(reviewQueue.status, 200)
+      assert.ok(Array.isArray(reviewQueue.body.applications))
+      const qApp1 = reviewQueue.body.applications.find((a:any)=>a.id===b22TaxAppId)
+      const qApp2 = reviewQueue.body.applications.find((a:any)=>a.id===foreignAppId)
+      assert.ok(qApp1, "Queue must contain submitted app 1")
+      assert.ok(qApp2, "Queue must contain submitted app 2")
+      assert.equal(qApp1.duplicate_review_required, false)
+      assert.equal(qApp2.duplicate_review_required, true)
+
+      const staffDocDownload = await foreignDraftChrome.eval(`(async()=>{`+
+        `const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(b22TaxAppId)}));`+
+        `return r.status;`+
+      `})()`)
+      assert.equal(staffDocDownload, 200, "Review staff must be permitted to read submitted application documents")
+
+      const correctionRes = await foreignDraftChrome.eval(`(async()=>{`+
+        `const s=await (await fetch('/personal/session')).json();`+
+        `const r=await fetch('/personal/organization-applications',{`+
+          `method:'POST',`+
+          `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+          `body:JSON.stringify({`+
+            `action:'review_decision',`+
+            `application_id:${JSON.stringify(foreignAppId)},`+
+            `expected_version:3,`+
+            `decision:'request_correction',`+
+            `notes:'Lütfen vergi levhanızı güncel tarihli olarak tekrar yükleyiniz.'`+
+          `})`+
+        `});`+
+        `return {status:r.status,body:await r.json()};`+
+      `})()`)
+      assert.equal(correctionRes.status, 200)
+      assert.equal(correctionRes.body.status, "correction_requested")
+      assert.equal((await q("select status,review_notes from da_organization_application where id=$1",[foreignAppId]))[0].status, "correction_requested")
+
+      const orgsCountBefore = Number((await q("select count(*)::int n from da_organization"))[0].n)
+      const membsCountBefore = Number((await q("select count(*)::int n from da_organization_membership"))[0].n)
+
+      const approveRes = await foreignDraftChrome.eval(`(async()=>{`+
+        `const s=await (await fetch('/personal/session')).json();`+
+        `const r=await fetch('/personal/organization-applications',{`+
+          `method:'POST',`+
+          `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+          `body:JSON.stringify({`+
+            `action:'review_decision',`+
+            `application_id:${JSON.stringify(b22TaxAppId)},`+
+            `expected_version:3,`+
+            `decision:'approve',`+
+            `notes:'Vergi levhası doğrulandı, kuruluş onaylandı.'`+
+          `})`+
+        `});`+
+        `return {status:r.status,body:await r.json()};`+
+      `})()`)
+      assert.equal(approveRes.status, 200)
+      assert.equal(approveRes.body.status, "approved")
+      const approvedOrgId = approveRes.body.organization_id
+      assert.ok(approvedOrgId, "Approval must return created organization_id")
+
+      const orgRow = (await q("select id,name,tax_identifier,status from da_organization where id=$1",[approvedOrgId]))[0]
+      assert.equal(orgRow.name, "B22 Vergi Levhası Test Şirketi")
+      assert.equal(orgRow.tax_identifier, b22TaxId)
+      assert.equal(orgRow.status, "active")
+
+      const membRow = (await q("select person_id,role,status,protected_owner from da_organization_membership where organization_id=$1",[approvedOrgId]))[0]
+      assert.equal(membRow.person_id, signupPerson)
+      assert.equal(membRow.role, "owner")
+      assert.equal(membRow.protected_owner, true)
+
+      const reviewAudits = await q("select action,target_id from da_audit_event where target_id=$1 or target_id=$2", [b22TaxAppId, approvedOrgId])
+      assert.ok(reviewAudits.some((a:any)=>a.action==="organization.application_approved"))
+      assert.ok(reviewAudits.some((a:any)=>a.action==="organization.provisioned"))
+
+      assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n), orgsCountBefore + 1)
+      assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n), membsCountBefore + 1)
+    } finally {
+      await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
+    }
+
+    process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, secure download, fail-closed corrupt doc, duplicate tax id race-safe, admin review correction/rejection/approval with Organization & protected Owner\n")
+
+
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
     assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
       "Primary Customer cannot offer an unlink button")
@@ -7424,6 +7724,8 @@ export default async function({container}:any){
     else process.env.DOGRUADRES_TLS_KEY=previousTlsKey
     if(previousListenerPort===undefined)delete process.env.DOGRUADRES_FRONTDOOR_PORT
     else process.env.DOGRUADRES_FRONTDOOR_PORT=previousListenerPort
+    if(previousTaxDir===undefined)delete process.env.DOGRUADRES_TAX_CERTIFICATE_DIR
+    else process.env.DOGRUADRES_TAX_CERTIFICATE_DIR=previousTaxDir
     if(app)await app.close()
     await pg.end()
     rmSync(temp,{recursive:true,force:true})

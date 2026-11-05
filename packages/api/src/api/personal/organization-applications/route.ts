@@ -7,6 +7,7 @@ import {
   withdrawDraftPayload,
   uploadDocumentPayload,
   submitApplicationPayload,
+  reviewApplicationPayload,
   decodeOrganizationDraftCursor
 } from "../../../modules/dogruadres-access/organization-application"
 
@@ -132,6 +133,21 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     }catch(error){
       return res.status(error instanceof IdentityAccessDenied?403:503)
         .json({message:error instanceof IdentityAccessDenied?"Access denied":"Outcome uncertain; read drafts"})
+    }
+  }
+
+  if(action==="review_decision"){
+    const parsed=reviewApplicationPayload.safeParse(req.body)
+    if(!parsed.success)return res.status(400).json({message:"Invalid review decision"})
+    try{
+      const result=await access(req).personalReviewOrganizationApplication(
+        sessionToken(req),parsed.data)
+      if(!result)return res.status(403).json({message:"Access denied"})
+      if(result.conflict)return res.status(409).json({message:"Application changed; read the current version"})
+      return res.status(200).json(result)
+    }catch(error){
+      return res.status(error instanceof IdentityAccessDenied?403:503)
+        .json({message:error instanceof IdentityAccessDenied?"Access denied":"Unavailable"})
     }
   }
 

@@ -33,7 +33,7 @@ export const draftPayload=z.object({
   landline_phone:z.string().trim().min(7).max(40)
     .regex(/^[+0-9 ()-]+$/)
     .refine(s=>(s.match(/[0-9]/g)||[]).length>=7),
-  tax_identifier:z.string().trim().regex(/^[0-9]{10,11}$/).optional(),
+  tax_identifier:z.preprocess(v=>v===""?undefined:v,z.string().trim().regex(/^[0-9]{10,11}$/).optional()),
 }).strict().superRefine((data,ctx)=>{
   if(!data.declared_activities.includes(data.primary_activity)){
     ctx.addIssue({code:z.ZodIssueCode.custom,message:"Primary activity must be declared",path:["primary_activity"]})
@@ -100,14 +100,14 @@ export async function listOrganizationDrafts(
   // Stable keyset: newest first, IDs break equal-timestamp ties.
   // PostgreSQL microseconds must not be truncated to JS Date milliseconds.
   const rows=await db.execute(`select id,business_kind,legal_name,landline_phone,tax_identifier,
-      declared_activities,primary_activity,status,version,created_at,updated_at,
+      declared_activities,primary_activity,status,version,review_notes,organization_id,created_at,updated_at,
       to_char(updated_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_time,
       (select mime_type from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_mime,
       (select original_byte_length from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_bytes,
       (select original_sha256 from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_sha256,
       (select version from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_version
     from da_organization_application
-    where applicant_person_id=? and status in ('draft','withdrawn','submitted')
+    where applicant_person_id=? and status in ('draft','withdrawn','submitted','correction_requested','rejected','approved')
     ${cursor?"and (updated_at < ?::timestamptz or (updated_at = ?::timestamptz and id > ?))":""}
     order by updated_at desc,id asc limit 101`,
     cursor?[session.person_id,cursor.updatedAt,cursor.updatedAt,cursor.id]:
@@ -126,7 +126,10 @@ export async function listOrganizationDrafts(
       legal_name:r.legal_name,landline_phone:r.landline_phone,
       tax_identifier:r.tax_identifier??null,
       declared_activities:r.declared_activities,primary_activity:r.primary_activity,status:r.status,
-      version:Number(r.version),created_at:r.created_at,updated_at:r.updated_at,
+      version:Number(r.version),
+      review_notes:r.review_notes??null,
+      organization_id:r.organization_id??null,
+      created_at:r.created_at,updated_at:r.updated_at,
       has_document: r.doc_mime !== null && r.doc_mime !== undefined,
       document: (r.doc_mime !== null && r.doc_mime !== undefined) ? {
         mime_type: r.doc_mime,
@@ -149,7 +152,7 @@ export async function saveOrganizationDraft(db:SecuritySql,token:string,value:un
     from da_organization_application where id=? for update`,[input.application_id])
   if(found.length>1)throw new IdentityAccessDenied()
   if(found.length && found[0].applicant_person_id!==session.person_id)return null
-  if(found.length && found[0].status!=="draft")return {conflict:true as const}
+  if(found.length && !["draft","correction_requested"].includes(found[0].status))return {conflict:true as const}
   if(!found.length){
     if(input.expected_version!==0)return {conflict:true as const}
     await db.execute(`insert into da_organization_application
@@ -163,9 +166,9 @@ export async function saveOrganizationDraft(db:SecuritySql,token:string,value:un
     if(Number(found[0].version)!==input.expected_version)return {conflict:true as const}
     const updated=await db.execute(`update da_organization_application
       set business_kind=?,legal_name=?,landline_phone=?,tax_identifier=?,
-        declared_activities=?::jsonb,primary_activity=?,
+        declared_activities=?::jsonb,primary_activity=?,status='draft',
         version=version+1,updated_at=clock_timestamp()
-      where id=? and applicant_person_id=? and status='draft' and version=?
+      where id=? and applicant_person_id=? and status in ('draft','correction_requested') and version=?
       returning id`,
       [input.business_kind,input.legal_name,input.landline_phone,input.tax_identifier??null,
         JSON.stringify(input.declared_activities),input.primary_activity,
@@ -369,7 +372,7 @@ export async function submitOrganizationApplication(
     from da_organization_application where id=? for update`,[input.application_id])
   if(rows.length>1)throw new IdentityAccessDenied()
   if(rows.length!==1||rows[0].applicant_person_id!==session.person_id)return null
-  if(rows[0].status!=="draft")return {conflict:true as const, missing_document:false as const, missing_tax_identifier:false as const}
+  if(!["draft","correction_requested"].includes(rows[0].status))return {conflict:true as const, missing_document:false as const, missing_tax_identifier:false as const}
   if(Number(rows[0].version)!==input.expected_version)return {conflict:true as const, missing_document:false as const, missing_tax_identifier:false as const}
 
   const app=rows[0]
@@ -380,6 +383,12 @@ export async function submitOrganizationApplication(
   if(app.business_kind==="legal_company"&&app.tax_identifier.length!==10){
     return {conflict:false as const, missing_document:false as const, missing_tax_identifier:true as const}
   }
+
+  // Prevent duplicate-tax-identifier race conditions across concurrent submissions (#44)
+  await db.execute(
+    `select pg_advisory_xact_lock(hashtext('da-org-tax-id'), hashtext(?))`,
+    [app.tax_identifier]
+  )
 
   // 2. Verify current document metadata
   const docRows=await db.execute(
@@ -415,18 +424,23 @@ export async function submitOrganizationApplication(
   }
 
   // 4. Confidential duplicate review check (#44)
-  const duplicates=await db.execute(
+  const duplicateApps=await db.execute(
     `select id from da_organization_application
-     where tax_identifier=? and status='submitted' and id<>?`,
+     where tax_identifier=? and status in ('submitted','approved') and id<>?`,
     [app.tax_identifier, input.application_id]
   )
-  const duplicateReviewRequired = duplicates.length > 0
+  const duplicateOrgs=await db.execute(
+    `select id from da_organization
+     where tax_identifier=? and status='active' and deleted_at is null`,
+    [app.tax_identifier]
+  )
+  const duplicateReviewRequired = duplicateApps.length > 0 || duplicateOrgs.length > 0
 
   // 5. Update status to 'submitted'
   const updated=await db.execute(
     `update da_organization_application
       set status='submitted', duplicate_review_required=?, version=version+1, updated_at=clock_timestamp()
-      where id=? and applicant_person_id=? and status='draft' and version=?
+      where id=? and applicant_person_id=? and status in ('draft','correction_requested') and version=?
       returning version`,
     [duplicateReviewRequired, input.application_id, session.person_id, input.expected_version]
   )
@@ -579,4 +593,178 @@ export async function listSubmittedOrganizationApplications(
     })),
     next_cursor
   }
+}
+
+export const reviewApplicationPayload = z.object({
+  application_id: z.string().regex(/^daorgapp_[0-9a-f]{32}$/),
+  expected_version: z.number().int().positive(),
+  decision: z.enum(["request_correction", "reject", "approve"]),
+  notes: z.string().trim().min(2).max(1000).optional(),
+}).strict()
+export type ReviewApplicationPayload = z.infer<typeof reviewApplicationPayload>
+
+/**
+ * Perform an authorized review decision on a submitted application.
+ * Permitted exclusively to platform review staff with 'organization.review' grant.
+ * 'request_correction': requests edits from applicant with mandatory review notes.
+ * 'reject': final rejection with mandatory review notes.
+ * 'approve': creates da_organization and assigns applicant as protected owner in da_organization_membership.
+ * Records complete audit events and security outbox entries in the Foundation transaction.
+ */
+export async function reviewOrganizationApplication(
+  db: SecuritySql,
+  token: string,
+  value: unknown
+) {
+  const parsed = reviewApplicationPayload.safeParse(value)
+  if (!parsed.success) throw new IdentityAccessDenied()
+  const input = parsed.data
+
+  const staff = await new IdentitySessions(db).staff(token, "organization.review", "platform")
+  if (!staff) return null
+
+  await db.execute(
+    `select pg_advisory_xact_lock(hashtext('da-org-draft'), hashtext(?))`,
+    [input.application_id]
+  )
+
+  const rows = await db.execute(
+    `select id, applicant_person_id, business_kind, legal_name, landline_phone, tax_identifier,
+            declared_activities, primary_activity, status, version, duplicate_review_required
+     from da_organization_application where id=? for update`,
+    [input.application_id]
+  )
+  if (rows.length !== 1) return null
+  const app = rows[0]
+
+  if (app.status !== "submitted") {
+    return { conflict: true as const }
+  }
+  if (Number(app.version) !== input.expected_version) {
+    return { conflict: true as const }
+  }
+
+  const staffSession = await new IdentitySessions(db).current(token, false, false)
+  if (!staffSession) return null
+
+  if (input.decision === "request_correction") {
+    if (!input.notes) throw new IdentityAccessDenied()
+    const updated = await db.execute(
+      `update da_organization_application
+       set status='correction_requested', review_notes=?, reviewed_by_person_id=?, reviewed_at=clock_timestamp(),
+           version=version+1, updated_at=clock_timestamp()
+       where id=? and status='submitted' and version=?
+       returning version`,
+      [input.notes, staffSession.person_id, input.application_id, input.expected_version]
+    )
+    if (updated.length !== 1) return { conflict: true as const }
+
+    const auditId = "daaud_" + randomUUID()
+    await db.execute(
+      `insert into da_audit_event
+        (id, actor_person_id, actor_type, actor_id, action, module, resource, target_id, occurred_at, created_at, updated_at)
+        values (?,?,?,?,'organization.application_correction_requested','dogruadres-access','organization-application',?,clock_timestamp(),now(),now())`,
+      [auditId, staffSession.person_id, staffSession.actor_type, staffSession.actor_id, input.application_id]
+    )
+    await db.execute(
+      `insert into da_security_outbox(id, audit_event_id, created_at) values(?,?,now())`,
+      [randomUUID(), auditId]
+    )
+    return {
+      conflict: false as const,
+      application_id: input.application_id,
+      status: "correction_requested" as const,
+      version: Number(updated[0].version)
+    }
+  }
+
+  if (input.decision === "reject") {
+    if (!input.notes) throw new IdentityAccessDenied()
+    const updated = await db.execute(
+      `update da_organization_application
+       set status='rejected', review_notes=?, reviewed_by_person_id=?, reviewed_at=clock_timestamp(),
+           version=version+1, updated_at=clock_timestamp()
+       where id=? and status='submitted' and version=?
+       returning version`,
+      [input.notes, staffSession.person_id, input.application_id, input.expected_version]
+    )
+    if (updated.length !== 1) return { conflict: true as const }
+
+    const auditId = "daaud_" + randomUUID()
+    await db.execute(
+      `insert into da_audit_event
+        (id, actor_person_id, actor_type, actor_id, action, module, resource, target_id, occurred_at, created_at, updated_at)
+        values (?,?,?,?,'organization.application_rejected','dogruadres-access','organization-application',?,clock_timestamp(),now(),now())`,
+      [auditId, staffSession.person_id, staffSession.actor_type, staffSession.actor_id, input.application_id]
+    )
+    await db.execute(
+      `insert into da_security_outbox(id, audit_event_id, created_at) values(?,?,now())`,
+      [randomUUID(), auditId]
+    )
+    return {
+      conflict: false as const,
+      application_id: input.application_id,
+      status: "rejected" as const,
+      version: Number(updated[0].version)
+    }
+  }
+
+  if (input.decision === "approve") {
+    const orgId = "daorg_" + randomUUID().replaceAll("-", "")
+    await db.execute(
+      `insert into da_organization(id, name, status, tax_identifier, created_at, updated_at)
+       values(?,?,'active',?,clock_timestamp(),clock_timestamp())`,
+      [orgId, app.legal_name, app.tax_identifier]
+    )
+
+    const membershipId = "daom_" + randomUUID().replaceAll("-", "")
+    await db.execute(
+      `insert into da_organization_membership(id, organization_id, person_id, role, status, protected_owner, created_at, updated_at)
+       values(?,?,?,'owner','active',true,clock_timestamp(),clock_timestamp())`,
+      [membershipId, orgId, app.applicant_person_id]
+    )
+
+    const updated = await db.execute(
+      `update da_organization_application
+       set status='approved', organization_id=?, review_notes=?, reviewed_by_person_id=?, reviewed_at=clock_timestamp(),
+           version=version+1, updated_at=clock_timestamp()
+       where id=? and status='submitted' and version=?
+       returning version`,
+      [orgId, input.notes ?? null, staffSession.person_id, input.application_id, input.expected_version]
+    )
+    if (updated.length !== 1) return { conflict: true as const }
+
+    const auditIdApprove = "daaud_" + randomUUID()
+    const auditIdOrg = "daaud_" + randomUUID()
+    const auditIdOwner = "daaud_" + randomUUID()
+
+    await db.execute(
+      `insert into da_audit_event
+        (id, actor_person_id, actor_type, actor_id, action, module, resource, target_id, organization_id, occurred_at, created_at, updated_at)
+        values
+        (?,?,?,?,'organization.application_approved','dogruadres-access','organization-application',?,?,clock_timestamp(),now(),now()),
+        (?,?,?,?,'organization.provisioned','dogruadres-access','organization',?,?,clock_timestamp(),now(),now()),
+        (?,?,?,?,'organization.owner_assigned','dogruadres-access','membership',?,?,clock_timestamp(),now(),now())`,
+      [
+        auditIdApprove, staffSession.person_id, staffSession.actor_type, staffSession.actor_id, input.application_id, orgId,
+        auditIdOrg, staffSession.person_id, staffSession.actor_type, staffSession.actor_id, orgId, orgId,
+        auditIdOwner, staffSession.person_id, staffSession.actor_type, staffSession.actor_id, membershipId, orgId
+      ]
+    )
+    await db.execute(
+      `insert into da_security_outbox(id, audit_event_id, created_at)
+       values (?,?,now()), (?,?,now()), (?,?,now())`,
+      [randomUUID(), auditIdApprove, randomUUID(), auditIdOrg, randomUUID(), auditIdOwner]
+    )
+
+    return {
+      conflict: false as const,
+      application_id: input.application_id,
+      status: "approved" as const,
+      organization_id: orgId,
+      version: Number(updated[0].version)
+    }
+  }
+
+  throw new IdentityAccessDenied()
 }
