@@ -7184,7 +7184,7 @@ export default async function({container}:any){
       `});`+
       `return {status:r.status,body:await r.json()};`+
     `})()`)
-    assert.equal(draftCreateRes.status,200)
+    assert.equal(draftCreateRes.status,201)
     assert.equal(draftCreateRes.body.version,1)
 
     // 2. Reject 10 MiB + 1 byte upload (10485761 bytes)
@@ -7198,7 +7198,7 @@ export default async function({container}:any){
           `action:'upload_document',`+
           `application_id:${JSON.stringify(b22TaxAppId)},`+
           `expected_version:1,`+
-          `mime_type:'application/pdf',`+
+          `filename:'tax-certificate.pdf',`+
           `file_base64:${JSON.stringify(oversizeBase64)}`+
         `})`+
       `});`+
@@ -7216,7 +7216,7 @@ export default async function({container}:any){
           `action:'upload_document',`+
           `application_id:${JSON.stringify(b22TaxAppId)},`+
           `expected_version:1,`+
-          `mime_type:'application/pdf',`+
+          `filename:'tax-certificate.pdf',`+
           `file_base64:'JVBERi0xLjQKJcTl8uXrCgoxIDAgb2JqCjw8L1R5cGUvQ2F0YWxvZwovUGFnZXMgMiAwIFI+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzCi9LaWRzWzMgMCBSXQovQ291bnQgMQo+PgplbmRvYmoKMyAwIG9iago8PC9UeXBlL1BhZ2UKL1BhcmVudCAyIDAgUgovTWVkaWFCb3hbMCAwIDYxMiA3OTJdCi9SZXNvdXJjZXM8PD4+Cj4+CmVuZG9iagp4cmVmCjAgNAowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUgMDAwMDAgbiAKMDAwMDAwMDA2OCAwMDAwMCBuIAowMDAwMDAwMTI1IDAwMDAwIG4gCnRyYWlsZXIKPDwvU2l6ZSA0Ci9Sb290IDEgMCBSPj4Kc3RhcnR4cmVmCjIxMwprfUVPZgo='`+
         `})`+
       `});`+
@@ -7225,10 +7225,12 @@ export default async function({container}:any){
     assert.equal(foreignUploadRes, 403, "Foreign Person must be denied document upload")
 
     // 4. Upload exactly 10 MiB valid synthetic PDF (10485760 bytes)
+    const pdfHead=Buffer.from("%PDF-1.4\n%B22 synthetic tax certificate\n")
+    const pdfTail=Buffer.from("\n%%EOF\n")
     const exact10MibPdf = Buffer.concat([
-      Buffer.from("%PDF-1.4\n%B22 synthetic tax certificate\n"),
-      Buffer.alloc(10485760 - 45 - 6, 0x20),
-      Buffer.from("\n%%EOF\n")
+      pdfHead,
+      Buffer.alloc(10485760 - pdfHead.length - pdfTail.length, 0x20),
+      pdfTail
     ])
     assert.equal(exact10MibPdf.length, 10485760, "Exact 10 MiB PDF test asset")
     const exact10MibBase64 = exact10MibPdf.toString("base64")
@@ -7242,7 +7244,7 @@ export default async function({container}:any){
           `action:'upload_document',`+
           `application_id:${JSON.stringify(b22TaxAppId)},`+
           `expected_version:1,`+
-          `mime_type:'application/pdf',`+
+          `filename:'tax-certificate.pdf',`+
           `file_base64:${JSON.stringify(exact10MibBase64)}`+
         `})`+
       `});`+
@@ -7271,7 +7273,7 @@ export default async function({container}:any){
 
     // 7. Submit verification fail-closed: corrupt stored file on disk
     const storedDoc = (await q("select storage_key,internal_name from da_organization_application_document where application_id=$1 and is_current=true",[b22TaxAppId]))[0]
-    const storedPath = join(taxDir, storedDoc.internal_name)
+    const storedPath = join(taxDir, storedDoc.storage_key)
     const backupBytes = readFileSync(storedPath)
     try {
       writeFileSync(storedPath, Buffer.from("corrupted file bytes"))
@@ -7337,7 +7339,7 @@ export default async function({container}:any){
           `action:'upload_document',`+
           `application_id:${JSON.stringify(foreignAppId)},`+
           `expected_version:1,`+
-          `mime_type:'application/pdf',`+
+          `filename:'tax-certificate.pdf',`+
           `file_base64:${JSON.stringify(exact10MibBase64)}`+
         `})`+
       `});`+

@@ -706,6 +706,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       // 1. Non-staff is denied (returns null)
       spyStaff.mockResolvedValueOnce(null)
       const nonStaff = await reviewOrganizationApplication(db, "opaque", {
+        action: "review_decision",
         application_id: payload.application_id,
         expected_version: 3,
         decision: "request_correction",
@@ -713,10 +714,27 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       })
       expect(nonStaff).toBeNull()
 
+      // Review staff must never decide their own application, even with a grant.
+      const callsBeforeOwnReview = exec.mock.calls.length
+      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_self", grant_name: "organization.review" } as any)
+      spyCurrent.mockResolvedValueOnce({ person_id: "daprs_applicant", actor_type: "user", actor_id: "usr_applicant" } as any)
+      const ownReview = await reviewOrganizationApplication(db, "opaque", {
+        action: "review_decision",
+        application_id: payload.application_id,
+        expected_version: 3,
+        decision: "approve",
+        notes: "This must be denied"
+      })
+      expect(ownReview).toBeNull()
+      expect(exec.mock.calls.slice(callsBeforeOwnReview).some(
+        ([sql]) => String(sql).includes("insert into da_organization")
+      )).toBe(false)
+
       // 2. Staff requests correction -> status becomes correction_requested, audit logged
       spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
       spyCurrent.mockResolvedValueOnce({ person_id: "daprs_admin", actor_type: "user", actor_id: "usr_admin" } as any)
       const correctionResult = await reviewOrganizationApplication(db, "opaque", {
+        action: "review_decision",
         application_id: payload.application_id,
         expected_version: 3,
         decision: "request_correction",
@@ -733,6 +751,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       // 3. Stale version returns conflict: true
       spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
       const staleResult = await reviewOrganizationApplication(db, "opaque", {
+        action: "review_decision",
         application_id: payload.application_id,
         expected_version: 1,
         decision: "reject",
@@ -745,6 +764,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
       spyCurrent.mockResolvedValueOnce({ person_id: "daprs_admin", actor_type: "user", actor_id: "usr_admin" } as any)
       const rejectResult = await reviewOrganizationApplication(db, "opaque", {
+        action: "review_decision",
         application_id: payload.application_id,
         expected_version: 4,
         decision: "reject",
@@ -763,6 +783,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
       spyCurrent.mockResolvedValueOnce({ person_id: "daprs_admin", actor_type: "user", actor_id: "usr_admin" } as any)
       const approveResult = await reviewOrganizationApplication(db, "opaque", {
+        action: "review_decision",
         application_id: payload.application_id,
         expected_version: 5,
         decision: "approve",

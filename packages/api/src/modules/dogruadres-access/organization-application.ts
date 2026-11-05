@@ -596,6 +596,7 @@ export async function listSubmittedOrganizationApplications(
 }
 
 export const reviewApplicationPayload = z.object({
+  action: z.literal("review_decision"),
   application_id: z.string().regex(/^daorgapp_[0-9a-f]{32}$/),
   expected_version: z.number().int().positive(),
   decision: z.enum(["request_correction", "reject", "approve"]),
@@ -646,6 +647,8 @@ export async function reviewOrganizationApplication(
 
   const staffSession = await new IdentitySessions(db).current(token, false, false)
   if (!staffSession) return null
+  // A platform reviewer must never decide their own application.
+  if (staffSession.person_id === app.applicant_person_id) return null
 
   if (input.decision === "request_correction") {
     if (!input.notes) throw new IdentityAccessDenied()
