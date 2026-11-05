@@ -861,9 +861,10 @@ export default async function({container}:any){
     assert.equal(topology.privateOrigin,process.env.DOGRUADRES_PRIVATE_API)
     assert.equal(topology.publicOrigin,host)
     const browser=new B06Chrome(host,"A");browsers.push(browser)
-    // Existing free CI runner may need longer for real Chrome CDP startup.
-    // This bounded allowance affects only this disposable B22 first browser.
-    await browser.start(crt,30000)
+    // Real GitHub runner at 30s: Chrome process alive but CDP still unavailable.
+    // Allow one bounded 45s startup for this disposable first browser only.
+    // Do not retry/disable TLS, MFA, authorization or browser proof on failure.
+    await browser.start(crt,45000)
     await browser.login(A.email,A.password,A.person)
     if(process.env.B22_ADMIN_SMTP==="true"){
       const other=new B06Chrome(host,"B");browsers.push(other)
