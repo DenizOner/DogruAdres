@@ -7366,14 +7366,64 @@ export default async function({container}:any){
     assert.equal(app2Row.duplicate_review_required, true, "Duplicate VKN must set confidential review flag in PG16")
 
     // 10. Platform Staff Review Journey:
-    const foreignPersonId = (await q("select applicant_person_id from da_organization_application where id=$1",[foreignAppId]))[0].applicant_person_id
-    const reviewGrantId = "da_staff_review_" + randomBytes(8).toString("hex")
+    // The two applicants cannot review their own applications. Register a
+    // genuinely independent THIRD Person via real HTTPS, native Customer
+    // registration and strong MFA. A grant alone never creates a valid session.
+    const reviewChrome=new B06Chrome(host,"B");browsers.push(reviewChrome)
+    await reviewChrome.start(crt)
+    const reviewEmail="b22-review-"+randomBytes(10).toString("hex")+"@example.invalid"
+    const reviewPassword="Task-Strong-"+randomBytes(18).toString("hex")
+    await reviewChrome.click("#register-details summary")
+    await reviewChrome.input("#register input[name=first_name]","Synthetic")
+    await reviewChrome.input("#register input[name=last_name]","Reviewer")
+    await reviewChrome.input("#register input[name=email]",reviewEmail)
+    await reviewChrome.input("#register input[name=mobile_phone]","+905551234579")
+    await reviewChrome.input("#register input[name=password]",reviewPassword)
+    await reviewChrome.click("#register button")
+    await reviewChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+    await reviewChrome.input("#login input[name=email]",reviewEmail)
+    await reviewChrome.input("#login input[name=password]",reviewPassword)
+    await reviewChrome.click("#login button")
+    await reviewChrome.wait("!document.getElementById('workspace').hidden || !document.getElementById('mfa-enrollment').hidden")
+    if(await reviewChrome.eval("!document.getElementById('mfa-enrollment').hidden")){
+      await reviewChrome.input("#mfa-enroll-start input[name=email]",reviewEmail)
+      await reviewChrome.input("#mfa-enroll-start input[name=password]",reviewPassword)
+      await reviewChrome.click("#mfa-enroll-start button")
+      await reviewChrome.wait("!document.getElementById('mfa-enroll-verify').hidden&&document.getElementById('mfa-seed').value.length>0")
+      const url=await reviewChrome.eval("document.getElementById('mfa-seed').value")
+      const secret=url.startsWith("otpauth:")?new URL(url).searchParams.get("secret"):url
+      assert.ok(secret)
+      await reviewChrome.input("#mfa-enroll-verify input[name=code]",otp(secret!))
+      await reviewChrome.click("#mfa-enroll-verify button")
+    }
+    await reviewChrome.wait("!document.getElementById('workspace').hidden")
+    const reviewerRows=await q(`select b.person_id from da_login_binding b
+      join public.customer c on c.id=b.actor_id
+      where b.actor_type='customer' and c.email=$1
+        and b.revoked_at is null and b.verified_at is not null`,[reviewEmail])
+    assert.equal(reviewerRows.length,1)
+    const reviewerPersonId=reviewerRows[0].person_id
+    const foreignPersonId=(await q("select applicant_person_id from da_organization_application where id=$1",[foreignAppId]))[0].applicant_person_id
+    assert.notEqual(reviewerPersonId,signupPerson,"Review staff cannot be the first applicant")
+    assert.notEqual(reviewerPersonId,foreignPersonId,"Review staff cannot be the second applicant")
+    const reviewerToken=await reviewChrome.token()
+    assert.match(reviewerToken??"",/^[A-Za-z0-9_-]{43}$/)
+    const reviewerProof=await q(`select s.status,s.last_strong_auth_at,s.mfa_purpose,
+       statement_timestamp()<s.last_strong_auth_at+p.recent_auth_seconds*interval '1 second' as recent
+       from da_browser_session s cross join da_session_policy p
+       where s.id=$1 and p.id='current'`,
+       [createHash("sha256").update(reviewerToken!).digest("hex")])
+    assert.equal(reviewerProof.length,1)
+    assert.equal(reviewerProof[0].status,"active")
+    assert.ok(reviewerProof[0].last_strong_auth_at,"Real reviewer strong login required")
+    assert.equal(reviewerProof[0].recent,true,"Reviewer must have fresh MFA")
+    const reviewGrantId="da_staff_review_"+randomBytes(8).toString("hex")
     await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
-      values($1,$2,'organization.review','platform',$2,'B22 real review journey acceptance fixture')`,
-      [reviewGrantId, foreignPersonId])
+      values($1,$2,'organization.review','platform',$2,'B22 independent real reviewer acceptance fixture')`,
+      [reviewGrantId,reviewerPersonId])
 
     try {
-      const reviewQueue = await foreignDraftChrome.eval(`(async()=>{`+
+      const reviewQueue = await reviewChrome.eval(`(async()=>{`+
         `const r=await fetch('/personal/organization-applications?action=review_queue');`+
         `return {status:r.status,body:await r.json()};`+
       `})()`)
@@ -7386,13 +7436,13 @@ export default async function({container}:any){
       assert.equal(qApp1.duplicate_review_required, false)
       assert.equal(qApp2.duplicate_review_required, true)
 
-      const staffDocDownload = await foreignDraftChrome.eval(`(async()=>{`+
+      const staffDocDownload = await reviewChrome.eval(`(async()=>{`+
         `const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(b22TaxAppId)}));`+
         `return r.status;`+
       `})()`)
       assert.equal(staffDocDownload, 200, "Review staff must be permitted to read submitted application documents")
 
-      const correctionRes = await foreignDraftChrome.eval(`(async()=>{`+
+      const correctionRes = await reviewChrome.eval(`(async()=>{`+
         `const s=await (await fetch('/personal/session')).json();`+
         `const r=await fetch('/personal/organization-applications',{`+
           `method:'POST',`+
@@ -7414,7 +7464,7 @@ export default async function({container}:any){
       const orgsCountBefore = Number((await q("select count(*)::int n from da_organization"))[0].n)
       const membsCountBefore = Number((await q("select count(*)::int n from da_organization_membership"))[0].n)
 
-      const approveRes = await foreignDraftChrome.eval(`(async()=>{`+
+      const approveRes = await reviewChrome.eval(`(async()=>{`+
         `const s=await (await fetch('/personal/session')).json();`+
         `const r=await fetch('/personal/organization-applications',{`+
           `method:'POST',`+
