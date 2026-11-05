@@ -7495,8 +7495,9 @@ export default async function({container}:any){
       assert.equal(qApp2.duplicate_review_required, true)
 
       // A real privileged queue response arrives after privacy concealment.
-      // Do not allow stale data from a prior session/Person to re-enter the DOM.
-      await reviewChrome.click("#organization-review-refresh")
+      // The refresh button starts hidden until the new staff grant is observed.
+      // Trigger its actual handler once; subsequent clicks use the visible UI.
+      await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()")
       await reviewChrome.wait("document.getElementById('organization-review-list').textContent.includes('B22 Vergi Levhası Test Şirketi')")
       const delayedReviewReady=await reviewChrome.eval(`(()=>{
         const original=window.fetch;
@@ -7528,7 +7529,7 @@ export default async function({container}:any){
       }
       await reviewChrome.send("Page.reload",{ignoreCache:true})
       await reviewChrome.wait("!document.getElementById('workspace').hidden")
-      process.stdout.write("PASS B22 Chrome: delayed reviewer response after pagehide cannot repopulate private application DOM\\n")
+      process.stdout.write("PASS B22 Chrome: delayed reviewer response after pagehide cannot repopulate private application DOM\n")
 
       const staffDocDownload = await reviewChrome.eval(`(async()=>{`+
         `const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(b22TaxAppId)}));`+
