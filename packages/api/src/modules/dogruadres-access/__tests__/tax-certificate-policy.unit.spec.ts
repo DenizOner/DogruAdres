@@ -169,3 +169,88 @@ it("Medusa LocalFileService v2.22.0 native contract: private bytes, prefixed key
     await fs.rm(root,{recursive:true,force:true})
   }
 })
+
+
+describe("B22 immutable private directory — real OS synthetic files, no HTTP",()=>{
+  const fs=require("node:fs/promises") as typeof import("node:fs/promises")
+  const os=require("node:os") as typeof import("node:os")
+  const path=require("node:path") as typeof import("node:path")
+  const {
+    writePrivateTaxCertificate, readPrivateTaxCertificate,
+  }=require("../private-tax-certificate-store") as typeof import("../private-tax-certificate-store")
+
+  it("stores the exact UUID v4 filename outside public static and restores original PDF",async()=>{
+    const root=await fs.mkdtemp(path.join(os.tmpdir(),"da-b22-private-"))
+    try {
+      const prepared=prepareTaxCertificate("very-private-vkn123.pdf",pdf)
+      const metadata=await writePrivateTaxCertificate(root,prepared)
+      expect(metadata.storageKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+      expect(await fs.readdir(root)).toEqual([metadata.storageKey])
+      expect(metadata.internalName).toMatch(/\.pdf$/)
+      expect(JSON.stringify(metadata)).not.toContain("very-private")
+      expect(JSON.stringify(metadata)).not.toContain("storedBytes")
+      expect(await readPrivateTaxCertificate(root,metadata)).toEqual(pdf)
+      expect(()=>inspectTaxCertificate("very-private-vkn123.pdf",pdf)).not.toThrow()
+    }finally{ await fs.rm(root,{recursive:true,force:true}) }
+  })
+
+  it("keeps gzip on disk only if smaller; returns the original PDF to authorized caller",async()=>{
+    const root=await fs.mkdtemp(path.join(os.tmpdir(),"da-b22-private-"))
+    try {
+      const original=Buffer.concat([
+        Buffer.from("%PDF-1.7\n","ascii"),Buffer.alloc(160_000,32),Buffer.from("%%EOF","ascii")
+      ])
+      const prepared=prepareTaxCertificate("belge.pdf",original)
+      expect(prepared.compression).toBe("gzip")
+      const record=await writePrivateTaxCertificate(root,prepared)
+      const physical=await fs.readFile(path.join(root,record.storageKey))
+      expect(physical).toEqual(prepared.storedBytes)
+      expect(physical).not.toEqual(original)
+      expect(await readPrivateTaxCertificate(root,record)).toEqual(original)
+      expect((await fs.readdir(root)).length).toBe(1)
+    }finally{ await fs.rm(root,{recursive:true,force:true}) }
+  })
+
+  it("fails closed for corrupted content, another key, public/workspace root and missing directory",async()=>{
+    const root=await fs.mkdtemp(path.join(os.tmpdir(),"da-b22-private-"))
+    try {
+      const prepared=prepareTaxCertificate("belge.pdf",pdf)
+      const record=await writePrivateTaxCertificate(root,prepared)
+      await expect(readPrivateTaxCertificate(root,{...record,storageKey:"../static"}))
+        .rejects.toThrow(InvalidTaxCertificate)
+      await expect(readPrivateTaxCertificate(root,{...record,storedByteLength:record.storedByteLength+1}))
+        .rejects.toThrow(InvalidTaxCertificate)
+      await fs.writeFile(path.join(root,record.storageKey),Buffer.from("corrupted"))
+      await expect(readPrivateTaxCertificate(root,record))
+        .rejects.toThrow(InvalidTaxCertificate)
+      await expect(writePrivateTaxCertificate(process.cwd(),prepared))
+        .rejects.toThrow(InvalidTaxCertificate)
+      await expect(writePrivateTaxCertificate(path.join(root,"missing"),prepared))
+        .rejects.toThrow(InvalidTaxCertificate)
+      // No production deletion by this storage helper.
+      expect((await fs.readdir(root)).length).toBe(1)
+    }finally{ await fs.rm(root,{recursive:true,force:true}) }
+  })
+
+  it("refuses root symlink and permissive POSIX root mode",async()=>{
+    const root=await fs.mkdtemp(path.join(os.tmpdir(),"da-b22-private-"))
+    const link=path.join(os.tmpdir(),"da-b22-symlink-"+require("node:crypto").randomUUID())
+    try {
+      const prepared=prepareTaxCertificate("belge.pdf",pdf)
+      if(process.platform!=="win32"){
+        await fs.chmod(root,0o755)
+        await expect(writePrivateTaxCertificate(root,prepared))
+          .rejects.toThrow(InvalidTaxCertificate)
+        await fs.chmod(root,0o700)
+      }
+      if(process.platform!=="win32"){
+        await fs.symlink(root,link,"dir")
+        await expect(writePrivateTaxCertificate(link,prepared))
+          .rejects.toThrow(InvalidTaxCertificate)
+      }
+    }finally{
+      await fs.unlink(link).catch(()=>undefined)
+      await fs.rm(root,{recursive:true,force:true})
+    }
+  })
+})
