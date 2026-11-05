@@ -128,7 +128,7 @@ export async function writePrivateTaxCertificate(
   } catch {
     // Do not blindly unlink: an interrupted, complete document may require
     // reconciliation. Accepted versions are NEVER automatically deleted.
-    inaccessible()
+    return inaccessible()
   } finally {
     if (handle) await handle.close().catch(() => undefined)
   }
