@@ -5981,6 +5981,35 @@ export default async function({container}:any){
           // post-recovery active current session would be a real auth defect.
           // Chrome CDP request IDs are joined to transient hashes in memory.
           // Do not print request IDs, hashes, cookies, tokens or Person IDs.
+          // Failure-only, disposable-DB diagnostic. Never emit session
+          // cookies, digests, identity values, request headers or document data.
+          const currentCookie=await browser.token()
+          const currentDigest=typeof currentCookie==="string" &&
+            /^[A-Za-z0-9_-]{43}$/.test(currentCookie)
+            ? createHash("sha256").update(currentCookie).digest("hex") : null
+          const sessionEligibility=currentDigest?await q(`select
+              s.mfa_purpose='full' as full_scope,
+              p.disabled_at is null and p.deleted_at is null as person_enabled,
+              statement_timestamp()<s.created_at+q.absolute_lifetime_seconds*interval '1 second' as absolute_valid,
+              statement_timestamp()<s.last_activity_at+q.idle_timeout_seconds*interval '1 second' as idle_valid,
+              (select count(*)::int from da_login_binding b
+                where b.auth_identity_id=s.auth_identity_id and b.person_id=s.person_id
+                and b.actor_type=s.actor_type and b.actor_id=s.actor_id
+                and b.verified_at is not null and b.revoked_at is null) as active_login_bindings,
+              (select count(*)::int from da_actor_mapping m
+                where m.person_id=s.person_id and m.actor_type=s.actor_type
+                and m.actor_id=s.actor_id and m.deleted_at is null) as active_actor_mappings,
+              (select count(*)::int from da_organization_membership m
+                where m.person_id=s.person_id and m.status='active'
+                and m.deleted_at is null) as active_memberships
+            from da_browser_session s join da_person p on p.id=s.person_id
+            join da_session_policy q on q.id='current' where s.id=$1`,
+            [currentDigest]):[]
+          const browserProbe=await browser.eval(`(async()=>{
+            const session=await fetch('/personal/session');
+            const organizations=await fetch('/personal/organizations');
+            return {session:session.status,organizations:organizations.status};
+          })()`)
           const scoped=browser.http.filter((row:any)=>
             row.method==="GET"&&row.path==="/personal/organizations").slice(-8)
           const organizationRequests=await Promise.all(scoped.map(async(row:any)=>{
@@ -6000,7 +6029,7 @@ export default async function({container}:any){
               sessionClass}
           }))
           throw new Error("B22 Staff A post-recovery UI did not open: "+
-            JSON.stringify({visibility,http:safe,ui,sessionState,organizationRequests}))
+            JSON.stringify({visibility,http:safe,ui,sessionState,sessionEligibility,browserProbe,organizationRequests}))
         }
         assert.equal(await browser.eval("(async()=> (await fetch('/personal/session')).status)()"),200)
       }
