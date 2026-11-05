@@ -9,6 +9,12 @@ import {
   reviewOrganizationApplication
 } from "../../../modules/dogruadres-access/organization-application"
 import { IdentitySessions } from "../../../modules/dogruadres-access/identity-session"
+import {
+  inspectPrivateTaxCertificateInventory,
+  writePrivateTaxCertificate,
+  readPrivateTaxCertificate,
+} from "../../../modules/dogruadres-access/private-tax-certificate-store"
+import { prepareTaxCertificate } from "../../../modules/dogruadres-access/tax-certificate-policy"
 import {GET,POST} from "../organization-applications/route"
 import {access,csrf,enabled,sessionToken} from "../security"
 
@@ -696,6 +702,57 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       spyCurrent.mockRestore()
       spyStaff.mockRestore()
       await fsp.rm(root, { recursive: true, force: true })
+    }
+  })
+
+
+  it("detects orphan, missing, corrupt and restored tax files without deletion or leaking identities",async()=>{
+    const os=require("node:os")
+    const path=require("node:path")
+    const fs=require("node:fs/promises")
+    // Two isolated, freshly created synthetic private roots; no real data.
+    const root=await fs.mkdtemp(path.join(os.tmpdir(),"da-b22-tax-reconcile-"))
+    const restoreRoot=await fs.mkdtemp(path.join(os.tmpdir(),"da-b22-tax-restore-"))
+    const png=Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC",
+      "base64"
+    )
+    try{
+      const linked=await writePrivateTaxCertificate(root,prepareTaxCertificate("levha.png",png))
+      const unlinked=await writePrivateTaxCertificate(root,prepareTaxCertificate("levha.png",png))
+      const check=()=>inspectPrivateTaxCertificateInventory(root,[linked])
+      expect(await check()).toEqual({
+        referenced:1,intact:1,missingOrCorrupted:0,unreferenced:1,unexpectedEntries:0
+      })
+      // Read-only inspection MUST preserve unknown files and valid history.
+      expect(await fs.readFile(path.join(root,unlinked.storageKey))).toBeDefined()
+      const originalBytes=await fs.readFile(path.join(root,linked.storageKey))
+      const copied=path.join(restoreRoot,linked.storageKey)
+      await fs.writeFile(copied,originalBytes,{mode:0o600})
+      expect(await inspectPrivateTaxCertificateInventory(restoreRoot,[linked])).toEqual({
+        referenced:1,intact:1,missingOrCorrupted:0,unreferenced:0,unexpectedEntries:0
+      })
+      expect(await readPrivateTaxCertificate(restoreRoot,linked)).toEqual(png)
+      await fs.writeFile(path.join(root,linked.storageKey),Buffer.from("broken"))
+      expect(await check()).toEqual({
+        referenced:1,intact:0,missingOrCorrupted:1,unreferenced:1,unexpectedEntries:0
+      })
+      await fs.writeFile(path.join(root,linked.storageKey),originalBytes)
+      await fs.rename(path.join(root,linked.storageKey),path.join(root,"unrecognized.entry"))
+      expect(await check()).toEqual({
+        referenced:1,intact:0,missingOrCorrupted:1,unreferenced:1,unexpectedEntries:1
+      })
+      // No inventory call removed a private file or repaired it without consent.
+      expect(await fs.readFile(path.join(root,"unrecognized.entry"))).toEqual(originalBytes)
+      expect(await fs.readFile(path.join(root,unlinked.storageKey))).toBeDefined()
+      const safeReport=JSON.stringify(await check())
+      expect(safeReport).not.toContain(linked.storageKey)
+      expect(safeReport).not.toContain(unlinked.storageKey)
+      expect(safeReport).not.toContain(root)
+    }finally{
+      // ONLY our disposable test directories are destroyed.
+      await fs.rm(root,{recursive:true,force:true})
+      await fs.rm(restoreRoot,{recursive:true,force:true})
     }
   })
 

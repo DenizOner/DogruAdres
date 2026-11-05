@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { lstat, open, realpath } from "node:fs/promises"
+import { lstat, open, readdir, realpath } from "node:fs/promises"
 import { isAbsolute, join, relative, resolve, sep } from "node:path"
 import {
   InvalidTaxCertificate,
@@ -169,5 +169,68 @@ export async function readPrivateTaxCertificate(
     return inaccessible()
   } finally {
     if (handle) await handle.close().catch(() => undefined)
+  }
+}
+
+/**
+ * READ-ONLY operator integrity observation for a complete, trusted DB
+ * snapshot of ALL private tax-certificate document revisions.
+ *
+ * No filenames, document bytes, applicant IDs, absolute paths or error
+ * details are returned. This is not an HTTP endpoint, backup mechanism or
+ * deletion authorization. In-flight uploads can appear transiently unlinked;
+ * recheck a consistent snapshot before any manual investigation.
+ *
+ * Production ACLs, filesystem backups and restoration are separate gates.
+ */
+export type PrivateTaxCertificateInventory = Readonly<{
+  referenced: number
+  intact: number
+  missingOrCorrupted: number
+  unreferenced: number
+  unexpectedEntries: number
+}>
+
+export async function inspectPrivateTaxCertificateInventory(
+  configuredRoot: string,
+  allDocumentRevisions: readonly PrivateTaxCertificateRecord[]
+): Promise<PrivateTaxCertificateInventory> {
+  const root=await checkedPrivateRoot(configuredRoot)
+  if(!Array.isArray(allDocumentRevisions)||allDocumentRevisions.length>100_000)
+    inaccessible()
+
+  const expected=new Map<string,PrivateTaxCertificateRecord>()
+  for(const record of allDocumentRevisions){
+    if(!record||typeof record.storageKey!=="string"||
+       !UUID_V4.test(record.storageKey)||expected.has(record.storageKey))
+      inaccessible()
+    expected.set(record.storageKey,record)
+  }
+
+  try {
+    const entries=await readdir(root,{withFileTypes:true})
+    if(entries.length>100_000)inaccessible()
+    const present=new Set<string>()
+    let unexpectedEntries=0
+    for(const entry of entries){
+      if(entry.isFile()&&UUID_V4.test(entry.name))
+        present.add(entry.name)
+      else unexpectedEntries++ // Never follow or delete unsafe directory entries.
+    }
+
+    let intact=0,missingOrCorrupted=0,unreferenced=0
+    for(const [key,record] of expected){
+      if(!present.has(key)){
+        missingOrCorrupted++
+        continue
+      }
+      // Existing fail-closed SHA-256, length, gzip and private-root checks.
+      try{await readPrivateTaxCertificate(root,record);intact++}
+      catch{missingOrCorrupted++}
+    }
+    for(const key of present)if(!expected.has(key))unreferenced++
+    return {referenced:expected.size,intact,missingOrCorrupted,unreferenced,unexpectedEntries}
+  }catch{
+    return inaccessible()
   }
 }

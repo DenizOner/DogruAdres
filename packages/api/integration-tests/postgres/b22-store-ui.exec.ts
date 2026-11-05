@@ -24,6 +24,7 @@ import {B06Chrome} from "./b06-ui-browser"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
+import {inspectPrivateTaxCertificateInventory} from "../../src/modules/dogruadres-access/private-tax-certificate-store"
 
 // Uses only the existing Mercur module middleware and its real built dashboard.
 // This dedicated child terminates after invalidating its two genuine MFA sessions.
@@ -7762,6 +7763,24 @@ export default async function({container}:any){
       await signupChrome.click("#organization-draft-refresh")
       await signupChrome.wait(
         "Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('B22 Sahis Isletmesi')&&p.textContent.includes('Başvuru onaylandı'))")
+
+      // Read-only verification against every persisted private revision.
+      // No cleanup, no paths/keys/Person data in the audit output.
+      const inventoryRows=await q(
+        'select storage_key as "storageKey",internal_name as "internalName",'+
+        'mime_type as "mimeType",compression,'+
+        'original_byte_length as "originalByteLength",'+
+        'original_sha256 as "originalSha256",'+
+        'stored_byte_length as "storedByteLength" '+
+        'from da_organization_application_document'
+      )
+      const inventory=await inspectPrivateTaxCertificateInventory(taxDir,inventoryRows)
+      assert.ok(inventory.referenced>=4,"Both original and replaced private document revisions must exist")
+      assert.deepEqual(inventory,{
+        referenced:inventoryRows.length,intact:inventoryRows.length,
+        missingOrCorrupted:0,unreferenced:0,unexpectedEntries:0
+      },"All committed private document revisions must match their real stored bytes")
+      process.stdout.write("PASS B22 Chrome/PG16: all private document versions reconciled read-only with DB, zero missing/corrupt/orphan files\\n")
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied\n")
     } finally {
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
