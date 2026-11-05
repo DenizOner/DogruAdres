@@ -585,7 +585,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
 
     try {
       // 1. Authorized platform staff with organization.review grant
-      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
+      spyStaff.mockResolvedValueOnce({ grant_id: "stg_1", grant_name: "organization.review" } as any)
       const queue = await listSubmittedOrganizationApplications(db, "opaque")
       expect(queue).not.toBeNull()
       expect(queue?.applications).toHaveLength(1)
@@ -660,7 +660,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
         person_id: "daprs_staff", actor_type: "user", actor_id: "usr_admin"
       } as any)
       spyStaff.mockResolvedValueOnce({
-        staff_grant_id: "stg_1", grant_name: "organization.review"
+        grant_id: "stg_1", grant_name: "organization.review"
       } as any)
       const asStaff = await readOrganizationApplicationDocument(db, "opaque", payload.application_id, root)
       expect(asStaff).not.toBeNull()
@@ -678,6 +678,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
 
     let appStatus = "submitted"
     let appVersion = 3
+    let activeTaxDuplicate = false
 
     const exec = jest.fn(async (sql: string) => {
       if (sql.includes("from da_organization_application where id=? for update")) {
@@ -698,9 +699,14 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       if (sql.includes("update da_organization_application")) {
         return [{ version: appVersion + 1 }]
       }
+      if (sql.includes("from da_organization where tax_identifier=?")) {
+        return activeTaxDuplicate ? [{ id: "daorg_another" }] : []
+      }
       return []
     })
     const db: any = { execute: exec }
+    // The Foundation service supplies the ONLY real native provisioning callback.
+    const provisionNative = jest.fn(async () => ({ organizationId: "daorg_nativefixture" }))
 
     try {
       // 1. Non-staff is denied (returns null)
@@ -716,7 +722,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
 
       // Review staff must never decide their own application, even with a grant.
       const callsBeforeOwnReview = exec.mock.calls.length
-      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_self", grant_name: "organization.review" } as any)
+      spyStaff.mockResolvedValueOnce({ grant_id: "stg_self", grant_name: "organization.review" } as any)
       spyCurrent.mockResolvedValueOnce({ person_id: "daprs_applicant", actor_type: "user", actor_id: "usr_applicant" } as any)
       const ownReview = await reviewOrganizationApplication(db, "opaque", {
         action: "review_decision",
@@ -731,7 +737,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       )).toBe(false)
 
       // 2. Staff requests correction -> status becomes correction_requested, audit logged
-      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
+      spyStaff.mockResolvedValueOnce({ grant_id: "stg_1", grant_name: "organization.review" } as any)
       spyCurrent.mockResolvedValueOnce({ person_id: "daprs_admin", actor_type: "user", actor_id: "usr_admin" } as any)
       const correctionResult = await reviewOrganizationApplication(db, "opaque", {
         action: "review_decision",
@@ -749,7 +755,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       expect(exec.mock.calls.some(c => String(c[0]).includes("organization.application_correction_requested"))).toBe(true)
 
       // 3. Stale version returns conflict: true
-      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
+      spyStaff.mockResolvedValueOnce({ grant_id: "stg_1", grant_name: "organization.review" } as any)
       const staleResult = await reviewOrganizationApplication(db, "opaque", {
         action: "review_decision",
         application_id: payload.application_id,
@@ -761,7 +767,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
 
       // 4. Staff rejects application -> status becomes rejected, audit logged
       appVersion = 4
-      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
+      spyStaff.mockResolvedValueOnce({ grant_id: "stg_1", grant_name: "organization.review" } as any)
       spyCurrent.mockResolvedValueOnce({ person_id: "daprs_admin", actor_type: "user", actor_id: "usr_admin" } as any)
       const rejectResult = await reviewOrganizationApplication(db, "opaque", {
         action: "review_decision",
@@ -778,9 +784,24 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       })
       expect(exec.mock.calls.some(c => String(c[0]).includes("organization.application_rejected"))).toBe(true)
 
-      // 5. Staff approves application -> creates da_organization & da_organization_membership (protected owner), status becomes approved
+      // 5. Active duplicate blocks native provisioning, even with review rights.
       appVersion = 5
-      spyStaff.mockResolvedValueOnce({ staff_grant_id: "stg_1", grant_name: "organization.review" } as any)
+      activeTaxDuplicate = true
+      spyStaff.mockResolvedValueOnce({ grant_id: "stg_1", grant_name: "organization.review" } as any)
+      spyCurrent.mockResolvedValueOnce({ person_id: "daprs_admin", actor_type: "user", actor_id: "usr_admin" } as any)
+      const deniedDuplicate = await reviewOrganizationApplication(db, "opaque", {
+        action: "review_decision",
+        application_id: payload.application_id,
+        expected_version: 5,
+        decision: "approve",
+      }, provisionNative)
+      expect(deniedDuplicate).toEqual({ conflict: true })
+      expect(provisionNative).not.toHaveBeenCalled()
+
+      // 6. A unique, verified application calls native Foundation provisioning
+      // exactly once. This module itself must NEVER INSERT an active Owner.
+      activeTaxDuplicate = false
+      spyStaff.mockResolvedValueOnce({ grant_id: "stg_1", grant_name: "organization.review" } as any)
       spyCurrent.mockResolvedValueOnce({ person_id: "daprs_admin", actor_type: "user", actor_id: "usr_admin" } as any)
       const approveResult = await reviewOrganizationApplication(db, "opaque", {
         action: "review_decision",
@@ -788,21 +809,27 @@ describe("B22 private business application DRAFT — never an Organization",()=>
         expected_version: 5,
         decision: "approve",
         notes: "Tüm belgeler onaylandı"
-      })
+      }, provisionNative)
       expect(approveResult).toMatchObject({
         conflict: false,
         application_id: payload.application_id,
         status: "approved",
-        version: 6
+        version: 6,
+        organization_id: "daorg_nativefixture"
       })
-      // Verify da_organization insert
-      expect(exec.mock.calls.some(c => String(c[0]).includes("insert into da_organization"))).toBe(true)
-      // Verify da_organization_membership insert with protected_owner
-      expect(exec.mock.calls.some(c => String(c[0]).includes("insert into da_organization_membership"))).toBe(true)
-      // Verify 3 audit events: application_approved, provisioned, owner_assigned
+      expect(provisionNative).toHaveBeenCalledTimes(1)
+      expect(provisionNative).toHaveBeenCalledWith(expect.objectContaining({
+        applicationId: payload.application_id,
+        applicantPersonId: "daprs_applicant",
+        taxIdentifier: "12345678901",
+        reviewerPersonId: "daprs_admin",
+        reviewerGrantId: "stg_1"
+      }))
+      expect(exec.mock.calls.some(c => String(c[0]).includes("insert into da_organization("))).toBe(false)
+      expect(exec.mock.calls.some(c => String(c[0]).includes("insert into da_organization_membership"))).toBe(false)
+      // Canonical Organization/Owner audit is produced by native service;
+      // this module records only the application decision and its outbox.
       expect(exec.mock.calls.some(c => String(c[0]).includes("organization.application_approved"))).toBe(true)
-      expect(exec.mock.calls.some(c => String(c[0]).includes("organization.provisioned"))).toBe(true)
-      expect(exec.mock.calls.some(c => String(c[0]).includes("organization.owner_assigned"))).toBe(true)
     } finally {
       spyStaff.mockRestore()
       spyCurrent.mockRestore()

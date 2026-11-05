@@ -54,6 +54,7 @@ type ProvisionOrganizationInput = Readonly<{
   provisioned_by: ActorReference
   initial_owners: ActorReference[]
   staff_grant_id?: string
+  staff_task?: "organization.provision"|"organization.review"
 }>
 
 type ChangeMembershipInput = Readonly<{
@@ -477,7 +478,59 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   async personalReviewOrganizationApplication(
     token:string,input:ReviewApplicationPayload,@MedusaContext() context:Context={}
   ) {
-    return reviewOrganizationApplication(securitySql(context.transactionManager),token,input)
+    const sql=securitySql(context.transactionManager)
+    return reviewOrganizationApplication(sql,token,input,async request=>{
+      // Revalidate the exact current private file at the moment of approval.
+      // An existing metadata row is not evidence of a still-readable document.
+      const document=await readOrganizationApplicationDocument(sql,token,request.applicationId)
+      if(!document?.content?.length)throw new IdentityAccessDenied()
+
+      // The applicant may be offline, but must still be an ACTIVE canonical
+      // Person backed by a CURRENT verified native actor, not merely an ID.
+      const candidates=await sql.execute(`select actor_type,actor_id
+        from da_login_binding where person_id=?
+        and verified_at is not null and revoked_at is null for share`,
+        [request.applicantPersonId])
+      if(candidates.length!==1)throw new IdentityAccessDenied()
+      const ownerActor:ActorReference={
+        actor_type:candidates[0].actor_type,actor_id:candidates[0].actor_id
+      }
+      const verified=await this.verifyProvisionOwnerActors_(sql,[ownerActor])
+      if(verified.size!==1||!verified.has(request.applicantPersonId))
+        throw new IdentityAccessDenied()
+
+      // Use the same existing Foundation native Organization/Owner workflow
+      // as ordinary platform provisioning. The scoped review permission is
+      // valid ONLY for this already-submitted, independently approved record.
+      const result=await this.provisionOrganization({
+        name:request.legalName,
+        initial_owners:[ownerActor],
+        provisioned_by:{
+          actor_type:request.reviewerActorType,actor_id:request.reviewerActorId
+        },
+        staff_grant_id:request.reviewerGrantId,
+        staff_task:"organization.review",
+      },context)
+      const manager=context.transactionManager
+      if(!manager||typeof manager!=="object"||!("flush" in manager)||
+        typeof manager.flush!=="function")
+        throw new Error("Foundation transaction manager unavailable")
+      await manager.flush()
+      const updated=await sql.execute(`update da_organization
+        set tax_identifier=?,updated_at=clock_timestamp()
+        where id=? and tax_identifier is null returning id`,
+        [request.taxIdentifier,result.organization.id])
+      if(updated.length!==1)throw new IdentityAccessDenied()
+
+      // Preserve the canonical Foundation security delivery for native
+      // Organization/Owner events in the SAME transaction.
+      await sql.execute(`insert into da_security_outbox(id,audit_event_id,created_at)
+        select 'security_'||id,id,clock_timestamp() from da_audit_event
+        where organization_id=? and action in
+        ('organization.provisioned','organization.owner_assigned')
+        on conflict(audit_event_id) do nothing`,[result.organization.id])
+      return {organizationId:result.organization.id}
+    })
   }
 
   @InjectTransactionManager()
@@ -872,13 +925,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return new MfaPersistence(sql).setPlatformPolicy(mode, expectedVersion, actor)
   }
 
-  @InjectTransactionManager()
-  async provisionPersonalOrganization(token: string, input: Omit<ProvisionOrganizationInput,"provisioned_by">, @MedusaContext() context:Context={}) {
-    const sql=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(sql).staff(token,"organization.provision","platform")
-    if(!staff)throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
-
-    for (const owner of input.initial_owners) {
+  /**
+   * Existing native Owner evidence checks, shared by ordinary provisioning
+   * and approved B22 applications. Never infer ownership from an email,
+   * an applicant-submitted Person ID, or unverified actor mapping.
+   */
+  private async verifyProvisionOwnerActors_(
+    sql:SecuritySql,owners:ActorReference[]
+  ):Promise<Set<string>> {
+    for (const owner of owners) {
       if (!supportedActorTypes.has(owner?.actor_type) || !owner?.actor_id) {
         throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
       }
@@ -886,13 +941,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
 
     // Deterministic advisory lock ordering matching AccountLinking (da-actor-link)
     // to serialize against concurrent linking/unlinking without deadlock.
-    const actorLinkKeys = [...new Set(input.initial_owners.map(o => `${o.actor_type}:${o.actor_id}`))].sort()
+    const actorLinkKeys = [...new Set(owners.map(o => `${o.actor_type}:${o.actor_id}`))].sort()
     for (const key of actorLinkKeys) {
       await sql.execute(`select pg_advisory_xact_lock(hashtext('da-actor-link'), hashtext(?))`, [key])
     }
 
     const ownerPersonIds = new Set<string>()
-    for (const owner of input.initial_owners) {
+    for (const owner of owners) {
       // Step A: Inspect all active verified proofs with row-level shared locks.
       // Do not join with da_actor_mapping or da_person yet to avoid masking conflicting proofs.
       const loginProofs = await sql.execute(
@@ -945,9 +1000,19 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       ownerPersonIds.add(verifiedPersonId)
     }
 
-    if (ownerPersonIds.size !== input.initial_owners.length) {
+    if (ownerPersonIds.size !== owners.length) {
       throw new MedusaError(MedusaError.Types.INVALID_DATA, "Initial Owners must be distinct canonical Persons")
     }
+    return ownerPersonIds
+  }
+
+  @InjectTransactionManager()
+  async provisionPersonalOrganization(token: string, input: Omit<ProvisionOrganizationInput,"provisioned_by">, @MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(sql).staff(token,"organization.provision","platform")
+    if(!staff)throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
+
+    await this.verifyProvisionOwnerActors_(sql,input.initial_owners)
     const result=await this.provisionOrganization({...input,staff_grant_id:staff.grant_id,provisioned_by:{actor_type:staff.actor_type,actor_id:staff.actor_id}},context)
     // Generated MedusaService writes may still be pending in this transaction's
     // identity map. Flush before the raw SELECT/FK insert; commit stays owned here.
@@ -1127,7 +1192,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         module: DOGRUADRES_AUDIT_MODULE,
         resource: "organization",
         target_id: organization.id,
-        new_values: { name: organization.name, initial_owner_count: memberships.length, ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:"organization.provision",staff_resource:"platform"}:{}) },
+        new_values: { name: organization.name, initial_owner_count: memberships.length, ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:(input.staff_task??"organization.provision"),staff_resource:"platform"}:{}) },
         occurred_at: new Date(),
       },
       ...memberships.map((membership, index) => ({
@@ -1141,7 +1206,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         resource: "membership",
         target_id: membership.id,
         new_values: { role: "owner", protected_owner: true, person_id: owners[index].id,
-          ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:"organization.provision",staff_resource:"platform"}:{}) },
+          ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:(input.staff_task??"organization.provision"),staff_resource:"platform"}:{}) },
         occurred_at: new Date(),
       })),
     ], sharedContext)

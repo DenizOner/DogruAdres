@@ -605,6 +605,22 @@ export const reviewApplicationPayload = z.object({
 export type ReviewApplicationPayload = z.infer<typeof reviewApplicationPayload>
 
 /**
+ * Only the authorized, already-submitted B22 application may invoke this
+ * Foundation-owned provisioner. It must reuse native Organization/Owner
+ * creation, current verified actor proofs, and the existing transaction.
+ */
+export type ApprovedApplicationProvisioner = (request:Readonly<{
+  applicationId:string
+  applicantPersonId:string
+  legalName:string
+  taxIdentifier:string
+  reviewerPersonId:string
+  reviewerActorType:string
+  reviewerActorId:string
+  reviewerGrantId:string
+}>)=>Promise<{organizationId:string}>
+
+/**
  * Perform an authorized review decision on a submitted application.
  * Permitted exclusively to platform review staff with 'organization.review' grant.
  * 'request_correction': requests edits from applicant with mandatory review notes.
@@ -615,7 +631,8 @@ export type ReviewApplicationPayload = z.infer<typeof reviewApplicationPayload>
 export async function reviewOrganizationApplication(
   db: SecuritySql,
   token: string,
-  value: unknown
+  value: unknown,
+  provisionApproved?:ApprovedApplicationProvisioner
 ) {
   const parsed = reviewApplicationPayload.safeParse(value)
   if (!parsed.success) throw new IdentityAccessDenied()
@@ -713,61 +730,72 @@ export async function reviewOrganizationApplication(
   }
 
   if (input.decision === "approve") {
-    const orgId = "daorg_" + randomUUID().replaceAll("-", "")
-    await db.execute(
-      `insert into da_organization(id, name, status, tax_identifier, created_at, updated_at)
-       values(?,?,'active',?,clock_timestamp(),clock_timestamp())`,
-      [orgId, app.legal_name, app.tax_identifier]
-    )
+    if(!provisionApproved)throw new IdentityAccessDenied()
+    if(typeof app.tax_identifier!=="string"||!/^[0-9]{10,11}$/.test(app.tax_identifier)||
+      typeof app.legal_name!=="string"||!app.legal_name.trim())throw new IdentityAccessDenied()
 
-    const membershipId = "daom_" + randomUUID().replaceAll("-", "")
+    // Submission and approval use the SAME tax-identifier lock, so two
+    // reviewers cannot independently activate the same registered business.
+    // A matching existing Organization remains in confidential manual review;
+    // never disclose its name, owner, document, or even its existence to applicants.
     await db.execute(
-      `insert into da_organization_membership(id, organization_id, person_id, role, status, protected_owner, created_at, updated_at)
-       values(?,?,?,'owner','active',true,clock_timestamp(),clock_timestamp())`,
-      [membershipId, orgId, app.applicant_person_id]
+      `select pg_advisory_xact_lock(hashtext('da-org-tax-id'),hashtext(?))`,
+      [app.tax_identifier]
     )
+    const existing=await db.execute(
+      `select id from da_organization where tax_identifier=?
+       and status='active' and deleted_at is null limit 1`,
+      [app.tax_identifier]
+    )
+    if(existing.length)return {conflict:true as const}
 
-    const updated = await db.execute(
+    // The callback MUST revalidate the intact current private document and
+    // the applicant's canonical verified native actor before native creation.
+    // No PostgreSQL/file transaction pretends to be a single ACID commit.
+    const provisioned=await provisionApproved({
+      applicationId:input.application_id,
+      applicantPersonId:app.applicant_person_id,
+      legalName:app.legal_name,
+      taxIdentifier:app.tax_identifier,
+      reviewerPersonId:staffSession.person_id,
+      reviewerActorType:staffSession.actor_type,
+      reviewerActorId:staffSession.actor_id,
+      reviewerGrantId:staff.grant_id,
+    })
+    if(!provisioned||!/^daorg_[A-Za-z0-9_-]+$/.test(provisioned.organizationId))
+      throw new IdentityAccessDenied()
+    const orgId=provisioned.organizationId
+
+    const updated=await db.execute(
       `update da_organization_application
-       set status='approved', organization_id=?, review_notes=?, reviewed_by_person_id=?, reviewed_at=clock_timestamp(),
+       set status='approved', organization_id=?, review_notes=?,
+           reviewed_by_person_id=?, reviewed_at=clock_timestamp(),
            version=version+1, updated_at=clock_timestamp()
        where id=? and status='submitted' and version=?
        returning version`,
-      [orgId, input.notes ?? null, staffSession.person_id, input.application_id, input.expected_version]
+      [orgId,input.notes??null,staffSession.person_id,input.application_id,input.expected_version]
     )
-    if (updated.length !== 1) return { conflict: true as const }
+    // The native Organization/Owner writes already occurred in the same
+    // Foundation transaction; never commit them if this CAS fails.
+    if(updated.length!==1)throw new IdentityAccessDenied()
 
-    const auditIdApprove = "daaud_" + randomUUID()
-    const auditIdOrg = "daaud_" + randomUUID()
-    const auditIdOwner = "daaud_" + randomUUID()
-
+    const auditIdApprove="daaud_"+randomUUID()
     await db.execute(
       `insert into da_audit_event
-        (id, actor_person_id, actor_type, actor_id, action, module, resource, target_id, organization_id, occurred_at, created_at, updated_at)
-        values
-        (?,?,?,?,'organization.application_approved','dogruadres-access','organization-application',?,?,clock_timestamp(),now(),now()),
-        (?,?,?,?,'organization.provisioned','dogruadres-access','organization',?,?,clock_timestamp(),now(),now()),
-        (?,?,?,?,'organization.owner_assigned','dogruadres-access','membership',?,?,clock_timestamp(),now(),now())`,
-      [
-        auditIdApprove, staffSession.person_id, staffSession.actor_type, staffSession.actor_id, input.application_id, orgId,
-        auditIdOrg, staffSession.person_id, staffSession.actor_type, staffSession.actor_id, orgId, orgId,
-        auditIdOwner, staffSession.person_id, staffSession.actor_type, staffSession.actor_id, membershipId, orgId
-      ]
+       (id,actor_person_id,actor_type,actor_id,action,module,resource,target_id,organization_id,
+        occurred_at,created_at,updated_at)
+       values(?,?,?,?,'organization.application_approved','dogruadres-access',
+              'organization-application',?,?,clock_timestamp(),now(),now())`,
+      [auditIdApprove,staffSession.person_id,staffSession.actor_type,staffSession.actor_id,
+       input.application_id,orgId]
     )
     await db.execute(
-      `insert into da_security_outbox(id, audit_event_id, created_at)
-       values (?,?,now()), (?,?,now()), (?,?,now())`,
-      [randomUUID(), auditIdApprove, randomUUID(), auditIdOrg, randomUUID(), auditIdOwner]
+      `insert into da_security_outbox(id,audit_event_id,created_at) values(?,?,now())`,
+      [randomUUID(),auditIdApprove]
     )
-
-    return {
-      conflict: false as const,
-      application_id: input.application_id,
-      status: "approved" as const,
-      organization_id: orgId,
-      version: Number(updated[0].version)
-    }
+    return {conflict:false as const,application_id:input.application_id,
+      status:"approved" as const,version:Number(updated[0].version),
+      organization_id:orgId}
   }
-
   throw new IdentityAccessDenied()
 }
