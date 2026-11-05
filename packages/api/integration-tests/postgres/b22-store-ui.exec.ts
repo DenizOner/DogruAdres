@@ -7753,6 +7753,12 @@ export default async function({container}:any){
         "(async()=>{const r=await fetch('/personal/organizations');return {status:r.status,body:await r.json()}})()")
       assert.equal(foreignSecondOrganization.status,200)
       assert.equal(foreignSecondOrganization.body.organizations.some((o:any)=>o.id===individualOrg),false)
+      // Adding a second approved Organization changes the canonical scope.
+      // The real UI intentionally conceals stale private views on the observer
+      // mismatch; the Person must reload and pass live session/authority checks
+      // before the newly approved application becomes visible again.
+      await signupChrome.send("Page.reload",{ignoreCache:true})
+      await signupChrome.wait("!document.getElementById('workspace').hidden")
       await signupChrome.click("#organization-draft-refresh")
       await signupChrome.wait(
         "Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('B22 Sahis Isletmesi')&&p.textContent.includes('Başvuru onaylandı'))")
