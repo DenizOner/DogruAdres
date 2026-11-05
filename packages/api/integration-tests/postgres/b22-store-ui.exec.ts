@@ -7577,21 +7577,23 @@ export default async function({container}:any){
       const orgsCountBefore = Number((await q("select count(*)::int n from da_organization"))[0].n)
       const membsCountBefore = Number((await q("select count(*)::int n from da_organization_membership"))[0].n)
 
-      const approveRes = await reviewChrome.eval(`(async()=>{`+
+      // Two concurrent, identical authorized approval requests must not create
+      // two Organizations or two protected Owners. The loser gets stale-version
+      // 409; no direct DB write, user impersonation or privileged shortcut.
+      const approveRace = await reviewChrome.eval(`(async()=>{`+
         `const s=await (await fetch('/personal/session')).json();`+
-        `const r=await fetch('/personal/organization-applications',{`+
-          `method:'POST',`+
-          `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
-          `body:JSON.stringify({`+
-            `action:'review_decision',`+
-            `application_id:${JSON.stringify(b22TaxAppId)},`+
-            `expected_version:3,`+
-            `decision:'approve',`+
-            `notes:'Vergi levhası doğrulandı, kuruluş onaylandı.'`+
-          `})`+
-        `});`+
-        `return {status:r.status,body:await r.json()};`+
+        `const body=JSON.stringify({action:'review_decision',`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:3,decision:'approve',`+
+          `notes:'Vergi levhası doğrulandı, kuruluş onaylandı.'});`+
+        `const responses=await Promise.all([0,1].map(()=>fetch('/personal/organization-applications',{`+
+          `method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},body})));`+
+        `return Promise.all(responses.map(async r=>({status:r.status,body:await r.json()})));`+
       `})()`)
+      assert.deepEqual(approveRace.map((r:any)=>r.status).sort((a:number,b:number)=>a-b),[200,409],
+        "Two concurrent review approvals must have exactly one winner")
+      const approveRes=approveRace.find((r:any)=>r.status===200)
+      assert.ok(approveRes)
       assert.equal(approveRes.status, 200)
       assert.equal(approveRes.body.status, "approved")
       const approvedOrgId = approveRes.body.organization_id
@@ -7610,6 +7612,22 @@ export default async function({container}:any){
       const reviewAudits = await q("select action,target_id from da_audit_event where target_id=$1 or target_id=$2", [b22TaxAppId, approvedOrgId])
       assert.ok(reviewAudits.some((a:any)=>a.action==="organization.application_approved"))
       assert.ok(reviewAudits.some((a:any)=>a.action==="organization.provisioned"))
+      assert.equal(reviewAudits.filter((a:any)=>a.action==="organization.application_approved").length,1,
+        "Only the winning approval can write the application approval audit")
+      assert.equal(reviewAudits.filter((a:any)=>a.action==="organization.provisioned").length,1,
+        "Only one canonical Organization provisioning audit")
+      const persistedApprovalOutbox=await q(
+        "select count(*)::int n from da_security_outbox x join da_audit_event a on a.id=x.audit_event_id where a.target_id=$1 and a.action='organization.application_approved'",
+        [b22TaxAppId])
+      assert.equal(Number(persistedApprovalOutbox[0].n),1,"One durable approval outbox event")
+      const applicantOrganization=await signupChrome.eval("(async()=>{const r=await fetch('/personal/organizations');return {status:r.status,body:await r.json()}})()")
+      assert.equal(applicantOrganization.status,200)
+      assert.ok(applicantOrganization.body.organizations.some((o:any)=>o.id===approvedOrgId&&o.role==="owner"),
+        "Applicant must see their newly approved Organization as Owner in actual browser session")
+      const foreignOrganization=await foreignDraftChrome.eval("(async()=>{const r=await fetch('/personal/organizations');return {status:r.status,body:await r.json()}})()")
+      assert.equal(foreignOrganization.status,200)
+      assert.equal(foreignOrganization.body.organizations.some((o:any)=>o.id===approvedOrgId),false,
+        "A foreign Person cannot see the newly approved Organization")
 
       assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n), orgsCountBefore + 1)
       assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n), membsCountBefore + 1)
@@ -7617,7 +7635,7 @@ export default async function({container}:any){
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
     }
 
-    process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner\n")
+    process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner, concurrent approval one winner/one 409, applicant-only new Organization\n")
 
 
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
