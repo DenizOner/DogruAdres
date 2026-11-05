@@ -24,7 +24,7 @@ import {B06Chrome} from "./b06-ui-browser"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
-import {inspectTaxCertificateSnapshot} from "../../src/scripts/tax-certificate-inventory"
+import taxCertificateInventory, {inspectTaxCertificateSnapshot} from "../../src/scripts/tax-certificate-inventory"
 
 // Uses only the existing Mercur module middleware and its real built dashboard.
 // This dedicated child terminates after invalidating its two genuine MFA sessions.
@@ -7785,6 +7785,9 @@ export default async function({container}:any){
         referenced:inventory.referenced,intact:inventory.referenced,
         missingOrCorrupted:0,unreferenced:0,unexpectedEntries:0
       },"Read-only PostgreSQL transaction and private disk must reconcile all revisions")
+      // Run the real Medusa CLI entry function with a fresh SQL client while
+      // the B22 sentinel guarantees a task-owned disposable DB and private dir.
+      await taxCertificateInventory({container} as any)
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied\n")
     } finally {
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
