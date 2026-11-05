@@ -7134,7 +7134,7 @@ export default async function({container}:any){
     await signupChrome.click("#organization-draft-list p:first-child button")
     await signupChrome.wait("!document.querySelector('#organization-draft-withdraw').hidden")
     await signupChrome.click("#organization-draft-withdraw")
-    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak geri çekildi')")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Başvuru/taslak geri çekildi')")
     assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[legacyDraftId]),
       [{status:"withdrawn",version:4}])
     const afterWithdrawal=await signupChrome.eval("(async()=>{"+
