@@ -24,7 +24,7 @@ import {B06Chrome} from "./b06-ui-browser"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
-import {inspectPrivateTaxCertificateInventory} from "../../src/modules/dogruadres-access/private-tax-certificate-store"
+import {inspectTaxCertificateSnapshot} from "../../src/scripts/tax-certificate-inventory"
 
 // Uses only the existing Mercur module middleware and its real built dashboard.
 // This dedicated child terminates after invalidating its two genuine MFA sessions.
@@ -7779,20 +7779,12 @@ export default async function({container}:any){
 
       // Read-only verification against every persisted private revision.
       // No cleanup, no paths/keys/Person data in the audit output.
-      const inventoryRows=await q(
-        'select storage_key as "storageKey",internal_name as "internalName",'+
-        'mime_type as "mimeType",compression,'+
-        'original_byte_length as "originalByteLength",'+
-        'original_sha256 as "originalSha256",'+
-        'stored_byte_length as "storedByteLength" '+
-        'from da_organization_application_document'
-      )
-      const inventory=await inspectPrivateTaxCertificateInventory(taxDir,inventoryRows)
+      const inventory=await inspectTaxCertificateSnapshot(pg,taxDir)
       assert.ok(inventory.referenced>=4,"Both original and replaced private document revisions must exist")
       assert.deepEqual(inventory,{
-        referenced:inventoryRows.length,intact:inventoryRows.length,
+        referenced:inventory.referenced,intact:inventory.referenced,
         missingOrCorrupted:0,unreferenced:0,unexpectedEntries:0
-      },"All committed private document revisions must match their real stored bytes")
+      },"Read-only PostgreSQL transaction and private disk must reconcile all revisions")
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied\n")
     } finally {
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])

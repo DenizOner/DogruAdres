@@ -15,6 +15,7 @@ import {
   readPrivateTaxCertificate,
 } from "../../../modules/dogruadres-access/private-tax-certificate-store"
 import { prepareTaxCertificate } from "../../../modules/dogruadres-access/tax-certificate-policy"
+import { inspectTaxCertificateSnapshot, PRIVATE_TAX_DOCUMENT_READ_SQL } from "../../../scripts/tax-certificate-inventory"
 import {GET,POST} from "../organization-applications/route"
 import {access,csrf,enabled,sessionToken} from "../security"
 
@@ -726,6 +727,24 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       })
       // Read-only inspection MUST preserve unknown files and valid history.
       expect(await fs.readFile(path.join(root,unlinked.storageKey))).toBeDefined()
+      // The same code path used by the authorized operator CLI: only
+      // read-only PostgreSQL snapshot plus private filesystem reads.
+      const queries:string[]=[]
+      const reader:any={query:async (sql:string)=>{
+        queries.push(sql)
+        if(sql==="SHOW transaction_read_only")
+          return {rows:[{transaction_read_only:"on"}]}
+        if(sql===PRIVATE_TAX_DOCUMENT_READ_SQL)
+          return {rows:[linked]}
+        return {rows:[]}
+      }}
+      expect(await inspectTaxCertificateSnapshot(reader,root)).toEqual({
+        referenced:1,intact:1,missingOrCorrupted:0,unreferenced:1,unexpectedEntries:0
+      })
+      expect(queries).toEqual([
+        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+        "SHOW transaction_read_only",PRIVATE_TAX_DOCUMENT_READ_SQL,"ROLLBACK"
+      ])
       const originalBytes=await fs.readFile(path.join(root,linked.storageKey))
       const copied=path.join(restoreRoot,linked.storageKey)
       await fs.writeFile(copied,originalBytes,{mode:0o600})
@@ -754,6 +773,30 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       await fs.rm(root,{recursive:true,force:true})
       await fs.rm(restoreRoot,{recursive:true,force:true})
     }
+  })
+
+  it("refuses an unverified read-only transaction and rolls back without inspecting files",async()=>{
+    const statements:string[]=[]
+    const fake:any={query:async (sql:string)=>{
+      statements.push(sql)
+      if(sql==="SHOW transaction_read_only")return {rows:[{transaction_read_only:"off"}]}
+      return {rows:[]}
+    }}
+    await expect(inspectTaxCertificateSnapshot(fake,"/not-a-real-private-root"))
+      .rejects.toThrow("Read-only database transaction not verified")
+    expect(statements).toEqual([
+      "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      "SHOW transaction_read_only","ROLLBACK"
+    ])
+    const tooMany:any={query:async(sql:string)=>{
+      statements.push(sql)
+      if(sql==="SHOW transaction_read_only")return {rows:[{transaction_read_only:"on"}]}
+      if(sql===PRIVATE_TAX_DOCUMENT_READ_SQL)return {rows:Array(100001).fill({})}
+      return {rows:[]}
+    }}
+    await expect(inspectTaxCertificateSnapshot(tooMany,"/not-a-real-private-root"))
+      .rejects.toThrow("Complete private-document inventory unavailable")
+    expect(statements.at(-1)).toBe("ROLLBACK")
   })
 
   it("reviewOrganizationApplication handles correction_requested, rejection and approval with audit", async () => {
