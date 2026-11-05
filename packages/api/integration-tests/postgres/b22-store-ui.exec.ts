@@ -7668,7 +7668,95 @@ export default async function({container}:any){
         "A foreign Person cannot see the newly approved Organization")
 
       assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n), orgsCountBefore + 1)
+
       assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n), membsCountBefore + 1)
+
+      // One canonical Person may apply for a SECOND, individual commercial
+      // business without becoming a second Person or acquiring foreign rights.
+      // Exercise two private PNG versions and actual review/owner provisioning.
+      const individualAppId="daorgapp_"+randomBytes(16).toString("hex")
+      const individualTaxId="12345678901" // isolated synthetic 11-digit identity
+      const onePixelPng="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC"
+      const individualFlow=await signupChrome.eval(`(async()=>{
+        const csrf=(await (await fetch('/personal/session')).json()).csrf_token;
+        const send=async body=>{
+          const r=await fetch('/personal/organization-applications',{method:'POST',
+            headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify(body)});
+          return {status:r.status,body:await r.json()};
+        };
+        const app=${JSON.stringify(individualAppId)};
+        const created=await send({application_id:app,expected_version:0,
+          business_kind:'individual_business',legal_name:'B22 Sahis Isletmesi',
+          tax_identifier:${JSON.stringify(individualTaxId)},
+          landline_phone:'+90 212 555 13 57',
+          declared_activities:['service_repair'],primary_activity:'service_repair'});
+        const upload1=await send({action:'upload_document',application_id:app,
+          expected_version:1,filename:'levha.png',file_base64:${JSON.stringify(onePixelPng)}});
+        const upload2=await send({action:'upload_document',application_id:app,
+          expected_version:2,filename:'levha.png',file_base64:${JSON.stringify(onePixelPng)}});
+        const submitted=await send({action:'submit',application_id:app,expected_version:3});
+        return {created,upload1,upload2,submitted};
+      })()`)
+      assert.deepEqual(
+        [individualFlow.created.status,individualFlow.upload1.status,
+         individualFlow.upload2.status,individualFlow.submitted.status],
+        [201,200,200,200],
+        "Individual commercial business must save, replace private document and submit"
+      )
+      assert.equal(individualFlow.submitted.body.status,"submitted")
+      assert.equal(individualFlow.submitted.body.version,4)
+      assert.equal(individualFlow.upload2.body.document.mime_type,"image/png")
+      assert.equal(individualFlow.upload2.body.document.version,2)
+      const documentHistory=await q(
+        "select version,is_current,storage_key from da_organization_application_document where application_id=$1 order by version",
+        [individualAppId])
+      assert.deepEqual(documentHistory.map((d:any)=>[Number(d.version),d.is_current]),
+        [[1,false],[2,true]],"Both tax certificate revisions must remain durable")
+      assert.notEqual(documentHistory[0].storage_key,documentHistory[1].storage_key)
+      for(const doc of documentHistory)
+        assert.ok(readFileSync(join(taxDir,doc.storage_key)).length>8,
+          "Each historical private document file must still exist")
+      const individualBefore=Number((await q("select count(*)::int n from da_organization"))[0].n)
+      const individualDecision=await reviewChrome.eval(`(async()=>{
+        const csrf=(await (await fetch('/personal/session')).json()).csrf_token;
+        const r=await fetch('/personal/organization-applications',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':csrf},
+          body:JSON.stringify({action:'review_decision',
+            application_id:${JSON.stringify(individualAppId)},expected_version:4,decision:'approve'})});
+        return {status:r.status,body:await r.json()};
+      })()`)
+      assert.equal(individualDecision.status,200)
+      assert.equal(individualDecision.body.status,"approved")
+      const individualOrg=individualDecision.body.organization_id
+      assert.ok(individualOrg&&individualOrg!==approvedOrgId)
+      const individualOrgRow=await q("select name,tax_identifier,status from da_organization where id=$1",[individualOrg])
+      assert.deepEqual(individualOrgRow,[{name:"B22 Sahis Isletmesi",tax_identifier:individualTaxId,status:"active"}])
+      const individualOwner=await q(
+        "select person_id,role,status,protected_owner from da_organization_membership where organization_id=$1",
+        [individualOrg])
+      assert.deepEqual(individualOwner,[{
+        person_id:signupPerson,role:"owner",status:"active",protected_owner:true
+      }])
+      assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+        individualBefore+1,"Individual business must add exactly one Organization")
+      const individualApprovalAudit=await q(
+        "select a.id from da_audit_event a join da_security_outbox o on o.audit_event_id=a.id where a.target_id=$1 and a.action='organization.application_approved'",
+        [individualAppId])
+      assert.equal(individualApprovalAudit.length,1,"Independent individual approval must persist one audit/outbox")
+      const applicantTwoOrganizations=await signupChrome.eval(
+        "(async()=>{const r=await fetch('/personal/organizations');return {status:r.status,body:await r.json()}})()")
+      assert.equal(applicantTwoOrganizations.status,200)
+      for(const id of [approvedOrgId,individualOrg])
+        assert.ok(applicantTwoOrganizations.body.organizations.some((o:any)=>o.id===id&&o.role==="owner"),
+          "One Person must see both independently approved businesses")
+      const foreignSecondOrganization=await foreignDraftChrome.eval(
+        "(async()=>{const r=await fetch('/personal/organizations');return {status:r.status,body:await r.json()}})()")
+      assert.equal(foreignSecondOrganization.status,200)
+      assert.equal(foreignSecondOrganization.body.organizations.some((o:any)=>o.id===individualOrg),false)
+      await signupChrome.click("#organization-draft-refresh")
+      await signupChrome.wait(
+        "Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('B22 Sahis Isletmesi')&&p.textContent.includes('Başvuru onaylandı'))")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied\\n")
     } finally {
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
     }
