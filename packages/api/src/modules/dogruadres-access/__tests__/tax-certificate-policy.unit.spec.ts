@@ -6,11 +6,12 @@ import {
 
 const pdf=Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n","ascii")
 const jpg=Buffer.from([255,216,255,224,0,2,255,217])
-const png=Buffer.concat([
-  Buffer.from([137,80,78,71,13,10,26,10]),Buffer.from([0,0,0,13]),
-  Buffer.from("IHDR","ascii"),Buffer.alloc(17),
-  Buffer.alloc(4),Buffer.from("IEND","ascii"),Buffer.alloc(4)
-])
+// True one-pixel 8-bit RGB PNG with a CRC-checked IHDR/IDAT/IEND and
+// a valid zlib scanline; not the previous fake header-only fixture.
+const png=Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC",
+  "base64"
+)
 
 describe("B22 tax certificate ingress format gate (NOT a public upload)",()=>{
   it("recognizes synthetic PDF, JPG/JPEG, and PNG",()=>{
@@ -20,6 +21,20 @@ describe("B22 tax certificate ingress format gate (NOT a public upload)",()=>{
     expect(inspectTaxCertificate("belge.JPEG",jpg,"").extension).toBe("jpg")
     expect(inspectTaxCertificate("belge.PNG",png,"application/octet-stream").mimeType)
       .toBe("image/png")
+  })
+  it("rejects forged PNG chunks, invalid CRC, missing image data and polyglot append",()=>{
+    const changed=Buffer.from(png)
+    changed[20]^=1 // invalidate a CRC-protected IHDR byte
+    const noIdat=Buffer.concat([png.subarray(0,33),png.subarray(png.length-12)])
+    const extra=Buffer.concat([png,Buffer.from("MZ executable", "ascii")])
+    const badZlib=Buffer.from(png)
+    badZlib[48]^=1 // invalidate an IDAT/zlib byte (without rebuilding CRC)
+    for(const bytes of [changed,noIdat,extra,badZlib])
+      expect(()=>inspectTaxCertificate("belge.png",bytes,"image/png"))
+        .toThrow(InvalidTaxCertificate)
+    expect(inspectTaxCertificate("belge.png",png).mimeType).toBe("image/png")
+    expect(restoreTaxCertificate(prepareTaxCertificate("belge.png",png)))
+      .toEqual(png)
   })
   it("accepts exactly 10 MiB but refuses 10 MiB + 1 byte",()=>{
     const head=Buffer.from("%PDF-1.7\n","ascii")
