@@ -7780,7 +7780,6 @@ export default async function({container}:any){
         referenced:inventoryRows.length,intact:inventoryRows.length,
         missingOrCorrupted:0,unreferenced:0,unexpectedEntries:0
       },"All committed private document revisions must match their real stored bytes")
-      process.stdout.write("PASS B22 Chrome/PG16: all private document versions reconciled read-only with DB, zero missing/corrupt/orphan files\\n")
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied\n")
     } finally {
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
