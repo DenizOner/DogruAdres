@@ -7840,7 +7840,7 @@ export default async function({container}:any){
           "Private queue must clear on pagehide after second page")
         assert.equal(await reviewChrome.eval(
           "document.getElementById('organization-review-more').hidden"),true)
-        process.stdout.write("PASS B22 Chrome/HTTP/PG16: reviewer 101 submitted queue pages, unauthorized denied, stale view cleared\\n")
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: reviewer 101 submitted queue pages, unauthorized denied, stale view cleared\n")
       }finally{
         await q("delete from da_organization_application where id=any($1::text[])",
           [reviewOverflowIds])
