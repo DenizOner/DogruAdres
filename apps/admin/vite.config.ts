@@ -16,10 +16,15 @@ const { mercurDashboardPlugin } = require('@mercurjs/dashboard-sdk/vite')
 const dashboardConnectPolicy = () => ({
   name: 'dogruadres-dashboard-network-policy',
   apply: 'build' as const,
-  transformIndexHtml(html: string) {
-    if (!html.includes('<head>')) throw new Error('Dashboard HTML head missing')
-    return html.replace('<head>', '<head>\\n    <meta http-equiv="Content-Security-Policy" content="connect-src \'self\'" />')
-  },
+  transformIndexHtml() {
+    // Vite inserts/escapes tag attributes; no raw HTML string replacement.
+    return [{
+      tag: 'meta',
+      attrs: { 'http-equiv': 'Content-Security-Policy',
+        content: "connect-src 'self'" },
+      injectTo: 'head-prepend' as const,
+    }]
+  }
 })
 
 // https://vite.dev/config/
