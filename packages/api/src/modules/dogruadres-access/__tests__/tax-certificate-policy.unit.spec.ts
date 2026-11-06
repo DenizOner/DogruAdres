@@ -167,14 +167,14 @@ describe("B22 lossless private-document preparation — no storage or upload",()
  * Medusa module, not a browser/private-URL security acceptance.
  * Uses only a fresh disposable OS temp directory with synthetic bytes.
  */
-it("Medusa LocalFileService v2.22.0 native contract: private bytes, prefixed key, public-shaped URL",async()=>{
+it("Medusa LocalFileService native contract: private bytes, prefixed key, public-shaped URL",async()=>{
     // Increased timeout for disk I/O under Windows
 
   const fs=require("node:fs/promises") as typeof import("node:fs/promises")
   const os=require("node:os") as typeof import("node:os")
   const path=require("node:path") as typeof import("node:path")
   const medusaPackage=require("@medusajs/medusa/package.json")
-  expect(["2.21.2","2.22.0"]).toContain(medusaPackage.version)
+  expect(["2.21.2","2.22.0","2.22.3"]).toContain(medusaPackage.version)
   // Medusa's documented module export forwards the installed provider.
   // It resolves through our declared @medusajs/medusa dependency.
   const {LocalFileService}=require("@medusajs/medusa/file-local")
