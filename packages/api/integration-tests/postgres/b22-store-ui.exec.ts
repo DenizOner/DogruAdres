@@ -5210,9 +5210,9 @@ export default async function({container}:any){
     }
 
 
-    // B22 protected Owner revoke vs real native Seller creation. Gamma is a
-    // separate task-owned Organization; this negative must not revoke A's
-    // Alpha purchasing/product permissions used by unrelated assertions.
+    // B22 protected Owner removal denial vs real native Seller creation.
+    // Gamma is a separate disposable Organization; a second Owner does not
+    // allow bypassing the #39 notice/appeal gate during an in-flight write.
     const [secondGammaOwner]=await foundation.createMemberships([{
       organization_id:sellerGamma.id,person_id:B.person,
       role:"owner",status:"active",protected_owner:true
@@ -5293,13 +5293,17 @@ export default async function({container}:any){
       const submitted=await ownerCreatePending
       const revoked=await ownerRevokePending
       assert.equal(submitted.status,201,
-        "Native Seller and authoritative Origin must complete before the Owner revoke commits")
+        "Committed native Seller must survive attempted unauthorized Owner removal")
       assert.equal(submitted.body.status,"pending_approval")
       assert.match(submitted.body.seller_id,/^sel_[A-Za-z0-9_-]+$/)
-      assert.equal(revoked.status,200)
-      const [revokedMember]=await q("select status,revoked_at from da_organization_membership where id=$1",[gammaOwnerMembership.id])
-      assert.equal(revokedMember.status,"revoked")
-      assert.ok(revokedMember.revoked_at)
+      assert.equal(revoked.status,403,
+        "A second Owner cannot bypass the 10+20 guarded removal process")
+      const [preservedOwner]=await q("select status,protected_owner,revoked_at from da_organization_membership where id=$1",[gammaOwnerMembership.id])
+      assert.equal(preservedOwner.status,"active")
+      assert.equal(preservedOwner.protected_owner,true)
+      assert.equal(preservedOwner.revoked_at,null)
+      assert.equal((await q("select count(*)::int n from da_audit_event where target_id=$1 and action='organization.membership_changed'",[gammaOwnerMembership.id]))[0].n,0,
+        "Denied Owner revocation must not append membership audit")
       const [ownerRaceLedger]=await q("select status,seller_id from da_store_application where id=$1",[ownerRaceRequest.application_id])
       assert.equal(ownerRaceLedger.status,"created")
       assert.equal(ownerRaceLedger.seller_id,submitted.body.seller_id)
@@ -5311,40 +5315,22 @@ export default async function({container}:any){
       assert.equal((await q("select count(*)::int n from seller where email=$1",[ownerRaceEmail]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_organization_seller_ownership o join da_audit_event e on e.id=o.verification_audit_event_id join da_audit_outbox x on x.source_audit_event_id=e.id where o.organization_id=$1 and o.seller_id=$2 and o.revoked_at is null and e.action='organization.store_application_created' and e.new_values->>'application_id'=$3",[sellerGamma.id,submitted.body.seller_id,ownerRaceRequest.application_id]))[0].n,1,
         "Owner native Seller requires exactly one authoritative Org link and audit/outbox")
-      await browser.send("Page.bringToFront")
-      await browser.wait("document.visibilityState==='visible'")
-      const deniedOwnerStore=await browser.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-applications',{method:'POST',"+
-        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-        "body:JSON.stringify("+JSON.stringify({...ownerRaceRequest,
-          application_id:"daapp_"+randomBytes(16).toString("hex"),
-          email:"b22-owner-post-revoke-"+rand+"@example.invalid"})+")});"+
-        "return r.status})()")
-      assert.equal(deniedOwnerStore,403)
-      assert.equal((await q("select count(*)::int n from seller where email=$1",["b22-owner-post-revoke-"+rand+"@example.invalid"]))[0].n,0)
-      assert.equal((await q("select count(*)::int n from da_store_application where person_id=$1 and organization_id=$2 and id<>$3 and created_at >= (select created_at from da_store_application where id=$3)",[A.person,sellerGamma.id,ownerRaceRequest.application_id]))[0].n,0)
-      process.stdout.write("PASS B22 Chrome: real Mercur Seller INSERT and Owner membership revoke serialized on PG16; Seller pending plus source audit/outbox before revoke, next Owner Store POST403 and zero Seller\n")
+      process.stdout.write("PASS B22 Chrome: native Seller creation serialized before denied protected Owner removal; Seller pending, Owner remains active, no unauthorized membership audit\\n")
     }finally{
       if(ownerBarrierHeld)await ownerRaceBarrier.query("ROLLBACK")
       await ownerRaceBarrier.end()
       if(ownerPauseTrigger)await q("drop trigger if exists b22_native_seller_owner_pause_v1 on seller")
       if(ownerPauseFn)await q("drop function if exists b22_native_seller_owner_pause_v1()")
-      // The revoked Gamma workspace is no longer selectable by A. Do NOT
-      // reload it and confuse a denied tenant with a failed global login.
-      // Test that the same Personal session still authorizes unrelated Alpha,
-      // then select Alpha before the pre-existing browser acceptance cases.
+      // The denied Gamma Owner removal leaves A's protected membership intact.
+      // Restore Alpha workspace for the following independent browser cases.
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
       const stillPersonal=await get("/personal/session")
       assert.equal(stillPersonal.status,200,
-        "Gamma Owner revoke must not terminate A's independent Alpha Person session")
+        "Denied Gamma Owner removal must not terminate A's Alpha Person session")
       await browser.select(organizations[0].name,"owner")
-      // Gamma Owner membership was revoked above. The privacy observer
-      // compares the full Organization set against the one loaded at login;
-      // its correct fail-closed behavior can conceal a stale workspace at the
-      // next 5-second check. Reload ONLY after selecting still-authorized
-      // Alpha, so the browser obtains the fresh server-authorized scope.
-      // Never disable the observer or keep using a stale Organization view.
+      // Reload only after switching back to Alpha; the Organization list
+      // remains authoritative, and no permission observer is bypassed.
       await browser.send("Page.reload",{ignoreCache:true})
       await browser.wait(`(()=>{
         if(document.getElementById('workspace').hidden)return false
