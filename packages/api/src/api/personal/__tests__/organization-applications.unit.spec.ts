@@ -5,6 +5,7 @@ import {
   saveOrganizationDocument,
   submitOrganizationApplication,
   readOrganizationApplicationDocument,
+  TaxCertificateReviewUnavailable,
   listSubmittedOrganizationApplications,
   reviewOrganizationApplication
 } from "../../../modules/dogruadres-access/organization-application"
@@ -355,6 +356,15 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     expect(res.status).toHaveBeenLastCalledWith(200)
     expect(res.send).toHaveBeenCalled()
 
+    // The API must never return a staff document when safety review is unavailable.
+    service.personalReadOrganizationApplicationDocument.mockRejectedValueOnce(
+      new TaxCertificateReviewUnavailable())
+    res.send.mockClear()
+    await GET(req, res)
+    expect(res.status).toHaveBeenLastCalledWith(503)
+    expect(res.json).toHaveBeenLastCalledWith({ message:"Document review unavailable" })
+    expect(res.send).not.toHaveBeenCalled()
+
     // Denied caller
     service.personalReadOrganizationApplicationDocument.mockResolvedValueOnce(null)
     await GET(req, res)
@@ -620,7 +630,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     }
   })
 
-  it("readOrganizationApplicationDocument allows applicant and authorized platform staff, but denies unauthorized third-party", async () => {
+  it("readOrganizationApplicationDocument preserves applicant read and blocks unscanned platform staff", async () => {
     const os = require("node:os")
     const path = require("node:path")
     const fsp = require("node:fs/promises")
@@ -674,16 +684,19 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       const asStranger = await readOrganizationApplicationDocument(db, "opaque", payload.application_id, root)
       expect(asStranger).toBeNull()
 
-      // 3. Platform staff with organization.review can read
+      // 3. Even a granted platform reviewer must not receive an unscanned
+      // original PDF/JPEG/PNG. The private file is not opened for this actor.
       spyCurrent.mockResolvedValueOnce({
         person_id: "daprs_staff", actor_type: "user", actor_id: "usr_admin"
       } as any)
       spyStaff.mockResolvedValueOnce({
         grant_id: "stg_1", grant_name: "organization.review"
       } as any)
-      const asStaff = await readOrganizationApplicationDocument(db, "opaque", payload.application_id, root)
-      expect(asStaff).not.toBeNull()
-      expect(asStaff?.content).toEqual(validPdf)
+      const beforeStaffQueries=exec.mock.calls.length
+      await expect(readOrganizationApplicationDocument(db, "opaque", payload.application_id, root))
+        .rejects.toBeInstanceOf(TaxCertificateReviewUnavailable)
+      expect(exec.mock.calls.slice(beforeStaffQueries).some(([sql])=>
+        String(sql).includes("da_organization_application_document"))).toBe(false)
 
       for(const disallowed of ["draft","correction_requested","withdrawn","rejected","approved"]){
         appStatus=disallowed
