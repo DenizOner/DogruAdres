@@ -18,21 +18,20 @@ describe("B05 active membership listing service boundary (mock-only)", () => {
       { select: ["id", "person_id", "role", "status", "protected_owner"] }, context)
   })
 
-  it("denies narrowed protected Owner and ungranted Admin before private membership queries",async()=>{
+  it("ignores obsolete deployment narrowing for protected Owner lists, but not legacy Admin",async()=>{
     const previous=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     const authorize=jest.spyOn(IdentitySessions.prototype,"organizations").mockResolvedValue(
       {person_id:"daprs_p",organizations:[{id:"daorg_test",role:"owner"}]} as any)
     const list=jest.spyOn(service,"listMemberships").mockResolvedValue([])
     try{
-      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage,membership.manage"
-      await expect(service.personalMemberships("synthetic","daorg_test",context))
-        .rejects.toThrow("Access denied")
-      expect(list).not.toHaveBeenCalled()
+      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit"
+      await expect(service.personalMemberships("synthetic","daorg_test",context)).resolves.toEqual([])
+      expect(list).toHaveBeenCalledTimes(1)
       authorize.mockResolvedValue({person_id:"daprs_p",
         organizations:[{id:"daorg_test",role:"admin"}]} as any)
       await expect(service.personalMemberships("synthetic","daorg_test",context))
         .rejects.toThrow("Access denied")
-      expect(list).not.toHaveBeenCalled()
+      expect(list).toHaveBeenCalledTimes(1)
     }finally{
       if(previous===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previous
@@ -148,18 +147,18 @@ describe("M0 B06 personal membership role change service boundary", () => {
     expect(result).toEqual({ id: memberId, role: "admin", status: "active" })
   })
 
-  it("blocks role, revoke and protected-Owner changes when the current Owner role policy excludes membership.manage",async()=>{
+  it("does not narrow protected Owner membership operations with legacy deployment settings",async()=>{
     const previous=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     try{
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage"
       await expect(service.personalChangeMembershipRole(token,orgId,memberId,"admin",context))
-        .rejects.toThrow("Access denied")
+        .resolves.toBeDefined()
       await expect(service.personalRevokeMembership(token,orgId,memberId,context))
-        .rejects.toThrow("Access denied")
+        .resolves.toBeDefined()
       await expect(service.personalManageProtectedOwner(token,orgId,memberId,"owner",context))
-        .rejects.toThrow("Access denied")
-      expect(getMembershipSpy).not.toHaveBeenCalled()
-      expect(changeMembershipSpy).not.toHaveBeenCalled()
+        .resolves.toBeDefined()
+      expect(getMembershipSpy).toHaveBeenCalled()
+      expect(changeMembershipSpy).toHaveBeenCalled()
     }finally{
       if(previous===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previous
