@@ -71,6 +71,13 @@ for (const panel of PANELS) {
   }
 
   const html = fs.readFileSync(indexHtml, 'utf8')
+  // Mercur 2.4.1 ships a Feedback button that can POST message + path to its
+  // telemetry host. Native telemetry:false does not cover browser-initiated
+  // fetches. Refuse a distributable panel without an active connect-src CSP.
+  if (!html.includes('http-equiv="Content-Security-Policy"') ||
+      !html.includes("connect-src 'self'")) {
+    fail(`Unprotected ${panel.name} panel: first-party-only connect-src CSP missing`)
+  }
   if (!html.includes(`${panel.basePath}assets/`)) {
     const message =
       `the ${panel.name} panel was built with the wrong base path — index.html does not ` +
