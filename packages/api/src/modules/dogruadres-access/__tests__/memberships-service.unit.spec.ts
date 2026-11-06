@@ -259,12 +259,12 @@ describe("M0 B07 protected Owner session gateway (mock-only)", () => {
     }, context)
   })
 
-  it("routes protected Owner demotion through existing last-owner invariant rather than bypassing it", async () => {
+  it("blocks the legacy direct Owner demotion even with valid strong session and another Owner", async () => {
     target.mockResolvedValue(protectedOwner)
-    change.mockResolvedValue({ id: membershipId, role: "admin", status: "active", protected_owner: false })
     await expect(service.personalManageProtectedOwner(token, orgId, membershipId, "admin", context))
-      .resolves.toMatchObject({ role: "admin", protected_owner: false })
-    expect(change).toHaveBeenCalledWith(expect.objectContaining({ role: "admin" }), context)
+      .rejects.toThrow("Protected Owner reduction requires the approved safety workflow")
+    expect(target).not.toHaveBeenCalled()
+    expect(change).not.toHaveBeenCalled()
   })
 
   it.each(["admin", "member"])("denies %s actors before touching the target", async role => {
@@ -295,7 +295,7 @@ describe("M0 B07 protected Owner session gateway (mock-only)", () => {
     }
     target.mockResolvedValue(activeMember)
     await expect(service.personalManageProtectedOwner(token, orgId, membershipId, "admin", context))
-      .rejects.toThrow("Owner operation denied")
+      .rejects.toThrow("Protected Owner reduction requires the approved safety workflow")
     await expect(service.personalManageProtectedOwner(token, orgId, membershipId, "member" as any, context))
       .rejects.toThrow("Invalid Owner operation")
     expect(change).not.toHaveBeenCalled()
