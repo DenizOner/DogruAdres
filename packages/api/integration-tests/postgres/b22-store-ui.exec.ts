@@ -755,11 +755,29 @@ export default async function({container}:any){
         ...(runException?[runException]:[]),...nativeErrors.map((x:any)=>x.error??x.message??x)
       ].map((x:any)=>String(x?.message??x)).join(" ")
       const nativeCategory=classify(nativeErrorText)
+      // Bounded, source-only diagnosis: report no raw exception, stack,
+      // cart, customer, tenant, environment, or database contents.
+      const firstNativeFailure=(runException??nativeErrors[0]?.error??nativeErrors[0]) as
+        {name?:unknown;message?:unknown;stack?:unknown}|undefined
+      const failureName=String(firstNativeFailure?.name??"")
+      const safeFailureType=/^(?:TypeError|ReferenceError|MedusaError|Error|SkipExecutionError)$/.test(failureName)
+        ?failureName:"unknown"
+      const readField=String(firstNativeFailure?.message??"").match(
+        /Cannot read properties of (?:undefined|null) \\(reading '([A-Za-z_]{1,32})'\\)/
+      )?.[1]??"unknown"
+      const sourceFrame=String(firstNativeFailure?.stack??"").match(
+        /(@medusajs|@mercurjs)\\/([A-Za-z0-9_-]+)\\/[^\\n)]*\\/([A-Za-z0-9_-]+)\\.(?:js|ts):([0-9]{1,5})/
+      )
+      const safeFrame=sourceFrame?
+        sourceFrame[1].slice(1)+"-"+sourceFrame[2]+"/"+sourceFrame[3]+":"+sourceFrame[4]:
+        "unverified"
       const nativeGroup=String(completed?.result?.order_group_id??"")
       process.stdout.write("OBSERVED B22 native Redis retry child: thrown="+
         String(runException!==undefined)+" errors="+String(nativeErrors.length)+
         " group_id_present="+String(/^og_[A-Za-z0-9_-]+$/.test(nativeGroup))+
-        " error_category="+nativeCategory+"\n")
+        " error_category="+nativeCategory+
+        " error_type="+safeFailureType+" missing_field="+readField+
+        " package_frame="+safeFrame+"\n")
       if(runException!==undefined||nativeErrors.length>0||
          !/^og_[A-Za-z0-9_-]+$/.test(nativeGroup))
         throw Error("B22 native Redis retry child incomplete: "+nativeCategory+
