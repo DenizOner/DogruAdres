@@ -84,8 +84,15 @@ async function run(){
       DOGRUADRES_MFA_SETTINGS_ENABLED:"false",
       ...(scope==="b22-ui"?{DOGRUADRES_B22_PG_LOCK_TEST:"true"}:{}),
     }
+    // The official Redis Workflow Engine needs its own migration in the
+    // same disposable PG16 database. Native child will use this schema.
+    const migrationEnv=scope==="b22-ui"?{
+      ...env,
+      DOGRUADRES_B22_REDIS_WORKFLOW_MIGRATION:"true",
+      LOCKING_REDIS_URL:"redis://127.0.0.1:6379",
+    }:env
     const result=spawnSync(process.execPath,["run","medusa",...flags],{
-      cwd:process.cwd(),env,encoding:"utf8",timeout:180000,maxBuffer:2*1024*1024,
+      cwd:process.cwd(),env:migrationEnv,encoding:"utf8",timeout:180000,maxBuffer:2*1024*1024,
     })
     if(result.error || result.status!==0){
       const cause=String(result.error??("exit "+result.status))
@@ -102,6 +109,9 @@ async function run(){
       if(scope==="b22-ui"){
         const locks=await target.unsafe("select to_regclass('public.locking') as table_name")
         assert.ok(locks[0].table_name,"Missing official PostgreSQL locking provider migration in disposable B22 CI database")
+        const workflows=await target.unsafe("select to_regclass('public.workflow_execution') as table_name")
+        assert.ok(workflows[0].table_name,
+          "Missing official Redis Workflow Engine execution storage in disposable B22 CI database")
         // Mercur 2.4.1 added a Seller migration with the same bare name as
         // our historical B22 Buyer price-group migration. A green db:migrate
         // exit cannot prove BOTH tables were migrated: inspect the real DB
@@ -272,11 +282,16 @@ async function run(){
             process.env.B22_ADMIN_SMTP==="true"?"b22-admin-smtp-evidence":"b22-ui-r1-evidence")
         }
         function invoke(file:string,env:NodeJS.ProcessEnv,direct=false){
+          // The main B22 child now observes the genuine 120s Redis native
+          // Cart lease; do not let the older 210s watchdog truncate the proof.
+          const timeoutMs=file.includes("b22-store-ui.exec.ts")&&
+            env.B22_UI_PREPARE!=="true"&&env.B22_ADMIN_SMTP!=="true"
+            ?420000:file.includes("b22-audit-worker.exec.ts")?360000:210000
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
-            cwd:process.cwd(),env,encoding:"utf8",timeout:file.includes('b22-audit-worker.exec.ts')?360000:210000,maxBuffer:3*1024*1024})
+            cwd:process.cwd(),env,encoding:"utf8",timeout:timeoutMs,maxBuffer:3*1024*1024})
           if(task.B22_SMTP_CANARY)assert.ok(!String(child.stdout??"").concat(String(child.stderr??"")).includes(task.B22_SMTP_CANARY),"SMTP canary leaked to child logs")
           const valid=String(child.stdout??"").split("\n")
-            .filter(x=>/^PASS B22 Chrome:|^PASS B22 real PG16: post-primary-proof forced audit failure|^PASS B22 native organization\.read role policy:|^PASS B22 Owner role policy:|^PASS B22 protected Owner mutation negatives:|^PASS B22 protected Owner management:|^PASS B22 explicit permission:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^PASS B22 native Cart TTL units:|^PASS B22 native Mercur product workflow:|^PASS B22 Mercur 2\.4 Store regions:|^PASS B22 native Store BuyerOrg group PriceList capability:|^PASS B22 BuyerOrg native private TRY reference:|^PASS B22 Buyer catalogue:|^PASS B22 native TRY Offer list price:|^PASS B22 audited Store price group:|^PASS B22 Store price group F-01\/F-02:|^PASS B22 suspended Seller Organization:|^PASS B22 audit worker:|^PASS B22 real audit relay:|^PASS B22 audit real ACK:|^PASS B22 audit natural lease:|^PASS B22 audit native scheduler and crash restart:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x) ||
+            .filter(x=>/^PASS B22 Chrome:|^PASS B22 real PG16: post-primary-proof forced audit failure|^PASS B22 native organization\.read role policy:|^PASS B22 Owner role policy:|^PASS B22 protected Owner mutation negatives:|^PASS B22 protected Owner management:|^PASS B22 explicit permission:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^PASS B22 Redis native Cart crash recovery:|^PASS B22 native Cart TTL units:|^PASS B22 native Mercur product workflow:|^PASS B22 Mercur 2\.4 Store regions:|^PASS B22 native Store BuyerOrg group PriceList capability:|^PASS B22 BuyerOrg native private TRY reference:|^PASS B22 Buyer catalogue:|^PASS B22 native TRY Offer list price:|^PASS B22 audited Store price group:|^PASS B22 Store price group F-01\/F-02:|^PASS B22 suspended Seller Organization:|^PASS B22 audit worker:|^PASS B22 real audit relay:|^PASS B22 audit real ACK:|^PASS B22 audit natural lease:|^PASS B22 audit native scheduler and crash restart:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x) ||
               x==="PASS B22 PG16: duplicate activity direct SQL 23514; original private draft unchanged" ||
               x==="PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner").join("\n")
           if(child.error||child.status!==0)
@@ -384,6 +399,8 @@ async function run(){
         assert.ok(result.includes("PASS B22 PostgreSQL expired lock behavior: task-owned one-second lock remained after expiration and rejected reacquisition; only explicit scoped release cleared it; crash recovery is NOT proven"),"Missing actual expired PostgreSQL lock recovery limitation evidence")
         assert.ok(result.includes("OBSERVED B22 abrupt Medusa process exit: expired provider lock persists and rejects reacquisition; exact task-only cleanup; checkout recovery BLOCKED"),"Missing independent Medusa process exit and stale lock negative evidence")
         assert.ok(result.includes("PASS B22 official Redis provider: independent process exit, live-lock denial, automatic TTL recovery; native Mercur Cart checkout NOT TESTED on Redis"),"Missing native Redis process exit and recovery evidence")
+        assert.ok(result.includes("PASS B22 Redis native Cart crash recovery: authorized zero-value Cart blocked before OrderGroup INSERT, independent live lock denied, process group terminated, real 120s TTL recovery, one OrderGroup/Order, unchanged Buyer, zero payment"),
+          "Missing real Mercur Cart Redis crash, denial, 120s retry and one order evidence")
         assert.ok(result.includes("PASS B22 native Cart TTL units: actual PostgreSQL Cart lease bounded by 120 seconds on Mercur 2.4; checkout/payment still disabled"),"Missing native Mercur Cart lease units mismatch evidence")
         assert.ok(result.includes("PASS B22 real Mercur validate: protected Owner still authorized after self-grant revoke, but Store Buyer Organization block denies native checkout with zero OrderGroup/Order/payment; unblock restores L"),"Missing protected Owner Store-block denial and no-order/payment evidence")
         assert.ok(result.includes("PASS B22 Chrome: real native product INSERT and protected Owner products.edit revoke serialized on PG16; committed product/audit predates revoke; next Member HTTP 403 and zero new product"),"Missing actual native-product and products.edit revoke PG16/Chrome overlap proof")

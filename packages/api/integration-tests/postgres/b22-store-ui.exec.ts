@@ -703,8 +703,107 @@ export default async function({container}:any){
     assert.equal(process.env.LOCKING_REDIS_URL,"redis://127.0.0.1:6379")
     assert.match(redisProbeKey,/^b22-redis-process-exit:[0-9a-f]{16}$/)
     const mode=process.env.B22_REDIS_PROBE_MODE
-    assert.ok(mode==="crash"||mode==="recover")
+    assert.ok(["crash","recover","native-lock-check","native-complete"].includes(mode??""))
     const redisLock=container.resolve("locking")
+    if(mode==="native-lock-check"||mode==="native-complete"){
+      const cartId=process.env.B22_REDIS_NATIVE_CART_ID??""
+      assert.match(cartId,/^cart_[A-Za-z0-9_-]+$/,
+        "Native Redis probe is restricted to its task-owned Cart")
+      if(mode==="native-lock-check"){
+        let acquired=false
+        try{
+          await redisLock.acquire(cartId,{expire:2})
+          acquired=true
+        }catch(error){
+          assert.match(String(error),/Failed to acquire lock/i,
+            "Another Medusa process must own the real native Redis Cart lock")
+        }finally{
+          if(acquired)await redisLock.release(cartId)
+        }
+        assert.equal(acquired,false,"Live native Redis Cart lock may not be stolen")
+        process.stdout.write("B22_REDIS_NATIVE_CART_LOCK_DENIED\n")
+        return
+      }
+      // The same transaction ID across crashed and recovery child processes
+      // lets Medusa's stored Redis engine resume an invoking workflow.
+      // A read-only phase marker distinguishes failure to boot the separate
+      // Medusa child from a failure inside the native Cart workflow.
+      process.stdout.write("OBSERVED B22 native Redis retry child entered workflow probe\n")
+      // Only disclose bounded, non-sensitive error categories; never echo
+      // provider messages, SQL identifiers, session tokens or raw stderr.
+      const classify=(value:unknown)=>{
+        const message=String(value??"")
+        if(/B22_CHECKOUT_AUTHORIZATION_DENIED/i.test(message))return "buyer-denied"
+        if(/Failed to acquire lock|lock.*(busy|acquire)/i.test(message))return "lock-denied"
+        if(/SkipExecutionError|transaction.*(already|active)|already.*transaction/i.test(message))return "transaction-conflict"
+        if(/already exists|duplicate key|unique constraint/i.test(message))return "duplicate-conflict"
+        if(/payment.*session/i.test(message))return "payment-session"
+        if(/timeout|timed out/i.test(message))return "timeout"
+        if(/cannot read properties|undefined/i.test(message))return "invalid-workflow-state"
+        return "unclassified"
+      }
+      const nativeRunner=completeCartWithSplitOrdersWorkflow(container)
+      // Read-only checkpoint provenance on the retry child only. Never print
+      // context, input, step output, Redis keys, tenant data, or exceptions.
+      if(process.env.B22_REDIS_INSPECT_STORED_STATE==="true"){
+        let storedState="unavailable",queryOutput="unknown"
+        try{
+          const existing=await nativeRunner.getRunningTransaction(
+            "b22-native-redis-cart-"+cartId)
+          const currentState=String(existing.getState())
+          storedState=/^(?:not_started|invoking|done|failed|reverted|compensating)$/.test(currentState)
+            ?currentState:"other"
+          const invocation=(existing.getContext() as any)?.invoke
+          queryOutput=invocation&&typeof invocation==="object"
+            ?String(Object.prototype.hasOwnProperty.call(invocation,"order-cart-query"))
+            :"unknown"
+        }catch{}
+        process.stdout.write("OBSERVED B22 Redis stored checkpoint before retry: state="+
+          storedState+" exact_query_output_key="+queryOutput+"\n")
+      }
+      let completed:any,runException:unknown
+      try{
+        completed=await nativeRunner.run({
+          input:{cart_id:cartId},
+          context:{transactionId:"b22-native-redis-cart-"+cartId},
+          throwOnError:false
+        })
+      }catch(error){runException=error}
+      const nativeErrors=Array.isArray(completed?.errors)?completed.errors:[]
+      const nativeErrorText=[
+        ...(runException?[runException]:[]),...nativeErrors.map((x:any)=>x.error??x.message??x)
+      ].map((x:any)=>String(x?.message??x)).join(" ")
+      const nativeCategory=classify(nativeErrorText)
+      // Bounded, source-only diagnosis: report no raw exception, stack,
+      // cart, customer, tenant, environment, or database contents.
+      const firstNativeFailure=(runException??nativeErrors[0]?.error??nativeErrors[0]) as
+        {name?:unknown;message?:unknown;stack?:unknown}|undefined
+      const failureName=String(firstNativeFailure?.name??"")
+      const safeFailureType=/^(?:TypeError|ReferenceError|MedusaError|Error|SkipExecutionError)$/.test(failureName)
+        ?failureName:"unknown"
+      const readField=String(firstNativeFailure?.message??"").match(
+        /Cannot read properties of (?:undefined|null) \(reading '([A-Za-z_]{1,32})'\)/
+      )?.[1]??"unknown"
+      const sourceFrame=String(firstNativeFailure?.stack??"").match(
+        /(@medusajs|@mercurjs)\/([A-Za-z0-9_-]+)\/[^\n)]*\/([A-Za-z0-9_-]+)\.(?:js|ts):([0-9]{1,5})/
+      )
+      const safeFrame=sourceFrame?
+        sourceFrame[1].slice(1)+"-"+sourceFrame[2]+"/"+sourceFrame[3]+":"+sourceFrame[4]:
+        "unverified"
+      const nativeGroup=String(completed?.result?.order_group_id??"")
+      process.stdout.write("OBSERVED B22 native Redis retry child: thrown="+
+        String(runException!==undefined)+" errors="+String(nativeErrors.length)+
+        " group_id_present="+String(/^og_[A-Za-z0-9_-]+$/.test(nativeGroup))+
+        " error_category="+nativeCategory+
+        " error_type="+safeFailureType+" missing_field="+readField+
+        " package_frame="+safeFrame+"\n")
+      if(runException!==undefined||nativeErrors.length>0||
+         !/^og_[A-Za-z0-9_-]+$/.test(nativeGroup))
+        throw Error("B22 native Redis retry child incomplete: "+nativeCategory+
+          ", errors="+String(nativeErrors.length))
+      process.stdout.write("B22_REDIS_NATIVE_CART_RECOVERED\n")
+      return
+    }
     if(mode==="crash"){
       await redisLock.acquire(redisProbeKey,{expire:25})
       process.stdout.write("B22_REDIS_NATIVE_LOCK_BEFORE_EXIT\n",()=>process.exit(86))
@@ -4108,6 +4207,268 @@ export default async function({container}:any){
       "B22 native Redis must deny active key, then recover after expiry")
     process.stdout.write("\nPASS B22 official Redis provider: independent process exit, live-lock denial, automatic TTL recovery; native Mercur Cart checkout NOT TESTED on Redis\n")
 
+
+    // Task-only native Cart: interrupt the actual Mercur workflow AFTER
+    // authoritative Buyer L and the Redis Cart lock, BEFORE OrderGroup INSERT.
+    // A PostgreSQL table barrier forces an observable, uncommitted checkpoint.
+    // Only a detached child process group created here may be terminated.
+    // Nothing touches a payment provider, protected data, or visitor checkout.
+    const redisCart=await cartService.createCarts({
+      currency_code:"eur",customer_id:nativeCustomer.id
+    })
+    await cartService.updateCarts(redisCart.id,{
+      region_id:region.id,sales_channel_id:market.id
+    })
+    await addToCartWorkflow(container).run({input:{
+      cart_id:redisCart.id,
+      items:[{variant_id:variant.id,offer_id:hookProbeOffer.id,
+        quantity:1,requires_shipping:false,
+        metadata:{offer_id:hookProbeOffer.id}} as any]
+    }})
+    const {data:[redisCartGraph]}=await query.graph({
+      entity:"cart",fields:["id","total","completed_at","customer.id",
+        "items.id","items.requires_shipping","items.offer.seller_id"],
+      filters:{id:redisCart.id}
+    })
+    assert.equal(Number(redisCartGraph.total),0)
+    assert.equal(redisCartGraph.completed_at,null)
+    assert.equal(redisCartGraph.customer?.id,nativeCustomer.id)
+    assert.equal(redisCartGraph.items.length,1)
+    assert.equal(redisCartGraph.items[0].requires_shipping,false)
+    assert.equal(redisCartGraph.items[0].offer?.seller_id,gammaSellerId)
+    const redisClaim=await claimCart(organizations[1].id,redisCart.id)
+    assert.equal(redisClaim.status,200)
+    assert.equal(redisClaim.body.checkout_ready,false)
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      redisCart.id,nativeCustomer.id,[gammaSellerId]
+    ),true,"Native Redis recovery test needs current Buyer/Store permission")
+    const beforeNativeOrderCount=Number((await q(
+      'select count(*)::int n from "order"'))[0].n)
+    // Same Customer/Buyer fingerprint distinguishes this Cart's orphan
+    // from any unrelated test order in the disposable database.
+    const beforeNativeBuyerOrderCount=Number((await q(
+      'select count(*)::int n from "order" where customer_id=$1',
+      [nativeCustomer.id]))[0].n)
+
+    const redisBarrier=new Client({connectionString:u.toString()})
+    await redisBarrier.connect()
+    let redisBarrierHeld=false
+    let redisWorker:ReturnType<typeof spawn>|undefined
+    let redisWorkerDone:Promise<{code:number|null;signal:NodeJS.Signals|null}>|undefined
+    let crashedWorker:{code:number|null;signal:NodeJS.Signals|null}|undefined
+    try{
+      await redisBarrier.query("BEGIN")
+      redisBarrierHeld=true
+      const barrierPid=(await redisBarrier.query(
+        "select pg_backend_pid()::int as pid"
+      )).rows[0].pid as number
+      await redisBarrier.query("LOCK TABLE order_group IN SHARE MODE")
+      redisWorker=spawn("bun",cmd,{
+        cwd:process.cwd(),
+        env:{...redisEnv,B22_REDIS_PROBE_MODE:"native-complete",
+          B22_REDIS_NATIVE_CART_ID:redisCart.id},
+        detached:true,
+        stdio:["ignore","ignore","ignore"]
+      })
+      const childGroupId=redisWorker.pid
+      assert.ok(Number.isSafeInteger(childGroupId)&&Number(childGroupId)>=2,
+        "Only the exact newly spawned disposable process group can be stopped")
+      redisWorkerDone=new Promise(resolve=>{
+        redisWorker!.once("error",()=>resolve({code:null,signal:null}))
+        redisWorker!.once("close",(code,signal)=>resolve({code,signal}))
+      })
+      await until(async()=>{
+        if(redisWorker!.exitCode!==null||redisWorker!.signalCode!==null)
+          throw Error("Native Redis Medusa child exited before checkpoint")
+        const rows=await q('select count(*)::int n from pg_locks l '+
+          "where l.locktype='relation' and l.relation='order_group'::regclass "+
+          "and l.mode='RowExclusiveLock' and l.granted=false and l.pid<>$1",
+          [barrierPid])
+        return rows[0].n===1
+      },35000,"B22 Redis-backed native Cart passed L, blocked before Group INSERT")
+      assert.equal((await q(
+        "select count(*)::int n from order_group where cart_id=$1",
+        [redisCart.id]))[0].n,0)
+      const activeRedis=spawnSync("bun",cmd,{
+        cwd:process.cwd(),
+        env:{...redisEnv,B22_REDIS_PROBE_MODE:"native-lock-check",
+          B22_REDIS_NATIVE_CART_ID:redisCart.id},
+        encoding:"utf8",stdio:["ignore","pipe","pipe"],
+        timeout:45000,maxBuffer:1024*1024
+      })
+      assert.ok(!activeRedis.error&&activeRedis.status===0&&
+        String(activeRedis.stdout??"").includes("B22_REDIS_NATIVE_CART_LOCK_DENIED"),
+        "Second Medusa process must be denied the native Cart's active Redis lock")
+      process.kill(-childGroupId!,"SIGKILL")
+      crashedWorker=await redisWorkerDone
+      assert.ok(crashedWorker.signal==="SIGKILL"||crashedWorker.code===137,
+        "Only the disposable native checkout worker must exit abruptly")
+      await redisBarrier.query("ROLLBACK")
+      redisBarrierHeld=false
+    }finally{
+      // Kill the exact task-owned process GROUP even if the Bun wrapper exited
+      // first; a surviving child Medusa process must never escape this probe.
+      if(redisWorker?.pid && Number.isSafeInteger(redisWorker.pid)&&
+          redisWorker.pid>=2){
+        try{process.kill(-redisWorker.pid,"SIGKILL")}
+        catch(error){if((error as NodeJS.ErrnoException).code!=="ESRCH")throw error}
+      }
+      if(redisWorkerDone)await redisWorkerDone
+      if(redisBarrierHeld)await redisBarrier.query("ROLLBACK")
+      await redisBarrier.end()
+    }
+    assert.equal((await q(
+      "select count(*)::int n from order_group where cart_id=$1",
+      [redisCart.id]))[0].n,0,
+      "Aborted native OrderGroup INSERT must not leave a partial committed Group")
+    assert.equal((await cartService.retrieveCart(redisCart.id)).completed_at,null)
+    const {data:redisBeforeOrderLinks}=await query.graph({
+      entity:"order_cart",fields:["order_id"],filters:{cart_id:redisCart.id}
+    })
+    assert.equal(redisBeforeOrderLinks.length,0)
+    const storedExecution=await q(
+      "select workflow_id,transaction_id,state from workflow_execution where transaction_id=$1 and deleted_at is null",
+      ["b22-native-redis-cart-"+redisCart.id])
+    assert.equal(storedExecution.length,1,
+      "Official Redis engine must retain the killed native Cart workflow checkpoint")
+    assert.equal(storedExecution[0].workflow_id,"complete-cart-with-split-orders")
+    process.stdout.write("OBSERVED B22 native Redis workflow execution persisted after crash\n")
+    const crashedBuyerOrders=Number((await q(
+      'select count(*)::int n from "order" where customer_id=$1',
+      [nativeCustomer.id]))[0].n)
+    const crashedAllOrders=Number((await q(
+      'select count(*)::int n from "order"'))[0].n)
+    // Keep the original zero-orphan gate. Continue only in this disposable
+    // zero-payment fixture to diagnose whether native Redis checkpoint resume
+    // will link that Order or accidentally create a duplicate.
+    if(crashedBuyerOrders!==beforeNativeBuyerOrderCount ||
+       crashedAllOrders!==beforeNativeOrderCount)
+      process.stdout.write("OBSERVED B22 native Redis crash orphan before retry; diagnosis only, not PASS\n")
+    const {data:redisBeforePaymentLinks}=await query.graph({
+      entity:"cart_payment_collection",fields:["payment_collection_id"],
+      filters:{cart_id:redisCart.id}
+    })
+    assert.equal(redisBeforePaymentLinks.length,0)
+    // Real Mercur 2.4.0 native Cart lock TTL is 120 seconds. Do not
+    // manually delete a Redis key, shorten its lease or fake recovery.
+    await new Promise<void>(resolve=>setTimeout(resolve,124000))
+    const redisRetry=spawnSync("bun",cmd,{
+      cwd:process.cwd(),
+      env:{...redisEnv,B22_REDIS_PROBE_MODE:"native-complete",
+        B22_REDIS_NATIVE_CART_ID:redisCart.id,
+        B22_REDIS_INSPECT_STORED_STATE:"true"},
+      encoding:"utf8",stdio:["ignore","pipe","pipe"],
+      timeout:90000,maxBuffer:1024*1024
+    })
+    const nativeRetrySuccess=!redisRetry.error&&redisRetry.status===0&&
+      String(redisRetry.stdout??"").includes("B22_REDIS_NATIVE_CART_RECOVERED")
+    const redisGroups=await q("select id from order_group where cart_id=$1",
+      [redisCart.id])
+    const {data:redisRetryLinks}=await query.graph({
+      entity:"order_cart",fields:["order_id"],filters:{cart_id:redisCart.id}
+    })
+    const {data:redisRetryPayments}=await query.graph({
+      entity:"cart_payment_collection",fields:["payment_collection_id"],
+      filters:{cart_id:redisCart.id}
+    })
+    const buyerOrderAfterRetry=Number((await q(
+      'select count(*)::int n from "order" where customer_id=$1',
+      [nativeCustomer.id]))[0].n)
+    const totalOrderAfterRetry=Number((await q(
+      'select count(*)::int n from "order"'))[0].n)
+    const nativeCartCompleted=(await cartService.retrieveCart(redisCart.id)).completed_at!==null
+    const workflowAfterRetry=await q(
+      "select state from workflow_execution where workflow_id=$1 and transaction_id=$2 and deleted_at is null",
+      ["complete-cart-with-split-orders","b22-native-redis-cart-"+redisCart.id])
+    assert.equal(workflowAfterRetry.length,1,
+      "Stored Redis execution must remain inspectable after failed native retry")
+    const engineState=String(workflowAfterRetry[0].state??"")
+    const safeEngineState=/^[a-z_-]{1,30}$/.test(engineState)?engineState:"unknown"
+    const transcript=String(redisRetry.stdout??"")+"\n"+String(redisRetry.stderr??"")
+    const childStatus=String(redisRetry.status??"unknown")
+    const childEntered=String(redisRetry.stdout??"").includes(
+      "OBSERVED B22 native Redis retry child entered workflow probe")
+    const startupCategory=/ECONNREFUSED|ECONNRESET/i.test(transcript)
+      ?"redis-connection":/MODULE_NOT_FOUND|Cannot find module/i.test(transcript)
+      ?"module-load":/SyntaxError|TypeError|ReferenceError/i.test(transcript)
+      ?"runtime-error":/database.*(connection|unavailable)|ECONN/i.test(transcript)
+      ?"database-connection":/Timeout|timed out/i.test(transcript)
+      ?"startup-timeout":/REFUSED:/i.test(transcript)
+      ?"guard-refusal":/Error running script/i.test(transcript)
+      ?"script-execution-error":"unclassified"
+    const childErrorCategory=(
+      transcript.match(/OBSERVED B22 native Redis retry child: thrown=(?:true|false) errors=[0-9]+ group_id_present=(?:true|false) error_category=([a-z-]+)/)
+    )?.[1]??(/Failed to acquire lock/i.test(transcript)?"lock-denied":
+      /B22_CHECKOUT_AUTHORIZATION_DENIED/i.test(transcript)?"buyer-denied":
+      redisRetry.error?"child-exec-error":"unclassified")
+    // Only publish the child's bounded diagnostic tokens, never its raw output.
+    const safeChildEvidence=transcript.match(
+      / error_type=(TypeError|ReferenceError|MedusaError|Error|SkipExecutionError|unknown) missing_field=([A-Za-z_]{1,32}) package_frame=([A-Za-z0-9_/:.-]{1,120})/
+    )
+    const storedCheckpointEvidence=transcript.match(
+      /OBSERVED B22 Redis stored checkpoint before retry: state=(not_started|invoking|done|failed|reverted|compensating|other|unavailable) exact_query_output_key=(true|false|unknown)/
+    )
+    const safeCheckpointState=storedCheckpointEvidence?.[1]??"unverified"
+    const safeQueryOutputKey=storedCheckpointEvidence?.[2]??"unknown"
+    const safeChildType=safeChildEvidence?.[1]??"unknown"
+    const safeChildField=safeChildEvidence?.[2]??"unknown"
+    const safeChildFrame=safeChildEvidence?.[3]??"unverified"
+    const buyerOrderDelta=buyerOrderAfterRetry-beforeNativeBuyerOrderCount
+    const totalOrderDelta=totalOrderAfterRetry-beforeNativeOrderCount
+    process.stdout.write("OBSERVED B22 Redis native retry SQL: buyer_order_delta="+buyerOrderDelta+
+      " all_order_delta="+totalOrderDelta+" groups="+redisGroups.length+
+      " order_cart_links="+redisRetryLinks.length+
+      " payment_links="+redisRetryPayments.length+
+      " cart_completed="+String(nativeCartCompleted)+
+      " workflow_state="+safeEngineState+
+      " child_entered="+String(childEntered)+
+      " startup_category="+startupCategory+
+      " child_exit="+(/^(?:0|[1-9][0-9]{0,2})$/.test(childStatus)?childStatus:"unknown")+
+      " error_category="+childErrorCategory+
+      " error_type="+safeChildType+" missing_field="+safeChildField+
+      " package_frame="+safeChildFrame+
+      " redis_checkpoint_state="+safeCheckpointState+
+      " query_output_key="+safeQueryOutputKey+"\n")
+    assert.equal(redisRetryPayments.length,0,
+      "No payment collection link may be created by a failed native Cart retry")
+    if(!nativeRetrySuccess)
+      throw Error("Native Redis checkpoint resume NOT ACCEPTED; category="+
+        childErrorCategory+" buyer_order_delta="+buyerOrderDelta+
+        " all_order_delta="+totalOrderDelta+" groups="+redisGroups.length+
+        " links="+redisRetryLinks.length+
+        " payment_links="+redisRetryPayments.length)
+    process.stdout.write("OBSERVED B22 native Redis checkpoint retry returned success; checking SQL uniqueness\n")
+    assert.equal(redisGroups.length,1,
+      "Crash and native retry must persist exactly one OrderGroup")
+    const {data:redisOrderLinks}=await query.graph({
+      entity:"order_cart",fields:["order_id"],filters:{cart_id:redisCart.id}
+    })
+    assert.equal(redisOrderLinks.length,1,
+      "Crash and native retry must persist exactly one Seller Order")
+    assert.match(String(redisOrderLinks[0].order_id),/^order_[A-Za-z0-9_-]+$/)
+    assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),
+      beforeNativeOrderCount+1,
+      "Recovery must create only one native Order, including unlinked rows")
+    const {data:redisAfterPaymentLinks}=await query.graph({
+      entity:"cart_payment_collection",fields:["payment_collection_id"],
+      filters:{cart_id:redisCart.id}
+    })
+    assert.equal(redisAfterPaymentLinks.length,0,
+      "Native crash/retry acceptance cannot create/capture a payment")
+    assert.ok((await cartService.retrieveCart(redisCart.id)).completed_at)
+    const redisBuyer=await q(
+      "select organization_id,customer_id from da_buyer_cart_attribution where cart_id=$1",
+      [redisCart.id])
+    assert.equal(redisBuyer.length,1)
+    assert.equal(redisBuyer[0].organization_id,organizations[1].id)
+    assert.equal(redisBuyer[0].customer_id,nativeCustomer.id)
+    // Reassert the independent crash instant gate LAST, after bounded retry
+    // diagnostics. A transient orphan remains a FAIL even if resumed later.
+    assert.equal(crashedBuyerOrders,beforeNativeBuyerOrderCount,
+      "Native Cart SIGKILL left an unlinked Buyer Order before recovery")
+    assert.equal(crashedAllOrders,beforeNativeOrderCount,
+      "Native Cart SIGKILL left an unlinked Seller Order before recovery")
+    process.stdout.write("\nPASS B22 Redis native Cart crash recovery: authorized zero-value Cart blocked before OrderGroup INSERT, independent live lock denied, process group terminated, real 120s TTL recovery, one OrderGroup/Order, unchanged Buyer, zero payment\n")
 
     type NativeCartAttempt={run?:any;error?:string}
     const startCartAttempt=():Promise<NativeCartAttempt>=>

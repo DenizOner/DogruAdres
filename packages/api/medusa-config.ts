@@ -36,9 +36,23 @@ if(b22DisposablePgLock || b22DisposableRedisLock){
 if(b22DisposableRedisLock && (
   process.env.LOCKING_REDIS_URL!=="redis://127.0.0.1:6379" ||
   !/^b22-redis-process-exit:[0-9a-f]{16}$/.test(process.env.B22_REDIS_PROBE_KEY??"") ||
-  !["crash","recover"].includes(process.env.B22_REDIS_PROBE_MODE??"")
-))throw new Error("REFUSED: Redis only for B22 disposable process-exit CI probe")
+  !["crash","recover","native-lock-check","native-complete"].includes(
+    process.env.B22_REDIS_PROBE_MODE??"") ||
+  (["native-lock-check","native-complete"].includes(process.env.B22_REDIS_PROBE_MODE??"")
+    ? !/^cart_[A-Za-z0-9_-]+$/.test(process.env.B22_REDIS_NATIVE_CART_ID??"")
+    : Boolean(process.env.B22_REDIS_NATIVE_CART_ID))
+))throw new Error("REFUSED: Redis only for exact task-owned B22 CI lock/Cart probes")
 
+
+// Only the task-owned B22 CI database may use Medusa's installed Redis
+// Workflow Engine. This is an integration capability test, not a rollout.
+const b22RedisWorkflowMigration=process.env.DOGRUADRES_B22_REDIS_WORKFLOW_MIGRATION==="true"
+if(b22RedisWorkflowMigration && (
+  !b22DisposablePgLock || b22DisposableRedisLock ||
+  process.env.LOCKING_REDIS_URL!=="redis://127.0.0.1:6379"
+))throw Error("REFUSED: Redis Workflow migration requires disposable B22 PG CI")
+const b22RedisWorkflowTest=b22RedisWorkflowMigration ||
+  (b22DisposableRedisLock && process.env.B22_REDIS_PROBE_MODE==="native-complete")
 
 // Fail closed even when Medusa evaluates configuration during a production build.
 const httpSecrets = resolveHttpSecrets(process.env)
@@ -108,6 +122,14 @@ module.exports = withMercur({
           namespace: "b22-ci-lock:" + new URL(process.env.DATABASE_URL!).pathname.slice(1) + ":",
         },
       }] },
+    }] : []),
+    ...(b22RedisWorkflowTest ? [{
+      resolve: "@medusajs/medusa/workflow-engine-redis",
+      options: {redis: {
+        redisUrl: process.env.LOCKING_REDIS_URL,
+        queueName: "b22-ci-workflows-" + new URL(process.env.DATABASE_URL!).pathname.slice(1),
+        jobQueueName: "b22-ci-workflow-jobs-" + new URL(process.env.DATABASE_URL!).pathname.slice(1),
+      }},
     }] : []),
     {
       resolve: '@medusajs/medusa/notification',
