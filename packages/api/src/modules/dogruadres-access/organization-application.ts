@@ -260,7 +260,7 @@ export async function saveOrganizationDocument(
     from da_organization_application where id=? for update`,[input.application_id])
   if(rows.length>1)throw new IdentityAccessDenied()
   if(rows.length!==1||rows[0].applicant_person_id!==session.person_id)return null
-  if(rows[0].status!=="draft")return {conflict:true as const}
+  if(!["draft","correction_requested"].includes(rows[0].status))return {conflict:true as const}
   if(Number(rows[0].version)!==input.expected_version)return {conflict:true as const}
 
   // Only the confirmed draft owner may spend CPU/memory decoding and gzipping.
@@ -315,8 +315,8 @@ export async function saveOrganizationDocument(
   // Bump application version
   const updated=await db.execute(
     `update da_organization_application
-      set version=version+1, updated_at=clock_timestamp()
-      where id=? and applicant_person_id=? and status='draft' and version=?
+      set status='draft',version=version+1, updated_at=clock_timestamp()
+      where id=? and applicant_person_id=? and status in ('draft','correction_requested') and version=?
       returning version`,
     [input.application_id, session.person_id, input.expected_version]
   )
@@ -374,7 +374,7 @@ export async function submitOrganizationApplication(
     from da_organization_application where id=? for update`,[input.application_id])
   if(rows.length>1)throw new IdentityAccessDenied()
   if(rows.length!==1||rows[0].applicant_person_id!==session.person_id)return null
-  if(!["draft","correction_requested"].includes(rows[0].status))return {conflict:true as const, missing_document:false as const, missing_tax_identifier:false as const}
+  if(rows[0].status!=="draft")return {conflict:true as const, missing_document:false as const, missing_tax_identifier:false as const}
   if(Number(rows[0].version)!==input.expected_version)return {conflict:true as const, missing_document:false as const, missing_tax_identifier:false as const}
 
   const app=rows[0]
@@ -442,7 +442,7 @@ export async function submitOrganizationApplication(
   const updated=await db.execute(
     `update da_organization_application
       set status='submitted', duplicate_review_required=?, version=version+1, updated_at=clock_timestamp()
-      where id=? and applicant_person_id=? and status in ('draft','correction_requested') and version=?
+      where id=? and applicant_person_id=? and status='draft' and version=?
       returning version`,
     [duplicateReviewRequired, input.application_id, session.person_id, input.expected_version]
   )

@@ -463,6 +463,61 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     }
   })
 
+
+  it("reopens a correction only after a new private document revision, preserving the earlier file",async()=>{
+    const os=require("node:os"),path=require("node:path"),fsp=require("node:fs/promises")
+    const root=await fsp.mkdtemp(path.join(os.tmpdir(),"da-b22-correction-"))
+    const pdf=Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\n0 1\n0000000000 65535 f\ntrailer\n<<>>\nstartxref\n9\n%%EOF\n","ascii")
+    const changed=Buffer.from(pdf.toString("ascii").replace("trailer","% revised document\ntrailer"),"ascii")
+    const spy=jest.spyOn(IdentitySessions.prototype,"current").mockResolvedValue({
+      person_id:"daprs_applicant",actor_type:"customer",actor_id:"cus_app"
+    } as any)
+    let status="correction_requested",person="daprs_applicant"
+    const exec=jest.fn(async(sql:string,params?:any[])=>{
+      if(sql.includes("from da_organization_application where id=? for update"))
+        return [{applicant_person_id:person,status,version:4}]
+      if(sql.includes("max(version)"))return [{max_v:1}]
+      if(sql.includes("update da_organization_application")&&sql.includes("set status='draft'"))
+        return [{version:5}]
+      return []
+    })
+    const db:any={execute:exec}
+    const input={action:"upload_document" as const,application_id:payload.application_id,
+      expected_version:4,filename:"corrected.pdf",file_base64:changed.toString("base64")}
+    try{
+      const prior=await writePrivateTaxCertificate(root,prepareTaxCertificate("original.pdf",pdf))
+      const result=await saveOrganizationDocument(db,"opaque",input,root)
+      expect(result).toMatchObject({conflict:false,status:"draft",version:5,
+        document:{version:2,original_byte_length:changed.length}})
+      const statusUpdate=exec.mock.calls.find(([sql])=>String(sql).includes("set status='draft'"))
+      expect(String(statusUpdate?.[0])).toContain("status in ('draft','correction_requested')")
+      const inserted=exec.mock.calls.find(([sql])=>String(sql).includes("insert into da_organization_application_document"))
+      const fields=inserted?.[1] as any[]
+      expect(fields[10]).toBe(2)
+      expect(await readPrivateTaxCertificate(root,{
+        storageKey:fields[3],internalName:fields[4],mimeType:fields[5],
+        compression:fields[6],originalByteLength:fields[7],
+        originalSha256:fields[8],storedByteLength:fields[9]
+      })).toEqual(changed)
+      expect(await readPrivateTaxCertificate(root,prior)).toEqual(pdf)
+      expect(await fsp.readdir(root)).toHaveLength(2)
+      expect(exec.mock.calls.filter(([sql])=>String(sql).includes("insert into da_audit_event"))).toHaveLength(1)
+      expect(exec.mock.calls.filter(([sql])=>String(sql).includes("insert into da_security_outbox"))).toHaveLength(1)
+      expect(exec.mock.calls.some(([sql])=>/createOrganizations|insert into da_organization_membership/.test(String(sql)))).toBe(false)
+      for(const forbidden of ["submitted","withdrawn","rejected","approved"]){
+        status=forbidden
+        const before=exec.mock.calls.length
+        expect(await saveOrganizationDocument(db,"opaque",input,root)).toEqual({conflict:true})
+        expect(exec.mock.calls.slice(before).some(([sql])=>/insert into |update da_/.test(String(sql)))).toBe(false)
+      }
+      status="correction_requested";person="daprs_other"
+      const before=exec.mock.calls.length
+      expect(await saveOrganizationDocument(db,"opaque",input,root)).toBeNull()
+      expect(exec.mock.calls.slice(before).some(([sql])=>/insert into |update da_/.test(String(sql)))).toBe(false)
+      expect(await fsp.readdir(root)).toHaveLength(2)
+    }finally{spy.mockRestore();await fsp.rm(root,{recursive:true,force:true})}
+  })
+
   it("submitOrganizationApplication verifies tax identifier, private file integrity and confidential duplicates", async () => {
     const os = require("node:os")
     const path = require("node:path")
@@ -489,11 +544,12 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     let hasDoc = false
     let hasDuplicates = false
     let hasOrgDuplicates = false
+    let currentStatus = "draft"
 
     const exec = jest.fn(async (sql: string) => {
       if (sql.includes("from da_organization_application where id=? for update")) {
         return [{
-          applicant_person_id: "daprs_applicant", status: "draft", version: 2,
+          applicant_person_id: "daprs_applicant", status: currentStatus, version: 2,
           business_kind: "individual_business", legal_name: "Test Ltd",
           landline_phone: "+90 212 555 00 00", tax_identifier: taxId,
           declared_activities: ["service_repair"], primary_activity: "service_repair"
@@ -589,6 +645,18 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       })
       const updateCalls2 = exec.mock.calls.filter(c => String(c[0]).includes("update da_organization_application"))
       expect(updateCalls2.some((c: any) => c[1]?.[0] === true)).toBe(true)
+
+      // A correction cannot be resubmitted unchanged and a terminal record
+      // cannot be replayed. These denials create no audit or Organization.
+      for(const state of ["correction_requested","submitted","withdrawn","rejected","approved"]){
+        currentStatus=state
+        const writes=()=>exec.mock.calls.filter(([sql])=>
+          /update da_organization_application|insert into da_audit_event|insert into da_security_outbox/.test(String(sql))).length
+        const before=writes()
+        expect(await submitOrganizationApplication(db,"opaque",input,root))
+          .toEqual({conflict:true,missing_document:false,missing_tax_identifier:false})
+        expect(writes()).toBe(before)
+      }
     } finally {
       spy.mockRestore()
       await fsp.rm(root, { recursive: true, force: true })

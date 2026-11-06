@@ -527,13 +527,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           el('organization-document-section').hidden=false;
           if(item.has_document){
             el('organization-document-info').textContent='Yüklü vergi levhası: v'+item.document.version+' ('+item.document.mime_type+', '+item.document.original_byte_length+' bayt)';
-            el('organization-application-submit').hidden=false;
+            // A correction must be saved or replaced before resubmission.
+            el('organization-application-submit').hidden=item.status!=='draft';
           } else {
             el('organization-document-info').textContent='Henüz vergi levhası yüklenmedi (zorunlu).';
             el('organization-application-submit').hidden=true;
           }
           el('organization-draft-status').textContent=item.status==='correction_requested'?
-            'Düzeltme istendi. Düzenleyip taslağı kaydedin; ardından başvuruyu yeniden gönderin.':
+            'Düzeltme istendi. Bilgileri kaydedin veya yeni belge yükleyin; ardından başvuruyu yeniden gönderin.':
             'Seçilen özel taslak düzenlenebilir; gönderilmedi.';
           form.elements.legal_name.focus();
         };
