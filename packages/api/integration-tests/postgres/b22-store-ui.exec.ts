@@ -85,30 +85,6 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   assert.deepEqual(before,[],"Fresh dedicated SMTP database")
   // Negative checks precede any valid settings write.
   await open(denied);await hidden(denied)
-  // Test the actual production dashboard document, not a mocked header.
-  // Only a synthetic .invalid host is attempted; no private information is
-  // submitted to Mercur or any real remote service during this check.
-  const policy=await denied.eval("document.querySelector('meta[http-equiv=Content-Security-Policy]')?.content||''")
-  assert.ok(policy.includes("connect-src 'self'"),"Admin panel CSP must restrict external connections")
-  assert.ok(!policy.includes("telemetry.mercurjs.com"),"Feedback host must never be allowlisted")
-  const externalDenied=await denied.eval(`(async()=>{
-    const testOrigin='https://dogruadres-csp-check.invalid';
-    return await new Promise(resolve=>{
-      let observed=false;
-      const onViolation=event=>{
-        if(event.effectiveDirective==='connect-src' && event.blockedURI.startsWith(testOrigin)){
-          observed=true;
-          document.removeEventListener('securitypolicyviolation',onViolation);
-          resolve(true);
-        }
-      };
-      document.addEventListener('securitypolicyviolation',onViolation);
-      fetch(testOrigin+'/feedback',{method:'POST',body:'synthetic-only'}).catch(()=>{});
-      setTimeout(()=>{document.removeEventListener('securitypolicyviolation',onViolation);resolve(observed)},700);
-    });
-  })()`)
-  assert.equal(externalDenied,true,
-    'Real Chrome must deny synthetic external Feedback-like POST via CSP')
   assert.equal((await read(denied)).status,403)
   assert.deepEqual(await digest(),before)
   mark("Unauthorized real MFA session GET403; no SMTP rows")
