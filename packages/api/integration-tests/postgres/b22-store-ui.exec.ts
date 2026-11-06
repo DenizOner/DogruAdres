@@ -7777,6 +7777,90 @@ export default async function({container}:any){
       await signupChrome.wait(
         "Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('B22 Sahis Isletmesi')&&p.textContent.includes('Başvuru onaylandı'))")
 
+      // Approved drag-and-drop path: Chrome DOM drop event + actual visible
+      // upload click, using the existing private HTTP/PG16 document service.
+      // A drop alone must not write anything, and a withdrawn draft retains it.
+      const dragApplicationId="daorgapp_"+randomBytes(16).toString("hex")
+      const dragDraft=await signupChrome.eval(`(async()=>{
+        const s=await (await fetch('/personal/session')).json();
+        const r=await fetch('/personal/organization-applications',{
+          method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+          body:JSON.stringify({
+            application_id:${JSON.stringify(dragApplicationId)},expected_version:0,
+            business_kind:'individual_business',legal_name:'B22 Drag Drop Fixture',
+            landline_phone:'+90 212 555 23 89',
+            declared_activities:['service_repair'],primary_activity:'service_repair'
+          })
+        });return {status:r.status,body:await r.json()};
+      })()`)
+      assert.equal(dragDraft.status,201)
+      assert.equal(dragDraft.body.version,1)
+      const dragOrgCount=Number((await q("select count(*)::int n from da_organization"))[0].n)
+      await signupChrome.click("#organization-draft-refresh")
+      await signupChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('B22 Drag Drop Fixture'))")
+      assert.equal(await signupChrome.eval(`(()=>{
+        const row=Array.from(document.querySelectorAll('#organization-draft-list p'))
+          .find(p=>p.textContent.includes('B22 Drag Drop Fixture'));
+        const edit=Array.from(row?.querySelectorAll('button')||[])
+          .find(b=>b.textContent.includes('Taslağı düzenle'));
+        if(!edit)return false;
+        edit.click();return true;
+      })()`),true)
+      await signupChrome.wait("!document.getElementById('organization-document-section').hidden")
+      const badDrop=await signupChrome.eval(`(()=>{
+        const transfer=new DataTransfer();
+        for(const name of ['one.png','two.png'])
+          transfer.items.add(new File([new Uint8Array([1])],name,{type:'image/png'}));
+        const zone=document.getElementById('organization-document-dropzone');
+        const accepted=!zone.dispatchEvent(new DragEvent('drop',
+          {bubbles:true,cancelable:true,dataTransfer:transfer}));
+        return {accepted,message:document.getElementById('organization-document-status').textContent};
+      })()`)
+      assert.deepEqual(badDrop,{
+        accepted:true,message:'Lütfen aynı anda yalnız bir belge bırakın.'
+      },"Multiple dropped files must not be silently accepted")
+      const goodDrop=await signupChrome.eval(`(()=>{
+        const bytes=Uint8Array.from(atob(${JSON.stringify(onePixelPng)}),c=>c.charCodeAt(0));
+        const transfer=new DataTransfer();
+        transfer.items.add(new File([bytes],'levha.png',{type:'image/png'}));
+        const zone=document.getElementById('organization-document-dropzone');
+        const accepted=!zone.dispatchEvent(new DragEvent('drop',
+          {bubbles:true,cancelable:true,dataTransfer:transfer}));
+        return {accepted,selected:document.getElementById('organization-document-status')
+          .textContent.includes('Dosya seçildi: levha.png.'),
+          submitHidden:document.getElementById('organization-application-submit').hidden};
+      })()`)
+      assert.deepEqual(goodDrop,{accepted:true,selected:true,submitHidden:true})
+      assert.equal(Number((await q(
+        "select count(*)::int n from da_organization_application_document where application_id=$1",
+        [dragApplicationId]))[0].n),0,"A dropped file alone must not start a document write")
+      await signupChrome.click("#organization-document-upload")
+      await signupChrome.wait("document.getElementById('organization-document-status').textContent.includes('başarıyla yüklendi')")
+      const dragDocument=await q(`select version,mime_type,original_byte_length,original_sha256
+        from da_organization_application_document where application_id=$1 and is_current=true`,
+        [dragApplicationId])
+      assert.equal(dragDocument.length,1)
+      assert.equal(Number(dragDocument[0].version),1)
+      assert.equal(dragDocument[0].mime_type,'image/png')
+      assert.equal(Number(dragDocument[0].original_byte_length),Buffer.from(onePixelPng,'base64').length)
+      assert.equal(dragDocument[0].original_sha256,
+        createHash('sha256').update(Buffer.from(onePixelPng,'base64')).digest('hex'))
+      const dragWithdrawal=await signupChrome.eval(`(async()=>{
+        const s=await (await fetch('/personal/session')).json();
+        const r=await fetch('/personal/organization-applications',{
+          method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+          body:JSON.stringify({action:'withdraw',application_id:${JSON.stringify(dragApplicationId)},
+            expected_version:2})
+        });return {status:r.status,body:await r.json()};
+      })()`)
+      assert.equal(dragWithdrawal.status,200)
+      assert.equal(dragWithdrawal.body.status,'withdrawn')
+      assert.equal((await q("select status from da_organization_application where id=$1",
+        [dragApplicationId]))[0].status,'withdrawn')
+      assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),dragOrgCount,
+        "Uploading and withdrawing a private draft must not provision an Organization")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: PNG drag drop requires visible upload, private hash persisted, multi-drop denied, withdrawn without Organization\\n")
+
       // Read-only verification against every persisted private revision.
       // No cleanup, no paths/keys/Person data in the audit output.
       const inventory=await inspectTaxCertificateSnapshot(pg,taxDir)
