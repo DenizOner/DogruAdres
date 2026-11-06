@@ -88,7 +88,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   // Test the actual production dashboard document, not a mocked header.
   // Only a synthetic .invalid host is attempted; no private information is
   // submitted to Mercur or any real remote service during this check.
-  const policy=await denied.eval("document.querySelector('meta[http-equiv=\\"Content-Security-Policy\\"]')?.content||''")
+  const policy=await denied.eval("document.querySelector('meta[http-equiv=Content-Security-Policy]')?.content||''")
   assert.ok(policy.includes("connect-src 'self'"),"Admin panel CSP must restrict external connections")
   assert.ok(!policy.includes("telemetry.mercurjs.com"),"Feedback host must never be allowlisted")
   const externalDenied=await denied.eval(`(async()=>{
