@@ -353,7 +353,16 @@ jobs:
           # never downgrade the document review to header/magic-byte checks.
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            clamav-daemon clamav-freshclam bubblewrap poppler-utils imagemagick
+            clamav-daemon clamav-freshclam bubblewrap poppler-utils imagemagick \
+            apparmor-profiles apparmor-utils
+          # Ubuntu 24.04 blocks unprivileged bwrap namespaces by default.
+          # Load ONLY its distribution-supplied restrictive bwrap profile in
+          # this throwaway CI VM. Never disable global AppArmor or userns rules.
+          test -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = "1"
           sudo systemctl stop clamav-freshclam.service >/dev/null 2>&1 || true
           sudo freshclam --stdout
           test -s /var/lib/clamav/daily.cvd || test -s /var/lib/clamav/daily.cld
