@@ -296,9 +296,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }
     // Explicit B07 operation states, not a backdoor to revoked membership
     // reactivation or ordinary B06 role controls.
-    if (target.status !== 'active' ||
-        (role === 'owner' && (target.protected_owner || target.role === 'owner')) ||
-        (role === 'admin' && (!target.protected_owner || target.role !== 'owner'))) {
+    if (target.status !== 'active' || target.protected_owner || target.role === 'owner') {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, 'Owner operation denied')
     }
     const result = await this.changeMembership({
