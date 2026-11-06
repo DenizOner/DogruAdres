@@ -763,10 +763,10 @@ export default async function({container}:any){
       const safeFailureType=/^(?:TypeError|ReferenceError|MedusaError|Error|SkipExecutionError)$/.test(failureName)
         ?failureName:"unknown"
       const readField=String(firstNativeFailure?.message??"").match(
-        /Cannot read properties of (?:undefined|null) \\(reading '([A-Za-z_]{1,32})'\\)/
+        /Cannot read properties of (?:undefined|null) \(reading '([A-Za-z_]{1,32})'\)/
       )?.[1]??"unknown"
       const sourceFrame=String(firstNativeFailure?.stack??"").match(
-        /(@medusajs|@mercurjs)\\/([A-Za-z0-9_-]+)\\/[^\\n)]*\\/([A-Za-z0-9_-]+)\\.(?:js|ts):([0-9]{1,5})/
+        /(@medusajs|@mercurjs)\/([A-Za-z0-9_-]+)\/[^\n)]*\/([A-Za-z0-9_-]+)\.(?:js|ts):([0-9]{1,5})/
       )
       const safeFrame=sourceFrame?
         sourceFrame[1].slice(1)+"-"+sourceFrame[2]+"/"+sourceFrame[3]+":"+sourceFrame[4]:
