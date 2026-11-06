@@ -5191,6 +5191,32 @@ export default async function({container}:any){
       assert.equal(nativeLinks.length,1)
       assert.equal(nativeLinks[0].is_owner,false)
       assert.equal(nativeLinks[0].role_id,"role_seller_support")
+      const confirmed=await q(`select e.id from da_audit_event e
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.action='organization.store_native_member_connection_confirmed'
+          and e.organization_id=$1 and e.target_id=$2
+          and e.new_values->>'person_id'=$3
+          and e.new_values->>'member_id'=$4`,
+        [organizations[0].id,ownerStoreId,B.person,bNativeMember.id])
+      assert.equal(confirmed.length,1,"Owner native membership requires canonical Foundation audit/outbox")
+      const replayConnected=await browser.eval("(async()=>{"+
+        "const s=await (await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-member-connections',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify("+JSON.stringify({
+          organization_id:organizations[0].id,seller_id:ownerStoreId,membership_id:alphaMember.id
+        })+")});return {status:r.status,body:await r.json()}})()")
+      assert.equal(replayConnected.status,200)
+      assert.equal(replayConnected.body.status,"connected")
+      assert.equal((await native.listSellerMembers({
+        seller_id:ownerStoreId,member_id:bNativeMember.id
+      })).length,1)
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where action='organization.store_native_member_connection_confirmed'
+        and organization_id=$1 and target_id=$2
+        and new_values->>'person_id'=$3`,
+        [organizations[0].id,ownerStoreId,B.person]))[0].n,1,
+        "Idempotent native link must not duplicate canonical audit")
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       await reviewer.click("#product-draft-refresh")

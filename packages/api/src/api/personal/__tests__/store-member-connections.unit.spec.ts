@@ -22,7 +22,7 @@ describe("B22 Owner-scoped native Store membership activation",()=>{
     run=jest.fn().mockResolvedValue({result:{
       seller_id:"sel_a",member_id:"mem_a",is_owner:false,role_id:SellerRole.SUPPORT
     }})
-    ;(addSellerMemberWorkflow as jest.Mock).mockReturnValue({run})
+    ;(addSellerMemberWorkflow as unknown as jest.Mock).mockReturnValue({run})
     ;(enabled as jest.Mock).mockReturnValue(true)
     ;(csrf as jest.Mock).mockResolvedValue(true)
     ;(access as jest.Mock).mockReturnValue(svc)

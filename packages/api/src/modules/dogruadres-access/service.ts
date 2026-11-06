@@ -1858,12 +1858,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
    * an assumed failure.
    */
   @InjectTransactionManager()
-  async personalWithStoreMemberConnectionLock<T>(
+  async personalWithStoreMemberConnectionLock(
     token:string,
     input:{organization_id:string;seller_id:string;membership_id:string},
-    execute:(memberId:string,context:Context)=>Promise<T>,
+    execute:(memberId:string,context:Context)=>Promise<{created:boolean}>,
     @MedusaContext() context:Context={}
-  ):Promise<T|null>{
+  ):Promise<{created:boolean}|null>{
     if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
        !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
@@ -1930,7 +1930,39 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        !/^mem_[A-Za-z0-9_-]+$/.test(bindings[0].actor_id)||
        typeof bindings[0].auth_identity_id!=="string"||
        !bindings[0].auth_identity_id)return null
-    return execute(bindings[0].actor_id as string,context)
+    const nativeMemberId=bindings[0].actor_id as string
+    const outcome=await execute(nativeMemberId,context)
+    if(!outcome||typeof outcome.created!=="boolean")throw new IdentityAccessDenied()
+    // Reconcile native success after an interrupted Foundation audit write:
+    // an existing correctly-scoped native link may be confirmed, but not
+    // duplicated, and it is never itself a products.edit permission.
+    const audits=await db.execute(
+      "select e.id,exists(select 1 from da_audit_outbox x "+
+      "where x.source_audit_event_id=e.id and x.source_module='dogruadres-access' "+
+      "and x.deleted_at is null) as proof from da_audit_event e "+
+      "where e.action='organization.store_native_member_connection_confirmed' "+
+      "and e.module='dogruadres-access' and e.resource='store-member-connection' "+
+      "and e.organization_id=? and e.target_id=? "+
+      "and e.new_values->>'person_id'=? and e.new_values->>'member_id'=? "+
+      "and e.deleted_at is null limit 2",
+      [input.organization_id,input.seller_id,targetPerson,nativeMemberId])
+    if(audits.length>1||audits.some(r=>r.proof!==true))
+      throw new IdentityAccessDenied()
+    if(!audits.length){
+      await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:current.person_id,actor_type:current.actor_type,
+        actor_id:current.actor_id,role_context:"owner",
+        organization_id:input.organization_id,
+        action:"organization.store_native_member_connection_confirmed",
+        module:DOGRUADRES_AUDIT_MODULE,resource:"store-member-connection",
+        target_id:input.seller_id,
+        new_values:{person_id:targetPerson,member_id:nativeMemberId,
+          role_id:"role_seller_support",source_permission:"products.edit"},
+        occurred_at:new Date()
+      }],context)
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+    }
+    return outcome
   }
 
   @InjectTransactionManager()
