@@ -4381,6 +4381,13 @@ export default async function({container}:any){
     )?.[1]??(/Failed to acquire lock/i.test(transcript)?"lock-denied":
       /B22_CHECKOUT_AUTHORIZATION_DENIED/i.test(transcript)?"buyer-denied":
       redisRetry.error?"child-exec-error":"unclassified")
+    // Only publish the child's bounded diagnostic tokens, never its raw output.
+    const safeChildEvidence=transcript.match(
+      / error_type=(TypeError|ReferenceError|MedusaError|Error|SkipExecutionError|unknown) missing_field=([A-Za-z_]{1,32}) package_frame=([A-Za-z0-9_/:.-]{1,120})/
+    )
+    const safeChildType=safeChildEvidence?.[1]??"unknown"
+    const safeChildField=safeChildEvidence?.[2]??"unknown"
+    const safeChildFrame=safeChildEvidence?.[3]??"unverified"
     const buyerOrderDelta=buyerOrderAfterRetry-beforeNativeBuyerOrderCount
     const totalOrderDelta=totalOrderAfterRetry-beforeNativeOrderCount
     process.stdout.write("OBSERVED B22 Redis native retry SQL: buyer_order_delta="+buyerOrderDelta+
@@ -4392,7 +4399,9 @@ export default async function({container}:any){
       " child_entered="+String(childEntered)+
       " startup_category="+startupCategory+
       " child_exit="+(/^(?:0|[1-9][0-9]{0,2})$/.test(childStatus)?childStatus:"unknown")+
-      " error_category="+childErrorCategory+"\n")
+      " error_category="+childErrorCategory+
+      " error_type="+safeChildType+" missing_field="+safeChildField+
+      " package_frame="+safeChildFrame+"\n")
     assert.equal(redisRetryPayments.length,0,
       "No payment collection link may be created by a failed native Cart retry")
     if(!nativeRetrySuccess)
