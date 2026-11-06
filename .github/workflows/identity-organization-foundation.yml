@@ -361,6 +361,7 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { randomBytes } from 'node:crypto'
+          import { readFileSync } from 'node:fs'
           import { spawnSync } from 'node:child_process'
           const env = {
             ...process.env,
@@ -378,6 +379,11 @@ jobs:
             if (result.error || result.status !== 0 ||
                 (result.stdout + result.stderr).includes('Could not load the Medusa config')) {
               throw new Error(`Existing ${name} panel build failed`)
+            }
+            const html = readFileSync(`apps/${name}/dist/index.html`, 'utf8')
+            if (!html.includes('http-equiv="Content-Security-Policy"') ||
+                !html.includes("connect-src 'self'")) {
+              throw new Error(`Native ${name} build lacks browser connect-src policy`)
             }
           }
           NODE
