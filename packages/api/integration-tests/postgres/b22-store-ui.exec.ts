@@ -1742,7 +1742,17 @@ export default async function({container}:any){
     const {result:[sellableProduct]}=await createProductsWorkflow(container).run({
       input:{created_by:stores[0].id,products:[{
         title:"B22 two-Store shared master "+rand,status:"published",
-        variants:[{title:"One size",sku:"B22-NATIVE-"+rand}]
+        // Mercur 2.4.1 permits one Seller Offer per variant per Cart.
+        // Keep one shared master Product, with distinct native variants for
+        // the two-Store positive Cart; never disable the native Offer guard.
+        attributes:[{title:"B22 Size",is_variant_axis:true,
+          values:["Primary","Secondary"]}],
+        variants:[
+          {title:"Primary",sku:"B22-NATIVE-A-"+rand,
+            options:{"B22 Size":"Primary"}},
+          {title:"Secondary",sku:"B22-NATIVE-B-"+rand,
+            options:{"B22 Size":"Secondary"}}
+        ]
       }]}
     })
     // Mercur's product workflow result is the master product projection;
@@ -1751,12 +1761,17 @@ export default async function({container}:any){
     const persistedVariants=await container.resolve("product").listProductVariants({
       product_id:sellableProduct.id
     })
-    assert.equal(persistedVariants.length,1)
-    const variant=persistedVariants[0]
+    assert.equal(persistedVariants.length,2)
+    const variant=persistedVariants.find((v:any)=>v.sku==="B22-NATIVE-A-"+rand)
+    const secondaryVariant=persistedVariants.find((v:any)=>
+      v.sku==="B22-NATIVE-B-"+rand)
+    assert.ok(variant&&secondaryVariant)
     assert.match(variant.id,/^variant_[A-Za-z0-9_-]+$/)
+    assert.match(secondaryVariant.id,/^variant_[A-Za-z0-9_-]+$/)
+    assert.notEqual(secondaryVariant.id,variant.id)
     // Mercur 2.4.0 createOffersWorkflow's seller-inventory step obtains
     // its Seller from offers[0], so use one run per Seller, not a mixed batch.
-    const offerRows:Array<{id:string;seller_id:string}>=[]
+    const offerRows:Array<{id:string;seller_id:string;variant_id:string}>=[]
     // Both participating native Stores used real Owner application and
     // independent platform approval. Other Sellers are not silently included.
     const cartStoreIds=[ownerStoreId,secondOwnerStoreId]
@@ -1773,10 +1788,11 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Mercur 2.4 Store regions: two approved task-only Sellers explicitly linked to native Region; unapproved Seller excluded\n")
     for(let i=0;i<2;i++){
       const sku="B22-TWO-STORE-"+i+"-"+rand
+      const offerVariant=i===0?variant:secondaryVariant
       const {result:[offer]}=await createOffersWorkflow(container).run({
         input:{offers:[{
           seller_id:cartStoreIds[i],created_by:member.id,
-          sku,variant_id:variant.id,shipping_profile_id:b22Profile.id,
+          sku,variant_id:offerVariant.id,shipping_profile_id:b22Profile.id,
           inventory_items:[{sku,stock_levels:[]}],
           prices:[{amount:1000+i*100,currency_code:"eur"}],
           manage_inventory:false,allow_backorder:true
@@ -1784,7 +1800,8 @@ export default async function({container}:any){
       })
       assert.match(offer.id,/^offer_[A-Za-z0-9_-]+$/)
       assert.equal(offer.seller_id,cartStoreIds[i])
-      offerRows.push(offer)
+      offerRows.push({id:offer.id,seller_id:offer.seller_id,
+        variant_id:offerVariant.id})
     }
     // A SECOND published master Product uses the SAME variant-backed native
     // Mercur workflow but direct TRY Offer prices. Different sellers own
@@ -2696,7 +2713,7 @@ export default async function({container}:any){
     for(const offer of offerRows){
       await addToCartWorkflow(container).run({input:{
         cart_id:customerCart.id,items:[{
-          variant_id:variant.id,offer_id:offer.id,
+          variant_id:offer.variant_id,offer_id:offer.id,
           quantity:1,requires_shipping:true,metadata:{offer_id:offer.id}
         } as any] // Mercur's installed Offer augmentation is runtime-registered.
         // The downstream Medusa DTO alone lacks this Mercur-specific field.
@@ -3081,7 +3098,7 @@ export default async function({container}:any){
     const {result:[gammaOffer]}=await createOffersWorkflow(container).run({
       input:{offers:[{
         seller_id:gammaSellerId,created_by:member.id,
-        sku:gammaSku,variant_id:variant.id,
+        sku:gammaSku,variant_id:secondaryVariant.id,
         shipping_profile_id:b22Profile.id,
         inventory_items:[{sku:gammaSku,stock_levels:[]}],
         prices:[{amount:1200,currency_code:"eur"}],
@@ -3095,10 +3112,13 @@ export default async function({container}:any){
     await cartService.updateCarts(betaTwoSellerCart.id,{
       region_id:region.id,sales_channel_id:market.id
     })
-    for(const offer of [offerRows[0],gammaOffer]){
+    // Two Stores, two variants. Mercur 2.4.1 rejects competing Offers
+    // for the SAME variant within one Cart; retain that native protection.
+    for(const offer of [offerRows[0],
+      {id:gammaOffer.id,variant_id:secondaryVariant.id}]){
       await addToCartWorkflow(container).run({input:{
         cart_id:betaTwoSellerCart.id,
-        items:[{variant_id:variant.id,offer_id:offer.id,
+        items:[{variant_id:offer.variant_id,offer_id:offer.id,
           quantity:1,requires_shipping:true,
           metadata:{offer_id:offer.id}} as any]
       }})
@@ -3544,7 +3564,7 @@ export default async function({container}:any){
     })
     await addToCartWorkflow(container).run({input:{
       cart_id:paidCart.id,
-      items:[{variant_id:variant.id,offer_id:gammaOffer.id,
+      items:[{variant_id:secondaryVariant.id,offer_id:gammaOffer.id,
         quantity:1,requires_shipping:false,
         metadata:{offer_id:gammaOffer.id}} as any]
     }})
@@ -3665,7 +3685,7 @@ export default async function({container}:any){
     })
     await addToCartWorkflow(container).run({input:{
       cart_id:deniedPaidCart.id,
-      items:[{variant_id:variant.id,offer_id:gammaOffer.id,
+      items:[{variant_id:secondaryVariant.id,offer_id:gammaOffer.id,
         quantity:1,requires_shipping:false,
         metadata:{offer_id:gammaOffer.id}} as any]
     }})
