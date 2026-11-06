@@ -1301,6 +1301,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     input: Readonly<{ organization_id: string; actor_person_id: string; actor_type: string; actor_id: string; email: string; role: "admin" | "member" }>,
     @MedusaContext() sharedContext: Context = {}
   ) {
+    // Workflow and direct module invocations cannot bypass the public
+    // membership invitation schema to create a retired company Admin.
+    if(input.role!=="member")
+      throw new MedusaError(MedusaError.Types.FORBIDDEN,"Organization Admin invitations are not permitted")
     const actorMembership = await this.getActiveMembership(input.actor_person_id, input.organization_id, sharedContext)
     if (!actorMembership || !organizationActionAllowed(
           actorMembership.role,"invitation.manage",
@@ -1430,6 +1434,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     })) {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "Invitation is invalid, expired, revoked, or already used")
     }
+    // Historical pending Admin invitations are kept for Owner inspection
+    // and revocation, but must never activate an obsolete higher role.
+    if(invitation.role!=="member")
+      throw new MedusaError(MedusaError.Types.FORBIDDEN,"Legacy Organization Admin invitations cannot be accepted")
     // The Organization can be suspended or soft-deleted after invitation
     // issuance. Lock its live row in this SAME transaction before touching
     // Person/membership/invitation. A concurrent suspension must serialize.

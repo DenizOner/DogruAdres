@@ -218,6 +218,7 @@ async function run(){
             const scoped=valid.split("\n").filter(x=>[
               "PASS B22 Chrome: protected Owner excluded from individual products.edit; forged grant/revoke HTTP403, PG16 grant/audit unchanged",
               "PASS B22 Chrome: no new Organization Admin assignment; Owner HTTP400, membership/audit unchanged",
+              "PASS B22 Chrome: retired company Admin invitation Owner HTTP400; no invitation or audit write",
               "PASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit",
               "PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged",
               "PASS B22 Chrome: denied native Member/Store UI stays visible without product submit; verified association enables product form",
@@ -298,6 +299,8 @@ async function run(){
           "Missing real Chrome/PG16 immutable Owner personal grant/revoke denial with zero DB side effects")
         assert.ok(result.split("\n").includes("PASS B22 Chrome: no new Organization Admin assignment; Owner HTTP400, membership/audit unchanged"),
           "Missing real Owner browser/HTTP rejection of retired company Admin role")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome: retired company Admin invitation Owner HTTP400; no invitation or audit write"),
+          "Missing real Owner refusal of retired Admin invitation with no audit or invitation mutation")
         assert.ok(result.split("\n").includes("PASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit"),
           "Missing real Chrome/PG16 refusal of unauthorized, foreign and forged native member connection")
         assert.ok(result.split("\n").includes("PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged"),
@@ -340,7 +343,7 @@ async function run(){
           "Missing immutable protected Owner audit.timeline.read HTTP200, legacy Admin403 and unchanged PG16 evidence")
         assert.ok(result.split("\n").includes("PASS B22 Owner role policy: fixed membership.list keeps Owner HTTPS GET200; Admin403; PG16 data unchanged"),
           "Missing protected Owner and role-only Admin membership.list 403/private data denial, restored Owner 200 and zero-write PG16 evidence")
-        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: fixed membership.manage under legacy setting; real Owner HTTP list and reversible role changes audited"),
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: fixed membership.manage under legacy setting; real Owner HTTP legacy Admin reduction audited"),
           "Missing owner membership.manage role-policy HTTP/PG16 zero-write and restored positive evidence")
         assert.ok(result.includes("PASS B22 Owner role policy: fixed buyer.purchase keeps eligible HTTPS and PG16 checkout L despite legacy setting; zero OrderGroup"),
           "Missing protected Owner purchase HTTPS/PG16 final checkout entitlement with deprecated deployment setting")

@@ -344,27 +344,27 @@ async function verifyOwnerMembershipManagePolicy({
       if(oldMembershipActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=oldMembershipActions
     }
-    // Prove the restored Owner default using the SAME real HTTPS/CSRF path.
-    // Apply a reversible ordinary Member->Admin->Member transition only to
-    // our disposable test membership, never to a protected Owner.
+    // Preserve the approved no-Admin rule in real HTTP. Only a historical
+    // Admin may be reduced to Member. The disposable test-only legacy fixture
+    // is prepared with SQL, never through a visitor-facing Admin promotion.
+    const legacyFixture=await q(`update da_organization_membership
+      set role='admin',protected_owner=false,updated_at=clock_timestamp()
+      where id=$1 and role='member' and protected_owner=false and status='active'
+      returning id`,[targetMembershipId])
+    assert.equal(legacyFixture.length,1,
+      "Task-only existing Member can represent an old Admin for non-escalating acceptance")
     const restoredMembership=await browser.eval(`(async()=>{
       const org=${JSON.stringify(organizationId)}
       const member=${JSON.stringify(targetMembershipId)}
       const session=await(await fetch('/personal/session')).json()
-      const post=async(role)=>{
-        const r=await fetch('/personal/memberships',{method:'POST',
-          headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
-          body:JSON.stringify({action:'role',organization_id:org,membership_id:member,role})})
-        return {status:r.status,body:r.status===200?await r.json():null}
-      }
-      const promoted=await post('admin')
-      const restored=promoted.status===200?await post('member'):{status:0,body:null}
-      return {promoted:promoted.status,restored:restored.status,
-        promotedRole:promoted.body?.membership?.role,restoredRole:restored.body?.membership?.role}
+      const response=await fetch('/personal/memberships',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify({action:'role',organization_id:org,membership_id:member,role:'member'})})
+      return {status:response.status,
+        role:response.status===200?(await response.json()).membership?.role:null}
     })()`)
-    assert.deepEqual(restoredMembership,{promoted:200,restored:200,
-      promotedRole:"admin",restoredRole:"member"},
-      "Restored Owner role policy must permit HTTP role changes in the same Organization")
+    assert.deepEqual(restoredMembership,{status:200,role:"member"},
+      "Protected Owner must be able to reduce a historical Admin to ordinary Member")
     const finalMembershipState=await q(`select role,status,protected_owner,revoked_at
       from da_organization_membership where id=$1`,[targetMembershipId])
     assert.deepEqual(finalMembershipState,[{role:"member",status:"active",
@@ -375,9 +375,9 @@ async function verifyOwnerMembershipManagePolicy({
       where e.organization_id=$1 and e.target_id=$2
         and e.action='organization.membership_changed'`,
       [organizationId,targetMembershipId])
-    assert.equal(membershipChangedAudit[0].n,membershipChangedAuditBefore[0].n+2,
-      "Both authorized transitions must append exactly one canonical audit/outbox each")
-    process.stdout.write("PASS B22 Owner role policy: fixed membership.manage under legacy setting; real Owner HTTP list and reversible role changes audited\n")
+    assert.equal(membershipChangedAudit[0].n,membershipChangedAuditBefore[0].n+1,
+      "The one real legacy Admin -> Member transition needs one canonical audit/outbox")
+    process.stdout.write("PASS B22 Owner role policy: fixed membership.manage under legacy setting; real Owner HTTP legacy Admin reduction audited\n")
 }
  
 // Dedicated real Chrome/PG16 audit timeline read-policy verification.
@@ -4410,6 +4410,25 @@ export default async function({container}:any){
     assert.deepEqual(await q(`select role,status,protected_owner from da_organization_membership where id=$1`,[alphaMember.id]),adminMemberBefore)
     assert.deepEqual(await q(`select id from da_audit_event where organization_id=$1 order by id`,[organizations[0].id]),adminAuditBefore)
     process.stdout.write("\nPASS B22 Chrome: no new Organization Admin assignment; Owner HTTP400, membership/audit unchanged\n")
+    // A second ingress must not recreate company Admin via a pending invite.
+    const formerInvites=await q(`select id,role,status from da_organization_invitation
+      where organization_id=$1 order by id`,[organizations[0].id])
+    const formerInviteAudits=await q(`select id from da_audit_event where
+      organization_id=$1 and resource='invitation' order by id`,[organizations[0].id])
+    const forbiddenInvite=await browser.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      const response=await fetch('/personal/invitations',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify({action:'create',organization_id:${JSON.stringify(organizations[0].id)},
+          email:'retired-admin-invite@example.invalid',role:'admin'})})
+      return response.status
+    })()`)
+    assert.equal(forbiddenInvite,400,"Owner cannot invite a retired Organization Admin")
+    assert.deepEqual(await q(`select id,role,status from da_organization_invitation
+      where organization_id=$1 order by id`,[organizations[0].id]),formerInvites)
+    assert.deepEqual(await q(`select id from da_audit_event where
+      organization_id=$1 and resource='invitation' order by id`,[organizations[0].id]),formerInviteAudits)
+    process.stdout.write("\nPASS B22 Chrome: retired company Admin invitation Owner HTTP400; no invitation or audit write\n")
     await browser.wait(`!document.getElementById('product-grants-panel').hidden && Array.from(document.querySelector('#product-grants-form select[name=seller_id]').options).some(o=>o.value===${JSON.stringify(ownerStoreId)}) && Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).some(o=>o.value===${JSON.stringify(alphaMember.id)}) && !document.querySelector('#product-grants-form button[value=grant]').disabled`)
     const editableMembers=await browser.eval("Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).map(o=>o.value)")
     assert.deepEqual(editableMembers,[alphaMember.id],

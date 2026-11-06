@@ -371,7 +371,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <form id="invite-member" hidden style="margin-top: 16px; padding: 14px; border: 1px solid #c1c6d4; border-radius: 8px; background: #f2f3fb;">
     <h3 style="margin-top: 0; font-size: 14px;">Kuruluşa Yeni Üye Davet Et</h3>
     <label>Davet edilecek e-posta adresi<input name="email" type="email" required maxlength="320" placeholder="yeni.uye@alanadi.invalid"></label>
-    <label>Davet edilecek rol<select name="role" required><option value="member">Üye</option><option value="admin">Yönetici</option></select></label>
+    <label>Davet edilecek kişi rolü<select name="role" required><option value="member">Üye</option></select></label>
     <button>Üyelik Daveti Oluştur</button>
   </form>
   <p id="invite-result" role="status" aria-live="polite"></p>
