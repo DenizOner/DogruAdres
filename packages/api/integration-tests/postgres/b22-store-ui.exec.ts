@@ -743,6 +743,25 @@ export default async function({container}:any){
     const secondaryEnrolledCounter=Math.floor(Date.now()/30000)
     await auth.verifyAuthMfa({id:secondaryMfa.mfa.id,auth_identity_id:reg.authIdentity.id,
       code:otp(secondaryMfa.secret)})
+    // A second native Member is an isolated B22 fixture. It conveys no
+    // DoğruAdres Person or Seller authority until B proves the secondary
+    // identity with the existing personal dual-MFA account-linking UI.
+    const bMemberEmail="b22-member-b-"+rand+"@example.invalid"
+    const [bNativeMember]=await native.createMembers([{email:bMemberEmail,is_active:true}])
+    const bMemberPassword=randomBytes(32).toString("base64url")
+    const bRegistration=await auth.register("emailpass",{
+      body:{email:bMemberEmail,password:bMemberPassword}
+    })
+    assert.ok(bRegistration.success&&bRegistration.authIdentity?.id)
+    await auth.updateAuthIdentities({id:bRegistration.authIdentity.id,
+      app_metadata:{member_id:bNativeMember.id}})
+    const bMemberMfa=await auth.startAuthMfa({
+      auth_identity_id:bRegistration.authIdentity.id,
+      provider:"totp",issuer:"B22 isolated verified Member B"
+    })
+    const bMemberEnrollCounter=Math.floor(Date.now()/30000)
+    await auth.verifyAuthMfa({id:bMemberMfa.mfa.id,
+      auth_identity_id:bRegistration.authIdentity.id,code:otp(bMemberMfa.secret)})
     // Medusa's installed Customer Module creates this task-only native actor.
     // This Customer is NOT itself a legal Organization or purchase grant.
     const customerEmail="b22-customer-"+rand+"@example.invalid"
@@ -5123,6 +5142,40 @@ export default async function({container}:any){
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       await reviewer.select(organizations[0].name,"member")
+      const memberDraftStores=()=>reviewer.eval(`(async()=>{
+        const r=await fetch('/personal/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
+        if(r.status!==200)return {status:r.status,stores:[]}
+        const body=await r.json()
+        return {status:r.status,stores:(body.stores||[]).map(x=>x.id)}
+      })()`)
+      assert.equal((await memberDraftStores()).status,403,
+        "A Foundation products.edit grant alone is not native Member identity proof")
+      assert.equal(Number((await q(`select count(*)::int n from da_verified_actor_binding
+        where person_id=$1 and actor_type='member' and revoked_at is null`,
+        [B.person]))[0].n),0)
+      // Use the same real secondary password + native MFA verified account
+      // linking UI as A. Do not fake the Person binding or accept email alone.
+      assert.ok(Math.floor(Date.now()/30000)>bMemberEnrollCounter,
+        "Secondary B challenge must not replay the enrollment TOTP window")
+      await reviewer.input("#link-account input[name=email]",bMemberEmail)
+      await reviewer.input("#link-account input[name=password]",bMemberPassword)
+      await reviewer.click("#link-account button")
+      await reviewer.wait("!document.getElementById('link-confirm').hidden")
+      await reviewer.input("#link-confirm input[name=code]",otp(bMemberMfa.secret))
+      await reviewer.click("#link-confirm button")
+      await reviewer.wait("document.getElementById('status').textContent==='Hesap bağlantısı tamamlandı'")
+      const bMemberBindings=await q(`select actor_id from da_verified_actor_binding
+        where person_id=$1 and actor_type='member' and revoked_at is null`,[B.person])
+      assert.equal(bMemberBindings.length,1)
+      assert.equal(bMemberBindings[0].actor_id,bNativeMember.id)
+      const withoutStore=await memberDraftStores()
+      assert.deepEqual(withoutStore,{status:200,stores:[]},
+        "A verified Member without a native SellerMember association has no Store")
+      // The installed Mercur native Seller service grants its own separate
+      // association. Only the authorized disposable Store is linked.
+      await native.createSellerMembers([{
+        seller_id:ownerStoreId,member_id:bNativeMember.id,is_owner:false
+      }])
       // B06Chrome.ready() waits for the Owner-only membership panel.
       // This actor is an ordinary Member; verify the actual product scope instead.
       const memberScope=await reviewer.eval(`(async()=>{
