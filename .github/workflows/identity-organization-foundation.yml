@@ -364,14 +364,21 @@ jobs:
           sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
           test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = "1"
           sudo systemctl stop clamav-freshclam.service >/dev/null 2>&1 || true
-          sudo freshclam --stdout
+          # This CI task starts its own private clamd AFTER the official
+          # signatures are installed. Suppress only FreshClam's notification
+          # to the unrelated distro daemon, not database verification.
+          sed '/^NotifyClamd[[:space:]]/d' /etc/clamav/freshclam.conf > "$RUNNER_TEMP/b22-freshclam.conf"
+          sudo freshclam --config-file="$RUNNER_TEMP/b22-freshclam.conf" --stdout
           test -s /var/lib/clamav/daily.cvd || test -s /var/lib/clamav/daily.cld
+          test -s /var/lib/clamav/main.cvd || test -s /var/lib/clamav/main.cld
+          echo "PASS B22: genuine updated ClamAV database installed"
 
           # Probe unprivileged namespaces. Never change host sysctl, AppArmor,
           # service privileges or Docker access to force a test to pass.
           /usr/bin/bwrap --unshare-all --new-session --ro-bind /usr /usr \
             --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64 \
             --proc /proc --dev /dev --tmpfs /tmp -- /usr/bin/true
+          echo "PASS B22: Ubuntu restricted Bubblewrap namespace with no network"
 
           sock="$RUNNER_TEMP/b22-clamd.sock"
           conf="$RUNNER_TEMP/b22-clamd.conf"
