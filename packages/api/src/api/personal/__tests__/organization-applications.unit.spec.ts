@@ -89,8 +89,9 @@ describe("B22 private business application DRAFT — never an Organization",()=>
         expect(sql).toContain("IS DISTINCT FROM ROW")
         expect(sql).toContain("status='draft' or")
         expect(params?.length).toBe(15)
-        return JSON.stringify(params?.slice(0,6))===JSON.stringify(params?.slice(-6))
-          ? []:[{id:payload.application_id}]
+        // The mock represents the previously stored application, not the
+        // proposed new values repeated in the SQL WHERE placeholders.
+        return params?.[1]===payload.legal_name?[]:[{id:payload.application_id}]
       }
       return []
     })
