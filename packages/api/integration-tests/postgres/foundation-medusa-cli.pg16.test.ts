@@ -123,7 +123,7 @@ async function run(){
           where name='Migration20261106090000'`)
         assert.equal(Number(repair[0].n),1,
           "Additive B22 migration collision repair was not recorded")
-        process.stdout.write("PASS B22 PG16 Mercur 2.4.1 migration collision guard: native hashed invites + audited price group, unique repair ledger\\n")
+        process.stdout.write("PASS B22 PG16 Mercur 2.4.1 migration collision guard: native hashed invites + audited price group, unique repair ledger\n")
       }
       const ledger=await target.unsafe("select count(*)::int as n from mikro_orm_migrations where name like 'Migration2026102%'")
       assert.ok(Number(ledger[0].n)>=1,"No Foundation migration history from Medusa CLI")
