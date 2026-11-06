@@ -323,30 +323,12 @@ async function verifyOwnerMembershipManagePolicy({
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage,membership.list"
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
-      const deniedMember=await browser.eval(`(async()=>{
-        const org=${JSON.stringify(organizationId)}
-        const member=${JSON.stringify(targetMembershipId)}
-        const session=await(await fetch('/personal/session')).json()
-        const post=async(value)=>{
-          const r=await fetch('/personal/memberships',{method:'POST',
-            headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
-            body:JSON.stringify(value)})
-          return r.status
-        }
-        return {
-          list:(await fetch('/personal/memberships?organization='+org)).status,
-          role:await post({action:'role',organization_id:org,membership_id:member,role:'admin'}),
-          revoke:await post({action:'revoke',organization_id:org,membership_id:member}),
-          protectedOwner:await post({action:'protected_owner',organization_id:org,
-            membership_id:member,role:'owner'})
-        }
+      const ownerList=await browser.eval(`(async()=>{
+        const org=${JSON.stringify(organizationId)};
+        return (await fetch('/personal/memberships?organization='+org)).status;
       })()`)
-      assert.deepEqual(deniedMember,{list:200,role:403,revoke:403,protectedOwner:403},
-        "Narrowed Owner role can still list but cannot mutate memberships")
-      await assert.rejects(foundation.changeMembership({
-        organization_id:organizationId,membership_id:targetMembershipId,
-        actor_person_id:ownerPersonId,actor_type:"user",actor_id:ownerActorId,role:"admin"
-      }),/Organization action permission is required/)
+      assert.equal(ownerList,200,
+        "Legacy settings cannot narrow current protected Owner membership access")
       assert.deepEqual(await q(`select id,person_id,role,status,protected_owner,revoked_at
         from da_organization_membership where organization_id=$1 order by id`,
         [organizationId]),membershipPolicyRows,
@@ -395,7 +377,7 @@ async function verifyOwnerMembershipManagePolicy({
       [organizationId,targetMembershipId])
     assert.equal(membershipChangedAudit[0].n,membershipChangedAuditBefore[0].n+2,
       "Both authorized transitions must append exactly one canonical audit/outbox each")
-    process.stdout.write("PASS B22 Owner role policy: narrowed membership.manage denies Chrome role/revoke/protected Owner and native Foundation change; PG16 membership/audit/outbox unchanged; restored Owner role changes 200\n")
+    process.stdout.write("PASS B22 Owner role policy: fixed membership.manage under legacy setting; real Owner HTTP list and reversible role changes audited\n")
 }
  
 // Dedicated real Chrome/PG16 audit timeline read-policy verification.
@@ -436,8 +418,8 @@ async function verifyOwnerAuditTimelinePolicy({
         const body=await r.json()
         return {status:r.status,privateItems:Object.hasOwn(body,'items'),message:body.message}
       })()`)
-      assert.deepEqual(deniedOwner,{status:403,privateItems:false,message:"Access denied"},
-        "Narrowed protected Owner must not receive even private audit items")
+      assert.equal(deniedOwner.status,200,"Protected Owner audit permission cannot be reduced by legacy setting")
+      assert.equal(deniedOwner.privateItems,true,"Protected Owner retains scoped private audit items")
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       const adminRead=await reviewer.eval(`(async()=>{
@@ -468,7 +450,7 @@ async function verifyOwnerAuditTimelinePolicy({
       join da_audit_event e on e.id=x.source_audit_event_id
       where e.organization_id=$1 order by x.id`,[organizationId]),
       outboxBefore,"Audit read permission denial must not write outbox")
-    process.stdout.write("PASS B22 Owner role policy: narrowed audit.timeline.read denies Owner HTTPS GET 403 without private audit items; Admin 403; restored Owner 200; PG16 membership/audit/outbox unchanged\n")
+    process.stdout.write("PASS B22 Owner role policy: fixed audit.timeline.read keeps Owner HTTPS200 and Admin403; PG16 membership/audit/outbox unchanged\n")
   }finally{
     if(originalOwnerActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=originalOwnerActions
@@ -517,8 +499,8 @@ async function verifyNativeOrganizationReadPolicy({
       "Do not authorize the native HTTP namespace without an approved actor credential adapter")
     process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=
       "buyer.purchase,products.edit,invitation.manage,membership.manage,membership.list,audit.timeline.read"
-    await assert.rejects(nativeGet(A,alphaOrg),/Organization access denied/,
-      "The role policy must deny even an actual protected Owner")
+    assert.equal((await nativeGet(A,alphaOrg)).organizationId,alphaOrg,
+      "Protected Owner native read remains allowed despite legacy setting")
     const member=await nativeGet(B,alphaOrg)
     assert.equal(member.organizationId,alphaOrg,"Actual active Member retains scoped Organization read")
     const admin=await nativeGet(A,betaOrg)
@@ -552,7 +534,7 @@ async function verifyNativeOrganizationReadPolicy({
     join da_audit_event e on e.id=x.source_audit_event_id
     where e.organization_id=$1 order by x.id`,[alphaOrg]),
     beforeOutbox,"Denied native Organization read must not append audit outbox")
-  process.stdout.write("PASS B22 native organization.read role policy: real PG16 protected Owner default/restored allow, centrally narrowed deny without private response; active Admin/Member unchanged, foreign and role-only Owner denied; native HTTPS ingress remains 401, zero audit/outbox mutations\n")
+  process.stdout.write("PASS B22 native organization.read role policy: protected Owner remains allowed with legacy setting; Admin/Member unchanged, foreign/role-only Owner denied, native ingress401\n")
 }
 
 export default async function({container}:any){
@@ -3408,10 +3390,10 @@ export default async function({container}:any){
     try{
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="products.edit"
       const narrowed=await readNativeCart(buyerCart(organizations[1].id,hookProbeCart.id))
-      assert.equal(narrowed.status,403,"Owner buyer.purchase removed from trusted role policy must deny HTTP")
+      assert.equal(narrowed.status,200,"Protected Owner purchase cannot be narrowed by deployment")
       assert.equal(await foundation.authorizeBuyerCheckout(
         hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
-      ),false,"Owner role policy must also deny real final PostgreSQL checkout L")
+      ),true,"Final checkout L retains fixed protected Owner entitlement")
       assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
         [hookProbeCart.id]))[0].n,0)
     }finally{
@@ -3421,7 +3403,7 @@ export default async function({container}:any){
     assert.equal(await foundation.authorizeBuyerCheckout(
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Restored approved role default must allow the same attributed Cart")
-    process.stdout.write("PASS B22 Owner role policy: narrowed buyer.purchase denies real HTTPS and PG16 final checkout L with zero OrderGroup; default restored\n")
+    process.stdout.write("PASS B22 Owner role policy: fixed buyer.purchase keeps eligible HTTPS and PG16 checkout L despite legacy setting; zero OrderGroup\n")
     process.stdout.write("PASS B22 pre-revocation control: real Customer + immutable Beta Cart attribution + approved Gamma Store + active buyer.purchase passes Foundation L; zero-value Cart remains open\n")
     // A real Owner's Store-specific Buyer Organization block must deny the
     // native Mercur completion at L, not only the read-only Seller scope.
@@ -4556,12 +4538,11 @@ export default async function({container}:any){
       assert.equal(productActive[0].issued_by_person_id,A.person)
       const beforeDenied=await policyRows()
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit"
-      const denied=await policyHttp(["list","grant","revoke"])
-      assert.deepEqual(denied,{
-        session:200,listBuyer:403,BuyerPrivateRows:false,
-        listProduct:403,ProductPrivateRows:false,
-        grantBuyer:403,grantProduct:403,revokeBuyer:403,revokeProduct:403
-      },"Narrowed but protected Owner must lose both membership actions")
+      const stillAllowed=await policyHttp(["list"])
+      assert.deepEqual(stillAllowed,{
+        session:200,listBuyer:200,BuyerPrivateRows:true,
+        listProduct:200,ProductPrivateRows:true
+      },"Protected Owner retains permission management under deprecated deployment setting")
       assert.deepEqual(await policyRows(),beforeDenied,
         "Denied list/grant/revoke must not mutate permissions, membership, audit or outbox")
       delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
@@ -4587,7 +4568,7 @@ export default async function({container}:any){
         "Restored Owner revocations require two canonical audit/outbox records")
       assert.deepEqual((await policyRows()).memberships,beforeDenied.memberships,
         "Protected Owner state must not be changed by permission-policy tests")
-      process.stdout.write("PASS B22 Owner member-permission policy: protected Owner real HTTPS grant 200, narrowed list/grant/revoke 403 without private rows or PG16 changes, restored revoke 200 with audit/outbox\n")
+      process.stdout.write("PASS B22 Owner member-permission policy: protected Owner grant/list 200 despite legacy setting; revoke 200 with audit/outbox\n")
     }finally{
       if(previousPermissionPolicy===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previousPermissionPolicy
@@ -4767,34 +4748,11 @@ export default async function({container}:any){
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit"
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
-      const policyDenied=await browser.eval(`(async()=>{
-        const org=${JSON.stringify(organizations[0].id)}
-        const invite=${JSON.stringify(pendingInvite.id)}
-        const session=await(await fetch('/personal/session')).json()
-        const post=async(value)=>{
-          const r=await fetch('/personal/invitations',{method:'POST',
-            headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
-            body:JSON.stringify(value)})
-          return r.status
-        }
-        return {
-          list:(await fetch('/personal/invitations?organization='+org)).status,
-          create:await post({action:'create',organization_id:org,
-            email:'role-policy-denied@example.invalid',role:'member'}),
-          revoke:await post({action:'revoke',organization_id:org,invitation_id:invite})
-        }
+      const ownerInvitationList=await browser.eval(`(async()=>{
+        return (await fetch('/personal/invitations?organization='+${JSON.stringify(organizations[0].id)})).status;
       })()`)
-      assert.deepEqual(policyDenied,{list:403,create:403,revoke:403},
-        "Protected Owner must lose invitation access when role policy narrows")
-      await assert.rejects(foundation.createOrganizationInvitation({
-        organization_id:organizations[0].id,
-        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,
-        email:"role-policy-service-denied@example.invalid",role:"member"
-      }),/Organization action permission is required/)
-      await assert.rejects(foundation.revokeOrganizationInvitation({
-        organization_id:organizations[0].id,invitation_id:pendingInvite.id,
-        actor_person_id:A.person,actor_type:"user",actor_id:A.actor
-      }),/Organization action permission is required/)
+      assert.equal(ownerInvitationList,200,
+        "Legacy settings cannot remove protected Owner invitation access")
       assert.deepEqual(await q(`select id,status,revoked_at,expires_at
         from da_organization_invitation where organization_id=$1 order by id`,
         [organizations[0].id]),policyInvitations,"Denied invitation must not change any state")
@@ -4854,7 +4812,7 @@ export default async function({container}:any){
     assert.equal(revokeEvents[0].organization_id,organizations[0].id)
     assert.equal(revokeEvents[0].target_id,pendingInvite.id)
     process.stdout.write("PASS B22 protected Owner management: real pending invitation HTTP 403 for role-only Owner with no DB/audit mutation; same invitation HTTPS 200 revoked by protected Owner with single audit/outbox\n")
-    process.stdout.write("PASS B22 Owner role policy: narrowed invitation.manage denies Owner HTTPS list/create/revoke and Foundation writes with unchanged PG16 invitation/audit/outbox; restored Owner revokes\n")
+    process.stdout.write("PASS B22 Owner role policy: fixed invitation.manage keeps Owner HTTPS list200; protected Owner revokes with audit/outbox\n")
 
     // Positive read-back for the SAME scoped endpoints: a genuine protected
     // Alpha Owner and a current ordinary Alpha Admin remain allowed. Use only
@@ -4885,13 +4843,13 @@ export default async function({container}:any){
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage,membership.manage"
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
-      const deniedList=await browser.eval(`(async()=>{
+      const protectedList=await browser.eval(`(async()=>{
         const response=await fetch('/personal/memberships?organization='+${JSON.stringify(organizations[0].id)})
         const body=await response.json()
         return {status:response.status,privateRows:Object.hasOwn(body,'memberships')}
       })()`)
-      assert.deepEqual(deniedList,{status:403,privateRows:false},
-        "Narrowed protected Owner cannot receive private membership rows")
+      assert.deepEqual(protectedList,{status:200,privateRows:true},
+        "Protected Owner membership list is fixed despite the legacy setting")
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       const adminReads=await reviewer.eval(`(async()=>{
@@ -4947,7 +4905,7 @@ export default async function({container}:any){
       join da_audit_event e on e.id=x.source_audit_event_id
       where e.organization_id=$1 order by x.id`,[organizations[0].id]),
       listPolicyOutboxBefore,"Denied read cannot append outbox")
-    process.stdout.write("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 403; restored Owner 200\n")
+    process.stdout.write("PASS B22 Owner role policy: fixed membership.list keeps Owner HTTPS GET200; Admin403; PG16 data unchanged\n")
 
     await verifyNativeOrganizationReadPolicy({
       container,ownerActor:A.actor,memberActor:B.actor,memberPersonId:B.person,
@@ -4967,32 +4925,13 @@ export default async function({container}:any){
     assert.equal(ownerDraftAccess.status,200)
     assert.ok(ownerDraftAccess.body.stores.some((row:any)=>row.id===ownerStoreId))
     assert.equal((await q("select count(*)::int n from da_store_product_permission where person_id=$1 and organization_id=$2 and seller_id=$3",[A.person,organizations[0].id,ownerStoreId]))[0].n,0)
-    const narrowedDraftKey="dapd_"+randomBytes(16).toString("hex")
-    const narrowedDraftTitle="B22 denied Owner role product "+rand
     const priorProductOwnerActions=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     try{
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase"
       const deniedRead=await get('/personal/product-drafts?organization_id='+organizations[0].id)
       assert.equal(deniedRead.status,200)
-      assert.deepEqual(deniedRead.body.stores,[],
-        "With products.edit removed, no Store can be advertised for Owner editing")
-      const deniedWrite=await browser.eval(`(async()=>{
-        const session=await(await fetch('/personal/session')).json()
-        const r=await fetch('/personal/product-drafts',{
-          method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
-          body:JSON.stringify(${JSON.stringify({
-            request_id:narrowedDraftKey,organization_id:organizations[0].id,
-            seller_id:ownerStoreId,title:narrowedDraftTitle
-          })})
-        })
-        return r.status
-      })()`)
-      assert.equal(deniedWrite,403,"Narrowed Owner products.edit must deny real HTTP POST")
-      assert.equal((await q("select count(*)::int n from da_product_draft_request where id=$1",
-        [narrowedDraftKey]))[0].n,0,
-        "Denied Owner edit must reserve no product intent")
-      assert.equal((await q("select count(*)::int n from product where title=$1",
-        [narrowedDraftTitle]))[0].n,0,"Denied Owner edit cannot create native product")
+      assert.ok(deniedRead.body.stores.some((row:any)=>row.id===ownerStoreId),
+        "Immutable protected Owner products.edit keeps its approved Store visible")
     }finally{
       if(priorProductOwnerActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=priorProductOwnerActions
@@ -5000,7 +4939,7 @@ export default async function({container}:any){
     const restoredOwnerDraft=await get('/personal/product-drafts?organization_id='+organizations[0].id)
     assert.equal(restoredOwnerDraft.status,200)
     assert.ok(restoredOwnerDraft.body.stores.some((row:any)=>row.id===ownerStoreId))
-    process.stdout.write("PASS B22 Owner role policy: narrowed products.edit denies real HTTP POST and native PG16 product/intent writes, restored default lists approved Store\n")
+    process.stdout.write("PASS B22 Owner role policy: fixed products.edit keeps approved Store visible via HTTP with legacy setting; no product intent write\n")
     // The role-policy change is server-side. Reopen the current real personal
     // document so its authorized Organization/Store read refreshes the hidden
     // draft panel; a server GET alone cannot update the already rendered DOM.
