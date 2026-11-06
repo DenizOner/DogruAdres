@@ -7583,11 +7583,17 @@ export default async function({container}:any){
       await reviewChrome.wait("!document.getElementById('workspace').hidden")
       process.stdout.write("PASS B22 Chrome: delayed reviewer response after pagehide cannot repopulate private application DOM\n")
 
+      // The submitted PDF is private but has no genuine server-side malware
+      // verdict or proven safe staff viewer. The staff route must fail closed.
       const staffDocDownload = await reviewChrome.eval(`(async()=>{`+
         `const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(b22TaxAppId)}));`+
-        `return r.status;`+
+        `return {status:r.status,contentType:r.headers.get('content-type'),cache:r.headers.get('cache-control')};`+
       `})()`)
-      assert.equal(staffDocDownload, 200, "Review staff must be permitted to read submitted application documents")
+      assert.equal(staffDocDownload.status,503,"Reviewer must not download unscanned original document")
+      assert.equal(staffDocDownload.cache,"no-store")
+      assert.ok(!['application/pdf','image/png','image/jpeg'].includes(staffDocDownload.contentType),
+        "Unscanned original media must not reach staff HTTP response")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: applicant private document readable, foreign denied, staff unscanned download blocked\\n")
 
       const correctionRes = await reviewChrome.eval(`(async()=>{`+
         `const s=await (await fetch('/personal/session')).json();`+
