@@ -344,6 +344,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <h3 id="product-draft-title">Mağazama ürün taslağı ekle</h3>
     <p>Kendi kuruluşunun onaylı mağazalarında korunmuş Owner veya ayrı ürün düzenleme izni olan aktif üye taslak oluşturabilir. Sonuç belirsizse aynı işlemi yeniden göndermeyin.</p>
     <p id="product-draft-status" role="status" aria-live="polite"></p>
+    <p id="product-draft-guidance" hidden>Bir ürün düzenleme izni, tek başına Mercur mağaza üyeliği oluşturmaz. İşlem için doğrulanmış üye hesabı, aynı mağazadaki canlı Mercur üyeliği ve geçerli kuruluş izni birlikte gerekir. <a href="#link-account">Mevcut üye hesabınızı doğrulayın</a>; mağaza üyeliğinin ayrıca yetkili biçimde kurulması gerekir. Hesap bağlamak tek başına işlem yetkisi vermez.</p>
     <form id="product-draft-form">
       <label>Yetkili mağaza<select name="seller_id" required></select></label>
       <label>Ürün başlığı<input name="title" required minlength="2" maxlength="120"></label>
@@ -2252,7 +2253,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          outcome.status!==(action==='grant'?'active':'revoked'))
         throw new Error('İzin sonucu doğrulanamadı');
       el('product-grants-status').textContent=action==='grant'?
-        'Ürün düzenleme izni kaydedildi.':'Ürün düzenleme izni iptal edildi.';
+        'Ürün düzenleme izni kaydedildi; kullanım için ayrıca doğrulanmış Mercur mağaza üyeliği gerekir.':'Ürün düzenleme izni iptal edildi.';
       void productPermissions(org,request,true);
       void productDraftStores(org,request);
     }catch(e){
@@ -2269,12 +2270,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     productDraftRequest++;productDraftKey='';productDraftAttempt=null;
     el('product-draft-check').hidden=true;
     el('product-draft-panel').hidden=true;
+    el('product-draft-guidance').hidden=true;
     el('product-draft-status').textContent='';
     const form=el('product-draft-form');
+    form.hidden=true;
     if(typeof form.reset==='function')form.reset();
     if(typeof form.querySelector==='function'){
       const select=form.querySelector('select');if(select&&typeof select.replaceChildren==='function')select.replaceChildren();
-      const button=form.querySelector('button');if(button)button.disabled=false;
+      const button=form.querySelector('button');if(button)button.disabled=true;
     }
   }
   async function productDraftStores(org,request,keepOutcome=false){
@@ -2284,8 +2287,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     // product form; only real browser documents have form.elements.
     if(!form||!form.elements||typeof form.elements.namedItem!=='function')return;
     const seq=++productDraftRequest,select=form.elements.namedItem('seller_id');
-    const previous=select.value;
-    el('product-draft-panel').hidden=true;
+    const previous=select.value,panel=el('product-draft-panel');
+    const guidance=el('product-draft-guidance');
+    const submit=typeof form.querySelector==='function'?form.querySelector('button'):null;
+    panel.hidden=true;guidance.hidden=true;form.hidden=true;
+    if(submit)submit.disabled=true;
     if(!keepOutcome)el('product-draft-status').textContent='Mağaza yetkileri kontrol ediliyor…';
     try{
       const data=await api('product-drafts?organization_id='+encodeURIComponent(org));
@@ -2301,13 +2307,22 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         option.textContent=store.name;select.append(option);
       }
       if(data.stores.some(s=>s.id===previous))select.value=previous;
-      el('product-draft-panel').hidden=data.stores.length===0;
+      panel.hidden=false;
+      form.hidden=data.stores.length===0;
+      guidance.hidden=data.stores.length!==0;
+      if(submit)submit.disabled=data.stores.length===0||!!productDraftAttempt;
       if(!keepOutcome)el('product-draft-status').textContent=data.stores.length?
-        'Taslak oluşturabileceğiniz mağazalar hazır.':'Bu kuruluşta onaylı mağaza için taslak oluşturma yetkiniz bulunmuyor.';
+        'Taslak oluşturabileceğiniz mağazalar hazır.':'Ürün düzenleme yetkisi veya doğrulanmış mağaza üyeliği bulunamadı.';
     }catch(e){
-      if(seq!==productDraftRequest||request!==organizationRequest||currentOrg!==org)return;
-      select.replaceChildren();el('product-draft-panel').hidden=true;
-      el('product-draft-status').textContent='Ürün işlemi için yetki doğrulanamadı.';
+      if(seq!==productDraftRequest||request!==organizationRequest||currentOrg!==org||document.hidden)return;
+      select.replaceChildren();form.hidden=true;guidance.hidden=false;
+      if(submit)submit.disabled=true;
+      panel.hidden=false;
+      // Preserve an uncertain native product result; never invite a duplicate POST.
+      if(!productDraftAttempt)el('product-draft-status').textContent=
+        [401,403].includes(e.httpStatus)?
+        'Bu kuruluşta ürün taslağı için işlem izni veya canlı Mercur üyeliği doğrulanamadı.':
+        'Mağaza yetkileri şu anda doğrulanamıyor. Taslak oluşturma kapalı; yeniden kontrol edin.';
     }
   }
   el('product-draft-refresh').onclick=()=>{
