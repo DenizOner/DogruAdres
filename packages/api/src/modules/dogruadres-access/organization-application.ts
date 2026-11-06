@@ -471,6 +471,15 @@ export async function submitOrganizationApplication(
 }
 
 /**
+ * A real, current server-side malware scan AND safe document-viewing path are
+ * not configured or validated. Do not allow a staff download to become the
+ * scan/preview mechanism. This is not a scan verdict.
+ */
+export class TaxCertificateReviewUnavailable extends Error {
+  constructor(){super("Private tax certificate safety review is unavailable")}
+}
+
+/**
  * Read the current tax certificate document for an application.
  * Permitted only to the authorized applicant Person OR platform Admin with explicit organization.review staff grant.
  */
@@ -498,6 +507,10 @@ export async function readOrganizationApplicationDocument(
     if(appRows[0].status!=="submitted")return null
     const staff=await new IdentitySessions(db).staff(token,"organization.review","platform")
     if(!staff)return null
+    // Fail closed for every submitted PDF/JPEG/PNG until both a genuine server
+    // scan and safe staff-viewing mechanism are proven. No filename, storage
+    // metadata or file bytes may reach an unverified staff document client.
+    throw new TaxCertificateReviewUnavailable()
   }
 
   // Fetch current document record
