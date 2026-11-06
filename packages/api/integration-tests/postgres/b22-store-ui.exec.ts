@@ -5184,7 +5184,7 @@ export default async function({container}:any){
         "The native and Foundation product completion must precede revoke")
       assert.equal((await q("select count(*)::int n from product where id=$1",[raceProductId]))[0].n,1)
       assert.deepEqual((await q("select seller_id from product_seller where product_id=$1",[raceProductId])).map((v:any)=>v.seller_id),[ownerStoreId])
-      assert.equal((await q("select count(*)::int n from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id where e.id=$1 and e.action='organization.product_draft_created' and e.actor_person_id=$2 and e.organization_id=$3 and e.new_values->>'request_id'=$4 and e.new_values->>'product_id'=$5",[ledger.completion_audit_event_id,A.person,organizations[0].id,raceKey,raceProductId]))[0].n,1)
+      assert.equal((await q("select count(*)::int n from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id where e.id=$1 and e.action='organization.product_draft_created' and e.actor_person_id=$2 and e.organization_id=$3 and e.new_values->>'request_id'=$4 and e.new_values->>'product_id'=$5",[ledger.completion_audit_event_id,B.person,organizations[0].id,raceKey,raceProductId]))[0].n,1)
       const deniedPayload={...racePayload,request_id:"dapd_"+randomBytes(16).toString("hex"),title:"B22 denied after revoke "+rand}
       const memberDraftPost=async(payload:Record<string,string>)=>reviewer.eval(`(async()=>{
         const session=await(await fetch('/personal/session')).json()
@@ -5315,7 +5315,7 @@ export default async function({container}:any){
       assert.equal((await q("select count(*)::int n from seller where email=$1",[ownerRaceEmail]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_organization_seller_ownership o join da_audit_event e on e.id=o.verification_audit_event_id join da_audit_outbox x on x.source_audit_event_id=e.id where o.organization_id=$1 and o.seller_id=$2 and o.revoked_at is null and e.action='organization.store_application_created' and e.new_values->>'application_id'=$3",[sellerGamma.id,submitted.body.seller_id,ownerRaceRequest.application_id]))[0].n,1,
         "Owner native Seller requires exactly one authoritative Org link and audit/outbox")
-      process.stdout.write("PASS B22 Chrome: native Seller creation serialized before denied protected Owner removal; Seller pending, Owner remains active, no unauthorized membership audit\\n")
+      process.stdout.write("PASS B22 Chrome: native Seller creation serialized before denied protected Owner removal; Seller pending, Owner remains active, no unauthorized membership audit\n")
     }finally{
       if(ownerBarrierHeld)await ownerRaceBarrier.query("ROLLBACK")
       await ownerRaceBarrier.end()
