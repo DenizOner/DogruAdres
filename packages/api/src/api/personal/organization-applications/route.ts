@@ -8,7 +8,8 @@ import {
   uploadDocumentPayload,
   submitApplicationPayload,
   reviewApplicationPayload,
-  decodeOrganizationDraftCursor
+  decodeOrganizationDraftCursor,
+  TaxCertificateReviewUnavailable
 } from "../../../modules/dogruadres-access/organization-application"
 
 export const AUTHENTICATE=false
@@ -37,8 +38,11 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       res.setHeader("X-Content-Type-Options","nosniff")
       return res.status(200).send(doc.content)
     }catch(error){
+      // Staff must never download an unscanned document. Distinguish an
+      // unavailable safety control from an identity/permission denial.
       return res.status(error instanceof IdentityAccessDenied?403:503)
-        .json({message:error instanceof IdentityAccessDenied?"Access denied":"Unavailable"})
+        .json({message:error instanceof IdentityAccessDenied?"Access denied":
+          error instanceof TaxCertificateReviewUnavailable?"Document review unavailable":"Unavailable"})
     }
   }
 
