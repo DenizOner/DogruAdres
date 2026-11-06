@@ -7593,7 +7593,7 @@ export default async function({container}:any){
       assert.equal(staffDocDownload.cache,"no-store")
       assert.ok(!['application/pdf','image/png','image/jpeg'].includes(staffDocDownload.contentType),
         "Unscanned original media must not reach staff HTTP response")
-      process.stdout.write("PASS B22 Chrome/HTTP/PG16: applicant private document readable, foreign denied, staff unscanned download blocked\n")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: staff unscanned document denied, applicant original retained, foreign denied\n")
 
       const correctionRes = await reviewChrome.eval(`(async()=>{`+
         `const s=await (await fetch('/personal/session')).json();`+
