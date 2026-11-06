@@ -2410,21 +2410,28 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             };
             el('memberships').append(sel,rb);
           }
-          if(canManageOwners && ((m.protected_owner&&m.role==='owner')||(!m.protected_owner&&m.role!=='owner'))){
-            const ownerRole=m.protected_owner?'admin':'owner';
-            const ob=document.createElement('button');ob.textContent=(ownerRole==='owner'?'Korumalı Owner yap ':'Owner rolünü Admin yap ')+m.id;
+          if(canManageOwners && !m.protected_owner && m.role!=='owner'){
+            const ob=document.createElement('button');ob.textContent='Korumalı Owner yap '+m.id;
             ob.onclick=async()=>{
               if(request!==organizationRequest||currentOrg!==org)return;ob.disabled=true;
-              try{await api('memberships',{method:'POST',body:JSON.stringify({action:'protected_owner',organization_id:org,membership_id:m.id,role:ownerRole})});if(request!==organizationRequest)return;await selectOrg(org);status('Owner üyeliği güncellendi')}
+              try{await api('memberships',{method:'POST',body:JSON.stringify({action:'protected_owner',organization_id:org,membership_id:m.id,role:'owner'})});if(request!==organizationRequest)return;await selectOrg(org);status('Owner üyeliği güncellendi')}
               catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)ob.disabled=false}
             };
             el('memberships').append(ob);
           }
-          const b=document.createElement('button');b.textContent='Üyeliği iptal et '+m.id;b.onclick=async()=>{
-            if(request!==organizationRequest||currentOrg!==org)return;b.disabled=true;
-            try{await api('memberships',{method:'POST',body:JSON.stringify({organization_id:org,membership_id:m.id})});if(request!==organizationRequest)return;await selectOrg(org)}
-            catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)b.disabled=false}
-          };el('memberships').append(b)}
+          // Protected Owner removal/reduction is NOT an ordinary member action.
+          // It needs the approved notice/appeal workflow; no unsafe button.
+          if(m.protected_owner || m.role==='owner'){
+            const note=document.createElement('span');
+            note.textContent=' Korunan Owner: kaldırma veya rol düşürme için güvenli inceleme süreci gereklidir.';
+            el('memberships').append(note);
+          }else{
+            const b=document.createElement('button');b.textContent='Üyeliği iptal et '+m.id;b.onclick=async()=>{
+              if(request!==organizationRequest||currentOrg!==org)return;b.disabled=true;
+              try{await api('memberships',{method:'POST',body:JSON.stringify({organization_id:org,membership_id:m.id})});if(request!==organizationRequest)return;await selectOrg(org)}
+              catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)b.disabled=false}
+            };el('memberships').append(b);
+          }}
       }
       el('memberships-status').textContent=data.memberships.length?'Üyelik listesi güncellendi.':'Gösterilecek üyelik bulunmuyor.';
     }catch(e){
