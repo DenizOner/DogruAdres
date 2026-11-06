@@ -5150,6 +5150,9 @@ export default async function({container}:any){
       })()`)
       assert.equal((await memberDraftStores()).status,403,
         "A Foundation products.edit grant alone is not native Member identity proof")
+      // The real personal UI must show an actionable explanation but cannot
+      // expose a product form or re-enable its submit button after 403.
+      await reviewer.wait("!document.getElementById('product-draft-panel').hidden && !document.getElementById('product-draft-guidance').hidden && document.getElementById('product-draft-form').hidden && document.querySelector('#product-draft-form button').disabled")
       assert.equal(Number((await q(`select count(*)::int n from da_verified_actor_binding
         where person_id=$1 and actor_type='member' and revoked_at is null`,
         [B.person]))[0].n),0)
@@ -5171,11 +5174,16 @@ export default async function({container}:any){
       const withoutStore=await memberDraftStores()
       assert.deepEqual(withoutStore,{status:200,stores:[]},
         "A verified Member without a native SellerMember association has no Store")
+      await reviewer.click("#product-draft-refresh")
+      await reviewer.wait("document.getElementById('product-draft-form').hidden && !document.getElementById('product-draft-guidance').hidden && document.getElementById('product-draft-status').textContent.includes('bulunamadı')")
       // The installed Mercur native Seller service grants its own separate
       // association. Only the authorized disposable Store is linked.
       await native.createSellerMembers([{
         seller_id:ownerStoreId,member_id:bNativeMember.id,is_owner:false
       }])
+      await reviewer.click("#product-draft-refresh")
+      await reviewer.wait("!document.getElementById('product-draft-panel').hidden && document.getElementById('product-draft-guidance').hidden && !document.getElementById('product-draft-form').hidden && !document.querySelector('#product-draft-form button').disabled && [...document.querySelector('#product-draft-form select[name=seller_id]').options].some(o=>o.value==="+JSON.stringify(ownerStoreId)+")")
+      process.stdout.write("PASS B22 Chrome: denied native Member/Store UI stays visible without product submit; verified association enables product form\\n")
       // B06Chrome.ready() waits for the Owner-only membership panel.
       // This actor is an ordinary Member; verify the actual product scope instead.
       const memberScope=await reviewer.eval(`(async()=>{
