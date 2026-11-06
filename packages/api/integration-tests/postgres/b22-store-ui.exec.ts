@@ -7799,7 +7799,7 @@ export default async function({container}:any){
            tax_identifier,declared_activities,primary_activity,status,version,updated_at)
           select x.id,$2,'legal_company',
             'B22 Pagination Fixture '||x.ordinality::text,$3,
-            lpad(x.ordinality::text,10,'0'),ARRAY['service_repair']::text[],
+            lpad(x.ordinality::text,10,'0'),jsonb_build_array('service_repair'),
             'service_repair','submitted',1,
             clock_timestamp()-(x.ordinality*interval '1 second')
           from unnest($1::text[]) with ordinality as x(id,ordinality)`,
