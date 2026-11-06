@@ -84,7 +84,10 @@ module.exports = withMercur({
     }
   },
   featureFlags: {
-    seller_registration: true
+    seller_registration: true,
+    // Mercur 2.4.1 defaults to caching. Keep it off until tenant isolation
+    // and permission-revocation invalidation pass real acceptance tests.
+    caching: false
   },
   modules: [
     ...(b22DisposablePgLock ? [{

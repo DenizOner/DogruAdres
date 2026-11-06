@@ -22,8 +22,92 @@ import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerW
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
+import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
+
+
+// Use the existing real CI Chrome and two native Vite dashboard apps. The only
+// external URL is a synthetic .invalid name; browser CSP blocks it BEFORE DNS.
+// This changes no application role, production setting or protected data.
+async function verifyPanelCspModes(browser:B06Chrome, container:any):Promise<void> {
+  assert.equal(container.resolve("vendor_ui").getServingMode(),"static")
+  const probe=async(label:string,url:string,sameOriginPath:string,allowedBackend?:string)=>{
+    browser.phase="b22-dashboard-csp-"+label
+    await browser.send("Page.navigate",{url})
+    const expectedOrigin=new URL(url).origin
+    try {
+      await browser.wait("location.origin==="+JSON.stringify(expectedOrigin)+
+        "&&!!document.querySelector('meta[http-equiv=Content-Security-Policy]')")
+    } catch(error) {
+      // Only fixed navigation metadata, never source, cookies, response bodies.
+      const page=await browser.eval("({onExpectedOrigin:location.origin==="+
+        JSON.stringify(expectedOrigin)+",onVendorLogin:location.pathname==='/seller/login',"+
+        "hasCsp:!!document.querySelector('meta[http-equiv=Content-Security-Policy]')})")
+      const navigation=browser.http.filter(r=>r.path.startsWith("/seller"))
+        .map(({path,status})=>({path,status})).slice(-5)
+      throw new Error(label+" expected native policy not visible: "+
+        JSON.stringify({page,navigation})+"; "+String(error).slice(0,130))
+    }
+    const result=await browser.eval("(async()=>{"+
+      "const rule=document.querySelector('meta[http-equiv=Content-Security-Policy]')?.content||'';"+
+      "const local=await fetch("+JSON.stringify(sameOriginPath)+",{cache:'no-store'}).then(r=>r.status).catch(()=>0);"+
+      "const blocked=await new Promise(resolve=>{"+
+      "const target='https://dogruadres-csp-check.invalid';"+
+      "let seen=false;"+
+      "const observe=e=>{if(e.effectiveDirective==='connect-src'&&e.blockedURI.startsWith(target)){"+
+      "seen=true;document.removeEventListener('securitypolicyviolation',observe);resolve(true)}};"+
+      "document.addEventListener('securitypolicyviolation',observe);"+
+      "fetch(target+'/feedback',{method:'POST',body:'synthetic-only'}).catch(()=>{});"+
+      "setTimeout(()=>{document.removeEventListener('securitypolicyviolation',observe);resolve(seen)},1000);"+
+      "});return {rule,local,blocked};})()")
+    assert.ok(result.rule.includes("connect-src 'self'"),label+" must restrict cross-origin requests")
+    if(allowedBackend)
+      assert.ok(result.rule.split(" ").includes(allowedBackend),
+        label+" must retain the explicitly configured local backend origin")
+    else
+      assert.equal(result.rule,"connect-src 'self'",label+" production panel allowlist")
+    assert.equal(result.local,200,label+" real same-origin HTTP asset/session")
+    assert.equal(result.blocked,true,label+" real Chrome external POST must be denied")
+    process.stdout.write("PASS B22 Chrome: "+label+
+      " connect-src blocked synthetic external POST; same-origin HTTP200\n")
+  }
+  // Mercur native /seller routes legitimately return 401 for a Person-only
+  // session. Do NOT disable that authority boundary to inspect a static file.
+  // Vite's own preview serves the exact built Vendor dist for browser proof.
+  for(const scenario of [
+    {panel:"vendor" as const,mode:"preview" as const,label:"Vendor BUILD"},
+    {panel:"admin" as const,mode:"dev" as const,label:"Admin DEV"},
+    {panel:"vendor" as const,mode:"dev" as const,label:"Vendor DEV"},
+  ]){
+    const port=await getFreePort()
+    const cwd=join(process.cwd(),"../../apps",scenario.panel)
+    const basePath=scenario.panel==="admin"?"/dashboard/":"/seller/"
+    const startUrl="http://127.0.0.1:"+port+basePath
+    const child=spawn("bun",
+      ["run",scenario.mode,"--host","127.0.0.1","--port",String(port),"--strictPort"],{
+      cwd,stdio:"ignore",detached:process.platform!=="win32",
+      env:{...process.env,VITE_MERCUR_BACKEND_URL:browser.origin,
+        MERCUR_DISABLE_TELEMETRY:"true"},
+    })
+    try{
+      await waitForLoopback(async()=>{
+        const response=await fetch(startUrl,{signal:AbortSignal.timeout(1000)})
+        return response.ok
+      },45000,scenario.label+" existing native Vite server")
+      await probe(scenario.label,startUrl,basePath,
+        scenario.mode==="dev"?browser.origin:undefined)
+    }finally{
+      // Bun can spawn a Vite child. Terminate only our dedicated process group.
+      if(process.platform!=="win32"&&child.pid){
+        try{process.kill(-child.pid,"SIGKILL")}catch{killProcess(child)}
+      }else killProcess(child)
+      await waitForLoopback(async()=>
+        child.exitCode!==null||child.signalCode!==null,
+        10000,scenario.label+" Vite process shutdown")
+    }
+  }
+}
 
 // Uses only the existing Mercur module middleware and its real built dashboard.
 // This dedicated child terminates after invalidating its two genuine MFA sessions.
@@ -84,7 +168,31 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   const before=await digest()
   assert.deepEqual(before,[],"Fresh dedicated SMTP database")
   // Negative checks precede any valid settings write.
+  await verifyPanelCspModes(denied,container)
   await open(denied);await hidden(denied)
+  // Test the actual production dashboard document, not a mocked header.
+  // Only a synthetic .invalid host is attempted; no private information is
+  // submitted to Mercur or any real remote service during this check.
+  const policy=await denied.eval("document.querySelector('meta[http-equiv=Content-Security-Policy]')?.content||''")
+  assert.ok(policy.includes("connect-src 'self'"),"Admin panel CSP must restrict external connections")
+  const externalDenied=await denied.eval(`(async()=>{
+    const testOrigin='https://dogruadres-csp-check.invalid';
+    return await new Promise(resolve=>{
+      let observed=false;
+      const onViolation=event=>{
+        if(event.effectiveDirective==='connect-src' && event.blockedURI.startsWith(testOrigin)){
+          observed=true;
+          document.removeEventListener('securitypolicyviolation',onViolation);
+          resolve(true);
+        }
+      };
+      document.addEventListener('securitypolicyviolation',onViolation);
+      fetch(testOrigin+'/feedback',{method:'POST',body:'synthetic-only'}).catch(()=>{});
+      setTimeout(()=>{document.removeEventListener('securitypolicyviolation',onViolation);resolve(observed)},700);
+    });
+  })()`)
+  assert.equal(externalDenied,true,
+    'Real Chrome must deny synthetic external Feedback-like POST via CSP')
   assert.equal((await read(denied)).status,403)
   assert.deepEqual(await digest(),before)
   mark("Unauthorized real MFA session GET403; no SMTP rows")
@@ -1742,7 +1850,17 @@ export default async function({container}:any){
     const {result:[sellableProduct]}=await createProductsWorkflow(container).run({
       input:{created_by:stores[0].id,products:[{
         title:"B22 two-Store shared master "+rand,status:"published",
-        variants:[{title:"One size",sku:"B22-NATIVE-"+rand}]
+        // Mercur 2.4.1 permits one Seller Offer per variant per Cart.
+        // Keep one shared master Product, with distinct native variants for
+        // the two-Store positive Cart; never disable the native Offer guard.
+        attributes:[{title:"B22 Size",is_variant_axis:true,
+          values:["Primary","Secondary"]}],
+        variants:[
+          {title:"Primary",sku:"B22-NATIVE-A-"+rand,
+            options:{"B22 Size":"Primary"}},
+          {title:"Secondary",sku:"B22-NATIVE-B-"+rand,
+            options:{"B22 Size":"Secondary"}}
+        ]
       }]}
     })
     // Mercur's product workflow result is the master product projection;
@@ -1751,12 +1869,17 @@ export default async function({container}:any){
     const persistedVariants=await container.resolve("product").listProductVariants({
       product_id:sellableProduct.id
     })
-    assert.equal(persistedVariants.length,1)
-    const variant=persistedVariants[0]
+    assert.equal(persistedVariants.length,2)
+    const variant=persistedVariants.find((v:any)=>v.sku==="B22-NATIVE-A-"+rand)
+    const secondaryVariant=persistedVariants.find((v:any)=>
+      v.sku==="B22-NATIVE-B-"+rand)
+    assert.ok(variant&&secondaryVariant)
     assert.match(variant.id,/^variant_[A-Za-z0-9_-]+$/)
+    assert.match(secondaryVariant.id,/^variant_[A-Za-z0-9_-]+$/)
+    assert.notEqual(secondaryVariant.id,variant.id)
     // Mercur 2.4.0 createOffersWorkflow's seller-inventory step obtains
     // its Seller from offers[0], so use one run per Seller, not a mixed batch.
-    const offerRows:Array<{id:string;seller_id:string}>=[]
+    const offerRows:Array<{id:string;seller_id:string;variant_id:string}>=[]
     // Both participating native Stores used real Owner application and
     // independent platform approval. Other Sellers are not silently included.
     const cartStoreIds=[ownerStoreId,secondOwnerStoreId]
@@ -1773,10 +1896,11 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Mercur 2.4 Store regions: two approved task-only Sellers explicitly linked to native Region; unapproved Seller excluded\n")
     for(let i=0;i<2;i++){
       const sku="B22-TWO-STORE-"+i+"-"+rand
+      const offerVariant=i===0?variant:secondaryVariant
       const {result:[offer]}=await createOffersWorkflow(container).run({
         input:{offers:[{
           seller_id:cartStoreIds[i],created_by:member.id,
-          sku,variant_id:variant.id,shipping_profile_id:b22Profile.id,
+          sku,variant_id:offerVariant.id,shipping_profile_id:b22Profile.id,
           inventory_items:[{sku,stock_levels:[]}],
           prices:[{amount:1000+i*100,currency_code:"eur"}],
           manage_inventory:false,allow_backorder:true
@@ -1784,7 +1908,8 @@ export default async function({container}:any){
       })
       assert.match(offer.id,/^offer_[A-Za-z0-9_-]+$/)
       assert.equal(offer.seller_id,cartStoreIds[i])
-      offerRows.push(offer)
+      offerRows.push({id:offer.id,seller_id:offer.seller_id,
+        variant_id:offerVariant.id})
     }
     // A SECOND published master Product uses the SAME variant-backed native
     // Mercur workflow but direct TRY Offer prices. Different sellers own
@@ -2696,7 +2821,7 @@ export default async function({container}:any){
     for(const offer of offerRows){
       await addToCartWorkflow(container).run({input:{
         cart_id:customerCart.id,items:[{
-          variant_id:variant.id,offer_id:offer.id,
+          variant_id:offer.variant_id,offer_id:offer.id,
           quantity:1,requires_shipping:true,metadata:{offer_id:offer.id}
         } as any] // Mercur's installed Offer augmentation is runtime-registered.
         // The downstream Medusa DTO alone lacks this Mercur-specific field.
@@ -3081,7 +3206,7 @@ export default async function({container}:any){
     const {result:[gammaOffer]}=await createOffersWorkflow(container).run({
       input:{offers:[{
         seller_id:gammaSellerId,created_by:member.id,
-        sku:gammaSku,variant_id:variant.id,
+        sku:gammaSku,variant_id:secondaryVariant.id,
         shipping_profile_id:b22Profile.id,
         inventory_items:[{sku:gammaSku,stock_levels:[]}],
         prices:[{amount:1200,currency_code:"eur"}],
@@ -3095,10 +3220,13 @@ export default async function({container}:any){
     await cartService.updateCarts(betaTwoSellerCart.id,{
       region_id:region.id,sales_channel_id:market.id
     })
-    for(const offer of [offerRows[0],gammaOffer]){
+    // Two Stores, two variants. Mercur 2.4.1 rejects competing Offers
+    // for the SAME variant within one Cart; retain that native protection.
+    for(const offer of [offerRows[0],
+      {id:gammaOffer.id,variant_id:secondaryVariant.id}]){
       await addToCartWorkflow(container).run({input:{
         cart_id:betaTwoSellerCart.id,
-        items:[{variant_id:variant.id,offer_id:offer.id,
+        items:[{variant_id:offer.variant_id,offer_id:offer.id,
           quantity:1,requires_shipping:true,
           metadata:{offer_id:offer.id}} as any]
       }})
@@ -3544,7 +3672,7 @@ export default async function({container}:any){
     })
     await addToCartWorkflow(container).run({input:{
       cart_id:paidCart.id,
-      items:[{variant_id:variant.id,offer_id:gammaOffer.id,
+      items:[{variant_id:secondaryVariant.id,offer_id:gammaOffer.id,
         quantity:1,requires_shipping:false,
         metadata:{offer_id:gammaOffer.id}} as any]
     }})
@@ -3665,7 +3793,7 @@ export default async function({container}:any){
     })
     await addToCartWorkflow(container).run({input:{
       cart_id:deniedPaidCart.id,
-      items:[{variant_id:variant.id,offer_id:gammaOffer.id,
+      items:[{variant_id:secondaryVariant.id,offer_id:gammaOffer.id,
         quantity:1,requires_shipping:false,
         metadata:{offer_id:gammaOffer.id}} as any]
     }})
