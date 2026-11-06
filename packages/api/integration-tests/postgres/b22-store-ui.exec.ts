@@ -5120,6 +5120,19 @@ export default async function({container}:any){
       assert.equal(grant.status,200)
       const grantRow=await q("select id from da_store_product_permission where person_id=$1 and organization_id=$2 and seller_id=$3 and revoked_at is null",[B.person,organizations[0].id,ownerStoreId])
       assert.equal(grantRow.length,1)
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      await reviewer.select(organizations[0].name,"member")
+      await reviewer.ready()
+      const memberScope=await reviewer.eval(`(async()=>{
+        const r=await fetch('/personal/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
+        if(r.status!==200)return {status:r.status,stores:[]}
+        const body=await r.json()
+        return {status:r.status,stores:(body.stores||[]).map(x=>x.id)}
+      })()`)
+      assert.equal(memberScope.status,200,"Real Member must reach private draft API with approved grant")
+      assert.ok(memberScope.stores.includes(ownerStoreId),
+        "Actual Member must see only their Organization's approved Store")
       // Task-owned disposable PG16 only. ID is generated hex, not user input.
       await q("create function b22_native_product_pause_v1() returns trigger language plpgsql as $b22$ begin if NEW.id='"+raceProductId+"' then perform pg_advisory_xact_lock(hashtext('b22-native-draft-pause'),hashtext('"+raceProductId+"')); end if; return NEW; end $b22$")
       raceFn=true
@@ -5146,8 +5159,12 @@ export default async function({container}:any){
         "and w.objid=h.objid and w.objsubid=h.objsubid and w.pid<>h.pid "+
         "and w.granted=false where h.pid=$1 and h.locktype='advisory' and h.granted=true",
         [pid]))[0].n)
-      await until(async()=>await waiters(barrierPid)===1,19000,
-        "B22 native product INSERT waits on task-only PG16 transaction barrier")
+      await until(async()=>await waiters(barrierPid)===1||createDone,19000,
+        "B22 native Member product INSERT waits on task-only PG16 transaction barrier")
+      if(createDone){
+        const early=await createPending
+        assert.fail("Member product draft exited before native INSERT: HTTP "+early.status)
+      }
       assert.equal(createDone,false)
       assert.equal((await q("select status from da_product_draft_request where id=$1",[raceKey]))[0].status,"reserved")
       await browser.send("Page.bringToFront")
