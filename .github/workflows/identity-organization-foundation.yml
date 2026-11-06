@@ -399,11 +399,20 @@ jobs:
           CommandReadTimeout 45
           EOF
           /usr/sbin/clamd --config-file="$conf" >"$RUNNER_TEMP/b22-clamd-start.log" 2>&1 &
-          for attempt in {1..45}; do
+          clamd_pid=$!
+          # The official multi-million-signature DB may take longer than a
+          # minute to load. Keep the daemon private, without any TCP listener.
+          for attempt in {1..110}; do
             if [ -S "$sock" ]; then break; fi
+            if ! kill -0 "$clamd_pid" 2>/dev/null; then break; fi
             sleep 1
           done
-          test -S "$sock"
+          if [ ! -S "$sock" ]; then
+            echo "B22 local daemon did not open its private socket"
+            tail -n 45 "$RUNNER_TEMP/b22-clamd-start.log" || true
+            exit 1
+          fi
+          echo "PASS B22: task-only ClamAV local socket ready"
           echo "DOGRUADRES_CLAMD_SOCKET=$sock" >> "$GITHUB_ENV"
           echo "DOGRUADRES_B22_SAFE_REVIEW_TEST=true" >> "$GITHUB_ENV"
       - name: B22 real Chrome after signed R1 activation on separate disposable database
