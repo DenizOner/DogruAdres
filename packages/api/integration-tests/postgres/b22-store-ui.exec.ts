@@ -742,9 +742,28 @@ export default async function({container}:any){
         if(/cannot read properties|undefined/i.test(message))return "invalid-workflow-state"
         return "unclassified"
       }
+      const nativeRunner=completeCartWithSplitOrdersWorkflow(container)
+      // Read-only checkpoint provenance on the retry child only. Never print
+      // context, input, step output, Redis keys, tenant data, or exceptions.
+      if(process.env.B22_REDIS_INSPECT_STORED_STATE==="true"){
+        let storedState="unavailable",queryOutput="unknown"
+        try{
+          const existing=await nativeRunner.getRunningTransaction(
+            "b22-native-redis-cart-"+cartId)
+          const currentState=String(existing.getState())
+          storedState=/^(?:not_started|invoking|done|failed|reverted|compensating)$/.test(currentState)
+            ?currentState:"other"
+          const invocation=(existing.getContext() as any)?.invoke
+          queryOutput=invocation&&typeof invocation==="object"
+            ?String(Object.prototype.hasOwnProperty.call(invocation,"order-cart-query"))
+            :"unknown"
+        }catch{}
+        process.stdout.write("OBSERVED B22 Redis stored checkpoint before retry: state="+
+          storedState+" exact_query_output_key="+queryOutput+"\n")
+      }
       let completed:any,runException:unknown
       try{
-        completed=await completeCartWithSplitOrdersWorkflow(container).run({
+        completed=await nativeRunner.run({
           input:{cart_id:cartId},
           context:{transactionId:"b22-native-redis-cart-"+cartId},
           throwOnError:false
@@ -4336,7 +4355,8 @@ export default async function({container}:any){
     const redisRetry=spawnSync("bun",cmd,{
       cwd:process.cwd(),
       env:{...redisEnv,B22_REDIS_PROBE_MODE:"native-complete",
-        B22_REDIS_NATIVE_CART_ID:redisCart.id},
+        B22_REDIS_NATIVE_CART_ID:redisCart.id,
+        B22_REDIS_INSPECT_STORED_STATE:"true"},
       encoding:"utf8",stdio:["ignore","pipe","pipe"],
       timeout:90000,maxBuffer:1024*1024
     })
@@ -4385,6 +4405,11 @@ export default async function({container}:any){
     const safeChildEvidence=transcript.match(
       / error_type=(TypeError|ReferenceError|MedusaError|Error|SkipExecutionError|unknown) missing_field=([A-Za-z_]{1,32}) package_frame=([A-Za-z0-9_/:.-]{1,120})/
     )
+    const storedCheckpointEvidence=transcript.match(
+      /OBSERVED B22 Redis stored checkpoint before retry: state=(not_started|invoking|done|failed|reverted|compensating|other|unavailable) exact_query_output_key=(true|false|unknown)/
+    )
+    const safeCheckpointState=storedCheckpointEvidence?.[1]??"unverified"
+    const safeQueryOutputKey=storedCheckpointEvidence?.[2]??"unknown"
     const safeChildType=safeChildEvidence?.[1]??"unknown"
     const safeChildField=safeChildEvidence?.[2]??"unknown"
     const safeChildFrame=safeChildEvidence?.[3]??"unverified"
@@ -4401,7 +4426,9 @@ export default async function({container}:any){
       " child_exit="+(/^(?:0|[1-9][0-9]{0,2})$/.test(childStatus)?childStatus:"unknown")+
       " error_category="+childErrorCategory+
       " error_type="+safeChildType+" missing_field="+safeChildField+
-      " package_frame="+safeChildFrame+"\n")
+      " package_frame="+safeChildFrame+
+      " redis_checkpoint_state="+safeCheckpointState+
+      " query_output_key="+safeQueryOutputKey+"\n")
     assert.equal(redisRetryPayments.length,0,
       "No payment collection link may be created by a failed native Cart retry")
     if(!nativeRetrySuccess)
