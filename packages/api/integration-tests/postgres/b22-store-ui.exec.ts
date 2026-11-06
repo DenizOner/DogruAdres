@@ -5183,7 +5183,7 @@ export default async function({container}:any){
       }])
       await reviewer.click("#product-draft-refresh")
       await reviewer.wait("!document.getElementById('product-draft-panel').hidden && document.getElementById('product-draft-guidance').hidden && !document.getElementById('product-draft-form').hidden && !document.querySelector('#product-draft-form button').disabled && [...document.querySelector('#product-draft-form select[name=seller_id]').options].some(o=>o.value==="+JSON.stringify(ownerStoreId)+")")
-      process.stdout.write("PASS B22 Chrome: denied native Member/Store UI stays visible without product submit; verified association enables product form\\n")
+      process.stdout.write("PASS B22 Chrome: denied native Member/Store UI stays visible without product submit; verified association enables product form\n")
       // B06Chrome.ready() waits for the Owner-only membership panel.
       // This actor is an ordinary Member; verify the actual product scope instead.
       const memberScope=await reviewer.eval(`(async()=>{
