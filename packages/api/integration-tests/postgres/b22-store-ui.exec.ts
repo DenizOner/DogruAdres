@@ -5176,6 +5176,43 @@ export default async function({container}:any){
         "A verified Member without a native SellerMember association has no Store")
       await reviewer.click("#product-draft-refresh")
       await reviewer.wait("document.getElementById('product-draft-form').hidden && !document.getElementById('product-draft-guidance').hidden && document.getElementById('product-draft-status').textContent.includes('bulunamadı')")
+      const intendedConnection={organization_id:organizations[0].id,
+        seller_id:ownerStoreId,membership_id:alphaMember.id}
+      const connectionResponse=async(actor:B06Chrome,input:Record<string,string>,
+        withCsrf=true)=>actor.eval(`(async()=>{
+          const sr=await fetch('/personal/session')
+          if(sr.status!==200)return sr.status
+          const current=await sr.json()
+          const r=await fetch('/personal/store-member-connections',{
+            method:'POST',headers:{'content-type':'application/json',
+              ...( ${JSON.stringify(withCsrf)} ? {'x-csrf-token':current.csrf_token} : {})},
+            body:JSON.stringify(${JSON.stringify(input)})
+          })
+          return r.status
+        })()`)
+      assert.equal(await connectionResponse(reviewer,intendedConnection),403,
+        "Ordinary Organization Member cannot connect their own native Seller role")
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      assert.equal(await connectionResponse(browser,intendedConnection,false),403,
+        "Owner cannot omit first-party CSRF")
+      assert.equal(await connectionResponse(browser,{...intendedConnection,
+        organization_id:organizations[1].id}),403,
+        "Owner cannot use an unrelated Organization to activate an Alpha Member")
+      assert.equal(await connectionResponse(browser,{...intendedConnection,
+        membership_id:"damem_foreign"}),403,
+        "Only the Owner's current active Organization membership is valid")
+      assert.equal(await connectionResponse(browser,{...intendedConnection,
+        member_id:bNativeMember.id}),400,
+        "Browser must never choose the native Member identity")
+      assert.equal((await native.listSellerMembers({
+        seller_id:ownerStoreId,member_id:bNativeMember.id
+      })).length,0,"All pre-activation negative checks leave native SellerMember absent")
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where action='organization.store_native_member_connection_confirmed'
+          and organization_id=$1 and target_id=$2`,
+        [organizations[0].id,ownerStoreId]))[0].n,0)
+      process.stdout.write("PASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit\n")
       // Complete the EXISTING native Member association through the real
       // Owner browser UI; never let a test-only service call stand in for
       // a user-facing product operation.
@@ -5217,6 +5254,7 @@ export default async function({container}:any){
         and new_values->>'person_id'=$3`,
         [organizations[0].id,ownerStoreId,B.person]))[0].n,1,
         "Idempotent native link must not duplicate canonical audit")
+      process.stdout.write("PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged\n")
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       await reviewer.click("#product-draft-refresh")
