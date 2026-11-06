@@ -75,7 +75,7 @@ for (const panel of PANELS) {
   // telemetry host. Native telemetry:false does not cover browser-initiated
   // fetches. Refuse a distributable panel without an active connect-src CSP.
   if (!html.includes('http-equiv="Content-Security-Policy"') ||
-      !html.includes("connect-src 'self'")) {
+      !html.includes('connect-src &#39;self&#39;')) {
     fail(`Unprotected ${panel.name} panel: first-party-only connect-src CSP missing`)
   }
   if (!html.includes(`${panel.basePath}assets/`)) {
