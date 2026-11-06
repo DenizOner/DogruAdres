@@ -5,7 +5,8 @@
  */
 import assert from "node:assert/strict"
 import { verifyB22OwnedSellerConstraints } from "./b22-ownership.pg16.test"
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
+import { Migration20261106090000 } from "../../src/modules/dogruadres-access/migrations/Migration20261106090000"
 import { spawnSync } from "node:child_process"
 import { mkdtempSync, readdirSync, unlinkSync, rmdirSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -124,6 +125,52 @@ async function run(){
         assert.equal(Number(repair[0].n),1,
           "Additive B22 migration collision repair was not recorded")
         process.stdout.write("PASS B22 PG16 Mercur 2.4.1 migration collision guard: native hashed invites + audited price group, unique repair ledger\n")
+      }
+      if(scope==="b22-ui"){
+        // Exercise the exact new migration SQL against a PostgreSQL TEMP table
+        // shaped like Mercur 2.4.0, not any real invitation or protected data.
+        // The same migration was already run by CLI above on the fresh native
+        // 2.4.1 schema. This additionally covers the legacy reverse collision.
+        const statements:string[]=[]
+        const migration=Object.create(Migration20261106090000.prototype)
+        migration.addSql=(statement:string)=>{statements.push(statement)}
+        await migration.up()
+        assert.equal(statements.length,4)
+        await target.begin(async(tx:any)=>{
+          await tx.unsafe(`create temporary table member_invite (
+            id text primary key, token text not null, deleted_at timestamptz
+          ) on commit drop`)
+          await tx.unsafe(`create index "IDX_member_invite_token"
+            on member_invite(token) where deleted_at is null`)
+          await tx.unsafe("set local search_path to pg_temp, public")
+          const active=await tx.unsafe("select current_schema() as schema")
+          assert.match(String(active[0].schema),/^pg_temp_[0-9]+$/,
+            "Legacy fixture must resolve only a temporary PostgreSQL schema")
+          const raw="synthetic-old-invite-"+randomBytes(24).toString("hex")
+          const expected=createHash("sha256").update(raw,"utf8").digest("hex")
+          await tx.unsafe("insert into member_invite(id,token) values($1,$2)",
+            ["synthetic",raw])
+          await tx.unsafe(statements[0])
+          const converted=await tx.unsafe(`select token_hash from member_invite
+            where id='synthetic'`)
+          assert.equal(converted.length,1)
+          assert.equal(converted[0].token_hash,expected,
+            "Legacy plaintext token must become native Mercur SHA-256")
+          const columns=await tx.unsafe(`select column_name from information_schema.columns
+            where table_schema=current_schema() and table_name='member_invite'`)
+          assert.ok(columns.some((r:any)=>r.column_name==="token_hash"))
+          assert.ok(!columns.some((r:any)=>r.column_name==="token"))
+          const indexes=await tx.unsafe(`select indexname from pg_indexes
+            where schemaname=current_schema() and tablename='member_invite'`)
+          assert.ok(indexes.some((r:any)=>r.indexname==="IDX_member_invite_token_hash"))
+          assert.ok(!indexes.some((r:any)=>r.indexname==="IDX_member_invite_token"))
+          await tx.unsafe(statements[0])
+          const repeated=await tx.unsafe(`select token_hash from member_invite
+            where id='synthetic'`)
+          assert.equal(repeated[0].token_hash,expected,
+            "A repeated repair must not double-hash the invitation")
+        })
+        process.stdout.write("PASS B22 PG16 Mercur 2.4.0 legacy token hash repair: temp-only SHA-256 conversion, old index replaced, no double-hash\\n")
       }
       const ledger=await target.unsafe("select count(*)::int as n from mikro_orm_migrations where name like 'Migration2026102%'")
       assert.ok(Number(ledger[0].n)>=1,"No Foundation migration history from Medusa CLI")
