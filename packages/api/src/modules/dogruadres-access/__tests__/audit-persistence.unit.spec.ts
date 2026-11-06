@@ -87,7 +87,7 @@ describe("Foundation canonical audit and outbox persistence contract", () => {
     }
   })
 
-  it("applies owner organization.read policy to personal and background observer lists",async()=>{
+  it("preserves fixed protected Owner organization.read on personal and observer lists",async()=>{
     const previous=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     const owner={id:"daorg_owner",name:"Private Owner Organization",
       membership_id:"damem_owner",role:"owner"}
@@ -103,15 +103,15 @@ describe("Foundation canonical audit and outbox persistence contract", () => {
       sql.includes("m.protected_owner=true")?[{id:"damem_owner"}]:[])
     try{
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase"
-      const noRead=await f.service.personalOrganizations("synthetic-session",undefined,f.context)
-      expect(noRead?.organizations.map(x=>x.id)).toEqual(["daorg_member"])
-      const noReadOne=await f.service.personalOrganizations("synthetic-session","daorg_owner",f.context)
-      expect(noReadOne).toBeNull()
+      const fixedRead=await f.service.personalOrganizations("synthetic-session",undefined,f.context)
+      expect(fixedRead?.organizations.map(x=>x.id)).toEqual(["daorg_owner","daorg_member"])
+      const fixedReadOne=await f.service.personalOrganizations("synthetic-session","daorg_owner",f.context)
+      expect(fixedReadOne?.organizations.map(x=>x.id)).toEqual(["daorg_owner"])
       const observed=await f.service.observePersonalOrganizations("synthetic-session",undefined,f.context)
-      expect(observed?.organizations.map(x=>x.id)).toEqual(["daorg_member"])
+      expect(observed?.organizations.map(x=>x.id)).toEqual(["daorg_owner","daorg_member"])
       expect(probe).toHaveBeenCalledWith("synthetic-session",undefined,false)
-      // Restore the canonical Owner default, but still demand actual
-      // protected Owner membership evidence for every Owner read.
+      // Legacy deployment changes cannot narrow the Owner; actual current
+      // protected membership proof is still mandatory for each read.
       delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       const allowed=await f.service.personalOrganizations("synthetic-session",undefined,f.context)
       expect(allowed?.organizations.map(x=>x.id)).toEqual(["daorg_owner","daorg_member"])
