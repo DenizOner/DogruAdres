@@ -207,10 +207,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <div id="organization-document-section" hidden style="margin-top:1em;padding:1em;border:1px solid #ccc">
       <h3>Vergi Levhası (Onaylı Belge)</h3>
       <p>PDF, JPEG veya PNG biçiminde, en fazla 10 MiB. Belge güvenli özel alanda saklanır; başvuru gönderilmeden işletme yetkisi verilmez.</p>
-      <label>Belge dosyası seçin
-        <input type="file" id="organization-document-file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
-      </label>
-      <button type="button" id="organization-document-upload">Belgeyi yükle</button>
+      <div id="organization-document-dropzone" role="group" aria-label="Vergi levhası dosyası bırakma alanı" style="padding:1em;border:1px dashed #777">
+        <p>PDF, JPEG veya PNG dosyasını buraya sürükleyip bırakın ya da dosya seçicisini kullanın.</p>
+        <label>Belge dosyası seçin
+          <input type="file" id="organization-document-file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
+        </label>
+        <button type="button" id="organization-document-upload">Belgeyi yükle</button>
+      </div>
       <p id="organization-document-status" role="status" aria-live="polite"></p>
       <div id="organization-document-info"></div>
     </div>
@@ -424,6 +427,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     'manufacturing','fleet_operations','insurance_claims'];
   let organizationDraftId='',organizationDraftVersion=0,organizationDraftRequest=0;
   let organizationDraftCursor=null,organizationDraftSaving=false,organizationDraftMutation=0;
+  let organizationDocumentSelection=null;
   function lockOrganizationDraftSelection(busy){
     organizationDraftSaving=busy;
     for(const control of el('organization-draft-form').querySelectorAll('input,select,button'))
@@ -436,6 +440,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   function clearOrganizationDrafts(){
     organizationDraftMutation++;organizationDraftRequest++;
     organizationDraftId='';organizationDraftVersion=0;organizationDraftCursor=null;
+    organizationDocumentSelection=null;
+    el('organization-document-file').value='';
     el('organization-draft-list').replaceChildren();
     el('organization-draft-more').hidden=true;
     el('organization-draft-withdraw').hidden=true;
@@ -503,6 +509,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           button.onclick=()=>{
           if(organizationDraftSaving)return;
           organizationDraftId=item.id;organizationDraftVersion=item.version;
+          organizationDocumentSelection=null;
+          el('organization-document-file').value='';
+          el('organization-document-status').textContent='';
           const form=el('organization-draft-form');
           for(const input of form.querySelectorAll('input[name=declared_activities]'))
             input.checked=item.declared_activities.includes(input.value);
@@ -555,6 +564,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('organization-draft-new').onclick=()=>{
     if(organizationDraftSaving)return;
     organizationDraftId='';organizationDraftVersion=0;
+    organizationDocumentSelection=null;
+    el('organization-document-file').value='';
     el('organization-draft-form').reset();
     el('organization-draft-form').querySelector('button').disabled=false;
     el('organization-draft-withdraw').hidden=true;
@@ -759,7 +770,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   };
   el('organization-document-upload').onclick=async()=>{
     const fileInput=el('organization-document-file');
-    const file=fileInput.files?.[0];
+    const file=organizationDocumentSelection||fileInput.files?.[0];
     if(!file){
       el('organization-document-status').textContent='Lütfen bir PDF, JPEG veya PNG dosyası seçin.';
       return;
@@ -796,6 +807,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('organization-document-status').textContent='Vergi levhası başarıyla yüklendi.';
       el('organization-document-info').textContent='Yüklü vergi levhası: v'+result.document.version+' ('+result.document.mime_type+', '+result.document.original_byte_length+' bayt)';
       el('organization-application-submit').hidden=false;
+      organizationDocumentSelection=null;
       fileInput.value='';
       await refreshOrganizationDrafts();
     }catch(err){
@@ -806,6 +818,45 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         lockOrganizationDraftSelection(false);
       }
     }
+  };
+
+  // Drop and file-picker share the existing authenticated upload button and
+  // server validation. A drop never starts a POST or changes a draft by itself.
+  function chooseOrganizationDocument(file){
+    const input=el('organization-document-file');
+    organizationDocumentSelection=null;
+    if(organizationDraftSaving||!organizationDraftId||organizationDraftVersion<1||
+       document.hidden||el('workspace').hidden||el('organization-document-section').hidden){
+      input.value='';return;
+    }
+    if(!(file instanceof File)||!/^.{1,160}\\.(?:pdf|jpe?g|png)$/i.test(file.name)||
+       file.size<1||file.size>10*1024*1024){
+      input.value='';
+      el('organization-document-status').textContent='Yalnız PDF, JPEG veya PNG biçiminde, en fazla 10 MiB dosya seçin.';
+      return;
+    }
+    organizationDocumentSelection=file;
+    el('organization-application-submit').hidden=true;
+    el('organization-document-status').textContent='Dosya seçildi: '+file.name+'. Yüklemek için Belgeyi yükle düğmesine basın.';
+  }
+  el('organization-document-file').onchange=e=>chooseOrganizationDocument(e.currentTarget.files?.[0]);
+  const taxDropzone=el('organization-document-dropzone');
+  taxDropzone.ondragover=e=>{
+    e.preventDefault();
+    if(!organizationDraftSaving&&!document.hidden&&!el('organization-document-section').hidden)
+      taxDropzone.style.outline='2px dashed currentColor';
+  };
+  taxDropzone.ondragleave=()=>{taxDropzone.style.outline='';};
+  taxDropzone.ondrop=e=>{
+    e.preventDefault();taxDropzone.style.outline='';
+    if(!e.dataTransfer||e.dataTransfer.files.length!==1){
+      organizationDocumentSelection=null;
+      el('organization-document-file').value='';
+      el('organization-document-status').textContent='Lütfen aynı anda yalnız bir belge bırakın.';
+      return;
+    }
+    el('organization-document-file').value='';
+    chooseOrganizationDocument(e.dataTransfer.files[0]);
   };
 
   el('organization-application-submit').onclick=async()=>{
