@@ -1,6 +1,7 @@
 import {
   decodeOrganizationDraftCursor,
   listOrganizationDrafts,
+  saveOrganizationDraft,
   withdrawOrganizationDraft,
   saveOrganizationDocument,
   submitOrganizationApplication,
@@ -75,6 +76,42 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","no-store")
     expect(JSON.stringify(res.json.mock.calls)).not.toContain(payload.landline_phone)
   })
+
+  it("requires a material field change before a correction can become a draft",async()=>{
+    const spy=jest.spyOn(IdentitySessions.prototype,"current").mockResolvedValue({
+      person_id:"daprs_applicant",actor_type:"customer",actor_id:"cus_app"
+    } as any)
+    const state={...payload,expected_version:4}
+    const exec=jest.fn(async(sql:string,params?:any[])=>{
+      if(sql.includes("from da_organization_application where id=? for update"))
+        return [{applicant_person_id:"daprs_applicant",status:"correction_requested",version:4}]
+      if(sql.startsWith("update da_organization_application")){
+        expect(sql).toContain("IS DISTINCT FROM ROW")
+        expect(sql).toContain("status='draft' or")
+        expect(params?.length).toBe(15)
+        return JSON.stringify(params?.slice(0,6))===JSON.stringify(params?.slice(-6))
+          ? []:[{id:payload.application_id}]
+      }
+      return []
+    })
+    const db:any={execute:exec}
+    try{
+      const same=await saveOrganizationDraft(db,"opaque",state)
+      expect(same).toEqual({conflict:true})
+      expect(exec.mock.calls.some(([sql])=>String(sql).includes("insert into da_audit_event"))).toBe(false)
+      expect(exec.mock.calls.some(([sql])=>String(sql).includes("insert into da_security_outbox"))).toBe(false)
+      const changed=await saveOrganizationDraft(db,"opaque",{
+        ...state,legal_name:"Updated Synthetic Business"
+      })
+      expect(changed).toEqual({
+        conflict:false,application_id:payload.application_id,status:"draft",version:5
+      })
+      expect(exec.mock.calls.filter(([sql])=>String(sql).includes("insert into da_audit_event"))).toHaveLength(1)
+      expect(exec.mock.calls.filter(([sql])=>String(sql).includes("insert into da_security_outbox"))).toHaveLength(1)
+      expect(exec.mock.calls.some(([sql])=>/createOrganizations|insert into da_organization_membership/.test(String(sql)))).toBe(false)
+    }finally{spy.mockRestore()}
+  })
+
   it("requires CSRF and denies browser-supplied native actor credentials",async()=>{
     ;(csrf as jest.Mock).mockResolvedValue(false)
     await POST(req,res)
@@ -472,11 +509,13 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     const spy=jest.spyOn(IdentitySessions.prototype,"current").mockResolvedValue({
       person_id:"daprs_applicant",actor_type:"customer",actor_id:"cus_app"
     } as any)
-    let status="correction_requested",person="daprs_applicant"
+    let status="correction_requested",person="daprs_applicant",priorSha=""
     const exec=jest.fn(async(sql:string,params?:any[])=>{
       if(sql.includes("from da_organization_application where id=? for update"))
         return [{applicant_person_id:person,status,version:4}]
       if(sql.includes("max(version)"))return [{max_v:1}]
+      if(sql.includes("select original_sha256 from da_organization_application_document"))
+        return [{original_sha256:priorSha}]
       if(sql.includes("update da_organization_application")&&sql.includes("set status='draft'"))
         return [{version:5}]
       return []
@@ -486,6 +525,13 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       expected_version:4,filename:"corrected.pdf",file_base64:changed.toString("base64")}
     try{
       const prior=await writePrivateTaxCertificate(root,prepareTaxCertificate("original.pdf",pdf))
+      priorSha=prior.originalSha256
+      const unchanged=await saveOrganizationDocument(db,"opaque",{
+        ...input,filename:"renamed.pdf",file_base64:pdf.toString("base64")
+      },root)
+      expect(unchanged).toEqual({conflict:true})
+      expect(await fsp.readdir(root)).toHaveLength(1)
+      expect(exec.mock.calls.some(([sql])=>String(sql).includes("insert into da_organization_application_document"))).toBe(false)
       const result=await saveOrganizationDocument(db,"opaque",input,root)
       expect(result).toMatchObject({conflict:false,status:"draft",version:5,
         document:{version:2,original_byte_length:changed.length}})

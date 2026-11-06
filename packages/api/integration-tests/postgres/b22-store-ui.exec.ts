@@ -7787,6 +7787,21 @@ export default async function({container}:any){
         return r.status;
       })()`)
       assert.equal(unchangedSubmit,409,"Correction must not permit unchanged resubmission")
+
+      const noChangeSave=await foreignDraftChrome.eval(`(async()=>{
+        const form=document.getElementById('organization-draft-form');
+        const selected=Array.from(form.querySelectorAll('input[name=declared_activities]:checked'),x=>x.value);
+        const body={...Object.fromEntries(new FormData(form)),
+          declared_activities:selected,primary_activity:form.elements.primary_activity.value,
+          application_id:${JSON.stringify(foreignAppId)},expected_version:4};
+        const csrf=(await(await fetch('/personal/session')).json()).csrf_token;
+        const r=await fetch('/personal/organization-applications',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify(body)});
+        return r.status;
+      })()`)
+      assert.equal(noChangeSave,409,"Unmodified correction form must not reopen application")
+      assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
+        [{status:"correction_requested",version:4}])
       const priorRevisions=await q(
         "select version,storage_key,original_sha256,is_current from da_organization_application_document where application_id=$1 order by version",
         [foreignAppId])

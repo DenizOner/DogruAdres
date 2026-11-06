@@ -755,7 +755,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('organization-draft-status').textContent=uncertain?
         'Kayıt sonucu belirsiz; yeniden göndermeyin. Taslaklarımı yenile ile kontrol edin.':
         error.httpStatus===409?
-          'Taslak başka bir sürümde. Taslaklarımı yenile ile güncel kaydı açın.':
+          'Değişiklik bulunamadı veya taslak güncellendi. Taslaklarımı yenileyip bilgileri kontrol edin.':
           'Taslak kaydedilemedi. Bilgileri ve oturumunuzu kontrol edin.';
     }finally{
       if(mutation===organizationDraftMutation&&epoch===viewEpoch){

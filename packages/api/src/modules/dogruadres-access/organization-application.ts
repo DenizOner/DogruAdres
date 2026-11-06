@@ -169,10 +169,15 @@ export async function saveOrganizationDraft(db:SecuritySql,token:string,value:un
         declared_activities=?::jsonb,primary_activity=?,status='draft',
         version=version+1,updated_at=clock_timestamp()
       where id=? and applicant_person_id=? and status in ('draft','correction_requested') and version=?
+        and (status='draft' or
+          ROW(business_kind,legal_name,landline_phone,tax_identifier,declared_activities,primary_activity)
+            IS DISTINCT FROM ROW(?,?,?, ?,?::jsonb,?))
       returning id`,
       [input.business_kind,input.legal_name,input.landline_phone,input.tax_identifier??null,
         JSON.stringify(input.declared_activities),input.primary_activity,
-        input.application_id,session.person_id,input.expected_version])
+        input.application_id,session.person_id,input.expected_version,
+        input.business_kind,input.legal_name,input.landline_phone,input.tax_identifier??null,
+        JSON.stringify(input.declared_activities),input.primary_activity])
     if(updated.length!==1)return {conflict:true as const}
   }
   // Save only actor+draft identity in the same Foundation transaction.
@@ -272,6 +277,16 @@ export async function saveOrganizationDocument(
     throw new InvalidTaxCertificate()
   }
   const prepared=prepareTaxCertificate(input.filename,fileBytes)
+  if(rows[0].status==="correction_requested"){
+    // A renamed upload of identical bytes is not a new review correction.
+    // Compare only the private SHA-256 while holding the application lock.
+    const prior=await db.execute(
+      `select original_sha256 from da_organization_application_document
+       where application_id=? and is_current=true`,[input.application_id])
+    if(prior.length>1)throw new IdentityAccessDenied()
+    if(prior.length===1&&prior[0].original_sha256===prepared.originalSha256)
+      return {conflict:true as const}
+  }
 
   // Persist to private directory outside checkout and public static
   const rootDir=overrideRoot??process.env.DOGRUADRES_TAX_CERTIFICATE_DIR
