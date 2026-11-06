@@ -5212,7 +5212,7 @@ export default async function({container}:any){
         where action='organization.store_native_member_connection_confirmed'
           and organization_id=$1 and target_id=$2`,
         [organizations[0].id,ownerStoreId]))[0].n,0)
-      process.stdout.write("PASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit\n")
+      process.stdout.write("\nPASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit\n")
       // Complete the EXISTING native Member association through the real
       // Owner browser UI; never let a test-only service call stand in for
       // a user-facing product operation.
@@ -5352,6 +5352,24 @@ export default async function({container}:any){
       assert.equal(denied.status,403)
       assert.equal((await q("select count(*)::int n from product where title=$1",[deniedPayload.title]))[0].n,0)
       assert.equal((await memberDraftPost(racePayload)).status,403,"Revoke must block replay of the earlier product")
+      // A persistent Mercur SellerMember is no longer sufficient after Owner
+      // revokes the independent, audited DoğruAdres products.edit permission.
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      assert.equal(await connectionResponse(browser,intendedConnection),403,
+        "Revoked products.edit denies even an existing native Store link")
+      const nativeAfterRevoke=await native.listSellerMembers({
+        seller_id:ownerStoreId,member_id:bNativeMember.id
+      })
+      assert.equal(nativeAfterRevoke.length,1)
+      assert.equal(nativeAfterRevoke[0].is_owner,false)
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where action='organization.store_native_member_connection_confirmed'
+          and organization_id=$1 and target_id=$2
+          and new_values->>'person_id'=$3`,
+        [organizations[0].id,ownerStoreId,B.person]))[0].n,1,
+        "Denied reconnection must not add a second Foundation audit")
+      process.stdout.write("\nPASS B22 Chrome: revoked products.edit prevents native Store connection via Owner HTTP; SellerMember and canonical audit unchanged\n")
       process.stdout.write("PASS B22 Chrome: real native Member product INSERT and Owner products.edit revoke serialized on PG16; committed product/audit predates revoke; next Member HTTP 403 and zero new product\n")
     }finally{
       if(raceBarrierHeld)await raceBarrier.query("ROLLBACK")

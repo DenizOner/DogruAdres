@@ -219,6 +219,7 @@ async function run(){
               "PASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit",
               "PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged",
               "PASS B22 Chrome: denied native Member/Store UI stays visible without product submit; verified association enables product form",
+              "PASS B22 Chrome: revoked products.edit prevents native Store connection via Owner HTTP; SellerMember and canonical audit unchanged",
             ].includes(x))
             if(scoped.length)process.stdout.write(scoped.join("\n")+"\n")
             throw Error("B22 dedicated task-only child stage failed: "+sanitized(
@@ -295,6 +296,8 @@ async function run(){
           "Missing real Chrome/PG16 refusal of unauthorized, foreign and forged native member connection")
         assert.ok(result.split("\n").includes("PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged"),
           "Missing real Owner UI→Mercur SellerMember persisted link, audited outcome and idempotent replay")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome: revoked products.edit prevents native Store connection via Owner HTTP; SellerMember and canonical audit unchanged"),
+          "Missing real revoked-grant refusal for existing native SellerMember and unchanged canonical audit")
         assert.ok(result.split("\n").includes("PASS B22 Buyer catalogue: real Chrome HTTPS and PG16 two published Mercur Offers under approved Buyer Org, foreign and forged scopes 403/400, no private inventory leakage and no audit writes"),
           "Missing real Chrome HTTPS/PG16 Buyer catalogue discovery, Store/Org denials and no-write evidence")
         assert.ok(result.split("\n").includes("PASS B22 Store price group F-01/F-02: suspended/de-approved Seller and suspended Buyer GET403; real first-party Member unlink between native HTTP scope and Foundation write denies grant403, zero group/audit mutation"),
