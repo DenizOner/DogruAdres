@@ -376,6 +376,19 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     expect(res.status).toHaveBeenLastCalledWith(400)
   })
 
+  it("fails closed on approval while verified staff document safety is unavailable", async () => {
+    req.body={action:"review_decision",application_id:payload.application_id,
+      expected_version:3,decision:"approve"}
+    service.personalReviewOrganizationApplication=jest.fn()
+      .mockRejectedValue(new TaxCertificateReviewUnavailable())
+    await POST(req,res)
+    expect(service.personalReviewOrganizationApplication)
+      .toHaveBeenCalledWith("opaque",req.body)
+    expect(res.status).toHaveBeenLastCalledWith(503)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Document review unavailable"})
+    expect(res.send).not.toHaveBeenCalled()
+  })
+
   it("allows platform review staff to list submitted applications and denies unauthorized callers", async () => {
     req.query = { action: "review_queue" }
     service.personalSubmittedOrganizationApplications.mockResolvedValueOnce({
