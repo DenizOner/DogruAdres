@@ -353,24 +353,33 @@ jobs:
           PG_MFA_TEST_SCOPE: b22-ui
           B22_UI_AUTO_SCOPE: b22-ui
         run: bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts
-      # Required runtime assets in this job; the accepted build check remains
-      # separate. No Vite listener or custom dashboard route is introduced.
-      - name: Prepare existing Admin assets for same-origin SMTP acceptance
+      # Existing native UI modules serve these two real build artifacts
+      # from the same isolated HTTPS test runtime. No new service/deployment.
+      - name: Prepare existing Admin and Vendor assets for browser privacy acceptance
         if: github.event_name != 'workflow_dispatch'
-        working-directory: apps/admin
-        # Vite evaluates medusa-config in production mode. Fresh build-only
-        # secrets satisfy its existing guard; never fall back to router base '/'.
+        working-directory: .
         run: |
           node --input-type=module <<'NODE'
           import { randomBytes } from 'node:crypto'
           import { spawnSync } from 'node:child_process'
-          const result = spawnSync('bun', ['run', 'build'], {
-            env: { ...process.env, JWT_SECRET: randomBytes(48).toString('hex'), COOKIE_SECRET: randomBytes(48).toString('hex') },
-            encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
-          })
-          process.stdout.write(result.stdout ?? '')
-          process.stderr.write(result.stderr ?? '')
-          if (result.error || result.status !== 0 || (result.stdout + result.stderr).includes('Could not load the Medusa config')) process.exit(1)
+          const env = {
+            ...process.env,
+            MERCUR_DISABLE_TELEMETRY: 'true',
+            JWT_SECRET: randomBytes(48).toString('hex'),
+            COOKIE_SECRET: randomBytes(48).toString('hex'),
+          }
+          for (const name of ['admin', 'vendor']) {
+            const result = spawnSync('bun', ['run', 'build'], {
+              cwd: `apps/${name}`, env, encoding: 'utf8',
+              maxBuffer: 4 * 1024 * 1024, timeout: 180000,
+            })
+            process.stdout.write(result.stdout ?? '')
+            process.stderr.write(result.stderr ?? '')
+            if (result.error || result.status !== 0 ||
+                (result.stdout + result.stderr).includes('Could not load the Medusa config')) {
+              throw new Error(`Existing ${name} panel build failed`)
+            }
+          }
           NODE
       - name: Native Admin SMTP real Chrome and disposable PG16
         if: github.event_name != 'workflow_dispatch'
