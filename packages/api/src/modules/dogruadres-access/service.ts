@@ -1847,6 +1847,92 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {status:"revoked" as const,grant_id:grantId}
   }
 
+
+  /**
+   * B22: the Owner activates an ALREADY AUDITED products.edit grant for an
+   * ALREADY VERIFIED native Member. This is never identity registration,
+   * Organization membership creation or an independent product permission.
+   * The Store/Person grant lock is shared with Owner revoke and draft writes.
+   * Native link creation emits Mercur's seller_member.created event; if its
+   * outcome is uncertain the caller must read native membership, not replay
+   * an assumed failure.
+   */
+  @InjectTransactionManager()
+  async personalWithStoreMemberConnectionLock<T>(
+    token:string,
+    input:{organization_id:string;seller_id:string;membership_id:string},
+    execute:(memberId:string,context:Context)=>Promise<T>,
+    @MedusaContext() context:Context={}
+  ):Promise<T|null>{
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
+       typeof execute!=="function")throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const org=await sessions.organizations(token,input.organization_id,false)
+    if(!org||org.person_id!==current.person_id||org.organizations.length!==1||
+       org.organizations[0].role!=="owner"||
+       !organizationActionAllowed("owner","membership.manage",
+         await isCurrentProtectedOwner(db,current.person_id,input.organization_id),false))
+      return null
+
+    // Ordinary member ONLY: historical Organization admin and protected Owner
+    // roles cannot become technical Store members through this narrow action.
+    const targets=await db.execute(
+      "select m.person_id from da_organization_membership m "+
+      "join da_person p on p.id=m.person_id "+
+      "where m.id=? and m.organization_id=? and m.role='member' "+
+      "and m.protected_owner=false and m.status='active' "+
+      "and m.deleted_at is null and m.revoked_at is null "+
+      "and p.disabled_at is null and p.deleted_at is null for share of m,p",
+      [input.membership_id,input.organization_id])
+    if(targets.length!==1||typeof targets[0].person_id!=="string"||
+       !/^daprs_[A-Za-z0-9_-]+$/.test(targets[0].person_id)||
+       targets[0].person_id===current.person_id)return null
+    const targetPerson=targets[0].person_id as string
+
+    // Same lock as permission grant/revoke and native draft creation.
+    await db.execute(
+      "select pg_advisory_xact_lock(hashtext('b22-products-edit'),hashtext(?))",
+      [input.organization_id+":"+input.seller_id+":"+targetPerson])
+    if(!await verifiedStoreProductEditGrant(db,targetPerson,
+         input.organization_id,input.seller_id))return null
+    if(!(await platformApprovedSellerIds(db,input.organization_id))
+       .includes(input.seller_id))return null
+    const ownership=await db.execute(
+      "select seller_id from da_organization_seller_ownership "+
+      "where organization_id=? and seller_id=? and revoked_at is null for share",
+      [input.organization_id,input.seller_id])
+    if(ownership.length!==1)return null
+
+    // A secondary Member must have completed the existing native password/MFA
+    // proof. A primary Member is accepted only with its verified login binding.
+    // Neither email equality nor a SellerMember flag binds two Persons.
+    const secondary=await db.execute(
+      "select b.actor_id,b.auth_identity_id from da_verified_actor_binding b "+
+      "join da_actor_mapping a on a.person_id=b.person_id "+
+      "and a.actor_type='member' and a.actor_id=b.actor_id and a.deleted_at is null "+
+      "where b.person_id=? and b.actor_type='member' "+
+      "and b.verified_at is not null and b.revoked_at is null for share of b,a",
+      [targetPerson])
+    const primary=await db.execute(
+      "select l.actor_id,l.auth_identity_id from da_login_binding l "+
+      "join da_actor_mapping a on a.person_id=l.person_id "+
+      "and a.actor_type='member' and a.actor_id=l.actor_id and a.deleted_at is null "+
+      "where l.person_id=? and l.actor_type='member' "+
+      "and l.verified_at is not null and l.revoked_at is null for share of l,a",
+      [targetPerson])
+    const bindings=[...secondary,...primary]
+    if(bindings.length!==1||typeof bindings[0].actor_id!=="string"||
+       !/^mem_[A-Za-z0-9_-]+$/.test(bindings[0].actor_id)||
+       typeof bindings[0].auth_identity_id!=="string"||
+       !bindings[0].auth_identity_id)return null
+    return execute(bindings[0].actor_id as string,context)
+  }
+
   @InjectTransactionManager()
   async personalListStoreProductPermissions(token:string,organizationId:string,
     @MedusaContext() context:Context={}){

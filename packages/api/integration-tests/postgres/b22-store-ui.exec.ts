@@ -5176,11 +5176,23 @@ export default async function({container}:any){
         "A verified Member without a native SellerMember association has no Store")
       await reviewer.click("#product-draft-refresh")
       await reviewer.wait("document.getElementById('product-draft-form').hidden && !document.getElementById('product-draft-guidance').hidden && document.getElementById('product-draft-status').textContent.includes('bulunamadı')")
-      // The installed Mercur native Seller service grants its own separate
-      // association. Only the authorized disposable Store is linked.
-      await native.createSellerMembers([{
-        seller_id:ownerStoreId,member_id:bNativeMember.id,is_owner:false
-      }])
+      // Complete the EXISTING native Member association through the real
+      // Owner browser UI; never let a test-only service call stand in for
+      // a user-facing product operation.
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      await browser.click("#product-grants-refresh")
+      await browser.wait("!!document.querySelector('#product-grants-list button.store-member-connect')")
+      await browser.click("#product-grants-list button.store-member-connect")
+      await browser.wait("document.getElementById('product-grants-status').textContent.includes('Mağaza çalışanı bağlantısı tamamlandı')")
+      const nativeLinks=await native.listSellerMembers({
+        seller_id:ownerStoreId,member_id:bNativeMember.id
+      })
+      assert.equal(nativeLinks.length,1)
+      assert.equal(nativeLinks[0].is_owner,false)
+      assert.equal(nativeLinks[0].role_id,"role_seller_support")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
       await reviewer.click("#product-draft-refresh")
       await reviewer.wait("!document.getElementById('product-draft-panel').hidden && document.getElementById('product-draft-guidance').hidden && !document.getElementById('product-draft-form').hidden && !document.querySelector('#product-draft-form button').disabled && [...document.querySelector('#product-draft-form select[name=seller_id]').options].some(o=>o.value==="+JSON.stringify(ownerStoreId)+")")
       process.stdout.write("PASS B22 Chrome: denied native Member/Store UI stays visible without product submit; verified association enables product form\n")

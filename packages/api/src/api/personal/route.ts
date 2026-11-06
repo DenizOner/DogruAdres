@@ -2218,6 +2218,36 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       for(const grant of grants.grants){
         const line=document.createElement('p');
         line.textContent=grant.person_id+' — '+grant.seller_id+' — products.edit';
+        const member=active.find(m=>m.person_id===grant.person_id&&m.role==='member');
+        if(member){
+          const connect=document.createElement('button');
+          connect.type='button';connect.className='store-member-connect';
+          connect.textContent='Mağaza çalışanı bağlantısını tamamla';
+          connect.onclick=async()=>{
+            if(document.hidden||el('workspace').hidden||
+               request!==organizationRequest||currentOrg!==org)return;
+            connect.disabled=true;
+            statusEl.textContent='Mağaza çalışanı bağlantısı kontrol ediliyor…';
+            try{
+              const result=await api('store-member-connections',{method:'POST',
+                body:JSON.stringify({organization_id:org,seller_id:grant.seller_id,
+                  membership_id:member.id})});
+              if(seq!==productPermissionRequest||request!==organizationRequest||
+                 currentOrg!==org||document.hidden)return;
+              if(result.status!=='connected')throw Error('Bağlantı doğrulanamadı');
+              statusEl.textContent='Mağaza çalışanı bağlantısı tamamlandı. Ürün izni ayrıca kontrol edilir.';
+              connect.textContent='Mağaza bağlantısı doğrulandı';
+            }catch(e){
+              if(seq!==productPermissionRequest||request!==organizationRequest||
+                 currentOrg!==org)return;
+              statusEl.textContent=e.uncertain?
+                'Bağlantının sonucu belirsiz. Tekrar göndermeyin; yetkili inceleme gerekli.':
+                'Bağlantı reddedildi. Çalışanın kendi üye hesabını doğrulaması, aktif olması ve ürün izni bulunması gerekir.';
+              if(!e.uncertain)connect.disabled=false;
+            }
+          };
+          line.append(' ',connect);
+        }
         grantList.append(line);
       }
       for(const button of form.querySelectorAll('button'))button.disabled=!allowedStores.length||!active.length;
