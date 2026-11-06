@@ -7788,6 +7788,63 @@ export default async function({container}:any){
       // Run the real Medusa CLI entry function with a fresh SQL client while
       // the B22 sentinel guarantees a task-owned disposable DB and private dir.
       await taxCertificateInventory({container} as any)
+
+      // The review API already pages by 100. Verify the actual staff UI can
+      // traverse page two on disposable PostgreSQL, not just fetch page one.
+      const reviewOverflowIds=Array.from({length:101},()=>
+        "daorgapp_"+randomBytes(16).toString("hex"))
+      try{
+        await q(`insert into da_organization_application
+          (id,applicant_person_id,business_kind,legal_name,landline_phone,
+           tax_identifier,declared_activities,primary_activity,status,version,updated_at)
+          select x.id,$2,'legal_company',
+            'B22 Pagination Fixture '||x.ordinality::text,$3,
+            lpad(x.ordinality::text,10,'0'),ARRAY['service_repair']::text[],
+            'service_repair','submitted',1,
+            clock_timestamp()-(x.ordinality*interval '1 second')
+          from unnest($1::text[]) with ordinality as x(id,ordinality)`,
+          [reviewOverflowIds,signupPerson,draftLandline])
+        const firstReviewPage=await reviewChrome.eval(`(async()=>{
+          const r=await fetch('/personal/organization-applications?action=review_queue');
+          const body=await r.json();
+          return {status:r.status,count:body.applications?.length,more:!!body.next_cursor};
+        })()`)
+        assert.deepEqual(firstReviewPage,{status:200,count:100,more:true},
+          "Authorized reviewer must get a real bounded first page and cursor")
+        const unauthorizedReview=await signupChrome.eval(`(async()=>{
+          const r=await fetch('/personal/organization-applications?action=review_queue');
+          return r.status;
+        })()`)
+        assert.equal(unauthorizedReview,403,
+          "Applicant cannot read the platform-wide submitted queue")
+        await reviewChrome.send("Page.reload",{ignoreCache:true})
+        await reviewChrome.wait("!document.getElementById('workspace').hidden")
+        await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()")
+        await reviewChrome.wait("!document.getElementById('organization-review-more').hidden")
+        assert.equal(await reviewChrome.eval(
+          "document.querySelectorAll('#organization-review-list p').length"),100)
+        await reviewChrome.click("#organization-review-more")
+        await reviewChrome.wait(
+          "document.querySelectorAll('#organization-review-list p').length===101")
+        const secondPageUi=await reviewChrome.eval(`(()=>({
+          count:document.querySelectorAll('#organization-review-list p').length,
+          moreHidden:document.getElementById('organization-review-more').hidden,
+          unique:new Set(Array.from(document.querySelectorAll('#organization-review-list p')).map(
+            p=>p.textContent)).size
+        }))()`)
+        assert.deepEqual(secondPageUi,{count:101,moreHidden:true,unique:101},
+          "Real Chrome must append exactly 1 remaining distinct submitted application")
+        await reviewChrome.eval("window.dispatchEvent(new Event('pagehide'))")
+        assert.equal(await reviewChrome.eval(
+          "document.getElementById('organization-review-list').textContent"),"",
+          "Private queue must clear on pagehide after second page")
+        assert.equal(await reviewChrome.eval(
+          "document.getElementById('organization-review-more').hidden"),true)
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: reviewer 101 submitted queue pages, unauthorized denied, stale view cleared\\n")
+      }finally{
+        await q("delete from da_organization_application where id=any($1::text[])",
+          [reviewOverflowIds])
+      }
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied\n")
     } finally {
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
