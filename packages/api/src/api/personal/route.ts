@@ -227,6 +227,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p>Yalnız açık platform organization.review görevi olan yetkili personel için gönderilmiş başvurular listelenir. Bu liste otomatik kuruluş veya mağaza yetkisi açmaz.</p>
     <p id="organization-review-status" role="status" aria-live="polite"></p>
     <div id="organization-review-list"></div>
+    <button id="organization-review-more" type="button" hidden>Daha eski başvuruları göster</button>
     <button id="organization-review-refresh" type="button">Başvuru kuyruğunu yenile</button>
   </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
@@ -559,28 +560,42 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('organization-draft-withdraw').hidden=true;
     el('organization-draft-status').textContent='Yeni taslak; hiçbir başvuru henüz gönderilmedi.';
   };
-  let organizationReviewRequest=0;
+  let organizationReviewRequest=0,organizationReviewCursor=null;
   function clearOrganizationReviews(){
     organizationReviewRequest++;
+    organizationReviewCursor=null;
     el('organization-review-list').replaceChildren();
     el('organization-review-status').textContent='';
+    el('organization-review-more').hidden=true;
+    el('organization-review-more').disabled=false;
     el('organization-review-panel').hidden=true;
   }
-  async function refreshOrganizationReviews(){
+  async function refreshOrganizationReviews(append=false){
     const panel=el('organization-review-panel');
     if(!panel)return;
+    const more=el('organization-review-more');
+    const cursor=append?organizationReviewCursor:null;
+    if(append&&(!cursor||more.disabled||panel.hidden))return;
     const request=++organizationReviewRequest,epoch=viewEpoch,person=currentPersonId;
     const list=el('organization-review-list');
-    list.replaceChildren();
-    panel.hidden=true;
-    if(document.hidden||el('workspace').hidden||!person)return;
+    if(!append){
+      organizationReviewCursor=null;
+      list.replaceChildren();
+      more.hidden=true;
+      panel.hidden=true;
+    }
+    more.disabled=true;
+    if(document.hidden||el('workspace').hidden||!person){more.disabled=false;return;}
     const stillAuthorizedView=()=>request===organizationReviewRequest &&
       epoch===viewEpoch&&currentPersonId===person&&
       !document.hidden&&!el('workspace').hidden;
     try{
-      const data=await api('organization-applications?action=review_queue');
+      const data=await api('organization-applications?action=review_queue'+
+        (cursor?'&cursor='+encodeURIComponent(cursor):''));
       if(!stillAuthorizedView())return;
-      if(!Array.isArray(data.applications))return;
+      if(!Array.isArray(data.applications)||
+         (data.next_cursor!==null&&typeof data.next_cursor!=='string')||
+         (append&&data.next_cursor===cursor))throw Error('Invalid review page');
       panel.hidden=false;
       for(const item of data.applications){
         const row=document.createElement('p');
@@ -631,16 +646,21 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         row.append(approveBtn);
         list.append(row);
       }
-      el('organization-review-status').textContent=data.applications.length?
-        data.applications.length+' başvuru inceleme bekliyor.':'İnceleme bekleyen başvuru yok.';
+      organizationReviewCursor=data.next_cursor;
+      more.hidden=!organizationReviewCursor;
+      el('organization-review-status').textContent=list.children.length?
+        list.children.length+' başvuru listelendi.':'İnceleme bekleyen başvuru yok.';
     }catch{
       if(stillAuthorizedView()){
-        list.replaceChildren();
-        panel.hidden=true;
+        // Fail closed if authorization, connectivity or cursor validity is uncertain.
+        clearOrganizationReviews();
       }
+    }finally{
+      if(stillAuthorizedView())more.disabled=false;
     }
   }
-  el('organization-review-refresh').onclick=refreshOrganizationReviews;
+  el('organization-review-refresh').onclick=()=>void refreshOrganizationReviews();
+  el('organization-review-more').onclick=()=>void refreshOrganizationReviews(true);
   el('organization-draft-refresh').onclick=()=>{
     if(!organizationDraftSaving)void refreshOrganizationDrafts();
   };
