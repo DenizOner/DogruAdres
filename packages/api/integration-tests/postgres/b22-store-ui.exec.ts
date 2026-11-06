@@ -36,8 +36,19 @@ async function verifyPanelCspModes(browser:B06Chrome, container:any):Promise<voi
     browser.phase="b22-dashboard-csp-"+label
     await browser.send("Page.navigate",{url})
     const expectedOrigin=new URL(url).origin
-    await browser.wait("location.origin==="+JSON.stringify(expectedOrigin)+
-      "&&!!document.querySelector('meta[http-equiv=Content-Security-Policy]')")
+    try {
+      await browser.wait("location.origin==="+JSON.stringify(expectedOrigin)+
+        "&&!!document.querySelector('meta[http-equiv=Content-Security-Policy]')")
+    } catch(error) {
+      // Only fixed navigation metadata, never source, cookies, response bodies.
+      const page=await browser.eval("({onExpectedOrigin:location.origin==="+
+        JSON.stringify(expectedOrigin)+",onVendorLogin:location.pathname==='/seller/login',"+
+        "hasCsp:!!document.querySelector('meta[http-equiv=Content-Security-Policy]')})")
+      const navigation=browser.http.filter(r=>r.path.startsWith("/seller"))
+        .map(({path,status})=>({path,status})).slice(-5)
+      throw new Error(label+" expected native policy not visible: "+
+        JSON.stringify({page,navigation})+"; "+String(error).slice(0,130))
+    }
     const result=await browser.eval("(async()=>{"+
       "const rule=document.querySelector('meta[http-equiv=Content-Security-Policy]')?.content||'';"+
       "const local=await fetch("+JSON.stringify(sameOriginPath)+",{cache:'no-store'}).then(r=>r.status).catch(()=>0);"+
@@ -61,11 +72,11 @@ async function verifyPanelCspModes(browser:B06Chrome, container:any):Promise<voi
     process.stdout.write("PASS B22 Chrome: "+label+
       " connect-src blocked synthetic external POST; same-origin HTTP200\n")
   }
-  await probe("Vendor BUILD",browser.origin+"/seller/","/personal/session")
+  await probe("Vendor BUILD",browser.origin+"/seller/login","/personal/session")
   for(const panel of ["admin","vendor"] as const){
     const port=await getFreePort()
     const cwd=join(process.cwd(),"../../apps",panel)
-    const startUrl="http://127.0.0.1:"+port+(panel==="admin"?"/dashboard/":"/seller/")
+    const startUrl="http://127.0.0.1:"+port+(panel==="admin"?"/dashboard/":"/seller/login")
     const child=spawn("bun",
       ["run","dev","--host","127.0.0.1","--port",String(port),"--strictPort"],{
       cwd,stdio:"ignore",detached:process.platform!=="win32",
@@ -77,7 +88,7 @@ async function verifyPanelCspModes(browser:B06Chrome, container:any):Promise<voi
         const response=await fetch(startUrl,{signal:AbortSignal.timeout(1000)})
         return response.ok
       },45000,panel+" native Vite dev server")
-      await probe(panel+" DEV",startUrl,panel==="admin"?"/dashboard/":"/seller/",
+      await probe(panel+" DEV",startUrl,panel==="admin"?"/dashboard/":"/seller/login",
         browser.origin)
     }finally{
       // Bun can spawn a Vite child. Terminate only our dedicated process group.
