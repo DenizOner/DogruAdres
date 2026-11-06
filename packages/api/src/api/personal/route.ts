@@ -642,16 +642,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           await refreshOrganizationReviews();
         };
         row.append(rejectBtn);
-        const approveBtn=document.createElement('button');
-        approveBtn.type='button';approveBtn.textContent='Onayla ve Kuruluş Oluştur';
-        approveBtn.onclick=async()=>{
-          await api('organization-applications',{method:'POST',body:JSON.stringify({
-            action:'review_decision',application_id:item.id,expected_version:item.version,
-            decision:'approve',notes:notesInput.value.trim()||undefined
-          })});
-          await refreshOrganizationReviews();
-        };
-        row.append(approveBtn);
+        // Approval depends on a genuine safe document review. There is no
+        // verified server scanner or isolated PDF viewer yet; never present
+        // this as an actionable approval to the platform reviewer.
+        const safetyNote=document.createElement('span');
+        safetyNote.textContent=' — Kuruluş onayı güvenli belge incelemesi etkinleşene kadar kapalı.';
+        row.append(safetyNote);
         list.append(row);
       }
       organizationReviewCursor=data.next_cursor;
