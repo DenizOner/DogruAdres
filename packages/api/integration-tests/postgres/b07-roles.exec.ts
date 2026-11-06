@@ -76,12 +76,12 @@ export default async function({container}:ExecArgs){
   await denied(a,'foreign-target',{action:'protected_owner',organization_id:orgs[0].id,membership_id:b2.id,role:'owner'},404)
   await denied(a,'csrf-denied',{action:'protected_owner',organization_id:orgs[0].id,membership_id:b1.id,role:'owner'},403,true)
   await denied(a,'normal-role-owner-denied',{organization_id:orgs[0].id,membership_id:b1.id,role:'owner'},400)
-  a.phase='last-owner-visible-denial';await strong(a)
-  let before=await domain()
-  await a.button('Owner rolünü Admin yap '+owner1.id)
-  await until(async()=>a.http.some(x=>x.phase==='last-owner-visible-denial'&&x.path==='/personal/memberships'&&x.method==='POST'&&x.status===403),20000,'B07 last Owner visible refusal')
-  assert.deepEqual(await domain(),before)
-  report.checks.push({phase:a.phase,http:403,zeroDomainAuditOutbox:true,visibleClick:true})
+  await a.ready()
+  const downgradeHidden=await a.eval("!Array.from(document.querySelectorAll('#memberships button')).some(x=>x.textContent.startsWith('Owner rolünü Admin yap '))")
+  assert.equal(downgradeHidden,true,'Unsafe protected Owner downgrade must have no UI button')
+  await denied(a,'last-owner-direct-downgrade-denied',
+    {action:'protected_owner',organization_id:orgs[0].id,membership_id:owner1.id,role:'admin'},403)
+  report.checks.push({phase:'last-owner-direct-downgrade-denied',visibleDowngradeAbsent:true})
   const change=async(c:B06Chrome,phase:string,target:any,role:'owner'|'admin')=>{
    c.phase=phase;await strong(c)
    const prev=(await q('select role,status,protected_owner from da_organization_membership where id=$1',[target.id]))[0],n=await count('da_audit_outbox')
@@ -99,13 +99,16 @@ export default async function({container}:ExecArgs){
   await a.ready();await b.reload('owner');await b.ready()
   await b.eval("document.getElementById('memberships').scrollIntoView({block:'start'})")
   await b.screenshot(join(output,'01-two-protected-owners.png'))
-  await change(b,'second-owner-demotes-first',owner1,'admin')
-  await b.ready();await a.reload('admin');await a.ready()
-  assert.equal(await a.eval("Array.from(document.querySelectorAll('#memberships button')).some(x=>x.textContent.startsWith('Korumalı Owner yap ')||x.textContent.startsWith('Owner rolünü Admin yap '))"),false)
-  await denied(a,'admin-denied',{action:'protected_owner',organization_id:orgs[0].id,membership_id:b1.id,role:'admin'},403)
-  await denied(b,'sole-owner-denied',{action:'protected_owner',organization_id:orgs[0].id,membership_id:b1.id,role:'admin'},403)
+  // Even two active protected Owners do not permit direct downgrade, revoke
+  // or ordinary member-role fallback without #39 approved guarded lifecycle.
+  await denied(b,'second-owner-direct-downgrade-denied',
+    {action:'protected_owner',organization_id:orgs[0].id,membership_id:owner1.id,role:'admin'},403)
+  await denied(a,'protected-owner-direct-revoke-denied',
+    {organization_id:orgs[0].id,membership_id:b1.id},403)
+  const stillTwo=await q("select role,status,protected_owner from da_organization_membership where organization_id=$1",[orgs[0].id])
+  assert.equal(stillTwo.filter(x=>x.role==='owner'&&x.status==='active'&&x.protected_owner).length,2)
   await b.eval("document.getElementById('memberships').scrollIntoView({block:'start'})")
-  await b.screenshot(join(output,'02-one-protected-owner.png'))
+  await b.screenshot(join(output,'02-two-protected-owners-safe.png'))
   // On a second disposable Organization race both protected Owners' demotions.
   await a.select(orgs[1].name,'owner');await a.ready()
   await b.select(orgs[1].name,'member')
@@ -118,21 +121,21 @@ export default async function({container}:ExecArgs){
    a.post({action:'protected_owner',organization_id:orgs[1].id,membership_id:owner2.id,role:'admin'}),
    b.post({action:'protected_owner',organization_id:orgs[1].id,membership_id:b2.id,role:'admin'})
   ])
-  assert.deepEqual([ra.status,rb.status].sort(),[200,403])
-  assert.equal(await count('da_audit_outbox'),n+1)
+  assert.deepEqual([ra.status,rb.status].sort(),[403,403])
+  assert.equal(await count('da_audit_outbox'),n)
   const org2=await q("select role,status,protected_owner from da_organization_membership where organization_id=$1",[orgs[1].id])
-  assert.equal(org2.filter(x=>x.status==='active'&&x.role==='owner'&&x.protected_owner).length,1)
+  assert.equal(org2.filter(x=>x.status==='active'&&x.role==='owner'&&x.protected_owner).length,2)
   const events2=await q("select e.id,(select count(*)::int from da_audit_outbox o where o.source_audit_event_id=e.id) canonical,(select count(*)::int from da_security_outbox o where o.audit_event_id=e.id) security from da_audit_event e where organization_id=$1 and action='organization.membership_changed'",[orgs[1].id])
-  assert.equal(events2.length,2);assert.ok(events2.every(e=>e.canonical===1&&e.security===1))
-  report.checks.push({phase:'concurrent-protected-owner-demotions',statuses:[ra.status,rb.status],remainingOwner:1,canonicalAuditDelta:1,zeroUnauthorizedWrites:true})
+  assert.equal(events2.length,1);assert.ok(events2.every(e=>e.canonical===1&&e.security===1))
+  report.checks.push({phase:'concurrent-protected-owner-demotions-blocked',statuses:[ra.status,rb.status],remainingOwners:2,canonicalAuditDelta:0,zeroUnauthorizedWrites:true})
   const final=await q('select organization_id,role,status,protected_owner from da_organization_membership order by id')
-  for(const o of orgs)assert.equal(final.filter(x=>x.organization_id===o.id&&x.role==='owner'&&x.status==='active'&&x.protected_owner).length,1)
+  for(const o of orgs)assert.equal(final.filter(x=>x.organization_id===o.id&&x.role==='owner'&&x.status==='active'&&x.protected_owner).length,2)
   const expected:any={da_person:2,user:2,auth_identity:2,provider_identity:2,da_actor_mapping:2,da_login_binding:2,da_organization:2,da_organization_membership:4,auth_mfa_factor:2,da_platform_staff_grant:0,da_organization_invitation:0,auth_verification:0,notification:0}
   for(const [table,countExpected]of Object.entries(expected))assert.equal(await count(table),countExpected,'B07 synthetic fixture '+table)
-  assert.equal(await count('da_audit_outbox'),4)
-  assert.equal((await q("select count(*)::int n from da_audit_event where action='organization.membership_changed'"))[0].n,4)
+  assert.equal(await count('da_audit_outbox'),2)
+  assert.equal((await q("select count(*)::int n from da_audit_event where action='organization.membership_changed'"))[0].n,2)
   assert.equal(challenges.length,2)
-  report.sql={counts:expected,final,domainMutations:4,canonicalOutbox:await count('da_audit_outbox'),securityOutbox:await count('da_security_outbox')}
+  report.sql={counts:expected,final,domainMutations:2,canonicalOutbox:await count('da_audit_outbox'),securityOutbox:await count('da_security_outbox')}
   report.status='PASS pending independent exact-HEAD acceptance'
  }catch(error){
   report.status='FAIL / no retry'
