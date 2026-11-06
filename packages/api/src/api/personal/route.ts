@@ -829,7 +829,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
        document.hidden||el('workspace').hidden||el('organization-document-section').hidden){
       input.value='';return;
     }
-    if(!(file instanceof File)||!/^.{1,160}\\.(?:pdf|jpe?g|png)$/i.test(file.name)||
+    if(!(file instanceof File)||!/^.{1,160}\.(?:pdf|jpe?g|png)$/i.test(file.name)||
        file.size<1||file.size>10*1024*1024){
       input.value='';
       el('organization-document-status').textContent='Yalnız PDF, JPEG veya PNG biçiminde, en fazla 10 MiB dosya seçin.';
