@@ -291,13 +291,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     </section>
     <section id="product-grants-panel" hidden aria-labelledby="product-grants-title">
       <h3 id="product-grants-title">Mağaza ürün düzenleme yetkileri</h3>
-      <p>Korunmuş Owner, kendi kuruluşunun onaylı mağazalarında ayrıca ürün düzenleme izni almadan işlem yapabilir. Diğer aktif üyelere yalnız bu kuruluşun onaylı mağazaları için ayrı izin verilebilir veya izinleri iptal edilebilir.</p>
+      <p>Korunan Owner grubunun izinleri sabittir; bu ekrandan değiştirilemez. Yalnız aktif sıradan çalışana, seçilen onaylı mağazada açık kişisel ürün izni verilebilir veya geri alınabilir. Grup Yetkisi henüz uygulanmadığından miras seçeneği gösterilmez. Mercur mağaza üyeliği ayrıca gerekir.</p>
       <p id="product-grants-status" role="status" aria-live="polite"></p>
+      <p id="product-grants-effective" role="status" aria-live="polite"></p>
       <form id="product-grants-form">
         <label>Onaylı mağaza<select name="seller_id" required></select></label>
         <label>Aktif kuruluş üyesi<select name="membership_id" required></select></label>
-        <button type="submit" name="action" value="grant">Ürün düzenleme izni ver</button>
-        <button type="submit" name="action" value="revoke">Ürün düzenleme iznini iptal et</button>
+        <button type="submit" name="action" value="grant">Yetkili — açık izin ver</button>
+        <button type="submit" name="action" value="revoke">Yetkisiz — açık izni geri al</button>
       </form>
       <div id="product-grants-list"></div>
       <button id="product-grants-refresh" type="button">İzinleri yenile</button>
@@ -1249,6 +1250,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('product-grants-panel').hidden=true;
     el('product-grants-list').replaceChildren();
     el('product-grants-status').textContent='';
+    el('product-grants-effective').textContent='';
     const form=el('product-grants-form');
     // Fake DOMs in non-browser unit contracts may not implement querySelectorAll.
     if(typeof form.querySelectorAll==='function'){
@@ -2189,6 +2191,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const allowedStores=stores.stores.filter(s=>typeof s?.id==='string'&&
         /^sel_[A-Za-z0-9_-]+$/.test(s.id)&&typeof s.name==='string');
       const active=members.memberships.filter(m=>m.status==='active'&&
+        m.role==='member'&&m.protected_owner===false&&
         typeof m.id==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(m.id)&&
         typeof m.person_id==='string'&&/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id));
       if(allowedStores.length!==stores.stores.length||
@@ -2214,6 +2217,21 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       if(allowedStores.some(s=>s.id===previousStore))storeSelect.value=previousStore;
       if(active.some(m=>m.id===previousMember))memberSelect.value=previousMember;
+      // Only the persisted personal grant state is shown; no group or
+      // native Mercur entitlement is inferred from this single choice.
+      const showPersonalChoice=()=>{
+        const member=active.find(m=>m.id===memberSelect.value);
+        const store=allowedStores.find(s=>s.id===storeSelect.value);
+        const label=el('product-grants-effective');
+        if(!member||!store){label.textContent='Seçilebilir aktif çalışan veya onaylı mağaza yok.';return;}
+        const granted=grants.grants.some(g=>g.person_id===member.person_id&&g.seller_id===store.id);
+        label.textContent=granted?
+          'Seçilen mağazada açık kişisel seçim: Yetkili. Ayrıca doğrulanmış Mercur üyeliği gerekir.':
+          'Seçilen mağazada açık kişisel izin yok: Yetkisiz. Grup Yetkisi henüz kullanılmıyor.';
+      };
+      storeSelect.onchange=showPersonalChoice;
+      memberSelect.onchange=showPersonalChoice;
+      showPersonalChoice();
       grantList.replaceChildren();
       for(const grant of grants.grants){
         const line=document.createElement('p');
@@ -2257,6 +2275,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }catch(e){
       if(seq!==productPermissionRequest||request!==organizationRequest||currentOrg!==org)return;
       grantList.replaceChildren();
+      el('product-grants-effective').textContent='';
       el('product-grants-panel').hidden=true;
       statusEl.textContent='İzinler doğrulanamadı. Yeniden deneyin.';
     }

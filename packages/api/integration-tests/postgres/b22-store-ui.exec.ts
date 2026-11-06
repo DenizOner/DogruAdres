@@ -4397,6 +4397,36 @@ export default async function({container}:any){
     // and freshly loaded Store/member options before the real Chrome click.
     await browser.wait(`new URLSearchParams(location.search).get('organization')===${JSON.stringify(organizations[0].id)} && JSON.parse(document.getElementById('detail').textContent||'{}').id===${JSON.stringify(organizations[0].id)}`)
     await browser.wait(`!document.getElementById('product-grants-panel').hidden && Array.from(document.querySelector('#product-grants-form select[name=seller_id]').options).some(o=>o.value===${JSON.stringify(ownerStoreId)}) && Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).some(o=>o.value===${JSON.stringify(alphaMember.id)}) && !document.querySelector('#product-grants-form button[value=grant]').disabled`)
+    const editableMembers=await browser.eval("Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).map(o=>o.value)")
+    assert.deepEqual(editableMembers,[alphaMember.id],
+      "Protected Owner and legacy Admin cannot be edited through an ordinary personal-grant selector")
+    const protectedGrantBefore=await q(`select id,revoked_at from da_store_product_permission
+      where person_id=$1 and organization_id=$2 and seller_id=$3 order by id`,
+      [A.person,organizations[0].id,ownerStoreId])
+    const auditBefore=await q(`select id from da_audit_event where organization_id=$1
+      and resource='store-product-permission' and target_id=$2 order by id`,
+      [organizations[0].id,ownerStoreId])
+    for(const action of ["grant","revoke"]){
+      const denied=await browser.eval(`(async()=>{
+        const session=await(await fetch('/personal/session')).json()
+        const r=await fetch('/personal/store-product-permissions',{
+          method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+          body:JSON.stringify(${JSON.stringify({action,organization_id:organizations[0].id,
+            seller_id:ownerStoreId,membership_id:memberships[0].id})})
+        })
+        return r.status
+      })()`)
+      assert.equal(denied,403,"Protected Owner's fixed permission group denies normal personal "+action)
+    }
+    assert.deepEqual(await q(`select id,revoked_at from da_store_product_permission
+      where person_id=$1 and organization_id=$2 and seller_id=$3 order by id`,
+      [A.person,organizations[0].id,ownerStoreId]),protectedGrantBefore)
+    assert.deepEqual(await q(`select id from da_audit_event where organization_id=$1
+      and resource='store-product-permission' and target_id=$2 order by id`,
+      [organizations[0].id,ownerStoreId]),auditBefore,
+      "Rejected Owner grant/revoke has no audit or permission side effects")
+    assert.equal(await browser.eval("document.getElementById('product-grants-effective').textContent.includes('Yetkisiz')"),true)
+    process.stdout.write("\nPASS B22 Chrome: protected Owner excluded from individual products.edit; forged grant/revoke HTTP403, PG16 grant/audit unchanged\n")
     await browser.eval(`(()=>{
       const f=document.getElementById('product-grants-form');
       f.elements.namedItem('seller_id').value=${JSON.stringify(ownerStoreId)};
@@ -4420,6 +4450,7 @@ export default async function({container}:any){
         [B.person,organizations[0].id,ownerStoreId])
       return rows.length===1
     },19000,"B22 Chrome Owner actual products.edit permission")
+    await browser.wait("document.getElementById('product-grants-effective').textContent.includes('Yetkili')")
     const [issued]=await q(`select g.id,g.source_audit_event_id from da_store_product_permission g
       where g.person_id=$1 and g.organization_id=$2 and g.seller_id=$3
         and g.revoked_at is null`,[B.person,organizations[0].id,ownerStoreId])
@@ -4471,6 +4502,7 @@ export default async function({container}:any){
       const rows=await q(`select revoked_at from da_store_product_permission where id=$1`,[issued.id])
       return rows.length===1&&!!rows[0].revoked_at
     },19000,"B22 Chrome Owner actual products.edit revocation")
+    await browser.wait("document.getElementById('product-grants-effective').textContent.includes('Yetkisiz')")
     const revokeAudit=await q(`select count(*)::int n from da_audit_event e
       join da_audit_outbox x on x.source_audit_event_id=e.id
       where e.action='organization.store_product_permission_revoked'

@@ -1792,7 +1792,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_person p on p.id=m.person_id
       where m.id=? and m.organization_id=? and m.deleted_at is null
         and p.disabled_at is null and p.deleted_at is null
-        ${input.action==="grant"?"and m.status='active'":""}
+        -- Protected Owner permissions are not editable individual grants.
+        -- Legacy admin may only have an older personal grant revoked.
+        and m.role in ('member','admin') and m.protected_owner=false
+        ${input.action==="grant"?"and m.role='member' and m.status='active'":""}
       for share of m,p`,[input.membership_id,input.organization_id])
     if(target.length!==1||typeof target[0].person_id!=="string"||
        !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
