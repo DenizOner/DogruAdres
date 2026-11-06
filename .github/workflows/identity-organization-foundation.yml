@@ -382,7 +382,7 @@ jobs:
             }
             const html = readFileSync(`apps/${name}/dist/index.html`, 'utf8')
             if (!html.includes('http-equiv="Content-Security-Policy"') ||
-                !html.includes("connect-src 'self'")) {
+                !html.includes('connect-src &#39;self&#39;')) {
               throw new Error(`Native ${name} build lacks browser connect-src policy`)
             }
           }
