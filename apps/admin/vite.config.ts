@@ -7,6 +7,26 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const { mercurDashboardPlugin } = require('@mercurjs/dashboard-sdk/vite')
 
+// The upstream Mercur Feedback control sends text/path to an external host.
+// Restrict browser network requests in the production panel without changing
+// Mercur's source or blocking the configured first-party backend.
+// These panels are bundled under the DoğruAdres API origin. Deny all
+// cross-origin browser fetch/websocket requests, including Mercur Feedback.
+// This avoids interpolating deployment environment values into an HTML policy.
+const dashboardConnectPolicy = () => ({
+  name: 'dogruadres-dashboard-network-policy',
+  apply: 'build' as const,
+  transformIndexHtml() {
+    // Vite inserts/escapes tag attributes; no raw HTML string replacement.
+    return [{
+      tag: 'meta',
+      attrs: { 'http-equiv': 'Content-Security-Policy',
+        content: "connect-src 'self'" },
+      injectTo: 'head-prepend' as const,
+    }]
+  }
+})
+
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
@@ -19,6 +39,7 @@ export default defineConfig(({ mode }) => {
     base: '/dashboard/',
     plugins: [
       react(),
+      dashboardConnectPolicy(),
       mercurDashboardPlugin({
         medusaConfigPath: '../../packages/api/medusa-config.ts',
         ...(backendUrl ? { backendUrl } : {}),
