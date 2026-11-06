@@ -22,7 +22,7 @@ async function rasterize(content: Buffer, mime: TaxCertificateFormat["mimeType"]
   // Only trusted, fixed executable paths and fixed arguments, never a
   // filename, shell, user-owned path, URL or caller-selected delegate.
   const render = mime === "application/pdf"
-    ? ["/usr/bin/pdftoppm", "-f", "1", "-l", "1", "-singlefile", "-scale-to", "900", "-png", "-", "-"]
+    ? ["/usr/bin/pdftoppm", "-f", "1", "-l", "1", "-singlefile", "-scale-to", "900", "-png", "-"]
     : ["/usr/bin/convert", mime === "image/png" ? "png:-" : "jpeg:-",
         "-auto-orient", "-strip", "-resize", "900x900>", "png:-"]
   const bwrap = [
