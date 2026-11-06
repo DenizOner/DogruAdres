@@ -367,8 +367,11 @@ jobs:
           # This CI task starts its own private clamd AFTER the official
           # signatures are installed. Suppress only FreshClam's notification
           # to the unrelated distro daemon, not database verification.
-          sed '/^NotifyClamd[[:space:]]/d' /etc/clamav/freshclam.conf > "$RUNNER_TEMP/b22-freshclam.conf"
-          sudo freshclam --config-file="$RUNNER_TEMP/b22-freshclam.conf" --stdout
+          # FreshClam switches to the restricted clamav account; its
+          # configuration must stay readable after privilege drop. This
+          # modifies only this disposable CI runner, never a host install.
+          sudo sed -i '/^NotifyClamd[[:space:]]/d' /etc/clamav/freshclam.conf
+          sudo freshclam --config-file=/etc/clamav/freshclam.conf --stdout
           test -s /var/lib/clamav/daily.cvd || test -s /var/lib/clamav/daily.cld
           test -s /var/lib/clamav/main.cvd || test -s /var/lib/clamav/main.cld
           echo "PASS B22: genuine updated ClamAV database installed"
