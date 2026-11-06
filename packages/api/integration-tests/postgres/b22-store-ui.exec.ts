@@ -7549,7 +7549,7 @@ export default async function({container}:any){
           `legal_name:'Foreign Duplicate Company',`+
           `landline_phone:'+90 212 555 99 99',`+
           `tax_identifier:${JSON.stringify(b22TaxId)},`+
-          `declared_activities:['service_repair'],`+
+          `declared_activities:['service_repair','insurance_claims'],`+
           `primary_activity:'service_repair'`+
         `})`+
       `});`+
@@ -7800,6 +7800,27 @@ export default async function({container}:any){
         return r.status;
       })()`)
       assert.equal(noChangeSave,409,"Unmodified correction form must not reopen application")
+      assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
+        [{status:"correction_requested",version:4}])
+
+      const priorDraftAuditCount=Number((await q(
+        "select count(*)::int n from da_audit_event where target_id=$1 and action='organization.application_draft_saved'",
+        [foreignAppId]))[0].n)
+      const reorderedOnlySave=await foreignDraftChrome.eval(`(async()=>{
+        const form=document.getElementById('organization-draft-form');
+        const selected=Array.from(form.querySelectorAll('input[name=declared_activities]:checked'),x=>x.value).reverse();
+        const body={...Object.fromEntries(new FormData(form)),
+          declared_activities:selected,primary_activity:form.elements.primary_activity.value,
+          application_id:${JSON.stringify(foreignAppId)},expected_version:4};
+        const csrf=(await(await fetch('/personal/session')).json()).csrf_token;
+        const r=await fetch('/personal/organization-applications',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify(body)});
+        return r.status;
+      })()`)
+      assert.equal(reorderedOnlySave,409,"Reordering declared activities must not count as a correction")
+      assert.equal(Number((await q(
+        "select count(*)::int n from da_audit_event where target_id=$1 and action='organization.application_draft_saved'",
+        [foreignAppId]))[0].n),priorDraftAuditCount,"Order-only retry must not add audit")
       assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
         [{status:"correction_requested",version:4}])
       const priorRevisions=await q(

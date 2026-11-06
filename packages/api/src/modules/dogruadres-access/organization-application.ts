@@ -170,14 +170,15 @@ export async function saveOrganizationDraft(db:SecuritySql,token:string,value:un
         version=version+1,updated_at=clock_timestamp()
       where id=? and applicant_person_id=? and status in ('draft','correction_requested') and version=?
         and (status='draft' or
-          ROW(business_kind,legal_name,landline_phone,tax_identifier,declared_activities,primary_activity)
-            IS DISTINCT FROM ROW(?,?,?, ?,?::jsonb,?))
+          ROW(business_kind,legal_name,landline_phone,tax_identifier,primary_activity)
+            IS DISTINCT FROM ROW(?,?,?,?,?)
+          or NOT (declared_activities @> ?::jsonb and declared_activities <@ ?::jsonb))
       returning id`,
       [input.business_kind,input.legal_name,input.landline_phone,input.tax_identifier??null,
         JSON.stringify(input.declared_activities),input.primary_activity,
         input.application_id,session.person_id,input.expected_version,
         input.business_kind,input.legal_name,input.landline_phone,input.tax_identifier??null,
-        JSON.stringify(input.declared_activities),input.primary_activity])
+        input.primary_activity,JSON.stringify(input.declared_activities),JSON.stringify(input.declared_activities)])
     if(updated.length!==1)return {conflict:true as const}
   }
   // Save only actor+draft identity in the same Foundation transaction.

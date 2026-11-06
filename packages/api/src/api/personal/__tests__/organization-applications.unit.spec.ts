@@ -88,10 +88,14 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       if(sql.startsWith("update da_organization_application")){
         expect(sql).toContain("IS DISTINCT FROM ROW")
         expect(sql).toContain("status='draft' or")
-        expect(params?.length).toBe(15)
-        // The mock represents the previously stored application, not the
-        // proposed new values repeated in the SQL WHERE placeholders.
-        return params?.[1]===payload.legal_name?[]:[{id:payload.application_id}]
+        expect(sql).toContain("declared_activities @> ?::jsonb and declared_activities <@ ?::jsonb")
+        expect(params?.length).toBe(16)
+        // Model the previously persisted activity set, not the submitted order.
+        const selected=JSON.parse(String(params?.[4])) as string[]
+        const sameActivities=JSON.stringify([...selected].sort())===
+          JSON.stringify([...payload.declared_activities].sort())
+        return params?.[1]===payload.legal_name && sameActivities
+          ? []:[{id:payload.application_id}]
       }
       return []
     })
@@ -99,6 +103,10 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     try{
       const same=await saveOrganizationDraft(db,"opaque",state)
       expect(same).toEqual({conflict:true})
+      const reordered=await saveOrganizationDraft(db,"opaque",{
+        ...state,declared_activities:[...state.declared_activities].reverse()
+      })
+      expect(reordered).toEqual({conflict:true})
       expect(exec.mock.calls.some(([sql])=>String(sql).includes("insert into da_audit_event"))).toBe(false)
       expect(exec.mock.calls.some(([sql])=>String(sql).includes("insert into da_security_outbox"))).toBe(false)
       const changed=await saveOrganizationDraft(db,"opaque",{
