@@ -305,20 +305,22 @@ async function run(){
           "Missing real pending invitation, denied role-only Owner and authorized protected Owner revoke/PG16 audit evidence")
         assert.ok(result.includes("PASS B22 explicit permission: protected Owner reads 200; role-only Admin private reads, role edit and invitation create 403; no PG16 writes"),
           "Missing protected Owner positive and role-only Admin private read/write 403 no-side-effect evidence")
-        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed invitation.manage denies Owner HTTPS list/create/revoke and Foundation writes with unchanged PG16 invitation/audit/outbox; restored Owner revokes"),
+        assert.ok(result.split("\n").includes("PASS B22 Owner member-permission policy: protected Owner grant/list 200 despite legacy setting; revoke 200 with audit/outbox"),
+          "Missing protected Owner member grant/list/revoke and audit after disabled legacy policy narrowing")
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: fixed invitation.manage keeps Owner HTTPS list200; protected Owner revokes with audit/outbox"),
           "Missing invitation.manage denied and restored real Chrome/PG16 marker")
-        assert.ok(result.split("\n").includes("PASS B22 native organization.read role policy: real PG16 protected Owner default/restored allow, centrally narrowed deny without private response; active Admin/Member unchanged, foreign and role-only Owner denied; native HTTPS ingress remains 401, zero audit/outbox mutations"),
+        assert.ok(result.split("\n").includes("PASS B22 native organization.read role policy: protected Owner remains allowed with legacy setting; Admin/Member unchanged, foreign/role-only Owner denied, native ingress401"),
           "Missing real PG16 Owner organization.read policy/role boundaries with native HTTP ingress still closed")
-        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed audit.timeline.read denies Owner HTTPS GET 403 without private audit items; Admin 403; restored Owner 200; PG16 membership/audit/outbox unchanged"),
-          "Missing real Chrome audit.timeline.read narrowed Owner and ungranted Admin 403/no data, restored Owner 200, PG16 zero write")
-        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 403; restored Owner 200"),
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: fixed audit.timeline.read keeps Owner HTTPS200 and Admin403; PG16 membership/audit/outbox unchanged"),
+          "Missing immutable protected Owner audit.timeline.read HTTP200, legacy Admin403 and unchanged PG16 evidence")
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: fixed membership.list keeps Owner HTTPS GET200; Admin403; PG16 data unchanged"),
           "Missing protected Owner and role-only Admin membership.list 403/private data denial, restored Owner 200 and zero-write PG16 evidence")
-        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed membership.manage denies Chrome role/revoke/protected Owner and native Foundation change; PG16 membership/audit/outbox unchanged; restored Owner role changes 200"),
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: fixed membership.manage under legacy setting; real Owner HTTP list and reversible role changes audited"),
           "Missing owner membership.manage role-policy HTTP/PG16 zero-write and restored positive evidence")
-        assert.ok(result.includes("PASS B22 Owner role policy: narrowed buyer.purchase denies real HTTPS and PG16 final checkout L with zero OrderGroup; default restored"),
-          "Missing real Owner role buyer.purchase narrowed-denial and restored-policy PG16/HTTP evidence")
-        assert.ok(result.includes("PASS B22 Owner role policy: narrowed products.edit denies real HTTP POST and native PG16 product/intent writes, restored default lists approved Store"),
-          "Missing real Owner role products.edit narrowed-denial/no-write and restored-policy PG16/HTTP evidence")
+        assert.ok(result.includes("PASS B22 Owner role policy: fixed buyer.purchase keeps eligible HTTPS and PG16 checkout L despite legacy setting; zero OrderGroup"),
+          "Missing protected Owner purchase HTTPS/PG16 final checkout entitlement with deprecated deployment setting")
+        assert.ok(result.includes("PASS B22 Owner role policy: fixed products.edit keeps approved Store visible via HTTP with legacy setting; no product intent write"),
+          "Missing protected Owner product edit store visibility with deprecated deployment setting")
         assert.ok(result.includes("PASS B22 real Mercur validate: real Chrome Gamma Store Buyer block denies attributed Beta Cart before OrderGroup/Order/payment writes; unblock restores L without completing Cart"),"Missing real Store block at Mercur validate evidence")
         assert.ok(result.includes("PASS B22 Chrome: authorized zero-value native Mercur split-order persisted one OrderGroup/Order and completed Cart with immutable Beta attribution; no payment or visitor checkout"),"Missing authorized native zero-value positive OrderGroup persistence evidence")
         assert.ok(result.includes("PASS B22 native payment simulation: system provider authorized before L/order; native Mercur persisted single OrderGroup/Order; only then system capture recorded; no external payment, callback or visitor checkout"),"Missing native preauthorized synthetic provider order/capture sequence evidence")
