@@ -7775,15 +7775,79 @@ export default async function({container}:any){
       await foreignDraftChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&p.textContent.includes('Düzeltme istendi'))")
       await foreignDraftChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-draft-list p')).find(p=>p.textContent.includes('Foreign Duplicate Company'));const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='Düzelt ve yeniden gönder');if(!button)throw Error('Missing correction selector');button.click();return true})()")
       await foreignDraftChrome.wait("!document.getElementById('organization-draft-withdraw').hidden")
-      await foreignDraftChrome.click("#organization-draft-withdraw")
+
+      // Requesting correction cannot be bypassed by replaying the unchanged
+      // submission. The genuine applicant must use the visible upload button.
+      assert.equal(await foreignDraftChrome.eval("document.getElementById('organization-application-submit').hidden"),true)
+      const unchangedSubmit=await foreignDraftChrome.eval(`(async()=>{
+        const csrf=(await(await fetch('/personal/session')).json()).csrf_token;
+        const r=await fetch('/personal/organization-applications',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':csrf},
+          body:JSON.stringify({action:'submit',application_id:${JSON.stringify(foreignAppId)},expected_version:4})});
+        return r.status;
+      })()`)
+      assert.equal(unchangedSubmit,409,"Correction must not permit unchanged resubmission")
+      const priorRevisions=await q(
+        "select version,storage_key,original_sha256,is_current from da_organization_application_document where application_id=$1 order by version",
+        [foreignAppId])
+      assert.equal(priorRevisions.length,1)
+      const correctedPdf=Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\n0 1\n0000000000 65535 f\n% replacement document\ntrailer\n<<>>\nstartxref\n9\n%%EOF\n","ascii")
+      const correctionSelection=await foreignDraftChrome.eval(`(()=>{
+        const raw=atob(${JSON.stringify(correctedPdf.toString("base64"))});
+        const file=new File([Uint8Array.from(raw,c=>c.charCodeAt(0))],
+          "duzeltilmis-vergi-levhasi.pdf",{type:"application/pdf"});
+        const input=document.getElementById('organization-document-file');
+        const transfer=new DataTransfer();transfer.items.add(file);
+        input.files=transfer.files;
+        input.dispatchEvent(new Event('change',{bubbles:true}));
+        return {status:document.getElementById('organization-document-status').textContent,
+          submitHidden:document.getElementById('organization-application-submit').hidden};
+      })()`)
+      assert.ok(correctionSelection.status.includes("Dosya seçildi:"))
+      assert.equal(correctionSelection.submitHidden,true)
+      assert.equal(Number((await q("select count(*)::int n from da_organization_application_document where application_id=$1",[foreignAppId]))[0].n),1,
+        "Selecting a file must not upload it")
+      await foreignDraftChrome.click("#organization-document-upload")
+      await foreignDraftChrome.wait("document.getElementById('organization-document-status').textContent.includes('başarıyla yüklendi')")
+      await foreignDraftChrome.wait("!document.getElementById('organization-application-submit').hidden && !document.getElementById('organization-application-submit').disabled")
+      assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
+        [{status:"draft",version:5}])
+      const revised=await q(
+        "select version,storage_key,original_sha256,is_current from da_organization_application_document where application_id=$1 order by version",
+        [foreignAppId])
+      assert.equal(revised.length,2)
+      assert.equal(revised[0].storage_key,priorRevisions[0].storage_key)
+      assert.equal(revised[0].original_sha256,priorRevisions[0].original_sha256)
+      assert.equal(revised[0].is_current,false)
+      assert.equal(revised[1].version,2)
+      assert.equal(revised[1].is_current,true)
+      assert.equal(revised[1].original_sha256,createHash("sha256").update(correctedPdf).digest("hex"))
+      for(const doc of revised)assert.ok(readFileSync(join(taxDir,doc.storage_key)).length>8)
+      await foreignDraftChrome.click("#organization-application-submit")
+      await foreignDraftChrome.wait("document.getElementById('organization-draft-status').textContent.includes('Başvuru platform incelemesine başarıyla gönderildi')")
+      assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
+        [{status:"submitted",version:6}])
+      // Withdraw the resubmitted application through its actual submitted-row
+      // action; document versions must remain after the withdrawal.
+      await foreignDraftChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&p.textContent.includes('Başvuru gönderildi'))")
+      await foreignDraftChrome.eval(`(()=>{
+        const row=Array.from(document.querySelectorAll('#organization-draft-list p'))
+          .find(p=>p.textContent.includes('Foreign Duplicate Company')&&p.textContent.includes('Başvuru gönderildi'));
+        const button=Array.from(row?.querySelectorAll('button')||[])
+          .find(b=>b.textContent==='Başvuruyu geri çek');
+        if(!button)throw Error('Missing submitted withdrawal action');
+        button.click();return true;
+      })()`)
+
       await foreignDraftChrome.wait("document.getElementById('organization-draft-status').textContent.includes('geri çekildi')")
       const withdrawn=await q("select status,version from da_organization_application where id=$1",[foreignAppId])
-      assert.deepEqual(withdrawn,[{status:"withdrawn",version:5}])
-      assert.equal(Number((await q("select count(*)::int n from da_organization_application_document where application_id=$1",[foreignAppId]))[0].n),1,"Withdraw must retain private tax certificate history")
+      assert.deepEqual(withdrawn,[{status:"withdrawn",version:7}])
+      assert.equal(Number((await q("select count(*)::int n from da_organization_application_document where application_id=$1",[foreignAppId]))[0].n),2,"Withdraw must retain both private tax certificate revisions")
       const withdrawOutbox=await q("select x.id from da_audit_event a join da_security_outbox x on x.audit_event_id=a.id where a.target_id=$1 and a.action='organization.application_withdrawn'",[foreignAppId])
       assert.equal(withdrawOutbox.length,1,"Withdraw requires one durable outboxed audit")
-      const deniedAfterWithdraw=await reviewChrome.eval(`(async()=>{const s=await (await fetch('/personal/session')).json();const r=await fetch('/personal/organization-applications',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},body:JSON.stringify({action:'review_decision',application_id:${JSON.stringify(foreignAppId)},expected_version:5,decision:'approve'})});return r.status})()`)
+      const deniedAfterWithdraw=await reviewChrome.eval(`(async()=>{const s=await (await fetch('/personal/session')).json();const r=await fetch('/personal/organization-applications',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},body:JSON.stringify({action:'review_decision',application_id:${JSON.stringify(foreignAppId)},expected_version:7,decision:'approve'})});return r.status})()`)
       assert.equal(deniedAfterWithdraw,409,"Staff may not approve an applicant-withdrawn application")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: corrected tax certificate resubmission required new upload; two versions retained; withdrawn approval denied\n")
 
       const orgsCountBefore = Number((await q("select count(*)::int n from da_organization"))[0].n)
       const membsCountBefore = Number((await q("select count(*)::int n from da_organization_membership"))[0].n)
