@@ -645,12 +645,70 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           await refreshOrganizationReviews();
         };
         row.append(rejectBtn);
-        // Approval depends on a genuine safe document review. There is no
-        // verified server scanner or isolated PDF viewer yet; never present
-        // this as an actionable approval to the platform reviewer.
-        const safetyNote=document.createElement('span');
-        safetyNote.textContent=' — Kuruluş onayı güvenli belge incelemesi etkinleşene kadar kapalı.';
-        row.append(safetyNote);
+        // Raw PDFs and images never enter the staff browser. The backend
+        // allows approval only after a fresh local malware scan and isolated
+        // rasterization; this button is NOT a client-side authority grant.
+        const previewNote=document.createElement('span');
+        previewNote.textContent=' — Güvenli tarama ve önizleme yapılmadı; onay kapalı.';
+        row.append(previewNote);
+        if(item.has_document){
+          const previewBtn=document.createElement('button');
+          previewBtn.type='button';previewBtn.textContent='Belgeyi Güvenli Önizle';
+          const safeImage=document.createElement('img');
+          safeImage.alt='Güvenli taramadan geçen vergi levhası önizlemesi';
+          safeImage.hidden=true;
+          safeImage.style.maxWidth='min(100%, 600px)';
+          safeImage.style.maxHeight='640px';
+          safeImage.style.objectFit='contain';
+          safeImage.referrerPolicy='no-referrer';
+          const approveBtn=document.createElement('button');
+          approveBtn.type='button';approveBtn.textContent='İşletmeyi Onayla';
+          approveBtn.hidden=true;approveBtn.disabled=true;
+          let previewReady=false;
+          previewBtn.onclick=()=>{
+            if(!stillAuthorizedView()||!row.isConnected)return;
+            previewReady=false;approveBtn.hidden=true;approveBtn.disabled=true;
+            previewBtn.disabled=true;safeImage.hidden=true;
+            previewNote.textContent=' — Yerel tarama ve güvenli görsel hazırlanıyor.';
+            safeImage.onload=()=>{
+              if(!stillAuthorizedView()||!row.isConnected)return;
+              previewReady=true;safeImage.hidden=false;
+              approveBtn.hidden=false;approveBtn.disabled=false;
+              previewBtn.disabled=false;
+              previewNote.textContent=' — Yalnız güvenli görsel gösteriliyor; onay sırasında tarama tekrarlanır.';
+            };
+            safeImage.onerror=()=>{
+              if(!stillAuthorizedView()||!row.isConnected)return;
+              previewReady=false;safeImage.hidden=true;
+              approveBtn.hidden=true;approveBtn.disabled=true;
+              previewBtn.disabled=false;
+              previewNote.textContent=' — Tarama veya güvenli önizleme kullanılamıyor; onay kapalı.';
+            };
+            safeImage.src='/personal/organization-applications?action=review_preview&application_id='+
+              encodeURIComponent(item.id);
+          };
+          approveBtn.onclick=async()=>{
+            if(!previewReady||approveBtn.disabled||!stillAuthorizedView()||!row.isConnected)return;
+            previewReady=false;approveBtn.disabled=true;
+            try{
+              await api('organization-applications',{method:'POST',body:JSON.stringify({
+                action:'review_decision',application_id:item.id,
+                expected_version:item.version,decision:'approve',
+                notes:notesInput.value.trim()||undefined
+              })});
+              await refreshOrganizationReviews();
+            }catch{
+              // Authorization, scan freshness, preview failure and stale
+              // document versions never produce optimistic UI success.
+              if(stillAuthorizedView()&&row.isConnected){
+                safeImage.hidden=true;approveBtn.hidden=true;
+                previewNote.textContent=' — Onay tamamlanamadı; güvenli incelemeyi yeniden başlatın.';
+                previewBtn.disabled=false;
+              }
+            }
+          };
+          row.append(previewBtn,safeImage,approveBtn);
+        }
         list.append(row);
       }
       organizationReviewCursor=data.next_cursor;

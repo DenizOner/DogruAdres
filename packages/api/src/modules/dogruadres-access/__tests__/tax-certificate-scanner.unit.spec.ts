@@ -5,6 +5,7 @@ import { join } from "node:path"
 import {
   TaxCertificateScannerUnavailable, verifyTaxCertificateWithClamd
 } from "../tax-certificate-scanner"
+import { makeSafeTaxCertificatePreview, TaxCertificateSafePreviewUnavailable } from "../tax-certificate-safe-preview"
 
 describe("B22 local ClamAV scanner fail-closed transport", () => {
   const sample = Buffer.from("%PDF-1.7\n% synthetic scanner-only fixture\n%%EOF\n")
@@ -99,5 +100,23 @@ describe("B22 local ClamAV scanner fail-closed transport", () => {
     }
     await expect(verifyTaxCertificateWithClamd(Buffer.alloc(7), "/tmp/scan.sock"))
       .rejects.toBeInstanceOf(TaxCertificateScannerUnavailable)
+  })
+})
+
+describe("B22 isolated safe preview admission", () => {
+  it("fails closed when no genuine local ClamAV daemon is configured", async () => {
+    const old = process.env.DOGRUADRES_CLAMD_SOCKET
+    process.env.DOGRUADRES_CLAMD_SOCKET =
+      join(tmpdir(), "da-preview-clamd-missing-" + process.pid + ".sock")
+    try {
+      for (const mime of ["application/pdf", "image/png", "image/jpeg"] as const) {
+        await expect(makeSafeTaxCertificatePreview(
+          Buffer.from("%PDF-1.7\n% local synthetic test\n%%EOF\n"), mime
+        )).rejects.toBeInstanceOf(TaxCertificateSafePreviewUnavailable)
+      }
+    } finally {
+      if(old===undefined)delete process.env.DOGRUADRES_CLAMD_SOCKET
+      else process.env.DOGRUADRES_CLAMD_SOCKET=old
+    }
   })
 })

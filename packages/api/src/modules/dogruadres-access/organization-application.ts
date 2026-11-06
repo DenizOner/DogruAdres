@@ -11,6 +11,7 @@ import {
   readPrivateTaxCertificate,
   writePrivateTaxCertificate,
 } from "./private-tax-certificate-store"
+import { makeSafeTaxCertificatePreview } from "./tax-certificate-safe-preview"
 
 // The six activity declarations have no verified status, discount, Organization
 // or Store entitlement. The customer's submitted profile is only a draft.
@@ -559,6 +560,47 @@ export async function readOrganizationApplicationDocument(
     filename:`vergi-levhasi-${doc.version}.${extension}`,
     version:Number(doc.version),
   }
+}
+
+
+/**
+ * Authorize a platform reviewer of an already submitted OTHER person's
+ * application. Only a rasterized, locally ClamAV-scanned PNG can leave this
+ * server. PostgreSQL locks the exact document version while the safe
+ * preview is produced; approval independently repeats this check.
+ */
+export async function readOrganizationApplicationReviewPreview(
+  db: SecuritySql, token: string, applicationId: string, overrideRoot?: string
+) {
+  if(typeof applicationId!=="string"||!draftId.test(applicationId))return null
+  const staff = await new IdentitySessions(db).staff(token,"organization.review","platform")
+  if(!staff)return null
+  const session = await new IdentitySessions(db).current(token,false,false)
+  if(!session)return null
+  const rows = await db.execute(
+    `select applicant_person_id,status,version from da_organization_application
+     where id=? for share`,[applicationId])
+  if(rows.length!==1||rows[0].status!=="submitted"||
+     rows[0].applicant_person_id===session.person_id)return null
+  const docs = await db.execute(
+    `select storage_key,internal_name,mime_type,compression,original_byte_length,
+       original_sha256,stored_byte_length,version
+     from da_organization_application_document
+     where application_id=? and is_current=true for share`,[applicationId])
+  if(docs.length!==1)throw new TaxCertificateReviewUnavailable()
+  const doc=docs[0]
+  const rootDir=overrideRoot??process.env.DOGRUADRES_TAX_CERTIFICATE_DIR
+  if(!rootDir)throw new TaxCertificateReviewUnavailable()
+  const original=await readPrivateTaxCertificate(rootDir,{
+    storageKey:doc.storage_key,internalName:doc.internal_name,
+    mimeType:doc.mime_type,compression:doc.compression,
+    originalByteLength:Number(doc.original_byte_length),
+    originalSha256:doc.original_sha256,
+    storedByteLength:Number(doc.stored_byte_length)
+  })
+  const preview=await makeSafeTaxCertificatePreview(original,doc.mime_type)
+  return {content:preview,mimeType:"image/png" as const,
+    applicationVersion:Number(rows[0].version),documentVersion:Number(doc.version)}
 }
 
 /**

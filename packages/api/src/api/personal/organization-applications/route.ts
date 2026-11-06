@@ -46,6 +46,29 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     }
   }
 
+  // A platform reviewer receives only a scanned, isolated PNG raster.
+  // The original PDF/JPEG/PNG and storage metadata are never returned.
+  if(query.action==="review_preview"){
+    if(Object.keys(query).some(key=>!["action","application_id"].includes(key)))
+      return res.status(400).json({message:"Invalid request"})
+    const appId=typeof query.application_id==="string"?query.application_id:""
+    if(!/^daorgapp_[0-9a-f]{32}$/.test(appId))
+      return res.status(400).json({message:"Invalid request"})
+    try {
+      const preview=await access(req).personalReadOrganizationApplicationReviewPreview(
+        sessionToken(req),appId)
+      if(!preview)return res.status(403).json({message:"Access denied"})
+      res.setHeader("Content-Type","image/png")
+      res.setHeader("Content-Disposition",'inline; filename="review-preview.png"')
+      res.setHeader("Content-Security-Policy","default-src 'none'; sandbox")
+      res.setHeader("X-Content-Type-Options","nosniff")
+      return res.status(200).send(preview.content)
+    }catch{
+      // Never leak scanner signatures, filesystem paths or raw document bytes.
+      return res.status(503).json({message:"Document review unavailable"})
+    }
+  }
+
   // Admin submitted queue request: ?action=review_queue
   if(query.action==="review_queue"){
     if(Object.keys(query).some(key=>!["action","cursor"].includes(key)))

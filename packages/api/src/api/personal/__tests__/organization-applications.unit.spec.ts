@@ -56,6 +56,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       personalReadOrganizationApplicationDocument:jest.fn().mockResolvedValue({
         content:Buffer.from("%PDF-1.7..."),mimeType:"application/pdf",filename:"vergi-levhasi-1.pdf",version:1
       }),
+      personalReadOrganizationApplicationReviewPreview:jest.fn().mockResolvedValue(null),
     }
     ;(access as jest.Mock).mockReturnValue(service)
     ;(csrf as jest.Mock).mockResolvedValue(true)
@@ -119,6 +120,43 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       expect(exec.mock.calls.filter(([sql])=>String(sql).includes("insert into da_security_outbox"))).toHaveLength(1)
       expect(exec.mock.calls.some(([sql])=>/createOrganizations|insert into da_organization_membership/.test(String(sql)))).toBe(false)
     }finally{spy.mockRestore()}
+  })
+
+  it("denies missing safe preview, then serves only an authorized raster without raw bytes",async()=>{
+    req.query={action:"review_preview",application_id:payload.application_id}
+    await GET(req,res)
+    expect(service.personalReadOrganizationApplicationReviewPreview).toHaveBeenCalledWith(
+      "opaque",payload.application_id)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.send).not.toHaveBeenCalled()
+
+    const pixels=Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0])
+    service.personalReadOrganizationApplicationReviewPreview.mockResolvedValueOnce({
+      content:pixels,mimeType:"image/png",applicationVersion:3,documentVersion:1
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.send).toHaveBeenLastCalledWith(pixels)
+    expect(res.setHeader).toHaveBeenCalledWith("Content-Type","image/png")
+    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","no-store")
+    expect(res.setHeader).toHaveBeenCalledWith("X-Content-Type-Options","nosniff")
+    expect(JSON.stringify(res.json.mock.calls)).not.toContain("%PDF")
+
+    service.personalReadOrganizationApplicationReviewPreview.mockRejectedValueOnce(
+      new Error("scanner unavailable"))
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(503)
+    expect(res.send).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(res.json.mock.calls)).not.toContain("scanner unavailable")
+
+    req.query={action:"review_preview",application_id:"daorg_other"}
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(400)
+    req.query={action:"review_preview",application_id:payload.application_id}
+    req.headers.authorization="Bearer forged"
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(400)
+    expect(service.personalReadOrganizationApplicationReviewPreview).toHaveBeenCalledTimes(3)
   })
 
   it("requires CSRF and denies browser-supplied native actor credentials",async()=>{

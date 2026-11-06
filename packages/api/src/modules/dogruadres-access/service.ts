@@ -37,6 +37,8 @@ import {
   saveOrganizationDocument,
   submitOrganizationApplication,
   readOrganizationApplicationDocument,
+  readOrganizationApplicationReviewPreview,
+  TaxCertificateReviewUnavailable,
   listSubmittedOrganizationApplications,
   reviewOrganizationApplication,
   type ReviewApplicationPayload,
@@ -473,6 +475,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   }
 
   @InjectTransactionManager()
+  async personalReadOrganizationApplicationReviewPreview(
+    token:string,applicationId:string,@MedusaContext() context:Context={}
+  ) {
+    return readOrganizationApplicationReviewPreview(
+      securitySql(context.transactionManager),token,applicationId)
+  }
+
+  @InjectTransactionManager()
   async personalSubmittedOrganizationApplications(
     token:string,cursor?:OrganizationDraftCursor,@MedusaContext() context:Context={}
   ) {
@@ -487,8 +497,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return reviewOrganizationApplication(sql,token,input,async request=>{
       // Revalidate the exact current private file at the moment of approval.
       // An existing metadata row is not evidence of a still-readable document.
-      const document=await readOrganizationApplicationDocument(sql,token,request.applicationId)
-      if(!document?.content?.length)throw new IdentityAccessDenied()
+      // Never use the applicant's raw download as the review path.
+      // A fresh scan and isolated rasterization are mandatory under the
+      // Foundation transaction lock at the exact moment of approval.
+      const preview=await readOrganizationApplicationReviewPreview(
+        sql,token,request.applicationId)
+      if(!preview?.content?.length)throw new TaxCertificateReviewUnavailable()
 
       // The applicant may be offline, but must still be an ACTIVE canonical
       // Person backed by a CURRENT verified native actor, not merely an ID.
