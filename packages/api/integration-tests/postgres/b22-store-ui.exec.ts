@@ -65,7 +65,7 @@ async function verifyPanelCspModes(browser:B06Chrome, container:any):Promise<voi
   for(const panel of ["admin","vendor"] as const){
     const port=await getFreePort()
     const cwd=join(process.cwd(),"../../apps",panel)
-    const startUrl="http://127.0.0.1:"+port+(panel==="admin"?"/dashboard/":"/")
+    const startUrl="http://127.0.0.1:"+port+(panel==="admin"?"/dashboard/":"/seller/")
     const child=spawn("bun",
       ["run","dev","--host","127.0.0.1","--port",String(port),"--strictPort"],{
       cwd,stdio:"ignore",detached:process.platform!=="win32",
@@ -77,7 +77,7 @@ async function verifyPanelCspModes(browser:B06Chrome, container:any):Promise<voi
         const response=await fetch(startUrl,{signal:AbortSignal.timeout(1000)})
         return response.ok
       },45000,panel+" native Vite dev server")
-      await probe(panel+" DEV",startUrl,panel==="admin"?"/dashboard/":"/",
+      await probe(panel+" DEV",startUrl,panel==="admin"?"/dashboard/":"/seller/",
         browser.origin)
     }finally{
       // Bun can spawn a Vite child. Terminate only our dedicated process group.
