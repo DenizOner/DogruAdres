@@ -22,8 +22,74 @@ import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerW
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
+import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
+
+
+// Use the existing real CI Chrome and two native Vite dashboard apps. The only
+// external URL is a synthetic .invalid name; browser CSP blocks it BEFORE DNS.
+// This changes no application role, production setting or protected data.
+async function verifyPanelCspModes(browser:B06Chrome, container:any):Promise<void> {
+  assert.equal(container.resolve("vendor_ui").getServingMode(),"static")
+  const probe=async(label:string,url:string,sameOriginPath:string,allowedBackend?:string)=>{
+    browser.phase="b22-dashboard-csp-"+label
+    await browser.send("Page.navigate",{url})
+    const expectedOrigin=new URL(url).origin
+    await browser.wait("location.origin==="+JSON.stringify(expectedOrigin)+
+      "&&!!document.querySelector('meta[http-equiv=Content-Security-Policy]')")
+    const result=await browser.eval("(async()=>{"+
+      "const rule=document.querySelector('meta[http-equiv=Content-Security-Policy]')?.content||'';"+
+      "const local=await fetch("+JSON.stringify(sameOriginPath)+",{cache:'no-store'}).then(r=>r.status).catch(()=>0);"+
+      "const blocked=await new Promise(resolve=>{"+
+      "const target='https://dogruadres-csp-check.invalid';"+
+      "let seen=false;"+
+      "const observe=e=>{if(e.effectiveDirective==='connect-src'&&e.blockedURI.startsWith(target)){"+
+      "seen=true;document.removeEventListener('securitypolicyviolation',observe);resolve(true)}};"+
+      "document.addEventListener('securitypolicyviolation',observe);"+
+      "fetch(target+'/feedback',{method:'POST',body:'synthetic-only'}).catch(()=>{});"+
+      "setTimeout(()=>{document.removeEventListener('securitypolicyviolation',observe);resolve(seen)},1000);"+
+      "});return {rule,local,blocked};})()")
+    assert.ok(result.rule.includes("connect-src 'self'"),label+" must restrict cross-origin requests")
+    if(allowedBackend)
+      assert.ok(result.rule.split(" ").includes(allowedBackend),
+        label+" must retain the explicitly configured local backend origin")
+    else
+      assert.equal(result.rule,"connect-src 'self'",label+" production panel allowlist")
+    assert.equal(result.local,200,label+" real same-origin HTTP asset/session")
+    assert.equal(result.blocked,true,label+" real Chrome external POST must be denied")
+    process.stdout.write("PASS B22 Chrome: "+label+
+      " connect-src blocked synthetic external POST; same-origin HTTP200\n")
+  }
+  await probe("Vendor BUILD",browser.origin+"/seller/","/personal/session")
+  for(const panel of ["admin","vendor"] as const){
+    const port=await getFreePort()
+    const cwd=join(process.cwd(),"../../apps",panel)
+    const startUrl="http://127.0.0.1:"+port+(panel==="admin"?"/dashboard/":"/")
+    const child=spawn("bun",
+      ["run","dev","--host","127.0.0.1","--port",String(port),"--strictPort"],{
+      cwd,stdio:"ignore",detached:process.platform!=="win32",
+      env:{...process.env,VITE_MERCUR_BACKEND_URL:browser.origin,
+        MERCUR_DISABLE_TELEMETRY:"true"},
+    })
+    try{
+      await waitForLoopback(async()=>{
+        const response=await fetch(startUrl,{signal:AbortSignal.timeout(1000)})
+        return response.ok
+      },45000,panel+" native Vite dev server")
+      await probe(panel+" DEV",startUrl,panel==="admin"?"/dashboard/":"/",
+        browser.origin)
+    }finally{
+      // Bun can spawn a Vite child. Terminate only our dedicated process group.
+      if(process.platform!=="win32"&&child.pid){
+        try{process.kill(-child.pid,"SIGKILL")}catch{killProcess(child)}
+      }else killProcess(child)
+      await waitForLoopback(async()=>
+        child.exitCode!==null||child.signalCode!==null,
+        10000,panel+" Vite process shutdown")
+    }
+  }
+}
 
 // Uses only the existing Mercur module middleware and its real built dashboard.
 // This dedicated child terminates after invalidating its two genuine MFA sessions.
@@ -84,6 +150,7 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   const before=await digest()
   assert.deepEqual(before,[],"Fresh dedicated SMTP database")
   // Negative checks precede any valid settings write.
+  await verifyPanelCspModes(denied,container)
   await open(denied);await hidden(denied)
   // Test the actual production dashboard document, not a mocked header.
   // Only a synthetic .invalid host is attempted; no private information is
