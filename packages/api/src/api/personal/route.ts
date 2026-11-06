@@ -613,12 +613,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const dupText=item.duplicate_review_required?' [Mükerrerlik İncelemesi Gerekli]':'';
         row.textContent=item.legal_name+' ('+item.business_kind+', VKN/TCKN: '+item.tax_identifier+')'+dupText+' — Durum: '+item.status;
         if(item.has_document){
-          const dl=document.createElement('button');
-          dl.type='button';dl.textContent='Vergi Levhasını İncele (İndir)';
-          dl.onclick=()=>{
-            window.open('/personal/organization-applications?action=document&application_id='+encodeURIComponent(item.id),'_blank');
-          };
-          row.append(dl);
+          const message=document.createElement('span');
+          message.textContent=' — Vergi levhası: güvenli tarama ve inceleme hazır değil; görevli indirmesi kapalı.';
+          row.append(message);
         }
         const notesInput=document.createElement('input');
         notesInput.placeholder='İnceleme / düzeltme notu';
