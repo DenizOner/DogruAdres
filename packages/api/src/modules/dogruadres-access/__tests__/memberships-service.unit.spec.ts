@@ -122,7 +122,7 @@ describe("M0 B06 personal membership role change service boundary", () => {
     getMembershipSpy = jest.spyOn(service as any, "getMembershipInOrganization").mockResolvedValue(targetMember)
     changeMembershipSpy = jest.spyOn(service as any, "changeMembership").mockResolvedValue({
       id: memberId,
-      role: "admin",
+      role: "member",
       status: "active",
     })
   })
@@ -131,27 +131,32 @@ describe("M0 B06 personal membership role change service boundary", () => {
     jest.restoreAllMocks()
   })
 
-  it("allows Owner to change an active ordinary Member to Admin", async () => {
-    const result = await service.personalChangeMembershipRole(token, orgId, memberId, "admin", context)
-    expect(currentSpy).toHaveBeenCalledWith(token, true)
-    expect(organizationsSpy).toHaveBeenCalledWith(token, orgId)
-    expect(getMembershipSpy).toHaveBeenCalledWith(memberId, orgId, context)
+  it("denies direct service assignment of retired company Admin by protected Owner",async()=>{
+    await expect(service.personalChangeMembershipRole(token,orgId,memberId,"admin",context))
+      .rejects.toThrow(new MedusaError(MedusaError.Types.FORBIDDEN,"Access denied"))
+    expect(currentSpy).not.toHaveBeenCalled()
+    expect(getMembershipSpy).not.toHaveBeenCalled()
+    expect(changeMembershipSpy).not.toHaveBeenCalled()
+  })
+
+  it("allows protected Owner to convert an existing legacy Admin into Member",async()=>{
+    getMembershipSpy.mockResolvedValue(targetAdmin)
+    const result=await service.personalChangeMembershipRole(token,orgId,memberId,"member",context)
+    expect(currentSpy).toHaveBeenCalledWith(token,true)
+    expect(organizationsSpy).toHaveBeenCalledWith(token,orgId)
+    expect(getMembershipSpy).toHaveBeenCalledWith(memberId,orgId,context)
     expect(changeMembershipSpy).toHaveBeenCalledWith({
-      organization_id: orgId,
-      membership_id: memberId,
-      actor_person_id: "daprs_owner",
-      actor_type: "user",
-      actor_id: "user_owner",
-      role: "admin",
-    }, context)
-    expect(result).toEqual({ id: memberId, role: "admin", status: "active" })
+      organization_id:orgId,membership_id:memberId,actor_person_id:"daprs_owner",
+      actor_type:"user",actor_id:"user_owner",role:"member"
+    },context)
+    expect(result).toEqual({id:memberId,role:"member",status:"active"})
   })
 
   it("does not narrow protected Owner membership operations with legacy deployment settings",async()=>{
     const previous=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     try{
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage"
-      await expect(service.personalChangeMembershipRole(token,orgId,memberId,"admin",context))
+      await expect(service.personalChangeMembershipRole(token,orgId,memberId,"member",context))
         .resolves.toBeDefined()
       await expect(service.personalRevokeMembership(token,orgId,memberId,context))
         .resolves.toBeDefined()
@@ -186,28 +191,28 @@ describe("M0 B06 personal membership role change service boundary", () => {
 
   it("denies ordinary Member from changing membership roles (403 Forbidden)", async () => {
     organizationsSpy.mockResolvedValue(orgDecisionMember)
-    await expect(service.personalChangeMembershipRole(token, orgId, memberId, "admin", context))
+    await expect(service.personalChangeMembershipRole(token, orgId, memberId, "member", context))
       .rejects.toThrow(new MedusaError(MedusaError.Types.FORBIDDEN, "Access denied"))
     expect(changeMembershipSpy).not.toHaveBeenCalled()
   })
 
   it("denies request when session is expired or lacks recent strong auth (403 Forbidden)", async () => {
     currentSpy.mockResolvedValue(null)
-    await expect(service.personalChangeMembershipRole(token, orgId, memberId, "admin", context))
+    await expect(service.personalChangeMembershipRole(token, orgId, memberId, "member", context))
       .rejects.toThrow(new MedusaError(MedusaError.Types.FORBIDDEN, "Access denied"))
     expect(changeMembershipSpy).not.toHaveBeenCalled()
   })
 
   it("denies request when target membership does not exist in the Organization (404 Not Found)", async () => {
     getMembershipSpy.mockResolvedValue(null)
-    await expect(service.personalChangeMembershipRole(token, orgId, memberId, "admin", context))
+    await expect(service.personalChangeMembershipRole(token, orgId, memberId, "member", context))
       .rejects.toThrow(new MedusaError(MedusaError.Types.NOT_FOUND, "Membership not found in the selected Organization"))
     expect(changeMembershipSpy).not.toHaveBeenCalled()
   })
 
   it("prevents changing protected Owner status through ordinary role controls (403 Forbidden)", async () => {
     getMembershipSpy.mockResolvedValue(targetOwner)
-    await expect(service.personalChangeMembershipRole(token, orgId, "daomem_owner_target", "admin", context))
+    await expect(service.personalChangeMembershipRole(token, orgId, "daomem_owner_target", "member", context))
       .rejects.toThrow(new MedusaError(MedusaError.Types.FORBIDDEN, "Protected Owner cannot be changed through ordinary role controls"))
     expect(changeMembershipSpy).not.toHaveBeenCalled()
   })
