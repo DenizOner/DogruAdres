@@ -101,6 +101,29 @@ async function run(){
       if(scope==="b22-ui"){
         const locks=await target.unsafe("select to_regclass('public.locking') as table_name")
         assert.ok(locks[0].table_name,"Missing official PostgreSQL locking provider migration in disposable B22 CI database")
+        // Mercur 2.4.1 added a Seller migration with the same bare name as
+        // our historical B22 Buyer price-group migration. A green db:migrate
+        // exit cannot prove BOTH tables were migrated: inspect the real DB
+        // before starting Chrome and preserve the old migration ledger.
+        const compatibility=await target.unsafe(`select
+          to_regclass('public.da_store_buyer_price_group') as buyer_group,
+          exists(select 1 from information_schema.columns
+            where table_schema='public' and table_name='member_invite'
+              and column_name='token_hash') as invite_hash,
+          exists(select 1 from information_schema.columns
+            where table_schema='public' and table_name='member_invite'
+              and column_name='token') as plaintext_invite`)
+        assert.ok(compatibility[0].buyer_group,
+          "B22 Buyer price group was skipped by a duplicate upstream migration name")
+        assert.equal(compatibility[0].invite_hash,true,
+          "Mercur 2.4.1 invite-token hash migration was skipped or not applied")
+        assert.equal(compatibility[0].plaintext_invite,false,
+          "Plaintext invite-token column survived the Mercur 2.4.1 upgrade")
+        const repair=await target.unsafe(`select count(*)::int as n from mikro_orm_migrations
+          where name='Migration20261106090000'`)
+        assert.equal(Number(repair[0].n),1,
+          "Additive B22 migration collision repair was not recorded")
+        process.stdout.write("PASS B22 PG16 Mercur 2.4.1 migration collision guard: native hashed invites + audited price group, unique repair ledger\\n")
       }
       const ledger=await target.unsafe("select count(*)::int as n from mikro_orm_migrations where name like 'Migration2026102%'")
       assert.ok(Number(ledger[0].n)>=1,"No Foundation migration history from Medusa CLI")
