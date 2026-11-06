@@ -7746,6 +7746,39 @@ export default async function({container}:any){
       assert.equal(staffDocDownload.cache,"no-store")
       assert.ok(!['application/pdf','image/png','image/jpeg'].includes(staffDocDownload.contentType),
         "Unscanned original media must not reach staff HTTP response")
+
+      // New raster-only endpoint must also reject without a genuine current
+      // local ClamAV database and an available OS namespace renderer.
+      const unsafePreview = await reviewChrome.eval(`(async()=>{
+        const r=await fetch('/personal/organization-applications?action=review_preview&application_id='+
+          encodeURIComponent(${JSON.stringify(b22TaxAppId)}));
+        return {status:r.status,type:r.headers.get('content-type'),
+          cache:r.headers.get('cache-control')};
+      })()`)
+      assert.equal(unsafePreview.status,503)
+      assert.equal(unsafePreview.cache,"no-store")
+      assert.ok(!unsafePreview.type?.startsWith("image/"),
+        "Staff must never receive a fake or raw preview on unavailable scan")
+      await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()")
+      await reviewChrome.wait("document.getElementById('organization-review-list').textContent.includes('B22 Vergi Levhası Test Şirketi')")
+      const openUnsafePreview = await reviewChrome.eval(`(()=>{
+        const row=Array.from(document.querySelectorAll('#organization-review-list p'))
+          .find(p=>p.textContent.includes('B22 Vergi Levhası Test Şirketi'));
+        const button=Array.from(row?.querySelectorAll('button')||[])
+          .find(b=>b.textContent==='Belgeyi Güvenli Önizle');
+        if(!button)throw Error('Missing reviewed document preview action');
+        button.click();return true;
+      })()`)
+      assert.equal(openUnsafePreview,true)
+      await reviewChrome.wait("document.getElementById('organization-review-list').textContent.includes('Tarama veya güvenli önizleme kullanılamıyor')")
+      const hiddenApproval=await reviewChrome.eval(`(()=>{
+        const row=Array.from(document.querySelectorAll('#organization-review-list p'))
+          .find(p=>p.textContent.includes('B22 Vergi Levhası Test Şirketi'));
+        const button=Array.from(row?.querySelectorAll('button')||[])
+          .find(b=>b.textContent==='İşletmeyi Onayla');
+        return !!button && button.hidden && button.disabled;
+      })()`)
+      assert.equal(hiddenApproval,true,"An unscanned document must never enable reviewer approval")
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: staff unscanned document denied, applicant original retained, foreign denied\n")
 
       const correctionRes = await reviewChrome.eval(`(async()=>{`+
