@@ -307,6 +307,10 @@ describe("personal memberships route", () => {
         ordinary,
       ] })
       await done
+      const controls=h.el("memberships").children
+      expect(controls.some((x:any)=>x.textContent==="Owner rolünü Admin yap mem_owner")).toBe(false)
+      expect(controls.some((x:any)=>x.textContent==="Üyeliği iptal et mem_owner")).toBe(false)
+      expect(controls.some((x:any)=>x.textContent.includes("Korunan Owner: kaldırma veya rol düşürme"))).toBe(true)
       const promote = h.el("memberships").children.find((x: any) => x.textContent === "Korumalı Owner yap mem_ordinary")
       expect(promote).toBeDefined()
       const click = promote.onclick()
