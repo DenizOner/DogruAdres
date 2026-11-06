@@ -259,12 +259,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {id:result.id,role:result.role,status:result.status}
   }
 
-  /**
-   * B07: an existing active member can become a protected Owner, and an
-   * existing protected Owner can return to Admin only when another protected
-   * Owner remains. All invariant checks and audit/outbox writes remain in the
-   * existing transaction-bound changeMembership implementation.
-   */
+  /** B07 promotion uses the current protected membership and transaction.
+   * Owner removal/downgrade must follow the separately approved strong
+   * verification, notification and 10+20 day process (#39), not this old
+   * immediate Owner->Admin action. */
   @InjectTransactionManager()
   async personalManageProtectedOwner(
     token: string,
@@ -285,6 +283,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         !organizationActionAllowed("owner","membership.manage",
           await isCurrentProtectedOwner(sql,identity.person_id,org),false)) {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, 'Access denied')
+    }
+    // Do not let an old strong session bypass the approved Owner removal
+    // workflow, even when another active protected Owner exists.
+    if (role === 'admin') {
+      throw new MedusaError(MedusaError.Types.FORBIDDEN,
+        'Protected Owner reduction requires the approved safety workflow')
     }
     const target = await this.getMembershipInOrganization(membership, org, context)
     if (!target) {
@@ -1255,6 +1259,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         protected_owner: true,
       }, {}, sharedContext)
       if (!isOwnerDemotionAllowed(ownerCount.length)) throw new MedusaError(MedusaError.Types.FORBIDDEN, "The last active protected Owner cannot be demoted or revoked")
+      // Last-Owner protection alone is insufficient. The 30-day seniority and
+      // 10+20 notice/appeal gates are not implemented on this ordinary
+      // mutation route; reject before any role, audit or outbox write.
+      throw new MedusaError(MedusaError.Types.FORBIDDEN,
+        "Protected Owner reduction requires the approved safety workflow")
     }
 
     const nextRole = input.role ?? target.role
