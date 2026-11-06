@@ -22,8 +22,92 @@ import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerW
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
+import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
+
+
+// Use the existing real CI Chrome and two native Vite dashboard apps. The only
+// external URL is a synthetic .invalid name; browser CSP blocks it BEFORE DNS.
+// This changes no application role, production setting or protected data.
+async function verifyPanelCspModes(browser:B06Chrome, container:any):Promise<void> {
+  assert.equal(container.resolve("vendor_ui").getServingMode(),"static")
+  const probe=async(label:string,url:string,sameOriginPath:string,allowedBackend?:string)=>{
+    browser.phase="b22-dashboard-csp-"+label
+    await browser.send("Page.navigate",{url})
+    const expectedOrigin=new URL(url).origin
+    try {
+      await browser.wait("location.origin==="+JSON.stringify(expectedOrigin)+
+        "&&!!document.querySelector('meta[http-equiv=Content-Security-Policy]')")
+    } catch(error) {
+      // Only fixed navigation metadata, never source, cookies, response bodies.
+      const page=await browser.eval("({onExpectedOrigin:location.origin==="+
+        JSON.stringify(expectedOrigin)+",onVendorLogin:location.pathname==='/seller/login',"+
+        "hasCsp:!!document.querySelector('meta[http-equiv=Content-Security-Policy]')})")
+      const navigation=browser.http.filter(r=>r.path.startsWith("/seller"))
+        .map(({path,status})=>({path,status})).slice(-5)
+      throw new Error(label+" expected native policy not visible: "+
+        JSON.stringify({page,navigation})+"; "+String(error).slice(0,130))
+    }
+    const result=await browser.eval("(async()=>{"+
+      "const rule=document.querySelector('meta[http-equiv=Content-Security-Policy]')?.content||'';"+
+      "const local=await fetch("+JSON.stringify(sameOriginPath)+",{cache:'no-store'}).then(r=>r.status).catch(()=>0);"+
+      "const blocked=await new Promise(resolve=>{"+
+      "const target='https://dogruadres-csp-check.invalid';"+
+      "let seen=false;"+
+      "const observe=e=>{if(e.effectiveDirective==='connect-src'&&e.blockedURI.startsWith(target)){"+
+      "seen=true;document.removeEventListener('securitypolicyviolation',observe);resolve(true)}};"+
+      "document.addEventListener('securitypolicyviolation',observe);"+
+      "fetch(target+'/feedback',{method:'POST',body:'synthetic-only'}).catch(()=>{});"+
+      "setTimeout(()=>{document.removeEventListener('securitypolicyviolation',observe);resolve(seen)},1000);"+
+      "});return {rule,local,blocked};})()")
+    assert.ok(result.rule.includes("connect-src 'self'"),label+" must restrict cross-origin requests")
+    if(allowedBackend)
+      assert.ok(result.rule.split(" ").includes(allowedBackend),
+        label+" must retain the explicitly configured local backend origin")
+    else
+      assert.equal(result.rule,"connect-src 'self'",label+" production panel allowlist")
+    assert.equal(result.local,200,label+" real same-origin HTTP asset/session")
+    assert.equal(result.blocked,true,label+" real Chrome external POST must be denied")
+    process.stdout.write("PASS B22 Chrome: "+label+
+      " connect-src blocked synthetic external POST; same-origin HTTP200\n")
+  }
+  // Mercur native /seller routes legitimately return 401 for a Person-only
+  // session. Do NOT disable that authority boundary to inspect a static file.
+  // Vite's own preview serves the exact built Vendor dist for browser proof.
+  for(const scenario of [
+    {panel:"vendor" as const,mode:"preview" as const,label:"Vendor BUILD"},
+    {panel:"admin" as const,mode:"dev" as const,label:"Admin DEV"},
+    {panel:"vendor" as const,mode:"dev" as const,label:"Vendor DEV"},
+  ]){
+    const port=await getFreePort()
+    const cwd=join(process.cwd(),"../../apps",scenario.panel)
+    const basePath=scenario.panel==="admin"?"/dashboard/":"/seller/"
+    const startUrl="http://127.0.0.1:"+port+basePath
+    const child=spawn("bun",
+      ["run",scenario.mode,"--host","127.0.0.1","--port",String(port),"--strictPort"],{
+      cwd,stdio:"ignore",detached:process.platform!=="win32",
+      env:{...process.env,VITE_MERCUR_BACKEND_URL:browser.origin,
+        MERCUR_DISABLE_TELEMETRY:"true"},
+    })
+    try{
+      await waitForLoopback(async()=>{
+        const response=await fetch(startUrl,{signal:AbortSignal.timeout(1000)})
+        return response.ok
+      },45000,scenario.label+" existing native Vite server")
+      await probe(scenario.label,startUrl,basePath,
+        scenario.mode==="dev"?browser.origin:undefined)
+    }finally{
+      // Bun can spawn a Vite child. Terminate only our dedicated process group.
+      if(process.platform!=="win32"&&child.pid){
+        try{process.kill(-child.pid,"SIGKILL")}catch{killProcess(child)}
+      }else killProcess(child)
+      await waitForLoopback(async()=>
+        child.exitCode!==null||child.signalCode!==null,
+        10000,scenario.label+" Vite process shutdown")
+    }
+  }
+}
 
 // Uses only the existing Mercur module middleware and its real built dashboard.
 // This dedicated child terminates after invalidating its two genuine MFA sessions.
@@ -84,7 +168,31 @@ async function verifyAdminSmtp(browser:B06Chrome, denied:B06Chrome, container:an
   const before=await digest()
   assert.deepEqual(before,[],"Fresh dedicated SMTP database")
   // Negative checks precede any valid settings write.
+  await verifyPanelCspModes(denied,container)
   await open(denied);await hidden(denied)
+  // Test the actual production dashboard document, not a mocked header.
+  // Only a synthetic .invalid host is attempted; no private information is
+  // submitted to Mercur or any real remote service during this check.
+  const policy=await denied.eval("document.querySelector('meta[http-equiv=Content-Security-Policy]')?.content||''")
+  assert.ok(policy.includes("connect-src 'self'"),"Admin panel CSP must restrict external connections")
+  const externalDenied=await denied.eval(`(async()=>{
+    const testOrigin='https://dogruadres-csp-check.invalid';
+    return await new Promise(resolve=>{
+      let observed=false;
+      const onViolation=event=>{
+        if(event.effectiveDirective==='connect-src' && event.blockedURI.startsWith(testOrigin)){
+          observed=true;
+          document.removeEventListener('securitypolicyviolation',onViolation);
+          resolve(true);
+        }
+      };
+      document.addEventListener('securitypolicyviolation',onViolation);
+      fetch(testOrigin+'/feedback',{method:'POST',body:'synthetic-only'}).catch(()=>{});
+      setTimeout(()=>{document.removeEventListener('securitypolicyviolation',onViolation);resolve(observed)},700);
+    });
+  })()`)
+  assert.equal(externalDenied,true,
+    'Real Chrome must deny synthetic external Feedback-like POST via CSP')
   assert.equal((await read(denied)).status,403)
   assert.deepEqual(await digest(),before)
   mark("Unauthorized real MFA session GET403; no SMTP rows")
@@ -919,7 +1027,9 @@ export default async function({container}:any){
     assert.equal(topology.privateOrigin,process.env.DOGRUADRES_PRIVATE_API)
     assert.equal(topology.publicOrigin,host)
     const browser=new B06Chrome(host,"A");browsers.push(browser)
-    await browser.start(crt)
+    // Existing free CI runner may need longer for real Chrome CDP startup.
+    // This bounded allowance affects only this disposable B22 first browser.
+    await browser.start(crt,30000)
     await browser.login(A.email,A.password,A.person)
     if(process.env.B22_ADMIN_SMTP==="true"){
       const other=new B06Chrome(host,"B");browsers.push(other)
@@ -927,6 +1037,132 @@ export default async function({container}:any){
       await verifyAdminSmtp(browser,other,container,A.person,B.person,q,smtpGuard!)
       return
     }
+    // M0 private contact slice uses the already strongly authenticated Person.
+    // It does not create a second Customer, Person, Owner or Organization.
+    const mobileBrowser=browser
+    await mobileBrowser.wait("!document.getElementById('person-mobile-form').hidden")
+    const firstMobile=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile');"+
+      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}})()")
+    assert.equal(firstMobile.status,200)
+    assert.equal(firstMobile.body.mobile_phone,null)
+    assert.equal(firstMobile.body.version,0)
+    assert.equal(firstMobile.body.phone_verified,false)
+    assert.match(firstMobile.cache,/no-store/)
+    const mobileAuditBefore=Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='person.mobile_updated'",
+      [A.person]))[0].n)
+    const personalPhone="+905551234567" // synthetic-only CI number
+    await mobileBrowser.input("#person-mobile-form input[name=mobile_phone]",personalPhone)
+    await mobileBrowser.click("#person-mobile-form button[type=submit]")
+    await mobileBrowser.wait("document.getElementById('person-mobile-status').textContent.includes('kayıtlı')")
+    const afterMobile=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile');return {status:r.status,body:await r.json()}})()")
+    assert.deepEqual(afterMobile,{status:200,body:{
+      mobile_phone:personalPhone,version:1,phone_verified:false
+    }})
+    const personMobileRows=await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person])
+    assert.deepEqual(personMobileRows,[{mobile_phone:personalPhone,mobile_version:1}])
+    assert.equal((await q("select mobile_phone from da_person where id=$1",[B.person]))[0].mobile_phone,null)
+    const contactEvents=await q(
+      "select e.new_values,o.envelope from da_audit_event e "+
+      "join da_audit_outbox o on o.source_audit_event_id=e.id "+
+      "where e.actor_person_id=$1 and e.action='person.mobile_updated'",
+      [A.person])
+    assert.equal(contactEvents.length,mobileAuditBefore+1)
+    assert.ok(!JSON.stringify(contactEvents).includes(personalPhone),
+      "Neither audit nor outbox may contain private phone")
+    const deniedForeign=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile?person_id=daprs_foreign');return r.status})()")
+    assert.equal(deniedForeign,400)
+    const blockedPost=await mobileBrowser.eval("(async()=>{"+
+      "const r=await fetch('/personal/profile',{method:'POST',"+
+      "headers:{'content-type':'application/json'},body:JSON.stringify({"+
+      "mobile_phone:'+905551234568',expected_version:1})});return r.status})()")
+    assert.equal(blockedPost,403,"Missing same-origin CSRF must deny a write")
+    const staleMobile=await mobileBrowser.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/profile',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({mobile_phone:'+905551234568',expected_version:0})});"+
+      "return r.status})()")
+    assert.equal(staleMobile,409)
+    assert.deepEqual(await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person]),
+      [{mobile_phone:personalPhone,mobile_version:1}])
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='person.mobile_updated'",
+      [A.person]))[0].n),mobileAuditBefore+1)
+    process.stdout.write("PASS B22 Chrome: M0 canonical Person private mobile GET, real UI save and PG16 readback, audit/outbox privacy, foreign query400, CSRF403, stale409, no duplicate mutation\\n")
+
+    // Real PG16 row-lock ordering: pause the Person row while a profile POST
+    // and an independent internal enrollment-session creation contend.
+    // The profile must WAIT for Person BEFORE taking the security epoch lock.
+    // This uses real Foundation transactions, not a mocked SQL scheduler.
+    const binding=await q(`select auth_identity_id from da_login_binding
+      where person_id=$1 and revoked_at is null and verified_at is not null`,[A.person])
+    assert.equal(binding.length,1)
+    const mobileBarrier=new Client({connectionString:u.toString()})
+    const mobileProbe=new Client({connectionString:u.toString()})
+    await mobileBarrier.connect();await mobileProbe.connect()
+    let mobileBarrierHeld=false
+    let mobileProbeHeld=false
+    let concurrentMobile:Promise<any>|undefined
+    let concurrentSession:Promise<any>|undefined
+    try {
+      await mobileBarrier.query("BEGIN");mobileBarrierHeld=true
+      await mobileBarrier.query("select id from da_person where id=$1 for update",[A.person])
+      concurrentMobile=mobileBrowser.eval(`(async()=>{
+        const s=await(await fetch('/personal/session')).json();
+        const r=await fetch('/personal/profile',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+          body:JSON.stringify({mobile_phone:'+905551234567',expected_version:1})});
+        return {status:r.status,body:await r.json()};
+      })()`).then(value=>({value}),error=>({error:String(error)}))
+      await until(async()=>{
+        const rows=await q(`select count(*)::int n from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock'
+            and query ilike '%from da_browser_session s%'
+            and query ilike '%for update of p%'`)
+        return rows[0].n>=1
+      },15000,"M0 mobile POST waits on Person BEFORE session/security")
+      // NOWAIT would fail if the profile already held the epoch lock.
+      await mobileProbe.query("BEGIN");mobileProbeHeld=true
+      await mobileProbe.query("select epoch from da_person_security where person_id=$1 for update nowait",[A.person])
+      await mobileProbe.query("ROLLBACK");mobileProbeHeld=false
+      // Same Person sign-in uses IdentitySessions.create() with Person→epoch
+      // locking; a task-only enrollment session exercises that exact native
+      // creation method without bypassing real visitor MFA credentials.
+      concurrentSession=foundation.openPersonalSession(
+        binding[0].auth_identity_id,"mfa_enroll"
+      ).then(value=>({value}),error=>({error:String(error)}))
+      await until(async()=>{
+        const rows=await q(`select count(*)::int n from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock'
+            and query ilike '%from da_login_binding b%'
+            and query ilike '%for update of b,p%'`)
+        return rows[0].n>=1
+      },15000,"M0 new Person session waits on same Person row")
+      await mobileBarrier.query("COMMIT");mobileBarrierHeld=false
+      const [mobileResult,createdResult]=await Promise.all([concurrentMobile,concurrentSession])
+      assert.equal(mobileResult.value?.status,200,mobileResult.error||"Mobile update must complete")
+      assert.equal(mobileResult.value?.body?.version,1,"Identical mobile write is no-op")
+      assert.match(createdResult.value?.token??"",/^[A-Za-z0-9_-]{43}$/,
+        createdResult.error||"Second native Person session must complete without deadlock")
+      await foundation.closePersonalSession(createdResult.value.token,false)
+      assert.deepEqual(await q("select mobile_phone,mobile_version from da_person where id=$1",[A.person]),
+        [{mobile_phone:personalPhone,mobile_version:1}])
+      process.stdout.write("PASS B22 PG16: concurrent Person session creation and mobile POST obey Person-first lock; one no-op write, no deadlock\\n")
+    }finally {
+      if(mobileProbeHeld)await mobileProbe.query("ROLLBACK")
+      if(mobileBarrierHeld)await mobileBarrier.query("ROLLBACK")
+      await Promise.allSettled([concurrentMobile,concurrentSession].filter(Boolean) as Promise<any>[])
+      await mobileProbe.end();await mobileBarrier.end()
+    }
+
+    // Real Chrome verifies CSRF403 and profile privacy above. The shipped
+    // UI's definite 403 recovery guidance is exercised by the browser-script
+    // VM test without changing protected session timestamps.
+
     // Approved personal workspace has no editable launcher. Its retired
     // Person-only API must not read or write historical preference rows.
     const legacyPrefsBefore=await q("select id,person_id,app_ids,collapsed_ids,version from da_launcher_preference order by id")
@@ -1470,6 +1706,17 @@ export default async function({container}:any){
     assert.equal(verifiedCustomerBinding.length,1)
     assert.equal(verifiedCustomerBinding[0].actor_id,nativeCustomer.id)
     assert.match(verifiedCustomerBinding[0].proof_reference,/^dual-proof:/)
+    const secondaryLinks=await reviewer.eval(`(async()=>{
+      const r=await fetch('/personal/links');
+      const body=await r.json();
+      return {status:r.status,bindings:body.bindings};
+    })()`)
+    assert.equal(secondaryLinks.status,200)
+    assert.equal(secondaryLinks.bindings.filter((b:any)=>
+      b.actor_type==='customer'&&b.actor_id===nativeCustomer.id&&
+      b.is_primary===false&&b.revoked_at===null).length,1,
+      "Independently linked Customer must remain a removable secondary")
+    await reviewer.wait("document.querySelector('#bindings p')?.textContent.includes('Doğrulanmış ek müşteri hesabı') && document.querySelector('#bindings button')?.disabled===false")
     const readyCustomer=await reviewer.eval(`(async()=>{
       const r=await fetch(${JSON.stringify(customerContext(organizations[0].id))})
       return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}
@@ -1665,7 +1912,17 @@ export default async function({container}:any){
     const {result:[sellableProduct]}=await createProductsWorkflow(container).run({
       input:{created_by:stores[0].id,products:[{
         title:"B22 two-Store shared master "+rand,status:"published",
-        variants:[{title:"One size",sku:"B22-NATIVE-"+rand}]
+        // Mercur 2.4.1 permits one Seller Offer per variant per Cart.
+        // Keep one shared master Product, with distinct native variants for
+        // the two-Store positive Cart; never disable the native Offer guard.
+        attributes:[{title:"B22 Size",is_variant_axis:true,
+          values:["Primary","Secondary"]}],
+        variants:[
+          {title:"Primary",sku:"B22-NATIVE-A-"+rand,
+            options:{"B22 Size":"Primary"}},
+          {title:"Secondary",sku:"B22-NATIVE-B-"+rand,
+            options:{"B22 Size":"Secondary"}}
+        ]
       }]}
     })
     // Mercur's product workflow result is the master product projection;
@@ -1674,12 +1931,17 @@ export default async function({container}:any){
     const persistedVariants=await container.resolve("product").listProductVariants({
       product_id:sellableProduct.id
     })
-    assert.equal(persistedVariants.length,1)
-    const variant=persistedVariants[0]
+    assert.equal(persistedVariants.length,2)
+    const variant=persistedVariants.find((v:any)=>v.sku==="B22-NATIVE-A-"+rand)
+    const secondaryVariant=persistedVariants.find((v:any)=>
+      v.sku==="B22-NATIVE-B-"+rand)
+    assert.ok(variant&&secondaryVariant)
     assert.match(variant.id,/^variant_[A-Za-z0-9_-]+$/)
+    assert.match(secondaryVariant.id,/^variant_[A-Za-z0-9_-]+$/)
+    assert.notEqual(secondaryVariant.id,variant.id)
     // Mercur 2.4.0 createOffersWorkflow's seller-inventory step obtains
     // its Seller from offers[0], so use one run per Seller, not a mixed batch.
-    const offerRows:Array<{id:string;seller_id:string}>=[]
+    const offerRows:Array<{id:string;seller_id:string;variant_id:string}>=[]
     // Both participating native Stores used real Owner application and
     // independent platform approval. Other Sellers are not silently included.
     const cartStoreIds=[ownerStoreId,secondOwnerStoreId]
@@ -1696,10 +1958,11 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Mercur 2.4 Store regions: two approved task-only Sellers explicitly linked to native Region; unapproved Seller excluded\n")
     for(let i=0;i<2;i++){
       const sku="B22-TWO-STORE-"+i+"-"+rand
+      const offerVariant=i===0?variant:secondaryVariant
       const {result:[offer]}=await createOffersWorkflow(container).run({
         input:{offers:[{
           seller_id:cartStoreIds[i],created_by:member.id,
-          sku,variant_id:variant.id,shipping_profile_id:b22Profile.id,
+          sku,variant_id:offerVariant.id,shipping_profile_id:b22Profile.id,
           inventory_items:[{sku,stock_levels:[]}],
           prices:[{amount:1000+i*100,currency_code:"eur"}],
           manage_inventory:false,allow_backorder:true
@@ -1707,7 +1970,8 @@ export default async function({container}:any){
       })
       assert.match(offer.id,/^offer_[A-Za-z0-9_-]+$/)
       assert.equal(offer.seller_id,cartStoreIds[i])
-      offerRows.push(offer)
+      offerRows.push({id:offer.id,seller_id:offer.seller_id,
+        variant_id:offerVariant.id})
     }
     // A SECOND published master Product uses the SAME variant-backed native
     // Mercur workflow but direct TRY Offer prices. Different sellers own
@@ -1825,17 +2089,271 @@ export default async function({container}:any){
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
     await browser.wait("!document.getElementById('store-price-group-panel').hidden")
-    await browser.input("#store-price-group-form input[name=customer_group_id]",priceGroup.id)
+    const groupListAuditStart=Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n)
+    const nativeGroupList=async(b:any,orgId:string,sellerId:string)=>b.eval("(async()=>{"+
+      "const p=new URLSearchParams({view:'list',"+
+      "organization_id:"+JSON.stringify(orgId)+","+
+      "seller_id:"+JSON.stringify(sellerId)+"});"+
+      "const r=await fetch('/personal/store-price-groups?'+p.toString());"+
+      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')};})()")
+    const ownedGroupList=await nativeGroupList(browser,organizations[0].id,ownerStoreId)
+    assert.equal(ownedGroupList.status,200)
+    assert.equal(ownedGroupList.body.organization_id,organizations[0].id)
+    assert.equal(ownedGroupList.body.seller_id,ownerStoreId)
+    assert.match(ownedGroupList.cache,/no-store/)
+    assert.ok(ownedGroupList.body.groups.some((g:any)=>g.id===priceGroup.id),
+      "Owned native CustomerGroup must be discoverable without typing its ID")
+    const secondGroupList=await nativeGroupList(browser,organizations[0].id,secondOwnerStoreId)
+    assert.equal(secondGroupList.status,200)
+    assert.ok(secondGroupList.body.groups.every((g:any)=>g.id!==priceGroup.id),
+      "Another Store may not discover this Store's native group")
+    assert.equal((await nativeGroupList(reviewer,organizations[0].id,ownerStoreId)).status,403,
+      "Foreign Person may not enumerate native Store CustomerGroups")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),groupListAuditStart,
+      "Read-only Store group choices must not write canonical audit")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    const choice=await browser.eval("(()=>{"+
+      "const field=document.getElementById('store-price-group-choice');"+
+      "field.value="+JSON.stringify(priceGroup.id)+";"+
+      "field.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value;})()")
+    assert.equal(choice,priceGroup.id,
+      "Real Owner Chrome picker must populate only its selected Store's native group ID")
     await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[1].id)
     const groupAuditStart=(await q("select count(*)::int n from da_audit_event"))[0].n
+    // Hold the FIRST real signed HTTPS POST response after PostgreSQL has
+    // committed. The request, authorization, grant and audit are not mocked.
+    // A->B->A while that reply is held must preserve the uncertainty notice,
+    // and an authorized subsequent GET must reconcile the durable result.
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daWriteRaceFetch=window.fetch;"+
+      "window.__daWriteRaceHeld=false;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+           "!window.__daWriteRaceHeld){"+
+          "window.__daWriteRaceHeld=true;"+
+          "return original(resource,options).then(response=>new Promise(resolve=>{"+
+            "window.__daWriteRaceRelease=()=>resolve(response)"+
+          "}))"+
+        "}"+
+        "return original(resource,options)"+
+      "};return true})()")
     await browser.click('#store-price-group-form button[value="grant"]')
-    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')")
+    await browser.wait("typeof window.__daWriteRaceRelease==='function'")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n),1,
+      "Pending Chrome grant must really commit an authorized PG16 BuyerOrg record")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Pending real grant must create one canonical audit before its reply is released")
+    const doubleSwitch=await browser.eval("(()=>{"+
+      "const form=document.getElementById('store-price-group-form');"+
+      "const store=form.elements.namedItem('seller_id');"+
+      "store.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "store.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "const first=document.getElementById('store-price-group-status').textContent;"+
+      "store.value="+JSON.stringify(ownerStoreId)+";"+
+      "store.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return {first,second:document.getElementById('store-price-group-status').textContent,"+
+        "group:form.elements.namedItem('customer_group_id').value,"+
+        "buttons:Array.from(form.querySelectorAll('button'),b=>b.disabled)}"+
+      "})()")
+    assert.match(doubleSwitch.first,/Önceki mağazadaki işlem/,
+      "First Store switch must report unresolved native grant")
+    assert.match(doubleSwitch.second,/Önceki mağazadaki işlem/,
+      "A->B->A cannot discard an unresolved native grant warning")
+    assert.equal(doubleSwitch.group,"",
+      "Returning to the first Store must not automatically reuse its stale group selection")
+    assert.ok(doubleSwitch.buttons.every((value:boolean)=>value===false),
+      "Multiple Store switches cannot strand group action buttons")
+    // A real authorized GET can finish while the original successful
+    // native POST response is still withheld by Chrome. This early read
+    // MUST NOT settle the write; another A->B->A must retain its warning.
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    assert.equal(await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value"+
+      "})()"),priceGroup.id)
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    const earlyReadSecondSwitch=await browser.eval("(()=>{"+
+      "const s=document.querySelector('#store-price-group-form select[name=seller_id]');"+
+      "s.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "s.value="+JSON.stringify(ownerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return {status:document.getElementById('store-price-group-status').textContent,"+
+      "enabled:Array.from(document.querySelectorAll('#store-price-group-form button'),b=>!b.disabled)}"+
+      "})()")
+    assert.match(earlyReadSecondSwitch.status,/Önceki mağazadaki işlem/,
+      "Early authorized GET and another Store switch cannot erase a pending native POST")
+    assert.ok(earlyReadSecondSwitch.enabled.every(Boolean),
+      "Another Store switch must keep the controls usable")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Early read and repeated Store switches may not create a second audit")
+    process.stdout.write("PASS B22 Chrome: early authorized HTTPS GET plus repeated Store switches cannot clear a still-pending native grant; PG16 one write/one audit\n")
+    await browser.eval("(()=>{"+
+      "window.__daWriteRaceRelease();"+
+      "window.fetch=window.__daWriteRaceFetch;"+
+      "delete window.__daWriteRaceRelease;delete window.__daWriteRaceFetch;"+
+      "return true})()")
+    await browser.wait("priceGroupUncertain.size>0&&"+
+      "Array.from(priceGroupUncertain.values()).every(v=>v.settled)")
+    assert.match(await browser.eval(
+      "document.getElementById('store-price-group-status').textContent"),
+      /Önceki mağazadaki işlem/,
+      "Late native POST reply must not falsely clear the unresolved notice")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    assert.equal(await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value"+
+      "})()"),priceGroup.id)
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')&&"+
+      "!document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Authorized recheck after a committed grant must not write another audit")
+    process.stdout.write("PASS B22 Chrome: pending native grant POST A-B-A retains warning and unlocked controls; authorized HTTPS record recheck clears only after PG16 grant and single audit are confirmed\n")
     assert.equal((await groupChange("read")).body.status,"active")
+    // Deterministic real-Chrome UI scheduling: the authenticated HTTPS GET
+    // still reaches Medusa, but its response is held only in this test page
+    // until the Store selector changes. No private API or DB is mocked.
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daGroupRaceFetch=window.fetch;"+
+      "window.__daGroupRaceHeld=false;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(typeof url==='string'&&url.startsWith('/personal/store-price-groups?')&&"+
+           "url.includes('buyer_organization_id=')&&!window.__daGroupRaceHeld){"+
+          "window.__daGroupRaceHeld=true;"+
+          "return original(resource,options).then(response=>new Promise(resolve=>{"+
+            "window.__daGroupRaceRelease=()=>resolve(response)"+
+          "}))"+
+        "}"+
+        "return original(resource,options)"+
+      "};return true})()")
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("typeof window.__daGroupRaceRelease==='function'")
+    const switchedGroup=await browser.eval("(()=>{"+
+      "const form=document.getElementById('store-price-group-form');"+
+      "const store=form.elements.namedItem('seller_id');"+
+      "store.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "store.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return {store:store.value,group:form.elements.namedItem('customer_group_id').value,"+
+        "disabled:Array.from(form.querySelectorAll('button'),b=>b.disabled),"+
+        "status:document.getElementById('store-price-group-status').textContent}"+
+    "})()")
+    assert.equal(switchedGroup.store,secondOwnerStoreId)
+    assert.equal(switchedGroup.group,"",
+      "Store switch must erase first Store's group selection")
+    assert.ok(switchedGroup.disabled.every((value:boolean)=>value===false),
+      "Buttons cannot remain locked while old Store read response is pending")
+    assert.match(switchedGroup.status,/Önceki mağazadaki işlem/,
+      "Unknown result of old Store action must not be represented as cancelled")
+    await browser.eval("(()=>{"+
+      "window.__daGroupRaceRelease();"+
+      "window.fetch=window.__daGroupRaceFetch;"+
+      "delete window.__daGroupRaceRelease;delete window.__daGroupRaceFetch;"+
+      "return true})()")
+    await browser.wait("document.getElementById('store-price-group-status').textContent"+
+      ".includes('Önceki mağazadaki işlem')")
+    assert.equal(await browser.eval(
+      "Array.from(document.querySelectorAll('#store-price-group-form button'))"+
+      ".every(b=>!b.disabled)"),true,
+      "Old completed read must not permanently disable next Store controls")
+    await browser.eval("(()=>{"+
+      "const s=document.querySelector('#store-price-group-form select[name=seller_id]');"+
+      "s.value="+JSON.stringify(ownerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    assert.equal(await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value"+
+      "})()"),priceGroup.id)
+    process.stdout.write("PASS B22 Chrome: group-picker Store-switch race: pending native HTTPS GET cannot lock new Store controls, previous result remains uncertain, selection resets; original Store works again\n")
     assert.equal((await groupChange("grant")).status,200)
     assert.equal((await q("select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
       [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n,1)
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
       groupAuditStart+1,"Idempotent grant writes only one canonical audit")
+    // F-01: an actual authenticated HTTPS idempotent grant commits before
+    // Chrome sees its response. Editing the Buyer input while it is delayed
+    // must not apply the OLD scope's success to the NEW visible Buyer.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'&&"+
+      "document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value==="+
+      JSON.stringify(organizations[1].id))
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daF01Fetch=window.fetch;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+          "JSON.parse(options.body||'{}').action==='grant'&&!window.__daF01Held){"+
+          "window.__daF01Held=true;"+
+          "return original(resource,options).then(response=>new Promise(resolve=>{"+
+            "window.__daF01Release=()=>resolve(response)"+
+          "}))"+
+        "}return original(resource,options)"+
+      "};return true})()")
+    await browser.click('#store-price-group-form button[value="grant"]')
+    await browser.wait("typeof window.__daF01Release==='function'")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n),1,
+      "Real original-scope grant remains persisted during delayed browser reply")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "Idempotent grant cannot create an extra audit")
+    // B06Chrome.input appends text, so clear the prior field first.
+    await browser.eval("document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value=''")
+    await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[0].id)
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value"),
+      organizations[0].id)
+    await browser.eval("(()=>{"+
+      "window.__daF01Release();"+
+      "window.fetch=window.__daF01Fetch;"+
+      "delete window.__daF01Release;delete window.__daF01Fetch;"+
+      "return true})()")
+    await browser.wait("priceGroupUncertain.has(JSON.stringify(["+
+      JSON.stringify(organizations[0].id)+","+
+      JSON.stringify(ownerStoreId)+","+
+      JSON.stringify(priceGroup.id)+","+
+      JSON.stringify(organizations[1].id)+"]))&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(await browser.eval(
+      "document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')"),
+      false,"Late grant success must not be shown against the edited Buyer")
+    // B06Chrome.input appends text, so clear the prior field first.
+    await browser.eval("document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value=''")
+    await browser.input("#store-price-group-form input[name=buyer_organization_id]",organizations[1].id)
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('kabul edilmiş')&&"+
+      "!document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+1,
+      "F-01 scoped authorized GET cannot trigger another POST/audit")
+    process.stdout.write("PASS B22 Chrome: F-01 real idempotent native grant + PG16, delayed 200 after same-Store Buyer edit cannot claim success for new Buyer; exact original-scope read reconciles, no extra audit\n")
     assert.equal((await groupChange("grant",{...groupInput,seller_id:secondOwnerStoreId})).status,403)
     assert.equal((await groupChange("grant",groupInput,reviewer)).status,403)
     const missingCsrf=await browser.eval("(async()=>{const r=await fetch('/personal/store-price-groups',{method:'POST',headers:{'content-type':'application/json'},body:"+JSON.stringify(JSON.stringify({...groupInput,action:"grant"}))+"});return r.status})()")
@@ -1873,10 +2391,9 @@ export default async function({container}:any){
       "Same Seller's separate buyer Organization must not inherit Beta's group")
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
       privateReadAuditStart,"Real private catalogue read cannot mutate audit")
+    // A background tab deliberately conceals private Buyer content.
+    // Re-enter the real HTTPS page with the authorized Organization.
     await reviewer.send("Page.bringToFront")
-    // A hidden tab deliberately discards private data. Restart the normal
-    // signed-in HTTPS navigation with an explicit Buyer Organization instead
-    // of trying to revive in-flight background requests or stale DOM.
     const buyerPersonalUrl=reviewer.origin+"/personal?organization="+
       encodeURIComponent(organizations[1].id)
     await reviewer.send("Page.navigate",{url:buyerPersonalUrl})
@@ -1896,6 +2413,41 @@ export default async function({container}:any){
     assert.equal(buyerPrivateDom.filter((line:string)=>
       line.includes('Bu işletmeye özel TRY referans fiyatı:')).length,1,
       "Only Seller Alpha's approved group price may appear")
+
+    // B22 bounded native Seller-window navigation: no Seller IDs/counts are
+    // exposed to the Buyer merely because a later page was queried.
+    // This real Chrome/HTTPS test checks page switching with disposable PG16.
+    // The separate deterministic service test covers the twenty-first Store.
+    const buyerPageUrl="/personal/catalog?organization_id="+
+      encodeURIComponent(organizations[1].id)
+    const laterWindow=await reviewer.eval("(async()=>{"+
+      "const r=await fetch("+JSON.stringify(buyerPageUrl+"&page=1")+");"+
+      "return {status:r.status,body:await r.json()}})()")
+    assert.equal(laterWindow.status,200)
+    assert.equal(laterWindow.body.organization_id,organizations[1].id)
+    assert.equal(laterWindow.body.page,1)
+    assert.ok(Array.isArray(laterWindow.body.stores)&&laterWindow.body.stores.length<=20)
+    assert.equal(laterWindow.body.checkout_ready,false)
+    assert.equal(laterWindow.body.prices_available,false)
+    assert.ok(!Object.prototype.hasOwnProperty.call(laterWindow.body,"count")&&
+      !Object.prototype.hasOwnProperty.call(laterWindow.body,"has_more"),
+      "A page must not expose the count of unrelated native Sellers")
+    assert.equal(await reviewer.eval("(async()=>{"+
+      "const r=await fetch("+JSON.stringify(buyerPageUrl+"&page=5")+");"+
+      "return r.status})()"),400)
+    await reviewer.click('#buyer-catalog-next')
+    await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden&&"+
+      "document.getElementById('buyer-catalog-status').textContent.includes('2/5')")
+    assert.equal(await reviewer.eval(
+      "document.getElementById('buyer-catalog-prev').disabled"),false)
+    await reviewer.click('#buyer-catalog-prev')
+    await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden&&"+
+      "document.getElementById('buyer-catalog-status').textContent.includes('1/5')&&"+
+      "document.getElementById('buyer-catalog-items').textContent.includes('Bu işletmeye özel TRY referans fiyatı:')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),privateReadAuditStart,
+      "Native catalogue page navigation must be read-only")
+    process.stdout.write("PASS B22 Chrome: Buyer catalogue native Seller page 1 and back to 0, bounded no-count HTTP and page 5 rejected, private TRY remains scoped, PG16 audit unchanged\\n")
 
     // F-01: a suspended or de-approved Seller must not disclose whether
     // a Buyer Organization has an active membership. Cleanup revoke remains
@@ -1938,8 +2490,70 @@ export default async function({container}:any){
         [organizations[1].id])
     }
     assert.equal((await groupChange("read")).body.status,"active")
+    // The real authorized native revoke reaches Medusa HTTPS, persists in
+    // PostgreSQL and writes the canonical audit first. In this browser only,
+    // change its already-successful response to the exact terminal native 503
+    // payload. This tests the UI's 503 recovery, NOT an actual server 503.
+    const auditBeforeRevoke503=Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n)
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daRevokeActualFetch=window.fetch;"+
+      "window.__daRevokeSynthetic503=false;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+          "JSON.parse(options.body||'{}').action==='revoke'&&!window.__daRevokeSynthetic503){"+
+          "return original(resource,options).then(async response=>{"+
+            "const body=await response.clone().json();"+
+            "if(response.status!==200||body.status!=='revoked')return response;"+
+            "window.__daRevokeSynthetic503=true;"+
+            "return new Response(JSON.stringify({message:'Outcome uncertain; recheck group'}),"+
+              "{status:503,headers:{'Content-Type':'application/json'}})"+
+          "})"+
+        "}return original(resource,options)"+
+      "};return true})()")
+    // Native status checks finish separately from the browser's picker refresh.
+    // Wait for the previously authorized visible control; never bypass UI.
+    await browser.wait("(()=>{const e=document.querySelector('#store-price-group-form button[value=\\\"revoke\\\"]');"+
+      "return !!e && !!e.getClientRects().length && !e.disabled})()")
     await browser.click('#store-price-group-form button[value="revoke"]')
-    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('üyeliği yok')")
+    await browser.wait("window.__daRevokeSynthetic503&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Sonuç belirsiz')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_buyer_price_group where seller_id=$1 and buyer_organization_id=$2 and customer_group_id=$3 and revoked_at is not null",
+      [ownerStoreId,organizations[1].id,priceGroup.id]))[0].n),1,
+      "The native HTTPS revoke must commit before the synthetic browser 503")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),auditBeforeRevoke503+1,
+      "A disguised 503 must not mask a second audit or duplicated write")
+    await browser.eval("(()=>{"+
+      "window.fetch=window.__daRevokeActualFetch;"+
+      "delete window.__daRevokeActualFetch;"+
+      "return true})()")
+    const revoke503Switch=await browser.eval("(()=>{"+
+      "const s=document.querySelector('#store-price-group-form select[name=seller_id]');"+
+      "s.value="+JSON.stringify(secondOwnerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "s.value="+JSON.stringify(ownerStoreId)+";"+
+      "s.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return document.getElementById('store-price-group-status').textContent"+
+      "})()")
+    assert.match(revoke503Switch,/Önceki mağazadaki işlem/,
+      "An uncertain native revoke result must survive Store A-B-A")
+    await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+      ".some(o=>o.value==="+JSON.stringify(priceGroup.id)+")")
+    await browser.eval("(()=>{"+
+      "const choice=document.getElementById('store-price-group-choice');"+
+      "choice.value="+JSON.stringify(priceGroup.id)+";"+
+      "choice.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('üyeliği yok')&&"+
+      "!document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),auditBeforeRevoke503+1,
+      "Authorized recheck after terminal synthetic 503 is read-only")
+    process.stdout.write("PASS B22 Chrome: real native HTTPS revoke/PG16 single audit with browser-only synthetic terminal 503; A-B-A warning and authorized subsequent GET recovery, no second write\n")
     assert.equal((await groupChange("read")).body.status,"revoked")
     const afterRevoke=await privateCatalogBeta()
     assert.equal(afterRevoke.status,200)
@@ -1948,9 +2562,8 @@ export default async function({container}:any){
     assert.equal(revokedOffer?.buyer_reference_try,undefined,
       "Committed Store BuyerOrg group revoke must immediately remove private reference")
     assert.deepEqual(revokedOffer?.list_price_try,{amount:1250.5,currency_code:"try"})
-    // Re-enter via real HTTPS after the Seller's revoke action. The backend
-    // must revalidate the Person session, selected Buyer and Store policies,
-    // then render the no-private-price result; no hidden DOM is forced open.
+    // Retest after Seller's revoke through a fresh HTTPS Buyer navigation,
+    // never by manually undoing the privacy-concealed DOM.
     await reviewer.send("Page.bringToFront")
     await reviewer.send("Page.navigate",{url:buyerPersonalUrl})
     await reviewer.wait("document.visibilityState==='visible'&&"+
@@ -1965,6 +2578,51 @@ export default async function({container}:any){
     assert.equal((await q("select count(*)::int n from da_audit_event"))[0].n,
       groupAuditStart+2,"Revocation retains auditable membership history")
     process.stdout.write("PASS B22 audited Store price group: real Owner Chrome grant/revoke, Mercur SellerCustomerGroup link, Buyer Org PG16 audit/outbox, foreign Person/Store/CSRF denied; no checkout\n")
+
+    // F-02: the real native HTTPS revoke returns 200 after a previously
+    // committed revoke. Corrupt ONLY the browser-visible body afterward.
+    // This does not claim Medusa itself sent corrupt JSON.
+    await browser.send("Page.bringToFront")
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);"+
+      "window.__daF02Fetch=window.fetch;"+
+      "window.__daF02Posts=0;"+
+      "window.fetch=(resource,options)=>{"+
+        "const url=typeof resource==='string'?resource:resource?.url;"+
+        "if(url==='/personal/store-price-groups'&&options?.method==='POST'&&"+
+          "JSON.parse(options.body||'{}').action==='revoke'){"+
+          "window.__daF02Posts++;"+
+          "return original(resource,options).then(async response=>{"+
+            "const data=await response.clone().json();"+
+            "if(response.status!==200||data.status!=='revoked')return response;"+
+            "return new Response('{',{status:200,headers:{'Content-Type':'application/json'}})"+
+          "})"+
+        "}return original(resource,options)"+
+      "};return true})()")
+    await browser.click('#store-price-group-form button[value="revoke"]')
+    await browser.wait("window.__daF02Posts===1&&"+
+      "document.getElementById('store-price-group-status').textContent.includes('Sonuç belirsiz')")
+    assert.equal(await browser.eval(
+      "document.getElementById('store-price-group-status').textContent.includes('İşlem reddedildi')"),
+      false,"Corrupt successful POST response must not falsely claim rejection")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+2,
+      "F-02 idempotent native revoke plus malformed browser response creates no new audit")
+    await browser.click('#store-price-group-form button[value="revoke"]')
+    assert.equal(await browser.eval("window.__daF02Posts"),1,
+      "F-02 duplicate write guard must prevent a second HTTPS POST")
+    await browser.click('#store-price-group-form button[value="read"]')
+    await browser.wait("document.getElementById('store-price-group-status').textContent.includes('Önceki mağazadaki işlem')")
+    assert.equal(await browser.eval(
+      "priceGroupUncertain.size>0&&Array.from(priceGroupUncertain.values()).some(v=>v.outcomeUnverified===true)"),
+      true,"A post-corruption GET alone cannot prove the original POST ended")
+    await browser.eval("(()=>{"+
+      "window.fetch=window.__daF02Fetch;delete window.__daF02Fetch;"+
+      "return true})()")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event"))[0].n),Number(groupAuditStart)+2,
+      "Malformed browser reply, duplicate guard and read cannot create an extra audit")
+    process.stdout.write("PASS B22 Chrome: F-02 native HTTPS/PG16 idempotent revoke, browser-only malformed 200 JSON remains uncertain; same-key POST blocked and authorized GET does not guess settlement; no extra audit\n")
 
     const catalogUrl=(org:string)=>"/personal/catalog?organization_id="+
       encodeURIComponent(org)
@@ -2041,6 +2699,76 @@ export default async function({container}:any){
       "Read-only Buyer catalogue cannot write canonical audit")
     process.stdout.write("PASS B22 Buyer catalogue: real Chrome HTTPS and PG16 two published Mercur Offers under approved Buyer Org, foreign and forged scopes 403/400, no private inventory leakage and no audit writes\n")
     process.stdout.write("PASS B22 native TRY Offer list price: two seller-scoped Medusa prices on a shared native variant, EUR-only excluded, browser reference display, no checkout\n")
+
+    // B22 follow is a Buyer Organization-owned relationship (not a Person
+    // wishlist, native Customer permission, group price or checkout grant).
+    const followSeller=ownerStoreId,followBuyer=organizations[0].id
+    assert.ok(scopedCatalog.body.stores.some((s:any)=>s.id===followSeller),
+      "The followed native Store must be visible in the authorized catalogue")
+    const followRowsBefore=await q(
+      "select version from da_buyer_store_follow where buyer_organization_id=$1 and seller_id=$2",
+      [followBuyer,followSeller])
+    assert.deepEqual(followRowsBefore,[],"Fixture starts without an automatic follow")
+    const followSelector="#buyer-catalog-items button[data-follow-seller-id='"+followSeller+"']"
+    await browser.wait("Array.from(document.querySelectorAll('#buyer-catalog-items button'))"+
+      ".some(b=>b.dataset.followSellerId==="+JSON.stringify(followSeller)+
+      " && !b.disabled && b.textContent.includes('takip et'))")
+    const foreignFollowGet=await reviewer.eval("(async()=>{"+
+      "const r=await fetch('/personal/store-follows?organization_id="+
+      encodeURIComponent(followBuyer)+"&seller_id="+encodeURIComponent(followSeller)+"');"+
+      "return {status:r.status,body:await r.json()};})()")
+    assert.equal(foreignFollowGet.status,403,"Another Person cannot inspect a foreign Buyer follow")
+    const wrongCsrfFollow=await browser.eval("(async()=>{"+
+      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "headers:{'content-type':'application/json'},"+
+      "body:JSON.stringify({action:'follow',organization_id:"+JSON.stringify(followBuyer)+
+      ",seller_id:"+JSON.stringify(followSeller)+",expected_version:0})});return r.status;})()")
+    assert.equal(wrongCsrfFollow,403)
+    await browser.click(followSelector)
+    await browser.wait("Array.from(document.querySelectorAll('#buyer-catalog-items button'))"+
+      ".some(b=>b.dataset.followSellerId==="+JSON.stringify(followSeller)+
+      " && !b.disabled && b.textContent.includes('takipten çık'))")
+    const followedRows=await q("select version,revoked_at,source_audit_event_id "+
+      "from da_buyer_store_follow where buyer_organization_id=$1 and seller_id=$2",
+      [followBuyer,followSeller])
+    assert.equal(followedRows.length,1)
+    assert.equal(followedRows[0].version,1)
+    assert.equal(followedRows[0].revoked_at,null)
+    const replayFollow=await browser.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'follow',organization_id:"+JSON.stringify(followBuyer)+
+      ",seller_id:"+JSON.stringify(followSeller)+",expected_version:0})});return r.status;})()")
+    assert.equal(replayFollow,409,"A stale follow cannot create a second audit or record")
+    const foreignMutation=await reviewer.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-follows',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'unfollow',organization_id:"+JSON.stringify(followBuyer)+
+      ",seller_id:"+JSON.stringify(followSeller)+",expected_version:1})});return r.status;})()")
+    assert.equal(foreignMutation,403)
+    await browser.click(followSelector)
+    await browser.wait("Array.from(document.querySelectorAll('#buyer-catalog-items button'))"+
+      ".some(b=>b.dataset.followSellerId==="+JSON.stringify(followSeller)+
+      " && !b.disabled && b.textContent.includes('takip et'))")
+    const unfollowedRows=await q("select version,revoked_at from da_buyer_store_follow "+
+      "where buyer_organization_id=$1 and seller_id=$2",[followBuyer,followSeller])
+    assert.equal(unfollowedRows.length,1)
+    assert.equal(unfollowedRows[0].version,2)
+    assert.ok(unfollowedRows[0].revoked_at,"Unfollow retains the private history row")
+    const followAudit=await q("select e.action from da_audit_event e "+
+      "join da_audit_outbox o on o.source_audit_event_id=e.id "+
+      "where e.organization_id=$1 and e.target_id=$2 and e.resource='buyer-store-follow' "+
+      "order by e.occurred_at,e.id",[followBuyer,followSeller])
+    assert.deepEqual(new Set(followAudit.map((x:any)=>x.action)),
+      new Set(["organization.store_followed","organization.store_unfollowed"]))
+    assert.equal(followAudit.length,2,"Follow and unfollow each require one canonical audit")
+    assert.deepEqual(await q("select version from da_buyer_store_follow "+
+      "where buyer_organization_id=$1 and seller_id=$2",[followBuyer,followSeller]),
+      [{version:2}])
+    process.stdout.write("PASS B22 Chrome: Buyer Organization Owner follows and unfollows approved Store; foreign/CSRF/replay denied, PG16 v1-v2 and two outboxed audits, no checkout\n")
+
     // Separate legal Seller Organization is part of the current entitlement,
     // not just the native Seller's open flag. Beta remains an active Buyer.
     // Test-only PG16 suspension/restoration never touches production.
@@ -2054,6 +2782,32 @@ export default async function({container}:any){
     assert.equal(betaCatalogBefore.status,200)
     assert.deepEqual(new Set(betaCatalogBefore.body.stores.map((s:any)=>s.id)),
       new Set(cartStoreIds),"Independent Buyer Beta can see two active legal Store offers")
+    // An approved Store may disappear from the Buyer's catalogue while
+    // its Buyer Organization follow remains. Use the real protected Beta
+    // Owner UI to unfollow without a product or Seller catalog row.
+    const betaFollowBuyer=organizations[1].id
+    const betaFollowBefore=await reviewer.eval(`(async()=>{
+      const r=await fetch('/personal/store-follows?organization_id='+
+        ${JSON.stringify(organizations[1].id)}+'&seller_id='+
+        ${JSON.stringify(ownerStoreId)})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    assert.equal(betaFollowBefore.status,200)
+    assert.deepEqual(betaFollowBefore.body,{
+      organization_id:betaFollowBuyer,seller_id:ownerStoreId,following:false,version:0
+    })
+    const betaFollow=await reviewer.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      const r=await fetch('/personal/store-follows',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify({action:'follow',
+          organization_id:${JSON.stringify(organizations[1].id)},
+          seller_id:${JSON.stringify(ownerStoreId)},expected_version:0})})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    assert.equal(betaFollow.status,200)
+    assert.equal(betaFollow.body.following,true)
+    assert.equal(betaFollow.body.version,1)
     await q("update da_organization set status='suspended' where id=$1",
       [organizations[0].id])
     try{
@@ -2063,6 +2817,52 @@ export default async function({container}:any){
       assert.equal(deniedSuspendedSeller.body.organization_id,organizations[1].id)
       assert.deepEqual(deniedSuspendedSeller.body.stores,[],
         "Every Store of a suspended seller legal Organization must disappear")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      await reviewer.click("#buyer-catalog-refresh")
+      await reviewer.wait("!document.getElementById('buyer-catalog-panel').hidden&&"+
+        "document.getElementById('buyer-catalog-items').children.length===0")
+      await reviewer.click("#buyer-follow-refresh")
+      await reviewer.wait("!document.getElementById('buyer-follow-panel').hidden&&"+
+        "Array.from(document.querySelectorAll('#buyer-follow-items button'))"+
+        ".some(b=>b.dataset.unfollowSellerId==="+JSON.stringify(ownerStoreId)+
+        "&&!b.disabled)")
+      const betaFollowList=await reviewer.eval(`(async()=>{
+        const r=await fetch('/personal/store-follows?organization_id='+
+          ${JSON.stringify(organizations[1].id)})
+        return {status:r.status,body:await r.json()}
+      })()`)
+      assert.equal(betaFollowList.status,200)
+      const nativeFollowSeller=(await native.listSellers({id:ownerStoreId}))[0]
+      assert.ok(nativeFollowSeller?.name)
+      assert.deepEqual(betaFollowList.body,{
+        organization_id:betaFollowBuyer,
+        stores:[{seller_id:ownerStoreId,version:1,
+          name:nativeFollowSeller.name,handle:nativeFollowSeller.handle}],next_cursor:null
+      })
+      const followLabel=await reviewer.eval(
+        "document.querySelector('#buyer-follow-items button').textContent")
+      assert.ok(followLabel.includes(nativeFollowSeller.name),
+        "Suspended native Seller name must remain recognizable in authorized Buyer follow list")
+      assert.ok(!followLabel.includes(ownerStoreId),
+        "Visible unfollow button must not show raw native Seller ID")
+      await reviewer.click("#buyer-follow-items button[data-unfollow-seller-id='"+
+        ownerStoreId+"']")
+      await reviewer.wait("!document.getElementById('buyer-follow-panel').hidden&&"+
+        "document.getElementById('buyer-follow-status').textContent.includes('bulunmuyor')")
+      assert.deepEqual(await q("select version,revoked_at is not null as revoked "+
+        "from da_buyer_store_follow where buyer_organization_id=$1 and seller_id=$2",
+        [betaFollowBuyer,ownerStoreId]),[{version:2,revoked:true}],
+        "Suspended Seller unfollow retains correct Buyer Organization history")
+      const betaFollowAudit=await q(
+        "select e.action from da_audit_event e "+
+        "join da_audit_outbox o on o.source_audit_event_id=e.id "+
+        "where e.organization_id=$1 and e.target_id=$2 and e.resource='buyer-store-follow' "+
+        "order by e.occurred_at,e.id",[betaFollowBuyer,ownerStoreId])
+      assert.deepEqual(new Set(betaFollowAudit.map((x:any)=>x.action)),
+        new Set(["organization.store_followed","organization.store_unfollowed"]))
+      assert.equal(betaFollowAudit.length,2)
+      process.stdout.write("PASS B22 Chrome: active Beta Owner follows Store then unfollows after Seller Organization suspension removes all catalogue rows; selected Buyer-only list, PG16 v2 and two audits/outboxes, no checkout\n")
     }finally{
       await q("update da_organization set status='active' where id=$1",
         [organizations[0].id])
@@ -2083,7 +2883,7 @@ export default async function({container}:any){
     for(const offer of offerRows){
       await addToCartWorkflow(container).run({input:{
         cart_id:customerCart.id,items:[{
-          variant_id:variant.id,offer_id:offer.id,
+          variant_id:offer.variant_id,offer_id:offer.id,
           quantity:1,requires_shipping:true,metadata:{offer_id:offer.id}
         } as any] // Mercur's installed Offer augmentation is runtime-registered.
         // The downstream Medusa DTO alone lacks this Mercur-specific field.
@@ -2468,7 +3268,7 @@ export default async function({container}:any){
     const {result:[gammaOffer]}=await createOffersWorkflow(container).run({
       input:{offers:[{
         seller_id:gammaSellerId,created_by:member.id,
-        sku:gammaSku,variant_id:variant.id,
+        sku:gammaSku,variant_id:secondaryVariant.id,
         shipping_profile_id:b22Profile.id,
         inventory_items:[{sku:gammaSku,stock_levels:[]}],
         prices:[{amount:1200,currency_code:"eur"}],
@@ -2482,10 +3282,13 @@ export default async function({container}:any){
     await cartService.updateCarts(betaTwoSellerCart.id,{
       region_id:region.id,sales_channel_id:market.id
     })
-    for(const offer of [offerRows[0],gammaOffer]){
+    // Two Stores, two variants. Mercur 2.4.1 rejects competing Offers
+    // for the SAME variant within one Cart; retain that native protection.
+    for(const offer of [offerRows[0],
+      {id:gammaOffer.id,variant_id:secondaryVariant.id}]){
       await addToCartWorkflow(container).run({input:{
         cart_id:betaTwoSellerCart.id,
-        items:[{variant_id:variant.id,offer_id:offer.id,
+        items:[{variant_id:offer.variant_id,offer_id:offer.id,
           quantity:1,requires_shipping:true,
           metadata:{offer_id:offer.id}} as any]
       }})
@@ -2931,7 +3734,7 @@ export default async function({container}:any){
     })
     await addToCartWorkflow(container).run({input:{
       cart_id:paidCart.id,
-      items:[{variant_id:variant.id,offer_id:gammaOffer.id,
+      items:[{variant_id:secondaryVariant.id,offer_id:gammaOffer.id,
         quantity:1,requires_shipping:false,
         metadata:{offer_id:gammaOffer.id}} as any]
     }})
@@ -3052,7 +3855,7 @@ export default async function({container}:any){
     })
     await addToCartWorkflow(container).run({input:{
       cart_id:deniedPaidCart.id,
-      items:[{variant_id:variant.id,offer_id:gammaOffer.id,
+      items:[{variant_id:secondaryVariant.id,offer_id:gammaOffer.id,
         quantity:1,requires_shipping:false,
         metadata:{offer_id:gammaOffer.id}} as any]
     }})
@@ -3366,6 +4169,7 @@ export default async function({container}:any){
       String(secondRedis.stdout??"").includes("B22_REDIS_NATIVE_LOCK_RECOVERED_AFTER_TTL"),
       "B22 native Redis must deny active key, then recover after expiry")
     process.stdout.write("\nPASS B22 official Redis provider: independent process exit, live-lock denial, automatic TTL recovery; native Mercur Cart checkout NOT TESTED on Redis\n")
+
 
     // Task-only native Cart: interrupt the actual Mercur workflow AFTER
     // authoritative Buyer L and the Redis Cart lock, BEFORE OrderGroup INSERT.
@@ -4626,6 +5430,10 @@ export default async function({container}:any){
     assert.equal(restoredOwnerDraft.status,200)
     assert.ok(restoredOwnerDraft.body.stores.some((row:any)=>row.id===ownerStoreId))
     process.stdout.write("PASS B22 Owner role policy: narrowed products.edit denies real HTTP POST and native PG16 product/intent writes, restored default lists approved Store\n")
+    // The role-policy change is server-side. Reopen the current real personal
+    // document so its authorized Organization/Store read refreshes the hidden
+    // draft panel; a server GET alone cannot update the already rendered DOM.
+    await browser.send("Page.reload",{ignoreCache:true})
     await browser.wait("!document.getElementById('product-draft-panel').hidden")
     const draftTitle="B22 browser product draft "+rand
     await browser.input("#product-draft-form input[name=title]",draftTitle)
@@ -5207,7 +6015,15 @@ export default async function({container}:any){
     if(ownerButton){
       // The visible UI path is preferred, but the privacy observer may
       // conceal it BETWEEN the Owner selection and actual button click.
-      await browser.select(organizations[0].name,"owner")
+      try{
+        await browser.select(organizations[0].name,"owner")
+      }catch(error){
+        // The observer can conceal the button after ownerButton was read.
+        // Never ignore a failed selection while the workspace stays visible.
+        const concealed=await browser.eval(
+          "document.getElementById('workspace').hidden===true")
+        if(!concealed)throw error
+      }
       // A real privacy observer may clear the panel after membership revoke.
       // Accept concealment ONLY when the entire workspace is genuinely
       // hidden. Otherwise insist on the correct Organization and both stores.
@@ -5485,6 +6301,9 @@ export default async function({container}:any){
       const staffGrantId="da_staff_mfa_race_"+rand
       await q("insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason) values($1,$2,'security.mfa.manage','platform',$2,'B22 disposable independent MFA policy race actor')",
         [staffGrantId,A.person])
+      // Only classify observed Chrome requests in this disposable A recovery
+      // path. The Browser never writes Cookie, token or digest into the log.
+      browser.captureSessionProof=true
       const loginStaffA=async(recoveryCode:string)=>{
         // These are repeated independent strong logins in a single real CI
         // suite. Respect the SERVER's existing per-minute 10/60 abuse caps:
@@ -5570,8 +6389,49 @@ export default async function({container}:any){
               .includes(row.path)).slice(-8).map((row:any)=>
                 ({method:row.method,path:row.path,status:row.status}))
           const visibility=await browser.eval("document.visibilityState")
+          // Only fixed boolean/status categories; never output private Person,
+          // Organization, cookies, MFA material or response bodies.
+          const ui=await browser.eval(`({
+            loginVisible:!document.getElementById('login').hidden,
+            workspaceVisible:!document.getElementById('workspace').hidden,
+            scopeLoaded:loadedScope!=='',
+            observing:observing,
+            selectedOrganization:!!new URLSearchParams(location.search).get('organization'),
+            statusKind:document.getElementById('status').textContent.includes('Erişim yeniden doğrulanmalı')
+              ?'observer-denied':document.getElementById('status').textContent.includes('Giriş gerekli')
+              ?'load-failed':document.getElementById('status').textContent.includes('Erişim değişti')
+              ?'scope-changed':'other'
+          })`)
+          const sessionState=await q(`select s.status,
+              (s.epoch=e.epoch) as current_epoch,
+              (s.mfa_platform_version=(select version from da_mfa_policy where id='current')) as platform_revision,
+              (s.mfa_person_version=coalesce((select version from da_person_mfa_preference where person_id=s.person_id),0)) as person_revision
+            from da_browser_session s join da_person_security e on e.person_id=s.person_id
+            where s.person_id=$1 order by s.created_at desc limit 2`,[A.person])
+          // A 403 for a revoked prior cookie is correct; a 403 for the
+          // post-recovery active current session would be a real auth defect.
+          // Chrome CDP request IDs are joined to transient hashes in memory.
+          // Do not print request IDs, hashes, cookies, tokens or Person IDs.
+          const scoped=browser.http.filter((row:any)=>
+            row.method==="GET"&&row.path==="/personal/organizations").slice(-8)
+          const organizationRequests=await Promise.all(scoped.map(async(row:any)=>{
+            const proof=browser.requestSessionProof(row.requestId)
+            const [state]=proof.digest?await q(`select s.status,
+                (s.epoch=e.epoch) as epoch_matches,
+                (s.mfa_platform_version=(select version from da_mfa_policy where id='current')) as platform_matches,
+                (s.mfa_person_version=coalesce((select version from da_person_mfa_preference where person_id=s.person_id),0)) as person_matches
+              from da_browser_session s join da_person_security e on e.person_id=s.person_id
+              where s.id=$1`,[proof.digest]):[]
+            const sessionClass=!state?"unclassified":
+              state.status==="revoked"?"revoked":
+              state.status==="active"&&state.epoch_matches&&
+                state.platform_matches&&state.person_matches?"active-current":
+              "other"
+            return {status:row.status,observer:proof.observer,
+              sessionClass}
+          }))
           throw new Error("B22 Staff A post-recovery UI did not open: "+
-            JSON.stringify({visibility,http:safe}))
+            JSON.stringify({visibility,http:safe,ui,sessionState,organizationRequests}))
         }
         assert.equal(await browser.eval("(async()=> (await fetch('/personal/session')).status)()"),200)
       }
@@ -5628,6 +6488,82 @@ export default async function({container}:any){
       // platform staff API. This permits the pre-existing post-native fault
       // regression to run with a fresh B session and its original invariants.
       await loginStaffA(staffCodes[1])
+      // The historical 403 had two possible sessions but no request-to-cookie
+      // binding. Control both sides using ONLY native, genuinely issued Staff A
+      // recovery sessions in the existing disposable HTTPS/PG16 fixture.
+      const revokedStaffCookie=await browser.token()
+      assert.ok(typeof revokedStaffCookie==="string"&&
+        /^[A-Za-z0-9_-]{43}$/.test(revokedStaffCookie),
+        "Staff A must have a genuine full MFA session before revocation")
+      const revokedStaffId=createHash("sha256").update(revokedStaffCookie).digest("hex")
+      const lockStaff=await browser.eval(`(async()=>{
+        const response=await fetch('/personal/session')
+        if(response.status!==200)return response.status
+        const session=await response.json()
+        const locked=await fetch('/personal/session?action=lock',{
+          method:'DELETE',headers:{'x-csrf-token':session.csrf_token}
+        })
+        return locked.status
+      })()`)
+      assert.equal(lockStaff,200,"Real CSRF-protected Staff A session lock must succeed")
+      const revokedStaff=await q(
+        "select status from da_browser_session where id=$1 and person_id=$2",
+        [revokedStaffId,A.person])
+      assert.equal(revokedStaff.length,1)
+      assert.equal(revokedStaff[0].status,"revoked")
+      const oldOrganizationStatus=async(observe:boolean)=>new Promise<number>((resolve,reject)=>{
+        const req=tlsRequest(host+"/personal/organizations",{
+          method:"GET",ca:readFileSync(crt),headers:{
+            cookie:"da_session="+revokedStaffCookie,
+            ...(observe?{"x-da-observe":"1"}:{})
+          }
+        },res=>{res.resume();res.on("end",()=>resolve(res.statusCode??0))})
+        req.on("error",reject)
+        req.setTimeout(10000,()=>req.destroy(Error("B22 revoked Staff A probe timed out")))
+        req.end()
+      })
+      assert.equal(await oldOrganizationStatus(false),403,
+        "Real revoked Staff A cookie must be denied on ordinary Organization GET")
+      assert.equal(await oldOrganizationStatus(true),403,
+        "Real revoked Staff A cookie must be denied on observer Organization GET")
+      // Unused recovery code, same real Chrome profile, no fake auth/session
+      // writes, no rate-limit bypass. loginStaffA retains the normal caps.
+      await loginStaffA(staffCodes[6])
+      const currentStaffCookie=await browser.token()
+      assert.ok(typeof currentStaffCookie==="string"&&
+        /^[A-Za-z0-9_-]{43}$/.test(currentStaffCookie)&&
+        currentStaffCookie!==revokedStaffCookie,
+        "Post-recovery cookie must be a distinct real native MFA session")
+      const currentStaffId=createHash("sha256").update(currentStaffCookie).digest("hex")
+      const [currentStaff]=await q(`select s.status,
+          s.person_id=$2 as same_person,
+          s.epoch=e.epoch as current_epoch,
+          s.mfa_platform_version=(select version from da_mfa_policy where id='current') as current_platform,
+          s.mfa_person_version=coalesce((select version from da_person_mfa_preference where person_id=s.person_id),0) as current_person
+        from da_browser_session s join da_person_security e on e.person_id=s.person_id
+        where s.id=$1`,[currentStaffId,A.person])
+      assert.ok(currentStaff?.status==="active"&&currentStaff.same_person&&
+        currentStaff.current_epoch&&currentStaff.current_platform&&currentStaff.current_person,
+        "Post-recovery Staff A cookie must be active and current in actual PG16")
+      const organizationProbeStart=browser.http.length
+      const currentNormal=await browser.eval(
+        "(async()=> (await fetch('/personal/organizations',{cache:'no-store'})).status)()")
+      const currentObserver=await browser.eval(
+        "(async()=> (await fetch('/personal/organizations',{cache:'no-store',headers:{'x-da-observe':'1'}})).status)()")
+      assert.equal(currentNormal,200,"Current Staff A ordinary Organization GET must succeed")
+      assert.equal(currentObserver,200,"Current Staff A observer Organization GET must succeed")
+      await until(async()=>{
+        const observed=browser.http.slice(organizationProbeStart).filter((row:any)=>
+          row.method==="GET"&&row.path==="/personal/organizations"&&row.status===200)
+        return [false,true].every(observer=>observed.some((row:any)=>{
+          const proof=browser.requestSessionProof(row.requestId)
+          return proof.digest===currentStaffId&&proof.observer===observer
+        }))
+      },10000,"B22 real CDP exact-request fresh Staff A cookie/observer correlation")
+      assert.equal((await q("select status from da_browser_session where id=$1",
+        [revokedStaffId]))[0]?.status,"revoked",
+        "Old Staff A session must remain revoked after genuine new recovery")
+      process.stdout.write("PASS B22 Chrome: MFA session differential, real revoked Staff A cookie ordinary/observer Organization GET403; distinct active-current post-recovery Chrome cookie ordinary/observer GET200, CDP requestId correlated and PG16 verified; no secrets logged\n")
       const [requiredPolicy]=await q("select version,platform_mode from da_mfa_policy where id='current'")
       assert.equal(requiredPolicy.platform_mode,"required")
       assert.equal((await staffSetPlatform("optional",Number(requiredPolicy.version))).status,200)
@@ -6009,6 +6945,899 @@ export default async function({container}:any){
         await q("drop trigger b22_mfa_disable_outbox_fault_v1 on da_security_outbox")
       if(disableFunctionInstalled)
         await q("drop function b22_mfa_disable_outbox_fault_v1()")
+    }
+
+    // First Person self-registration on the same real Chrome HTTPS and
+    // isolated PG16 boundary. Native Customer is only an Auth adapter,
+    // not an Organization, Buyer entitlement, Staff or Store owner.
+    const signupChrome=new B06Chrome(host,"B");browsers.push(signupChrome)
+    await signupChrome.start(crt)
+    const signupEmail="b22-signup-"+randomBytes(10).toString("hex")+"@example.invalid"
+    const signupPassword="Task-Strong-"+randomBytes(18).toString("hex")
+    const signupPhone="+905551234569"
+    const beforePeople=Number((await q("select count(*)::int n from da_person"))[0].n)
+    const badSignup=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/register',{method:'POST',credentials:'omit',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({first_name:'Synthetic',last_name:'Person',
+          email:'no-person@example.invalid',password:'Strong-test-password-123'})});
+      return {status:r.status};
+    })()`)
+    assert.equal(badSignup.status,400,"Missing mobile must not create an account")
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),beforePeople)
+    // P2: +12345 has six characters but only five digits. It must be
+    // rejected before native AuthIdentity/Customer or Person writes.
+    const shortPhoneEmail="b22-short-mobile-"+randomBytes(10).toString("hex")+"@example.invalid"
+    const shortPhone=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/register',{method:'POST',credentials:'omit',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({first_name:'Synthetic',last_name:'Rejected',
+          email:${JSON.stringify(shortPhoneEmail)},password:'Strong-test-password-123',
+          mobile_phone:'+12345'})});
+      return {status:r.status};
+    })()`)
+    assert.equal(shortPhone.status,400,"Five-digit mobile must fail before native registration")
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),beforePeople)
+    assert.equal(Number((await q(
+      "select count(*)::int n from public.customer where email=$1",
+      [shortPhoneEmail]))[0].n),0,"Invalid mobile must leave no native Customer")
+    await signupChrome.click("#register-details summary")
+    await signupChrome.input("#register input[name=first_name]","Synthetic")
+    await signupChrome.input("#register input[name=last_name]","Registrant")
+    await signupChrome.input("#register input[name=email]",signupEmail)
+    await signupChrome.input("#register input[name=mobile_phone]",signupPhone)
+    await signupChrome.input("#register input[name=password]",signupPassword)
+    await signupChrome.click("#register button")
+    try {
+      await signupChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+    } catch {
+      const ui=await signupChrome.eval(`(()=>{
+        const form=document.getElementById('register');
+        const t=document.getElementById('register-status').textContent;
+        return {visible:!form.hidden,
+          fieldsInvalid:Array.from(form.elements).filter(e=>e.name && !e.checkValidity()).map(e=>e.name),
+          submitDisabled:form.querySelector('button').disabled,
+          statusKind:t.includes('Kayıt bilgileri geçersiz')?'input-rejected':
+            t.includes('bu hesapla tamamlanamadı')?'identity-rejected':
+            t.includes('Çok fazla')?'rate-limited':
+            t.includes('Kayıt sonucu doğrulanamadı')?'server-uncertain':
+            t.includes('Bağlantı koptu')?'network-uncertain':'other',
+          successNotice:document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')};
+      })()`)
+      const requests=signupChrome.http.filter(r=>r.path==="/personal/register")
+        .map(({method,path,status})=>({method,path,status}))
+      const postPeople=Number((await q("select count(*)::int n from da_person"))[0].n)
+      let nativeCustomerCreated:boolean|null=null
+      try{
+        const customerRows=await q("select count(*)::int n from public.customer where email=$1",[signupEmail])
+        nativeCustomerCreated=Number(customerRows[0].n)>0
+      }catch{}
+      // Read only a fixed, whitelisted server stage from the completed
+      // HTTPS response. Never put raw request/response bodies or PII in CI logs.
+      let serverStage="response-unavailable"
+      try{
+        const last=signupChrome.http.filter(r=>r.path==="/personal/register").slice(-1)[0]
+        if(last?.requestId){
+          const raw=await signupChrome.send("Network.getResponseBody",{requestId:last.requestId})
+          const parsed=JSON.parse(raw.body)
+          const stageCodes:Record<string,string>={
+            "Registration is not yet complete; sign in to resume":"native-workflow",
+            "Native account binding unavailable":"native-actor-binding",
+            "Registration result could not be confirmed; sign in to check":"foundation-commit-or-customer-read",
+            "Registration verification unavailable":"native-verification",
+            "Registration could not be confirmed":"native-authentication",
+            "Access denied":"identity-ownership",
+          }
+          serverStage=stageCodes[parsed.message]??"unclassified-denial"
+        }
+      }catch{}
+      throw Error("B22 first Person signup failed: "+JSON.stringify({
+        ui,requests,serverStage,personCountChange:postPeople-beforePeople,
+        nativeCustomerCreated,registrationRequestCount:requests.length
+      }))
+    }
+    const registered=await q(`select b.person_id,p.mobile_phone,p.mobile_version,
+        b.actor_type,b.actor_id,b.auth_identity_id
+      from da_login_binding b join da_person p on p.id=b.person_id
+      join public.customer c on c.id=b.actor_id
+      where b.actor_type='customer' and c.email=$1 and
+        b.revoked_at is null and b.verified_at is not null`,[signupEmail])
+    assert.equal(registered.length,1)
+    assert.equal(registered[0].mobile_phone,signupPhone)
+    assert.equal(registered[0].mobile_version,1)
+    const signupPerson=registered[0].person_id
+    assert.equal((await q("select count(*)::int n from da_organization_membership where person_id=$1",[signupPerson]))[0].n,0)
+    assert.equal((await q("select count(*)::int n from da_platform_staff_grant where person_id=$1",[signupPerson]))[0].n,0)
+    const primaryCustomerProof=await q(`select id,auth_identity_id,actor_id,revoked_at,proof_reference
+      from da_verified_actor_binding where person_id=$1 and actor_type='customer'`,[signupPerson])
+    assert.equal(primaryCustomerProof.length,1)
+    assert.equal(primaryCustomerProof[0].auth_identity_id,registered[0].auth_identity_id)
+    assert.equal(primaryCustomerProof[0].actor_id,registered[0].actor_id)
+    assert.equal(primaryCustomerProof[0].revoked_at,null)
+    assert.equal(primaryCustomerProof[0].proof_reference,"primary-emailpass-registration")
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),beforePeople+1)
+    const signupAudits=await q(`select new_values::text as value from da_audit_event
+      where actor_person_id=$1 and action='person.registered'`,[signupPerson])
+    assert.equal(signupAudits.length,1)
+    assert.ok(!JSON.stringify(signupAudits).includes(signupPhone))
+    const countBeforeRetry=Number((await q("select count(*)::int n from da_person"))[0].n)
+    const repeated=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/register',{method:'POST',credentials:'omit',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({
+          first_name:'Synthetic',last_name:'Registrant',
+          email:${JSON.stringify(signupEmail)},
+          password:${JSON.stringify(signupPassword)},
+          mobile_phone:'+905551234568'
+        })});
+      return {status:r.status,registered:(await r.json()).registered};
+    })()`)
+    assert.equal(repeated.status,200,"Verified same-identity retry must not create Person")
+    assert.equal(repeated.registered,true)
+    assert.equal(Number((await q("select count(*)::int n from da_person"))[0].n),countBeforeRetry)
+    assert.equal((await q("select mobile_phone from da_person where id=$1",[signupPerson]))[0].mobile_phone,signupPhone,
+      "Retry must not silently overwrite canonical Person contact")
+    await signupChrome.input("#login input[name=email]",signupEmail)
+    await signupChrome.input("#login input[name=password]",signupPassword)
+    await signupChrome.click("#login button")
+    await signupChrome.wait("!document.getElementById('workspace').hidden || !document.getElementById('mfa-enrollment').hidden")
+    const needMfa=await signupChrome.eval("!document.getElementById('mfa-enrollment').hidden")
+    if(needMfa){
+      await signupChrome.input("#mfa-enroll-start input[name=email]",signupEmail)
+      await signupChrome.input("#mfa-enroll-start input[name=password]",signupPassword)
+      await signupChrome.click("#mfa-enroll-start button")
+      await signupChrome.wait("!document.getElementById('mfa-enroll-verify').hidden&&document.getElementById('mfa-seed').value.length>0")
+      const seedUrl=await signupChrome.eval("document.getElementById('mfa-seed').value")
+      const seed=seedUrl.startsWith("otpauth:")?new URL(seedUrl).searchParams.get("secret"):seedUrl
+      assert.ok(seed)
+      await signupChrome.input("#mfa-enroll-verify input[name=code]",otp(seed!))
+      await signupChrome.click("#mfa-enroll-verify button")
+    }
+    await signupChrome.wait(`!document.getElementById('workspace').hidden&&
+      document.getElementById('person').textContent===${JSON.stringify('Person: '+signupPerson)}`)
+    const ownPhone=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/profile');
+      const data=await r.json();
+      return {status:r.status,mobile:data.mobile_phone,
+        version:data.version,verified:data.phone_verified};
+    })()`)
+    assert.deepEqual(ownPhone,{status:200,mobile:signupPhone,version:1,verified:false})
+
+    // One Person starts and reopens an Organization application DRAFT only.
+    // No tax document, legal approval, protected Owner or commerce right yet.
+    const draftOrganizationsBefore=Number((await q(
+      "select count(*)::int n from da_organization"))[0].n)
+    const draftMembershipsBefore=Number((await q(
+      "select count(*)::int n from da_organization_membership"))[0].n)
+    const draftLegalName="B22 Sentetik İşletme Taslağı"
+    const draftLandline="+90 212 555 00 00"
+    await signupChrome.click('#organization-draft-form input[value=service_repair]')
+    await signupChrome.click('#organization-draft-form input[value=insurance_claims]')
+    await signupChrome.click('#organization-draft-form select[name=primary_activity]')
+    for(const key of ["End","Enter"]){
+      for(const type of ["keyDown","keyUp"])
+        await signupChrome.send("Input.dispatchKeyEvent",{type,key,code:key})
+    }
+    assert.equal(await signupChrome.eval(
+      "document.querySelector('#organization-draft-form select[name=primary_activity]').value"),
+      "insurance_claims","Chrome must choose a non-default primary activity")
+    await signupChrome.input("#organization-draft-form input[name=legal_name]",draftLegalName)
+    await signupChrome.input("#organization-draft-form input[name=landline_phone]",draftLandline)
+    await signupChrome.click("#organization-draft-form button[type=submit]")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
+    const firstDraft=await q(`select id,applicant_person_id,business_kind,legal_name,landline_phone,
+       declared_activities,primary_activity,status,version
+      from da_organization_application where applicant_person_id=$1`,[signupPerson])
+    assert.equal(firstDraft.length,1)
+    assert.equal(firstDraft[0].applicant_person_id,signupPerson)
+    assert.equal(firstDraft[0].business_kind,"individual_business")
+    assert.deepEqual(firstDraft[0].declared_activities,
+      ["service_repair","insurance_claims"])
+    assert.equal(firstDraft[0].primary_activity,"insurance_claims")
+    assert.equal(firstDraft[0].legal_name,draftLegalName)
+    assert.equal(firstDraft[0].landline_phone,draftLandline)
+    assert.equal(firstDraft[0].status,"draft")
+    assert.equal(firstDraft[0].version,1)
+    const draftId=firstDraft[0].id
+    // This must be rejected by the PG16 CHECK itself, not just by HTTP/Zod.
+    // A failed statement uses the existing disposable CI database only.
+    await assert.rejects(
+      q(`update da_organization_application
+        set declared_activities=$2::jsonb,primary_activity='service_repair'
+        where id=$1`,[draftId,JSON.stringify(["service_repair","service_repair"])]),
+      (error:any)=>error?.code==="23514" &&
+        error?.constraint==="da_org_application_activities_check",
+      "PG16 must reject duplicate approved activity codes directly"
+    )
+    const afterDuplicate=await q(`select declared_activities,primary_activity,version
+      from da_organization_application where id=$1`,[draftId])
+    assert.equal(afterDuplicate.length,1)
+    assert.deepEqual(afterDuplicate[0].declared_activities,
+      ["service_repair","insurance_claims"])
+    assert.equal(afterDuplicate[0].primary_activity,"insurance_claims")
+    assert.equal(afterDuplicate[0].version,1)
+    process.stdout.write("PASS B22 PG16: duplicate activity direct SQL 23514; original private draft unchanged\n")
+    await signupChrome.wait("document.querySelector('#organization-draft-list button')?.textContent.includes('Taslağı düzenle')")
+    await signupChrome.click("#organization-draft-list button")
+    // B06Chrome.input appends text; select the existing form value first,
+    // then send actual Chromium input (not a synthetic DOM/server mutation).
+    await signupChrome.click("#organization-draft-form input[name=legal_name]")
+    await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').select()")
+    await signupChrome.send("Input.insertText",{text:"B22 Düzenlenmiş Sentetik İşletme"})
+    // Choose the NON-default business kind with native Chromium keyboard input.
+    // Reuse the proven B06Chrome.role() select interaction, not a DOM mutation.
+    await signupChrome.click("#organization-draft-form select[name=business_kind]")
+    for(const key of ["End","Enter"]){
+      for(const type of ["keyDown","keyUp"])
+        await signupChrome.send("Input.dispatchKeyEvent",{type,key,code:key})
+    }
+    assert.equal(await signupChrome.eval(
+      "document.querySelector('#organization-draft-form select[name=business_kind]').value"),
+      "legal_company","The real Chrome edit must choose the non-default legal-company kind")
+    await signupChrome.click("#organization-draft-form button[type=submit]")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
+    const revisedDraft=await q(`select version,legal_name,business_kind,declared_activities,primary_activity from da_organization_application
+      where id=$1 and applicant_person_id=$2`,[draftId,signupPerson])
+    assert.equal(revisedDraft.length,1)
+    assert.equal(revisedDraft[0].version,2)
+    assert.equal(revisedDraft[0].legal_name,"B22 Düzenlenmiş Sentetik İşletme")
+    assert.deepEqual(revisedDraft[0].declared_activities,
+      ["service_repair","insurance_claims"])
+    assert.equal(revisedDraft[0].primary_activity,"insurance_claims")
+    assert.equal(revisedDraft[0].business_kind,"legal_company",
+      "PG16 must persist the non-default legal-company kind at version 2")
+    const draftReplay=await signupChrome.eval(`(async()=>{
+      const s=await (await fetch('/personal/session')).json();
+      const body={application_id:${JSON.stringify(draftId)},expected_version:1,
+        business_kind:'legal_company',
+        declared_activities:['service_repair','insurance_claims'],
+        primary_activity:'insurance_claims',legal_name:'Should not overwrite',
+        landline_phone:'+90 212 555 00 00'};
+      const stale=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify(body)});
+      const badCsrf=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':'forged'},
+        body:JSON.stringify({...body,expected_version:2})});
+      const badPhone=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify({...body,landline_phone:'12',expected_version:2})});
+      const badActivity=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify({...body,expected_version:2,
+          primary_activity:'manufacturing'})});
+      const noCookie=await fetch('/personal/organization-applications',{credentials:'omit'});
+      return {stale:stale.status,badCsrf:badCsrf.status,
+        badPhone:badPhone.status,badActivity:badActivity.status,noCookie:noCookie.status};
+    })()`)
+    assert.deepEqual(draftReplay,{stale:409,badCsrf:403,badPhone:400,badActivity:400,noCookie:403})
+    // Earlier B22 MFA-disabling tests deliberately REVOKED both A and B.
+    // A revoked browser must not be used as proof of cross-Person isolation.
+    // Register a genuinely distinct second Person over the same real HTTPS
+    // route and native MFA flow, not a fabricated browser cookie or actor.
+    const foreignDraftChrome=new B06Chrome(host,"B");browsers.push(foreignDraftChrome)
+    await foreignDraftChrome.start(crt)
+    const foreignEmail="b22-foreign-draft-"+randomBytes(10).toString("hex")+"@example.invalid"
+    const foreignPassword="Task-Strong-"+randomBytes(18).toString("hex")
+    await foreignDraftChrome.click("#register-details summary")
+    await foreignDraftChrome.input("#register input[name=first_name]","Synthetic")
+    await foreignDraftChrome.input("#register input[name=last_name]","Other")
+    await foreignDraftChrome.input("#register input[name=email]",foreignEmail)
+    await foreignDraftChrome.input("#register input[name=mobile_phone]","+905551234578")
+    await foreignDraftChrome.input("#register input[name=password]",foreignPassword)
+    await foreignDraftChrome.click("#register button")
+    await foreignDraftChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+    await foreignDraftChrome.input("#login input[name=email]",foreignEmail)
+    await foreignDraftChrome.input("#login input[name=password]",foreignPassword)
+    await foreignDraftChrome.click("#login button")
+    await foreignDraftChrome.wait("!document.getElementById('workspace').hidden || !document.getElementById('mfa-enrollment').hidden")
+    if(await foreignDraftChrome.eval("!document.getElementById('mfa-enrollment').hidden")){
+      await foreignDraftChrome.input("#mfa-enroll-start input[name=email]",foreignEmail)
+      await foreignDraftChrome.input("#mfa-enroll-start input[name=password]",foreignPassword)
+      await foreignDraftChrome.click("#mfa-enroll-start button")
+      await foreignDraftChrome.wait("!document.getElementById('mfa-enroll-verify').hidden&&document.getElementById('mfa-seed').value.length>0")
+      const seedUrl=await foreignDraftChrome.eval("document.getElementById('mfa-seed').value")
+      const seed=seedUrl.startsWith("otpauth:")?new URL(seedUrl).searchParams.get("secret"):seedUrl
+      assert.ok(seed)
+      await foreignDraftChrome.input("#mfa-enroll-verify input[name=code]",otp(seed!))
+      await foreignDraftChrome.click("#mfa-enroll-verify button")
+    }
+    await foreignDraftChrome.wait("!document.getElementById('workspace').hidden")
+    assert.equal(await foreignDraftChrome.eval(
+      "(async()=> (await fetch('/personal/session')).status)()"),200,
+      "Cross-Person denial must be tested from a real active second session")
+    const otherDrafts=await foreignDraftChrome.eval(`(async()=>{
+      const r=await fetch('/personal/organization-applications');
+      const s=await (await fetch('/personal/session')).json();
+      const edit=await fetch('/personal/organization-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+        body:JSON.stringify({application_id:${JSON.stringify(draftId)},
+          expected_version:2,business_kind:'legal_company',
+           declared_activities:['service_repair','insurance_claims'],
+           primary_activity:'insurance_claims',
+          legal_name:'Foreign rewrite forbidden',landline_phone:'+90 212 555 00 00'})});
+      const data=await r.json();
+      return {status:r.status,items:data.drafts,foreignEdit:edit.status};
+    })()`)
+    assert.equal(otherDrafts.status,200)
+    assert.ok(Array.isArray(otherDrafts.items))
+    assert.ok(!otherDrafts.items.some((x:any)=>x.id===draftId))
+    assert.equal(otherDrafts.foreignEdit,403)
+    const draftAudits=await q(`select e.new_values::text as details
+      from da_audit_event e join da_security_outbox o on o.audit_event_id=e.id
+      where e.target_id=$1 and e.action='organization.application_draft_saved'`,[draftId])
+    assert.equal(draftAudits.length,2)
+    assert.ok(!JSON.stringify(draftAudits).includes(draftLandline))
+    assert.ok(!JSON.stringify(draftAudits).includes(draftLegalName))
+    assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+      draftOrganizationsBefore,"Draft cannot create legal Organization")
+    assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
+      draftMembershipsBefore,"Draft cannot assign first Owner")
+    assert.equal((await q("select version from da_organization_application where id=$1",[draftId]))[0].version,2)
+
+    // --- B22 RELOAD PROOF ---
+    // The same authenticated Person reloads the page with cache bypass.
+    // The previously saved draft (version 2) must reappear in the draft list
+    // exactly as persisted -- no new draft, Organization, Owner or audit write.
+    const reloadDraftCountBefore=Number((await q(
+      "select count(*)::int n from da_organization_application where applicant_person_id=$1",[signupPerson]))[0].n)
+    const reloadOrgsBefore=Number((await q("select count(*)::int n from da_organization"))[0].n)
+    const reloadMembsBefore=Number((await q("select count(*)::int n from da_organization_membership"))[0].n)
+    const reloadAuditsBefore=Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1",[signupPerson]))[0].n)
+    const reloadHttpStart=signupChrome.http.length
+    await signupChrome.send("Page.reload",{ignoreCache:true})
+    // Wait for the fresh authenticated workspace (not the login screen).
+    await signupChrome.wait(`!document.getElementById('workspace').hidden&&document.getElementById('person').textContent==='Person: '+${JSON.stringify(signupPerson)}`)
+    // Wait for the private draft list to render the persisted draft entry.
+    await signupChrome.wait("document.querySelector('#organization-draft-list button')?.textContent.includes('Taslağı düzenle')")
+    // Verify: same draft appears (version 2) in the UI list via the GET endpoint.
+    const reloadListResponse=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/organization-applications');
+      const data=await r.json();
+      return {status:r.status,drafts:data.drafts};
+    })()`)
+    assert.equal(reloadListResponse.status,200,"Fresh reload must return 200 for draft list")
+    assert.ok(Array.isArray(reloadListResponse.drafts),"Draft list must be an array after reload")
+    const reloadedDraft=reloadListResponse.drafts.find((x:any)=>x.id===draftId)
+    assert.ok(reloadedDraft,"Same draft id must survive a full page reload")
+    assert.equal(reloadedDraft.version,2,"Draft version must remain 2 after reload (no new write)")
+    assert.deepEqual(reloadedDraft.declared_activities,
+      ["service_repair","insurance_claims"])
+    assert.equal(reloadedDraft.primary_activity,"insurance_claims")
+    // After a full reload the untouched form starts at its original default.
+    // Removing the UI's item.business_kind restoration must now FAIL this test.
+    assert.equal(await signupChrome.eval(
+      "document.querySelector('#organization-draft-form select[name=business_kind]').value"),
+      "individual_business","Fresh form must begin on its default kind before edit")
+    // Click the visible "Taslağı düzenle" control -- a real Chromium user action.
+    await signupChrome.click("#organization-draft-list button")
+    // After clicking, the form must populate with the persisted values.
+    await signupChrome.wait("document.querySelector('#organization-draft-form input[name=legal_name]')?.value.length>0")
+    const reloadFormValues=await signupChrome.eval(`(()=>{
+      const form=document.getElementById('organization-draft-form');
+      return {
+        declared_activities:Array.from(form.querySelectorAll(
+          'input[name=declared_activities]:checked'),x=>x.value),
+        primary_activity:form.elements.primary_activity.value,
+        business_kind:form?.querySelector('select[name=business_kind]')?.value??
+                      form?.querySelector('input[name=business_kind]')?.value??null,
+        legal_name:form?.querySelector('input[name=legal_name]')?.value??null,
+        landline_phone:form?.querySelector('input[name=landline_phone]')?.value??null,
+      };
+    })()`)
+    // The form must reflect the version-2 legal_name (edited value), not the original draft.
+    assert.equal(reloadFormValues.legal_name,"B22 Düzenlenmiş Sentetik İşletme",
+      "Reload must populate form with persisted version-2 legal name")
+    assert.equal(reloadFormValues.landline_phone,draftLandline,
+      "Reload must populate form with persisted landline")
+    assert.equal(reloadedDraft.business_kind,"legal_company",
+      "Reload GET must preserve the persisted NON-default legal-company kind")
+    assert.deepEqual(reloadFormValues.declared_activities,
+      reloadedDraft.declared_activities,
+      "Reloaded edit form must restore declared activity selections")
+    assert.equal(reloadFormValues.primary_activity,reloadedDraft.primary_activity,
+      "Reloaded edit form must restore the primary activity")
+    assert.equal(reloadFormValues.business_kind,reloadedDraft.business_kind,
+      "Reloaded edit form must restore the exact persisted business kind")
+    process.stdout.write("PASS B22 Chrome: declared activities and primary activity saved in PG16; foreign and invalid primary denied; reload restores selection\n")
+    // PG16 invariants: reload must not create any new rows.
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_organization_application where applicant_person_id=$1",[signupPerson]))[0].n),
+      reloadDraftCountBefore,"Reload must not create a second draft row")
+    assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+      reloadOrgsBefore,"Reload must not create a legal Organization")
+    assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
+      reloadMembsBefore,"Reload must not assign an Owner membership")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1",[signupPerson]))[0].n),
+      reloadAuditsBefore,"Reload must not emit a new audit write")
+    // Confirm: no POST to organization-applications was issued during reload.
+    const reloadPosts=signupChrome.http.slice(reloadHttpStart).filter(
+      (r:any)=>r.method==="POST"&&r.path==="/personal/organization-applications")
+    assert.equal(reloadPosts.length,0,"Page reload must issue zero POSTs to organization-applications")
+    process.stdout.write("PASS B22 Chrome: Person private Organization draft reload; version-2 reappears in list; Taslağı düzenle opens populated form; zero new draft/Organization/Owner/audit write\n")
+    // --- END B22 RELOAD PROOF ---
+    process.stdout.write("PASS B22 Chrome: Person private Organization draft save/edit, foreign/unauthenticated/CSRF/replay denies, PG16 audit without Organization or Owner\n")
+
+    // Legacy-shaped draft: omit BOTH columns added by the activity migration.
+    // PG16 must supply []/NULL, preserve the original Person, ID and version,
+    // allow a private read, and let Chrome upgrade the same row via normal POST.
+    // This is a post-migration compatibility fixture, not an asserted
+    // pre-migration database upgrade simulation.
+    const legacyDraftId="daorgapp_"+randomBytes(16).toString("hex")
+    await q(`insert into da_organization_application
+      (id,applicant_person_id,business_kind,legal_name,landline_phone,status,version)
+      values($1,$2,'individual_business','B22 Önceki Taslak',$3,'draft',1)`,
+      [legacyDraftId,signupPerson,draftLandline])
+    const legacyBefore=await q(`select id,applicant_person_id,
+      declared_activities,primary_activity,status,version
+      from da_organization_application where id=$1`,[legacyDraftId])
+    assert.equal(legacyBefore.length,1)
+    assert.equal(legacyBefore[0].id,legacyDraftId)
+    assert.equal(legacyBefore[0].applicant_person_id,signupPerson)
+    assert.deepEqual(legacyBefore[0].declared_activities,[])
+    assert.equal(legacyBefore[0].primary_activity,null)
+    assert.equal(legacyBefore[0].status,"draft")
+    assert.equal(legacyBefore[0].version,1)
+    const legacyVisible=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/organization-applications');
+      const data=await r.json();
+      return {status:r.status,draft:data.drafts?.find(
+        x=>x.id===${JSON.stringify(legacyDraftId)})};
+    })()`)
+    assert.equal(legacyVisible.status,200)
+    assert.deepEqual(legacyVisible.draft.declared_activities,[])
+    assert.equal(legacyVisible.draft.primary_activity,null)
+    assert.equal(legacyVisible.draft.version,1)
+    await signupChrome.click("#organization-draft-refresh")
+    await signupChrome.wait("document.querySelector('#organization-draft-list p:first-child')?.textContent.includes('B22 Önceki Taslak')")
+    await signupChrome.click("#organization-draft-list p:first-child button")
+    const legacyFormBefore=await signupChrome.eval(`(()=>{
+      const form=document.getElementById('organization-draft-form');
+      return {name:form.elements.legal_name.value,
+        selected:form.querySelectorAll('input[name=declared_activities]:checked').length,
+        primary:form.elements.primary_activity.value};
+    })()`)
+    assert.deepEqual(legacyFormBefore,{name:"B22 Önceki Taslak",selected:0,primary:""})
+    await signupChrome.click('#organization-draft-form input[value=insurance_claims]')
+    await signupChrome.click('#organization-draft-form select[name=primary_activity]')
+    for(const key of ["End","Enter"]){
+      for(const type of ["keyDown","keyUp"])
+        await signupChrome.send("Input.dispatchKeyEvent",{type,key,code:key})
+    }
+    await signupChrome.click("#organization-draft-form button[type=submit]")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
+    const legacyAfter=await q(`select id,applicant_person_id,declared_activities,
+      primary_activity,status,version from da_organization_application
+      where id=$1`,[legacyDraftId])
+    assert.equal(legacyAfter.length,1)
+    assert.equal(legacyAfter[0].id,legacyDraftId)
+    assert.equal(legacyAfter[0].applicant_person_id,signupPerson)
+    assert.deepEqual(legacyAfter[0].declared_activities,["insurance_claims"])
+    assert.equal(legacyAfter[0].primary_activity,"insurance_claims")
+    assert.equal(legacyAfter[0].status,"draft")
+    assert.equal(legacyAfter[0].version,2)
+    assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+      draftOrganizationsBefore,"Legacy draft edit cannot create Organization")
+    assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
+      draftMembershipsBefore,"Legacy draft edit cannot create Owner")
+    process.stdout.write("PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner\n")
+
+    // Codex #269 P2: hold a REAL committed POST response while the browser
+    // remains in saving state. A second draft selection/new action must not
+    // consume the old form with the newer server version.
+    await signupChrome.click("#organization-draft-form input[name=legal_name]")
+    await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').select()")
+    await signupChrome.send("Input.insertText",{text:"B22 Gecikmeli Kaydedilen Taslak"})
+    await signupChrome.eval(`(()=>{
+      const original=window.fetch.bind(window);
+      const hold={original,used:false,release:null};
+      window.__daDraftHold=hold;
+      window.fetch=(...args)=>{
+        const path=String(args[0]);
+        if(!hold.used && path.includes('/personal/organization-applications') &&
+          args[1]?.method==='POST'){
+          hold.used=true;
+          return original(...args).then(response=>new Promise(resolve=>{
+            hold.release=()=>resolve(response);
+          }));
+        }
+        return original(...args);
+      };
+    })()`)
+    try{
+      await signupChrome.click("#organization-draft-form button[type=submit]")
+      await signupChrome.wait("!!window.__daDraftHold?.release")
+      const committed=await q("select version,legal_name from da_organization_application where id=$1",[legacyDraftId])
+      assert.deepEqual(committed,[{version:3,legal_name:"B22 Gecikmeli Kaydedilen Taslak"}])
+      const protectedForm=await signupChrome.eval(`(()=>{
+        const f=document.getElementById('organization-draft-form');
+        const current={id:f.elements.legal_name.value,
+          newDisabled:document.getElementById('organization-draft-new').disabled,
+          refreshDisabled:document.getElementById('organization-draft-refresh').disabled,
+          editDisabled:Array.from(document.querySelectorAll('#organization-draft-list button'))
+            .every(x=>x.disabled),
+          inputsDisabled:Array.from(f.querySelectorAll('input,select,button'))
+            .every(x=>x.disabled)};
+        document.getElementById('organization-draft-new').click();
+        document.querySelector('#organization-draft-list button')?.click();
+        return {...current,after:f.elements.legal_name.value};
+      })()`)
+      assert.equal(protectedForm.id,"B22 Gecikmeli Kaydedilen Taslak")
+      assert.equal(protectedForm.after,protectedForm.id,"Blocked selection may not restore stale form")
+      for(const key of ["newDisabled","refreshDisabled","editDisabled","inputsDisabled"])
+        assert.equal(protectedForm[key],true,"Pending draft save must lock "+key)
+      await signupChrome.eval("window.__daDraftHold.release()")
+      await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak kaydedildi')")
+      assert.deepEqual(await q("select version,legal_name from da_organization_application where id=$1",[legacyDraftId]),
+        committed,"Delayed HTTP response cannot undo a committed draft")
+      assert.equal(await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').value"),
+        committed[0].legal_name)
+      process.stdout.write("PASS B22 Chrome: delayed real draft POST locks selection/form; no stale-value rewrite or silent version overwrite\n")
+    }finally{
+      await signupChrome.eval(`(()=>{
+        const hold=window.__daDraftHold;
+        if(hold?.release)hold.release();
+        if(hold?.original)window.fetch=hold.original;
+        delete window.__daDraftHold;
+      })()`)
+    }
+
+    // Codex #269 P2: 101 older task-owned drafts must remain reachable in
+    // actual Chrome. Seed private disposable PG16 rows only; no production
+    // data, migration or real user records. Delete exactly these fixture IDs.
+    const overflowIds=Array.from({length:101},()=> "daorgapp_"+randomBytes(16).toString("hex"))
+    try{
+      await q(`insert into da_organization_application
+        (id,applicant_person_id,business_kind,legal_name,landline_phone,status,version,updated_at)
+        select x.id,$2,'individual_business','B22 Eski Sentetik Taslak',$3,'draft',1,
+          clock_timestamp()-interval '30 days'-(x.ordinality*interval '1 second')
+        from unnest($1::text[]) with ordinality as x(id,ordinality)`,
+        [overflowIds,signupPerson,draftLandline])
+      const pages=await signupChrome.eval(`(async()=>{
+        const first=await (await fetch('/personal/organization-applications')).json();
+        const second=await (await fetch('/personal/organization-applications?cursor='+
+          encodeURIComponent(first.next_cursor))).json();
+        return {firstCount:first.drafts.length,secondCount:second.drafts.length,
+          unique:new Set([...first.drafts,...second.drafts].map(x=>x.id)).size,
+          firstCursor:!!first.next_cursor,lastCursor:second.next_cursor,
+          secondIds:second.drafts.map(x=>x.id)};
+      })()`)
+      assert.deepEqual({firstCount:pages.firstCount,secondCount:pages.secondCount,
+        unique:pages.unique,firstCursor:pages.firstCursor,lastCursor:pages.lastCursor},
+        {firstCount:100,secondCount:3,unique:103,firstCursor:true,lastCursor:null})
+      assert.ok(pages.secondIds.some((id:string)=>overflowIds.includes(id)))
+      const foreignPage=await foreignDraftChrome.eval(`(async()=>{
+        const first=await (await fetch('/personal/organization-applications')).json();
+        return {count:first.drafts.length,more:first.next_cursor};
+      })()`)
+      assert.deepEqual(foreignPage,{count:0,more:null},
+        "Another genuine Person may not read the original Person's pagination")
+      await signupChrome.click("#organization-draft-refresh")
+      await signupChrome.wait("document.querySelectorAll('#organization-draft-list button').length===100 && !document.querySelector('#organization-draft-more').hidden")
+      await signupChrome.click("#organization-draft-more")
+      await signupChrome.wait("document.querySelectorAll('#organization-draft-list button').length===103 && document.querySelector('#organization-draft-more').hidden")
+      await signupChrome.click("#organization-draft-list p:last-child button")
+      assert.equal(await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').value"),
+        "B22 Eski Sentetik Taslak")
+      assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+        draftOrganizationsBefore)
+      assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),
+        draftMembershipsBefore)
+      process.stdout.write("PASS B22 Chrome: 103 private drafts across keyset pages; oldest opened via visible button; foreign Person empty; no Organization/Owner\n")
+    }finally{
+      await q("delete from da_organization_application where applicant_person_id=$1 and id=any($2::text[])",
+        [signupPerson,overflowIds])
+      await signupChrome.click("#organization-draft-new")
+      await signupChrome.click("#organization-draft-refresh")
+    }
+
+
+
+    // B22 approved, non-deleting applicant draft withdrawal; no documents or privileges.
+    await signupChrome.click("#organization-draft-refresh")
+    await signupChrome.wait("document.querySelector('#organization-draft-list p:first-child')?.textContent.includes('B22 Gecikmeli Kaydedilen Taslak')")
+    const withdrawBefore=await q("select status,version from da_organization_application where id=$1",[legacyDraftId])
+    assert.deepEqual(withdrawBefore,[{status:"draft",version:3}])
+    const withdrawal={action:"withdraw",application_id:legacyDraftId,expected_version:3}
+    const payloadLiteral=JSON.stringify(withdrawal)
+    const foreignWithdrawal=await foreignDraftChrome.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify("+payloadLiteral+")});"+
+      "return {status:r.status,body:await r.json()};})()")
+    assert.equal(foreignWithdrawal.status,403)
+    assert.equal(JSON.stringify(foreignWithdrawal.body).includes("B22 Gecikmeli"),false)
+    const rejectedWithdrawal=await signupChrome.eval("(async()=>{"+
+      "const payload="+payloadLiteral+";"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const missing=await fetch('/personal/organization-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json'},body:JSON.stringify(payload)});"+
+      "const stale=await fetch('/personal/organization-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({...payload,expected_version:2})});"+
+      "return {csrf:missing.status,stale:stale.status};})()")
+    assert.deepEqual(rejectedWithdrawal,{csrf:403,stale:409})
+    assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[legacyDraftId]),
+      withdrawBefore,"Denials may not mutate the private application")
+    await signupChrome.click("#organization-draft-list p:first-child button")
+    await signupChrome.wait("!document.querySelector('#organization-draft-withdraw').hidden")
+    await signupChrome.click("#organization-draft-withdraw")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak geri çekildi')")
+    assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[legacyDraftId]),
+      [{status:"withdrawn",version:4}])
+    const afterWithdrawal=await signupChrome.eval("(async()=>{"+
+      "const r=await fetch('/personal/organization-applications');"+
+      "const d=await r.json();"+
+      "const row=Array.from(document.querySelectorAll('#organization-draft-list p'))"+
+        ".find(x=>x.textContent.includes('B22 Gecikmeli Kaydedilen Taslak'));"+
+      "return {status:r.status,saved:d.drafts?.find(x=>x.id==="+JSON.stringify(legacyDraftId)+")?.status,"+
+        "visible:row?.textContent.includes('Geri çekildi'),"+
+        "editButtons:row?.querySelectorAll('button').length};})()")
+    assert.deepEqual(afterWithdrawal,{status:200,saved:"withdrawn",visible:true,editButtons:0})
+    const replayWithdrawal=await signupChrome.eval("(async()=>{"+
+      "const s=await (await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify("+payloadLiteral+")});return r.status;})()")
+    assert.equal(replayWithdrawal,409)
+    const withdrawalAudit=await q("select action,target_id from da_audit_event "+
+      "where target_id=$1 and action='organization.application_draft_withdrawn'",[legacyDraftId])
+    assert.deepEqual(withdrawalAudit,[{action:"organization.application_draft_withdrawn",target_id:legacyDraftId}])
+    assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),draftOrganizationsBefore)
+    assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),draftMembershipsBefore)
+    process.stdout.write("PASS B22 Chrome: private applicant withdraws draft; foreign/CSRF/stale/replay denied; persisted audit, no Organization/Owner\n")
+
+    await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
+    assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
+      "Primary Customer cannot offer an unlink button")
+    const signupLinks=await signupChrome.eval(`(async()=>{
+      const r=await fetch('/personal/links');
+      const body=await r.json();
+      return {status:r.status,bindings:body.bindings};
+    })()`)
+    assert.equal(signupLinks.status,200)
+    assert.equal(signupLinks.bindings.length,1)
+    assert.equal(signupLinks.bindings[0].id,primaryCustomerProof[0].id)
+    assert.equal(signupLinks.bindings[0].actor_id,registered[0].actor_id)
+    assert.equal(signupLinks.bindings[0].is_primary,true)
+    const primaryAuditBefore=Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1",[signupPerson]))[0].n)
+    const primaryProofBefore=await q(
+      "select id,revoked_at from da_verified_actor_binding where person_id=$1",[signupPerson])
+    const deniedPrimaryUnlink=await signupChrome.eval(`(async()=>{
+      const response=await fetch('/personal/session');
+      const session=await response.json();
+      const r=await fetch('/personal/links',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify({action:'unlink',binding_id:${JSON.stringify(primaryCustomerProof[0].id)}})});
+      return r.status;
+    })()`)
+    assert.equal(deniedPrimaryUnlink,403,"Primary unlink must fail server-side")
+    assert.deepEqual(await q(
+      "select id,revoked_at from da_verified_actor_binding where person_id=$1",[signupPerson]),
+      primaryProofBefore)
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where actor_person_id=$1",[signupPerson]))[0].n),
+      primaryAuditBefore,"Primary unlink cannot emit audit or mutate identity")
+    assert.equal((await q(
+      "select count(*)::int n from da_login_binding where person_id=$1 and revoked_at is null",
+      [signupPerson]))[0].n,1)
+    process.stdout.write("PASS B22 Chrome: primary Customer protected in UI, no unlink control, forged unlink403 and unchanged PG16 login/proof/audit\n")
+    // Reuse the same task-only native Medusa Store publishable token used
+    // by earlier B22 customer-context tests. It was restored after F-02.
+    const priorSignupPublishable=process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY
+    process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY=b22PublishableKey.token
+    let nativeCustomerContext
+    try{
+      nativeCustomerContext=await signupChrome.eval(`(async()=>{
+        const r=await fetch('/personal/contexts?type=customer');
+        const body=await r.json();
+        return {status:r.status,person_id:body.person_id,
+          actor_id:body.actor_id,context:body.context};
+      })()`)
+    }finally{
+      if(priorSignupPublishable===undefined)
+        delete process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY
+      else process.env.DOGRUADRES_STORE_PUBLISHABLE_KEY=priorSignupPublishable
+    }
+    assert.deepEqual(nativeCustomerContext,{status:200,person_id:signupPerson,
+      actor_id:registered[0].actor_id,context:"customer"},
+      "First-party primary Customer proof must authorize native self-context without second login")
+    process.stdout.write("PASS B22 Chrome: first Person signup HTTPS/PG16, mandatory mobile400, native Customer to one Person, persistent private self-read, no Organization/Staff grant, safe retry and audit privacy\n")
+
+    // Isolated fault AFTER inserting the primary verified proof: fail the
+    // canonical audit insert and independently observe complete PG16 rollback.
+    // Native Medusa AuthIdentity/Customer creation is not in this transaction.
+    const faultIdentity="authid_b22rollback_"+rand
+    const faultCustomer="cus_b22rollback_"+rand
+    const countRegistrationRows=async()=> (await q(`select
+      (select count(*)::int from da_person) as persons,
+      (select count(*)::int from da_actor_mapping) as mappings,
+      (select count(*)::int from da_login_binding) as logins,
+      (select count(*)::int from da_verified_actor_binding) as proofs,
+      (select count(*)::int from da_audit_event) as audits,
+      (select count(*)::int from da_audit_outbox) as outboxes`))[0]
+    const beforeFaultCounts=await countRegistrationRows()
+    let faultFnInstalled=false,faultTriggerInstalled=false
+    try{
+      await q(`create function b22_signup_post_proof_fault_v1() returns trigger
+        language plpgsql as $b22$
+        begin
+          if NEW.action='person.registered' and NEW.actor_type='customer'
+            and NEW.actor_id='${faultCustomer}' then
+            if not exists(select 1 from da_verified_actor_binding
+              where auth_identity_id='${faultIdentity}' and actor_id='${faultCustomer}'
+                and revoked_at is null) then
+              raise exception 'B22_SIGNUP_PRIMARY_PROOF_NOT_INSERTED';
+            end if;
+            raise exception 'B22_SIGNUP_POST_PROOF_FORCED_ROLLBACK';
+          end if;
+          return NEW;
+        end $b22$`)
+      faultFnInstalled=true
+      await q("create trigger b22_signup_post_proof_fault_v1 before insert on da_audit_event for each row execute function b22_signup_post_proof_fault_v1()")
+      faultTriggerInstalled=true
+      await assert.rejects(
+        ()=>foundation.personalRegisterCustomer(
+          faultIdentity,faultCustomer,"+905551234570","Synthetic rollback"),
+        /B22_SIGNUP_POST_PROOF_FORCED_ROLLBACK/,
+        "Post-primary-proof failure must abort the Foundation transaction")
+    }finally{
+      if(faultTriggerInstalled)
+        await q("drop trigger b22_signup_post_proof_fault_v1 on da_audit_event")
+      if(faultFnInstalled)
+        await q("drop function b22_signup_post_proof_fault_v1()")
+    }
+    assert.deepEqual(await countRegistrationRows(),beforeFaultCounts,
+      "Forced post-proof failure must roll back Person/mapping/login/proof/audit/outbox")
+    assert.equal((await q(
+      "select count(*)::int n from da_login_binding where auth_identity_id=$1",
+      [faultIdentity]))[0].n,0)
+    assert.equal((await q(
+      "select count(*)::int n from da_verified_actor_binding where auth_identity_id=$1",
+      [faultIdentity]))[0].n,0)
+    process.stdout.write("PASS B22 real PG16: post-primary-proof forced audit failure rolls back six Foundation tables\n")
+
+    // P2 regression: TWO real HTTPS socket origins reach the actual
+    // first-party front door (not a mocked X-Forwarded-For header).
+    // Each password attempt uses a distinct nonexistent identity, so the
+    // subject 10/minute budget cannot obscure the source 60/minute budget.
+    // This runs only against the disposable task-owned PG16 database.
+    const availablePort=plainServer()
+    await new Promise<void>((resolve,reject)=>{
+      availablePort.once("error",reject)
+      availablePort.listen(0,"127.0.0.1",resolve)
+    })
+    const visitorPort=(availablePort.address() as {port:number}).port
+    await new Promise<void>(resolve=>availablePort.close(()=>resolve()))
+    const visitorOrigin="https://127.0.0.1:"+visitorPort
+    const originalPublicOrigin=process.env.DOGRUADRES_PUBLIC_ORIGIN
+    process.env.DOGRUADRES_PUBLIC_ORIGIN=visitorOrigin
+    const visitorFrontdoor=spawn("node",["scripts/personal-frontdoor.mjs"],{
+      cwd:process.cwd(),env:{...process.env,
+        DOGRUADRES_PUBLIC_ORIGIN:visitorOrigin,
+        DOGRUADRES_FRONTDOOR_HOST:"127.0.0.1",
+        DOGRUADRES_FRONTDOOR_PORT:String(visitorPort)},
+      stdio:["ignore","ignore","pipe"],
+    })
+    // Never log raw child stderr: it can contain local paths or secrets.
+    let startupClass="none",probeStatus=0,probeErrorClass="none"
+    visitorFrontdoor.stderr?.on("data",(buf:Buffer)=>{
+      const message=String(buf)
+      if(message.includes("ERR_UNKNOWN_FILE_EXTENSION"))startupClass="typescript-loader"
+      else if(message.includes("ERR_MODULE_NOT_FOUND"))startupClass="module-resolution"
+      else if(message.includes("EADDRINUSE"))startupClass="port-collision"
+      else if(message.includes("ENOENT"))startupClass="missing-resource"
+      else if(message.includes("Invalid ingress")||message.includes("Missing ingress"))startupClass="ingress-config"
+    })
+    visitorFrontdoor.on("error",()=>{startupClass="spawn-error"})
+    try{
+      const visitorHttp=(source:string,path:string,body:unknown,spoof=false):Promise<number>=>
+        new Promise((resolve,reject)=>{
+          const request=tlsRequest(visitorOrigin+path,{
+            method:"POST",ca:readFileSync(crt),localAddress:source,agent:false,
+            headers:{"origin":visitorOrigin,"content-type":"application/json",
+              ...(spoof?{"x-forwarded-for":"127.0.0.3","x-da-visitor-rate-v1":"forged"}:{})},
+          },response=>{
+            response.resume()
+            response.on("end",()=>resolve(response.statusCode??0))
+          })
+          request.on("error",reject)
+          request.setTimeout(12000,()=>request.destroy(Error("Visitor quota HTTPS timeout")))
+          request.end(JSON.stringify(body))
+        })
+      try{
+        await until(async()=>{
+          if(visitorFrontdoor.exitCode!==null)return false
+          try{
+            const response=await new Promise<number>((resolve,reject)=>{
+              const request=tlsRequest(visitorOrigin+"/personal",{
+                method:"GET",ca:readFileSync(crt),agent:false,
+              },res=>{res.resume();res.on("end",()=>resolve(res.statusCode??0))})
+              request.on("error",reject);request.end()
+            })
+            probeStatus=response
+            return response===200
+          }catch(error){
+            const c=(error as {code?:unknown})?.code
+            probeErrorClass=typeof c==="string"&&["ECONNREFUSED","ECONNRESET","EPROTO","ETIMEDOUT"].includes(c)?c:"transport-error"
+            return false
+          }
+        },16000,"first-party signed rate-source HTTPS frontdoor")
+      }catch{
+        throw Error("Visitor rate HTTPS frontdoor unavailable: "+JSON.stringify({
+          childExited:visitorFrontdoor.exitCode!==null,exitCode:visitorFrontdoor.exitCode,
+          startupClass,probeStatus,probeErrorClass
+        }))
+      }
+      const countBefore=Number((await q(
+        "select count(*)::int n from da_person"))[0].n)
+      // Rate quotas use PostgreSQL clock minutes, not elapsed 60-second TTL.
+      // A rollover among 60 HTTPS probes can legitimately return 401 again.
+      // Retry at most once with a FRESH real loopback source, so partial
+      // requests from the crossed minute cannot contaminate the new pass.
+      const quotaMinute=async()=>Number((await q(
+        "select floor(extract(epoch from clock_timestamp())/60)::bigint as bucket"
+      ))[0].bucket)
+      const fakeRegistration=(source:string,spoof=false)=>visitorHttp(source,
+        "/personal/register",{first_name:"Synthetic",last_name:"Rejected",
+          email:signupEmail,password:"intentionally-wrong-password-123",
+          mobile_phone:signupPhone},spoof)
+      let quotaVerified=false
+      for(let pass=0;pass<2&&!quotaVerified;pass++){
+        const sourceA=pass===0?"127.0.0.2":"127.0.0.4"
+        const startMinute=await quotaMinute()
+        const failedLogins:number[]=[]
+        for(let i=0;i<60;i++){
+          failedLogins.push(await visitorHttp(sourceA,"/personal/session",{
+            email:"visitor-throttle-"+randomBytes(8).toString("hex")+"@example.invalid",
+            password:"deliberately-not-a-real-password",
+          }))
+        }
+        const deniedLogin=await visitorHttp(sourceA,"/personal/session",{
+          email:"visitor-throttle-"+randomBytes(8).toString("hex")+"@example.invalid",
+          password:"deliberately-not-a-real-password",
+        })
+        const deniedSignup=await fakeRegistration(sourceA)
+        const deniedSpoof=await fakeRegistration(sourceA,true)
+        const sourceBLogin=await visitorHttp("127.0.0.3","/personal/session",{
+          email:"visitor-independent-"+randomBytes(8).toString("hex")+"@example.invalid",
+          password:"deliberately-not-a-real-password",
+        })
+        const sourceBSignup=await fakeRegistration("127.0.0.3")
+        if(await quotaMinute()!==startMinute){
+          if(pass===1)throw Error(
+            "B22 HTTPS quota check crossed two database-minute windows; inconclusive")
+          // Not a rate-limit failure: a new clock minute resets the quota.
+          // Source 127.0.0.4 has no prior counter in the replacement window.
+          continue
+        }
+        assert.ok(failedLogins.every(code=>code===401),
+          "Source A must have 60 independent failed logins in one PG minute")
+        assert.equal(deniedLogin,429,"Source A's 61st login must be throttled")
+        assert.equal(deniedSignup,429,
+          "Source A must not bypass the shared login/register source quota")
+        assert.equal(deniedSpoof,429,
+          "Public spoofed forwarding and rate-source headers must be ignored")
+        assert.equal(sourceBLogin,401,"Source B login must not inherit A's 429")
+        assert.equal(sourceBSignup,409,
+          "Source B signup reaches native credential check, not A's 429")
+        quotaVerified=true
+      }
+      assert.ok(quotaVerified,"No complete PostgreSQL-minute quota evidence")
+      assert.equal(Number((await q(
+        "select count(*)::int n from da_person"))[0].n),countBefore,
+        "Failed quota probes must not register a Person")
+      process.stdout.write("PASS B22 Chrome: distinct real TLS client IPs share login/signup budget per source only; 61st login 429, forged headers ignored, independent source 401/409, no Person mutation\n")
+    }finally{
+      visitorFrontdoor.kill("SIGTERM")
+      if(visitorFrontdoor.exitCode===null)
+        await new Promise<void>(resolve=>visitorFrontdoor.once("exit",()=>resolve()))
+      if(originalPublicOrigin===undefined)delete process.env.DOGRUADRES_PUBLIC_ORIGIN
+      else process.env.DOGRUADRES_PUBLIC_ORIGIN=originalPublicOrigin
     }
 
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")

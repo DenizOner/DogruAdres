@@ -11,12 +11,12 @@
   "dependencies": {
     "@headlessui/react": "^2.2.1",
     "@hookform/resolvers": "^3.10.0",
-    "@medusajs/icons": "2.22.0",
-    "@medusajs/medusa": "2.22.0",
-    "@medusajs/types": "2.22.0",
+    "@medusajs/icons": "2.22.3",
+    "@medusajs/medusa": "2.22.3",
+    "@medusajs/types": "2.22.3",
     "@medusajs/ui": "^4.0.33",
-    "@mercurjs/client": "2.4.0",
-    "@mercurjs/types": "2.4.0",
+    "@mercurjs/client": "2.4.1",
+    "@mercurjs/types": "2.4.1",
     "@stripe/react-stripe-js": "^3.7.0",
     "@stripe/stripe-js": "^7.1.0",
     "@talkjs/react": "^0.1.11",
@@ -39,7 +39,7 @@
     "tailwind-merge": "^2.6.0",
     "talkjs": "^0.37.0",
     "uuid": "^11.0.5",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@chromatic-com/storybook": "^3.2.3",

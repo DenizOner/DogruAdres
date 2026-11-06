@@ -1,6 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import type { IAuthModuleService } from "@medusajs/framework/types"
-import { access, csrf, csrfEnrollment, enabled, sessionToken, trustedOrigin, secureCookies } from "../security"
+import { access, csrf, csrfEnrollment, enabled, sessionToken, trustedOrigin, secureCookies, visitorRateAddress } from "../security"
 import { csrfToken, digest, mfaRuntimeEnforced } from "../../../modules/dogruadres-access/identity-session"
 import { readNativeMfaSummary } from "../../../modules/dogruadres-access/native-mfa-summary"
 import { z } from "@medusajs/framework/zod"
@@ -53,7 +53,12 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const parsed = credentials.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({message:"Invalid input"})
   const body = parsed.data
-  if(!await access(req).personalLoginAttempt(digest(body.email.toLowerCase()),digest(req.socket.remoteAddress??"unknown")))return res.status(429).json({message:"Try again later"})
+  const source=visitorRateAddress(req)
+  if(!source)return res.status(403).json({message:"Access denied"})
+  try{
+    if(!await access(req).personalLoginAttempt(digest(body.email.toLowerCase()),source))
+      return res.status(429).json({message:"Try again later"})
+  }catch{return res.status(503).json({message:"Service unavailable"})}
   const auth: IAuthModuleService = req.scope.resolve("auth")
   const result = await auth.authenticate("emailpass",{body:{email:body.email,password:body.password},headers:{},query:{},url:req.url,protocol:req.protocol})
   if (!result.success || !result.authIdentity) return res.status(401).json({message:"Access denied"})

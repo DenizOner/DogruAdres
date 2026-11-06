@@ -4,6 +4,17 @@ import http from 'node:http'
 import {once} from 'node:events'
 import {allowedPublicRequest,startFrontdoor} from '../../scripts/personal-frontdoor.mjs'
 
+test("B22 Store follow has exact private GET and CSRF POST ingress only",()=>{
+  for(const method of ["GET","POST"])
+    assert.equal(allowedPublicRequest(method,"/personal/store-follows"),true)
+  for(const method of ["PUT","PATCH","DELETE","HEAD","OPTIONS"])
+    assert.equal(allowedPublicRequest(method,"/personal/store-follows"),false)
+  for(const path of ["/personal/store-follows/","/personal/store-follows/sel_other",
+    "/store/sellers/sel_other/follow","/vendor/sellers/sel_other/follow"])
+    for(const method of ["GET","POST"])
+      assert.equal(allowedPublicRequest(method,path),false)
+})
+
 test("B22 Store applications and active Store read have exact public method/path contracts",()=>{
   for(const method of ["GET","POST"])
     assert.equal(allowedPublicRequest(method,"/personal/store-applications"),true)
@@ -59,11 +70,22 @@ test('MFA enrollment is POST-only and never a native MFA wildcard',()=>{
   for(const path of ['/personal/mfa/enroll/extra','/auth/mfa/start','/auth/mfa/disable'])
     assert.equal(allowedPublicRequest('POST',path),false)
 })
-test('email verification route allows GET and POST and denies other methods',()=>{
-  for(const method of ['GET','POST'])
+test('email verification route allows exact CORS preflight without general OPTIONS forwarding',()=>{
+  for(const method of ['GET','POST','OPTIONS'])
     assert.equal(allowedPublicRequest(method,'/auth/verify-email'),true)
-  for(const method of ['PUT','PATCH','DELETE','HEAD','OPTIONS'])
+  for(const method of ['PUT','PATCH','DELETE','HEAD'])
     assert.equal(allowedPublicRequest(method,'/auth/verify-email'),false)
+  assert.equal(allowedPublicRequest('OPTIONS','/auth/verify-email/extra'),false)
+})
+
+test('Store approvals and Buyer blocks relay only their approved methods',()=>{
+  for(const m of ['GET','POST'])assert.equal(allowedPublicRequest(m,'/personal/platform/stores'),true)
+  assert.equal(allowedPublicRequest('POST','/personal/store-buyer-blocks'),true)
+  for(const [p,m] of [
+    ['/personal/platform/stores','DELETE'],['/personal/platform/stores','OPTIONS'],
+    ['/personal/platform/stores/other','POST'],['/personal/store-buyer-blocks','GET'],
+    ['/personal/store-buyer-blocks','PATCH'],['/personal/store-buyer-blocks/other','POST'],
+  ])assert.equal(allowedPublicRequest(m,p),false)
 })
 
 test('personal, locale bootstrap and purpose-bound recovery remain; B4B catalog stays closed',()=>{
@@ -221,3 +243,64 @@ test('browser-facing privacy policy is fixed at the public header boundary',asyn
     const denied=await fetch(origin+'/auth/verification/request',{method:'POST'});assert.equal(denied.status,401);assert.equal(denied.headers.get('referrer-policy'),'no-referrer');await denied.text();
   }finally{front.closeAllConnections();upstream.closeAllConnections();await Promise.all([new Promise(r=>front.close(r)),new Promise(r=>upstream.close(r))]);}
 });
+
+test('real public email CORS enforces configured Storefront origin and exact JSON preflight',async()=>{
+  const seen=[]
+  const upstream=http.createServer((req,res)=>{
+    seen.push({url:req.url,method:req.method,origin:req.headers.origin})
+    res.setHeader('Content-Type','application/json')
+    res.end('{"ok":true}')
+  })
+  upstream.listen(0,'127.0.0.1');await once(upstream,'listening')
+  const reservation=http.createServer()
+  reservation.listen(0,'127.0.0.1');await once(reservation,'listening')
+  const port=reservation.address().port
+  await new Promise(done=>reservation.close(done))
+  const origin='http://127.0.0.1:'+port
+  const storefront='http://localhost:8917'
+  const front=startFrontdoor({
+    NODE_ENV:'test',DOGRUADRES_PUBLIC_ORIGIN:origin,
+    DOGRUADRES_PRIVATE_API:'http://127.0.0.1:'+upstream.address().port,
+    DOGRUADRES_FRONTDOOR_HOST:'127.0.0.1',DOGRUADRES_FRONTDOOR_PORT:String(port),
+    STORE_CORS:storefront,
+  })
+  await once(front,'listening')
+  try{
+    const preflight=await fetch(origin+'/auth/verify-email',{
+      method:'OPTIONS',headers:{
+        Origin:storefront,'Access-Control-Request-Method':'POST',
+        'Access-Control-Request-Headers':'content-type',
+      }
+    })
+    assert.equal(preflight.status,204)
+    assert.equal(preflight.headers.get('access-control-allow-origin'),storefront)
+    assert.equal(preflight.headers.get('vary'),'Origin')
+    assert.equal(seen.length,0,'preflight must never reach native ingress')
+    for(const method of ['GET','POST']){
+      const response=await fetch(origin+'/auth/verify-email'+(method==='GET'?'?token=synthetic':''),
+        {method,headers:{Origin:storefront,...(method==='POST'?{'Content-Type':'application/json'}:{})},
+        ...(method==='POST'?{body:'{"token":"synthetic"}'}:{})})
+      assert.equal(response.status,200)
+      assert.equal(response.headers.get('access-control-allow-origin'),storefront)
+    }
+    assert.equal(seen.length,2)
+    for(const headers of [
+      {Origin:'https://evil.example','Access-Control-Request-Method':'POST','Access-Control-Request-Headers':'content-type'},
+      {Origin:storefront,'Access-Control-Request-Method':'DELETE','Access-Control-Request-Headers':'content-type'},
+      {Origin:storefront,'Access-Control-Request-Method':'POST','Access-Control-Request-Headers':'authorization'},
+    ]){
+      const bad=await fetch(origin+'/auth/verify-email',{method:'OPTIONS',headers})
+      assert.equal(bad.status,403)
+      assert.equal(bad.headers.get('access-control-allow-origin'),null)
+    }
+    const badGet=await fetch(origin+'/auth/verify-email',{headers:{Origin:'https://evil.example'}})
+    assert.equal(badGet.status,403)
+    assert.equal(seen.length,2)
+    const blocked=await fetch(origin+'/personal/platform/stores',{method:'DELETE'})
+    assert.equal(blocked.status,401)
+    assert.equal(seen.length,2)
+  }finally{
+    front.closeAllConnections();upstream.closeAllConnections()
+    await Promise.all([new Promise(done=>front.close(done)),new Promise(done=>upstream.close(done))])
+  }
+})

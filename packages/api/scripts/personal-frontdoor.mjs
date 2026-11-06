@@ -4,18 +4,22 @@ import {readFileSync} from 'node:fs'
 import {pathToFileURL} from 'node:url'
 // Node 24's supported type-stripping loads this dependency-free shared contract.
 import {ingressConfig} from '../src/utils/ingress-config.ts'
+import {signVisitorRateSource,VISITOR_RATE_HEADER} from '../src/utils/visitor-rate-source.ts'
 
 /** Closed method/path relay, never a general-purpose reverse proxy. */
 export function allowedPublicRequest(method,path){
   const personal={
     '/personal':['GET'], '/personal/session':['GET','POST','DELETE'],
-    '/personal/challenge':['POST'], '/personal/organizations':['GET'],
+    '/personal/challenge':['POST'], '/personal/register':['POST'], '/personal/organizations':['GET'],
+    '/personal/organization-applications':['GET','POST'],
     '/personal/platform':['GET','POST'], '/personal/platform/smtp':['GET','POST'], '/personal/memberships':['GET','POST'],
     '/personal/invitations':['GET','POST'], '/personal/mfa':['GET','POST'], '/personal/mfa/enroll':['POST'], '/personal/mfa/manage':['POST'],
     '/personal/contexts':['GET'],
     '/personal/organization-stores':['GET'],
-    '/personal/catalog':['GET'],
+    '/personal/catalog':['GET'], '/personal/store-follows':['GET','POST'],
     '/personal/store-applications':['GET','POST'],
+    '/personal/platform/stores':['GET','POST'],
+    '/personal/store-buyer-blocks':['POST'],
     '/personal/store-product-permissions':['GET','POST'],
     '/personal/buyer-permissions':['GET','POST'],
     '/personal/buyer-context':['GET','POST'],
@@ -31,10 +35,25 @@ export function allowedPublicRequest(method,path){
   // it contains no authenticated Buyer Organization pricing decision.
   const dashboard=/^\/dashboard(?:\/.*)?$/
   if(method==='GET' && (path==='/store/regions'||['/cloud/auth','/health'].includes(path)||dashboard.test(path)))return true
-  if(['GET','POST'].includes(method) && path==='/auth/verify-email')return true
+  if(['GET','POST','OPTIONS'].includes(method) && path==='/auth/verify-email')return true
   if(method==='POST' && (path==='/auth/verification/confirm'||/^\/auth\/(user|member|customer)\/emailpass\/(reset-password|update)$/.test(path)))return true
   if(method==='GET' && path==='/admin/api-keys')return 'machine'
   return false
+}
+// Never reflect arbitrary Origin or an unrestricted CORS wildcard. The
+// storefront must be explicitly included in Medusa's configured STORE_CORS.
+function verifiedStorefrontOrigin(origin,env) {
+  if(typeof origin!=='string'||!origin)return null
+  return (env.STORE_CORS??'').split(',').some(entry=>{
+    const allowed=entry.trim()
+    try{
+      const url=new URL(allowed)
+      const local=env.NODE_ENV!=='production' && url.protocol==='http:' &&
+        ['localhost','127.0.0.1','[::1]'].includes(url.hostname)
+      return allowed===url.origin && allowed===origin &&
+        (url.protocol==='https:'||local)
+    }catch{return false}
+  })?origin:null
 }
 export function startFrontdoor(env=process.env){
   const config=ingressConfig(env),upstream=config.privateOrigin
@@ -53,6 +72,31 @@ export function startFrontdoor(env=process.env){
       if(url.origin!==config.publicOrigin){res.writeHead(400).end();return}
       const mode=allowedPublicRequest(req.method,url.pathname)
       if(!mode || mode==='machine'&&!/^Basic /i.test(req.headers.authorization??'')){res.writeHead(401,{'Content-Type':'application/json'}).end('{"message":"Public ingress denied"}');return}
+      const verifyEmail=url.pathname==='/auth/verify-email'
+      const requestedOrigin=req.headers.origin
+      const storeOrigin=verifyEmail?verifiedStorefrontOrigin(requestedOrigin,env):null
+      if(verifyEmail && requestedOrigin && !storeOrigin){res.writeHead(403).end();return}
+      if(req.method==='OPTIONS'){
+        // No general OPTIONS proxy: the one single-use email token workflow
+        // only needs a POST JSON browser preflight from a configured storefront.
+        const method=req.headers['access-control-request-method']
+        const asked=req.headers['access-control-request-headers']
+        const requestedHeaders=typeof asked==='string'?asked.split(',').map(x=>x.trim().toLowerCase()):[]
+        if(!verifyEmail||!storeOrigin||method!=='POST'||
+          requestedHeaders.some(x=>!['content-type','accept'].includes(x))||
+          requestedHeaders.includes('')){
+          res.writeHead(403).end();return
+        }
+        res.setHeader('Access-Control-Allow-Origin',storeOrigin)
+        res.setHeader('Vary','Origin')
+        res.setHeader('Access-Control-Allow-Methods','GET, POST')
+        res.setHeader('Access-Control-Allow-Headers','content-type, accept')
+        res.writeHead(204).end();return
+      }
+      if(storeOrigin){
+        res.setHeader('Access-Control-Allow-Origin',storeOrigin)
+        res.setHeader('Vary','Origin')
+      }
       // Private B4B catalogue is the only public-facing relay for this data.
       // Enforce fixed privacy metadata at the HTTPS boundary instead of
       // forwarding arbitrary upstream Vary / X-Robots-Tag header values.
@@ -65,6 +109,13 @@ export function startFrontdoor(env=process.env){
       // Only purpose-bound password reset and scoped machine auth need this
       // header. No browser actor header or seller context is forwarded.
       if(mode==='machine'||url.pathname.endsWith('/emailpass/update'))headers.authorization=req.headers.authorization??''
+      // Rate-limit source is derived ONLY from the public TLS socket. Never
+      // forward incoming X-Forwarded-For or an incoming visitor-rate header.
+      // The short-lived proof contains no raw client address and uses the
+      // existing cookie secret with a distinct cryptographic purpose.
+      if(req.method==='POST'&&['/personal/session','/personal/register'].includes(url.pathname))
+        headers[VISITOR_RATE_HEADER]=signVisitorRateSource(
+          req.socket.remoteAddress,env.COOKIE_SECRET??'',req.method,url.pathname)
       // The privacy observer retains the same session authorization as normal reads.
       if(req.method==='GET'&&url.pathname==='/personal/organizations'&&req.headers['x-da-observe']==='1')headers['x-da-observe']='1'
       const chunks=[];let size=0

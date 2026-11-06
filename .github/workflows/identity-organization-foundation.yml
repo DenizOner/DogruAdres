@@ -173,7 +173,7 @@ jobs:
         working-directory: packages/api
         env:
           TEST_TYPE: unit
-        run: bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts src/modules/dogruadres-access/__tests__/legal-store-ownership.unit.spec.ts src/modules/dogruadres-access/__tests__/memberships-service.unit.spec.ts src/modules/dogruadres-access/__tests__/invitation-resend-service.unit.spec.ts src/modules/dogruadres-access/__tests__/actor-delegation.unit.spec.ts src/modules/dogruadres-access/__tests__/account-linking.unit.spec.ts src/utils/__tests__/ingress-config.unit.spec.ts src/api/personal/__tests__/ingress.unit.spec.ts src/api/personal/__tests__/organization-selection.unit.spec.ts src/api/personal/__tests__/organization-stores.unit.spec.ts src/api/personal/__tests__/store-approvals.unit.spec.ts src/api/personal/__tests__/store-product-permissions.unit.spec.ts src/api/personal/__tests__/buyer-permissions.unit.spec.ts src/api/personal/__tests__/buyer-context.unit.spec.ts src/api/personal/__tests__/catalog.unit.spec.ts src/api/personal/__tests__/native-try-list-price.unit.spec.ts src/api/personal/__tests__/native-group-try-reference.unit.spec.ts src/api/personal/__tests__/store-price-groups.unit.spec.ts src/api/personal/__tests__/product-drafts.unit.spec.ts src/api/personal/__tests__/launcher-b22.unit.spec.ts src/api/personal/__tests__/workspace-lifetime.unit.spec.ts src/api/personal/__tests__/notifications.unit.spec.ts src/api/personal/__tests__/memberships.unit.spec.ts src/api/personal/__tests__/invitations.unit.spec.ts src/api/dogruadres/__tests__/audit-timeline.unit.spec.ts src/api/personal/__tests__/audit-timeline.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-login-decision.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-persistence.unit.spec.ts src/modules/dogruadres-access/__tests__/audit-persistence.unit.spec.ts src/modules/dogruadres-audit-index/__tests__/envelope.unit.spec.ts src/workflows/dogruadres-audit-relay/__tests__/relay.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-settings-service.unit.spec.ts src/modules/dogruadres-access/__tests__/native-mfa-summary.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-enrollment-ticket.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-session-scope.unit.spec.ts src/api/personal/__tests__/mfa-settings.unit.spec.ts src/api/personal/__tests__/mfa-management.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-management.unit.spec.ts src/api/personal/__tests__/mfa-shell.unit.spec.ts src/api/personal/__tests__/mfa-enrollment.unit.spec.ts src/api/personal/__tests__/mfa-login-runtime.unit.spec.ts src/api/personal/__tests__/mfa-challenge-recovery.unit.spec.ts src/modules/dogruadres-access/__tests__/provision-personal-organization.unit.spec.ts src/api/personal/__tests__/platform.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-client.unit.spec.ts src/api/personal/__tests__/platform-smtp.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-settings.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-crypto.unit.spec.ts
+        run: bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts src/modules/dogruadres-access/__tests__/person-mobile.unit.spec.ts src/modules/dogruadres-access/__tests__/person-registration.unit.spec.ts src/modules/dogruadres-access/__tests__/legal-store-ownership.unit.spec.ts src/modules/dogruadres-access/__tests__/memberships-service.unit.spec.ts src/modules/dogruadres-access/__tests__/invitation-resend-service.unit.spec.ts src/modules/dogruadres-access/__tests__/actor-delegation.unit.spec.ts src/modules/dogruadres-access/__tests__/account-linking.unit.spec.ts src/utils/__tests__/ingress-config.unit.spec.ts src/api/personal/__tests__/ingress.unit.spec.ts src/api/personal/__tests__/profile.unit.spec.ts src/api/personal/__tests__/register.unit.spec.ts src/api/personal/__tests__/organization-applications.unit.spec.ts src/api/personal/__tests__/organization-selection.unit.spec.ts src/api/personal/__tests__/organization-stores.unit.spec.ts src/api/personal/__tests__/store-approvals.unit.spec.ts src/api/personal/__tests__/store-product-permissions.unit.spec.ts src/api/personal/__tests__/buyer-permissions.unit.spec.ts src/api/personal/__tests__/buyer-context.unit.spec.ts src/api/personal/__tests__/catalog.unit.spec.ts src/api/personal/__tests__/native-try-list-price.unit.spec.ts src/api/personal/__tests__/native-group-try-reference.unit.spec.ts src/api/personal/__tests__/store-price-groups.unit.spec.ts src/api/personal/__tests__/product-drafts.unit.spec.ts src/api/personal/__tests__/launcher-b22.unit.spec.ts src/api/personal/__tests__/workspace-lifetime.unit.spec.ts src/api/personal/__tests__/notifications.unit.spec.ts src/api/personal/__tests__/memberships.unit.spec.ts src/api/personal/__tests__/invitations.unit.spec.ts src/api/dogruadres/__tests__/audit-timeline.unit.spec.ts src/api/personal/__tests__/audit-timeline.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-login-decision.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-persistence.unit.spec.ts src/modules/dogruadres-access/__tests__/audit-persistence.unit.spec.ts src/modules/dogruadres-audit-index/__tests__/envelope.unit.spec.ts src/workflows/dogruadres-audit-relay/__tests__/relay.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-settings-service.unit.spec.ts src/modules/dogruadres-access/__tests__/native-mfa-summary.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-enrollment-ticket.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-session-scope.unit.spec.ts src/api/personal/__tests__/mfa-settings.unit.spec.ts src/api/personal/__tests__/mfa-management.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-management.unit.spec.ts src/api/personal/__tests__/mfa-shell.unit.spec.ts src/api/personal/__tests__/mfa-enrollment.unit.spec.ts src/api/personal/__tests__/mfa-login-runtime.unit.spec.ts src/api/personal/__tests__/mfa-challenge-recovery.unit.spec.ts src/modules/dogruadres-access/__tests__/provision-personal-organization.unit.spec.ts src/api/personal/__tests__/platform.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-client.unit.spec.ts src/api/personal/__tests__/platform-smtp.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-settings.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-crypto.unit.spec.ts
       - name: Closed public front door unit contract
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
@@ -354,24 +354,39 @@ jobs:
           PG_MFA_TEST_SCOPE: b22-ui
           B22_UI_AUTO_SCOPE: b22-ui
         run: bun integration-tests/postgres/foundation-medusa-cli.pg16.test.ts
-      # Required runtime assets in this job; the accepted build check remains
-      # separate. No Vite listener or custom dashboard route is introduced.
-      - name: Prepare existing Admin assets for same-origin SMTP acceptance
+      # Existing native UI modules serve these two real build artifacts
+      # from the same isolated HTTPS test runtime. No new service/deployment.
+      - name: Prepare existing Admin and Vendor assets for browser privacy acceptance
         if: github.event_name != 'workflow_dispatch'
-        working-directory: apps/admin
-        # Vite evaluates medusa-config in production mode. Fresh build-only
-        # secrets satisfy its existing guard; never fall back to router base '/'.
+        working-directory: .
         run: |
           node --input-type=module <<'NODE'
           import { randomBytes } from 'node:crypto'
+          import { readFileSync } from 'node:fs'
           import { spawnSync } from 'node:child_process'
-          const result = spawnSync('bun', ['run', 'build'], {
-            env: { ...process.env, JWT_SECRET: randomBytes(48).toString('hex'), COOKIE_SECRET: randomBytes(48).toString('hex') },
-            encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
-          })
-          process.stdout.write(result.stdout ?? '')
-          process.stderr.write(result.stderr ?? '')
-          if (result.error || result.status !== 0 || (result.stdout + result.stderr).includes('Could not load the Medusa config')) process.exit(1)
+          const env = {
+            ...process.env,
+            MERCUR_DISABLE_TELEMETRY: 'true',
+            JWT_SECRET: randomBytes(48).toString('hex'),
+            COOKIE_SECRET: randomBytes(48).toString('hex'),
+          }
+          for (const name of ['admin', 'vendor']) {
+            const result = spawnSync('bun', ['run', 'build'], {
+              cwd: `apps/${name}`, env, encoding: 'utf8',
+              maxBuffer: 4 * 1024 * 1024, timeout: 180000,
+            })
+            process.stdout.write(result.stdout ?? '')
+            process.stderr.write(result.stderr ?? '')
+            if (result.error || result.status !== 0 ||
+                (result.stdout + result.stderr).includes('Could not load the Medusa config')) {
+              throw new Error(`Existing ${name} panel build failed`)
+            }
+            const html = readFileSync(`apps/${name}/dist/index.html`, 'utf8')
+            if (!html.includes('http-equiv="Content-Security-Policy"') ||
+                !html.includes('connect-src &#39;self&#39;')) {
+              throw new Error(`Native ${name} build lacks browser connect-src policy`)
+            }
+          }
           NODE
       - name: Native Admin SMTP real Chrome and disposable PG16
         if: github.event_name != 'workflow_dispatch'

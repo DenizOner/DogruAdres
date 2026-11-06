@@ -12,7 +12,7 @@ import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, has
 import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
-import { IdentitySessions, securitySql, isCurrentProtectedOwner, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced } from "./identity-session"
+import { IdentitySessions, securitySql, isCurrentProtectedOwner, type BrowserMfaPurpose, IdentityAccessDenied, mfaRuntimeEnforced, type SecuritySql } from "./identity-session"
 import { MfaPersistence, type MfaAuditActor } from "./mfa-persistence"
 import { MfaEnrollmentTickets } from "./mfa-enrollment-ticket"
 import { resolveMfaPolicy, type MfaPlatformMode } from "./mfa-policy"
@@ -30,6 +30,7 @@ import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedS
 import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
+import {listOrganizationDrafts,saveOrganizationDraft,withdrawOrganizationDraft,type DraftPayload,type WithdrawDraftPayload,type OrganizationDraftCursor} from "./organization-application"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -171,7 +172,16 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   async personalActorLinks(token:string,@MedusaContext() context:Context={}) {
     const sql=securitySql(context.transactionManager),s=await new IdentitySessions(sql).current(token)
     if(!s)return null // Preserve terminal expiry when returning denial.
-    return sql.execute(`select id,actor_type,actor_id,revoked_at from da_verified_actor_binding where person_id=? order by verified_at`,[s.person_id])
+    // Match the active first-party login proof server-side, not a browser claim.
+    // A primary Customer is a verified technical actor, never an unlinkable
+    // secondary. Protect every active login actor of this Person.
+    return sql.execute(`select b.id,b.actor_type,b.actor_id,b.revoked_at,
+      exists(select 1 from da_login_binding l
+        where l.person_id=b.person_id and l.auth_identity_id=b.auth_identity_id
+          and l.actor_type=b.actor_type and l.actor_id=b.actor_id
+          and l.verified_at is not null and l.revoked_at is null) as is_primary
+      from da_verified_actor_binding b where b.person_id=?
+      order by b.verified_at`,[s.person_id])
   }
   @InjectTransactionManager()
   async personalActorBinding(token:string,type:string,@MedusaContext() context:Context={}) {
@@ -406,6 +416,21 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   }
 
   @InjectTransactionManager()
+  async personalOrganizationApplicationDrafts(token:string,cursor?:OrganizationDraftCursor,@MedusaContext() context:Context={}) {
+    return listOrganizationDrafts(securitySql(context.transactionManager),token,cursor)
+  }
+
+  @InjectTransactionManager()
+  async personalSaveOrganizationApplicationDraft(token:string,input:DraftPayload,@MedusaContext() context:Context={}) {
+    return saveOrganizationDraft(securitySql(context.transactionManager),token,input)
+  }
+
+  @InjectTransactionManager()
+  async personalWithdrawOrganizationApplicationDraft(token:string,input:WithdrawDraftPayload,@MedusaContext() context:Context={}) {
+    return withdrawOrganizationDraft(securitySql(context.transactionManager),token,input)
+  }
+
+  @InjectTransactionManager()
   async personalNotifications(token: string, offset: number, organization?: string, @MedusaContext() context: Context = {}) {
     return new PersonalNotifications(securitySql(context.transactionManager)).list(token, offset, organization)
   }
@@ -415,9 +440,175 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return new PersonalNotifications(securitySql(context.transactionManager)).read(token, id, organization)
   }
 
+  /**
+   * First-party registration: native Customer is ONLY a technical actor.
+   * Caller must independently authenticate the exact native actor/identity.
+   * Foundation Person, mapping, binding and audit commit in one transaction.
+   */
+  @InjectTransactionManager()
+  async personalRegisterCustomer(
+    authIdentityId: string, customerId: string, mobile: string, displayName: string,
+    @MedusaContext() context: Context = {}
+  ) {
+    if (!/^authid_[A-Za-z0-9_-]+$/.test(authIdentityId) ||
+        !/^cus_[A-Za-z0-9_-]+$/.test(customerId) ||
+        !/^\+?[0-9]{6,20}$/.test(mobile) ||
+        typeof displayName !== "string" || displayName.length > 101)
+      throw new IdentityAccessDenied()
+    const sql = securitySql(context.transactionManager)
+    await sql.execute(`select pg_advisory_xact_lock(hashtext('da-person-signup'),hashtext(?))`,[authIdentityId])
+    const bindings = await sql.execute(`select person_id,actor_type,actor_id,revoked_at
+      from da_login_binding where auth_identity_id=? for update`,[authIdentityId])
+    const links = await this.listActorMappings(
+      {actor_type:"customer",actor_id:customerId},{take:2},context)
+    // Never overwrite another Person, resurrect a revoked binding, or link by email.
+    if (bindings.length || links.length) {
+      if (bindings.length===1 && links.length===1 && bindings[0].revoked_at===null &&
+          bindings[0].actor_type==="customer" && bindings[0].actor_id===customerId &&
+          bindings[0].person_id===links[0].person_id) {
+        // A matching technical actor is not proof that the current Person is
+        // active or already has the required registration contact. Never
+        // accept a disabled/deleted/incomplete legacy Person as registered.
+        const existing=await sql.execute(`select mobile_phone from da_person
+          where id=? and disabled_at is null and deleted_at is null for update`,
+          [bindings[0].person_id])
+        if(existing.length===1 && typeof existing[0].mobile_phone==="string" &&
+           /^\+?[0-9]{6,20}$/.test(existing[0].mobile_phone)) {
+          // Primary Customer delegation must have its own active verified
+          // binding. Never silently resurrect a missing or revoked proof.
+          const proofs=await sql.execute(`select person_id,auth_identity_id,actor_id,revoked_at
+            from da_verified_actor_binding where person_id=? and actor_type='customer'
+            for update`,[bindings[0].person_id])
+          if(proofs.length===1 && proofs[0].person_id===bindings[0].person_id &&
+             proofs[0].auth_identity_id===authIdentityId &&
+             proofs[0].actor_id===customerId && proofs[0].revoked_at===null)
+            return {created:false as const}
+        }
+      }
+      throw new IdentityAccessDenied()
+    }
+    const [person] = await this.createPeople([{
+      display_name:displayName, mobile_phone:mobile, mobile_version:1,
+    }],context)
+    if (!person?.id) throw new IdentityAccessDenied()
+    await this.createActorMappings([{
+      actor_type:"customer", actor_id:customerId,person_id:person.id,
+      created_by_actor_type:"customer", created_by_actor_id:customerId,
+    }],context)
+    // Native MedusaService writes may still be pending in the EntityManager.
+    // Flush Person and mapping BEFORE inserting the raw SQL login-binding FK.
+    // The same enclosing Foundation transaction owns commit or rollback.
+    const manager=context.transactionManager
+    if(!manager || typeof manager!=="object" || !("flush" in manager) || typeof manager.flush!=="function")
+      throw new Error("Foundation transaction manager unavailable")
+    await manager.flush()
+    await sql.execute(`insert into da_login_binding
+      (auth_identity_id,person_id,actor_type,actor_id,verified_at)
+      values (?,?,'customer',?,clock_timestamp())`,
+      [authIdentityId,person.id,customerId])
+    // The first-party native password/MFA proof establishes this PRIMARY
+    // technical Customer binding. Reuse the existing verified actor and
+    // short-lived server-only credential mechanism; never infer buyer rights.
+    // Both proofs share the same Foundation transaction and audit rollback.
+    await sql.execute(`insert into da_verified_actor_binding
+      (id,person_id,auth_identity_id,actor_type,actor_id,verified_at,proof_reference)
+      values (?,?,?,'customer',?,clock_timestamp(),'primary-emailpass-registration')`,
+      ["dabind_"+randomUUID(),person.id,authIdentityId,customerId])
+    await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:person.id,actor_type:"customer",actor_id:customerId,
+      action:"person.registered",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"person-contact",target_id:person.id,
+      new_values:{contact_recorded:true,email_verification_claimed:false},
+      occurred_at:new Date(),
+    }],context)
+    return {created:true as const}
+  }
+
+  /**
+   * Canonical Person contact only. Never consult a native Customer by email:
+   * an upstream actor is not proof of the Person who owns this session.
+   */
+  @InjectTransactionManager()
+  async personalMobile(token: string, @MedusaContext() context: Context = {}) {
+    const db = securitySql(context.transactionManager)
+    const session = await new IdentitySessions(db).current(token, false, false)
+    if (!session) return null
+    const rows = await db.execute(`select mobile_phone,mobile_version from da_person
+      where id=? and disabled_at is null and deleted_at is null`, [session.person_id])
+    if (rows.length !== 1 || !Number.isSafeInteger(rows[0].mobile_version))
+      throw new IdentityAccessDenied()
+    return { mobile_phone: rows[0].mobile_phone as string|null,
+      version: rows[0].mobile_version as number }
+  }
+
+  @InjectTransactionManager()
+  async personalSaveMobile(
+    token: string, mobile: string, expectedVersion: number,
+    @MedusaContext() context: Context = {}
+  ) {
+    if (typeof mobile !== "string" || mobile.length < 6 || mobile.length > 20 ||
+        !/^[+]?[0-9]+$/.test(mobile) ||
+        !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 ||
+        expectedVersion > 2147483646) throw new IdentityAccessDenied()
+    const db = securitySql(context.transactionManager)
+    // A fresh strong personal session is necessary to change this private
+    // contact. Row and session locks protect the read / update / audit unit.
+    const session = await new IdentitySessions(db).currentForPersonWrite(token)
+    if (!session) return null
+    const rows = await db.execute(`select mobile_phone,mobile_version from da_person
+      where id=? and disabled_at is null and deleted_at is null for update`,
+      [session.person_id])
+    if (rows.length !== 1 || !Number.isSafeInteger(rows[0].mobile_version))
+      throw new IdentityAccessDenied()
+    if (rows[0].mobile_version !== expectedVersion) return { conflict: true as const }
+    if (rows[0].mobile_phone === mobile)
+      return { mobile_phone: mobile, version: expectedVersion }
+    const changed = await db.execute(`update da_person set mobile_phone=?,
+      mobile_version=mobile_version+1,updated_at=clock_timestamp()
+      where id=? and disabled_at is null and deleted_at is null and mobile_version=?
+      returning mobile_phone,mobile_version`,
+      [mobile,session.person_id,expectedVersion])
+    if (changed.length !== 1) throw new IdentityAccessDenied()
+    await this.persistAuditEventsWithOutbox_([{
+      actor_person_id: session.person_id,
+      actor_type: session.actor_type,
+      actor_id: session.actor_id,
+      action: "person.mobile_updated",
+      module: DOGRUADRES_AUDIT_MODULE,
+      resource: "person-contact",
+      target_id: session.person_id,
+      // No phone number in audit, outbox, query string, or log payload.
+      new_values: { contact_recorded: true },
+      occurred_at: new Date(),
+    }], context)
+    return { mobile_phone: changed[0].mobile_phone as string,
+      version: changed[0].mobile_version as number }
+  }
+
+  // Personal and observer reads must obey the same centrally adjustable
+  // organization.read policy as requireOrganizationAccess. Never let a
+  // narrowed Owner policy leak names or memberships through the launcher.
+  private async readablePersonalOrganizations_(
+    token:string,organizationId:string|undefined,touch:boolean,context:Context
+  ){
+    const db=securitySql(context.transactionManager)
+    const result=await new IdentitySessions(db).organizations(token,organizationId,touch)
+    if(!result)return null
+    const visible: typeof result.organizations = []
+    for(const item of result.organizations){
+      if(item.role==="owner"){
+        if(!organizationActionAllowed("owner","organization.read",
+          await isCurrentProtectedOwner(db,result.person_id,item.id),false))continue
+      }else if(item.role!=="admin"&&item.role!=="member")continue
+      visible.push(item)
+    }
+    if(organizationId&&visible.length!==1)return null
+    return {...result,organizations:visible}
+  }
+
   @InjectTransactionManager()
   async personalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
-    return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId)
+    return this.readablePersonalOrganizations_(token,organizationId,true,context)
   }
 
   /** Current active Organization and protected Owner proof for privileged reads.
@@ -442,7 +633,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   // Background privacy checks must not extend the user's idle session.
   @InjectTransactionManager()
   async observePersonalOrganizations(token: string, organizationId?: string, @MedusaContext() context: Context = {}) {
-    return new IdentitySessions(securitySql(context.transactionManager)).organizations(token, organizationId, false)
+    return this.readablePersonalOrganizations_(token,organizationId,false,context)
   }
 
   @InjectTransactionManager()
@@ -1114,6 +1305,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     })) {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "Invitation is invalid, expired, revoked, or already used")
     }
+    // The Organization can be suspended or soft-deleted after invitation
+    // issuance. Lock its live row in this SAME transaction before touching
+    // Person/membership/invitation. A concurrent suspension must serialize.
+    const available = await securitySql(sharedContext.transactionManager).execute(`select id
+      from da_organization where id=? and status='active' and deleted_at is null
+      for share`,[invitation.organization_id])
+    if(available.length!==1 || available[0].id!==invitation.organization_id)
+      throw new MedusaError(MedusaError.Types.FORBIDDEN,"Invitation Organization is unavailable")
     const person = await this.ensureActorPerson_(input.actor, input.actor, sharedContext)
     await this.lockMembership_(person.id, invitation.organization_id, sharedContext)
     // Read after the shared lock: a different invitation may have activated the
@@ -2037,6 +2236,177 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       if(!confirmed.includes(row.seller_id))throw new IdentityAccessDenied()
     }
     return {blocked:rows.length!==0,ownership_verified:ownershipVerified}
+  }
+
+
+  /** First B22 Store-follow slice. A follow is a Buyer Organization relation,
+   * never a Person wishlist, native Seller grant or buyer price permission.
+   * Member delegation awaits the separately approved action-grant UX.
+   */
+  private async currentStoreFollowOwner_(
+    db:SecuritySql,token:string,organizationId:string
+  ){
+    const sessions=new IdentitySessions(db)
+    const actor=await sessions.current(token,false,false)
+    if(!actor)return null
+    const member=await sessions.organizations(token,organizationId,false)
+    if(!member||member.person_id!==actor.person_id||
+       member.organizations.length!==1||
+       member.organizations[0].role!=="owner")return null
+    const owner=await isCurrentProtectedOwner(db,actor.person_id,organizationId)
+    if(!organizationActionAllowed("owner","store.follow",owner,false))return null
+    return actor
+  }
+
+  private async storeFollowRow_(db:SecuritySql,organizationId:string,sellerId:string){
+    const rows=await db.execute(
+      "select f.version,f.revoked_at,exists(select 1 from da_audit_event e "+
+      "where e.id=f.source_audit_event_id and e.deleted_at is null "+
+      "and e.organization_id=f.buyer_organization_id "+
+      "and e.module='dogruadres-access' and e.resource='buyer-store-follow' "+
+      "and e.target_id=f.seller_id and e.actor_person_id is not null "+
+      "and e.action in ('organization.store_followed','organization.store_unfollowed') "+
+      "and exists(select 1 from da_audit_outbox o "+
+      "where o.source_audit_event_id=e.id and o.source_module='dogruadres-access' "+
+      "and o.deleted_at is null)) as proof "+
+      "from da_buyer_store_follow f "+
+      "where f.buyer_organization_id=? and f.seller_id=?",
+      [organizationId,sellerId])
+    if(rows.length>1||rows.some(x=>x.proof!==true||
+      !Number.isInteger(Number(x.version))||Number(x.version)<1))
+      throw new IdentityAccessDenied()
+    return rows.length?rows[0]:null
+  }
+
+  @InjectTransactionManager()
+  async personalBuyerStoreFollowState(
+    token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    if(!await this.currentStoreFollowOwner_(db,token,organizationId))return null
+    const row=await this.storeFollowRow_(db,organizationId,sellerId)
+    return {organization_id:organizationId,seller_id:sellerId,
+      following:!!row&&row.revoked_at===null,
+      version:row?Number(row.version):0}
+  }
+
+  /** Only the current protected Owner may enumerate their own active follows.
+   * Catalog visibility is deliberately irrelevant: suspended/blocked Stores
+   * must remain removable. Return IDs only, not Store names or other Buyers.
+   * The cursor is a validated Seller ID; the composite key bounds each page.
+   */
+  @InjectTransactionManager()
+  async personalBuyerStoreFollows(
+    token:string,organizationId:string,after:string|undefined,
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       (after!==undefined&&!/^sel_[A-Za-z0-9_-]+$/.test(after)))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    if(!await this.currentStoreFollowOwner_(db,token,organizationId))return null
+    const rows=await db.execute(
+      "select seller_id from da_buyer_store_follow "+
+      "where buyer_organization_id=? and revoked_at is null "+
+      (after===undefined?"":"and seller_id>? ")+
+      "order by seller_id limit 21",
+      after===undefined?[organizationId]:[organizationId,after])
+    if(!Array.isArray(rows)||rows.length>21||
+       rows.some(r=>typeof r.seller_id!=="string"||
+         !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id)))
+      throw new IdentityAccessDenied()
+    const stores:{seller_id:string;version:number}[]=[]
+    for(const item of rows.slice(0,20)){
+      const row=await this.storeFollowRow_(db,organizationId,item.seller_id)
+      if(!row||row.revoked_at!==null||Number(row.version)>=2147483647)
+        throw new IdentityAccessDenied()
+      stores.push({seller_id:item.seller_id,version:Number(row.version)})
+    }
+    return {organization_id:organizationId,stores,
+      next_cursor:rows.length>20?stores[stores.length-1].seller_id:null}
+  }
+
+  @InjectTransactionManager()
+  async personalChangeBuyerStoreFollow(
+    token:string,input:{action:"follow"|"unfollow";organization_id:string;
+      seller_id:string;expected_version:number},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !["follow","unfollow"].includes(input.action)||
+       !Number.isInteger(input.expected_version)||
+       input.expected_version<0||input.expected_version>=2147483647)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    // All Owner/Store policy writers lock Person/session/Owner first, then
+    // Store×Buyer. Reversing this order deadlocks follow against Store block.
+    const actor=await this.currentStoreFollowOwner_(db,token,input.organization_id)
+    if(!actor)return null
+    // Block and follow operations serialize on the same Store×Buyer pair.
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-buyer-block'),hashtext(?))",
+      [input.seller_id+":"+input.organization_id])
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-buyer-store-follow'),hashtext(?))",
+      [input.organization_id+":"+input.seller_id])
+    if(input.action==="follow"){
+      const origins=await db.execute(
+        "select organization_id from da_organization_seller_ownership "+
+        "where seller_id=? and revoked_at is null",[input.seller_id])
+      if(origins.length!==1||
+         typeof origins[0].organization_id!=="string"||
+         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(origins[0].organization_id))
+        return null
+      const approved=await platformApprovedSellerIds(db,origins[0].organization_id)
+      if(!approved.includes(input.seller_id))return null
+      const blocked=await db.execute(
+        "select id from da_store_buyer_organization_block "+
+        "where seller_id=? and buyer_organization_id=? and revoked_at is null limit 2",
+        [input.seller_id,input.organization_id])
+      if(blocked.length)return null
+    }
+    const row=await this.storeFollowRow_(db,input.organization_id,input.seller_id)
+    const previousVersion=row?Number(row.version):0
+    const wasFollowing=!!row&&row.revoked_at===null
+    if(previousVersion!==input.expected_version||
+       wasFollowing===(input.action==="follow"))
+      return {conflict:true as const}
+    const version=previousVersion+1
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:actor.person_id,actor_type:actor.actor_type,
+      actor_id:actor.actor_id,role_context:"owner",
+      organization_id:input.organization_id,
+      action:input.action==="follow"?"organization.store_followed":
+        "organization.store_unfollowed",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"buyer-store-follow",
+      target_id:input.seller_id,
+      previous_values:{following:wasFollowing,version:previousVersion},
+      new_values:{following:input.action==="follow",version},
+      occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    if(!row){
+      const inserted=await db.execute(
+        "insert into da_buyer_store_follow "+
+        "(buyer_organization_id,seller_id,version,source_audit_event_id) "+
+        "values (?,?,1,?) returning version",
+        [input.organization_id,input.seller_id,audit.id])
+      if(inserted.length!==1)throw new IdentityAccessDenied()
+    }else{
+      const updated=await db.execute(
+        "update da_buyer_store_follow set version=?,source_audit_event_id=?, "+
+        "updated_at=clock_timestamp(), "+
+        "followed_at=case when ?='follow' then clock_timestamp() else followed_at end, "+
+        "revoked_at=case when ?='unfollow' then clock_timestamp() else null end "+
+        "where buyer_organization_id=? and seller_id=? and version=? returning version",
+        [version,audit.id,input.action,input.action,input.organization_id,
+          input.seller_id,previousVersion])
+      if(updated.length!==1)throw new IdentityAccessDenied()
+    }
+    return {conflict:false as const,organization_id:input.organization_id,
+      seller_id:input.seller_id,following:input.action==="follow",version}
   }
 
   @InjectTransactionManager()

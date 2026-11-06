@@ -5,7 +5,8 @@
  */
 import assert from "node:assert/strict"
 import { verifyB22OwnedSellerConstraints } from "./b22-ownership.pg16.test"
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
+import { Migration20261106090000 } from "../../src/modules/dogruadres-access/migrations/Migration20261106090000"
 import { spawnSync } from "node:child_process"
 import { mkdtempSync, readdirSync, unlinkSync, rmdirSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -111,9 +112,139 @@ async function run(){
         const workflows=await target.unsafe("select to_regclass('public.workflow_execution') as table_name")
         assert.ok(workflows[0].table_name,
           "Missing official Redis Workflow Engine execution storage in disposable B22 CI database")
+        // Mercur 2.4.1 added a Seller migration with the same bare name as
+        // our historical B22 Buyer price-group migration. A green db:migrate
+        // exit cannot prove BOTH tables were migrated: inspect the real DB
+        // before starting Chrome and preserve the old migration ledger.
+        const compatibility=await target.unsafe(`select
+          to_regclass('public.da_store_buyer_price_group') as buyer_group,
+          exists(select 1 from information_schema.columns
+            where table_schema='public' and table_name='member_invite'
+              and column_name='token_hash') as invite_hash,
+          exists(select 1 from information_schema.columns
+            where table_schema='public' and table_name='member_invite'
+              and column_name='token') as plaintext_invite`)
+        assert.ok(compatibility[0].buyer_group,
+          "B22 Buyer price group was skipped by a duplicate upstream migration name")
+        assert.equal(compatibility[0].invite_hash,true,
+          "Mercur 2.4.1 invite-token hash migration was skipped or not applied")
+        assert.equal(compatibility[0].plaintext_invite,false,
+          "Plaintext invite-token column survived the Mercur 2.4.1 upgrade")
+        const repair=await target.unsafe(`select count(*)::int as n from mikro_orm_migrations
+          where name='Migration20261106090000'`)
+        assert.equal(Number(repair[0].n),1,
+          "Additive B22 migration collision repair was not recorded")
+        process.stdout.write("PASS B22 PG16 Mercur 2.4.1 migration collision guard: native hashed invites + audited price group, unique repair ledger\n")
+      }
+      if(scope==="b22-ui"){
+        // Exercise the exact new migration SQL against a PostgreSQL TEMP table
+        // shaped like Mercur 2.4.0, not any real invitation or protected data.
+        // The same migration was already run by CLI above on the fresh native
+        // 2.4.1 schema. This additionally covers the legacy reverse collision.
+        const statements:string[]=[]
+        const migration=Object.create(Migration20261106090000.prototype)
+        migration.addSql=(statement:string)=>{statements.push(statement)}
+        await migration.up()
+        assert.equal(statements.length,4)
+        await target.begin(async(tx:any)=>{
+          await tx.unsafe(`create temporary table member_invite (
+            id text primary key, token text not null, deleted_at timestamptz
+          ) on commit drop`)
+          await tx.unsafe(`create index "IDX_member_invite_token"
+            on member_invite(token) where deleted_at is null`)
+          await tx.unsafe("set local search_path to pg_temp, public")
+          const active=await tx.unsafe("select current_schema() as schema")
+          assert.match(String(active[0].schema),/^pg_temp_[0-9]+$/,
+            "Legacy fixture must resolve only a temporary PostgreSQL schema")
+          const raw="synthetic-old-invite-"+randomBytes(24).toString("hex")
+          const expected=createHash("sha256").update(raw,"utf8").digest("hex")
+          await tx.unsafe("insert into member_invite(id,token) values($1,$2)",
+            ["synthetic",raw])
+          await tx.unsafe(statements[0])
+          const converted=await tx.unsafe(`select token_hash from member_invite
+            where id='synthetic'`)
+          assert.equal(converted.length,1)
+          assert.equal(converted[0].token_hash,expected,
+            "Legacy plaintext token must become native Mercur SHA-256")
+          const columns=await tx.unsafe(`select column_name from information_schema.columns
+            where table_schema=current_schema() and table_name='member_invite'`)
+          assert.ok(columns.some((r:any)=>r.column_name==="token_hash"))
+          assert.ok(!columns.some((r:any)=>r.column_name==="token"))
+          const indexes=await tx.unsafe(`select indexname from pg_indexes
+            where schemaname=current_schema() and tablename='member_invite'`)
+          assert.ok(indexes.some((r:any)=>r.indexname==="IDX_member_invite_token_hash"))
+          assert.ok(!indexes.some((r:any)=>r.indexname==="IDX_member_invite_token"))
+          await tx.unsafe(statements[0])
+          const repeated=await tx.unsafe(`select token_hash from member_invite
+            where id='synthetic'`)
+          assert.equal(repeated[0].token_hash,expected,
+            "A repeated repair must not double-hash the invitation")
+        })
+        process.stdout.write("PASS B22 PG16 Mercur 2.4.0 legacy token hash repair: temp-only SHA-256 conversion, old index replaced, no double-hash\\n")
       }
       const ledger=await target.unsafe("select count(*)::int as n from mikro_orm_migrations where name like 'Migration2026102%'")
       assert.ok(Number(ledger[0].n)>=1,"No Foundation migration history from Medusa CLI")
+      if(scope==="b22-ui"){
+        // SQL-only acceptance before the long, unrelated native Chrome flow:
+        // LIKE copies the ACTUAL migrated CHECK and defaults, but NOT foreign
+        // keys. The task-owned scratch table never contains a real Person.
+        const probe="b22_activity_constraint_probe_"+randomBytes(6).toString("hex")
+        const source=await target.unsafe(`select conname from pg_constraint
+          where conrelid='da_organization_application'::regclass
+            and conname='da_org_application_activities_check'`)
+        assert.equal(source.length,1,"B22 activity CHECK missing from native migration")
+        await target.unsafe(`create table "${probe}"
+          (like da_organization_application including defaults including constraints)`)
+        try{
+          await target.unsafe(`insert into "${probe}"
+            (id,applicant_person_id,business_kind,legal_name,landline_phone)
+            values('daorgapp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              'daprs_b22synthetic','individual_business','B22 sentetik eski taslak',
+              '+90 212 555 00 00')`)
+          const old=await target.unsafe(`select declared_activities::text as activities,
+            primary_activity,status,version from "${probe}"`)
+          assert.equal(old.length,1)
+          assert.equal(old[0].activities,"[]")
+          assert.equal(old[0].primary_activity,null)
+          assert.equal(old[0].status,"draft")
+          assert.equal(Number(old[0].version),1)
+          await target.unsafe(`update "${probe}"
+            set declared_activities='["service_repair","insurance_claims"]'::jsonb,
+                primary_activity='insurance_claims'`)
+          const copied=await target.unsafe(`select conname from pg_constraint
+            where conrelid='"${probe}"'::regclass
+              and conname='da_org_application_activities_check'`)
+          assert.equal(copied.length,1,"Activity CHECK not copied to isolated PG16 probe")
+          let duplicateRejected=false
+          let duplicateSqlState="not-exposed"
+          try{
+            await target.unsafe(`update "${probe}"
+              set declared_activities='["service_repair","service_repair"]'::jsonb,
+                  primary_activity='service_repair'`)
+          }catch(error:any){
+            duplicateRejected=true
+            if(typeof error?.errno==="string")duplicateSqlState=error.errno
+          }
+          const after=await target.unsafe(`select declared_activities::text as activities,
+            primary_activity,status,version from "${probe}"`)
+          process.stdout.write("B22 PG16 duplicate CHECK probe: rejected="+duplicateRejected+
+            ", sqlstate="+duplicateSqlState+
+            ", unchanged="+(JSON.stringify(JSON.parse(String(after[0]?.activities)))===
+              JSON.stringify(["service_repair","insurance_claims"]))+"\n")
+          assert.ok(duplicateRejected,"Migrated PG16 CHECK accepted duplicate activity codes")
+          assert.equal(duplicateSqlState,"23514","Unexpected PostgreSQL CHECK SQLSTATE")
+          assert.equal(after.length,1)
+          assert.deepEqual(JSON.parse(String(after[0].activities)),
+            ["service_repair","insurance_claims"],
+            "Failed duplicate update must preserve existing valid activities")
+          assert.equal(after[0].primary_activity,"insurance_claims")
+          assert.equal(after[0].status,"draft")
+          assert.equal(Number(after[0].version),1)
+          process.stdout.write("PASS B22 PG16 migrated CHECK: valid multi-activity, duplicate 23514 and unchanged row; legacy-shaped []/NULL default on isolated copy\n")
+        }finally{
+          await target.unsafe(`drop table if exists "${probe}"`)
+        }
+      }
       process.stdout.write("PASS Medusa 2.21.2 CLI db:migrate: Foundation discovered and ledger recorded on disposable PG16\n")
       // Execute native AuthIdentity TOTP/recovery with this exact disposable
       // database. Only this child enables the local Auth module MFA options;
@@ -160,7 +291,9 @@ async function run(){
             cwd:process.cwd(),env,encoding:"utf8",timeout:timeoutMs,maxBuffer:3*1024*1024})
           if(task.B22_SMTP_CANARY)assert.ok(!String(child.stdout??"").concat(String(child.stderr??"")).includes(task.B22_SMTP_CANARY),"SMTP canary leaked to child logs")
           const valid=String(child.stdout??"").split("\n")
-            .filter(x=>/^PASS B22 Chrome:|^PASS B22 native organization\.read role policy:|^PASS B22 Owner role policy:|^PASS B22 protected Owner mutation negatives:|^PASS B22 protected Owner management:|^PASS B22 explicit permission:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^PASS B22 Redis native Cart crash recovery:|^PASS B22 native Cart TTL units:|^PASS B22 native Mercur product workflow:|^PASS B22 Mercur 2\.4 Store regions:|^PASS B22 native Store BuyerOrg group PriceList capability:|^PASS B22 BuyerOrg native private TRY reference:|^PASS B22 Buyer catalogue:|^PASS B22 native TRY Offer list price:|^PASS B22 audited Store price group:|^PASS B22 Store price group F-01\/F-02:|^PASS B22 suspended Seller Organization:|^PASS B22 audit worker:|^PASS B22 audit real ACK:|^PASS B22 audit natural lease:|^PASS B22 audit native scheduler and crash restart:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x)).join("\n")
+            .filter(x=>/^PASS B22 Chrome:|^PASS B22 real PG16: post-primary-proof forced audit failure|^PASS B22 native organization\.read role policy:|^PASS B22 Owner role policy:|^PASS B22 protected Owner mutation negatives:|^PASS B22 protected Owner management:|^PASS B22 explicit permission:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^PASS B22 Redis native Cart crash recovery:|^PASS B22 native Cart TTL units:|^PASS B22 native Mercur product workflow:|^PASS B22 Mercur 2\.4 Store regions:|^PASS B22 native Store BuyerOrg group PriceList capability:|^PASS B22 BuyerOrg native private TRY reference:|^PASS B22 Buyer catalogue:|^PASS B22 native TRY Offer list price:|^PASS B22 audited Store price group:|^PASS B22 Store price group F-01\/F-02:|^PASS B22 suspended Seller Organization:|^PASS B22 audit worker:|^PASS B22 real audit relay:|^PASS B22 audit real ACK:|^PASS B22 audit natural lease:|^PASS B22 audit native scheduler and crash restart:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x) ||
+              x==="PASS B22 PG16: duplicate activity direct SQL 23514; original private draft unchanged" ||
+              x==="PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner").join("\n")
           if(child.error||child.status!==0)
             throw Error("B22 dedicated task-only child stage failed: "+sanitized(
               String(child.error??"exit "+child.status)+"\n"+String(child.stderr??"")+"\n"+String(child.stdout??"")))
@@ -176,6 +309,38 @@ async function run(){
           assert.ok(result.includes("PASS B22 Chrome: native Admin SMTP same-origin MFA/grant GET200"))
           return
         }
+        assert.ok(result.split("\n").some(line=>line.startsWith(
+          "PASS B22 Chrome: first Person signup HTTPS/PG16, mandatory mobile400, native Customer to one Person")),
+          "Missing real Chrome/PG16 successful first Person signup evidence")
+        assert.ok(result.includes("PASS B22 PG16: duplicate activity direct SQL 23514; original private draft unchanged"),
+          "Missing direct PostgreSQL 16 CHECK rejection evidence for duplicate activity")
+        assert.ok(result.includes("PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner"),
+          "Missing PG16 legacy-shaped default/read and Chrome edit persistence evidence")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome: delayed real draft POST locks selection/form; no stale-value rewrite or silent version overwrite"),
+          "Missing delayed HTTP save/selection lock and unchanged PG16 draft evidence")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome: 103 private drafts across keyset pages; oldest opened via visible button; foreign Person empty; no Organization/Owner"),
+          "Missing real Chrome private pagination, oldest draft read and foreign Person isolation")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome: private applicant withdraws draft; foreign/CSRF/stale/replay denied; persisted audit, no Organization/Owner"),
+          "Missing real Chrome/PG16 private draft withdrawal acceptance")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome: Buyer Organization Owner follows and unfollows approved Store; foreign/CSRF/replay denied, PG16 v1-v2 and two outboxed audits, no checkout"),
+          "Missing real Chrome/PG16 Store follow persistence and foreign/replay rejection")
+        assert.ok(result.includes("PASS B22 Chrome: declared activities and primary activity saved in PG16; foreign and invalid primary denied; reload restores selection"),
+          "Missing actual Chrome/PG16 activity declaration/save/denial/reload proof")
+        assert.ok(result.includes("PASS B22 Chrome: Person private Organization draft save/edit, foreign/unauthenticated/CSRF/replay denies, PG16 audit without Organization or Owner"),
+          "Missing real Chrome/PG16 applicant-private draft, edit, CSRF/foreign/replay denial and no auto Organization/Owner")
+        assert.ok(result.includes("PASS B22 Chrome: Person private Organization draft reload; version-2 reappears in list; Taslağı düzenle opens populated form; zero new draft/Organization/Owner/audit write"),
+          "Missing real Chrome/PG16 draft reload persistence: same draft (v2) in list, Taslağı düzenle form populated, zero new DB rows")
+        assert.ok(result.includes("PASS B22 Chrome: primary Customer protected in UI, no unlink control, forged unlink403 and unchanged PG16 login/proof/audit"),
+          "Missing real browser primary/secondary distinction, forged unlink denial and PG16 non-mutation")
+        assert.ok(result.includes("PASS B22 real PG16: post-primary-proof forced audit failure rolls back six Foundation tables"),
+          "Missing real PG16 forced post-primary-proof rollback across Person, mapping, login, proof, audit and outbox")
+        assert.ok(result.split("\n").some(line=>line.startsWith(
+          "PASS B22 Chrome: distinct real TLS client IPs share login/signup budget per source only;")),
+          "Missing real HTTPS source-isolated 429 and forged-header negative evidence")
         for(const target of ["active","missing","foreign","revoked"])
           assert.ok(result.split("\n").includes("PASS B22 Chrome: membership non-disclosure "+target+
             " target HTTP403 identical safe body; PG16 membership/canonical audit/audit outbox/security outbox unchanged"),
@@ -250,6 +415,8 @@ async function run(){
             DOGRUADRES_MFA_ENROLLMENT_ENABLED:"true"})
         assert.ok(audit.includes("PASS B22 audit worker: real Medusa Access/Index job delivered canonical Staff events, ACK and single Index entry on lost-ACK replay; crash recovery NOT TESTED"),
           "Missing native worker crash/Index/ACK/replay evidence")
+        assert.ok(audit.includes("PASS B22 real audit relay: native Owner Store follow/unfollow delivered by Medusa worker to Buyer-only Audit Index, two matching envelopes and durable ACKs"),
+          "Missing real indexed Store-follow audit delivery and ACK")
         for(const proof of ["PASS B22 audit real ACK: committed receipt lost,",
           "PASS B22 audit natural lease: DB clock 60s,",
           "PASS B22 audit native scheduler and crash restart: true Medusa cron,"])
