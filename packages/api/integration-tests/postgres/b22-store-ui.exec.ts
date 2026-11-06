@@ -7747,18 +7747,29 @@ export default async function({container}:any){
       assert.ok(!['application/pdf','image/png','image/jpeg'].includes(staffDocDownload.contentType),
         "Unscanned original media must not reach staff HTTP response")
 
-      // New raster-only endpoint must also reject without a genuine current
-      // local ClamAV database and an available OS namespace renderer.
-      const unsafePreview = await reviewChrome.eval(`(async()=>{
+      // Preview must be the server-generated PNG. Positive CI mode uses an
+      // official free ClamAV database and real OS namespace isolation;
+      // without either, the same real HTTP request MUST fail closed.
+      const scanEnabled=process.env.DOGRUADRES_B22_SAFE_REVIEW_TEST==="true"
+      const reviewPreview = await reviewChrome.eval(`(async()=>{
         const r=await fetch('/personal/organization-applications?action=review_preview&application_id='+
           encodeURIComponent(${JSON.stringify(b22TaxAppId)}));
+        const raw=new Uint8Array(await r.arrayBuffer());
         return {status:r.status,type:r.headers.get('content-type'),
-          cache:r.headers.get('cache-control')};
+          cache:r.headers.get('cache-control'),length:raw.length,
+          header:Array.from(raw.slice(0,8))};
       })()`)
-      assert.equal(unsafePreview.status,503)
-      assert.equal(unsafePreview.cache,"no-store")
-      assert.ok(!unsafePreview.type?.startsWith("image/"),
-        "Staff must never receive a fake or raw preview on unavailable scan")
+      assert.equal(reviewPreview.cache,"no-store")
+      if(scanEnabled){
+        assert.equal(reviewPreview.status,200,"Signed local ClamAV and sandbox must provide safe PNG")
+        assert.equal(reviewPreview.type,"image/png")
+        assert.ok(reviewPreview.length>64&&reviewPreview.length<=4*1024*1024)
+        assert.deepEqual(reviewPreview.header,[137,80,78,71,13,10,26,10])
+      }else{
+        assert.equal(reviewPreview.status,503)
+        assert.ok(!reviewPreview.type?.startsWith("image/"),
+          "Staff must never receive a fake or raw preview on unavailable scan")
+      }
       await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()")
       await reviewChrome.wait("document.getElementById('organization-review-list').textContent.includes('B22 Vergi Levhası Test Şirketi')")
       const openUnsafePreview = await reviewChrome.eval(`(()=>{
@@ -7770,15 +7781,21 @@ export default async function({container}:any){
         button.click();return true;
       })()`)
       assert.equal(openUnsafePreview,true)
-      await reviewChrome.wait("document.getElementById('organization-review-list').textContent.includes('Tarama veya güvenli önizleme kullanılamıyor')")
-      const hiddenApproval=await reviewChrome.eval(`(()=>{
+      await reviewChrome.wait(scanEnabled?
+        "document.getElementById('organization-review-list').textContent.includes('Yalnız güvenli görsel gösteriliyor')":
+        "document.getElementById('organization-review-list').textContent.includes('Tarama veya güvenli önizleme kullanılamıyor')")
+      const approvalState=await reviewChrome.eval(`(()=>{
         const row=Array.from(document.querySelectorAll('#organization-review-list p'))
           .find(p=>p.textContent.includes('B22 Vergi Levhası Test Şirketi'));
         const button=Array.from(row?.querySelectorAll('button')||[])
           .find(b=>b.textContent==='İşletmeyi Onayla');
-        return !!button && button.hidden && button.disabled;
+        const image=row?.querySelector('img');
+        return {ready:!!button&&!button.hidden&&!button.disabled,
+          rasterVisible:!!image&&!image.hidden&&image.naturalWidth>0};
       })()`)
-      assert.equal(hiddenApproval,true,"An unscanned document must never enable reviewer approval")
+      assert.equal(approvalState.ready,scanEnabled,
+        "Only a genuinely scanned and rendered preview may unlock review UI")
+      assert.equal(approvalState.rasterVisible,scanEnabled)
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: staff unscanned document denied, applicant original retained, foreign denied\n")
 
       const correctionRes = await reviewChrome.eval(`(async()=>{`+

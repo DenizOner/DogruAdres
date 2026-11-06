@@ -342,6 +342,51 @@ jobs:
           command -v openssl
           command -v certutil
           command -v google-chrome
+      - name: B22 free ClamAV signature database and isolated renderer — task-only PR
+        if: github.event_name != 'workflow_dispatch' && github.head_ref == 'feature/b22-tax-certificate-admission-20261105'
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          # These packages are free and confined to this disposable CI runner.
+          # A blocked signature download or unavailable sandbox MUST fail;
+          # never downgrade the document review to header/magic-byte checks.
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            clamav-daemon clamav-freshclam bubblewrap poppler-utils imagemagick
+          sudo systemctl stop clamav-freshclam.service >/dev/null 2>&1 || true
+          sudo freshclam --stdout
+          test -s /var/lib/clamav/daily.cvd || test -s /var/lib/clamav/daily.cld
+
+          # Probe unprivileged namespaces. Never change host sysctl, AppArmor,
+          # service privileges or Docker access to force a test to pass.
+          /usr/bin/bwrap --unshare-all --new-session --ro-bind /usr /usr \
+            --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64 \
+            --proc /proc --dev /dev --tmpfs /tmp -- /usr/bin/true
+
+          sock="$RUNNER_TEMP/b22-clamd.sock"
+          conf="$RUNNER_TEMP/b22-clamd.conf"
+          cat >"$conf" <<EOF
+          Foreground yes
+          User $(id -un)
+          DatabaseDirectory /var/lib/clamav
+          LocalSocket $sock
+          LocalSocketMode 660
+          FixStaleSocket yes
+          MaxFileSize 15M
+          MaxScanSize 50M
+          StreamMaxLength 12M
+          ReadTimeout 45
+          CommandReadTimeout 45
+          EOF
+          /usr/sbin/clamd --config-file="$conf" >"$RUNNER_TEMP/b22-clamd-start.log" 2>&1 &
+          for attempt in {1..45}; do
+            if [ -S "$sock" ]; then break; fi
+            sleep 1
+          done
+          test -S "$sock"
+          echo "DOGRUADRES_CLAMD_SOCKET=$sock" >> "$GITHUB_ENV"
+          echo "DOGRUADRES_B22_SAFE_REVIEW_TEST=true" >> "$GITHUB_ENV"
       - name: B22 real Chrome after signed R1 activation on separate disposable database
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
