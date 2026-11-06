@@ -5350,25 +5350,26 @@ export default async function({container}:any){
         "return {status:r.status,body:await r.json()}})()"
       ).then((v:any)=>{ownerRevokeFinished=true;return v},
         (e:unknown)=>{ownerRevokeFinished=true;throw e})
-      await until(async()=>{
-        const [w]=await q("select count(*)::int n from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.granted=false and l.locktype in ('transactionid','tuple') and a.datname=current_database() and a.query ilike '%da_organization_membership%'")
-        return w.n>=1
-      },19000,"Real second protected Owner revocation waits on applicant membership row")
-      assert.equal(ownerRevokeFinished,false)
+      // The direct Owner revoke path now fails before any membership write.
+      // Unlike the former unsafe downgrade, it must not wait for a row
+      // lock while the native Seller INSERT is held by our test barrier.
+      const revoked=await ownerRevokePending
+      assert.equal(revoked.status,403,
+        "A second Owner cannot bypass the 10+20 guarded removal process")
+      assert.equal(ownerRevokeFinished,true)
       assert.equal(ownerCreateFinished,false)
       const [stillOwner]=await q("select status,protected_owner from da_organization_membership where id=$1",[gammaOwnerMembership.id])
       assert.equal(stillOwner.status,"active")
       assert.equal(stillOwner.protected_owner,true)
+      assert.equal((await q("select count(*)::int n from da_audit_event where target_id=$1 and action='organization.membership_changed'",[gammaOwnerMembership.id]))[0].n,0,
+        "Denied protected Owner removal must not write membership audit while Seller INSERT waits")
       await ownerRaceBarrier.query("ROLLBACK")
       ownerBarrierHeld=false
       const submitted=await ownerCreatePending
-      const revoked=await ownerRevokePending
       assert.equal(submitted.status,201,
         "Committed native Seller must survive attempted unauthorized Owner removal")
       assert.equal(submitted.body.status,"pending_approval")
       assert.match(submitted.body.seller_id,/^sel_[A-Za-z0-9_-]+$/)
-      assert.equal(revoked.status,403,
-        "A second Owner cannot bypass the 10+20 guarded removal process")
       const [preservedOwner]=await q("select status,protected_owner,revoked_at from da_organization_membership where id=$1",[gammaOwnerMembership.id])
       assert.equal(preservedOwner.status,"active")
       assert.equal(preservedOwner.protected_owner,true)
