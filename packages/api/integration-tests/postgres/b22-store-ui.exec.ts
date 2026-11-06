@@ -5123,7 +5123,8 @@ export default async function({container}:any){
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       await reviewer.select(organizations[0].name,"member")
-      await reviewer.ready()
+      // B06Chrome.ready() waits for the Owner-only membership panel.
+      // This actor is an ordinary Member; verify the actual product scope instead.
       const memberScope=await reviewer.eval(`(async()=>{
         const r=await fetch('/personal/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
         if(r.status!==200)return {status:r.status,stores:[]}
