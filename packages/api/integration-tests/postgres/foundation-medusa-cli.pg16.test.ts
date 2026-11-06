@@ -217,6 +217,7 @@ async function run(){
             // stdout, HTTP payloads, credentials, DOM or test fixture IDs.
             const scoped=valid.split("\n").filter(x=>[
               "PASS B22 Chrome: protected Owner excluded from individual products.edit; forged grant/revoke HTTP403, PG16 grant/audit unchanged",
+              "PASS B22 Chrome: no new Organization Admin assignment; Owner HTTP400, membership/audit unchanged",
               "PASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit",
               "PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged",
               "PASS B22 Chrome: denied native Member/Store UI stays visible without product submit; verified association enables product form",
@@ -295,6 +296,8 @@ async function run(){
         assert.ok(result.includes("PASS B22 native Mercur product workflow: draft persisted, only selected Seller linked"))
         assert.ok(result.split("\n").includes("PASS B22 Chrome: protected Owner excluded from individual products.edit; forged grant/revoke HTTP403, PG16 grant/audit unchanged"),
           "Missing real Chrome/PG16 immutable Owner personal grant/revoke denial with zero DB side effects")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome: no new Organization Admin assignment; Owner HTTP400, membership/audit unchanged"),
+          "Missing real Owner browser/HTTP rejection of retired company Admin role")
         assert.ok(result.split("\n").includes("PASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit"),
           "Missing real Chrome/PG16 refusal of unauthorized, foreign and forged native member connection")
         assert.ok(result.split("\n").includes("PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged"),

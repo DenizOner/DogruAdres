@@ -235,7 +235,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   }
   @InjectTransactionManager()
   async personalChangeMembershipRole(token:string,org:string,membership:string,role:'member'|'admin',@MedusaContext() context:Context={}) {
-    if(role!=='member'&&role!=='admin')throw new MedusaError(MedusaError.Types.INVALID_DATA,'Invalid role')
+    // Direct service calls must also refuse retired Organization Admin.
+    // Historical Admin rows may only be reduced to ordinary Member.
+    if(role!=='member')throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
     const sql=securitySql(context.transactionManager)
     await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`,[org])
     const sessions=new IdentitySessions(sql),identity=await sessions.current(token,true)

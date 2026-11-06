@@ -106,13 +106,14 @@ describe("personal memberships route", () => {
   })
 
   describe("POST /personal/memberships", () => {
-    it("changes active member role to admin when role='admin' is supplied", async () => {
-      req.body = { organization_id: orgId, membership_id: memberId, role: "admin" }
-      await POST(req, res)
-      expect(mockService.personalChangeMembershipRole).toHaveBeenCalledWith(token, orgId, memberId, "admin")
-      expect(res.json).toHaveBeenCalledWith({
-        membership: { id: memberId, role: "admin", status: "active" },
-      })
+    it("rejects retired Organization Admin assignment before service mutation", async () => {
+      for(const action of [undefined,"role"]){
+        req.body={organization_id:orgId,membership_id:memberId,role:"admin",...(action?{action}:{})}
+        await POST(req,res)
+        expect(res.status).toHaveBeenLastCalledWith(400)
+        expect(res.json).toHaveBeenLastCalledWith({message:"Invalid input"})
+      }
+      expect(mockService.personalChangeMembershipRole).not.toHaveBeenCalled()
     })
 
     it("changes active admin role to member when role='member' is supplied", async () => {
@@ -125,13 +126,12 @@ describe("personal memberships route", () => {
       })
     })
 
-    it("accepts optional action='role' in payload", async () => {
-      req.body = { action: "role", organization_id: orgId, membership_id: memberId, role: "admin" }
-      await POST(req, res)
-      expect(mockService.personalChangeMembershipRole).toHaveBeenCalledWith(token, orgId, memberId, "admin")
-      expect(res.json).toHaveBeenCalledWith({
-        membership: { id: memberId, role: "admin", status: "active" },
-      })
+    it("accepts optional role action only for legacy Admin -> Member reduction", async () => {
+      mockService.personalChangeMembershipRole.mockResolvedValueOnce({id:memberId,role:"member",status:"active"})
+      req.body={action:"role",organization_id:orgId,membership_id:memberId,role:"member"}
+      await POST(req,res)
+      expect(mockService.personalChangeMembershipRole).toHaveBeenCalledWith(token,orgId,memberId,"member")
+      expect(res.json).toHaveBeenCalledWith({membership:{id:memberId,role:"member",status:"active"}})
     })
 
     it("preserves backward-compatible revoke when role is omitted", async () => {
@@ -435,66 +435,40 @@ describe("personal memberships route", () => {
       expect(source).toContain('id="memberships" aria-describedby="memberships-status" aria-busy="false"')
     })
 
-    it("renders role controls for an active ordinary member but not a protected Owner from the active-only list", async () => {
-      const h = createUiHarness()
-      const selPromise = h.select(orgId)
-
-      // Resolve organization detail
-      h.state.pending[0].resolve({ organizations: [{ id: orgId, name: "Test Org", role: "owner" }] })
+    it("shows only the protected Owner a legacy Admin to Member reduction", async () => {
+      const h=createUiHarness()
+      runInContext("currentPersonId='p_owner'",h.context)
+      const select=h.select(orgId)
+      h.state.pending[0].resolve({organizations:[{id:orgId,name:"Test Org",role:"owner"}]})
       await settle()
-
-      // Resolve memberships
-      const members = [
-        { id: "mem_owner", person_id: "p_owner", role: "owner", status: "active", protected_owner: true },
-        { id: "mem_ordinary", person_id: "p_ordinary", role: "member", status: "active", protected_owner: false },
+      const members=[
+        {id:"mem_owner",person_id:"p_owner",role:"owner",status:"active",protected_owner:true},
+        {id:"mem_ordinary",person_id:"p_ordinary",role:"member",status:"active",protected_owner:false},
+        {id:"mem_legacy",person_id:"p_legacy",role:"admin",status:"active",protected_owner:false}
       ]
-      h.state.pending.find(p => p.path === `memberships?organization=${orgId}`)!.resolve({ memberships: members })
-      await selPromise
+      h.state.pending.find(p=>p.path===`memberships?organization=${orgId}`)!.resolve({memberships:members})
+      await select
       await settle()
-
-      const membershipChildren = h.el("memberships").children
-
-      // Find the select elements
-      const selects = membershipChildren.filter((c: any) => c.tag === "select")
-      expect(selects).toHaveLength(1)
-      expect(selects[0].value).toBe("member")
-
-      // Find the save buttons
-      const saveButtons = membershipChildren.filter((c: any) => c.tag === "button" && c.textContent.includes("Rolü kaydet"))
-      expect(saveButtons).toHaveLength(1)
-      expect(saveButtons[0].textContent).toBe("Rolü kaydet mem_ordinary")
-
-      // Test clicking the save button to change to admin
-      selects[0].value = "admin"
-      const roleChange = saveButtons[0].onclick()
-
-      // Verify the POST request sent
-      const postReq = h.state.pending.find(p => p.path === "memberships" && p.options?.method === "POST")
-      expect(postReq).toBeDefined()
-      const body = JSON.parse(postReq!.options.body)
-      expect(body).toEqual({
-        organization_id: orgId,
-        membership_id: "mem_ordinary",
-        role: "admin",
+      const elements=h.el("memberships").children
+      expect(elements.filter((e:any)=>e.tag==="select")).toHaveLength(0)
+      expect(elements.some((e:any)=>e.textContent?.includes("Rolü kaydet mem_ordinary"))).toBe(false)
+      const button=elements.find((e:any)=>e.tag==="button"&&e.textContent==="Eski şirket Admin kaydını Üye yap mem_legacy")
+      expect(button).toBeDefined()
+      const change=button.onclick()
+      const post=h.state.pending.find(p=>p.path==="memberships"&&p.options?.method==="POST")
+      expect(JSON.parse(post!.options.body)).toEqual({
+        organization_id:orgId,membership_id:"mem_legacy",role:"member"
       })
-
-      // Resolve the POST
-      postReq!.resolve({ membership: { id: "mem_ordinary", role: "admin", status: "active" } })
+      post!.resolve({membership:{id:"mem_legacy",role:"member",status:"active"}})
       await settle()
-
-      // In the onclick handler, selectOrg(org) is called: resolve its organization detail
-      const orgRefresh = h.state.pending.find(p => p.path === `organizations?id=${orgId}` && p !== h.state.pending[0])
-      expect(orgRefresh).toBeDefined()
-      orgRefresh!.resolve({ organizations: [{ id: orgId, name: "Test Org", role: "owner" }] })
+      const orgRefresh=h.state.pending.filter(p=>p.path===`organizations?id=${orgId}`).at(-1)!
+      orgRefresh.resolve({organizations:[{id:orgId,name:"Test Org",role:"owner"}]})
       await settle()
-
-      // Resolve the memberships re-fetch inside selectOrg
-      const memRefresh = h.state.pending.find(p => p.path === `memberships?organization=${orgId}` && p !== h.state.pending[1])
-      expect(memRefresh).toBeDefined()
-      memRefresh!.resolve({ memberships: [{ id: "mem_ordinary", person_id: "p_ordinary", role: "admin", status: "active", protected_owner: false }] })
-      await roleChange
-
-      expect(h.state.status).toBe("Rol güncellendi")
+      const memRefresh=h.state.pending.filter(p=>p.path===`memberships?organization=${orgId}`).at(-1)!
+      memRefresh.resolve({memberships:members.map(m=>m.id==="mem_legacy"?{...m,role:"member"}:m)})
+      await change
+      expect(h.state.status).toBe("Eski Admin kaydı Üye olarak güncellendi")
+      expect(h.el("memberships").children.some((e:any)=>e.textContent?.includes("Eski şirket Admin kaydını Üye yap"))).toBe(false)
     })
   })
 })

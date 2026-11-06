@@ -280,7 +280,7 @@ async function verifyMembershipNonDisclosure({
       const r=await fetch('/personal/memberships',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':${JSON.stringify(session.body.csrf_token)}},
         body:JSON.stringify({action:'role',organization_id:${JSON.stringify(organizationId)},
-          membership_id:${JSON.stringify(target.id)},role:'admin'})})
+          membership_id:${JSON.stringify(target.id)},role:'member'})})
       return {status:r.status,body:await r.json()}
     })()`)
     // Read back even on an unexpected response before stopping; no retry.
@@ -4396,6 +4396,20 @@ export default async function({container}:any){
     // Organization also had an Owner role. Wait for exact Organization scope
     // and freshly loaded Store/member options before the real Chrome click.
     await browser.wait(`new URLSearchParams(location.search).get('organization')===${JSON.stringify(organizations[0].id)} && JSON.parse(document.getElementById('detail').textContent||'{}').id===${JSON.stringify(organizations[0].id)}`)
+    const adminMemberBefore=await q(`select role,status,protected_owner from da_organization_membership where id=$1`,[alphaMember.id])
+    const adminAuditBefore=await q(`select id from da_audit_event where organization_id=$1 order by id`,[organizations[0].id])
+    const attemptedAdmin=await browser.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      const response=await fetch('/personal/memberships',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify({action:'role',organization_id:${JSON.stringify(organizations[0].id)},
+          membership_id:${JSON.stringify(alphaMember.id)},role:'admin'})})
+      return response.status
+    })()`)
+    assert.equal(attemptedAdmin,400,"Owner cannot assign retired Organization Admin")
+    assert.deepEqual(await q(`select role,status,protected_owner from da_organization_membership where id=$1`,[alphaMember.id]),adminMemberBefore)
+    assert.deepEqual(await q(`select id from da_audit_event where organization_id=$1 order by id`,[organizations[0].id]),adminAuditBefore)
+    process.stdout.write("\nPASS B22 Chrome: no new Organization Admin assignment; Owner HTTP400, membership/audit unchanged\n")
     await browser.wait(`!document.getElementById('product-grants-panel').hidden && Array.from(document.querySelector('#product-grants-form select[name=seller_id]').options).some(o=>o.value===${JSON.stringify(ownerStoreId)}) && Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).some(o=>o.value===${JSON.stringify(alphaMember.id)}) && !document.querySelector('#product-grants-form button[value=grant]').disabled`)
     const editableMembers=await browser.eval("Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).map(o=>o.value)")
     assert.deepEqual(editableMembers,[alphaMember.id],
@@ -4728,7 +4742,7 @@ export default async function({container}:any){
           revokeMember:await post('/personal/memberships',{action:'revoke',
             organization_id:org,membership_id:membership}),
           changeRole:await post('/personal/memberships',{action:'role',
-            organization_id:org,membership_id:membership,role:'admin'}),
+            organization_id:org,membership_id:membership,role:'member'}),
           revokeInvite:await post('/personal/invitations',{action:'revoke',
             organization_id:org,invitation_id:invitation})
         }

@@ -2463,16 +2463,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const canManageOwners=data.memberships.some(m=>m.person_id===currentPersonId&&m.role==='owner'&&m.protected_owner===true&&m.status==='active');
       for(const m of data.memberships){const p=document.createElement('p');p.textContent=m.person_id+' — '+m.role+' — '+m.status;el('memberships').append(p);
         if(m.status==='active'){
-          if(!m.protected_owner&&m.role!=='owner'){
-            const sel=document.createElement('select');
-            for(const r of ['member','admin']){const o=document.createElement('option');o.value=r;o.textContent=r;if(r===m.role)o.selected=true;sel.append(o)}
-            const rb=document.createElement('button');rb.textContent='Rolü kaydet '+m.id;
+          // Old company Admin records remain intact. Only a current,
+          // protected Owner may reduce one to an ordinary Member.
+          if(canManageOwners && m.protected_owner===false && m.role==='admin'){
+            const rb=document.createElement('button');rb.textContent='Eski şirket Admin kaydını Üye yap '+m.id;
             rb.onclick=async()=>{
               if(request!==organizationRequest||currentOrg!==org)return;rb.disabled=true;
-              try{await api('memberships',{method:'POST',body:JSON.stringify({organization_id:org,membership_id:m.id,role:sel.value})});if(request!==organizationRequest)return;await selectOrg(org);status('Rol güncellendi')}
+              try{await api('memberships',{method:'POST',body:JSON.stringify({organization_id:org,membership_id:m.id,role:'member'})});if(request!==organizationRequest)return;await selectOrg(org);status('Eski Admin kaydı Üye olarak güncellendi')}
               catch(e){if(request!==organizationRequest)return;status(e.message);if(!e.uncertain)rb.disabled=false}
             };
-            el('memberships').append(sel,rb);
+            el('memberships').append(rb);
           }
           if(canManageOwners && !m.protected_owner && m.role!=='owner'){
             const ob=document.createElement('button');ob.textContent='Korumalı Owner yap '+m.id;
