@@ -412,6 +412,26 @@ jobs:
           sudo setfacl -m "u:$(id -un):rw" "$sock"
           test -r "$sock"
           echo "PASS B22: official local-only ClamAV daemon and scoped socket ACL"
+          # This uses only safe, in-memory synthetic fixtures. It isolates
+          # scanner protocol, live EICAR detection and sandboxed PNG rendering
+          # before the longer real Chrome acceptance. No real document paths.
+          DOGRUADRES_CLAMD_SOCKET="$sock" bun -e '
+            import { verifyTaxCertificateWithClamd, TaxCertificateScannerUnavailable } from "./packages/api/src/modules/dogruadres-access/tax-certificate-scanner.ts";
+            import { makeSafeTaxCertificatePreview } from "./packages/api/src/modules/dogruadres-access/tax-certificate-safe-preview.ts";
+            const png=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8//8/AwMDEwMDAwMDAwAkBgMB/DXemwAAAABJRU5ErkJggg==","base64");
+            await verifyTaxCertificateWithClamd(png);
+            console.log("PASS B22: real ClamAV clean PNG stream accepted");
+            const eicar=Buffer.from(String.raw`X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*`);
+            let denied=false;
+            try { await verifyTaxCertificateWithClamd(eicar); }
+            catch(error) { denied=error instanceof TaxCertificateScannerUnavailable; }
+            if(!denied) throw Error("Official ClamAV EICAR detection failed");
+            console.log("PASS B22: real ClamAV harmless EICAR test file denied");
+            const raster=await makeSafeTaxCertificatePreview(png,"image/png");
+            if(raster.length<64 || !raster.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))
+              throw Error("Sandbox did not produce a valid synthetic PNG");
+            console.log("PASS B22: real isolated scanner-to-raster preview");
+          '
           echo "DOGRUADRES_CLAMD_SOCKET=$sock" >> "$GITHUB_ENV"
           echo "DOGRUADRES_B22_SAFE_REVIEW_TEST=true" >> "$GITHUB_ENV"
       - name: B22 real Chrome after signed R1 activation on separate disposable database
