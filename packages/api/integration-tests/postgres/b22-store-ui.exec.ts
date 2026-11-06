@@ -7859,7 +7859,7 @@ export default async function({container}:any){
         [dragApplicationId]))[0].status,'withdrawn')
       assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),dragOrgCount,
         "Uploading and withdrawing a private draft must not provision an Organization")
-      process.stdout.write("PASS B22 Chrome/HTTP/PG16: PNG drag drop requires visible upload, private hash persisted, multi-drop denied, withdrawn without Organization\\n")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: PNG drag drop requires visible upload, private hash persisted, multi-drop denied, withdrawn without Organization\n")
 
       // Read-only verification against every persisted private revision.
       // No cleanup, no paths/keys/Person data in the audit output.
