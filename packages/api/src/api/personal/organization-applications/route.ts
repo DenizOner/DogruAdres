@@ -151,7 +151,8 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
       return res.status(200).json(result)
     }catch(error){
       return res.status(error instanceof IdentityAccessDenied?403:503)
-        .json({message:error instanceof IdentityAccessDenied?"Access denied":"Unavailable"})
+        .json({message:error instanceof IdentityAccessDenied?"Access denied":
+          error instanceof TaxCertificateReviewUnavailable?"Document review unavailable":"Unavailable"})
     }
   }
 
