@@ -72,13 +72,20 @@ async function verifyPanelCspModes(browser:B06Chrome, container:any):Promise<voi
     process.stdout.write("PASS B22 Chrome: "+label+
       " connect-src blocked synthetic external POST; same-origin HTTP200\n")
   }
-  await probe("Vendor BUILD",browser.origin+"/seller/login","/personal/session")
-  for(const panel of ["admin","vendor"] as const){
+  // Mercur native /seller routes legitimately return 401 for a Person-only
+  // session. Do NOT disable that authority boundary to inspect a static file.
+  // Vite's own preview serves the exact built Vendor dist for browser proof.
+  for(const scenario of [
+    {panel:"vendor" as const,mode:"preview" as const,label:"Vendor BUILD"},
+    {panel:"admin" as const,mode:"dev" as const,label:"Admin DEV"},
+    {panel:"vendor" as const,mode:"dev" as const,label:"Vendor DEV"},
+  ]){
     const port=await getFreePort()
-    const cwd=join(process.cwd(),"../../apps",panel)
-    const startUrl="http://127.0.0.1:"+port+(panel==="admin"?"/dashboard/":"/seller/login")
+    const cwd=join(process.cwd(),"../../apps",scenario.panel)
+    const basePath=scenario.panel==="admin"?"/dashboard/":"/seller/"
+    const startUrl="http://127.0.0.1:"+port+basePath
     const child=spawn("bun",
-      ["run","dev","--host","127.0.0.1","--port",String(port),"--strictPort"],{
+      ["run",scenario.mode,"--host","127.0.0.1","--port",String(port),"--strictPort"],{
       cwd,stdio:"ignore",detached:process.platform!=="win32",
       env:{...process.env,VITE_MERCUR_BACKEND_URL:browser.origin,
         MERCUR_DISABLE_TELEMETRY:"true"},
@@ -87,9 +94,9 @@ async function verifyPanelCspModes(browser:B06Chrome, container:any):Promise<voi
       await waitForLoopback(async()=>{
         const response=await fetch(startUrl,{signal:AbortSignal.timeout(1000)})
         return response.ok
-      },45000,panel+" native Vite dev server")
-      await probe(panel+" DEV",startUrl,panel==="admin"?"/dashboard/":"/seller/login",
-        browser.origin)
+      },45000,scenario.label+" existing native Vite server")
+      await probe(scenario.label,startUrl,basePath,
+        scenario.mode==="dev"?browser.origin:undefined)
     }finally{
       // Bun can spawn a Vite child. Terminate only our dedicated process group.
       if(process.platform!=="win32"&&child.pid){
@@ -97,7 +104,7 @@ async function verifyPanelCspModes(browser:B06Chrome, container:any):Promise<voi
       }else killProcess(child)
       await waitForLoopback(async()=>
         child.exitCode!==null||child.signalCode!==null,
-        10000,panel+" Vite process shutdown")
+        10000,scenario.label+" Vite process shutdown")
     }
   }
 }
