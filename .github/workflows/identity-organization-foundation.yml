@@ -354,7 +354,7 @@ jobs:
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
             clamav-daemon clamav-freshclam bubblewrap poppler-utils imagemagick \
-            apparmor-profiles apparmor-utils
+            apparmor-profiles apparmor-utils acl
           # Ubuntu 24.04 blocks unprivileged bwrap namespaces by default.
           # Load ONLY its distribution-supplied restrictive bwrap profile in
           # this throwaway CI VM. Never disable global AppArmor or userns rules.
@@ -383,36 +383,35 @@ jobs:
             --proc /proc --dev /dev --tmpfs /tmp -- /usr/bin/true
           echo "PASS B22: Ubuntu restricted Bubblewrap namespace with no network"
 
-          sock="$RUNNER_TEMP/b22-clamd.sock"
-          conf="$RUNNER_TEMP/b22-clamd.conf"
-          cat >"$conf" <<EOF
-          Foreground yes
-          User $(id -un)
-          DatabaseDirectory /var/lib/clamav
-          LocalSocket $sock
-          LocalSocketMode 660
-          FixStaleSocket yes
-          MaxFileSize 15M
-          MaxScanSize 50M
-          StreamMaxLength 12M
-          ReadTimeout 45
-          CommandReadTimeout 45
-          EOF
-          /usr/sbin/clamd --config-file="$conf" >"$RUNNER_TEMP/b22-clamd-start.log" 2>&1 &
-          clamd_pid=$!
-          # The official multi-million-signature DB may take longer than a
-          # minute to load. Keep the daemon private, without any TCP listener.
-          for attempt in {1..110}; do
-            if [ -S "$sock" ]; then break; fi
-            if ! kill -0 "$clamd_pid" 2>/dev/null; then break; fi
-            sleep 1
-          done
-          if [ ! -S "$sock" ]; then
-            echo "B22 local daemon did not open its private socket"
-            tail -n 45 "$RUNNER_TEMP/b22-clamd-start.log" || true
+          # The Ubuntu package already provides an AppArmor-confined daemon
+          # and its local Unix socket. Do not invent a second daemon/socket:
+          # /usr/sbin/clamd is forbidden from binding under RUNNER_TEMP.
+          conf=/etc/clamav/clamd.conf
+          test -r "$conf"
+          sock=$(awk '$1=="LocalSocket" {print $2}' "$conf" | head -n1)
+          case "$sock" in
+            /run/clamav/clamd.ctl|/var/run/clamav/clamd.ctl) ;;
+            *) echo "REFUSED: unexpected ClamAV socket"; exit 1;;
+          esac
+          if grep -Eq '^[[:space:]]*TCPSocket[[:space:]]+[0-9]+' "$conf"; then
+            echo "REFUSED: ClamAV must have no TCP listener"
             exit 1
           fi
-          echo "PASS B22: task-only ClamAV local socket ready"
+          sudo systemctl restart clamav-daemon.socket clamav-daemon.service
+          for attempt in {1..100}; do
+            if [ -S "$sock" ] && sudo systemctl is-active --quiet clamav-daemon.service; then break; fi
+            sleep 1
+          done
+          if [ ! -S "$sock" ] || ! sudo systemctl is-active --quiet clamav-daemon.service; then
+            echo "B22 official AppArmor-confined daemon unavailable"
+            sudo systemctl status clamav-daemon.service --no-pager --lines=18 || true
+            exit 1
+          fi
+          # Grant ONLY this ephemeral CI process-user socket access. Keep the
+          # distro's restrictive AppArmor profile, socket mode and TCP denial.
+          sudo setfacl -m "u:$(id -un):rw" "$sock"
+          test -r "$sock"
+          echo "PASS B22: official local-only ClamAV daemon and scoped socket ACL"
           echo "DOGRUADRES_CLAMD_SOCKET=$sock" >> "$GITHUB_ENV"
           echo "DOGRUADRES_B22_SAFE_REVIEW_TEST=true" >> "$GITHUB_ENV"
       - name: B22 real Chrome after signed R1 activation on separate disposable database
