@@ -7455,6 +7455,8 @@ export default async function({container}:any){
     })()
     assert.equal(exact10MibPdf.length,10485760,"Exact 10 MiB real-structure PDF test asset")
     const exact10MibBase64 = exact10MibPdf.toString("base64")
+    // A separate two-page synthetic document tests full-page staff review.
+    const twoPagePdfBase64="JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9jdW1lbnQgKG9wZW5zb3VyY2UpCjEgMCBvYmoKPDwKL0YxIDIgMCBSCj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9CYXNlRm9udCAvSGVsdmV0aWNhIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nIC9OYW1lIC9GMSAvU3VidHlwZSAvVHlwZTEgL1R5cGUgL0ZvbnQKPj4KZW5kb2JqCjMgMCBvYmoKPDwKL0NvbnRlbnRzIDggMCBSIC9NZWRpYUJveCBbIDAgMCA2MTIgNzkyIF0gL1BhcmVudCA3IDAgUiAvUmVzb3VyY2VzIDw8Ci9Gb250IDEgMCBSIC9Qcm9jU2V0IFsgL1BERiAvVGV4dCAvSW1hZ2VCIC9JbWFnZUMgL0ltYWdlSSBdCj4+IC9Sb3RhdGUgMCAvVHJhbnMgPDwKCj4+IAogIC9UeXBlIC9QYWdlCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9Db250ZW50cyA5IDAgUiAvTWVkaWFCb3ggWyAwIDAgNjEyIDc5MiBdIC9QYXJlbnQgNyAwIFIgL1Jlc291cmNlcyA8PAovRm9udCAxIDAgUiAvUHJvY1NldCBbIC9QREYgL1RleHQgL0ltYWdlQiAvSW1hZ2VDIC9JbWFnZUkgXQo+PiAvUm90YXRlIDAgL1RyYW5zIDw8Cgo+PiAKICAvVHlwZSAvUGFnZQo+PgplbmRvYmoKNSAwIG9iago8PAovUGFnZU1vZGUgL1VzZU5vbmUgL1BhZ2VzIDcgMCBSIC9UeXBlIC9DYXRhbG9nCj4+CmVuZG9iago2IDAgb2JqCjw8Ci9BdXRob3IgKGFub255bW91cykgL0NyZWF0aW9uRGF0ZSAoRDoyMDI2MTEwNzA5NDM1MSswMCcwMCcpIC9DcmVhdG9yIChhbm9ueW1vdXMpIC9LZXl3b3JkcyAoKSAvTW9kRGF0ZSAoRDoyMDI2MTEwNzA5NDM1MSswMCcwMCcpIC9Qcm9kdWNlciAoUmVwb3J0TGFiIFBERiBMaWJyYXJ5IC0gXChvcGVuc291cmNlXCkpIAogIC9TdWJqZWN0ICh1bnNwZWNpZmllZCkgL1RpdGxlICh1bnRpdGxlZCkgL1RyYXBwZWQgL0ZhbHNlCj4+CmVuZG9iago3IDAgb2JqCjw8Ci9Db3VudCAyIC9LaWRzIFsgMyAwIFIgNCAwIFIgXSAvVHlwZSAvUGFnZXMKPj4KZW5kb2JqCjggMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggMTA5Cj4+CnN0cmVhbQpHYXBRaDBFPUYsMFVcSDNUXHBOWVReUUtrP3RjPklQLDtXI1UxXjIzaWhQRU1fP0NXNEtJU2k8OmJYYWE6XkcwQ2N1QVJiJDRdbz1FLS07KG5GdU8yZTVRXnE7QChZT1dFOCFaIShGNC0mSH4+ZW5kc3RyZWFtCmVuZG9iago5IDAgb2JqCjw8Ci9GaWx0ZXIgWyAvQVNDSUk4NURlY29kZSAvRmxhdGVEZWNvZGUgXSAvTGVuZ3RoIDExMgo+PgpzdHJlYW0KR2FwUWgwRT1GLDBVXEgzVFxwTllUXlFLaz90Yz5JUCw7VyNVMV4yM2loUEVNXz9DVzRLSVNpPDpiWGFhOl5HMENjajRmO3BAaVcqI11PbTA8PSY5aCRrLjovPCFeVEQjZ2ldZjs7X0tVSmttJzZ+PmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDEwCjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDA2MSAwMDAwMCBuIAowMDAwMDAwMDkyIDAwMDAwIG4gCjAwMDAwMDAxOTkgMDAwMDAgbiAKMDAwMDAwMDM5MiAwMDAwMCBuIAowMDAwMDAwNTg1IDAwMDAwIG4gCjAwMDAwMDA2NTMgMDAwMDAgbiAKMDAwMDAwMDkxNCAwMDAwMCBuIAowMDAwMDAwOTc5IDAwMDAwIG4gCjAwMDAwMDExNzggMDAwMDAgbiAKMDAwMDAwMDk3OSAwMDAwMCBuIAowMDAwMDAxMTc4IDAwMDAwIG4gCnRyYWlsZXIKPDwKL0lEIFs8NzZjYzE0NWFkY2E1NTJhOWM5MzRmMzllNDFiMTJlZDQ+PDc2Y2MxNDVhZGNhNTUyYTljOTM0ZjM5ZTQxYjEyZWQ0Pl0KJSBSZXBvcnRMYWIgZ2VuZXJhdGVkIFBERiBkb2N1bWVudCAtLSBkaWdlc3QgKG9wZW5zb3VyY2UpCgovSW5mbyA2IDAgUgovUm9vdCA1IDAgUgovU2l6ZSAxMAo+PgpzdGFydHhyZWYKMTM4MAolJUVPRgo="
 
     const uploadRes = await signupChrome.eval(`(async()=>{`+
       `const s=await (await fetch('/personal/session')).json();`+
@@ -7561,7 +7563,7 @@ export default async function({container}:any){
           `application_id:${JSON.stringify(foreignAppId)},`+
           `expected_version:1,`+
           `filename:'tax-certificate.pdf',`+
-          `file_base64:${JSON.stringify(exact10MibBase64)}`+
+          `file_base64:${JSON.stringify(twoPagePdfBase64)}`+
         `})`+
       `});`+
     `})()`)
@@ -7784,7 +7786,7 @@ export default async function({container}:any){
       // Distinguish a real fail-closed image error from an HTTP/DOM stall.
       // A failed image must not masquerade as a generic 20-second timeout.
       const previewStatusExpr=scanEnabled?
-        "document.getElementById('organization-review-list').textContent.includes('Yalnız güvenli görsel gösteriliyor') || document.getElementById('organization-review-list').textContent.includes('Tarama veya güvenli önizleme kullanılamıyor')":
+        "document.getElementById('organization-review-list').textContent.includes('Güvenli görselin tamamı gösterildi') || document.getElementById('organization-review-list').textContent.includes('Tarama veya güvenli önizleme kullanılamıyor')":
         "document.getElementById('organization-review-list').textContent.includes('Tarama veya güvenli önizleme kullanılamıyor')"
       try{
         await reviewChrome.wait(previewStatusExpr)
@@ -7802,7 +7804,7 @@ export default async function({container}:any){
             imageComplete:!!image?.complete,imageWidth:image?.naturalWidth||0,
             note:row?.textContent?.includes('hazırlanıyor')?'loading':
               row?.textContent?.includes('kullanılamıyor')?'unavailable':
-              row?.textContent?.includes('gösteriliyor')?'ready':'other'};
+              row?.textContent?.includes('tamamı gösterildi')?'ready':'other'};
         })()`)
         throw Error("B22 preview browser state not settled: "+JSON.stringify(snapshot)+"; "+String(error))
       }
@@ -7819,6 +7821,23 @@ export default async function({container}:any){
         "Only a genuinely scanned and rendered preview may unlock review UI; preview must fail closed when scan or browser decode fails")
       assert.equal(approvalState.rasterVisible,scanEnabled)
       if(scanEnabled)process.stdout.write("PASS B22 Chrome/HTTP/PG16: scanned PNG preview loaded and reviewer approval UI gated\n")
+      if(scanEnabled){
+        // Both pages must reach the actual browser from the protected, scanned
+        // HTTP endpoint. Approval UI stays disabled until the reviewer can
+        // scroll through the complete tall PNG, not just its first page.
+        await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()");
+        await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company'))");
+        await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.includes('Foreign Duplicate Company'));const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='Belgeyi Güvenli Önizle');if(!button)throw Error('Missing private review button');button.click();return true})()");
+        await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&p.querySelector('img')?.naturalHeight>=1700)");
+        const multiPageBefore=await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.includes('Foreign Duplicate Company'));const image=row?.querySelector('img');const box=row?.querySelector('[role=region]');const approval=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='İşletmeyi Onayla');return {height:image?.naturalHeight||0,scrollable:!!box&&box.scrollHeight>box.clientHeight+16,ready:!!approval&&!approval.hidden&&!approval.disabled};})()");
+        assert.ok(multiPageBefore.height>=1700,"The browser must receive every PDF page");
+        assert.equal(multiPageBefore.scrollable,true,"Multi-page preview must remain legible and scrollable");
+        assert.equal(multiPageBefore.ready,false,"Approval must stay disabled before reaching the second page");
+        await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.includes('Foreign Duplicate Company'));const box=row?.querySelector('[role=region]');if(!box)throw Error('Missing accessible page scroll');box.scrollTop=box.scrollHeight;return true})()");
+        await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&Array.from(p.querySelectorAll('button')).some(b=>b.textContent==='İşletmeyi Onayla'&&!b.hidden&&!b.disabled))");
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: full two-page PDF preview, approval disabled until final page scrolled\n");
+      }
+
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: staff unscanned document denied, applicant original retained, foreign denied\n")
 
       const correctionRes = await reviewChrome.eval(`(async()=>{`+
