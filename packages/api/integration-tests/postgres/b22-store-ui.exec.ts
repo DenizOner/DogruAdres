@@ -1200,6 +1200,16 @@ export default async function({container}:any){
     // An Owner can create/reopen/edit a PRIVATE Organization Store draft
     // without creating any native Seller or irreversible application claim.
     await browser.wait("!document.getElementById('store-draft-form').hidden")
+    // B06Chrome.input inserts at caret; replace existing text via real CDP
+    // Ctrl+A key events as the user would, never direct DOM value mutation.
+    const replaceStoreDraftText=async(selector:string,value:string)=>{
+      await browser.click(selector)
+      await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:"a",code:"KeyA",
+        modifiers:2,windowsVirtualKeyCode:65})
+      await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:"a",code:"KeyA",
+        modifiers:2,windowsVirtualKeyCode:65})
+      await browser.send("Input.insertText",{text:value})
+    }
     const draftName="B22 draft "+rand,draftEdited="B22 revised draft "+rand
     const draftEmail="draft-"+rand+"@example.invalid"
     await browser.input("#store-draft-form input[name=name]",draftName)
@@ -1218,7 +1228,7 @@ export default async function({container}:any){
       [organizations[0].id]))[0].n,0,"Saving drafts may not create a Seller claim")
     await browser.wait("document.querySelector('#store-application-list button')?.textContent==='Taslağı düzenle'")
     await browser.click("#store-application-list button")
-    await browser.input("#store-draft-form input[name=name]",draftEdited)
+    await replaceStoreDraftText("#store-draft-form input[name=name]",draftEdited)
     await browser.click("#store-draft-form button[type=submit]")
     await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
     const editedDrafts=await get(draftUrl)
@@ -1589,7 +1599,7 @@ export default async function({container}:any){
     await browser.wait("document.querySelector('#store-application-list button')?.textContent==='Taslağı düzenle'")
     await browser.click("#store-application-list button")
     const pausedDraftName="B22 paused edit "+rand
-    await browser.input("#store-draft-form input[name=name]",pausedDraftName)
+    await replaceStoreDraftText("#store-draft-form input[name=name]",pausedDraftName)
     await browser.click("#store-draft-form button[type=submit]")
     await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
     const [pausedDraft]=await q("select name,version from da_store_application_draft where id=$1",[storeDraftId])
