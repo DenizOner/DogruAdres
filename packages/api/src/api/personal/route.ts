@@ -632,17 +632,23 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         if(item.status==='submitted'){
           const startBtn=document.createElement('button');
           startBtn.type='button';startBtn.textContent='İncelemeye Al';
+          // The page-1 button remains valid when the *same* Person opens
+          // page 2. Request counters protect stale async list responses, not
+          // live buttons. Server still rechecks staff grant and CAS version.
+          const currentReviewView=()=>epoch===viewEpoch&&
+            currentPersonId===person&&!document.hidden&&
+            !el('workspace').hidden&&row.isConnected;
           startBtn.onclick=async()=>{
-            if(!stillAuthorizedView()||!row.isConnected)return;
+            if(!currentReviewView()||startBtn.disabled)return;
             startBtn.disabled=true;
             try{
               await api('organization-applications',{method:'POST',body:JSON.stringify({
                 action:'review_decision',application_id:item.id,expected_version:item.version,
                 decision:'start_review'
               })});
-              if(stillAuthorizedView())await refreshOrganizationReviews();
+              if(currentReviewView())await refreshOrganizationReviews();
             }catch{
-              if(stillAuthorizedView()&&row.isConnected){
+              if(currentReviewView()){
                 startBtn.disabled=false;
                 el('organization-review-status').textContent='İncelemeye alma doğrulanamadı; başvuru kuyruğunu yenileyin.';
               }
