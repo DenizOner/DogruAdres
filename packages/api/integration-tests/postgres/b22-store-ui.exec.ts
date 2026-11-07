@@ -1607,6 +1607,85 @@ export default async function({container}:any){
     assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
       [organizations[0].id]))[0].n,appCountBefore)
     process.stdout.write("PASS B22 Chrome: paused company Store draft remains editable but native Owner submit is denied\n")
+    // The native HTTPS request for draft A commits to the disposable PG16 DB,
+    // but its browser-visible response arrives after the Owner creates draft B.
+    // Keep the authorized request real: hold only the response at window.fetch.
+    await browser.wait("!document.getElementById('store-draft-form').hidden")
+    await browser.wait("document.querySelector('#store-application-list button')?.textContent==='Taslağı düzenle'")
+    await browser.click("#store-application-list button")
+    const lateDraftName="B22 late reply "+rand
+    await replaceStoreDraftText("#store-draft-form input[name=name]",lateDraftName)
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);window.__daDraftRaceFetch=window.fetch;"+
+      "window.__daDraftRaceHeld=false;"+
+      "window.fetch=(resource,options)=>{"+
+      "const url=typeof resource==='string'?resource:resource?.url;"+
+      "if(url==='/personal/store-applications'&&options?.method==='POST'&&"+
+      "!window.__daDraftRaceHeld){"+
+      "window.__daDraftRaceHeld=true;"+
+      "return original(resource,options).then(response=>new Promise(resolve=>{"+
+      "window.__daDraftRaceRelease=()=>resolve(response)"+
+      "}))}return original(resource,options)"+
+      "};return true})()")
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("typeof window.__daDraftRaceRelease==='function'")
+    assert.deepEqual(await q("select name,version from da_store_application_draft where id=$1",
+      [storeDraftId]),[{name:lateDraftName,version:4}],
+      "The native draft A write must commit before the held browser response")
+    await browser.click("#store-draft-new")
+    const secondDraftName="B22 second draft "+rand
+    const secondDraftEmail="second-draft-"+rand+"@example.invalid"
+    await browser.input("#store-draft-form input[name=name]",secondDraftName)
+    await browser.input("#store-draft-form input[name=email]",secondDraftEmail)
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
+    const [secondDraft]=((await get(draftUrl)).body.drafts as any[]).filter(d=>d.name===secondDraftName)
+    assert.ok(secondDraft&&/^dasdraft_[0-9a-f]{32}$/.test(secondDraft.id))
+    assert.notEqual(secondDraft.id,storeDraftId)
+    assert.equal(secondDraft.version,1)
+    await browser.eval("(()=>{"+
+      "window.__daDraftRaceRelease();window.fetch=window.__daDraftRaceFetch;"+
+      "delete window.__daDraftRaceRelease;delete window.__daDraftRaceFetch;return true})()")
+    await browser.wait("!document.getElementById('store-draft-form').hidden")
+    // Reuse the same B editor after A's late reply. If A has overwritten B's
+    // version, the next real HTTPS update gets 409 instead of committing.
+    const corruptDraftName="B22 corrupt reply "+rand
+    await replaceStoreDraftText("#store-draft-form input[name=name]",corruptDraftName)
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);window.__daDraftMalformedFetch=window.fetch;"+
+      "window.__daDraftMalformedPosts=0;"+
+      "window.fetch=(resource,options)=>{"+
+      "const url=typeof resource==='string'?resource:resource?.url;"+
+      "if(url==='/personal/store-applications'&&options?.method==='POST'){"+
+      "window.__daDraftMalformedPosts++;"+
+      "return original(resource,options).then(response=>"+
+      "response.status===200?new Response('{',{status:200,"+
+      "headers:{'Content-Type':'application/json'}}):response)"+
+      "}return original(resource,options)"+
+      "};return true})()")
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("window.__daDraftMalformedPosts===1&&"+
+      "document.getElementById('store-application-status').textContent.includes('Taslak sonucu belirsiz')")
+    assert.deepEqual(await q("select name,version from da_store_application_draft where id=$1",
+      [secondDraft.id]),[{name:corruptDraftName,version:2}],
+      "A real successful B update must remain durable despite corrupted browser JSON")
+    assert.equal(await browser.eval("document.querySelector('#store-draft-form button[type=submit]').disabled"),
+      true,"Unknown HTTP outcome must prevent blind retry")
+    await browser.click("#store-draft-form button[type=submit]")
+    assert.equal(await browser.eval("window.__daDraftMalformedPosts"),1,
+      "Clicking a disabled form must never send a duplicate Store draft write")
+    await browser.eval("(()=>{window.fetch=window.__daDraftMalformedFetch;"+
+      "delete window.__daDraftMalformedFetch;return true})()")
+    await browser.click("#store-applications-refresh")
+    await browser.wait("document.getElementById('store-application-list').textContent.includes('"+
+      "Kaydedilmiş mağaza taslağı (gönderilmedi) — '+\u0020"+JSON.stringify(corruptDraftName)+")")
+    assert.equal((await q("select count(*)::int n from da_store_application_draft where organization_id=$1",
+      [organizations[0].id]))[0].n,2,
+      "Two distinct private drafts, no duplicate after ambiguous HTTP response")
+    assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n,appCountBefore,
+      "Draft race and corrupt reply must not create a native Seller application")
+    process.stdout.write("PASS B22 Chrome: delayed native A draft reply cannot corrupt new B version; B durable update with browser-only malformed 200 remains uncertain, duplicate blocked, two private drafts, no Seller created\n")
     const deniedAppId="daapp_"+randomBytes(16).toString("hex")
     const deniedWhilePaused=await browser.callFunction(
       "async function(org,id){"+
