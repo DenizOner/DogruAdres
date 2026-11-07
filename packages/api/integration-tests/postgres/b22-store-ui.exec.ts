@@ -5494,10 +5494,12 @@ export default async function({container}:any){
       assert.equal(grantRow.length,1)
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
-      // Switching between real Chrome profiles triggers a private UI reload;
-      // avoid asserting a transient list before its authenticated refresh.
-      await reviewer.wait(`Array.from(document.querySelectorAll('#organizations button')).
-        some(b=>b.textContent===${JSON.stringify(organizations[0].name+' — member')})`)
+      // The test changed the platform company policy while this second
+      // browser was elsewhere. Rebuild the authenticated Organization list
+      // through the same real Page.reload path used by earlier B22 scenarios.
+      // This must not grant authority or manufacture a Member option.
+      await reviewer.send("Page.reload",{ignoreCache:true})
+      await reviewer.wait("document.getElementById('workspace').hidden===false")
       await reviewer.select(organizations[0].name,"member")
       const memberDraftStores=()=>reviewer.eval(`(async()=>{
         const r=await fetch('/personal/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
