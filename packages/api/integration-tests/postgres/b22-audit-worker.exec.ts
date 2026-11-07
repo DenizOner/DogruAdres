@@ -388,7 +388,7 @@ export default async function({container}:any){
           assert.equal((await q(`select count(*)::int n from da_audit_index_entry
             where source_event_id=$1`,[event.id]))[0].n,1)
         }
-        process.stdout.write("PASS B22 real audit relay: Owner grant, Member private Store draft and Owner revocation delivered through native Medusa worker, redacted envelopes, one Index row/ACK each\\n")
+        process.stdout.write("PASS B22 real audit relay: Owner grant, Member private Store draft and Owner revocation delivered through native Medusa worker, redacted envelopes, one Index row/ACK each\n")
       }finally{
         for(const original of delegatedOriginal)
           await q("update da_audit_outbox set created_at=$2 where id=$1",
