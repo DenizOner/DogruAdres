@@ -558,6 +558,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('organization-draft-more').hidden=!organizationDraftCursor;
       el('organization-draft-status').textContent=data.drafts.length?
         'Yalnız size ait taslaklar yüklendi.':'Başka taslak bulunamadı.';
+      // The saving form may restore its actual document state from this fresh GET.
+      return data.drafts.find(item=>item.id===organizationDraftId)||null;
     }catch(error){
       if(request!==organizationDraftRequest||epoch!==viewEpoch)return;
       if([401,403].includes(error.httpStatus)){
@@ -866,11 +868,36 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         throw Error('Taslak sonucu belirsiz');
       organizationDraftVersion=data.version;
       el('organization-document-section').hidden=false;
-      el('organization-document-info').textContent='Henüz vergi levhası yüklenmedi (zorunlu).';
       el('organization-application-submit').hidden=true;
-      await refreshOrganizationDrafts();
+      // Saving application fields must not erase a previously scanned document.
+      // Reconcile from an authorized fresh GET, not from an optimistic POST.
+      const refreshed=await refreshOrganizationDrafts();
       if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
-      el('organization-draft-status').textContent='Taslak kaydedildi. Vergi levhası yükleyip başvuruyu gönderebilirsiniz.';
+      if(!refreshed||refreshed.id!==id||refreshed.status!=='draft'||
+         refreshed.version!==data.version||
+         (refreshed.has_document&&!refreshed.document)){
+        el('organization-document-info').textContent='Belge durumu doğrulanamadı; taslakları yeniden açın.';
+        el('organization-draft-status').textContent=
+          'Taslak kaydedildi; belge durumu doğrulanamadı. Taslakları yenileyin.';
+        return;
+      }
+      if(refreshed.has_document){
+        const doc=refreshed.document;
+        el('organization-document-info').textContent=
+          'Yüklü vergi levhası: v'+doc.version+' ('+doc.mime_type+', '+doc.original_byte_length+' bayt)';
+        el('organization-document-status').textContent=organizationDocumentSelection?
+          'Yeni belge seçildi ancak henüz yüklenmedi; yüklemek için düğmeye basın.':
+          'Önceki belge korundu; virüs taraması güncel imzalarla erişimde doğrulanır.';
+        el('organization-application-submit').hidden=!!organizationDocumentSelection;
+        el('organization-draft-status').textContent=organizationDocumentSelection?
+          'Taslak kaydedildi; seçilen yeni belgeyi yükleyin.':
+          'Taslak kaydedildi. Yüklü vergi levhası korundu; başvuruyu gönderebilirsiniz.';
+      }else{
+        el('organization-document-info').textContent='Henüz vergi levhası yüklenmedi (zorunlu).';
+        el('organization-document-status').textContent='Henüz belge yüklenmedi ve virüs taraması yapılmadı.';
+        el('organization-draft-status').textContent=
+          'Taslak kaydedildi. Vergi levhası yükleyip başvuruyu gönderebilirsiniz.';
+      }
     }catch(error){
       if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
       uncertain=!!error.uncertain;
