@@ -156,13 +156,15 @@ export default async function({container}:any){
       }
       // The real B22 Chrome Staff POSTs persist company-policy changes in
       // canonical Access audit/outbox. Exercise the EXISTING native Medusa
-      // Access -> Index relay on those exact two events (no synthetic producer).
+      // Access -> Index relay on User and Customer events (no synthetic producer).
       const policyReasons=[
         "B22 synthetic company application pause",
         "B22 synthetic company application reopen",
+        "B22 linked Customer Staff policy pause",
+        "B22 linked Customer Staff policy reopen",
       ]
       const policyEvents=await q(
-        "select e.id,e.organization_id,e.target_id,e.action,e.resource,"+
+        "select e.id,e.organization_id,e.target_id,e.action,e.resource,e.actor_type,e.actor_id,"+
         " o.id as outbox_id,o.created_at,o.status"+
         " from da_audit_event e join da_audit_outbox o on o.source_audit_event_id=e.id"+
         " where e.module='dogruadres-access' and e.role_context='platform_staff'"+
@@ -171,11 +173,13 @@ export default async function({container}:any){
         " 'organization.store_application_right_enabled')"+
         " and e.new_values->>'reason'=any($1::text[])"+
         " and o.status='pending' and o.attempt_count=0 and o.lease_token is null"+
-        " order by e.action",[policyReasons])
-      assert.deepEqual(policyEvents.map(e=>e.action),[
-        "organization.store_application_right_disabled",
-        "organization.store_application_right_enabled",
-      ],"Both genuine, distinct company policy changes must be pending for relay")
+        " order by e.action,e.actor_type",[policyReasons])
+      assert.deepEqual(policyEvents.map(e=>e.action+"/"+e.actor_type),[
+        "organization.store_application_right_disabled/customer",
+        "organization.store_application_right_disabled/user",
+        "organization.store_application_right_enabled/customer",
+        "organization.store_application_right_enabled/user",
+      ],"Both User and linked Customer Staff policy pairs must be pending")
       const policyOrg=policyEvents[0].organization_id
       assert.ok(policyEvents.every(e=>e.organization_id===policyOrg &&
         e.target_id===policyOrg && e.resource==="organization"))
@@ -186,14 +190,14 @@ export default async function({container}:any){
         const due=await q(
           "update da_audit_outbox set"+
           " created_at=(select min(created_at) from da_audit_outbox)-interval '3 days'"+
-          " + case when id=$1 then interval '0 seconds' else interval '1 second' end"+
-          " where id in ($1,$2) and status='pending' and attempt_count=0"+
+          " + (array_position($1::text[],id)-1)*interval '1 second'"+
+          " where id=any($1::text[]) and status='pending' and attempt_count=0"+
           " and lease_token is null returning id",
-          policyEvents.map(e=>e.outbox_id))
-        assert.equal(due.length,2)
-        const delivered=await runAuditRelayBatch(container,2)
-        assert.equal(delivered.delivered,2,
-          "Real Medusa worker must deliver both Staff company policy events")
+          [policyEvents.map(e=>e.outbox_id)])
+        assert.equal(due.length,4)
+        const delivered=await runAuditRelayBatch(container,4)
+        assert.equal(delivered.delivered,4,
+          "Real Medusa worker must deliver both User and Customer Staff pairs")
         for(const event of policyEvents){
           const rows=await q(
             "select o.status,o.delivered_at,o.lease_token,"+
@@ -213,12 +217,12 @@ export default async function({container}:any){
           assert.equal(row.target_id,policyOrg)
           const envelope=typeof row.envelope==="string"?JSON.parse(row.envelope):row.envelope
           assert.equal(envelope.actor.role_context,"platform_staff")
-          assert.equal(envelope.actor.type,"user")
+          assert.equal(envelope.actor.type,event.actor_type)
           assert.deepEqual(Object.keys(envelope).sort(),[
             "action","actor","occurred_at","organization_id","resource",
             "source_event_id","source_module","target_id","version"])
-          assert.equal(JSON.stringify(envelope).includes(policyReasons[0]),false)
-          assert.equal(JSON.stringify(envelope).includes(policyReasons[1]),false)
+          for(const reason of policyReasons)
+            assert.equal(JSON.stringify(envelope).includes(reason),false)
           assert.equal(JSON.stringify(envelope).includes("staff_grant_id"),false)
           assert.equal(JSON.stringify(envelope).includes("reason"),false)
         }
@@ -234,6 +238,7 @@ export default async function({container}:any){
             e.target_id===policyOrg && e.action===event.action),
             "Company policy event must appear in the scoped Audit Index timeline")
         process.stdout.write("PASS B22 real audit relay: platform company policy disable/reopen delivered by native Medusa Access/Index, redacted envelopes, durable ACKs and scoped timeline\n")
+        process.stdout.write("PASS B22 real audit relay: linked native Customer Staff HTTPS policy events delivered with Customer actor, redacted durable ACKs and scoped Owner timeline\n")
       }finally{
         for(const row of policyOriginal)
           await q("update da_audit_outbox set created_at=$2 where id=$1",

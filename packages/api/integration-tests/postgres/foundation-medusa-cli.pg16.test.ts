@@ -319,6 +319,8 @@ async function run(){
           assert.ok(result.includes("PASS B22 Chrome: native Admin SMTP same-origin MFA/grant GET200"))
           return
         }
+        assert.ok(result.includes("PASS B22 Chrome: linked Customer native MFA Person session and explicit Staff grant changed company policy through HTTPS, CSRF denied, two canonical Customer audit/outboxes and Owner-only notices; non-Owner audit timeline denied"),
+          "Missing linked Customer Staff Chrome HTTPS and PG16 canonical audit proof")
         assert.ok(result.split("\n").includes(
           "PASS B22 Chrome/HTTP/PG16: native Mercur Seller creation holds company policy SHARE lock, concurrent platform disable waits then commits, single audit/outbox and two Owner notices; later creation403; pending Seller preserved on reopen"),
           "Missing real PostgreSQL company policy vs native Mercur Seller create overlap, canonical audit/outbox, Owner notices and denied subsequent Store evidence")
@@ -467,6 +469,8 @@ async function run(){
           "Missing real indexed Store-follow audit delivery and ACK")
         assert.ok(audit.includes("PASS B22 real audit relay: platform company policy disable/reopen delivered by native Medusa Access/Index, redacted envelopes, durable ACKs and scoped timeline"),
           "Missing real Access/Index receipt, redaction and Organization timeline delivery for platform policy changes")
+        assert.ok(audit.includes("PASS B22 real audit relay: linked native Customer Staff HTTPS policy events delivered with Customer actor, redacted durable ACKs and scoped Owner timeline"),
+          "Missing linked Customer Staff HTTP producer and Access/Index relay acceptance")
         for(const proof of ["PASS B22 audit real ACK: committed receipt lost,",
           "PASS B22 audit natural lease: DB clock 60s,",
           "PASS B22 audit native scheduler and crash restart: true Medusa cron,"])
