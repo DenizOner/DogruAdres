@@ -1197,6 +1197,67 @@ export default async function({container}:any){
     // No extra Store-to-Organization approval or native dashboard login.
     await browser.select(organizations[0].name,"owner")
     await browser.wait("!document.getElementById('store-application-form').hidden")
+    // An Owner can create/reopen/edit a PRIVATE Organization Store draft
+    // without creating any native Seller or irreversible application claim.
+    await browser.wait("!document.getElementById('store-draft-form').hidden")
+    const draftName="B22 draft "+rand,draftEdited="B22 revised draft "+rand
+    const draftEmail="draft-"+rand+"@example.invalid"
+    await browser.input("#store-draft-form input[name=name]",draftName)
+    await browser.input("#store-draft-form input[name=email]",draftEmail)
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
+    const draftUrl="/personal/store-applications?organization_id="+encodeURIComponent(organizations[0].id)
+    const storedDrafts=await get(draftUrl)
+    assert.equal(storedDrafts.status,200)
+    assert.equal(storedDrafts.body.drafts.length,1)
+    const draftId=storedDrafts.body.drafts[0].id
+    assert.match(draftId,/^dasdraft_[0-9a-f]{32}$/)
+    assert.equal(storedDrafts.body.drafts[0].name,draftName)
+    assert.equal(storedDrafts.body.drafts[0].version,1)
+    assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n,0,"Saving drafts may not create a Seller claim")
+    await browser.wait("document.querySelector('#store-application-list button')?.textContent==='Taslağı düzenle'")
+    await browser.click("#store-application-list button")
+    await browser.input("#store-draft-form input[name=name]",draftEdited)
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
+    const editedDrafts=await get(draftUrl)
+    assert.equal(editedDrafts.body.drafts.length,1)
+    assert.equal(editedDrafts.body.drafts[0].id,draftId)
+    assert.equal(editedDrafts.body.drafts[0].name,draftEdited)
+    assert.equal(editedDrafts.body.drafts[0].version,2)
+    const saveDraft=async(payload:Record<string,unknown>,validCsrf=true)=>browser.eval(`(async()=>{
+      const s=await (await fetch('/personal/session')).json()
+      const r=await fetch('/personal/store-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':${validCsrf?"s.csrf_token":"'invalid'"}},
+        body:JSON.stringify(${JSON.stringify(payload)})})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    const draftRequest={action:"save_draft",organization_id:organizations[0].id,
+      draft_id:draftId,expected_version:1,name:"Stale draft",email:draftEmail,currency_code:"try"}
+    assert.equal((await saveDraft(draftRequest)).status,409,
+      "A stale form may not overwrite the latest Organization draft")
+    assert.equal((await saveDraft({...draftRequest,expected_version:2},false)).status,403,
+      "Native session Owner draft writes still require valid CSRF")
+    assert.equal((await saveDraft({...draftRequest,organization_id:organizations[2].id,
+      expected_version:2})).status,403,
+      "An unrelated Organization cannot read or alter another Store draft")
+    assert.equal((await get("/personal/store-applications?organization_id="+
+      encodeURIComponent(organizations[2].id))).status,403)
+    assert.deepEqual(await q(`select version,name from da_store_application_draft where id=$1`,
+      [draftId]),[{version:2,name:draftEdited}],
+      "Stale and foreign writes may not change durable draft input")
+    const draftAudit=await q(`select e.action,e.target_id,x.id as outbox_id
+      from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.action='organization.store_application_draft_saved'
+        and e.target_id=$2 order by e.occurred_at`,[organizations[0].id,draftId])
+    assert.equal(draftAudit.length,2)
+    assert.ok(draftAudit.every((x:any)=>x.action==="organization.store_application_draft_saved"&&
+      x.target_id===draftId&&typeof x.outbox_id==="string"))
+    assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n,0,
+      "Two successful drafts and rejected retries create zero native Store applications")
+    process.stdout.write("PASS B22 Chrome/PG16: Owner Store draft saved, edited, reloaded with version and audit/outbox; stale409, CSRF403, foreign403; zero native Seller applications\\n")
     const applicationName="B22 Owner application "+rand
     const applicationEmail="b22-owner-app-"+rand+"@example.invalid"
     await browser.input("#store-application-form input[name=name]",applicationName)
