@@ -1602,15 +1602,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {applications,store_application_enabled:policy[0].store_application_enabled as boolean}
   }
 
-  // Existing platform organization.provision staff grant is the restrictive
-  // administrator scope: owner/member, Seller and store.approve grants do not
-  // grant power to disable another company's application right.
+  // A dedicated platform task is required. Holding organization.provision or
+  // store.approve must NEVER silently grant this independent company policy
+  // authority. An explicit task grant with strong authentication is mandatory.
   @InjectTransactionManager()
   async personalPlatformStoreApplicationRight(token:string,org:string,
     @MedusaContext() context:Context={}){
     if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org))throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(db).staff(token,"organization.provision","platform")
+    const staff=await new IdentitySessions(db).staff(token,"store.application.policy.manage","platform")
     if(!staff)return null
     const rows=await db.execute(`select id,name,store_application_enabled
       from da_organization where id=? and status='active' and deleted_at is null`,[org])
@@ -1631,10 +1631,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        input.reason.length<10||input.reason.length>500)
       throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
-    const staff=await sessions.staff(token,"organization.provision","platform")
+    const staff=await sessions.staff(token,"store.application.policy.manage","platform")
     if(!staff)return null
     const grant=await db.execute(`select id from da_platform_staff_grant
-      where id=? and person_id=? and task='organization.provision' and resource='platform'
+      where id=? and person_id=? and task='store.application.policy.manage' and resource='platform'
       and revoked_at is null and (expires_at is null or expires_at>clock_timestamp())
       for share`,[staff.grant_id,staff.person_id])
     if(grant.length!==1)return null
