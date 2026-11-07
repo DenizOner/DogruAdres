@@ -460,6 +460,10 @@ jobs:
             console.log("B22 version policy:",JSON.stringify({
               parsed:!!v,ageHours:v?(Date.now()-Date.parse(v[2]))/3600000:null
             }));
+            // VERSIONCOMMANDS is an official alternate metadata query. It
+            // must never substitute for a clean streamed malware verdict.
+            const vc=await rawReply(Buffer.from("zVERSIONCOMMANDS\0"));
+            console.log("B22 native ClamAV VERSIONCOMMANDS metadata:",JSON.stringify(vc.slice(0,180)));
             const frame=Buffer.allocUnsafe(4);frame.writeUInt32BE(png.length,0);
             const raw=await rawReply(Buffer.concat([
               Buffer.from("zINSTREAM\0"),frame,png,Buffer.alloc(4)
