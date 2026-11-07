@@ -26,6 +26,16 @@ import {access,csrf,enabled,sessionToken} from "../security"
 jest.mock("../security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
+// Keep transport and renderer real in dedicated OS/Chrome tests. Only this
+// metadata persistence unit suite uses synthetic, explicitly scoped verdicts.
+jest.mock("../../../modules/dogruadres-access/tax-certificate-safe-preview",()=>({
+  ...jest.requireActual("../../../modules/dogruadres-access/tax-certificate-safe-preview"),
+  prepareScannedTaxCertificatePreview:jest.fn(),
+}))
+jest.mock("../../../modules/dogruadres-access/tax-certificate-scanner",()=>({
+  ...jest.requireActual("../../../modules/dogruadres-access/tax-certificate-scanner"),
+  currentClamdSignatureIdentity:jest.fn(),
+}))
 
 describe("B22 private business application DRAFT — never an Organization",()=>{
   const payload={
@@ -508,9 +518,9 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     // Persistence-only unit scope: controlled synthetic scanner verdict.
     // Real ClamAV INSTREAM, renderer and fail-closed paths run separately.
     const scanIdentity="1.4.3/28001/1794000000000"
-    const scanSpy=jest.spyOn(safePreview,"prepareScannedTaxCertificatePreview")
+    const scanSpy=(safePreview.prepareScannedTaxCertificatePreview as jest.Mock)
       .mockResolvedValue({png:Buffer.alloc(80,1),scanIdentity})
-    const identitySpy=jest.spyOn(clamav,"currentClamdSignatureIdentity")
+    const identitySpy=(clamav.currentClamdSignatureIdentity as jest.Mock)
       .mockResolvedValue(scanIdentity)
 
     const input = {
@@ -557,8 +567,8 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       expect(files).toHaveLength(1)
       expect(files[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     } finally {
-      scanSpy.mockRestore()
-      identitySpy.mockRestore()
+      scanSpy.mockReset()
+      identitySpy.mockReset()
       spy.mockRestore()
       await fsp.rm(root, { recursive: true, force: true })
     }
@@ -576,9 +586,9 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     // Persistence-only unit scope: controlled synthetic scanner verdict.
     // Real ClamAV INSTREAM, renderer and fail-closed paths run separately.
     const scanIdentity="1.4.3/28001/1794000000000"
-    const scanSpy=jest.spyOn(safePreview,"prepareScannedTaxCertificatePreview")
+    const scanSpy=(safePreview.prepareScannedTaxCertificatePreview as jest.Mock)
       .mockResolvedValue({png:Buffer.alloc(80,1),scanIdentity})
-    const identitySpy=jest.spyOn(clamav,"currentClamdSignatureIdentity")
+    const identitySpy=(clamav.currentClamdSignatureIdentity as jest.Mock)
       .mockResolvedValue(scanIdentity)
     let status="correction_requested",person="daprs_applicant",priorSha=""
     const exec=jest.fn(async(sql:string,params?:any[])=>{
@@ -633,7 +643,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       expect(await saveOrganizationDocument(db,"opaque",input,root)).toBeNull()
       expect(exec.mock.calls.slice(before).some(([sql])=>/insert into |update da_/.test(String(sql)))).toBe(false)
       expect(await fsp.readdir(root)).toHaveLength(2)
-    }finally{scanSpy.mockRestore();identitySpy.mockRestore();spy.mockRestore();await fsp.rm(root,{recursive:true,force:true})}
+    }finally{scanSpy.mockReset();identitySpy.mockReset();spy.mockRestore();await fsp.rm(root,{recursive:true,force:true})}
   })
 
   it("submitOrganizationApplication verifies tax identifier, private file integrity and confidential duplicates", async () => {
