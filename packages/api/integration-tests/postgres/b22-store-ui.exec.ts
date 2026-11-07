@@ -7476,6 +7476,18 @@ export default async function({container}:any){
     assert.equal(uploadRes.status, 200, "10 MiB upload must succeed via real HTTP")
     assert.equal(uploadRes.body.version, 2)
     assert.equal(uploadRes.body.document.original_byte_length, 10485760)
+    // A successful HTTP upload must persist real ClamAV + protected PNG
+    // evidence. This is NOT a time-based or browser supplied clean flag.
+    const initialScanEvidence = await q(
+      "select scanned_clamav_identity,preview_renderer_revision,safe_preview_sha256,octet_length(safe_preview_png)::int as png_bytes,scanned_at::text as scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+      [b22TaxAppId])
+    assert.equal(initialScanEvidence.length,1)
+    assert.match(initialScanEvidence[0].scanned_clamav_identity,
+      /^[A-Za-z0-9_.+-]+\/[0-9]+\/[0-9]{13}$/)
+    assert.equal(initialScanEvidence[0].preview_renderer_revision,"all-pages-png-20261107-v1")
+    assert.match(initialScanEvidence[0].safe_preview_sha256,/^[0-9a-f]{64}$/)
+    assert.ok(initialScanEvidence[0].png_bytes>64&&initialScanEvidence[0].png_bytes<=4*1024*1024)
+    assert.ok(initialScanEvidence[0].scanned_at)
 
     // 5. Authorized download by applicant
     const downloadRes = await signupChrome.eval(`(async()=>{`+
@@ -7767,6 +7779,12 @@ export default async function({container}:any){
         assert.equal(reviewPreview.type,"image/png")
         assert.ok(reviewPreview.length>64&&reviewPreview.length<=4*1024*1024)
         assert.deepEqual(reviewPreview.header,[137,80,78,71,13,10,26,10])
+      const evidenceAfterReview=await q(
+        "select scanned_clamav_identity,preview_renderer_revision,safe_preview_sha256,octet_length(safe_preview_png)::int as png_bytes,scanned_at::text as scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+        [b22TaxAppId])
+      assert.deepEqual(evidenceAfterReview,initialScanEvidence,
+        "Matching ClamAV identity and exact immutable file must reuse the first scan/PNG without a cache rewrite")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: upload scans once and same-signature private preview remains unchanged\n")
       }else{
         assert.equal(reviewPreview.status,503)
         assert.ok(!reviewPreview.type?.startsWith("image/"),
@@ -7780,7 +7798,7 @@ export default async function({container}:any){
         const button=Array.from(row?.querySelectorAll('button')||[])
           .find(b=>b.textContent==='Belgeyi Güvenli Önizle');
         if(!button)throw Error('Missing reviewed document preview action');
-        button.click();return row.textContent.includes('Virüs taramasından geçiriliyor');
+        button.click();return row.textContent.includes('ClamAV güncelliği kontrol ediliyor');
       })()`)
       assert.equal(openUnsafePreview,true)
       // Distinguish a real fail-closed image error from an HTTP/DOM stall.
@@ -7946,8 +7964,8 @@ export default async function({container}:any){
         "Selecting a file must not upload it")
       await foreignDraftChrome.click("#organization-document-upload")
       await foreignDraftChrome.wait("document.getElementById('organization-document-status').textContent.includes('başarıyla yüklendi')")
-      assert.equal(await foreignDraftChrome.eval("document.getElementById('organization-document-status').textContent.includes('Virüs taraması henüz yapılmadı')"),true,
-        "Upload completion must never claim that a ClamAV scan occurred")
+      assert.equal(await foreignDraftChrome.eval("document.getElementById('organization-document-status').textContent.includes('virüs taramasından geçirildi')"),true,
+        "Only a successfully scanned and persistently stored upload may claim clean ClamAV status")
       await foreignDraftChrome.wait("!document.getElementById('organization-application-submit').hidden && !document.getElementById('organization-application-submit').disabled")
       assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
         [{status:"draft",version:5}])
