@@ -1053,6 +1053,75 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     expect(statements.at(-1)).toBe("ROLLBACK")
   })
 
+  it("records in_review only for authorized independent platform staff, and rejects replays", async()=>{
+    const staffSpy=jest.spyOn(IdentitySessions.prototype,"staff")
+    const currentSpy=jest.spyOn(IdentitySessions.prototype,"current")
+    let status="submitted", version=7
+    const exec=jest.fn(async(sql:string)=>{
+      if(sql.includes("from da_organization_application where id=? for update"))
+        return [{id:payload.application_id,applicant_person_id:"daprs_applicant",
+          business_kind:"legal_company",legal_name:"Synthetic Company",
+          tax_identifier:"1234567890",status,version,duplicate_review_required:false}]
+      if(sql.includes("set status='in_review'")){status="in_review";version++;return [{version}]}
+      if(sql.includes("set status='correction_requested'")){status="correction_requested";version++;return [{version}]}
+      return []
+    })
+    const db:any={execute:exec}
+    const request=(expected_version:number,decision:string,notes?:string)=>({
+      action:"review_decision",application_id:payload.application_id,
+      expected_version,decision,notes
+    })
+    try{
+      staffSpy.mockResolvedValueOnce(null)
+      expect(await reviewOrganizationApplication(db,"opaque",request(7,"start_review")))
+        .toBeNull()
+      expect(exec).not.toHaveBeenCalled()
+
+      staffSpy.mockResolvedValueOnce({grant_id:"grant",grant_name:"organization.review"} as any)
+      currentSpy.mockResolvedValueOnce({person_id:"daprs_applicant",
+        actor_type:"user",actor_id:"usr_applicant"} as any)
+      expect(await reviewOrganizationApplication(db,"opaque",request(7,"start_review")))
+        .toBeNull()
+      expect(status).toBe("submitted")
+
+      staffSpy.mockResolvedValueOnce({grant_id:"grant",grant_name:"organization.review"} as any)
+      currentSpy.mockResolvedValueOnce({person_id:"daprs_reviewer",
+        actor_type:"user",actor_id:"usr_reviewer"} as any)
+      expect(await reviewOrganizationApplication(db,"opaque",request(7,"start_review")))
+        .toEqual({conflict:false,application_id:payload.application_id,
+          status:"in_review",version:8})
+      expect(status).toBe("in_review")
+      const inserts=exec.mock.calls.map(([sql])=>String(sql))
+      expect(inserts.filter(sql=>sql.includes("organization.application_in_review"))).toHaveLength(1)
+      expect(inserts.filter(sql=>sql.includes("insert into da_security_outbox"))).toHaveLength(1)
+      expect(inserts.some(sql=>/insert into da_organization\b|insert into da_organization_membership/.test(sql))).toBe(false)
+
+      staffSpy.mockResolvedValueOnce({grant_id:"grant",grant_name:"organization.review"} as any)
+      currentSpy.mockResolvedValueOnce({person_id:"daprs_reviewer",
+        actor_type:"user",actor_id:"usr_reviewer"} as any)
+      const before=exec.mock.calls.length
+      expect(await reviewOrganizationApplication(db,"opaque",request(8,"start_review")))
+        .toEqual({conflict:true})
+      expect(exec.mock.calls.slice(before).some(([sql])=>/update da_organization_application|insert into da_/.test(String(sql))))
+        .toBe(false)
+
+      staffSpy.mockResolvedValueOnce({grant_id:"grant",grant_name:"organization.review"} as any)
+      expect(await reviewOrganizationApplication(db,"opaque",request(7,"reject","Too late")))
+        .toEqual({conflict:true})
+
+      staffSpy.mockResolvedValueOnce({grant_id:"grant",grant_name:"organization.review"} as any)
+      currentSpy.mockResolvedValueOnce({person_id:"daprs_reviewer",
+        actor_type:"user",actor_id:"usr_reviewer"} as any)
+      expect(await reviewOrganizationApplication(db,"opaque",
+        request(8,"request_correction","Lütfen başvuruyu düzeltin")))
+        .toEqual({conflict:false,application_id:payload.application_id,
+          status:"correction_requested",version:9})
+    }finally{
+      staffSpy.mockRestore()
+      currentSpy.mockRestore()
+    }
+  })
+
   it("reviewOrganizationApplication handles correction_requested, rejection and approval with audit", async () => {
     const spyStaff = jest.spyOn(IdentitySessions.prototype, "staff")
     const spyCurrent = jest.spyOn(IdentitySessions.prototype, "current")
