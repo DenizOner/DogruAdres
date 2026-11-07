@@ -1668,6 +1668,16 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       where id=? and store_application_enabled=? returning id`,
       [input.enabled,input.organization_id,prior])
     if(updated.length!==1)throw new IdentityAccessDenied()
+    // Existing Foundation in-app notification receipts: one private receipt for
+    // each currently protected active Owner, all attached to this exact audit.
+    // A failed insert rolls back both the company policy and its audit/outbox.
+    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
+      select 'danot_'||gen_random_uuid()::text,m.person_id,?
+      from da_organization_membership m join da_person p on p.id=m.person_id
+      where m.organization_id=? and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.deleted_at is null
+        and p.disabled_at is null and p.deleted_at is null
+      on conflict(audit_event_id,person_id) do nothing`,[audit.id,input.organization_id])
     return {status:"updated" as const,
       organization_id:input.organization_id,
       store_application_enabled:input.enabled}

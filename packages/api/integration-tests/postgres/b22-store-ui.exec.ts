@@ -1459,6 +1459,30 @@ export default async function({container}:any){
     assert.equal(stoppedAudit.length,1)
     assert.equal(stoppedAudit[0].actor_person_id,B.person)
     assert.equal(stoppedAudit[0].reason,"B22 synthetic company application pause")
+    const receiptOwners=await q(`select m.person_id from da_organization_membership m
+      join da_person p on p.id=m.person_id
+      where m.organization_id=$1 and m.role='owner' and m.protected_owner=true
+      and m.status='active' and m.deleted_at is null and p.disabled_at is null
+      and p.deleted_at is null order by m.person_id`,[organizations[0].id])
+    const companyNotices=await q(`select n.person_id from da_notification_receipt n
+      where n.audit_event_id=$1 order by n.person_id`,[stoppedAudit[0].id])
+    assert.ok(receiptOwners.length>=1)
+    assert.deepEqual(companyNotices,receiptOwners,
+      "One private policy notice per current protected Owner, no foreign recipient")
+    const noticePath="/personal/notifications?organization="+encodeURIComponent(organizations[0].id)
+    const closedNotices=await get(noticePath)
+    assert.equal(closedNotices.status,200)
+    assert.equal(closedNotices.body.notifications.filter((n:any)=>
+      n.title==="Yeni mağaza başvuru hakkı durduruldu" &&
+      n.context===organizations[0].name).length,1)
+    assert.equal((await reviewer.callFunction(
+      "async function(path){return (await fetch(path)).status}",noticePath)),403,
+      "Staff with no Organization Owner membership cannot read company policy notices")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.click("#notification-bell")
+    await browser.wait("document.getElementById('notification-list').textContent.includes('Yeni mağaza başvuru hakkı durduruldu')")
+    await browser.click("#notification-bell")
     const appCountBefore=Number((await q(
       "select count(*)::int n from da_store_application where organization_id=$1",
       [organizations[0].id]))[0].n)
@@ -1516,6 +1540,17 @@ export default async function({container}:any){
       [organizations[0].id])
     assert.equal(enabledEvents.length,1)
     assert.equal(enabledEvents[0].actor_person_id,B.person)
+    const reopenedNotices=await get(noticePath)
+    assert.equal(reopenedNotices.status,200)
+    assert.equal(reopenedNotices.body.notifications.filter((n:any)=>
+      n.title==="Yeni mağaza başvuru hakkı açıldı" &&
+      n.context===organizations[0].name).length,1)
+    const companyTotal=await q(`select count(*)::int n from da_notification_receipt n
+      join da_audit_event e on e.id=n.audit_event_id
+      where e.organization_id=$1 and e.action in
+      ('organization.store_application_right_enabled','organization.store_application_right_disabled')`,
+      [organizations[0].id])
+    assert.equal(companyTotal[0].n,receiptOwners.length*2)
     assert.equal((await companyRight(true,false,"B22 stale policy switch")).status,409)
     await reviewer.click("#store-approval-refresh")
     await reviewer.wait("document.querySelector('#store-approval-list button')?.disabled===false")
