@@ -160,8 +160,8 @@ export default async function({container}:any){
       const policyReasons=[
         "B22 synthetic company application pause",
         "B22 synthetic company application reopen",
-        "B22 linked Customer Staff policy pause",
-        "B22 linked Customer Staff policy reopen",
+        "B22 primary Customer Staff policy pause",
+        "B22 primary Customer Staff policy reopen",
       ]
       const policyEvents=await q(
         "select e.id,e.organization_id,e.target_id,e.action,e.resource,e.actor_type,e.actor_id,"+
@@ -238,7 +238,7 @@ export default async function({container}:any){
             e.target_id===policyOrg && e.action===event.action),
             "Company policy event must appear in the scoped Audit Index timeline")
         process.stdout.write("PASS B22 real audit relay: platform company policy disable/reopen delivered by native Medusa Access/Index, redacted envelopes, durable ACKs and scoped timeline\n")
-        process.stdout.write("PASS B22 real audit relay: linked native Customer Staff HTTPS policy events delivered with Customer actor, redacted durable ACKs and scoped Owner timeline\n")
+        process.stdout.write("PASS B22 real audit relay: primary native Customer Staff HTTPS policy events delivered with Customer actor, redacted durable ACKs and scoped Owner timeline\n")
       }finally{
         for(const row of policyOriginal)
           await q("update da_audit_outbox set created_at=$2 where id=$1",

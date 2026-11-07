@@ -1952,7 +1952,6 @@ export default async function({container}:any){
     await reviewer.wait("!document.getElementById('link-confirm').hidden")
     await until(async()=>Math.floor(Date.now()/30000)>customerEnrollCounter,
       45000,"Customer TOTP challenge must not reuse enrollment window")
-    const customerLinkCounter=Math.floor(Date.now()/30000)
     await reviewer.input("#link-confirm input[name=code]",otp(customerMfa.secret))
     await reviewer.click("#link-confirm button")
     await reviewer.wait("document.getElementById('status').textContent==='Hesap bağlantısı tamamlandı'")
@@ -5718,90 +5717,6 @@ export default async function({container}:any){
       assert.equal(bMemberBindings.length,1)
       assert.equal(bMemberBindings[0].actor_id,bNativeMember.id)
 
-    // Use the real linked Customer credential in the SAME personal UI. It
-    // resolves to canonical Person B, not an additional business identity.
-    // The existing task-only platform grant remains bound to Person B.
-    const customerPolicyBrowser=new B06Chrome(host,"B")
-    browsers.push(customerPolicyBrowser)
-    try{
-      customerPolicyBrowser.phase="linked-customer-policy"
-      await customerPolicyBrowser.start(crt)
-      await customerPolicyBrowser.input("#login input[name=email]",customerEmail)
-      await customerPolicyBrowser.input("#login input[name=password]",customerPassword)
-      await customerPolicyBrowser.click("#login button")
-      await customerPolicyBrowser.wait("!document.getElementById('challenge').hidden")
-      await until(async()=>Math.floor(Date.now()/30000)>customerLinkCounter,
-        45000,"Customer MFA login must not replay a linked-account TOTP")
-      await customerPolicyBrowser.input("#challenge input[name=code]",otp(customerMfa.secret))
-      await customerPolicyBrowser.click("#challenge button")
-      await customerPolicyBrowser.wait(`!document.getElementById('workspace').hidden&&document.getElementById('person').textContent===${JSON.stringify("Person: "+B.person)}`)
-      const customerToken=await customerPolicyBrowser.token()
-      assert.match(customerToken??"",/^[A-Za-z0-9_-]{43}$/)
-      const customerSessions=await q(
-        "select person_id,actor_type,actor_id,mfa_purpose,last_strong_auth_at"+
-        " from da_browser_session where id=$1 and status='active'",
-        [createHash("sha256").update(customerToken!).digest("hex")])
-      assert.equal(customerSessions.length,1)
-      assert.equal(customerSessions[0].person_id,B.person)
-      assert.equal(customerSessions[0].actor_type,"customer")
-      assert.equal(customerSessions[0].actor_id,nativeCustomer.id)
-      assert.equal(customerSessions[0].mfa_purpose,"full")
-      assert.ok(customerSessions[0].last_strong_auth_at)
-      const policyUrl="/personal/platform/store-application-policy?organization_id="+
-        encodeURIComponent(organizations[0].id)
-      assert.equal(await customerPolicyBrowser.callFunction(
-        "async function(url){return (await fetch(url)).status}",policyUrl),200,
-        "Real Customer-linked Person with explicit Staff grant may read policy")
-      assert.equal(await customerPolicyBrowser.callFunction(
-        "async function(org){return (await fetch('/personal/audit-timeline?organization='+encodeURIComponent(org))).status}",
-        organizations[0].id),403,
-        "Former Owner cannot read Alpha's private audit even with Staff grant")
-      assert.deepEqual(await q(
-        "select store_application_enabled from da_organization where id=$1",
-        [organizations[0].id]),[{store_application_enabled:true}])
-      const customerPauseReason="B22 linked Customer Staff policy pause"
-      const customerReopenReason="B22 linked Customer Staff policy reopen"
-      assert.equal((await companyRight(false,true,customerPauseReason,false,
-        organizations[0].id,customerPolicyBrowser)).status,403,
-        "Customer Staff still needs valid CSRF")
-      assert.equal((await companyRight(false,true,customerPauseReason,true,
-        organizations[0].id,customerPolicyBrowser)).status,200)
-      assert.equal((await companyRight(true,false,customerReopenReason,true,
-        organizations[0].id,customerPolicyBrowser)).status,200)
-      assert.deepEqual(await q(
-        "select store_application_enabled from da_organization where id=$1",
-        [organizations[0].id]),[{store_application_enabled:true}],
-        "Customer policy pair must restore previous Company setting")
-      const customerPolicyEvents=await q(
-        "select e.id,e.action,e.actor_type,e.actor_id,e.actor_person_id,e.role_context,"+
-        " x.id as outbox_id from da_audit_event e"+
-        " join da_audit_outbox x on x.source_audit_event_id=e.id"+
-        " where e.organization_id=$1 and e.new_values->>'reason'=any($2::text[])"+
-        " and e.action in ('organization.store_application_right_disabled',"+
-        " 'organization.store_application_right_enabled') order by e.action",
-        [organizations[0].id,[customerPauseReason,customerReopenReason]])
-      assert.deepEqual(customerPolicyEvents.map(e=>e.action),[
-        "organization.store_application_right_disabled",
-        "organization.store_application_right_enabled",
-      ],"Two real Customer Staff HTTPS events must be canonical and pending for relay")
-      for(const event of customerPolicyEvents){
-        assert.equal(event.actor_type,"customer")
-        assert.equal(event.actor_id,nativeCustomer.id)
-        assert.equal(event.actor_person_id,B.person)
-        assert.equal(event.role_context,"platform_staff")
-        const recipients=await q(
-          "select person_id from da_notification_receipt where audit_event_id=$1",
-          [event.id])
-        assert.deepEqual(recipients,[{person_id:A.person}],
-          "Only current protected Owner receives private policy notification")
-      }
-      process.stdout.write("PASS B22 Chrome: linked Customer native MFA Person session and explicit Staff grant changed company policy through HTTPS, CSRF denied, two canonical Customer audit/outboxes and Owner-only notices; non-Owner audit timeline denied\n")
-    }finally{
-      try{await customerPolicyBrowser.close()}
-      finally{browsers.splice(browsers.indexOf(customerPolicyBrowser),1)}
-    }
-    await reviewer.send("Page.bringToFront")
-    await reviewer.wait("document.visibilityState==='visible'")
       const withoutStore=await memberDraftStores()
       assert.deepEqual(withoutStore,{status:200,stores:[]},
         "A verified Member without a native SellerMember association has no Store")
@@ -7505,6 +7420,95 @@ export default async function({container}:any){
         version:data.version,verified:data.phone_verified};
     })()`)
     assert.deepEqual(ownPhone,{status:200,mobile:signupPhone,version:1,verified:false})
+
+    // This registered Person's PRIMARY native Customer is the authorized
+    // first-party sign-in identity. Merely linked secondary Customers must NOT
+    // gain a second login binding or a separate buyer/Staff account.
+    const primaryCustomerToken=await signupChrome.token()
+    assert.match(primaryCustomerToken??"",/^[A-Za-z0-9_-]{43}$/)
+    const primaryCustomerSessions=await q(
+      "select person_id,actor_type,actor_id,mfa_purpose,last_strong_auth_at"+
+      " from da_browser_session where id=$1 and status='active'",
+      [createHash("sha256").update(primaryCustomerToken!).digest("hex")])
+    assert.equal(primaryCustomerSessions.length,1)
+    assert.equal(primaryCustomerSessions[0].person_id,signupPerson)
+    assert.equal(primaryCustomerSessions[0].actor_type,"customer")
+    assert.equal(primaryCustomerSessions[0].actor_id,registered[0].actor_id)
+    assert.equal(primaryCustomerSessions[0].mfa_purpose,"full")
+    assert.ok(primaryCustomerSessions[0].last_strong_auth_at)
+    const primaryPolicyUrl="/personal/platform/store-application-policy?organization_id="+
+      encodeURIComponent(organizations[0].id)
+    const customerReadPolicy=()=>signupChrome.callFunction(
+      "async function(url){return (await fetch(url)).status}",primaryPolicyUrl)
+    const customerPauseReason="B22 primary Customer Staff policy pause"
+    const customerReopenReason="B22 primary Customer Staff policy reopen"
+    assert.equal(await customerReadPolicy(),403,
+      "A newly registered Customer must not inherit platform task authority")
+    assert.equal((await companyRight(false,true,customerPauseReason,true,
+      organizations[0].id,signupChrome)).status,403)
+    const primaryPolicyGrantId="da_staff_customer_policy_"+rand
+    // The fixture explicitly grants this ONE platform task to the canonical
+    // Person in the disposable CI DB; native Customer does not confer it.
+    await q(`insert into da_platform_staff_grant
+      (id,person_id,task,resource,granted_by_person_id,reason)
+      values($1,$2,'store.application.policy.manage','platform',$2,
+      'B22 isolated registered Customer policy actor')`,
+      [primaryPolicyGrantId,signupPerson])
+    try{
+      assert.equal(await customerReadPolicy(),200,
+        "Explicit task plus real strong Customer session may read platform policy")
+      assert.equal(await signupChrome.callFunction(
+        "async function(org){return (await fetch('/personal/audit-timeline?organization='+encodeURIComponent(org))).status}",
+        organizations[0].id),403,
+        "Unrelated Person cannot read company audit despite a platform Staff task")
+      assert.deepEqual(await q(
+        "select store_application_enabled from da_organization where id=$1",
+        [organizations[0].id]),[{store_application_enabled:true}])
+      assert.equal((await companyRight(false,true,customerPauseReason,false,
+        organizations[0].id,signupChrome)).status,403,
+        "A valid Staff Customer session cannot bypass same-origin CSRF")
+      assert.equal((await companyRight(false,true,customerPauseReason,true,
+        organizations[0].id,signupChrome)).status,200)
+      assert.equal((await companyRight(true,false,customerReopenReason,true,
+        organizations[0].id,signupChrome)).status,200)
+      assert.deepEqual(await q(
+        "select store_application_enabled from da_organization where id=$1",
+        [organizations[0].id]),[{store_application_enabled:true}],
+        "Customer Staff policy pair must restore Company state")
+      const customerPolicyEvents=await q(
+        "select e.id,e.action,e.actor_type,e.actor_id,e.actor_person_id,e.role_context,"+
+        " x.id as outbox_id from da_audit_event e"+
+        " join da_audit_outbox x on x.source_audit_event_id=e.id"+
+        " where e.organization_id=$1 and e.new_values->>'reason'=any($2::text[])"+
+        " and e.action in ('organization.store_application_right_disabled',"+
+        " 'organization.store_application_right_enabled') order by e.action",
+        [organizations[0].id,[customerPauseReason,customerReopenReason]])
+      assert.deepEqual(customerPolicyEvents.map(e=>e.action),[
+        "organization.store_application_right_disabled",
+        "organization.store_application_right_enabled",
+      ],"Both live primary Customer Staff HTTP changes need canonical audit/outbox")
+      for(const event of customerPolicyEvents){
+        assert.equal(event.actor_type,"customer")
+        assert.equal(event.actor_id,registered[0].actor_id)
+        assert.equal(event.actor_person_id,signupPerson)
+        assert.equal(event.role_context,"platform_staff")
+        assert.deepEqual(await q(
+          "select person_id from da_notification_receipt where audit_event_id=$1",
+          [event.id]),[{person_id:A.person}],
+          "Only current Company protected Owner receives a policy receipt")
+      }
+    }finally{
+      await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",
+        [primaryPolicyGrantId])
+    }
+    assert.equal(await customerReadPolicy(),403,
+      "Customer's platform task revoke must deny future reads immediately")
+    assert.equal((await companyRight(false,true,"B22 Customer grant revoked",
+      true,organizations[0].id,signupChrome)).status,403)
+    assert.deepEqual(await q(
+      "select store_application_enabled from da_organization where id=$1",
+      [organizations[0].id]),[{store_application_enabled:true}])
+    process.stdout.write("PASS B22 Chrome: primary Customer native MFA Person session and explicit Staff grant changed company policy through HTTPS, CSRF denied, two canonical Customer audit/outboxes and Owner-only notices; foreign audit denied, revoked task 403\n")
 
     // One Person starts and reopens an Organization application DRAFT only.
     // No tax document, legal approval, protected Owner or commerce right yet.
