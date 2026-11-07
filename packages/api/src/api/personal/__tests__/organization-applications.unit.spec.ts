@@ -17,6 +17,8 @@ import {
   readPrivateTaxCertificate,
 } from "../../../modules/dogruadres-access/private-tax-certificate-store"
 import { prepareTaxCertificate } from "../../../modules/dogruadres-access/tax-certificate-policy"
+import * as safePreview from "../../../modules/dogruadres-access/tax-certificate-safe-preview"
+import * as clamav from "../../../modules/dogruadres-access/tax-certificate-scanner"
 import { inspectTaxCertificateSnapshot, PRIVATE_TAX_DOCUMENT_READ_SQL } from "../../../scripts/tax-certificate-inventory"
 import {GET,POST} from "../organization-applications/route"
 import {access,csrf,enabled,sessionToken} from "../security"
@@ -503,6 +505,14 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     } as any)
     const validPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\n0 1\n0000000000 65535 f\ntrailer\n<<>>\nstartxref\n9\n%%EOF\n", "ascii")
 
+    // Persistence-only unit scope: controlled synthetic scanner verdict.
+    // Real ClamAV INSTREAM, renderer and fail-closed paths run separately.
+    const scanIdentity="1.4.3/28001/1794000000000"
+    const scanSpy=jest.spyOn(safePreview,"prepareScannedTaxCertificatePreview")
+      .mockResolvedValue({png:Buffer.alloc(80,1),scanIdentity})
+    const identitySpy=jest.spyOn(clamav,"currentClamdSignatureIdentity")
+      .mockResolvedValue(scanIdentity)
+
     const input = {
       action: "upload_document" as const,
       application_id: payload.application_id,
@@ -538,10 +548,17 @@ describe("B22 private business application DRAFT — never an Organization",()=>
           original_byte_length: validPdf.length
         })
       })
+      expect(scanSpy).toHaveBeenCalledTimes(1)
+      expect(identitySpy).toHaveBeenCalled()
+      const inserted=exec.mock.calls.find(([sql])=>String(sql).includes("insert into da_organization_application_document"))
+      expect((inserted?.[1] as any[])[11]).toBe(scanIdentity)
+      expect((inserted?.[1] as any[])[13]).toEqual(Buffer.alloc(80,1))
       const files = await fsp.readdir(root)
       expect(files).toHaveLength(1)
       expect(files[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     } finally {
+      scanSpy.mockRestore()
+      identitySpy.mockRestore()
       spy.mockRestore()
       await fsp.rm(root, { recursive: true, force: true })
     }
@@ -556,6 +573,13 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     const spy=jest.spyOn(IdentitySessions.prototype,"current").mockResolvedValue({
       person_id:"daprs_applicant",actor_type:"customer",actor_id:"cus_app"
     } as any)
+    // Persistence-only unit scope: controlled synthetic scanner verdict.
+    // Real ClamAV INSTREAM, renderer and fail-closed paths run separately.
+    const scanIdentity="1.4.3/28001/1794000000000"
+    const scanSpy=jest.spyOn(safePreview,"prepareScannedTaxCertificatePreview")
+      .mockResolvedValue({png:Buffer.alloc(80,1),scanIdentity})
+    const identitySpy=jest.spyOn(clamav,"currentClamdSignatureIdentity")
+      .mockResolvedValue(scanIdentity)
     let status="correction_requested",person="daprs_applicant",priorSha=""
     const exec=jest.fn(async(sql:string,params?:any[])=>{
       if(sql.includes("from da_organization_application where id=? for update"))
@@ -582,6 +606,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       const result=await saveOrganizationDocument(db,"opaque",input,root)
       expect(result).toMatchObject({conflict:false,status:"draft",version:5,
         document:{version:2,original_byte_length:changed.length}})
+      expect(scanSpy).toHaveBeenCalledTimes(1)
       const statusUpdate=exec.mock.calls.find(([sql])=>String(sql).includes("set status='draft'"))
       expect(String(statusUpdate?.[0])).toContain("status in ('draft','correction_requested')")
       const inserted=exec.mock.calls.find(([sql])=>String(sql).includes("insert into da_organization_application_document"))
@@ -608,7 +633,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
       expect(await saveOrganizationDocument(db,"opaque",input,root)).toBeNull()
       expect(exec.mock.calls.slice(before).some(([sql])=>/insert into |update da_/.test(String(sql)))).toBe(false)
       expect(await fsp.readdir(root)).toHaveLength(2)
-    }finally{spy.mockRestore();await fsp.rm(root,{recursive:true,force:true})}
+    }finally{scanSpy.mockRestore();identitySpy.mockRestore();spy.mockRestore();await fsp.rm(root,{recursive:true,force:true})}
   })
 
   it("submitOrganizationApplication verifies tax identifier, private file integrity and confidential duplicates", async () => {
