@@ -1525,7 +1525,7 @@ export default async function({container}:any){
     await browser.wait("!document.getElementById('store-application-form').hidden")
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
-    process.stdout.write("PASS B22 Chrome/HTTP/PG16: platform company Store application pause/reopen, private Owner 403, CSRF 403, native pending on hold, old Store open, audit/outbox and no auto-approval\\n")
+    process.stdout.write("PASS B22 Chrome/HTTP/PG16: platform company Store application pause/reopen, private Owner 403, CSRF 403, native pending on hold, old Store open, audit/outbox and no auto-approval\n")
 
     await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",
       [staffOrgGrantId])
@@ -1535,7 +1535,7 @@ export default async function({container}:any){
       [provisionName+" revoked"]))[0].n,0)
     // Separate store.approve grant remains valid; Staff and Owner roles
     // cannot silently inherit each other's permissions.
-    process.stdout.write("PASS B22 Chrome: real Staff Organization provision HTTP201 and protected Owner persisted, two canonical platform_staff audit/outboxes project safely; CSRF/foreign actor/revoked grant denied\\n")
+    process.stdout.write("PASS B22 Chrome: real Staff Organization provision HTTP201 and protected Owner persisted, two canonical platform_staff audit/outboxes project safely; CSRF/foreign actor/revoked grant denied\n")
     reviewer.phase="platform-store-review"
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
