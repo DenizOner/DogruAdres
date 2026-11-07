@@ -1612,20 +1612,25 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const db=securitySql(context.transactionManager)
     const staff=await new IdentitySessions(db).staff(token,"store.application.policy.manage","platform")
     if(!staff)return null
-    const rows=await db.execute(`select id,name,store_application_enabled
+    const rows=await db.execute(`select id,name,store_application_enabled,store_application_version
       from da_organization where id=? and status='active' and deleted_at is null`,[org])
-    if(rows.length!==1||typeof rows[0].store_application_enabled!=="boolean")return null
+    if(rows.length!==1||typeof rows[0].store_application_enabled!=="boolean"||
+       !Number.isSafeInteger(rows[0].store_application_version)||
+       rows[0].store_application_version<0)return null
     return {organization_id:rows[0].id as string,
       name:rows[0].name as string,
-      store_application_enabled:rows[0].store_application_enabled as boolean}
+      store_application_enabled:rows[0].store_application_enabled as boolean,
+      store_application_version:rows[0].store_application_version as number}
   }
 
   @InjectTransactionManager()
   async personalSetStoreApplicationRight(token:string,input:{
-    organization_id:string;expected_enabled:boolean;enabled:boolean;reason:string
+    organization_id:string;expected_enabled:boolean;expected_version:number;enabled:boolean;reason:string
   },@MedusaContext() context:Context={}){
     if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
        typeof input.expected_enabled!=="boolean"||typeof input.enabled!=="boolean"||
+       !Number.isSafeInteger(input.expected_version)||input.expected_version<0||
+       input.expected_version>=2147483647||
        input.expected_enabled===input.enabled||
        typeof input.reason!=="string"||input.reason.trim()!==input.reason||
        input.reason.length<10||input.reason.length>500)
@@ -1640,12 +1645,18 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(grant.length!==1)return null
     // Serializes against active native Store creation/approval, both of which
     // hold this same row FOR SHARE until their workflow has finished.
-    const rows=await db.execute(`select store_application_enabled
+    const rows=await db.execute(`select store_application_enabled,store_application_version
       from da_organization where id=? and status='active' and deleted_at is null
       for update`,[input.organization_id])
-    if(rows.length!==1||typeof rows[0].store_application_enabled!=="boolean")return null
+    if(rows.length!==1||typeof rows[0].store_application_enabled!=="boolean"||
+       !Number.isSafeInteger(rows[0].store_application_version)||
+       rows[0].store_application_version<0)return null
     const prior=rows[0].store_application_enabled as boolean
-    if(prior!==input.expected_enabled)return {status:"conflict" as const}
+    const version=rows[0].store_application_version as number
+    // TRUE -> FALSE -> TRUE is NOT the same version as the first TRUE.
+    // Reject stale tabs before writing any audit/outbox or notices.
+    if(prior!==input.expected_enabled||version!==input.expected_version)
+      return {status:"conflict" as const}
     const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:staff.person_id,actor_type:staff.actor_type,actor_id:staff.actor_id,
       role_context:"platform_staff",organization_id:input.organization_id,
@@ -1653,8 +1664,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         "organization.store_application_right_disabled",
       module:DOGRUADRES_AUDIT_MODULE,resource:"organization",
       target_id:input.organization_id,
-      previous_values:{store_application_enabled:prior},
+      previous_values:{store_application_enabled:prior,store_application_version:version},
       new_values:{store_application_enabled:input.enabled,
+        store_application_version:version+1,
         reason:input.reason,staff_grant_id:staff.grant_id},
       occurred_at:new Date()
     }],context)
@@ -1664,9 +1676,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        typeof manager.flush!=="function")throw new Error("Foundation transaction unavailable")
     await manager.flush()
     const updated=await db.execute(`update da_organization
-      set store_application_enabled=?,updated_at=clock_timestamp()
-      where id=? and store_application_enabled=? returning id`,
-      [input.enabled,input.organization_id,prior])
+      set store_application_enabled=?,store_application_version=store_application_version+1,
+        updated_at=clock_timestamp()
+      where id=? and store_application_enabled=? and store_application_version=?
+      returning id,store_application_version`,
+      [input.enabled,input.organization_id,prior,version])
     if(updated.length!==1)throw new IdentityAccessDenied()
     // Existing Foundation in-app notification receipts: one private receipt for
     // each currently protected active Owner, all attached to this exact audit.
@@ -1680,7 +1694,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       on conflict(audit_event_id,person_id) do nothing`,[audit.id,input.organization_id])
     return {status:"updated" as const,
       organization_id:input.organization_id,
-      store_application_enabled:input.enabled}
+      store_application_enabled:input.enabled,
+      store_application_version:updated[0].store_application_version as number}
   }
 
   /** B22 Owner membership revoke vs native Mercur Seller creation.

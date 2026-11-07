@@ -3174,9 +3174,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(seq!==platformStoreRequest||epoch!==viewEpoch||document.hidden||
          el('workspace').hidden||policyInput.value.trim()!==org)return;
       if(result.organization_id!==org||typeof result.name!=='string'||
-         typeof result.store_application_enabled!=='boolean')
+         typeof result.store_application_enabled!=='boolean'||
+         !Number.isSafeInteger(result.store_application_version)||
+         result.store_application_version<0||result.store_application_version>=2147483647)
         throw Error('Durum doğrulanamadı');
-      platformStorePolicy={organization_id:org,enabled:result.store_application_enabled};
+      platformStorePolicy={organization_id:org,enabled:result.store_application_enabled,
+        version:result.store_application_version};
       policyApply.disabled=false;
       policyApply.textContent=result.store_application_enabled?
         'Yeni mağaza başvuru hakkını kapat':'Yeni mağaza başvuru hakkını aç';
@@ -3203,13 +3206,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const result=await api('platform/store-application-policy',{
         method:'POST',body:JSON.stringify({
           organization_id:org,expected_enabled:current.enabled,
-          enabled:!current.enabled,reason
+          expected_version:current.version,enabled:!current.enabled,reason
         })
       });
       if(seq!==platformStoreRequest||epoch!==viewEpoch||
          document.hidden||el('workspace').hidden||policyInput.value.trim()!==org)return;
       if(result.status!=='updated'||result.organization_id!==org||
-         result.store_application_enabled!==!current.enabled){
+         result.store_application_enabled!==!current.enabled||
+         result.store_application_version!==current.version+1){
         const uncertain=new Error('İşlem yanıtı doğrulanamadı');
         uncertain.uncertain=true;
         throw uncertain;

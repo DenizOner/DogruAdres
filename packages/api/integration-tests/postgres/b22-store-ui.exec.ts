@@ -1440,19 +1440,30 @@ export default async function({container}:any){
     assert.equal(await reviewer.eval("document.getElementById('platform-store-policy-apply').disabled"),false)
     const companyRight=async(enabled:boolean,expected:boolean,reason:string,
       validCsrf=true,organizationId=organizations[0].id,
-      actingBrowser:B06Chrome=reviewer)=>{
+      actingBrowser:B06Chrome=reviewer,expectedVersion?:number)=>{
+      // Test-only snapshot of current committed revision. Historical replay
+      // tests pass an explicit older version; product UI always uses HTTP GET.
+      const [current]=await q("select store_application_version from da_organization where id=$1",
+        [organizationId])
+      assert.ok(current)
+      const version=expectedVersion??current.store_application_version
+      assert.ok(Number.isSafeInteger(version)&&version>=0&&version<2147483647)
       return actingBrowser.callFunction(
-        "async function(org,e,x,reason,valid){"+
+        "async function(org,e,x,reason,valid,version){"+
           "const s=await(await fetch('/personal/session')).json();"+
           "const r=await fetch('/personal/platform/store-application-policy',{method:'POST',"+
             "headers:{'content-type':'application/json','x-csrf-token':valid==='true'?s.csrf_token:'bad'},"+
-            "body:JSON.stringify({organization_id:org,expected_enabled:x==='true',enabled:e==='true',reason})});"+
+            "body:JSON.stringify({organization_id:org,expected_enabled:x==='true',expected_version:Number(version),enabled:e==='true',reason})});"+
           "return {status:r.status,body:await r.json()};}",
-        organizationId,String(enabled),String(expected),reason,String(validCsrf))
+        organizationId,String(enabled),String(expected),reason,String(validCsrf),String(version))
     }
     const initialCompanyState=await q("select store_application_enabled from da_organization where id=$1",
       [organizations[0].id])
     assert.deepEqual(initialCompanyState,[{store_application_enabled:true}])
+    const [initialPolicyRevision]=await q(
+      "select store_application_version from da_organization where id=$1",
+      [organizations[0].id])
+    assert.equal(initialPolicyRevision.store_application_version,0)
     assert.equal((await get("/personal/platform/store-application-policy?organization_id="+
       encodeURIComponent(organizations[0].id))).status,403,
       "Owner cannot read platform-only policy administration")
@@ -1552,6 +1563,27 @@ export default async function({container}:any){
     await reviewer.wait("document.getElementById('platform-store-policy-status').textContent.includes('açıldı')")
     assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
       [organizations[0].id]),[{store_application_enabled:true}])
+    const [afterReopenRevision]=await q(
+      "select store_application_version from da_organization where id=$1",
+      [organizations[0].id])
+    assert.equal(afterReopenRevision.store_application_version,2)
+    const policyAuditBeforeReplay=await q(`select count(*)::int n from da_audit_event
+      where organization_id=$1 and action in
+      ('organization.store_application_right_disabled','organization.store_application_right_enabled')`,
+      [organizations[0].id])
+    // Actual ABA replay: TRUE -> FALSE -> TRUE cannot reuse revision zero.
+    assert.equal((await companyRight(false,true,"B22 stale pause replay after reopen",
+      true,organizations[0].id,reviewer,
+      initialPolicyRevision.store_application_version)).status,409)
+    assert.deepEqual(await q(
+      "select store_application_enabled,store_application_version from da_organization where id=$1",
+      [organizations[0].id]),
+      [{store_application_enabled:true,store_application_version:2}])
+    assert.deepEqual(await q(`select count(*)::int n from da_audit_event
+      where organization_id=$1 and action in
+      ('organization.store_application_right_disabled','organization.store_application_right_enabled')`,
+      [organizations[0].id]),policyAuditBeforeReplay,
+      "Stale replay cannot write audit, outbox or private notices")
     assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval",
       "Reopen only returns prior application to review queue, never auto-approves")
     const enabledEvents=await q("select e.actor_person_id,x.id outbox_id from da_audit_event e"+
@@ -7400,6 +7432,8 @@ export default async function({container}:any){
     await signupChrome.click("#login button")
     await signupChrome.wait("!document.getElementById('workspace').hidden || !document.getElementById('mfa-enrollment').hidden")
     const needMfa=await signupChrome.eval("!document.getElementById('mfa-enrollment').hidden")
+    let signupSeed:string|null=null
+    let signupEnrollmentCounter:number|null=null
     if(needMfa){
       await signupChrome.input("#mfa-enroll-start input[name=email]",signupEmail)
       await signupChrome.input("#mfa-enroll-start input[name=password]",signupPassword)
@@ -7408,9 +7442,32 @@ export default async function({container}:any){
       const seedUrl=await signupChrome.eval("document.getElementById('mfa-seed').value")
       const seed=seedUrl.startsWith("otpauth:")?new URL(seedUrl).searchParams.get("secret"):seedUrl
       assert.ok(seed)
+      signupSeed=seed
+      signupEnrollmentCounter=Math.floor(Date.now()/30000)
       await signupChrome.input("#mfa-enroll-verify input[name=code]",otp(seed!))
       await signupChrome.click("#mfa-enroll-verify button")
     }
+    await signupChrome.wait(`!document.getElementById('workspace').hidden&&
+      document.getElementById('person').textContent===${JSON.stringify('Person: '+signupPerson)}`)
+    // Enrollment-only scope cannot exercise a sensitive Staff mutation.
+    // Complete the real Medusa password+TOTP challenge on this exact native
+    // primary Customer before claiming a strong browser session.
+    assert.ok(needMfa&&signupSeed&&signupEnrollmentCounter!==null)
+    await until(async()=>Math.floor(Date.now()/30000)>signupEnrollmentCounter!,
+      45000,"First Customer full login must use a fresh native TOTP counter")
+    await signupChrome.send("Page.bringToFront")
+    await signupChrome.wait("document.visibilityState==='visible'")
+    await signupChrome.eval(
+      "document.getElementById('workspace').hidden=true;"+
+      "document.getElementById('login').hidden=false;"+
+      "document.getElementById('login').reset()")
+    await signupChrome.input("#login input[name=email]",signupEmail)
+    await signupChrome.input("#login input[name=password]",signupPassword)
+    await signupChrome.click("#login button")
+    await signupChrome.wait("!document.getElementById('challenge').hidden")
+    await signupChrome.input("#challenge input[name=code]",otp(signupSeed!))
+    signupSeed=null
+    await signupChrome.click("#challenge button")
     await signupChrome.wait(`!document.getElementById('workspace').hidden&&
       document.getElementById('person').textContent===${JSON.stringify('Person: '+signupPerson)}`)
     const ownPhone=await signupChrome.eval(`(async()=>{

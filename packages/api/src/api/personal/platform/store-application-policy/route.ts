@@ -10,6 +10,7 @@ const query=z.object({organization_id:org}).strict()
 const change=z.object({
   organization_id:org,
   expected_enabled:z.boolean(),
+  expected_version:z.number().int().min(0).max(2147483646),
   enabled:z.boolean(),
   reason:z.string().trim().min(10).max(500)
 }).strict().refine(x=>x.expected_enabled!==x.enabled)
