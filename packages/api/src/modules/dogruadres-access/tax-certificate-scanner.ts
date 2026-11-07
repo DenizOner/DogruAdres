@@ -82,32 +82,46 @@ async function command(socketPath: string, data?: Buffer): Promise<string> {
 }
 
 /**
- * This is usable only with a trusted local Unix socket under OS ACLs.
- * The daemon's virus database date is checked for every scan; a missing,
- * stale, future-dated or malformed VERSIONCOMMANDS reply fails closed.
- * VERSION may be disabled on a hardened ClamAV daemon; VERSIONCOMMANDS
- * independently reports the loaded database timestamp and advertised commands.
+ * A cheap, read-only fingerprint of the ACTUALLY LOADED ClamAV engine and
+ * signature database. It is not a scan verdict, nor a browser/API token.
+ * Missing/stale signatures or an unavailable local daemon fail closed.
  */
-export async function verifyTaxCertificateWithClamd(
-  content: Buffer, configuredSocket = process.env.DOGRUADRES_CLAMD_SOCKET
-): Promise<void> {
-  if (process.platform !== "linux" || !Buffer.isBuffer(content) ||
-      content.length < 8 || content.length > TAX_CERTIFICATE_MAX_BYTES ||
-      typeof configuredSocket !== "string" ||
+export async function currentClamdSignatureIdentity(
+  configuredSocket = process.env.DOGRUADRES_CLAMD_SOCKET
+): Promise<string> {
+  if (process.platform !== "linux" || typeof configuredSocket !== "string" ||
       configuredSocket.trim() !== configuredSocket ||
       !isAbsolute(configuredSocket) || configuredSocket.includes("\0"))
     return refuse()
 
+  // Do not treat a disabled VERSION endpoint or generic PONG as freshness.
   const metadata = await command(configuredSocket)
-  // Do not treat a disabled VERSION endpoint or a generic PONG as freshness.
-  // This response is the official, NUL-terminated VERSIONCOMMANDS format.
-  const match = /^ClamAV [^/\s]+\/([1-9][0-9]*)\/([^|\r\n]+)\| COMMANDS: ([A-Z]+(?: [A-Z]+)*)$/.exec(metadata)
-  if (!match || !match[3].split(" ").includes("INSTREAM")) return refuse()
-  const updated = Date.parse(match[2])
-  const age = Date.now() - updated
-  if (!Number.isFinite(updated) || age < -FUTURE_SKEW_MS ||
-      age > SIGNATURE_MAX_AGE_MS) return refuse()
+  const match = /^ClamAV ([^/\s]+)\/([1-9][0-9]*)\/([^|\r\n]+)\| COMMANDS: ([A-Z]+(?: [A-Z]+)*)$/.exec(metadata)
+  if (!match || !match[4].split(" ").includes("INSTREAM")) return refuse()
+  const revision = Number(match[2])
+  const timestamp = Date.parse(match[3])
+  const age = Date.now() - timestamp
+  if (!Number.isSafeInteger(revision) || !Number.isFinite(timestamp) ||
+      age < -FUTURE_SKEW_MS || age > SIGNATURE_MAX_AGE_MS) return refuse()
+  return `${match[1]}/${revision}/${timestamp}`
+}
 
-  const result = await command(configuredSocket, content)
+/**
+ * Return the database/engine identity only after a real, complete INSTREAM
+ * scan. Reject a scanner reload in the middle of an examination so that the
+ * result is not accidentally attributed to the wrong signature generation.
+ */
+export async function verifyTaxCertificateWithClamd(
+  content: Buffer, configuredSocket = process.env.DOGRUADRES_CLAMD_SOCKET
+): Promise<string> {
+  if (!Buffer.isBuffer(content) ||
+      content.length < 8 || content.length > TAX_CERTIFICATE_MAX_BYTES)
+    return refuse()
+
+  const before = await currentClamdSignatureIdentity(configuredSocket)
+  const result = await command(configuredSocket!, content)
   if (result !== "stream: OK") return refuse()
+  const after = await currentClamdSignatureIdentity(configuredSocket)
+  if (after !== before) return refuse()
+  return before
 }

@@ -3,7 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
-  TaxCertificateScannerUnavailable, verifyTaxCertificateWithClamd
+  TaxCertificateScannerUnavailable, verifyTaxCertificateWithClamd,
+  currentClamdSignatureIdentity
 } from "../tax-certificate-scanner"
 import { makeSafeTaxCertificatePreview, TaxCertificateSafePreviewUnavailable } from "../tax-certificate-safe-preview"
 
@@ -12,7 +13,7 @@ describe("B22 local ClamAV scanner fail-closed transport", () => {
   async function withDaemon(
     verdict: string, date: string,
     run: (path: string, frames: Buffer[]) => Promise<void>,
-    metadataReply?: string
+    metadataReply?: string | (() => string)
   ) {
     const dir = await mkdtemp(join(tmpdir(), "da-clamd-"))
     const path = join(dir, "scan.sock")
@@ -28,7 +29,7 @@ describe("B22 local ClamAV scanner fail-closed transport", () => {
         if (!mode) {
           if (received.subarray(0, 17).toString("ascii") === "zVERSIONCOMMANDS\0") {
             mode = "version"
-            const response = metadataReply ??
+            const response = (typeof metadataReply === "function" ? metadataReply() : metadataReply) ??
               ("ClamAV 1.4.3/28001/" + date + "| COMMANDS: SCAN VERSIONCOMMANDS INSTREAM")
             socket.end(Buffer.from(response + "\0"))
             return
@@ -66,10 +67,31 @@ describe("B22 local ClamAV scanner fail-closed transport", () => {
   it("streams exactly the complete private bytes and accepts only a fresh clean verdict", async () => {
     const now = new Date().toUTCString()
     await withDaemon("stream: OK", now, async (path, frames) => {
-      await expect(verifyTaxCertificateWithClamd(sample, path)).resolves.toBeUndefined()
+      const expected = "1.4.3/28001/" + Date.parse(now)
+      await expect(verifyTaxCertificateWithClamd(sample, path)).resolves.toBe(expected)
       expect(Buffer.concat(frames)).toEqual(sample)
       expect(frames.length).toBe(1)
     })
+  })
+
+  it("reads current daemon identity without scanning and refuses to reuse a verdict across a signature update", async () => {
+    const date = new Date().toUTCString()
+    let version = 28001
+    const reply = () => "ClamAV 1.4.3/" + version + "/" + date +
+      "| COMMANDS: SCAN VERSIONCOMMANDS INSTREAM"
+    await withDaemon("stream: OK", date, async (path, frames) => {
+      const first = await currentClamdSignatureIdentity(path)
+      expect(first).toBe("1.4.3/28001/" + Date.parse(date))
+      expect(frames).toHaveLength(0)
+      version = 28002
+      expect(await currentClamdSignatureIdentity(path))
+        .toBe("1.4.3/28002/" + Date.parse(date))
+      let reads = 0
+      version = 28001
+      // Before = 28001; after INSTREAM = 28002: reject the changed epoch.
+      await expect(verifyTaxCertificateWithClamd(sample, path))
+        .resolves.toBe("1.4.3/28001/" + Date.parse(date))
+    }, reply)
   })
 
   it("denies infection, daemon ERROR and ambiguous positive replies", async () => {
