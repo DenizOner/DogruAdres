@@ -4,6 +4,7 @@ import type {Context} from "@medusajs/framework/types"
 import {createSellerAccountWorkflow} from "@mercurjs/core/workflows"
 import {access,csrf,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
+import {storeDraftPayload} from "../../../modules/dogruadres-access/store-application-draft"
 
 export const AUTHENTICATE=false
 const payload=z.object({
@@ -32,6 +33,22 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   let validCsrf=false;try{validCsrf=await csrf(req)}catch{}
   if(!validCsrf||req.headers["x-seller-id"]!==undefined)
     return res.status(403).json({message:"Access denied"})
+  if((req.body as {action?:unknown}|null)?.action==="save_draft"){
+    const draft=storeDraftPayload.safeParse(req.body)
+    if(!draft.success)return res.status(400).json({message:"Invalid draft"})
+    try{
+      const saved=await access(req).personalSaveStoreApplicationDraft(
+        sessionToken(req),draft.data)
+      if(!saved)return res.status(403).json({message:"Access denied"})
+      if(saved.conflict)return res.status(409).json({message:"Draft changed; read current version"})
+      return res.status(draft.data.expected_version===0?201:200)
+        .json({draft_id:saved.draft_id,status:"draft",version:saved.version})
+    }catch(error){
+      return res.status(error instanceof IdentityAccessDenied?403:503)
+        .json({message:error instanceof IdentityAccessDenied?"Access denied":
+          "Outcome uncertain; read drafts"})
+    }
+  }
   const parsed=payload.safeParse(req.body)
   if(!parsed.success)return res.status(400).json({message:"Invalid application"})
   const token=sessionToken(req),svc=access(req)
