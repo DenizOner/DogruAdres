@@ -7446,13 +7446,33 @@ export default async function({container}:any){
       signupEnrollmentCounter=Math.floor(Date.now()/30000)
       await signupChrome.input("#mfa-enroll-verify input[name=code]",otp(seed!))
       await signupChrome.click("#mfa-enroll-verify button")
+    }else{
+      // Optional platform MFA does not force the enrollment UI. This task
+      // creates a genuine native Medusa TOTP factor on its already verified,
+      // disposable PRIMARY Customer identity; it does not forge Person login,
+      // Staff authority or strong session. Actual Chrome password/TOTP follows.
+      const enrolled=await auth.listAuthMfa(
+        {auth_identity_id:registered[0].auth_identity_id,status:"enabled"},{take:2})
+      assert.equal(enrolled.length,0,"Optional Customer should not have a factor")
+      const native=await auth.startAuthMfa({
+        auth_identity_id:registered[0].auth_identity_id,
+        provider:"totp",issuer:"B22 registered primary Customer"})
+      assert.ok(native?.mfa?.id&&native.secret)
+      signupSeed=native.secret
+      signupEnrollmentCounter=Math.floor(Date.now()/30000)
+      await auth.verifyAuthMfa({
+        id:native.mfa.id,auth_identity_id:registered[0].auth_identity_id,
+        code:otp(native.secret)})
+      assert.equal((await auth.listAuthMfa(
+        {auth_identity_id:registered[0].auth_identity_id,status:"enabled"},{take:2})).length,1)
     }
     await signupChrome.wait(`!document.getElementById('workspace').hidden&&
       document.getElementById('person').textContent===${JSON.stringify('Person: '+signupPerson)}`)
     // Enrollment-only scope cannot exercise a sensitive Staff mutation.
     // Complete the real Medusa password+TOTP challenge on this exact native
     // primary Customer before claiming a strong browser session.
-    assert.ok(needMfa&&signupSeed&&signupEnrollmentCounter!==null)
+    assert.ok(signupSeed&&signupEnrollmentCounter!==null,
+      "Real native MFA factor must exist before Customer Staff login")
     await until(async()=>Math.floor(Date.now()/30000)>signupEnrollmentCounter!,
       45000,"First Customer full login must use a fresh native TOTP counter")
     await signupChrome.send("Page.bringToFront")
