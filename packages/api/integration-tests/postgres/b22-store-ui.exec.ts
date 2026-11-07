@@ -8422,7 +8422,32 @@ export default async function({container}:any){
           "const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='İncelemeye Al');"+
           "if(!button)throw Error('Missing staff in-review action');button.click();return true})()")
         assert.equal(clickReview,true)
-        await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.startsWith('B22 Pagination Fixture 1 (')&&p.textContent.includes('İncelemede'))")
+        try{
+          await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.startsWith('B22 Pagination Fixture 1 (')&&p.textContent.includes('İncelemede'))")
+        }catch{
+          // Narrow public-CI-safe diagnosis: do not log application/person IDs,
+          // cookies, request bodies, tax identifiers or staff notes.
+          const ui=await reviewChrome.eval(`(()=>({
+            workspaceHidden:document.getElementById('workspace')?.hidden??null,
+            documentHidden:document.hidden,
+            reviewPanelHidden:document.getElementById('organization-review-panel')?.hidden??null,
+            stagedRowPresent:Array.from(document.querySelectorAll('#organization-review-list p')).some(
+              p=>p.textContent.startsWith('B22 Pagination Fixture 1 (')),
+            inReviewVisible:Array.from(document.querySelectorAll('#organization-review-list p')).some(
+              p=>p.textContent.startsWith('B22 Pagination Fixture 1 (')&&p.textContent.includes('İncelemede')),
+            reviewStartError:document.getElementById('organization-review-status')?.textContent.includes('İncelemeye alma doğrulanamadı')??false
+          }))()`)
+          const persisted=(await q(
+            "select status,version from da_organization_application where id=$1",
+            [stagedId]))[0]
+          const postStatuses=reviewChrome.http.filter(h=>
+            h.path==='/personal/organization-applications'&&h.method==='POST')
+            .slice(-2).map(h=>h.status)
+          throw Error("B22 in_review acceptance diagnosis (no IDs): "+JSON.stringify({
+            ui,status:persisted?.status??"missing",version:persisted?.version??null,
+            postStatuses
+          }))
+        }
         assert.deepEqual(await q(
           "select status,version from da_organization_application where id=$1",[stagedId]),
           [{status:"in_review",version:2}])
