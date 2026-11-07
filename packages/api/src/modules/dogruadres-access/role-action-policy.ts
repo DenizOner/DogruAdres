@@ -4,10 +4,10 @@
  * cannot narrow it. This is not a role-label bypass: the caller must still
  * prove a current active protected Owner and an eligible Organization/resource.
  */
-export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage" | "membership.manage" | "membership.list" | "audit.timeline.read" | "organization.read" | "price.group.manage" | "store.follow"
+export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage" | "membership.manage" | "membership.list" | "audit.timeline.read" | "organization.read" | "price.group.manage" | "store.follow" | "store.application.draft.manage"
 
 export const DEFAULT_OWNER_ACTIONS: readonly OrganizationAction[] =
-  Object.freeze(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read","organization.read","price.group.manage","store.follow"])
+  Object.freeze(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read","organization.read","price.group.manage","store.follow","store.application.draft.manage"]
 
 /** One central decision, using server-authenticated membership and action
  * proofs. Historic Organization "admin" rows have no inherent management
@@ -22,7 +22,7 @@ export function organizationActionAllowed(
   auditedMemberGrant: boolean,
 ): boolean {
   if(role==="owner")return protectedOwner===true && DEFAULT_OWNER_ACTIONS.includes(action)
-  if(role==="member" || role==="admin")return !["invitation.manage","membership.manage","membership.list","audit.timeline.read","price.group.manage","store.follow"].includes(action) &&
+  if(role==="member" || role==="admin")return !["invitation.manage","membership.manage","membership.list","audit.timeline.read","price.group.manage","store.follow","store.application.draft.manage"].includes(action) &&
     auditedMemberGrant===true
   return false
 }
