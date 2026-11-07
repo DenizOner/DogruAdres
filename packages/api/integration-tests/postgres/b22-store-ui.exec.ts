@@ -1210,8 +1210,8 @@ export default async function({container}:any){
     const storedDrafts=await get(draftUrl)
     assert.equal(storedDrafts.status,200)
     assert.equal(storedDrafts.body.drafts.length,1)
-    const draftId=storedDrafts.body.drafts[0].id
-    assert.match(draftId,/^dasdraft_[0-9a-f]{32}$/)
+    const storeDraftId=storedDrafts.body.drafts[0].id
+    assert.match(storeDraftId,/^dasdraft_[0-9a-f]{32}$/)
     assert.equal(storedDrafts.body.drafts[0].name,draftName)
     assert.equal(storedDrafts.body.drafts[0].version,1)
     assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
@@ -1223,7 +1223,7 @@ export default async function({container}:any){
     await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
     const editedDrafts=await get(draftUrl)
     assert.equal(editedDrafts.body.drafts.length,1)
-    assert.equal(editedDrafts.body.drafts[0].id,draftId)
+    assert.equal(editedDrafts.body.drafts[0].id,storeDraftId)
     assert.equal(editedDrafts.body.drafts[0].name,draftEdited)
     assert.equal(editedDrafts.body.drafts[0].version,2)
     const saveDraft=async(payload:Record<string,unknown>,validCsrf=true)=>browser.eval(`(async()=>{
@@ -1234,7 +1234,7 @@ export default async function({container}:any){
       return {status:r.status,body:await r.json()}
     })()`)
     const draftRequest={action:"save_draft",organization_id:organizations[0].id,
-      draft_id:draftId,expected_version:1,name:"Stale draft",email:draftEmail,currency_code:"try"}
+      draft_id:storeDraftId,expected_version:1,name:"Stale draft",email:draftEmail,currency_code:"try"}
     assert.equal((await saveDraft(draftRequest)).status,409,
       "A stale form may not overwrite the latest Organization draft")
     assert.equal((await saveDraft({...draftRequest,expected_version:2},false)).status,403,
@@ -1245,15 +1245,15 @@ export default async function({container}:any){
     assert.equal((await get("/personal/store-applications?organization_id="+
       encodeURIComponent(organizations[2].id))).status,403)
     assert.deepEqual(await q(`select version,name from da_store_application_draft where id=$1`,
-      [draftId]),[{version:2,name:draftEdited}],
+      [storeDraftId]),[{version:2,name:draftEdited}],
       "Stale and foreign writes may not change durable draft input")
     const draftAudit=await q(`select e.action,e.target_id,x.id as outbox_id
       from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
       where e.organization_id=$1 and e.action='organization.store_application_draft_saved'
-        and e.target_id=$2 order by e.occurred_at`,[organizations[0].id,draftId])
+        and e.target_id=$2 order by e.occurred_at`,[organizations[0].id,storeDraftId])
     assert.equal(draftAudit.length,2)
     assert.ok(draftAudit.every((x:any)=>x.action==="organization.store_application_draft_saved"&&
-      x.target_id===draftId&&typeof x.outbox_id==="string"))
+      x.target_id===storeDraftId&&typeof x.outbox_id==="string"))
     assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
       [organizations[0].id]))[0].n,0,
       "Two successful drafts and rejected retries create zero native Store applications")
@@ -1592,7 +1592,7 @@ export default async function({container}:any){
     await browser.input("#store-draft-form input[name=name]",pausedDraftName)
     await browser.click("#store-draft-form button[type=submit]")
     await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
-    const [pausedDraft]=await q("select name,version from da_store_application_draft where id=$1",[draftId])
+    const [pausedDraft]=await q("select name,version from da_store_application_draft where id=$1",[storeDraftId])
     assert.deepEqual(pausedDraft,{name:pausedDraftName,version:3})
     assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
       [organizations[0].id]))[0].n,appCountBefore)
