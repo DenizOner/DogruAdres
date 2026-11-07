@@ -12,7 +12,9 @@ export class TaxCertificateSafePreviewUnavailable extends Error {
   constructor() { super("Private tax certificate safe preview unavailable") }
 }
 
-const MAX_PNG_BYTES = 4 * 1024 * 1024
+export const TAX_CERTIFICATE_PREVIEW_RENDERER_REVISION = "all-pages-png-20261107-v1"
+export const TAX_CERTIFICATE_PREVIEW_MAX_BYTES = 4 * 1024 * 1024
+const MAX_PNG_BYTES = TAX_CERTIFICATE_PREVIEW_MAX_BYTES
 const TIMEOUT_MS = 12_000
 
 // Execute every PDF page inside the same networkless Bubblewrap namespace.
@@ -89,18 +91,41 @@ async function rasterize(content: Buffer, mime: TaxCertificateFormat["mimeType"]
   })
 }
 
-export async function makeSafeTaxCertificatePreview(
+/** First upload: both the private original and isolated PNG scanned with the
+ * SAME actual loaded engine/signature identity; a reload fails closed. */
+export async function prepareScannedTaxCertificatePreview(
   original:Buffer,mime:TaxCertificateFormat["mimeType"]
-):Promise<Buffer> {
+):Promise<{png:Buffer,scanIdentity:string}> {
   if(!Buffer.isBuffer(original)||original.length<8||original.length>TAX_CERTIFICATE_MAX_BYTES||
      !["application/pdf","image/png","image/jpeg"].includes(mime))
     return refuse()
   try {
-    // Require the genuine current original to pass malware scanning before
-    // any PDF or image decoder touches it. Scan the generated PNG as well.
-    await verifyTaxCertificateWithClamd(original)
-    const preview = await rasterize(original,mime)
-    await verifyTaxCertificateWithClamd(preview)
-    return preview
-  } catch { return refuse() }
+    const originalIdentity=await verifyTaxCertificateWithClamd(original)
+    const png=await rasterize(original,mime)
+    const imageIdentity=await verifyTaxCertificateWithClamd(png)
+    if(originalIdentity!==imageIdentity)return refuse()
+    return {png,scanIdentity:originalIdentity}
+  }catch{return refuse()}
+}
+
+/** Signature update: scan original and validated cached PNG without rendering
+ * the original PDF again. */
+export async function rescanTaxCertificateAndPreview(
+  original:Buffer,png:Buffer
+):Promise<string>{
+  if(!Buffer.isBuffer(original)||original.length<8||original.length>TAX_CERTIFICATE_MAX_BYTES||
+     !Buffer.isBuffer(png)||png.length<64||png.length>MAX_PNG_BYTES)return refuse()
+  try {
+    inspectTaxCertificate("safe-preview.png",png,"image/png")
+    const originalIdentity=await verifyTaxCertificateWithClamd(original)
+    const previewIdentity=await verifyTaxCertificateWithClamd(png)
+    if(originalIdentity!==previewIdentity)return refuse()
+    return originalIdentity
+  }catch{return refuse()}
+}
+
+export async function makeSafeTaxCertificatePreview(
+  original:Buffer,mime:TaxCertificateFormat["mimeType"]
+):Promise<Buffer> {
+  return (await prepareScannedTaxCertificatePreview(original,mime)).png
 }
