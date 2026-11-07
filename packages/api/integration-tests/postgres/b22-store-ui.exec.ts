@@ -7781,9 +7781,31 @@ export default async function({container}:any){
         button.click();return true;
       })()`)
       assert.equal(openUnsafePreview,true)
-      await reviewChrome.wait(scanEnabled?
-        "document.getElementById('organization-review-list').textContent.includes('Yalnız güvenli görsel gösteriliyor')":
-        "document.getElementById('organization-review-list').textContent.includes('Tarama veya güvenli önizleme kullanılamıyor')")
+      // Distinguish a real fail-closed image error from an HTTP/DOM stall.
+      // A failed image must not masquerade as a generic 20-second timeout.
+      const previewStatusExpr=scanEnabled?
+        "document.getElementById('organization-review-list').textContent.includes('Yalnız güvenli görsel gösteriliyor') || document.getElementById('organization-review-list').textContent.includes('Tarama veya güvenli önizleme kullanılamıyor')":
+        "document.getElementById('organization-review-list').textContent.includes('Tarama veya güvenli önizleme kullanılamıyor')"
+      try{
+        await reviewChrome.wait(previewStatusExpr)
+      }catch(error){
+        const snapshot=await reviewChrome.eval(`(()=>{
+          const row=Array.from(document.querySelectorAll('#organization-review-list p'))
+            .find(p=>p.textContent.includes('B22 Vergi Levhası Test Şirketi'));
+          const preview=Array.from(row?.querySelectorAll('button')||[])
+            .find(b=>b.textContent==='Belgeyi Güvenli Önizle');
+          const approval=Array.from(row?.querySelectorAll('button')||[])
+            .find(b=>b.textContent==='İşletmeyi Onayla');
+          const image=row?.querySelector('img');
+          return {rowPresent:!!row,previewDisabled:!!preview?.disabled,
+            approvalReady:!!approval&&!approval.hidden&&!approval.disabled,
+            imageComplete:!!image?.complete,imageWidth:image?.naturalWidth||0,
+            note:row?.textContent?.includes('hazırlanıyor')?'loading':
+              row?.textContent?.includes('kullanılamıyor')?'unavailable':
+              row?.textContent?.includes('gösteriliyor')?'ready':'other'};
+        })()`)
+        throw Error("B22 preview browser state not settled: "+JSON.stringify(snapshot)+"; "+String(error))
+      }
       const approvalState=await reviewChrome.eval(`(()=>{
         const row=Array.from(document.querySelectorAll('#organization-review-list p'))
           .find(p=>p.textContent.includes('B22 Vergi Levhası Test Şirketi'));
@@ -7794,7 +7816,7 @@ export default async function({container}:any){
           rasterVisible:!!image&&!image.hidden&&image.naturalWidth>0};
       })()`)
       assert.equal(approvalState.ready,scanEnabled,
-        "Only a genuinely scanned and rendered preview may unlock review UI")
+        "Only a genuinely scanned and rendered preview may unlock review UI; preview must fail closed when scan or browser decode fails")
       assert.equal(approvalState.rasterVisible,scanEnabled)
       if(scanEnabled)process.stdout.write("PASS B22 Chrome/HTTP/PG16: scanned PNG preview loaded and reviewer approval UI gated\n")
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: staff unscanned document denied, applicant original retained, foreign denied\n")
