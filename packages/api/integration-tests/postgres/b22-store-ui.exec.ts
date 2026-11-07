@@ -1406,7 +1406,7 @@ export default async function({container}:any){
     // company application-policy authority without an additional explicit grant.
     const companyPolicyPath='/personal/platform/store-application-policy?organization_id='+
       encodeURIComponent(organizations[0].id)
-    assert.equal(await reviewer.eval(`(async()=> (await fetch(${JSON.stringify(companyPolicyPath)})).status)()`),403,
+    assert.equal(await reviewer.callFunction("async function(path){return (await fetch(path)).status}",companyPolicyPath),403,
       "Organization provision and Store approve grants must not authorize policy changes")
     const policyGrantId="da_staff_policy_"+rand
     await q(`insert into da_platform_staff_grant
