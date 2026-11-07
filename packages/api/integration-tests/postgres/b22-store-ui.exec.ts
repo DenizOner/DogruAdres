@@ -1487,7 +1487,7 @@ export default async function({container}:any){
       applicationId,ownerStoreId)
     assert.equal(blockedApproval,409)
     assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
-    assert.equal((await companyRight(true,false,"B22 stale policy switch")).status,409,
+    assert.equal((await companyRight(true,true,"B22 stale policy switch")).status,409,
       "Stale switch must be rejected while company is already disabled")
     await reviewer.click("#platform-store-policy-read")
     await reviewer.wait("document.getElementById('platform-store-policy-apply').textContent.includes('aç')")
