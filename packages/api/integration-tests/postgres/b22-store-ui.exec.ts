@@ -7583,7 +7583,7 @@ export default async function({container}:any){
         return {createStatus:create.status,uploadStatus:upload.status};
       }`,
       foreignAppId,b22TaxId,twoPagePdfBase64)
-    assert.deepEqual(foreignSetup,{createStatus:200,uploadStatus:200},
+    assert.deepEqual(foreignSetup,{createStatus:201,uploadStatus:200},
       "Foreign applicant must save draft and upload through real HTTPS")
     const duplicateSubmitRes=await foreignDraftChrome.callFunction(
       `async function(applicationId){
