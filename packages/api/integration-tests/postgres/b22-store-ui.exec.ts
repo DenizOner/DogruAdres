@@ -8409,6 +8409,11 @@ export default async function({container}:any){
         // Real authorized staff button starts review, never provisions an Org.
         // Use only an isolated task-owned application and no protected data.
         const stagedId=reviewOverflowIds[0]
+        // Do not alter the first applicant's session or source-owned
+        // registration proof acceptance later in this journey. Use the
+        // already authenticated SECOND applicant and a disposable row.
+        await q("update da_organization_application set applicant_person_id=$1 where id=$2",
+          [foreignPersonId,stagedId])
         const organizationCountBeforeReview=Number((await q(
           "select count(*)::int n from da_organization"))[0].n)
         const clickReview=await reviewChrome.eval(
@@ -8428,7 +8433,7 @@ export default async function({container}:any){
         assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
           organizationCountBeforeReview,"Starting review must not create a business")
 
-        const applicantStage=await signupChrome.eval(
+        const applicantStage=await foreignDraftChrome.eval(
           "(async()=>{const r=await fetch('/personal/organization-applications');"+
           "const body=await r.json();return {status:r.status,items:body.drafts||[]}})()")
         assert.equal(applicantStage.status,200)
@@ -8442,14 +8447,14 @@ export default async function({container}:any){
           "body:JSON.stringify({action:'review_decision',application_id:"+JSON.stringify(stagedId)+
           ",expected_version:2,decision:'start_review'})});return r.status})()")
         assert.equal(replayReview,409,"Already in review cannot be started twice")
-        const foreignReview=await signupChrome.eval(
+        const foreignReview=await foreignDraftChrome.eval(
           "(async()=>{const s=await(await fetch('/personal/session')).json();"+
           "const r=await fetch('/personal/organization-applications',{method:'POST',"+
           "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
           "body:JSON.stringify({action:'review_decision',application_id:"+JSON.stringify(stagedId)+
           ",expected_version:2,decision:'reject',notes:'not authorized'})});return r.status})()")
         assert.equal(foreignReview,403,"Applicant cannot issue platform review decisions")
-        const ownerWithdraw=await signupChrome.eval(
+        const ownerWithdraw=await foreignDraftChrome.eval(
           "(async()=>{const s=await(await fetch('/personal/session')).json();"+
           "const r=await fetch('/personal/organization-applications',{method:'POST',"+
           "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
@@ -8481,15 +8486,8 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner\n")
 
 
-    // After a staff-initiated review and applicant withdrawal, re-open the
-    // personal view before checking the canonical primary Customer binding.
-    // Do not skip the binding assertion or bypass an expired session.
-    const primaryBindingVisible=await signupChrome.eval(
-      "!!document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
-    if(!primaryBindingVisible){
-      await signupChrome.send("Page.reload",{ignoreCache:true})
-      await signupChrome.wait("!document.getElementById('workspace').hidden")
-    }
+    // The earlier primary Customer browser is deliberately untouched by the
+    // independent review-status acceptance above.
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
     assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
       "Primary Customer cannot offer an unlink button")
