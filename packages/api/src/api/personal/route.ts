@@ -382,6 +382,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="pending-invitations-refresh" type="button">Davetleri yenile</button>
   </section>
   <button id="staff">Platform yetkisini kontrol et</button>
+  <button id="platform-store-policy-open" type="button">Şirket mağaza başvuru hakkı yönetimi</button>
   <section id="platform-store-policy-panel" hidden style="grid-column:1/-1">
     <h3>Şirketin yeni mağaza başvuru hakkı</h3>
     <p>Bu işlem yalnız yetkili platform görevlisine açıktır. Mevcut faal mağazalar bu ayardan etkilenmez. Bekleyen başvurular karar verilmeden korunur.</p>
@@ -3222,15 +3223,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         'Başvuru hakkı değiştirilemedi. Yetkinizi ve şirket kaydını kontrol edin.';
     }
   };
+  el('platform-store-policy-open').onclick=()=>{
+    clearPlatformStorePolicy();
+    el('platform-store-policy-panel').hidden=false;
+    policyStatus.textContent='Şirket kimliğini yazıp mevcut durumu doğrulayın. Yalnız yetkili platform görevlileri işlem yapabilir.';
+  };
   el('staff').onclick=async()=>{
     try{
       const allowed=await api('platform');
       if(allowed.allowed!==true)throw Error('Platform görevi doğrulanamadı');
-      el('platform-store-policy-panel').hidden=false;
-      status('Platform görevi için izin var');
+      status('Kuruluş oluşturma için platform görevi doğrulandı');
     }catch{
-      clearPlatformStorePolicy();
-      status('Platform yetkisi bulunamadı veya güncel güçlü doğrulama gerekli.');
+      status('Kuruluş oluşturma platform yetkisi bulunamadı veya güçlü doğrulama gerekli.');
     }
   };load();
   </script></html>`)
