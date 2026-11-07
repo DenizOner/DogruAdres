@@ -7477,10 +7477,18 @@ export default async function({container}:any){
       45000,"First Customer full login must use a fresh native TOTP counter")
     await signupChrome.send("Page.bringToFront")
     await signupChrome.wait("document.visibilityState==='visible'")
-    await signupChrome.eval(
-      "document.getElementById('workspace').hidden=true;"+
-      "document.getElementById('login').hidden=false;"+
-      "document.getElementById('login').reset()")
+    // A real visitor logs out before logging back in for strong native MFA.
+    // Do not fake the UI state by toggling DOM.hidden from the test.
+    const preLogoutCookie=await signupChrome.token()
+    assert.match(preLogoutCookie??"",/^[A-Za-z0-9_-]{43}$/)
+    await signupChrome.click("#logout")
+    await signupChrome.wait("!document.getElementById('login').hidden&&"+
+      "document.getElementById('workspace').hidden")
+    const [revokedFirstCustomerSession]=await q(
+      "select status from da_browser_session where id=$1",
+      [createHash("sha256").update(preLogoutCookie!).digest("hex")])
+    assert.equal(revokedFirstCustomerSession?.status,"revoked",
+      "Real browser logout must revoke first Customer session before re-login")
     await signupChrome.input("#login input[name=email]",signupEmail)
     await signupChrome.input("#login input[name=password]",signupPassword)
     await signupChrome.click("#login button")
