@@ -1686,6 +1686,64 @@ export default async function({container}:any){
       [organizations[0].id]))[0].n,appCountBefore,
       "Draft race and corrupt reply must not create a native Seller application")
     process.stdout.write("PASS B22 Chrome: delayed native A draft reply cannot corrupt new B version; B durable update with browser-only malformed 200 remains uncertain, duplicate blocked, two private drafts, no Seller created\n")
+    // A valid JSON object with a mismatched draft ID still cannot prove the
+    // result of a real committed HTTPS POST. Corrupt only the Chrome-visible
+    // response; keep the native service and PostgreSQL writes untouched.
+    await browser.wait("document.querySelector('#store-application-list button')?.closest('p')?.textContent.includes("+
+      JSON.stringify(corruptDraftName)+")")
+    await browser.click("#store-application-list button")
+    const semanticDraftEmail="semantic-draft-"+rand+"@example.invalid"
+    await replaceStoreDraftText("#store-draft-form input[name=email]",semanticDraftEmail)
+    const auditBeforeSemantic=Number((await q(
+      "select count(*)::int n from da_audit_event where target_id=$1 and action='organization.store_application_draft_saved'",
+      [secondDraft.id]))[0].n)
+    assert.equal(auditBeforeSemantic,2,
+      "Only the B draft's original create and malformed-response update exist")
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);window.__daDraftSemanticFetch=window.fetch;"+
+      "window.__daDraftSemanticPosts=0;"+
+      "window.fetch=(resource,options)=>{"+
+      "const url=typeof resource==='string'?resource:resource?.url;"+
+      "if(url==='/personal/store-applications'&&options?.method==='POST'){"+
+      "window.__daDraftSemanticPosts++;"+
+      "return original(resource,options).then(async response=>{"+
+      "if(response.status!==200)return response;"+
+      "const data=await response.clone().json();"+
+      "if(data.status!=='draft'||data.version!==3)return response;"+
+      "return new Response(JSON.stringify({...data,draft_id:'dasdraft_'+'0'.repeat(32)}),"+
+      "{status:200,headers:{'Content-Type':'application/json'}})"+
+      "})}return original(resource,options)"+
+      "};return true})()")
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("window.__daDraftSemanticPosts===1&&"+
+      "document.getElementById('store-application-status').textContent.includes('Taslak sonucu belirsiz')")
+    assert.deepEqual(await q(
+      "select name,email,version from da_store_application_draft where id=$1",
+      [secondDraft.id]),[{name:corruptDraftName,email:semanticDraftEmail,version:3}],
+      "A valid but mismatched success JSON must not undo the real DB commit")
+    assert.equal(await browser.eval("document.querySelector('#store-draft-form button[type=submit]').disabled"),
+      true,"A semantically mismatched successful reply must block blind retry")
+    await browser.click("#store-draft-form button[type=submit]")
+    assert.equal(await browser.eval("window.__daDraftSemanticPosts"),1,
+      "A failed contract check must not generate a duplicate HTTPS POST")
+    await browser.eval("(()=>{window.fetch=window.__daDraftSemanticFetch;"+
+      "delete window.__daDraftSemanticFetch;return true})()")
+    const semanticDrafts=(await get(draftUrl)).body.drafts
+    assert.equal(semanticDrafts.find((d:any)=>d.id===secondDraft.id)?.version,3,
+      "Owner's authorized read can reconcile the durable B draft version")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where target_id=$1 and action='organization.store_application_draft_saved'",
+      [secondDraft.id]))[0].n),auditBeforeSemantic+1,
+      "One committed B update must create exactly one canonical audit")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_outbox o join da_audit_event e on e.id=o.source_audit_event_id where e.target_id=$1 and e.action='organization.store_application_draft_saved'",
+      [secondDraft.id]))[0].n),auditBeforeSemantic+1,
+      "A duplicate click cannot create an extra outbox")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n),appCountBefore,
+      "A mismatched success reply must never create a native Seller application")
+    process.stdout.write("PASS B22 Chrome: native successful Store draft POST with parseable mismatched 200 JSON remains uncertain; single persistent B v3, one audit/outbox, no duplicate request or Seller application\n")
     const deniedAppId="daapp_"+randomBytes(16).toString("hex")
     const deniedWhilePaused=await browser.callFunction(
       "async function(org,id){"+
