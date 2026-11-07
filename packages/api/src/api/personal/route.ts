@@ -3114,6 +3114,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   function concealPrivateView(){
     clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
+    clearPlatformStorePolicy();
     clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPendingInvitations();clearOrganizationReviews();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
@@ -3137,6 +3138,96 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('audit-timeline-refresh').onclick=async()=>{timelineCursor=null;await loadTimeline(currentOrg);};
   el('audit-timeline-next').onclick=async()=>{if(timelineCursor&&currentOrg)await loadTimeline(currentOrg,timelineCursor,true);};
   el('select-org').onsubmit=async e=>{e.preventDefault();await selectOrg(new FormData(e.target).get('organization'))};
-  el('session-lock').onclick=lockCurrentSession;el('logout').onclick=()=>logout(false);el('logout-all').onclick=()=>logout(true);el('staff').onclick=async()=>{try{await api('platform');status('Platform görevi için izin var')}catch(e){status(e.message)}};load();
+  el('session-lock').onclick=lockCurrentSession;el('logout').onclick=()=>logout(false);el('logout-all').onclick=()=>logout(true);let platformStorePolicy=null,platformStoreRequest=0;
+  const policyForm=el('platform-store-policy-form');
+  const policyStatus=el('platform-store-policy-status');
+  const policyApply=el('platform-store-policy-apply');
+  const policyInput=policyForm.elements.namedItem('organization_id');
+  function clearPlatformStorePolicy(){
+    platformStoreRequest++;platformStorePolicy=null;
+    policyApply.disabled=true;policyApply.textContent='Henüz durum doğrulanmadı';
+    policyForm.reset();policyStatus.textContent='';
+    el('platform-store-policy-panel').hidden=true;
+  }
+  policyInput.oninput=()=>{
+    platformStorePolicy=null;platformStoreRequest++;
+    policyApply.disabled=true;policyApply.textContent='Önce durumu doğrula';
+    policyStatus.textContent='';
+  };
+  async function readPlatformStorePolicy(){
+    const org=String(policyInput.value||'').trim(),epoch=viewEpoch;
+    const seq=++platformStoreRequest;
+    platformStorePolicy=null;policyApply.disabled=true;
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org)){
+      policyStatus.textContent='Geçerli şirket kimliği girin.';return;
+    }
+    policyStatus.textContent='Başvuru hakkı doğrulanıyor…';
+    try{
+      const result=await api('platform/store-application-policy?organization_id='+
+        encodeURIComponent(org));
+      if(seq!==platformStoreRequest||epoch!==viewEpoch||document.hidden||
+         el('workspace').hidden||policyInput.value.trim()!==org)return;
+      if(result.organization_id!==org||typeof result.name!=='string'||
+         typeof result.store_application_enabled!=='boolean')
+        throw Error('Durum doğrulanamadı');
+      platformStorePolicy={organization_id:org,enabled:result.store_application_enabled};
+      policyApply.disabled=false;
+      policyApply.textContent=result.store_application_enabled?
+        'Yeni mağaza başvuru hakkını kapat':'Yeni mağaza başvuru hakkını aç';
+      policyStatus.textContent=result.name+' — yeni mağaza başvuru hakkı '+
+        (result.store_application_enabled?'açık.':'kapalı; bekleyen başvurular korunuyor.');
+    }catch{
+      if(seq!==platformStoreRequest||epoch!==viewEpoch)return;
+      policyStatus.textContent='Şirket ve platform yetkisi doğrulanamadı. İşlem yapılamaz.';
+    }
+  }
+  el('platform-store-policy-read').onclick=()=>void readPlatformStorePolicy();
+  policyForm.onsubmit=async event=>{
+    event.preventDefault();
+    const org=String(policyInput.value||'').trim(),current=platformStorePolicy,
+      reason=String(policyForm.elements.namedItem('reason').value||'').trim(),
+      epoch=viewEpoch,seq=++platformStoreRequest;
+    policyApply.disabled=true;platformStorePolicy=null;
+    if(!current||current.organization_id!==org||reason.length<10||reason.length>500){
+      policyStatus.textContent='Önce şirket durumunu doğrulayın ve gerekçe girin.';
+      return;
+    }
+    policyStatus.textContent='Politika değişikliği gönderiliyor…';
+    try{
+      const result=await api('platform/store-application-policy',{
+        method:'POST',body:JSON.stringify({
+          organization_id:org,expected_enabled:current.enabled,
+          enabled:!current.enabled,reason
+        })
+      });
+      if(seq!==platformStoreRequest||epoch!==viewEpoch||
+         document.hidden||el('workspace').hidden||policyInput.value.trim()!==org)return;
+      if(result.status!=='updated'||result.organization_id!==org||
+         result.store_application_enabled!==!current.enabled)
+        throw Error('İşlem doğrulanamadı');
+      policyStatus.textContent='Şirketin yeni mağaza başvuru hakkı '+
+        (result.store_application_enabled?'açıldı.':'kapatıldı; bekleyenler korunuyor.')+
+        ' Son durum yeniden doğrulansın.';
+      policyForm.elements.namedItem('reason').value='';
+    }catch(error){
+      if(seq!==platformStoreRequest||epoch!==viewEpoch)return;
+      policyStatus.textContent=error.uncertain?
+        'Sonuç belirsiz. İşlemi tekrar göndermeyin; şirketin durumunu yeniden sorgulayın.':
+        error.httpStatus===409?
+        'Şirketin durumu başka işlemle değişti. Tekrar göndermeden önce yeniden sorgulayın.':
+        'Başvuru hakkı değiştirilemedi. Yetkinizi ve şirket kaydını kontrol edin.';
+    }
+  };
+  el('staff').onclick=async()=>{
+    try{
+      const allowed=await api('platform');
+      if(allowed.allowed!==true)throw Error('Platform görevi doğrulanamadı');
+      el('platform-store-policy-panel').hidden=false;
+      status('Platform görevi için izin var');
+    }catch{
+      clearPlatformStorePolicy();
+      status('Platform yetkisi bulunamadı veya güncel güçlü doğrulama gerekli.');
+    }
+  };load();
   </script></html>`)
 }
