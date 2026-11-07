@@ -727,7 +727,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
           version: 1
         }] : []
       }
-      if (sql.includes("where tax_identifier=? and status in ('submitted','approved') and id<>?")) {
+      if (sql.includes("where tax_identifier=? and status in ('submitted','in_review','approved') and id<>?")) {
         return hasDuplicates ? [{ id: "daorgapp_other123" }] : []
       }
       if (sql.includes("from da_organization") && sql.includes("where tax_identifier=? and status='active'")) {
@@ -826,7 +826,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
   it("listSubmittedOrganizationApplications allows organization.review staff and denies unauthorized users", async () => {
     const spyStaff = jest.spyOn(IdentitySessions.prototype, "staff")
     const exec = jest.fn(async (sql: string) => {
-      if (sql.includes("from da_organization_application") && sql.includes("where status = 'submitted'")) {
+      if (sql.includes("from da_organization_application") && sql.includes("where status in ('submitted','in_review')")) {
         return [{
           id: payload.application_id,
           applicant_person_id: "daprs_applicant",
