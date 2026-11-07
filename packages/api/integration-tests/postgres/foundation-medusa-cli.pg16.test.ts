@@ -210,6 +210,7 @@ async function run(){
               x==="PASS B22 Owner member-permission policy: protected Owner grant/list 200 despite legacy setting; revoke 200 with audit/outbox" ||
               x==="PASS B22 Chrome/HTTP/PG16: scanned PNG preview loaded and reviewer approval UI gated" ||
               x==="PASS B22 Chrome/HTTP/PG16: full two-page PDF preview, approval disabled until final page scrolled" ||
+              x==="PASS B22 Chrome/HTTP/PG16: staff starts in_review, applicant sees stage and withdraws; forged and replayed decisions denied, audit preserved" ||
               x==="PASS B22 Chrome/HTTP/PG16: changed signature triggers genuine re-scan; unchanged reuse; damaged PNG regenerated" ||
               x==="PASS B22 PG16: duplicate activity direct SQL 23514; original private draft unchanged" ||
               x==="PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner").join("\n")

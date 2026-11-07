@@ -8405,6 +8405,63 @@ export default async function({container}:any){
         }))()`)
         assert.deepEqual(secondPageUi,{count:101,moreHidden:true,unique:101},
           "Real Chrome must append exactly 1 remaining distinct submitted application")
+
+        // Real authorized staff button starts review, never provisions an Org.
+        // Use only an isolated task-owned application and no protected data.
+        const stagedId=reviewOverflowIds[0]
+        const organizationCountBeforeReview=Number((await q(
+          "select count(*)::int n from da_organization"))[0].n)
+        const clickReview=await reviewChrome.eval(
+          "(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p'))"+
+          ".find(p=>p.textContent.startsWith('B22 Pagination Fixture 1 ('));"+
+          "const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='İncelemeye Al');"+
+          "if(!button)throw Error('Missing staff in-review action');button.click();return true})()")
+        assert.equal(clickReview,true)
+        await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.startsWith('B22 Pagination Fixture 1 (')&&p.textContent.includes('İncelemede'))")
+        assert.deepEqual(await q(
+          "select status,version from da_organization_application where id=$1",[stagedId]),
+          [{status:"in_review",version:2}])
+        const inReviewAudit=await q(
+          "select count(*)::int n from da_audit_event where action='organization.application_in_review' and target_id=$1",
+          [stagedId])
+        assert.equal(Number(inReviewAudit[0].n),1,"Review start must be auditable exactly once")
+        assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+          organizationCountBeforeReview,"Starting review must not create a business")
+
+        const applicantStage=await signupChrome.eval(
+          "(async()=>{const r=await fetch('/personal/organization-applications');"+
+          "const body=await r.json();return {status:r.status,items:body.drafts||[]}})()")
+        assert.equal(applicantStage.status,200)
+        assert.ok(applicantStage.items.some((x:any)=>x.id===stagedId&&x.status==="in_review"),
+          "Applicant must see only their own current in-review application")
+
+        const replayReview=await reviewChrome.eval(
+          "(async()=>{const s=await(await fetch('/personal/session')).json();"+
+          "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+          "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+          "body:JSON.stringify({action:'review_decision',application_id:"+JSON.stringify(stagedId)+
+          ",expected_version:2,decision:'start_review'})});return r.status})()")
+        assert.equal(replayReview,409,"Already in review cannot be started twice")
+        const foreignReview=await signupChrome.eval(
+          "(async()=>{const s=await(await fetch('/personal/session')).json();"+
+          "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+          "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+          "body:JSON.stringify({action:'review_decision',application_id:"+JSON.stringify(stagedId)+
+          ",expected_version:2,decision:'reject',notes:'not authorized'})});return r.status})()")
+        assert.equal(foreignReview,403,"Applicant cannot issue platform review decisions")
+        const ownerWithdraw=await signupChrome.eval(
+          "(async()=>{const s=await(await fetch('/personal/session')).json();"+
+          "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+          "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+          "body:JSON.stringify({action:'withdraw',application_id:"+JSON.stringify(stagedId)+
+          ",expected_version:2})});return {status:r.status,body:await r.json()}})()")
+        assert.equal(ownerWithdraw.status,200,"Applicant can withdraw an undecided in-review application")
+        assert.equal(ownerWithdraw.body.status,"withdrawn")
+        assert.deepEqual(await q(
+          "select status,version from da_organization_application where id=$1",[stagedId]),
+          [{status:"withdrawn",version:3}])
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: staff starts in_review, applicant sees stage and withdraws; forged and replayed decisions denied, audit preserved\n")
+
         await reviewChrome.eval("window.dispatchEvent(new Event('pagehide'))")
         assert.equal(await reviewChrome.eval(
           "document.getElementById('organization-review-list').textContent"),"",
