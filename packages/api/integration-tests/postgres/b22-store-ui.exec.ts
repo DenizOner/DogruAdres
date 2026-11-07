@@ -25,6 +25,7 @@ import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
+import taxCertificateInventory, {inspectTaxCertificateSnapshot} from "../../src/scripts/tax-certificate-inventory"
 
 
 // Use the existing real CI Chrome and two native Vite dashboard apps. The only
@@ -387,7 +388,7 @@ async function verifyMembershipNonDisclosure({
       const r=await fetch('/personal/memberships',{method:'POST',
         headers:{'content-type':'application/json','x-csrf-token':${JSON.stringify(session.body.csrf_token)}},
         body:JSON.stringify({action:'role',organization_id:${JSON.stringify(organizationId)},
-          membership_id:${JSON.stringify(target.id)},role:'admin'})})
+          membership_id:${JSON.stringify(target.id)},role:'member'})})
       return {status:r.status,body:await r.json()}
     })()`)
     // Read back even on an unexpected response before stopping; no retry.
@@ -430,30 +431,12 @@ async function verifyOwnerMembershipManagePolicy({
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage,membership.list"
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
-      const deniedMember=await browser.eval(`(async()=>{
-        const org=${JSON.stringify(organizationId)}
-        const member=${JSON.stringify(targetMembershipId)}
-        const session=await(await fetch('/personal/session')).json()
-        const post=async(value)=>{
-          const r=await fetch('/personal/memberships',{method:'POST',
-            headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
-            body:JSON.stringify(value)})
-          return r.status
-        }
-        return {
-          list:(await fetch('/personal/memberships?organization='+org)).status,
-          role:await post({action:'role',organization_id:org,membership_id:member,role:'admin'}),
-          revoke:await post({action:'revoke',organization_id:org,membership_id:member}),
-          protectedOwner:await post({action:'protected_owner',organization_id:org,
-            membership_id:member,role:'owner'})
-        }
+      const ownerList=await browser.eval(`(async()=>{
+        const org=${JSON.stringify(organizationId)};
+        return (await fetch('/personal/memberships?organization='+org)).status;
       })()`)
-      assert.deepEqual(deniedMember,{list:200,role:403,revoke:403,protectedOwner:403},
-        "Narrowed Owner role can still list but cannot mutate memberships")
-      await assert.rejects(foundation.changeMembership({
-        organization_id:organizationId,membership_id:targetMembershipId,
-        actor_person_id:ownerPersonId,actor_type:"user",actor_id:ownerActorId,role:"admin"
-      }),/Organization action permission is required/)
+      assert.equal(ownerList,200,
+        "Legacy settings cannot narrow current protected Owner membership access")
       assert.deepEqual(await q(`select id,person_id,role,status,protected_owner,revoked_at
         from da_organization_membership where organization_id=$1 order by id`,
         [organizationId]),membershipPolicyRows,
@@ -469,27 +452,27 @@ async function verifyOwnerMembershipManagePolicy({
       if(oldMembershipActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=oldMembershipActions
     }
-    // Prove the restored Owner default using the SAME real HTTPS/CSRF path.
-    // Apply a reversible ordinary Member->Admin->Member transition only to
-    // our disposable test membership, never to a protected Owner.
+    // Preserve the approved no-Admin rule in real HTTP. Only a historical
+    // Admin may be reduced to Member. The disposable test-only legacy fixture
+    // is prepared with SQL, never through a visitor-facing Admin promotion.
+    const legacyFixture=await q(`update da_organization_membership
+      set role='admin',protected_owner=false,updated_at=clock_timestamp()
+      where id=$1 and role='member' and protected_owner=false and status='active'
+      returning id`,[targetMembershipId])
+    assert.equal(legacyFixture.length,1,
+      "Task-only existing Member can represent an old Admin for non-escalating acceptance")
     const restoredMembership=await browser.eval(`(async()=>{
       const org=${JSON.stringify(organizationId)}
       const member=${JSON.stringify(targetMembershipId)}
       const session=await(await fetch('/personal/session')).json()
-      const post=async(role)=>{
-        const r=await fetch('/personal/memberships',{method:'POST',
-          headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
-          body:JSON.stringify({action:'role',organization_id:org,membership_id:member,role})})
-        return {status:r.status,body:r.status===200?await r.json():null}
-      }
-      const promoted=await post('admin')
-      const restored=promoted.status===200?await post('member'):{status:0,body:null}
-      return {promoted:promoted.status,restored:restored.status,
-        promotedRole:promoted.body?.membership?.role,restoredRole:restored.body?.membership?.role}
+      const response=await fetch('/personal/memberships',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify({action:'role',organization_id:org,membership_id:member,role:'member'})})
+      return {status:response.status,
+        role:response.status===200?(await response.json()).membership?.role:null}
     })()`)
-    assert.deepEqual(restoredMembership,{promoted:200,restored:200,
-      promotedRole:"admin",restoredRole:"member"},
-      "Restored Owner role policy must permit HTTP role changes in the same Organization")
+    assert.deepEqual(restoredMembership,{status:200,role:"member"},
+      "Protected Owner must be able to reduce a historical Admin to ordinary Member")
     const finalMembershipState=await q(`select role,status,protected_owner,revoked_at
       from da_organization_membership where id=$1`,[targetMembershipId])
     assert.deepEqual(finalMembershipState,[{role:"member",status:"active",
@@ -500,9 +483,9 @@ async function verifyOwnerMembershipManagePolicy({
       where e.organization_id=$1 and e.target_id=$2
         and e.action='organization.membership_changed'`,
       [organizationId,targetMembershipId])
-    assert.equal(membershipChangedAudit[0].n,membershipChangedAuditBefore[0].n+2,
-      "Both authorized transitions must append exactly one canonical audit/outbox each")
-    process.stdout.write("PASS B22 Owner role policy: narrowed membership.manage denies Chrome role/revoke/protected Owner and native Foundation change; PG16 membership/audit/outbox unchanged; restored Owner role changes 200\n")
+    assert.equal(membershipChangedAudit[0].n,membershipChangedAuditBefore[0].n+1,
+      "The one real legacy Admin -> Member transition needs one canonical audit/outbox")
+    process.stdout.write("PASS B22 Owner role policy: fixed membership.manage under legacy setting; real Owner HTTP legacy Admin reduction audited\n")
 }
  
 // Dedicated real Chrome/PG16 audit timeline read-policy verification.
@@ -543,8 +526,8 @@ async function verifyOwnerAuditTimelinePolicy({
         const body=await r.json()
         return {status:r.status,privateItems:Object.hasOwn(body,'items'),message:body.message}
       })()`)
-      assert.deepEqual(deniedOwner,{status:403,privateItems:false,message:"Access denied"},
-        "Narrowed protected Owner must not receive even private audit items")
+      assert.equal(deniedOwner.status,200,"Protected Owner audit permission cannot be reduced by legacy setting")
+      assert.equal(deniedOwner.privateItems,true,"Protected Owner retains scoped private audit items")
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       const adminRead=await reviewer.eval(`(async()=>{
@@ -575,7 +558,7 @@ async function verifyOwnerAuditTimelinePolicy({
       join da_audit_event e on e.id=x.source_audit_event_id
       where e.organization_id=$1 order by x.id`,[organizationId]),
       outboxBefore,"Audit read permission denial must not write outbox")
-    process.stdout.write("PASS B22 Owner role policy: narrowed audit.timeline.read denies Owner HTTPS GET 403 without private audit items; Admin 403; restored Owner 200; PG16 membership/audit/outbox unchanged\n")
+    process.stdout.write("PASS B22 Owner role policy: fixed audit.timeline.read keeps Owner HTTPS200 and Admin403; PG16 membership/audit/outbox unchanged\n")
   }finally{
     if(originalOwnerActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=originalOwnerActions
@@ -624,8 +607,8 @@ async function verifyNativeOrganizationReadPolicy({
       "Do not authorize the native HTTP namespace without an approved actor credential adapter")
     process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=
       "buyer.purchase,products.edit,invitation.manage,membership.manage,membership.list,audit.timeline.read"
-    await assert.rejects(nativeGet(A,alphaOrg),/Organization access denied/,
-      "The role policy must deny even an actual protected Owner")
+    assert.equal((await nativeGet(A,alphaOrg)).organizationId,alphaOrg,
+      "Protected Owner native read remains allowed despite legacy setting")
     const member=await nativeGet(B,alphaOrg)
     assert.equal(member.organizationId,alphaOrg,"Actual active Member retains scoped Organization read")
     const admin=await nativeGet(A,betaOrg)
@@ -659,7 +642,7 @@ async function verifyNativeOrganizationReadPolicy({
     join da_audit_event e on e.id=x.source_audit_event_id
     where e.organization_id=$1 order by x.id`,[alphaOrg]),
     beforeOutbox,"Denied native Organization read must not append audit outbox")
-  process.stdout.write("PASS B22 native organization.read role policy: real PG16 protected Owner default/restored allow, centrally narrowed deny without private response; active Admin/Member unchanged, foreign and role-only Owner denied; native HTTPS ingress remains 401, zero audit/outbox mutations\n")
+  process.stdout.write("PASS B22 native organization.read role policy: protected Owner remains allowed with legacy setting; Admin/Member unchanged, foreign/role-only Owner denied, native ingress401\n")
 }
 
 export default async function({container}:any){
@@ -788,6 +771,10 @@ export default async function({container}:any){
   const previousListenerPort=process.env.DOGRUADRES_FRONTDOOR_PORT
   const browsers:B06Chrome[]=[]
   const temp=mkdtempSync(join(tmpdir(),"b22-task-ca-"))
+  const taxDir=join(temp,"private-tax-certificates")
+  mkdirSync(taxDir,{recursive:true,mode:0o700})
+  const previousTaxDir=process.env.DOGRUADRES_TAX_CERTIFICATE_DIR
+  process.env.DOGRUADRES_TAX_CERTIFICATE_DIR=taxDir
   let originalB22Error:unknown
   try{
     assert.equal((await q("select current_database() db"))[0].db,u.pathname.slice(1))
@@ -864,6 +851,25 @@ export default async function({container}:any){
     const secondaryEnrolledCounter=Math.floor(Date.now()/30000)
     await auth.verifyAuthMfa({id:secondaryMfa.mfa.id,auth_identity_id:reg.authIdentity.id,
       code:otp(secondaryMfa.secret)})
+    // A second native Member is an isolated B22 fixture. It conveys no
+    // DoğruAdres Person or Seller authority until B proves the secondary
+    // identity with the existing personal dual-MFA account-linking UI.
+    const bMemberEmail="b22-member-b-"+rand+"@example.invalid"
+    const [bNativeMember]=await native.createMembers([{email:bMemberEmail,is_active:true}])
+    const bMemberPassword=randomBytes(32).toString("base64url")
+    const bRegistration=await auth.register("emailpass",{
+      body:{email:bMemberEmail,password:bMemberPassword}
+    })
+    assert.ok(bRegistration.success&&bRegistration.authIdentity?.id)
+    await auth.updateAuthIdentities({id:bRegistration.authIdentity.id,
+      app_metadata:{member_id:bNativeMember.id}})
+    const bMemberMfa=await auth.startAuthMfa({
+      auth_identity_id:bRegistration.authIdentity.id,
+      provider:"totp",issuer:"B22 isolated verified Member B"
+    })
+    const bMemberEnrollCounter=Math.floor(Date.now()/30000)
+    await auth.verifyAuthMfa({id:bMemberMfa.mfa.id,
+      auth_identity_id:bRegistration.authIdentity.id,code:otp(bMemberMfa.secret)})
     // Medusa's installed Customer Module creates this task-only native actor.
     // This Customer is NOT itself a legal Organization or purchase grant.
     const customerEmail="b22-customer-"+rand+"@example.invalid"
@@ -965,9 +971,10 @@ export default async function({container}:any){
     assert.equal(topology.privateOrigin,process.env.DOGRUADRES_PRIVATE_API)
     assert.equal(topology.publicOrigin,host)
     const browser=new B06Chrome(host,"A");browsers.push(browser)
-    // Existing free CI runner may need longer for real Chrome CDP startup.
-    // This bounded allowance affects only this disposable B22 first browser.
-    await browser.start(crt,30000)
+    // Real GitHub runner at 30s: Chrome process alive but CDP still unavailable.
+    // Allow one bounded 45s startup for this disposable first browser only.
+    // Do not retry/disable TLS, MFA, authorization or browser proof on failure.
+    await browser.start(crt,45000)
     await browser.login(A.email,A.password,A.person)
     if(process.env.B22_ADMIN_SMTP==="true"){
       const other=new B06Chrome(host,"B");browsers.push(other)
@@ -3530,10 +3537,10 @@ export default async function({container}:any){
     try{
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="products.edit"
       const narrowed=await readNativeCart(buyerCart(organizations[1].id,hookProbeCart.id))
-      assert.equal(narrowed.status,403,"Owner buyer.purchase removed from trusted role policy must deny HTTP")
+      assert.equal(narrowed.status,200,"Protected Owner purchase cannot be narrowed by deployment")
       assert.equal(await foundation.authorizeBuyerCheckout(
         hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
-      ),false,"Owner role policy must also deny real final PostgreSQL checkout L")
+      ),true,"Final checkout L retains fixed protected Owner entitlement")
       assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
         [hookProbeCart.id]))[0].n,0)
     }finally{
@@ -3543,7 +3550,7 @@ export default async function({container}:any){
     assert.equal(await foundation.authorizeBuyerCheckout(
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Restored approved role default must allow the same attributed Cart")
-    process.stdout.write("PASS B22 Owner role policy: narrowed buyer.purchase denies real HTTPS and PG16 final checkout L with zero OrderGroup; default restored\n")
+    process.stdout.write("PASS B22 Owner role policy: fixed buyer.purchase keeps eligible HTTPS and PG16 checkout L despite legacy setting; zero OrderGroup\n")
     process.stdout.write("PASS B22 pre-revocation control: real Customer + immutable Beta Cart attribution + approved Gamma Store + active buyer.purchase passes Foundation L; zero-value Cart remains open\n")
     // A real Owner's Store-specific Buyer Organization block must deny the
     // native Mercur completion at L, not only the read-only Seller scope.
@@ -4517,7 +4524,70 @@ export default async function({container}:any){
     // Organization also had an Owner role. Wait for exact Organization scope
     // and freshly loaded Store/member options before the real Chrome click.
     await browser.wait(`new URLSearchParams(location.search).get('organization')===${JSON.stringify(organizations[0].id)} && JSON.parse(document.getElementById('detail').textContent||'{}').id===${JSON.stringify(organizations[0].id)}`)
+    const adminMemberBefore=await q(`select role,status,protected_owner from da_organization_membership where id=$1`,[alphaMember.id])
+    const adminAuditBefore=await q(`select id from da_audit_event where organization_id=$1 order by id`,[organizations[0].id])
+    const attemptedAdmin=await browser.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      const response=await fetch('/personal/memberships',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify({action:'role',organization_id:${JSON.stringify(organizations[0].id)},
+          membership_id:${JSON.stringify(alphaMember.id)},role:'admin'})})
+      return response.status
+    })()`)
+    assert.equal(attemptedAdmin,400,"Owner cannot assign retired Organization Admin")
+    assert.deepEqual(await q(`select role,status,protected_owner from da_organization_membership where id=$1`,[alphaMember.id]),adminMemberBefore)
+    assert.deepEqual(await q(`select id from da_audit_event where organization_id=$1 order by id`,[organizations[0].id]),adminAuditBefore)
+    process.stdout.write("\nPASS B22 Chrome: no new Organization Admin assignment; Owner HTTP400, membership/audit unchanged\n")
+    // A second ingress must not recreate company Admin via a pending invite.
+    const formerInvites=await q(`select id,role,status from da_organization_invitation
+      where organization_id=$1 order by id`,[organizations[0].id])
+    const formerInviteAudits=await q(`select id from da_audit_event where
+      organization_id=$1 and resource='invitation' order by id`,[organizations[0].id])
+    const forbiddenInvite=await browser.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      const response=await fetch('/personal/invitations',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+        body:JSON.stringify({action:'create',organization_id:${JSON.stringify(organizations[0].id)},
+          email:'retired-admin-invite@example.invalid',role:'admin'})})
+      return response.status
+    })()`)
+    assert.equal(forbiddenInvite,400,"Owner cannot invite a retired Organization Admin")
+    assert.deepEqual(await q(`select id,role,status from da_organization_invitation
+      where organization_id=$1 order by id`,[organizations[0].id]),formerInvites)
+    assert.deepEqual(await q(`select id from da_audit_event where
+      organization_id=$1 and resource='invitation' order by id`,[organizations[0].id]),formerInviteAudits)
+    process.stdout.write("\nPASS B22 Chrome: retired company Admin invitation Owner HTTP400; no invitation or audit write\n")
     await browser.wait(`!document.getElementById('product-grants-panel').hidden && Array.from(document.querySelector('#product-grants-form select[name=seller_id]').options).some(o=>o.value===${JSON.stringify(ownerStoreId)}) && Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).some(o=>o.value===${JSON.stringify(alphaMember.id)}) && !document.querySelector('#product-grants-form button[value=grant]').disabled`)
+    const editableMembers=await browser.eval("Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).map(o=>o.value)")
+    assert.deepEqual(editableMembers,[alphaMember.id],
+      "Protected Owner and legacy Admin cannot be edited through an ordinary personal-grant selector")
+    const protectedGrantBefore=await q(`select id,revoked_at from da_store_product_permission
+      where person_id=$1 and organization_id=$2 and seller_id=$3 order by id`,
+      [A.person,organizations[0].id,ownerStoreId])
+    const auditBefore=await q(`select id from da_audit_event where organization_id=$1
+      and resource='store-product-permission' and target_id=$2 order by id`,
+      [organizations[0].id,ownerStoreId])
+    for(const action of ["grant","revoke"]){
+      const denied=await browser.eval(`(async()=>{
+        const session=await(await fetch('/personal/session')).json()
+        const r=await fetch('/personal/store-product-permissions',{
+          method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+          body:JSON.stringify(${JSON.stringify({action,organization_id:organizations[0].id,
+            seller_id:ownerStoreId,membership_id:memberships[0].id})})
+        })
+        return r.status
+      })()`)
+      assert.equal(denied,403,"Protected Owner's fixed permission group denies normal personal "+action)
+    }
+    assert.deepEqual(await q(`select id,revoked_at from da_store_product_permission
+      where person_id=$1 and organization_id=$2 and seller_id=$3 order by id`,
+      [A.person,organizations[0].id,ownerStoreId]),protectedGrantBefore)
+    assert.deepEqual(await q(`select id from da_audit_event where organization_id=$1
+      and resource='store-product-permission' and target_id=$2 order by id`,
+      [organizations[0].id,ownerStoreId]),auditBefore,
+      "Rejected Owner grant/revoke has no audit or permission side effects")
+    assert.equal(await browser.eval("document.getElementById('product-grants-effective').textContent.includes('Yetkisiz')"),true)
+    process.stdout.write("\nPASS B22 Chrome: protected Owner excluded from individual products.edit; forged grant/revoke HTTP403, PG16 grant/audit unchanged\n")
     await browser.eval(`(()=>{
       const f=document.getElementById('product-grants-form');
       f.elements.namedItem('seller_id').value=${JSON.stringify(ownerStoreId)};
@@ -4541,6 +4611,7 @@ export default async function({container}:any){
         [B.person,organizations[0].id,ownerStoreId])
       return rows.length===1
     },19000,"B22 Chrome Owner actual products.edit permission")
+    await browser.wait("document.getElementById('product-grants-effective').textContent.includes('Yetkili')")
     const [issued]=await q(`select g.id,g.source_audit_event_id from da_store_product_permission g
       where g.person_id=$1 and g.organization_id=$2 and g.seller_id=$3
         and g.revoked_at is null`,[B.person,organizations[0].id,ownerStoreId])
@@ -4592,6 +4663,7 @@ export default async function({container}:any){
       const rows=await q(`select revoked_at from da_store_product_permission where id=$1`,[issued.id])
       return rows.length===1&&!!rows[0].revoked_at
     },19000,"B22 Chrome Owner actual products.edit revocation")
+    await browser.wait("document.getElementById('product-grants-effective').textContent.includes('Yetkisiz')")
     const revokeAudit=await q(`select count(*)::int n from da_audit_event e
       join da_audit_outbox x on x.source_audit_event_id=e.id
       where e.action='organization.store_product_permission_revoked'
@@ -4599,6 +4671,41 @@ export default async function({container}:any){
       [A.person,organizations[0].id,ownerStoreId])
     assert.equal(revokeAudit[0].n,1,"Revocation requires canonical outbox")
     process.stdout.write("PASS B22 Chrome: Owner grants active Member scoped products.edit, retry idempotent, foreign Member/staff 403, Owner revokes with PG16 audit/outbox\n")
+
+    // A legacy Admin may retain a product grant even though new Admin grants
+    // are forbidden. Use the Owner's actual browser to revoke that one grant.
+    const legacyRegrant=await browser.eval("(async()=>{"+
+      "const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-product-permissions',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify("+JSON.stringify(sameRequest)+")});"+
+      "return {status:r.status,body:await r.json()}})()")
+    assert.equal(legacyRegrant.status,200)
+    assert.equal(legacyRegrant.body.status,'active')
+    const legacyGrantId=legacyRegrant.body.grant_id
+    await q("update da_organization_membership set role='admin',protected_owner=false,updated_at=clock_timestamp() where id=$1",
+      [alphaMember.id])
+    try{
+      await browser.click('#memberships-refresh')
+      await browser.wait("Array.from(document.querySelectorAll('#product-grants-list button')).some(b=>b.textContent==='Eski Admin ürün iznini iptal et')")
+      const ordinaryOptions=await browser.eval(
+        "Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).map(o=>o.value)")
+      assert.equal(ordinaryOptions.includes(alphaMember.id),false,
+        "Legacy Admin must not become eligible for a new personal product grant")
+      await browser.eval("Array.from(document.querySelectorAll('#product-grants-list button')).find(b=>b.textContent==='Eski Admin ürün iznini iptal et').click()")
+      await until(async()=> (await q("select revoked_at from da_store_product_permission where id=$1",
+        [legacyGrantId]))[0]?.revoked_at!=null,19000,
+        "Owner must revoke the historical Admin grant through real Chrome")
+      await browser.wait("document.getElementById('product-grants-status').textContent.includes('Eski Admin ürün izni iptal edildi')")
+      assert.deepEqual(await q("select role,status,protected_owner from da_organization_membership where id=$1",
+        [alphaMember.id]),[{role:'admin',status:'active',protected_owner:false}])
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: Owner revokes legacy Admin products.edit through existing API without restoring Admin grants\n")
+    }finally{
+      await q("update da_organization_membership set role='member',protected_owner=false,updated_at=clock_timestamp() where id=$1",
+        [alphaMember.id])
+      await browser.click('#memberships-refresh')
+      await browser.wait("Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).some(o=>o.value==="+JSON.stringify(alphaMember.id)+")")
+    }
 
     // Verify the PR #256 policy boundary with this SAME active protected Owner:
     // actual Chrome/HTTPS endpoints, task-only PG16 rows and audit/outbox.
@@ -4678,12 +4785,11 @@ export default async function({container}:any){
       assert.equal(productActive[0].issued_by_person_id,A.person)
       const beforeDenied=await policyRows()
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit"
-      const denied=await policyHttp(["list","grant","revoke"])
-      assert.deepEqual(denied,{
-        session:200,listBuyer:403,BuyerPrivateRows:false,
-        listProduct:403,ProductPrivateRows:false,
-        grantBuyer:403,grantProduct:403,revokeBuyer:403,revokeProduct:403
-      },"Narrowed but protected Owner must lose both membership actions")
+      const stillAllowed=await policyHttp(["list"])
+      assert.deepEqual(stillAllowed,{
+        session:200,listBuyer:200,BuyerPrivateRows:true,
+        listProduct:200,ProductPrivateRows:true
+      },"Protected Owner retains permission management under deprecated deployment setting")
       assert.deepEqual(await policyRows(),beforeDenied,
         "Denied list/grant/revoke must not mutate permissions, membership, audit or outbox")
       delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
@@ -4709,7 +4815,7 @@ export default async function({container}:any){
         "Restored Owner revocations require two canonical audit/outbox records")
       assert.deepEqual((await policyRows()).memberships,beforeDenied.memberships,
         "Protected Owner state must not be changed by permission-policy tests")
-      process.stdout.write("PASS B22 Owner member-permission policy: protected Owner real HTTPS grant 200, narrowed list/grant/revoke 403 without private rows or PG16 changes, restored revoke 200 with audit/outbox\n")
+      process.stdout.write("PASS B22 Owner member-permission policy: protected Owner grant/list 200 despite legacy setting; revoke 200 with audit/outbox\n")
     }finally{
       if(previousPermissionPolicy===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previousPermissionPolicy
@@ -4818,7 +4924,7 @@ export default async function({container}:any){
           revokeMember:await post('/personal/memberships',{action:'revoke',
             organization_id:org,membership_id:membership}),
           changeRole:await post('/personal/memberships',{action:'role',
-            organization_id:org,membership_id:membership,role:'admin'}),
+            organization_id:org,membership_id:membership,role:'member'}),
           revokeInvite:await post('/personal/invitations',{action:'revoke',
             organization_id:org,invitation_id:invitation})
         }
@@ -4889,34 +4995,11 @@ export default async function({container}:any){
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit"
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
-      const policyDenied=await browser.eval(`(async()=>{
-        const org=${JSON.stringify(organizations[0].id)}
-        const invite=${JSON.stringify(pendingInvite.id)}
-        const session=await(await fetch('/personal/session')).json()
-        const post=async(value)=>{
-          const r=await fetch('/personal/invitations',{method:'POST',
-            headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
-            body:JSON.stringify(value)})
-          return r.status
-        }
-        return {
-          list:(await fetch('/personal/invitations?organization='+org)).status,
-          create:await post({action:'create',organization_id:org,
-            email:'role-policy-denied@example.invalid',role:'member'}),
-          revoke:await post({action:'revoke',organization_id:org,invitation_id:invite})
-        }
+      const ownerInvitationList=await browser.eval(`(async()=>{
+        return (await fetch('/personal/invitations?organization='+${JSON.stringify(organizations[0].id)})).status;
       })()`)
-      assert.deepEqual(policyDenied,{list:403,create:403,revoke:403},
-        "Protected Owner must lose invitation access when role policy narrows")
-      await assert.rejects(foundation.createOrganizationInvitation({
-        organization_id:organizations[0].id,
-        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,
-        email:"role-policy-service-denied@example.invalid",role:"member"
-      }),/Organization action permission is required/)
-      await assert.rejects(foundation.revokeOrganizationInvitation({
-        organization_id:organizations[0].id,invitation_id:pendingInvite.id,
-        actor_person_id:A.person,actor_type:"user",actor_id:A.actor
-      }),/Organization action permission is required/)
+      assert.equal(ownerInvitationList,200,
+        "Legacy settings cannot remove protected Owner invitation access")
       assert.deepEqual(await q(`select id,status,revoked_at,expires_at
         from da_organization_invitation where organization_id=$1 order by id`,
         [organizations[0].id]),policyInvitations,"Denied invitation must not change any state")
@@ -4976,7 +5059,7 @@ export default async function({container}:any){
     assert.equal(revokeEvents[0].organization_id,organizations[0].id)
     assert.equal(revokeEvents[0].target_id,pendingInvite.id)
     process.stdout.write("PASS B22 protected Owner management: real pending invitation HTTP 403 for role-only Owner with no DB/audit mutation; same invitation HTTPS 200 revoked by protected Owner with single audit/outbox\n")
-    process.stdout.write("PASS B22 Owner role policy: narrowed invitation.manage denies Owner HTTPS list/create/revoke and Foundation writes with unchanged PG16 invitation/audit/outbox; restored Owner revokes\n")
+    process.stdout.write("PASS B22 Owner role policy: fixed invitation.manage keeps Owner HTTPS list200; protected Owner revokes with audit/outbox\n")
 
     // Positive read-back for the SAME scoped endpoints: a genuine protected
     // Alpha Owner and a current ordinary Alpha Admin remain allowed. Use only
@@ -5007,13 +5090,13 @@ export default async function({container}:any){
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit,invitation.manage,membership.manage"
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
-      const deniedList=await browser.eval(`(async()=>{
+      const protectedList=await browser.eval(`(async()=>{
         const response=await fetch('/personal/memberships?organization='+${JSON.stringify(organizations[0].id)})
         const body=await response.json()
         return {status:response.status,privateRows:Object.hasOwn(body,'memberships')}
       })()`)
-      assert.deepEqual(deniedList,{status:403,privateRows:false},
-        "Narrowed protected Owner cannot receive private membership rows")
+      assert.deepEqual(protectedList,{status:200,privateRows:true},
+        "Protected Owner membership list is fixed despite the legacy setting")
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       const adminReads=await reviewer.eval(`(async()=>{
@@ -5069,7 +5152,7 @@ export default async function({container}:any){
       join da_audit_event e on e.id=x.source_audit_event_id
       where e.organization_id=$1 order by x.id`,[organizations[0].id]),
       listPolicyOutboxBefore,"Denied read cannot append outbox")
-    process.stdout.write("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 403; restored Owner 200\n")
+    process.stdout.write("PASS B22 Owner role policy: fixed membership.list keeps Owner HTTPS GET200; Admin403; PG16 data unchanged\n")
 
     await verifyNativeOrganizationReadPolicy({
       container,ownerActor:A.actor,memberActor:B.actor,memberPersonId:B.person,
@@ -5089,32 +5172,13 @@ export default async function({container}:any){
     assert.equal(ownerDraftAccess.status,200)
     assert.ok(ownerDraftAccess.body.stores.some((row:any)=>row.id===ownerStoreId))
     assert.equal((await q("select count(*)::int n from da_store_product_permission where person_id=$1 and organization_id=$2 and seller_id=$3",[A.person,organizations[0].id,ownerStoreId]))[0].n,0)
-    const narrowedDraftKey="dapd_"+randomBytes(16).toString("hex")
-    const narrowedDraftTitle="B22 denied Owner role product "+rand
     const priorProductOwnerActions=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     try{
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase"
       const deniedRead=await get('/personal/product-drafts?organization_id='+organizations[0].id)
       assert.equal(deniedRead.status,200)
-      assert.deepEqual(deniedRead.body.stores,[],
-        "With products.edit removed, no Store can be advertised for Owner editing")
-      const deniedWrite=await browser.eval(`(async()=>{
-        const session=await(await fetch('/personal/session')).json()
-        const r=await fetch('/personal/product-drafts',{
-          method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
-          body:JSON.stringify(${JSON.stringify({
-            request_id:narrowedDraftKey,organization_id:organizations[0].id,
-            seller_id:ownerStoreId,title:narrowedDraftTitle
-          })})
-        })
-        return r.status
-      })()`)
-      assert.equal(deniedWrite,403,"Narrowed Owner products.edit must deny real HTTP POST")
-      assert.equal((await q("select count(*)::int n from da_product_draft_request where id=$1",
-        [narrowedDraftKey]))[0].n,0,
-        "Denied Owner edit must reserve no product intent")
-      assert.equal((await q("select count(*)::int n from product where title=$1",
-        [narrowedDraftTitle]))[0].n,0,"Denied Owner edit cannot create native product")
+      assert.ok(deniedRead.body.stores.some((row:any)=>row.id===ownerStoreId),
+        "Immutable protected Owner products.edit keeps its approved Store visible")
     }finally{
       if(priorProductOwnerActions===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=priorProductOwnerActions
@@ -5122,7 +5186,7 @@ export default async function({container}:any){
     const restoredOwnerDraft=await get('/personal/product-drafts?organization_id='+organizations[0].id)
     assert.equal(restoredOwnerDraft.status,200)
     assert.ok(restoredOwnerDraft.body.stores.some((row:any)=>row.id===ownerStoreId))
-    process.stdout.write("PASS B22 Owner role policy: narrowed products.edit denies real HTTP POST and native PG16 product/intent writes, restored default lists approved Store\n")
+    process.stdout.write("PASS B22 Owner role policy: fixed products.edit keeps approved Store visible via HTTP with legacy setting; no product intent write\n")
     // The role-policy change is server-side. Reopen the current real personal
     // document so its authorized Organization/Store read refreshes the hidden
     // draft panel; a server GET alone cannot update the already rendered DOM.
@@ -5275,10 +5339,10 @@ export default async function({container}:any){
     assert.equal((await q("select count(*)::int n from product where title=$1",[draftTitle]))[0].n,1)
     process.stdout.write("PASS B22 Chrome: protected Owner native draft without self grant, PG16 product_seller/audit/outbox, exact replay no duplicate, conflicting key/foreign Member denied\\n")
 
-    // B22 PG16 negative race: the native INSERT is held while a *different*
-    // authenticated protected Owner revokes an ordinary Admin's products.edit.
+    // B22 PG16 negative race: the native INSERT is held while a current
+    // protected Owner revokes a different ordinary Member's products.edit.
     // The real Chrome requests and native Mercur workflow run unmocked.
-    let racePromoted=false,raceDemoted=false,raceFn=false,raceTrigger=false
+    let raceFn=false,raceTrigger=false
     const raceBarrier=new Client({connectionString:u.toString()})
     await raceBarrier.connect()
     let raceBarrierHeld=false
@@ -5286,33 +5350,155 @@ export default async function({container}:any){
     const raceProductId="prod_"+raceKey.slice("dapd_".length)
     const raceTitle="B22 native products edit race "+rand
     try{
-      await foundation.changeMembership({
-        organization_id:organizations[0].id,membership_id:alphaMember.id,
-        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,role:"owner"
-      })
-      racePromoted=true
-      await foundation.changeMembership({
-        organization_id:organizations[0].id,membership_id:memberships[0].id,
-        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,role:"admin"
-      })
-      raceDemoted=true
       const [roles]=await q("select count(*)::int n from da_organization_membership where organization_id=$1 and protected_owner=true and status='active'",[organizations[0].id])
       assert.equal(roles.n,1)
       const ownerEdit=async(action:"grant"|"revoke")=>{
         const intent={action,organization_id:organizations[0].id,
-          seller_id:ownerStoreId,membership_id:memberships[0].id}
-        return reviewer.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
+          seller_id:ownerStoreId,membership_id:alphaMember.id}
+        return browser.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
           "const r=await fetch('/personal/store-product-permissions',{method:'POST',"+
           "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
           "body:JSON.stringify("+JSON.stringify(intent)+")});"+
           "return {status:r.status,body:await r.json()}})()")
       }
-      await reviewer.send("Page.bringToFront")
-      await reviewer.wait("document.visibilityState==='visible'")
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
       const grant=await ownerEdit("grant")
       assert.equal(grant.status,200)
-      const grantRow=await q("select id from da_store_product_permission where person_id=$1 and organization_id=$2 and seller_id=$3 and revoked_at is null",[A.person,organizations[0].id,ownerStoreId])
+      const grantRow=await q("select id from da_store_product_permission where person_id=$1 and organization_id=$2 and seller_id=$3 and revoked_at is null",[B.person,organizations[0].id,ownerStoreId])
       assert.equal(grantRow.length,1)
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      await reviewer.select(organizations[0].name,"member")
+      const memberDraftStores=()=>reviewer.eval(`(async()=>{
+        const r=await fetch('/personal/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
+        if(r.status!==200)return {status:r.status,stores:[]}
+        const body=await r.json()
+        return {status:r.status,stores:(body.stores||[]).map(x=>x.id)}
+      })()`)
+      assert.equal((await memberDraftStores()).status,403,
+        "A Foundation products.edit grant alone is not native Member identity proof")
+      // The real personal UI must show an actionable explanation but cannot
+      // expose a product form or re-enable its submit button after 403.
+      await reviewer.wait("!document.getElementById('product-draft-panel').hidden && !document.getElementById('product-draft-guidance').hidden && document.getElementById('product-draft-form').hidden && document.querySelector('#product-draft-form button').disabled")
+      assert.equal(Number((await q(`select count(*)::int n from da_verified_actor_binding
+        where person_id=$1 and actor_type='member' and revoked_at is null`,
+        [B.person]))[0].n),0)
+      // Use the same real secondary password + native MFA verified account
+      // linking UI as A. Do not fake the Person binding or accept email alone.
+      assert.ok(Math.floor(Date.now()/30000)>bMemberEnrollCounter,
+        "Secondary B challenge must not replay the enrollment TOTP window")
+      await reviewer.input("#link-account input[name=email]",bMemberEmail)
+      await reviewer.input("#link-account input[name=password]",bMemberPassword)
+      await reviewer.click("#link-account button")
+      await reviewer.wait("!document.getElementById('link-confirm').hidden")
+      await reviewer.input("#link-confirm input[name=code]",otp(bMemberMfa.secret))
+      await reviewer.click("#link-confirm button")
+      await reviewer.wait("document.getElementById('status').textContent==='Hesap bağlantısı tamamlandı'")
+      const bMemberBindings=await q(`select actor_id from da_verified_actor_binding
+        where person_id=$1 and actor_type='member' and revoked_at is null`,[B.person])
+      assert.equal(bMemberBindings.length,1)
+      assert.equal(bMemberBindings[0].actor_id,bNativeMember.id)
+      const withoutStore=await memberDraftStores()
+      assert.deepEqual(withoutStore,{status:200,stores:[]},
+        "A verified Member without a native SellerMember association has no Store")
+      await reviewer.click("#product-draft-refresh")
+      await reviewer.wait("document.getElementById('product-draft-form').hidden && !document.getElementById('product-draft-guidance').hidden && document.getElementById('product-draft-status').textContent.includes('bulunamadı')")
+      const intendedConnection={organization_id:organizations[0].id,
+        seller_id:ownerStoreId,membership_id:alphaMember.id}
+      const connectionResponse=async(actor:B06Chrome,input:Record<string,string>,
+        withCsrf=true)=>actor.eval(`(async()=>{
+          const sr=await fetch('/personal/session')
+          if(sr.status!==200)return sr.status
+          const current=await sr.json()
+          const r=await fetch('/personal/store-member-connections',{
+            method:'POST',headers:{'content-type':'application/json',
+              ...( ${JSON.stringify(withCsrf)} ? {'x-csrf-token':current.csrf_token} : {})},
+            body:JSON.stringify(${JSON.stringify(input)})
+          })
+          return r.status
+        })()`)
+      assert.equal(await connectionResponse(reviewer,intendedConnection),403,
+        "Ordinary Organization Member cannot connect their own native Seller role")
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      assert.equal(await connectionResponse(browser,intendedConnection,false),403,
+        "Owner cannot omit first-party CSRF")
+      assert.equal(await connectionResponse(browser,{...intendedConnection,
+        organization_id:organizations[1].id}),403,
+        "Owner cannot use an unrelated Organization to activate an Alpha Member")
+      assert.equal(await connectionResponse(browser,{...intendedConnection,
+        membership_id:"damem_foreign"}),403,
+        "Only the Owner's current active Organization membership is valid")
+      assert.equal(await connectionResponse(browser,{...intendedConnection,
+        member_id:bNativeMember.id}),400,
+        "Browser must never choose the native Member identity")
+      assert.equal((await native.listSellerMembers({
+        seller_id:ownerStoreId,member_id:bNativeMember.id
+      })).length,0,"All pre-activation negative checks leave native SellerMember absent")
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where action='organization.store_native_member_connection_confirmed'
+          and organization_id=$1 and target_id=$2`,
+        [organizations[0].id,ownerStoreId]))[0].n,0)
+      process.stdout.write("\nPASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit\n")
+      // Complete the EXISTING native Member association through the real
+      // Owner browser UI; never let a test-only service call stand in for
+      // a user-facing product operation.
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      await browser.click("#product-grants-refresh")
+      await browser.wait("!!document.querySelector('#product-grants-list button.store-member-connect')")
+      await browser.click("#product-grants-list button.store-member-connect")
+      await browser.wait("document.getElementById('product-grants-status').textContent.includes('Mağaza çalışanı bağlantısı tamamlandı')")
+      const nativeLinks=await native.listSellerMembers({
+        seller_id:ownerStoreId,member_id:bNativeMember.id
+      })
+      assert.equal(nativeLinks.length,1)
+      assert.equal(nativeLinks[0].is_owner,false)
+      assert.equal(nativeLinks[0].role_id,"role_seller_support")
+      const confirmed=await q(`select e.id from da_audit_event e
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.action='organization.store_native_member_connection_confirmed'
+          and e.organization_id=$1 and e.target_id=$2
+          and e.new_values->>'person_id'=$3
+          and e.new_values->>'member_id'=$4`,
+        [organizations[0].id,ownerStoreId,B.person,bNativeMember.id])
+      assert.equal(confirmed.length,1,"Owner native membership requires canonical Foundation audit/outbox")
+      const replayConnected=await browser.eval("(async()=>{"+
+        "const s=await (await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-member-connections',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify("+JSON.stringify({
+          organization_id:organizations[0].id,seller_id:ownerStoreId,membership_id:alphaMember.id
+        })+")});return {status:r.status,body:await r.json()}})()")
+      assert.equal(replayConnected.status,200)
+      assert.equal(replayConnected.body.status,"connected")
+      assert.equal((await native.listSellerMembers({
+        seller_id:ownerStoreId,member_id:bNativeMember.id
+      })).length,1)
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where action='organization.store_native_member_connection_confirmed'
+        and organization_id=$1 and target_id=$2
+        and new_values->>'person_id'=$3`,
+        [organizations[0].id,ownerStoreId,B.person]))[0].n,1,
+        "Idempotent native link must not duplicate canonical audit")
+      process.stdout.write("PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged\n")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      await reviewer.click("#product-draft-refresh")
+      await reviewer.wait("!document.getElementById('product-draft-panel').hidden && document.getElementById('product-draft-guidance').hidden && !document.getElementById('product-draft-form').hidden && !document.querySelector('#product-draft-form button').disabled && [...document.querySelector('#product-draft-form select[name=seller_id]').options].some(o=>o.value==="+JSON.stringify(ownerStoreId)+")")
+      process.stdout.write("PASS B22 Chrome: denied native Member/Store UI stays visible without product submit; verified association enables product form\n")
+      // B06Chrome.ready() waits for the Owner-only membership panel.
+      // This actor is an ordinary Member; verify the actual product scope instead.
+      const memberScope=await reviewer.eval(`(async()=>{
+        const r=await fetch('/personal/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
+        if(r.status!==200)return {status:r.status,stores:[]}
+        const body=await r.json()
+        return {status:r.status,stores:(body.stores||[]).map(x=>x.id)}
+      })()`)
+      assert.equal(memberScope.status,200,"Real Member must reach private draft API with approved grant")
+      assert.ok(memberScope.stores.includes(ownerStoreId),
+        "Actual Member must see only their Organization's approved Store")
       // Task-owned disposable PG16 only. ID is generated hex, not user input.
       await q("create function b22_native_product_pause_v1() returns trigger language plpgsql as $b22$ begin if NEW.id='"+raceProductId+"' then perform pg_advisory_xact_lock(hashtext('b22-native-draft-pause'),hashtext('"+raceProductId+"')); end if; return NEW; end $b22$")
       raceFn=true
@@ -5324,10 +5510,10 @@ export default async function({container}:any){
       await raceBarrier.query("select pg_advisory_xact_lock(hashtext('b22-native-draft-pause'),hashtext($1))",[raceProductId])
       const racePayload={request_id:raceKey,organization_id:organizations[0].id,
         seller_id:ownerStoreId,title:raceTitle}
-      await browser.send("Page.bringToFront")
-      await browser.wait("document.visibilityState==='visible'")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
       let createDone=false
-      const createPending=browser.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
+      const createPending=reviewer.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
         "const r=await fetch('/personal/product-drafts',{method:'POST',"+
         "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
         "body:JSON.stringify("+JSON.stringify(racePayload)+")});"+
@@ -5339,10 +5525,16 @@ export default async function({container}:any){
         "and w.objid=h.objid and w.objsubid=h.objsubid and w.pid<>h.pid "+
         "and w.granted=false where h.pid=$1 and h.locktype='advisory' and h.granted=true",
         [pid]))[0].n)
-      await until(async()=>await waiters(barrierPid)===1,19000,
-        "B22 native product INSERT waits on task-only PG16 transaction barrier")
+      await until(async()=>await waiters(barrierPid)===1||createDone,19000,
+        "B22 native Member product INSERT waits on task-only PG16 transaction barrier")
+      if(createDone){
+        const early=await createPending
+        assert.fail("Member product draft exited before native INSERT: HTTP "+early.status)
+      }
       assert.equal(createDone,false)
       assert.equal((await q("select status from da_product_draft_request where id=$1",[raceKey]))[0].status,"reserved")
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
       let revokeDone=false
       const revokePending=ownerEdit("revoke").then(
         (x:any)=>{revokeDone=true;return x},(e:unknown)=>{revokeDone=true;throw e})
@@ -5375,35 +5567,53 @@ export default async function({container}:any){
         "The native and Foundation product completion must precede revoke")
       assert.equal((await q("select count(*)::int n from product where id=$1",[raceProductId]))[0].n,1)
       assert.deepEqual((await q("select seller_id from product_seller where product_id=$1",[raceProductId])).map((v:any)=>v.seller_id),[ownerStoreId])
-      assert.equal((await q("select count(*)::int n from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id where e.id=$1 and e.action='organization.product_draft_created' and e.actor_person_id=$2 and e.organization_id=$3 and e.new_values->>'request_id'=$4 and e.new_values->>'product_id'=$5",[ledger.completion_audit_event_id,A.person,organizations[0].id,raceKey,raceProductId]))[0].n,1)
+      assert.equal((await q("select count(*)::int n from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id where e.id=$1 and e.action='organization.product_draft_created' and e.actor_person_id=$2 and e.organization_id=$3 and e.new_values->>'request_id'=$4 and e.new_values->>'product_id'=$5",[ledger.completion_audit_event_id,B.person,organizations[0].id,raceKey,raceProductId]))[0].n,1)
       const deniedPayload={...racePayload,request_id:"dapd_"+randomBytes(16).toString("hex"),title:"B22 denied after revoke "+rand}
-      const denied=await draftPost(deniedPayload)
+      const memberDraftPost=async(payload:Record<string,string>)=>reviewer.eval(`(async()=>{
+        const session=await(await fetch('/personal/session')).json()
+        const r=await fetch('/personal/product-drafts',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},
+          body:JSON.stringify(${JSON.stringify(payload)})})
+        return {status:r.status}
+      })()`)
+      const denied=await memberDraftPost(deniedPayload)
       assert.equal(denied.status,403)
       assert.equal((await q("select count(*)::int n from product where title=$1",[deniedPayload.title]))[0].n,0)
-      assert.equal((await draftPost(racePayload)).status,403,"Revoke must block replay of the earlier product")
-      process.stdout.write("PASS B22 Chrome: real native product INSERT and protected Owner products.edit revoke serialized on PG16; committed product/audit predates revoke; next Member HTTP 403 and zero new product\n")
+      assert.equal((await memberDraftPost(racePayload)).status,403,"Revoke must block replay of the earlier product")
+      // A persistent Mercur SellerMember is no longer sufficient after Owner
+      // revokes the independent, audited DoğruAdres products.edit permission.
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      assert.equal(await connectionResponse(browser,intendedConnection),403,
+        "Revoked products.edit denies even an existing native Store link")
+      const nativeAfterRevoke=await native.listSellerMembers({
+        seller_id:ownerStoreId,member_id:bNativeMember.id
+      })
+      assert.equal(nativeAfterRevoke.length,1)
+      assert.equal(nativeAfterRevoke[0].is_owner,false)
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where action='organization.store_native_member_connection_confirmed'
+          and organization_id=$1 and target_id=$2
+          and new_values->>'person_id'=$3`,
+        [organizations[0].id,ownerStoreId,B.person]))[0].n,1,
+        "Denied reconnection must not add a second Foundation audit")
+      process.stdout.write("\nPASS B22 Chrome: revoked products.edit prevents native Store connection via Owner HTTP; SellerMember and canonical audit unchanged\n")
+      process.stdout.write("PASS B22 Chrome: real native Member product INSERT and Owner products.edit revoke serialized on PG16; committed product/audit predates revoke; next Member HTTP 403 and zero new product\n")
     }finally{
       if(raceBarrierHeld)await raceBarrier.query("ROLLBACK")
       await raceBarrier.end()
       if(raceTrigger)await q("drop trigger if exists b22_native_product_pause_v1 on product")
       if(raceFn)await q("drop function if exists b22_native_product_pause_v1()")
-      if(raceDemoted)await foundation.changeMembership({
-        organization_id:organizations[0].id,membership_id:memberships[0].id,
-        actor_person_id:B.person,actor_type:"user",actor_id:B.actor,role:"owner"
-      })
-      if(racePromoted)await foundation.changeMembership({
-        organization_id:organizations[0].id,membership_id:alphaMember.id,
-        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,role:"member"
-      })
+      // Ordinary Member permission race requires no protected Owner role mutation.
       await browser.send("Page.bringToFront")
       await browser.send("Page.reload",{ignoreCache:true})
       await reviewer.send("Page.reload",{ignoreCache:true})
     }
 
 
-    // B22 protected Owner revoke vs real native Seller creation. Gamma is a
-    // separate task-owned Organization; this negative must not revoke A's
-    // Alpha purchasing/product permissions used by unrelated assertions.
+    // B22 protected Owner removal denial vs real native Seller creation.
+    // Gamma is a separate disposable Organization; a second Owner does not
+    // allow bypassing the #39 notice/appeal gate during an in-flight write.
     const [secondGammaOwner]=await foundation.createMemberships([{
       organization_id:sellerGamma.id,person_id:B.person,
       role:"owner",status:"active",protected_owner:true
@@ -5470,27 +5680,29 @@ export default async function({container}:any){
         "return {status:r.status,body:await r.json()}})()"
       ).then((v:any)=>{ownerRevokeFinished=true;return v},
         (e:unknown)=>{ownerRevokeFinished=true;throw e})
-      await until(async()=>{
-        const [w]=await q("select count(*)::int n from pg_locks l join pg_stat_activity a on a.pid=l.pid where l.granted=false and l.locktype in ('transactionid','tuple') and a.datname=current_database() and a.query ilike '%da_organization_membership%'")
-        return w.n>=1
-      },19000,"Real second protected Owner revocation waits on applicant membership row")
-      assert.equal(ownerRevokeFinished,false)
+      // The Owner-revoke call has been initiated while the native Seller
+      // INSERT is blocked. Existing membership row locks may serialize it;
+      // do not demand an obsolete specific pg_locks waiter or fast rejection.
       assert.equal(ownerCreateFinished,false)
       const [stillOwner]=await q("select status,protected_owner from da_organization_membership where id=$1",[gammaOwnerMembership.id])
       assert.equal(stillOwner.status,"active")
       assert.equal(stillOwner.protected_owner,true)
       await ownerRaceBarrier.query("ROLLBACK")
       ownerBarrierHeld=false
-      const submitted=await ownerCreatePending
-      const revoked=await ownerRevokePending
+      const [submitted,revoked]=await Promise.all([ownerCreatePending,ownerRevokePending])
+      assert.equal(revoked.status,403,
+        "A second Owner cannot bypass the 10+20 guarded removal process")
+      assert.equal(ownerRevokeFinished,true)
       assert.equal(submitted.status,201,
-        "Native Seller and authoritative Origin must complete before the Owner revoke commits")
+        "Committed native Seller must survive attempted unauthorized Owner removal")
       assert.equal(submitted.body.status,"pending_approval")
       assert.match(submitted.body.seller_id,/^sel_[A-Za-z0-9_-]+$/)
-      assert.equal(revoked.status,200)
-      const [revokedMember]=await q("select status,revoked_at from da_organization_membership where id=$1",[gammaOwnerMembership.id])
-      assert.equal(revokedMember.status,"revoked")
-      assert.ok(revokedMember.revoked_at)
+      const [preservedOwner]=await q("select status,protected_owner,revoked_at from da_organization_membership where id=$1",[gammaOwnerMembership.id])
+      assert.equal(preservedOwner.status,"active")
+      assert.equal(preservedOwner.protected_owner,true)
+      assert.equal(preservedOwner.revoked_at,null)
+      assert.equal((await q("select count(*)::int n from da_audit_event where target_id=$1 and action='organization.membership_changed'",[gammaOwnerMembership.id]))[0].n,0,
+        "Denied Owner revocation must not append membership audit")
       const [ownerRaceLedger]=await q("select status,seller_id from da_store_application where id=$1",[ownerRaceRequest.application_id])
       assert.equal(ownerRaceLedger.status,"created")
       assert.equal(ownerRaceLedger.seller_id,submitted.body.seller_id)
@@ -5502,40 +5714,22 @@ export default async function({container}:any){
       assert.equal((await q("select count(*)::int n from seller where email=$1",[ownerRaceEmail]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_organization_seller_ownership o join da_audit_event e on e.id=o.verification_audit_event_id join da_audit_outbox x on x.source_audit_event_id=e.id where o.organization_id=$1 and o.seller_id=$2 and o.revoked_at is null and e.action='organization.store_application_created' and e.new_values->>'application_id'=$3",[sellerGamma.id,submitted.body.seller_id,ownerRaceRequest.application_id]))[0].n,1,
         "Owner native Seller requires exactly one authoritative Org link and audit/outbox")
-      await browser.send("Page.bringToFront")
-      await browser.wait("document.visibilityState==='visible'")
-      const deniedOwnerStore=await browser.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-applications',{method:'POST',"+
-        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-        "body:JSON.stringify("+JSON.stringify({...ownerRaceRequest,
-          application_id:"daapp_"+randomBytes(16).toString("hex"),
-          email:"b22-owner-post-revoke-"+rand+"@example.invalid"})+")});"+
-        "return r.status})()")
-      assert.equal(deniedOwnerStore,403)
-      assert.equal((await q("select count(*)::int n from seller where email=$1",["b22-owner-post-revoke-"+rand+"@example.invalid"]))[0].n,0)
-      assert.equal((await q("select count(*)::int n from da_store_application where person_id=$1 and organization_id=$2 and id<>$3 and created_at >= (select created_at from da_store_application where id=$3)",[A.person,sellerGamma.id,ownerRaceRequest.application_id]))[0].n,0)
-      process.stdout.write("PASS B22 Chrome: real Mercur Seller INSERT and Owner membership revoke serialized on PG16; Seller pending plus source audit/outbox before revoke, next Owner Store POST403 and zero Seller\n")
+      process.stdout.write("PASS B22 Chrome: native Seller creation serialized before denied protected Owner removal; Seller pending, Owner remains active, no unauthorized membership audit\n")
     }finally{
       if(ownerBarrierHeld)await ownerRaceBarrier.query("ROLLBACK")
       await ownerRaceBarrier.end()
       if(ownerPauseTrigger)await q("drop trigger if exists b22_native_seller_owner_pause_v1 on seller")
       if(ownerPauseFn)await q("drop function if exists b22_native_seller_owner_pause_v1()")
-      // The revoked Gamma workspace is no longer selectable by A. Do NOT
-      // reload it and confuse a denied tenant with a failed global login.
-      // Test that the same Personal session still authorizes unrelated Alpha,
-      // then select Alpha before the pre-existing browser acceptance cases.
+      // The denied Gamma Owner removal leaves A's protected membership intact.
+      // Restore Alpha workspace for the following independent browser cases.
       await browser.send("Page.bringToFront")
       await browser.wait("document.visibilityState==='visible'")
       const stillPersonal=await get("/personal/session")
       assert.equal(stillPersonal.status,200,
-        "Gamma Owner revoke must not terminate A's independent Alpha Person session")
+        "Denied Gamma Owner removal must not terminate A's Alpha Person session")
       await browser.select(organizations[0].name,"owner")
-      // Gamma Owner membership was revoked above. The privacy observer
-      // compares the full Organization set against the one loaded at login;
-      // its correct fail-closed behavior can conceal a stale workspace at the
-      // next 5-second check. Reload ONLY after selecting still-authorized
-      // Alpha, so the browser obtains the fresh server-authorized scope.
-      // Never disable the observer or keep using a stale Organization view.
+      // Reload only after switching back to Alpha; the Organization list
+      // remains authoritative, and no permission observer is bypassed.
       await browser.send("Page.reload",{ignoreCache:true})
       await browser.wait(`(()=>{
         if(document.getElementById('workspace').hidden)return false
@@ -6105,6 +6299,35 @@ export default async function({container}:any){
           // post-recovery active current session would be a real auth defect.
           // Chrome CDP request IDs are joined to transient hashes in memory.
           // Do not print request IDs, hashes, cookies, tokens or Person IDs.
+          // Failure-only, disposable-DB diagnostic. Never emit session
+          // cookies, digests, identity values, request headers or document data.
+          const currentCookie=await browser.token()
+          const currentDigest=typeof currentCookie==="string" &&
+            /^[A-Za-z0-9_-]{43}$/.test(currentCookie)
+            ? createHash("sha256").update(currentCookie).digest("hex") : null
+          const sessionEligibility=currentDigest?await q(`select
+              s.mfa_purpose='full' as full_scope,
+              p.disabled_at is null and p.deleted_at is null as person_enabled,
+              statement_timestamp()<s.created_at+q.absolute_lifetime_seconds*interval '1 second' as absolute_valid,
+              statement_timestamp()<s.last_activity_at+q.idle_timeout_seconds*interval '1 second' as idle_valid,
+              (select count(*)::int from da_login_binding b
+                where b.auth_identity_id=s.auth_identity_id and b.person_id=s.person_id
+                and b.actor_type=s.actor_type and b.actor_id=s.actor_id
+                and b.verified_at is not null and b.revoked_at is null) as active_login_bindings,
+              (select count(*)::int from da_actor_mapping m
+                where m.person_id=s.person_id and m.actor_type=s.actor_type
+                and m.actor_id=s.actor_id and m.deleted_at is null) as active_actor_mappings,
+              (select count(*)::int from da_organization_membership m
+                where m.person_id=s.person_id and m.status='active'
+                and m.deleted_at is null) as active_memberships
+            from da_browser_session s join da_person p on p.id=s.person_id
+            join da_session_policy q on q.id='current' where s.id=$1`,
+            [currentDigest]):[]
+          const browserProbe=await browser.eval(`(async()=>{
+            const session=await fetch('/personal/session');
+            const organizations=await fetch('/personal/organizations');
+            return {session:session.status,organizations:organizations.status};
+          })()`)
           const scoped=browser.http.filter((row:any)=>
             row.method==="GET"&&row.path==="/personal/organizations").slice(-8)
           const organizationRequests=await Promise.all(scoped.map(async(row:any)=>{
@@ -6124,7 +6347,7 @@ export default async function({container}:any){
               sessionClass}
           }))
           throw new Error("B22 Staff A post-recovery UI did not open: "+
-            JSON.stringify({visibility,http:safe,ui,sessionState,organizationRequests}))
+            JSON.stringify({visibility,http:safe,ui,sessionState,sessionEligibility,browserProbe,organizationRequests}))
         }
         assert.equal(await browser.eval("(async()=> (await fetch('/personal/session')).status)()"),200)
       }
@@ -7258,7 +7481,7 @@ export default async function({container}:any){
     await signupChrome.click("#organization-draft-list p:first-child button")
     await signupChrome.wait("!document.querySelector('#organization-draft-withdraw').hidden")
     await signupChrome.click("#organization-draft-withdraw")
-    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Taslak geri çekildi')")
+    await signupChrome.wait("document.querySelector('#organization-draft-status').textContent.includes('Başvuru/taslak geri çekildi')")
     assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[legacyDraftId]),
       [{status:"withdrawn",version:4}])
     const afterWithdrawal=await signupChrome.eval("(async()=>{"+
@@ -7283,6 +7506,1259 @@ export default async function({container}:any){
     assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n),draftMembershipsBefore)
     process.stdout.write("PASS B22 Chrome: private applicant withdraws draft; foreign/CSRF/stale/replay denied; persisted audit, no Organization/Owner\n")
 
+    // =========================================================================
+    // B22 REAL HTTP / CHROME / PG16 TAX CERTIFICATE & SUBMISSION ACCEPTANCE JOURNEY
+    // =========================================================================
+    const b22TaxAppId="daorgapp_"+randomBytes(16).toString("hex")
+    const b22TaxId="1234567890"
+
+    // 1. Create fresh draft for tax certificate upload journey
+    const draftCreateRes=await signupChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `const r=await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:0,`+
+          `business_kind:'legal_company',`+
+          `legal_name:'B22 Vergi Levhası Test Şirketi',`+
+          `landline_phone:'+90 212 555 12 34',`+
+          `tax_identifier:${JSON.stringify(b22TaxId)},`+
+          `declared_activities:['service_repair'],`+
+          `primary_activity:'service_repair'`+
+        `})`+
+      `});`+
+      `return {status:r.status,body:await r.json()};`+
+    `})()`)
+    assert.equal(draftCreateRes.status,201)
+    assert.equal(draftCreateRes.body.version,1)
+
+    // 2. Reject 10 MiB + 1 byte upload (10485761 bytes)
+    const oversizeBase64 = Buffer.alloc(10485761, 65).toString("base64")
+    const oversizeUploadRes = await signupChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `const r=await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `action:'upload_document',`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:1,`+
+          `filename:'tax-certificate.pdf',`+
+          `file_base64:${JSON.stringify(oversizeBase64)}`+
+        `})`+
+      `});`+
+      `return r.status;`+
+    `})()`)
+    assert.equal(oversizeUploadRes, 400, "10 MiB + 1 byte document must be rejected with 400")
+
+    // 3. Foreign Person cannot upload to another Person's draft
+    const foreignUploadRes = await foreignDraftChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `const r=await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `action:'upload_document',`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:1,`+
+          `filename:'tax-certificate.pdf',`+
+          `file_base64:'JVBERi0xLjQKJcTl8uXrCgoxIDAgb2JqCjw8L1R5cGUvQ2F0YWxvZwovUGFnZXMgMiAwIFI+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzCi9LaWRzWzMgMCBSXQovQ291bnQgMQo+PgplbmRvYmoKMyAwIG9iago8PC9UeXBlL1BhZ2UKL1BhcmVudCAyIDAgUgovTWVkaWFCb3hbMCAwIDYxMiA3OTJdCi9SZXNvdXJjZXM8PD4+Cj4+CmVuZG9iagp4cmVmCjAgNAowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUgMDAwMDAgbiAKMDAwMDAwMDA2OCAwMDAwMCBuIAowMDAwMDAwMTI1IDAwMDAwIG4gCnRyYWlsZXIKPDwvU2l6ZSA0Ci9Sb290IDEgMCBSPj4Kc3RhcnR4cmVmCjIxMwprfUVPZgo='`+
+        `})`+
+      `});`+
+      `return r.status;`+
+    `})()`)
+    assert.equal(foreignUploadRes, 403, "Foreign Person must be denied document upload")
+
+    // 4. Upload an actual structurally readable PDF at exactly 10 MiB.
+    // The earlier header + spaces + %%EOF fixture was not a parseable PDF.
+    // Generate one-page PDF objects/xref with a harmless padded content
+    // stream; this remains an entirely synthetic, private CI-only document.
+    const exact10MibPdf=(()=>{
+      const target=10485760
+      const build=(streamLength:number)=>{
+        const parts:Buffer[]=[]
+        const offsets:number[]=[0]
+        let length=0
+        const add=(value:Buffer|string)=>{
+          const bytes=typeof value==="string"?Buffer.from(value,"ascii"):value
+          parts.push(bytes);length+=bytes.length
+        }
+        const obj=(n:number,body:string)=>{
+          offsets.push(length)
+          add(n+" 0 obj\n"+body+"\nendobj\n")
+        }
+        add("%PDF-1.4\n%Synthetic certificate for isolated B22 tests\n")
+        obj(1,"<< /Type /Catalog /Pages 2 0 R >>")
+        obj(2,"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        obj(3,"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>")
+        obj(4,"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        const content=Buffer.from("BT /F1 12 Tf 36 700 Td (Synthetic certificate) Tj ET\n","ascii")
+        assert.ok(streamLength>=content.length)
+        offsets.push(length)
+        add("5 0 obj\n<< /Length "+streamLength+" >>\nstream\n")
+        add(content)
+        add(Buffer.alloc(streamLength-content.length,0x20))
+        add("\nendstream\nendobj\n")
+        const xref=length
+        add("xref\n0 6\n0000000000 65535 f \n")
+        for(const off of offsets.slice(1))
+          add(String(off).padStart(10,"0")+" 00000 n \n")
+        add("trailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n"+xref+"\n%%EOF\n")
+        return Buffer.concat(parts)
+      }
+      let streamLength=target-600
+      for(let attempt=0;attempt<8;attempt++){
+        const bytes=build(streamLength)
+        if(bytes.length===target)return bytes
+        streamLength+=target-bytes.length
+      }
+      throw Error("Unable to construct exact-size valid synthetic PDF")
+    })()
+    assert.equal(exact10MibPdf.length,10485760,"Exact 10 MiB real-structure PDF test asset")
+    const exact10MibBase64 = exact10MibPdf.toString("base64")
+    // A separate two-page synthetic document tests full-page staff review.
+    const twoPagePdfBase64="JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9jdW1lbnQgKG9wZW5zb3VyY2UpCjEgMCBvYmoKPDwKL0YxIDIgMCBSCj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9CYXNlRm9udCAvSGVsdmV0aWNhIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nIC9OYW1lIC9GMSAvU3VidHlwZSAvVHlwZTEgL1R5cGUgL0ZvbnQKPj4KZW5kb2JqCjMgMCBvYmoKPDwKL0NvbnRlbnRzIDggMCBSIC9NZWRpYUJveCBbIDAgMCA2MTIgNzkyIF0gL1BhcmVudCA3IDAgUiAvUmVzb3VyY2VzIDw8Ci9Gb250IDEgMCBSIC9Qcm9jU2V0IFsgL1BERiAvVGV4dCAvSW1hZ2VCIC9JbWFnZUMgL0ltYWdlSSBdCj4+IC9Sb3RhdGUgMCAvVHJhbnMgPDwKCj4+IAogIC9UeXBlIC9QYWdlCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9Db250ZW50cyA5IDAgUiAvTWVkaWFCb3ggWyAwIDAgNjEyIDc5MiBdIC9QYXJlbnQgNyAwIFIgL1Jlc291cmNlcyA8PAovRm9udCAxIDAgUiAvUHJvY1NldCBbIC9QREYgL1RleHQgL0ltYWdlQiAvSW1hZ2VDIC9JbWFnZUkgXQo+PiAvUm90YXRlIDAgL1RyYW5zIDw8Cgo+PiAKICAvVHlwZSAvUGFnZQo+PgplbmRvYmoKNSAwIG9iago8PAovUGFnZU1vZGUgL1VzZU5vbmUgL1BhZ2VzIDcgMCBSIC9UeXBlIC9DYXRhbG9nCj4+CmVuZG9iago2IDAgb2JqCjw8Ci9BdXRob3IgKGFub255bW91cykgL0NyZWF0aW9uRGF0ZSAoRDoyMDI2MTEwNzA5NDM1MSswMCcwMCcpIC9DcmVhdG9yIChhbm9ueW1vdXMpIC9LZXl3b3JkcyAoKSAvTW9kRGF0ZSAoRDoyMDI2MTEwNzA5NDM1MSswMCcwMCcpIC9Qcm9kdWNlciAoUmVwb3J0TGFiIFBERiBMaWJyYXJ5IC0gXChvcGVuc291cmNlXCkpIAogIC9TdWJqZWN0ICh1bnNwZWNpZmllZCkgL1RpdGxlICh1bnRpdGxlZCkgL1RyYXBwZWQgL0ZhbHNlCj4+CmVuZG9iago3IDAgb2JqCjw8Ci9Db3VudCAyIC9LaWRzIFsgMyAwIFIgNCAwIFIgXSAvVHlwZSAvUGFnZXMKPj4KZW5kb2JqCjggMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggMTA5Cj4+CnN0cmVhbQpHYXBRaDBFPUYsMFVcSDNUXHBOWVReUUtrP3RjPklQLDtXI1UxXjIzaWhQRU1fP0NXNEtJU2k8OmJYYWE6XkcwQ2N1QVJiJDRdbz1FLS07KG5GdU8yZTVRXnE7QChZT1dFOCFaIShGNC0mSH4+ZW5kc3RyZWFtCmVuZG9iago5IDAgb2JqCjw8Ci9GaWx0ZXIgWyAvQVNDSUk4NURlY29kZSAvRmxhdGVEZWNvZGUgXSAvTGVuZ3RoIDExMgo+PgpzdHJlYW0KR2FwUWgwRT1GLDBVXEgzVFxwTllUXlFLaz90Yz5JUCw7VyNVMV4yM2loUEVNXz9DVzRLSVNpPDpiWGFhOl5HMENjajRmO3BAaVcqI11PbTA8PSY5aCRrLjovPCFeVEQjZ2ldZjs7X0tVSmttJzZ+PmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDEwCjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDA2MSAwMDAwMCBuIAowMDAwMDAwMDkyIDAwMDAwIG4gCjAwMDAwMDAxOTkgMDAwMDAgbiAKMDAwMDAwMDM5MiAwMDAwMCBuIAowMDAwMDAwNTg1IDAwMDAwIG4gCjAwMDAwMDA2NTMgMDAwMDAgbiAKMDAwMDAwMDkxNCAwMDAwMCBuIAowMDAwMDAwOTc5IDAwMDAwIG4gCjAwMDAwMDExNzggMDAwMDAgbiAKMDAwMDAwMDk3OSAwMDAwMCBuIAowMDAwMDAxMTc4IDAwMDAwIG4gCnRyYWlsZXIKPDwKL0lEIFs8NzZjYzE0NWFkY2E1NTJhOWM5MzRmMzllNDFiMTJlZDQ+PDc2Y2MxNDVhZGNhNTUyYTljOTM0ZjM5ZTQxYjEyZWQ0Pl0KJSBSZXBvcnRMYWIgZ2VuZXJhdGVkIFBERiBkb2N1bWVudCAtLSBkaWdlc3QgKG9wZW5zb3VyY2UpCgovSW5mbyA2IDAgUgovUm9vdCA1IDAgUgovU2l6ZSAxMAo+PgpzdGFydHhyZWYKMTM4MAolJUVPRgo="
+
+    const uploadRes = await signupChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `const r=await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `action:'upload_document',`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:1,`+
+          `filename:'tax-certificate.pdf',`+
+          `file_base64:${JSON.stringify(exact10MibBase64)}`+
+        `})`+
+      `});`+
+      `return {status:r.status,body:await r.json()};`+
+    `})()`)
+    assert.equal(uploadRes.status, 200, "10 MiB upload must succeed via real HTTP")
+    assert.equal(uploadRes.body.version, 2)
+    assert.equal(uploadRes.body.document.original_byte_length, 10485760)
+    // A successful HTTP upload must persist real ClamAV + protected PNG
+    // evidence. This is NOT a time-based or browser supplied clean flag.
+    const initialScanEvidence = await q(
+      "select scanned_clamav_identity,preview_renderer_revision,safe_preview_sha256,octet_length(safe_preview_png)::int as png_bytes,scanned_at::text as scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+      [b22TaxAppId])
+    assert.equal(initialScanEvidence.length,1)
+    assert.match(initialScanEvidence[0].scanned_clamav_identity,
+      /^[A-Za-z0-9_.+-]+\/[0-9]+\/[0-9]{13}$/)
+    assert.equal(initialScanEvidence[0].preview_renderer_revision,"all-pages-png-20261107-v1")
+    assert.match(initialScanEvidence[0].safe_preview_sha256,/^[0-9a-f]{64}$/)
+    assert.ok(initialScanEvidence[0].png_bytes>64&&initialScanEvidence[0].png_bytes<=4*1024*1024)
+    assert.ok(initialScanEvidence[0].scanned_at)
+
+    // 5. Authorized download by applicant
+    const downloadRes = await signupChrome.eval(`(async()=>{`+
+      `const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(b22TaxAppId)}));`+
+      `const blob=await r.blob();`+
+      `return {status:r.status,type:r.headers.get('content-type'),size:blob.size};`+
+    `})()`)
+    assert.equal(downloadRes.status, 200)
+    assert.equal(downloadRes.type, "application/pdf")
+    assert.equal(downloadRes.size, 10485760)
+
+    // 6. Foreign download denied
+    const foreignDownloadRes = await foreignDraftChrome.eval(`(async()=>{`+
+      `const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(b22TaxAppId)}));`+
+      `return r.status;`+
+    `})()`)
+    assert.equal(foreignDownloadRes, 403, "Foreign Person must not download applicant document")
+
+    // 7. Submit verification fail-closed: corrupt stored file on disk
+    const storedDoc = (await q("select storage_key,internal_name from da_organization_application_document where application_id=$1 and is_current=true",[b22TaxAppId]))[0]
+    const storedPath = join(taxDir, storedDoc.storage_key)
+    const backupBytes = readFileSync(storedPath)
+    try {
+      writeFileSync(storedPath, Buffer.from("corrupted file bytes"))
+      const failClosedSubmit = await signupChrome.eval(`(async()=>{`+
+        `const s=await (await fetch('/personal/session')).json();`+
+        `const r=await fetch('/personal/organization-applications',{`+
+          `method:'POST',`+
+          `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+          `body:JSON.stringify({`+
+            `action:'submit',`+
+            `application_id:${JSON.stringify(b22TaxAppId)},`+
+            `expected_version:2`+
+          `})`+
+        `});`+
+        `return r.status;`+
+      `})()`)
+      assert.equal(failClosedSubmit, 400, "Submission with corrupted private file must fail closed (400)")
+      assert.equal((await q("select status from da_organization_application where id=$1",[b22TaxAppId]))[0].status, "draft")
+    } finally {
+      writeFileSync(storedPath, backupBytes)
+    }
+
+    // 8. Submit successfully with intact file
+    const validSubmitRes = await signupChrome.eval(`(async()=>{`+
+      `const s=await (await fetch('/personal/session')).json();`+
+      `const r=await fetch('/personal/organization-applications',{`+
+        `method:'POST',`+
+        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+        `body:JSON.stringify({`+
+          `action:'submit',`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:2`+
+        `})`+
+      `});`+
+      `return {status:r.status,body:await r.json()};`+
+    `})()`)
+    assert.equal(validSubmitRes.status, 200)
+    assert.equal(validSubmitRes.body.status, "submitted")
+    assert.equal(validSubmitRes.body.version, 3)
+
+    // 9. Confidential duplicate tax-identifier check:
+    const foreignAppId="daorgapp_"+randomBytes(16).toString("hex")
+    // Inject fixture data as CDP values, not executable source. Keep every
+    // request inside the foreign applicant's real Chrome/HTTPS/CSRF session.
+    const foreignSetup=await foreignDraftChrome.callFunction(
+      `async function(applicationId,taxIdentifier,pdfBase64){
+        const s=await (await fetch('/personal/session')).json();
+        const headers={'content-type':'application/json','x-csrf-token':s.csrf_token};
+        const create=await fetch('/personal/organization-applications',{
+          method:'POST',headers,
+          body:JSON.stringify({
+            application_id:applicationId,
+            expected_version:0,
+            business_kind:'legal_company',
+            legal_name:'Foreign Duplicate Company',
+            landline_phone:'+90 212 555 99 99',
+            tax_identifier:taxIdentifier,
+            declared_activities:['service_repair','insurance_claims'],
+            primary_activity:'service_repair'
+          })
+        });
+        const upload=await fetch('/personal/organization-applications',{
+          method:'POST',headers,
+          body:JSON.stringify({
+            action:'upload_document',
+            application_id:applicationId,
+            expected_version:1,
+            filename:'tax-certificate.pdf',
+            file_base64:pdfBase64
+          })
+        });
+        return {createStatus:create.status,uploadStatus:upload.status};
+      }`,
+      foreignAppId,b22TaxId,twoPagePdfBase64)
+    assert.deepEqual(foreignSetup,{createStatus:201,uploadStatus:200},
+      "Foreign applicant must save draft and upload through real HTTPS")
+    const duplicateSubmitRes=await foreignDraftChrome.callFunction(
+      `async function(applicationId){
+        const s=await (await fetch('/personal/session')).json();
+        const r=await fetch('/personal/organization-applications',{
+          method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+          body:JSON.stringify({
+            action:'submit',application_id:applicationId,expected_version:2
+          })
+        });
+        return {status:r.status,body:await r.json()};
+      }`,
+      foreignAppId)
+    assert.equal(duplicateSubmitRes.status, 200)
+    assert.equal(duplicateSubmitRes.body.status, "submitted")
+    const app1Row=(await q("select duplicate_review_required from da_organization_application where id=$1",[b22TaxAppId]))[0]
+    const app2Row=(await q("select duplicate_review_required from da_organization_application where id=$1",[foreignAppId]))[0]
+    assert.equal(app1Row.duplicate_review_required, false)
+    assert.equal(app2Row.duplicate_review_required, true, "Duplicate VKN must set confidential review flag in PG16")
+    await foreignDraftChrome.click("#organization-draft-refresh")
+    await foreignDraftChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&p.textContent.includes('Başvuru gönderildi'))")
+    const submittedCanWithdraw=await foreignDraftChrome.eval("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&Array.from(p.querySelectorAll('button')).some(b=>b.textContent==='Başvuruyu geri çek'))")
+    assert.equal(submittedCanWithdraw,true,"A submitted application must offer applicant cancellation before staff approval")
+
+    // 10. Platform Staff Review Journey:
+    // The two applicants cannot review their own applications. Register a
+    // genuinely independent THIRD Person via real HTTPS, native Customer
+    // registration and strong MFA. A grant alone never creates a valid session.
+    const reviewChrome=new B06Chrome(host,"B");browsers.push(reviewChrome)
+    await reviewChrome.start(crt)
+    const reviewEmail="b22-review-"+randomBytes(10).toString("hex")+"@example.invalid"
+    const reviewPassword="Task-Strong-"+randomBytes(18).toString("hex")
+    await reviewChrome.click("#register-details summary")
+    await reviewChrome.input("#register input[name=first_name]","Synthetic")
+    await reviewChrome.input("#register input[name=last_name]","Reviewer")
+    await reviewChrome.input("#register input[name=email]",reviewEmail)
+    await reviewChrome.input("#register input[name=mobile_phone]","+905551234579")
+    await reviewChrome.input("#register input[name=password]",reviewPassword)
+    await reviewChrome.click("#register button")
+    await reviewChrome.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+    await reviewChrome.input("#login input[name=email]",reviewEmail)
+    await reviewChrome.input("#login input[name=password]",reviewPassword)
+    await reviewChrome.click("#login button")
+    await reviewChrome.wait("!document.getElementById('workspace').hidden || !document.getElementById('mfa-enrollment').hidden")
+    if(await reviewChrome.eval("!document.getElementById('mfa-enrollment').hidden")){
+      await reviewChrome.input("#mfa-enroll-start input[name=email]",reviewEmail)
+      await reviewChrome.input("#mfa-enroll-start input[name=password]",reviewPassword)
+      await reviewChrome.click("#mfa-enroll-start button")
+      await reviewChrome.wait("!document.getElementById('mfa-enroll-verify').hidden&&document.getElementById('mfa-seed').value.length>0")
+      const url=await reviewChrome.eval("document.getElementById('mfa-seed').value")
+      const secret=url.startsWith("otpauth:")?new URL(url).searchParams.get("secret"):url
+      assert.ok(secret)
+      await reviewChrome.input("#mfa-enroll-verify input[name=code]",otp(secret!))
+      await reviewChrome.click("#mfa-enroll-verify button")
+    }
+    await reviewChrome.wait("!document.getElementById('workspace').hidden")
+    // Optional platform MFA can open a normal, non-strong Person session.
+    // A reviewer must voluntarily complete real native TOTP enrollment before
+    // the platform staff grant can authorize sensitive review work. Never
+    // insert last_strong_auth_at directly or relax IdentitySessions.staff().
+    const beforeStrong=await reviewChrome.token()
+    assert.match(beforeStrong??"",/^[A-Za-z0-9_-]{43}$/)
+    const [strongProof]=await q(`select last_strong_auth_at from da_browser_session
+      where id=$1`,[createHash("sha256").update(beforeStrong!).digest("hex")])
+    if(!strongProof?.last_strong_auth_at){
+      // The workspace becomes visible BEFORE load() awaits refreshMfa().
+      // Wait for the real authenticated MFA policy response; never make an
+      // enrolment button visible when policy genuinely forbids it.
+      const mfaPolicy=await reviewChrome.eval(`(async()=>{
+        const r=await fetch('/personal/mfa');
+        const body=r.status===200?await r.json():{};
+        return {status:r.status,mode:body.platform?.platform_mode};
+      })()`)
+      assert.equal(mfaPolicy.status,200,"Native MFA policy must remain readable")
+      assert.ok(["required","optional"].includes(mfaPolicy.mode),
+        "Independent reviewer must not bypass a disabled platform MFA policy")
+      await reviewChrome.wait(
+        "!document.getElementById('workspace').hidden && !document.getElementById('mfa-person').hidden")
+      assert.equal(await reviewChrome.eval(
+        "!document.getElementById('mfa-enroll-launch').hidden"),true,
+        "Reviewer requires an enabled, user-visible native MFA enrollment path")
+      await reviewChrome.click("#mfa-enroll-launch")
+      await reviewChrome.input("#mfa-enroll-start input[name=email]",reviewEmail)
+      await reviewChrome.input("#mfa-enroll-start input[name=password]",reviewPassword)
+      await reviewChrome.click("#mfa-enroll-start button")
+      await reviewChrome.wait("!document.getElementById('mfa-enroll-verify').hidden&&document.getElementById('mfa-seed').value.length>0")
+      const enrolled=await reviewChrome.eval("document.getElementById('mfa-seed').value")
+      const enrolledSecret=enrolled.startsWith("otpauth:")
+        ?new URL(enrolled).searchParams.get("secret"):enrolled
+      assert.ok(enrolledSecret)
+      await reviewChrome.input("#mfa-enroll-verify input[name=code]",otp(enrolledSecret!))
+      await reviewChrome.click("#mfa-enroll-verify button")
+      await reviewChrome.wait("!document.getElementById('workspace').hidden")
+    }
+    const reviewerRows=await q(`select b.person_id from da_login_binding b
+      join public.customer c on c.id=b.actor_id
+      where b.actor_type='customer' and c.email=$1
+        and b.revoked_at is null and b.verified_at is not null`,[reviewEmail])
+    assert.equal(reviewerRows.length,1)
+    const reviewerPersonId=reviewerRows[0].person_id
+    const foreignPersonId=(await q("select applicant_person_id from da_organization_application where id=$1",[foreignAppId]))[0].applicant_person_id
+    assert.notEqual(reviewerPersonId,signupPerson,"Review staff cannot be the first applicant")
+    assert.notEqual(reviewerPersonId,foreignPersonId,"Review staff cannot be the second applicant")
+    const reviewerToken=await reviewChrome.token()
+    assert.match(reviewerToken??"",/^[A-Za-z0-9_-]{43}$/)
+    const reviewerProof=await q(`select s.status,s.last_strong_auth_at,s.mfa_purpose,
+       statement_timestamp()<s.last_strong_auth_at+p.recent_auth_seconds*interval '1 second' as recent
+       from da_browser_session s cross join da_session_policy p
+       where s.id=$1 and p.id='current'`,
+       [createHash("sha256").update(reviewerToken!).digest("hex")])
+    assert.equal(reviewerProof.length,1)
+    assert.equal(reviewerProof[0].status,"active")
+    assert.ok(reviewerProof[0].last_strong_auth_at,"Real reviewer strong login required")
+    assert.equal(reviewerProof[0].recent,true,"Reviewer must have fresh MFA")
+    const reviewGrantId="da_staff_review_"+randomBytes(8).toString("hex")
+    await q(`insert into da_platform_staff_grant(id,person_id,task,resource,granted_by_person_id,reason)
+      values($1,$2,'organization.review','platform',$2,'B22 independent real reviewer acceptance fixture')`,
+      [reviewGrantId,reviewerPersonId])
+
+    try {
+      const reviewQueue = await reviewChrome.eval(`(async()=>{`+
+        `const r=await fetch('/personal/organization-applications?action=review_queue');`+
+        `return {status:r.status,body:await r.json()};`+
+      `})()`)
+      assert.equal(reviewQueue.status, 200)
+      assert.ok(Array.isArray(reviewQueue.body.applications))
+      const qApp1 = reviewQueue.body.applications.find((a:any)=>a.id===b22TaxAppId)
+      const qApp2 = reviewQueue.body.applications.find((a:any)=>a.id===foreignAppId)
+      assert.ok(qApp1, "Queue must contain submitted app 1")
+      assert.ok(qApp2, "Queue must contain submitted app 2")
+      assert.equal(qApp1.duplicate_review_required, false)
+      assert.equal(qApp2.duplicate_review_required, true)
+
+      // A real privileged queue response arrives after privacy concealment.
+      // The refresh button starts hidden until the new staff grant is observed.
+      // Trigger its actual handler once; subsequent clicks use the visible UI.
+      await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()")
+      await reviewChrome.wait("document.getElementById('organization-review-list').textContent.includes('B22 Vergi Levhası Test Şirketi')")
+      const delayedReviewReady=await reviewChrome.eval(`(()=>{
+        const original=window.fetch;
+        window.__b22ReviewLag={waiting:false,release:null,original};
+        window.fetch=(...args)=>{
+          const gate=window.__b22ReviewLag;
+          if(gate && !gate.waiting && String(args[0]).includes('organization-applications?action=review_queue')){
+            gate.waiting=true;
+            return original(...args).then(response=>new Promise(resolve=>{gate.release=()=>resolve(response)}));
+          }
+          return original(...args);
+        };
+        return true;
+      })()`)
+      assert.equal(delayedReviewReady,true)
+      try{
+        await reviewChrome.click("#organization-review-refresh")
+        await reviewChrome.wait("!!window.__b22ReviewLag?.release")
+        await reviewChrome.eval("window.dispatchEvent(new Event('pagehide'))")
+        assert.equal(await reviewChrome.eval("document.getElementById('organization-review-list').textContent"),"")
+        assert.equal(await reviewChrome.eval("document.getElementById('organization-review-panel').hidden"),true)
+        await reviewChrome.eval("window.__b22ReviewLag.release()")
+        await reviewChrome.eval("(async()=>{await new Promise(r=>setTimeout(r,250));return true})()")
+        assert.equal(await reviewChrome.eval("document.getElementById('organization-review-list').textContent"),"",
+          "Delayed former privileged review response must not restore private tax identifiers")
+        assert.equal(await reviewChrome.eval("document.getElementById('organization-review-panel').hidden"),true)
+      }finally{
+        await reviewChrome.eval("(()=>{if(window.__b22ReviewLag){window.fetch=window.__b22ReviewLag.original;delete window.__b22ReviewLag}return true})()")
+      }
+      await reviewChrome.send("Page.reload",{ignoreCache:true})
+      await reviewChrome.wait("!document.getElementById('workspace').hidden")
+      process.stdout.write("PASS B22 Chrome: delayed reviewer response after pagehide cannot repopulate private application DOM\n")
+
+      // The submitted PDF is private but has no genuine server-side malware
+      // verdict or proven safe staff viewer. The staff route must fail closed.
+      const staffDocDownload = await reviewChrome.eval(`(async()=>{`+
+        `const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(b22TaxAppId)}));`+
+        `return {status:r.status,contentType:r.headers.get('content-type'),cache:r.headers.get('cache-control')};`+
+      `})()`)
+      assert.equal(staffDocDownload.status,503,"Reviewer must not download unscanned original document")
+      assert.equal(staffDocDownload.cache,"no-store")
+      assert.ok(!['application/pdf','image/png','image/jpeg'].includes(staffDocDownload.contentType),
+        "Unscanned original media must not reach staff HTTP response")
+
+      // Preview must be the server-generated PNG. Positive CI mode uses an
+      // official free ClamAV database and real OS namespace isolation;
+      // without either, the same real HTTP request MUST fail closed.
+      const scanEnabled=process.env.DOGRUADRES_B22_SAFE_REVIEW_TEST==="true"
+      const reviewPreview = await reviewChrome.eval(`(async()=>{
+        const r=await fetch('/personal/organization-applications?action=review_preview&application_id='+
+          encodeURIComponent(${JSON.stringify(b22TaxAppId)}));
+        const raw=new Uint8Array(await r.arrayBuffer());
+        return {status:r.status,type:r.headers.get('content-type'),
+          cache:r.headers.get('cache-control'),length:raw.length,
+          header:Array.from(raw.slice(0,8))};
+      })()`)
+      assert.equal(reviewPreview.cache,"no-store")
+      if(scanEnabled){
+        assert.equal(reviewPreview.status,200,"Signed local ClamAV and sandbox must provide safe PNG")
+        assert.equal(reviewPreview.type,"image/png")
+        assert.ok(reviewPreview.length>64&&reviewPreview.length<=4*1024*1024)
+        assert.deepEqual(reviewPreview.header,[137,80,78,71,13,10,26,10])
+      const evidenceAfterReview=await q(
+        "select scanned_clamav_identity,preview_renderer_revision,safe_preview_sha256,octet_length(safe_preview_png)::int as png_bytes,scanned_at::text as scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+        [b22TaxAppId])
+      assert.deepEqual(evidenceAfterReview,initialScanEvidence,
+        "Matching ClamAV identity and exact immutable file must reuse the first scan/PNG without a cache rewrite")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: upload scans once and same-signature private preview remains unchanged\n")
+      }else{
+        assert.equal(reviewPreview.status,503)
+        assert.ok(!reviewPreview.type?.startsWith("image/"),
+          "Staff must never receive a fake or raw preview on unavailable scan")
+      }
+      await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()")
+      await reviewChrome.wait("document.getElementById('organization-review-list').textContent.includes('B22 Vergi Levhası Test Şirketi')")
+      const openUnsafePreview = await reviewChrome.eval(`(()=>{
+        const row=Array.from(document.querySelectorAll('#organization-review-list p'))
+          .find(p=>p.textContent.includes('B22 Vergi Levhası Test Şirketi'));
+        const button=Array.from(row?.querySelectorAll('button')||[])
+          .find(b=>b.textContent==='Belgeyi Güvenli Önizle');
+        if(!button)throw Error('Missing reviewed document preview action');
+        button.click();return row.textContent.includes('ClamAV güncelliği kontrol ediliyor');
+      })()`)
+      assert.equal(openUnsafePreview,true)
+      // Distinguish a real fail-closed image error from an HTTP/DOM stall.
+      // A failed image must not masquerade as a generic 20-second timeout.
+      const previewStatusExpr=scanEnabled?
+        "document.getElementById('organization-review-list').textContent.includes('Güvenli görselin tamamı gösterildi') || document.getElementById('organization-review-list').textContent.includes('Tarama veya güvenli önizleme kullanılamıyor')":
+        "document.getElementById('organization-review-list').textContent.includes('Tarama veya güvenli önizleme kullanılamıyor')"
+      try{
+        await reviewChrome.wait(previewStatusExpr)
+      }catch(error){
+        const snapshot=await reviewChrome.eval(`(()=>{
+          const row=Array.from(document.querySelectorAll('#organization-review-list p'))
+            .find(p=>p.textContent.includes('B22 Vergi Levhası Test Şirketi'));
+          const preview=Array.from(row?.querySelectorAll('button')||[])
+            .find(b=>b.textContent==='Belgeyi Güvenli Önizle');
+          const approval=Array.from(row?.querySelectorAll('button')||[])
+            .find(b=>b.textContent==='İşletmeyi Onayla');
+          const image=row?.querySelector('img');
+          return {rowPresent:!!row,previewDisabled:!!preview?.disabled,
+            approvalReady:!!approval&&!approval.hidden&&!approval.disabled,
+            imageComplete:!!image?.complete,imageWidth:image?.naturalWidth||0,
+            note:row?.textContent?.includes('hazırlanıyor')?'loading':
+              row?.textContent?.includes('kullanılamıyor')?'unavailable':
+              row?.textContent?.includes('tamamı gösterildi')?'ready':'other'};
+        })()`)
+        throw Error("B22 preview browser state not settled: "+JSON.stringify(snapshot)+"; "+String(error))
+      }
+      const approvalState=await reviewChrome.eval(`(()=>{
+        const row=Array.from(document.querySelectorAll('#organization-review-list p'))
+          .find(p=>p.textContent.includes('B22 Vergi Levhası Test Şirketi'));
+        const button=Array.from(row?.querySelectorAll('button')||[])
+          .find(b=>b.textContent==='İşletmeyi Onayla');
+        const image=row?.querySelector('img');
+        const label=row?.textContent||'';
+        return {ready:!!button&&!button.hidden&&!button.disabled,
+          rasterVisible:!!image&&!image.hidden&&image.naturalWidth>0,
+          scanComplete:label.includes('Virüs taramasından geçirilmiştir'),
+          scanUnverified:label.includes('Virüs taraması doğrulanamadı')};
+      })()`)
+      assert.equal(approvalState.ready,scanEnabled,
+        "Only a genuinely scanned and rendered preview may unlock review UI; preview must fail closed when scan or browser decode fails")
+      assert.equal(approvalState.rasterVisible,scanEnabled)
+      assert.equal(approvalState.scanComplete,scanEnabled,
+        "Only a real successful safe preview may display completed antivirus scan")
+      assert.equal(approvalState.scanUnverified,!scanEnabled,
+        "Unavailable scanner or preview must display unsuccessful verification")
+      if(scanEnabled)process.stdout.write("PASS B22 Chrome/HTTP/PG16: scanned PNG preview loaded and reviewer approval UI gated\n")
+      if(scanEnabled){
+        // Both pages must reach the actual browser from the protected, scanned
+        // HTTP endpoint. Approval UI stays disabled until the reviewer can
+        // scroll through the complete tall PNG, not just its first page.
+        await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()");
+        await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company'))");
+        await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.includes('Foreign Duplicate Company'));const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='Belgeyi Güvenli Önizle');if(!button)throw Error('Missing private review button');button.click();return true})()");
+        await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&p.querySelector('img')?.naturalHeight>=1700)");
+        const multiPageBefore=await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.includes('Foreign Duplicate Company'));const image=row?.querySelector('img');const box=row?.querySelector('[role=region]');const approval=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='İşletmeyi Onayla');return {height:image?.naturalHeight||0,scrollable:!!box&&box.scrollHeight>box.clientHeight+16,ready:!!approval&&!approval.hidden&&!approval.disabled};})()");
+        assert.ok(multiPageBefore.height>=1700,"The browser must receive every PDF page");
+        assert.equal(multiPageBefore.scrollable,true,"Multi-page preview must remain legible and scrollable");
+        assert.equal(multiPageBefore.ready,false,"Approval must stay disabled before reaching the second page");
+        await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.includes('Foreign Duplicate Company'));const box=row?.querySelector('[role=region]');if(!box)throw Error('Missing accessible page scroll');box.scrollTop=box.scrollHeight;return true})()");
+        await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&Array.from(p.querySelectorAll('button')).some(b=>b.textContent==='İşletmeyi Onayla'&&!b.hidden&&!b.disabled))");
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: full two-page PDF preview, approval disabled until final page scrolled\n");
+
+        // The daemon stays genuine. Only this disposable task-only PostgreSQL
+        // row simulates evidence previously recorded under an old signature.
+        const signedPreviewUrl='/personal/organization-applications?action=review_preview&application_id='+encodeURIComponent(foreignAppId);
+        const fetchSignedPreview=()=>reviewChrome.eval(
+          "(async()=>{const r=await fetch("+JSON.stringify(signedPreviewUrl)+");return {status:r.status,type:r.headers.get('content-type')}})()");
+        const beforeRenewal=(await q(
+          "select scanned_clamav_identity,safe_preview_sha256,scanned_at::text scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+          [foreignAppId]))[0];
+        assert.ok(beforeRenewal?.scanned_clamav_identity);
+        const identityParts=beforeRenewal.scanned_clamav_identity.split("/");
+        assert.equal(identityParts.length,3);
+        assert.ok(Number(identityParts[1])>1);
+        const staleIdentity=identityParts[0]+"/"+(Number(identityParts[1])-1)+"/"+identityParts[2];
+        await q("update da_organization_application_document set scanned_clamav_identity=$1 where application_id=$2 and is_current=true",
+          [staleIdentity,foreignAppId]);
+        const freshPreview=await fetchSignedPreview();
+        assert.equal(freshPreview.status,200,"Signature change requires successful real ClamAV renewal");
+        assert.equal(freshPreview.type,"image/png");
+        const afterRenewal=(await q(
+          "select scanned_clamav_identity,safe_preview_sha256,scanned_at::text scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+          [foreignAppId]))[0];
+        assert.equal(afterRenewal.scanned_clamav_identity,beforeRenewal.scanned_clamav_identity);
+        assert.equal(afterRenewal.safe_preview_sha256,beforeRenewal.safe_preview_sha256,
+          "Signature-only renewal must preserve identical PNG rather than re-rendering");
+        assert.notEqual(afterRenewal.scanned_at,beforeRenewal.scanned_at);
+        assert.equal((await fetchSignedPreview()).status,200);
+        const afterSecond=(await q(
+          "select scanned_clamav_identity,safe_preview_sha256,scanned_at::text scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+          [foreignAppId]))[0];
+        assert.deepEqual(afterSecond,afterRenewal,
+          "Repeated same-signature review must not rewrite scan evidence");
+
+        // A damaged PNG hash cannot authorize a cached image; regenerate
+        // under the real sandbox and scanner (no disabled safety checks).
+        await q("update da_organization_application_document set safe_preview_sha256=$1 where application_id=$2 and is_current=true",
+          ["0".repeat(64),foreignAppId]);
+        const repairedPreview=await fetchSignedPreview();
+        assert.equal(repairedPreview.status,200,"Damaged cached PNG must be regenerated safely");
+        assert.equal(repairedPreview.type,"image/png");
+        const afterRepair=(await q(
+          "select scanned_clamav_identity,safe_preview_sha256,scanned_at::text scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+          [foreignAppId]))[0];
+        assert.equal(afterRepair.scanned_clamav_identity,beforeRenewal.scanned_clamav_identity);
+        assert.match(afterRepair.safe_preview_sha256,/^[0-9a-f]{64}$/);
+        assert.notEqual(afterRepair.safe_preview_sha256,"0".repeat(64));
+        assert.notEqual(afterRepair.scanned_at,afterSecond.scanned_at);
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: changed signature triggers genuine re-scan; unchanged reuse; damaged PNG regenerated\n");
+
+      }
+
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: staff unscanned document denied, applicant original retained, foreign denied\n")
+
+      const correctionRes = await reviewChrome.eval(`(async()=>{`+
+        `const s=await (await fetch('/personal/session')).json();`+
+        `const r=await fetch('/personal/organization-applications',{`+
+          `method:'POST',`+
+          `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
+          `body:JSON.stringify({`+
+            `action:'review_decision',`+
+            `application_id:${JSON.stringify(foreignAppId)},`+
+            `expected_version:3,`+
+            `decision:'request_correction',`+
+            `notes:'Lütfen vergi levhanızı güncel tarihli olarak tekrar yükleyiniz.'`+
+          `})`+
+        `});`+
+        `return {status:r.status,body:await r.json()};`+
+      `})()`)
+      assert.equal(correctionRes.status, 200)
+      assert.equal(correctionRes.body.status, "correction_requested")
+      const correctionDocumentDenied=await reviewChrome.eval(`(async()=>{
+        const r=await fetch('/personal/organization-applications?action=document&application_id='+encodeURIComponent(${JSON.stringify(foreignAppId)}));return r.status
+      })()`)
+      assert.equal(correctionDocumentDenied,403,"Review staff may not read correction-requested private documents")
+
+      assert.equal((await q("select status,review_notes from da_organization_application where id=$1",[foreignAppId]))[0].status, "correction_requested")
+      await foreignDraftChrome.click("#organization-draft-refresh")
+      await foreignDraftChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&p.textContent.includes('Düzeltme istendi'))")
+      await foreignDraftChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-draft-list p')).find(p=>p.textContent.includes('Foreign Duplicate Company'));const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='Düzelt ve yeniden gönder');if(!button)throw Error('Missing correction selector');button.click();return true})()")
+      await foreignDraftChrome.wait("!document.getElementById('organization-draft-withdraw').hidden")
+
+      // Requesting correction cannot be bypassed by replaying the unchanged
+      // submission. The genuine applicant must use the visible upload button.
+      assert.equal(await foreignDraftChrome.eval("document.getElementById('organization-application-submit').hidden"),true)
+      const unchangedSubmit=await foreignDraftChrome.eval(`(async()=>{
+        const csrf=(await(await fetch('/personal/session')).json()).csrf_token;
+        const r=await fetch('/personal/organization-applications',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':csrf},
+          body:JSON.stringify({action:'submit',application_id:${JSON.stringify(foreignAppId)},expected_version:4})});
+        return r.status;
+      })()`)
+      assert.equal(unchangedSubmit,409,"Correction must not permit unchanged resubmission")
+
+      const noChangeSave=await foreignDraftChrome.eval(`(async()=>{
+        const form=document.getElementById('organization-draft-form');
+        const selected=Array.from(form.querySelectorAll('input[name=declared_activities]:checked'),x=>x.value);
+        const body={...Object.fromEntries(new FormData(form)),
+          declared_activities:selected,primary_activity:form.elements.primary_activity.value,
+          application_id:${JSON.stringify(foreignAppId)},expected_version:4};
+        const csrf=(await(await fetch('/personal/session')).json()).csrf_token;
+        const r=await fetch('/personal/organization-applications',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify(body)});
+        return r.status;
+      })()`)
+      assert.equal(noChangeSave,409,"Unmodified correction form must not reopen application")
+      assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
+        [{status:"correction_requested",version:4}])
+
+      const priorDraftAuditCount=Number((await q(
+        "select count(*)::int n from da_audit_event where target_id=$1 and action='organization.application_draft_saved'",
+        [foreignAppId]))[0].n)
+      const reorderedOnlySave=await foreignDraftChrome.eval(`(async()=>{
+        const form=document.getElementById('organization-draft-form');
+        const selected=Array.from(form.querySelectorAll('input[name=declared_activities]:checked'),x=>x.value).reverse();
+        const body={...Object.fromEntries(new FormData(form)),
+          declared_activities:selected,primary_activity:form.elements.primary_activity.value,
+          application_id:${JSON.stringify(foreignAppId)},expected_version:4};
+        const csrf=(await(await fetch('/personal/session')).json()).csrf_token;
+        const r=await fetch('/personal/organization-applications',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify(body)});
+        return r.status;
+      })()`)
+      assert.equal(reorderedOnlySave,409,"Reordering declared activities must not count as a correction")
+      assert.equal(Number((await q(
+        "select count(*)::int n from da_audit_event where target_id=$1 and action='organization.application_draft_saved'",
+        [foreignAppId]))[0].n),priorDraftAuditCount,"Order-only retry must not add audit")
+      assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
+        [{status:"correction_requested",version:4}])
+      const priorRevisions=await q(
+        "select version,storage_key,original_sha256,is_current from da_organization_application_document where application_id=$1 order by version",
+        [foreignAppId])
+      assert.equal(priorRevisions.length,1)
+      // Replace the former EOF-shaped PDF stub: upload now requires a genuine
+      // ClamAV scan AND sandbox rendering before marking a correction saved.
+      // Change exactly eight metadata bytes so PDF xref offsets and both pages
+      // remain valid, while the immutable original SHA-256 really changes.
+      const correctedPdf=Buffer.from(twoPagePdfBase64,"base64")
+      const previousTitle=Buffer.from("/Title (untitled)","ascii")
+      const correctedTitle=Buffer.from("/Title (changed!)","ascii")
+      assert.equal(previousTitle.length,correctedTitle.length)
+      const titleOffset=correctedPdf.indexOf(previousTitle)
+      assert.ok(titleOffset>0,"Expected known two-page PDF metadata")
+      correctedTitle.copy(correctedPdf,titleOffset)
+      assert.notEqual(createHash("sha256").update(correctedPdf).digest("hex"),
+        createHash("sha256").update(Buffer.from(twoPagePdfBase64,"base64")).digest("hex"))
+      const correctionSelection=await foreignDraftChrome.eval(`(()=>{
+        const raw=atob(${JSON.stringify(correctedPdf.toString("base64"))});
+        const file=new File([Uint8Array.from(raw,c=>c.charCodeAt(0))],
+          "duzeltilmis-vergi-levhasi.pdf",{type:"application/pdf"});
+        const input=document.getElementById('organization-document-file');
+        const transfer=new DataTransfer();transfer.items.add(file);
+        input.files=transfer.files;
+        input.dispatchEvent(new Event('change',{bubbles:true}));
+        return {status:document.getElementById('organization-document-status').textContent,
+          submitHidden:document.getElementById('organization-application-submit').hidden};
+      })()`)
+      assert.ok(correctionSelection.status.includes("Dosya seçildi:"))
+      assert.ok(correctionSelection.status.includes("Henüz virüs taramasından geçirilmedi"),
+        "Selecting a file must not claim successful antivirus scanning")
+      assert.equal(correctionSelection.submitHidden,true)
+      assert.equal(Number((await q("select count(*)::int n from da_organization_application_document where application_id=$1",[foreignAppId]))[0].n),1,
+        "Selecting a file must not upload it")
+      await foreignDraftChrome.click("#organization-document-upload")
+      try {
+        await foreignDraftChrome.wait("document.getElementById('organization-document-status').textContent.includes('başarıyla yüklendi') || document.getElementById('organization-document-status').textContent.includes('başarısız oldu')")
+      }catch(error){
+        const state=await foreignDraftChrome.eval("document.getElementById('organization-document-status').textContent")
+        throw Error("B22 correction upload remained unresolved: "+state+"; "+String(error))
+      }
+      assert.equal(await foreignDraftChrome.eval("document.getElementById('organization-document-status').textContent.includes('başarıyla yüklendi')"),true,
+        "Updated real PDF must pass ClamAV and isolated preview during corrected upload")
+      assert.equal(await foreignDraftChrome.eval("document.getElementById('organization-document-status').textContent.includes('virüs taramasından geçirildi')"),true,
+        "Only a successfully scanned and persistently stored upload may claim clean ClamAV status")
+      await foreignDraftChrome.wait("!document.getElementById('organization-application-submit').hidden && !document.getElementById('organization-application-submit').disabled")
+      assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
+        [{status:"draft",version:5}])
+      const revised=await q(
+        "select version,storage_key,original_sha256,is_current from da_organization_application_document where application_id=$1 order by version",
+        [foreignAppId])
+      assert.equal(revised.length,2)
+      assert.equal(revised[0].storage_key,priorRevisions[0].storage_key)
+      assert.equal(revised[0].original_sha256,priorRevisions[0].original_sha256)
+      assert.equal(revised[0].is_current,false)
+      assert.equal(revised[1].version,2)
+      assert.equal(revised[1].is_current,true)
+      assert.equal(revised[1].original_sha256,createHash("sha256").update(correctedPdf).digest("hex"))
+      for(const doc of revised)assert.ok(readFileSync(join(taxDir,doc.storage_key)).length>8)
+      // Observe only the synthetic submission's HTTP status. The existing
+      // real UI button remains the actor; never replace it with a direct POST.
+      await foreignDraftChrome.eval(`(()=>{
+        const original=window.fetch,trace={original,seen:false,http:null};
+        window.__b22SubmitTrace=trace;
+        window.fetch=(...args)=>{
+          const opts=args[1]||{};
+          if(opts.method==='POST'&&String(opts.body||'').includes('"action":"submit"')){
+            trace.seen=true;
+            return original(...args).then(r=>{trace.http=r.status;return r;},
+              e=>{trace.http=-1;throw e;});
+          }
+          return original(...args);
+        };
+        return true;
+      })()`)
+      try{
+        await foreignDraftChrome.click("#organization-application-submit")
+        await foreignDraftChrome.wait("document.getElementById('organization-draft-status').textContent.includes('Başvuru platform incelemesine başarıyla gönderildi')")
+      }catch(error){
+        const actual=await q("select status,version from da_organization_application where id=$1",[foreignAppId])
+        const browser=await foreignDraftChrome.eval(`(()=>{
+          const note=document.getElementById('organization-draft-status')?.textContent||'';
+          const button=document.getElementById('organization-application-submit');
+          return {requestSeen:!!window.__b22SubmitTrace?.seen,
+            httpStatus:window.__b22SubmitTrace?.http??null,
+            uiState:note.includes('Başvuru sonucu belirsiz')?'uncertain':
+              note.includes('Taslak değişmiş')?'conflict':
+              note.includes('Başvuru gönderilemedi')?'failed':
+              note.includes('Başvuru platform incelemesine başarıyla gönderildi')?'success':'other',
+            buttonDisabled:!!button?.disabled};
+        })()`)
+        throw Error("B22 real corrected resubmission did not confirm: "+
+          JSON.stringify({applicationState:actual,browser})+"; "+String(error))
+      }finally{
+        await foreignDraftChrome.eval(`(()=>{
+          const t=window.__b22SubmitTrace;
+          if(t){window.fetch=t.original;delete window.__b22SubmitTrace;}
+          return true;
+        })()`)
+      }
+      assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
+        [{status:"submitted",version:6}])
+      // Withdraw the resubmitted application through its actual submitted-row
+      // action; document versions must remain after the withdrawal.
+      await foreignDraftChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&p.textContent.includes('Başvuru gönderildi'))")
+      await foreignDraftChrome.eval(`(()=>{
+        const row=Array.from(document.querySelectorAll('#organization-draft-list p'))
+          .find(p=>p.textContent.includes('Foreign Duplicate Company')&&p.textContent.includes('Başvuru gönderildi'));
+        const button=Array.from(row?.querySelectorAll('button')||[])
+          .find(b=>b.textContent==='Başvuruyu geri çek');
+        if(!button)throw Error('Missing submitted withdrawal action');
+        button.click();return true;
+      })()`)
+
+      await foreignDraftChrome.wait("document.getElementById('organization-draft-status').textContent.includes('geri çekildi')")
+      const withdrawn=await q("select status,version from da_organization_application where id=$1",[foreignAppId])
+      assert.deepEqual(withdrawn,[{status:"withdrawn",version:7}])
+      assert.equal(Number((await q("select count(*)::int n from da_organization_application_document where application_id=$1",[foreignAppId]))[0].n),2,"Withdraw must retain both private tax certificate revisions")
+      const withdrawOutbox=await q("select x.id from da_audit_event a join da_security_outbox x on x.audit_event_id=a.id where a.target_id=$1 and a.action='organization.application_withdrawn'",[foreignAppId])
+      assert.equal(withdrawOutbox.length,1,"Withdraw requires one durable outboxed audit")
+      // CodeQL #25 (original line 7503): use CDP value arguments rather than
+      // building executable JavaScript from the withdrawn application ID.
+      const deniedAfterWithdraw=await reviewChrome.callFunction(
+        `async function(applicationId){
+          const s=await (await fetch('/personal/session')).json();
+          const r=await fetch('/personal/organization-applications',{
+            method:'POST',
+            headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+            body:JSON.stringify({
+              action:'review_decision',application_id:applicationId,
+              expected_version:7,decision:'approve'
+            })
+          });
+          return r.status;
+        }`,
+        foreignAppId)
+      assert.equal(deniedAfterWithdraw,409,"Staff may not approve an applicant-withdrawn application")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: corrected tax certificate resubmission required new upload; two versions retained; withdrawn approval denied\n")
+
+      const orgsCountBefore = Number((await q("select count(*)::int n from da_organization"))[0].n)
+      const membsCountBefore = Number((await q("select count(*)::int n from da_organization_membership"))[0].n)
+
+      // Two concurrent, identical authorized approval requests must not create
+      // two Organizations or two protected Owners. The loser gets stale-version
+      // 409; no direct DB write, user impersonation or privileged shortcut.
+      const approveRace = await reviewChrome.eval(`(async()=>{`+
+        `const s=await (await fetch('/personal/session')).json();`+
+        `const body=JSON.stringify({action:'review_decision',`+
+          `application_id:${JSON.stringify(b22TaxAppId)},`+
+          `expected_version:3,decision:'approve',`+
+          `notes:'Vergi levhası doğrulandı, kuruluş onaylandı.'});`+
+        `const responses=await Promise.all([0,1].map(()=>fetch('/personal/organization-applications',{`+
+          `method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},body})));`+
+        `return Promise.all(responses.map(async r=>({status:r.status,body:await r.json()})));`+
+      `})()`)
+      assert.deepEqual(approveRace.map((r:any)=>r.status).sort((a:number,b:number)=>a-b),[200,409],
+        "Two concurrent review approvals must have exactly one winner")
+      const approveRes=approveRace.find((r:any)=>r.status===200)
+      assert.ok(approveRes)
+      assert.equal(approveRes.status, 200)
+      assert.equal(approveRes.body.status, "approved")
+      const approvedOrgId = approveRes.body.organization_id
+      assert.ok(approvedOrgId, "Approval must return created organization_id")
+
+      const orgRow = (await q("select id,name,tax_identifier,status from da_organization where id=$1",[approvedOrgId]))[0]
+      assert.equal(orgRow.name, "B22 Vergi Levhası Test Şirketi")
+      assert.equal(orgRow.tax_identifier, b22TaxId)
+      assert.equal(orgRow.status, "active")
+
+      const membRow = (await q("select person_id,role,status,protected_owner from da_organization_membership where organization_id=$1",[approvedOrgId]))[0]
+      assert.equal(membRow.person_id, signupPerson)
+      assert.equal(membRow.role, "owner")
+      assert.equal(membRow.protected_owner, true)
+
+      const reviewAudits = await q("select action,target_id from da_audit_event where target_id=$1 or target_id=$2", [b22TaxAppId, approvedOrgId])
+      assert.ok(reviewAudits.some((a:any)=>a.action==="organization.application_approved"))
+      assert.ok(reviewAudits.some((a:any)=>a.action==="organization.provisioned"))
+      assert.equal(reviewAudits.filter((a:any)=>a.action==="organization.application_approved").length,1,
+        "Only the winning approval can write the application approval audit")
+      assert.equal(reviewAudits.filter((a:any)=>a.action==="organization.provisioned").length,1,
+        "Only one canonical Organization provisioning audit")
+      const persistedApprovalOutbox=await q(
+        "select count(*)::int n from da_security_outbox x join da_audit_event a on a.id=x.audit_event_id where a.target_id=$1 and a.action='organization.application_approved'",
+        [b22TaxAppId])
+      assert.equal(Number(persistedApprovalOutbox[0].n),1,"One durable approval outbox event")
+      const applicantOrganization=await signupChrome.eval("(async()=>{const r=await fetch('/personal/organizations');return {status:r.status,body:await r.json()}})()")
+      assert.equal(applicantOrganization.status,200)
+      assert.ok(applicantOrganization.body.organizations.some((o:any)=>o.id===approvedOrgId&&o.role==="owner"),
+        "Applicant must see their newly approved Organization as Owner in actual browser session")
+      const foreignOrganization=await foreignDraftChrome.eval("(async()=>{const r=await fetch('/personal/organizations');return {status:r.status,body:await r.json()}})()")
+      assert.equal(foreignOrganization.status,200)
+      assert.equal(foreignOrganization.body.organizations.some((o:any)=>o.id===approvedOrgId),false,
+        "A foreign Person cannot see the newly approved Organization")
+
+      assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n), orgsCountBefore + 1)
+
+      assert.equal(Number((await q("select count(*)::int n from da_organization_membership"))[0].n), membsCountBefore + 1)
+
+      // One canonical Person may apply for a SECOND, individual commercial
+      // business without becoming a second Person or acquiring foreign rights.
+      // Exercise two private PNG versions and actual review/owner provisioning.
+      const individualAppId="daorgapp_"+randomBytes(16).toString("hex")
+      const individualTaxId="12345678901" // isolated synthetic 11-digit identity
+      const onePixelPng="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC"
+      const individualFlow=await signupChrome.eval(`(async()=>{
+        const csrf=(await (await fetch('/personal/session')).json()).csrf_token;
+        const send=async body=>{
+          const r=await fetch('/personal/organization-applications',{method:'POST',
+            headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify(body)});
+          return {status:r.status,body:await r.json()};
+        };
+        const app=${JSON.stringify(individualAppId)};
+        const created=await send({application_id:app,expected_version:0,
+          business_kind:'individual_business',legal_name:'B22 Sahis Isletmesi',
+          tax_identifier:${JSON.stringify(individualTaxId)},
+          landline_phone:'+90 212 555 13 57',
+          declared_activities:['service_repair'],primary_activity:'service_repair'});
+        const upload1=await send({action:'upload_document',application_id:app,
+          expected_version:1,filename:'levha.png',file_base64:${JSON.stringify(onePixelPng)}});
+        const upload2=await send({action:'upload_document',application_id:app,
+          expected_version:2,filename:'levha.png',file_base64:${JSON.stringify(onePixelPng)}});
+        const submitted=await send({action:'submit',application_id:app,expected_version:3});
+        return {created,upload1,upload2,submitted};
+      })()`)
+      assert.deepEqual(
+        [individualFlow.created.status,individualFlow.upload1.status,
+         individualFlow.upload2.status,individualFlow.submitted.status],
+        [201,200,200,200],
+        "Individual commercial business must save, replace private document and submit"
+      )
+      assert.equal(individualFlow.submitted.body.status,"submitted")
+      assert.equal(individualFlow.submitted.body.version,4)
+      assert.equal(individualFlow.upload2.body.document.mime_type,"image/png")
+      assert.equal(individualFlow.upload2.body.document.version,2)
+      const documentHistory=await q(
+        "select version,is_current,storage_key from da_organization_application_document where application_id=$1 order by version",
+        [individualAppId])
+      assert.deepEqual(documentHistory.map((d:any)=>[Number(d.version),d.is_current]),
+        [[1,false],[2,true]],"Both tax certificate revisions must remain durable")
+      assert.notEqual(documentHistory[0].storage_key,documentHistory[1].storage_key)
+      for(const doc of documentHistory)
+        assert.ok(readFileSync(join(taxDir,doc.storage_key)).length>8,
+          "Each historical private document file must still exist")
+      const individualBefore=Number((await q("select count(*)::int n from da_organization"))[0].n)
+      const individualDecision=await reviewChrome.eval(`(async()=>{
+        const csrf=(await (await fetch('/personal/session')).json()).csrf_token;
+        const r=await fetch('/personal/organization-applications',{method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':csrf},
+          body:JSON.stringify({action:'review_decision',
+            application_id:${JSON.stringify(individualAppId)},expected_version:4,decision:'approve'})});
+        return {status:r.status,body:await r.json()};
+      })()`)
+      assert.equal(individualDecision.status,200)
+      assert.equal(individualDecision.body.status,"approved")
+      const individualOrg=individualDecision.body.organization_id
+      assert.ok(individualOrg&&individualOrg!==approvedOrgId)
+      const individualOrgRow=await q("select name,tax_identifier,status from da_organization where id=$1",[individualOrg])
+      assert.deepEqual(individualOrgRow,[{name:"B22 Sahis Isletmesi",tax_identifier:individualTaxId,status:"active"}])
+      const individualOwner=await q(
+        "select person_id,role,status,protected_owner from da_organization_membership where organization_id=$1",
+        [individualOrg])
+      assert.deepEqual(individualOwner,[{
+        person_id:signupPerson,role:"owner",status:"active",protected_owner:true
+      }])
+      assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+        individualBefore+1,"Individual business must add exactly one Organization")
+      const individualApprovalAudit=await q(
+        "select a.id from da_audit_event a join da_security_outbox o on o.audit_event_id=a.id where a.target_id=$1 and a.action='organization.application_approved'",
+        [individualAppId])
+      assert.equal(individualApprovalAudit.length,1,"Independent individual approval must persist one audit/outbox")
+      const applicantTwoOrganizations=await signupChrome.eval(
+        "(async()=>{const r=await fetch('/personal/organizations');return {status:r.status,body:await r.json()}})()")
+      assert.equal(applicantTwoOrganizations.status,200)
+      for(const id of [approvedOrgId,individualOrg])
+        assert.ok(applicantTwoOrganizations.body.organizations.some((o:any)=>o.id===id&&o.role==="owner"),
+          "One Person must see both independently approved businesses")
+      const foreignSecondOrganization=await foreignDraftChrome.eval(
+        "(async()=>{const r=await fetch('/personal/organizations');return {status:r.status,body:await r.json()}})()")
+      assert.equal(foreignSecondOrganization.status,200)
+      assert.equal(foreignSecondOrganization.body.organizations.some((o:any)=>o.id===individualOrg),false)
+      // Adding a second approved Organization changes the canonical scope.
+      // The real UI intentionally conceals stale private views on the observer
+      // mismatch; the Person must reload and pass live session/authority checks
+      // before the newly approved application becomes visible again.
+      await signupChrome.send("Page.reload",{ignoreCache:true})
+      await signupChrome.wait("!document.getElementById('workspace').hidden")
+      await signupChrome.click("#organization-draft-refresh")
+      await signupChrome.wait(
+        "Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('B22 Sahis Isletmesi')&&p.textContent.includes('Başvuru onaylandı'))")
+
+      // Approved drag-and-drop path: Chrome DOM drop event + actual visible
+      // upload click, using the existing private HTTP/PG16 document service.
+      // A drop alone must not write anything, and a withdrawn draft retains it.
+      const dragApplicationId="daorgapp_"+randomBytes(16).toString("hex")
+      const dragDraft=await signupChrome.eval(`(async()=>{
+        const s=await (await fetch('/personal/session')).json();
+        const r=await fetch('/personal/organization-applications',{
+          method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+          body:JSON.stringify({
+            application_id:${JSON.stringify(dragApplicationId)},expected_version:0,
+            business_kind:'individual_business',legal_name:'B22 Drag Drop Fixture',
+            landline_phone:'+90 212 555 23 89',
+            declared_activities:['service_repair'],primary_activity:'service_repair'
+          })
+        });return {status:r.status,body:await r.json()};
+      })()`)
+      assert.equal(dragDraft.status,201)
+      assert.equal(dragDraft.body.version,1)
+      const dragOrgCount=Number((await q("select count(*)::int n from da_organization"))[0].n)
+      await signupChrome.click("#organization-draft-refresh")
+      await signupChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('B22 Drag Drop Fixture'))")
+      assert.equal(await signupChrome.eval(`(()=>{
+        const row=Array.from(document.querySelectorAll('#organization-draft-list p'))
+          .find(p=>p.textContent.includes('B22 Drag Drop Fixture'));
+        const edit=Array.from(row?.querySelectorAll('button')||[])
+          .find(b=>b.textContent.includes('Taslağı düzenle'));
+        if(!edit)return false;
+        edit.click();return true;
+      })()`),true)
+      await signupChrome.wait("!document.getElementById('organization-document-section').hidden")
+      const badDrop=await signupChrome.eval(`(()=>{
+        const transfer=new DataTransfer();
+        for(const name of ['one.png','two.png'])
+          transfer.items.add(new File([new Uint8Array([1])],name,{type:'image/png'}));
+        const zone=document.getElementById('organization-document-dropzone');
+        const accepted=!zone.dispatchEvent(new DragEvent('drop',
+          {bubbles:true,cancelable:true,dataTransfer:transfer}));
+        return {accepted,message:document.getElementById('organization-document-status').textContent};
+      })()`)
+      assert.deepEqual(badDrop,{
+        accepted:true,message:'Lütfen aynı anda yalnız bir belge bırakın.'
+      },"Multiple dropped files must not be silently accepted")
+      const goodDrop=await signupChrome.eval(`(()=>{
+        const bytes=Uint8Array.from(atob(${JSON.stringify(onePixelPng)}),c=>c.charCodeAt(0));
+        const transfer=new DataTransfer();
+        transfer.items.add(new File([bytes],'levha.png',{type:'image/png'}));
+        const zone=document.getElementById('organization-document-dropzone');
+        const accepted=!zone.dispatchEvent(new DragEvent('drop',
+          {bubbles:true,cancelable:true,dataTransfer:transfer}));
+        return {accepted,selected:document.getElementById('organization-document-status')
+          .textContent.includes('Dosya seçildi: levha.png.'),
+          submitHidden:document.getElementById('organization-application-submit').hidden};
+      })()`)
+      assert.deepEqual(goodDrop,{accepted:true,selected:true,submitHidden:true})
+      assert.equal(Number((await q(
+        "select count(*)::int n from da_organization_application_document where application_id=$1",
+        [dragApplicationId]))[0].n),0,"A dropped file alone must not start a document write")
+      await signupChrome.click("#organization-document-upload")
+      await signupChrome.wait("document.getElementById('organization-document-status').textContent.includes('başarıyla yüklendi')")
+      const dragDocument=await q(`select version,mime_type,original_byte_length,original_sha256
+        from da_organization_application_document where application_id=$1 and is_current=true`,
+        [dragApplicationId])
+      assert.equal(dragDocument.length,1)
+      assert.equal(Number(dragDocument[0].version),1)
+      assert.equal(dragDocument[0].mime_type,'image/png')
+      assert.equal(Number(dragDocument[0].original_byte_length),Buffer.from(onePixelPng,'base64').length)
+      assert.equal(dragDocument[0].original_sha256,
+        createHash('sha256').update(Buffer.from(onePixelPng,'base64')).digest('hex'))
+      const dragWithdrawal=await signupChrome.eval(`(async()=>{
+        const s=await (await fetch('/personal/session')).json();
+        const r=await fetch('/personal/organization-applications',{
+          method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+          body:JSON.stringify({action:'withdraw',application_id:${JSON.stringify(dragApplicationId)},
+            expected_version:2})
+        });return {status:r.status,body:await r.json()};
+      })()`)
+      assert.equal(dragWithdrawal.status,200)
+      assert.equal(dragWithdrawal.body.status,'withdrawn')
+      assert.equal((await q("select status from da_organization_application where id=$1",
+        [dragApplicationId]))[0].status,'withdrawn')
+      assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),dragOrgCount,
+        "Uploading and withdrawing a private draft must not provision an Organization")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: PNG drag drop requires visible upload, private hash persisted, multi-drop denied, withdrawn without Organization\n")
+
+      // Read-only verification against every persisted private revision.
+      // No cleanup, no paths/keys/Person data in the audit output.
+      const inventory=await inspectTaxCertificateSnapshot(pg,taxDir)
+      assert.ok(inventory.referenced>=4,"Both original and replaced private document revisions must exist")
+      assert.deepEqual(inventory,{
+        referenced:inventory.referenced,intact:inventory.referenced,
+        missingOrCorrupted:0,unreferenced:0,unexpectedEntries:0
+      },"Read-only PostgreSQL transaction and private disk must reconcile all revisions")
+      // Run the real Medusa CLI entry function with a fresh SQL client while
+      // the B22 sentinel guarantees a task-owned disposable DB and private dir.
+      await taxCertificateInventory({container} as any)
+
+      // The review API already pages by 100. Verify the actual staff UI can
+      // traverse page two on disposable PostgreSQL, not just fetch page one.
+      const reviewOverflowIds=Array.from({length:101},()=>
+        "daorgapp_"+randomBytes(16).toString("hex"))
+      // Exactly one of 101 queue rows is created, scanned and submitted through
+      // a real applicant browser. The other 100 are disposable pagination rows.
+      const documentedReviewId=reviewOverflowIds[1]
+      const paginationOnlyIds=reviewOverflowIds.filter(id=>id!==documentedReviewId)
+      try{
+        await q(`insert into da_organization_application
+          (id,applicant_person_id,business_kind,legal_name,landline_phone,
+           tax_identifier,declared_activities,primary_activity,status,version,updated_at)
+          select x.id,$2,'legal_company',
+            'B22 Pagination Fixture '||x.ordinality::text,$3,
+            lpad(x.ordinality::text,10,'0'),jsonb_build_array('service_repair'),
+            'service_repair','submitted',1,
+            clock_timestamp()-(x.ordinality*interval '1 second')
+          from unnest($1::text[]) with ordinality as x(id,ordinality)`,
+          [paginationOnlyIds,signupPerson,draftLandline])
+        const documentedCreate=await signupChrome.callFunction(
+          `async function(id){
+            const s=await (await fetch('/personal/session')).json();
+            const r=await fetch('/personal/organization-applications',{
+              method:'POST',
+              headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+              body:JSON.stringify({application_id:id,expected_version:0,
+                business_kind:'legal_company',legal_name:'B22 Pagination Document Fixture',
+                landline_phone:'+90 212 555 00 00',tax_identifier:'1087654321',
+                declared_activities:['service_repair'],primary_activity:'service_repair'})
+            });
+            return {status:r.status,body:await r.json()};
+          }`,documentedReviewId)
+        assert.equal(documentedCreate.status,201)
+        assert.equal(documentedCreate.body.version,1)
+        const documentedUpload=await signupChrome.callFunction(
+          `async function(id,png){
+            const s=await (await fetch('/personal/session')).json();
+            const r=await fetch('/personal/organization-applications',{
+              method:'POST',
+              headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+              body:JSON.stringify({action:'upload_document',application_id:id,
+                expected_version:1,filename:'pagination-certificate.png',file_base64:png})
+            });
+            return {status:r.status,body:await r.json()};
+          }`,documentedReviewId,onePixelPng)
+        assert.equal(documentedUpload.status,200)
+        assert.equal(documentedUpload.body.version,2)
+        await signupChrome.click('#organization-draft-refresh')
+        await signupChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('B22 Pagination Document Fixture'))")
+        await signupChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-draft-list p')).find(p=>p.textContent.includes('B22 Pagination Document Fixture'));const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='Taslağı düzenle');if(!button)throw Error('Documented draft edit missing');button.click();return true})()")
+        await signupChrome.click('#organization-draft-form input[name=legal_name]')
+        await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').select()")
+        await signupChrome.send('Input.insertText',{text:'B22 Pagination Edited Document'})
+        await signupChrome.click('#organization-draft-form button[type=submit]')
+        await signupChrome.wait("document.getElementById('organization-draft-status').textContent.includes('Yüklü vergi levhası korundu')")
+        const persistedDocumentUi=await signupChrome.eval("({info:document.getElementById('organization-document-info').textContent,submitHidden:document.getElementById('organization-application-submit').hidden})")
+        assert.match(persistedDocumentUi.info,/Yüklü vergi levhası: v1/)
+        assert.equal(persistedDocumentUi.submitHidden,false,
+          'Changing only application details must preserve submit with existing scanned document')
+        assert.deepEqual(await q('select status,version from da_organization_application where id=$1',[documentedReviewId]),
+          [{status:'draft',version:3}])
+        assert.equal(Number((await q('select count(*)::int n from da_organization_application_document where application_id=$1',[documentedReviewId]))[0].n),1,
+          'Details-only edit must not re-upload or replace the document')
+        await signupChrome.click('#organization-application-submit')
+        await signupChrome.wait("document.getElementById('organization-draft-status').textContent.includes('Başvuru platform incelemesine başarıyla gönderildi')")
+        assert.deepEqual(await q('select status,version from da_organization_application where id=$1',[documentedReviewId]),
+          [{status:'submitted',version:4}])
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: details-only edit preserves scanned document, submit UI and one private revision\\n")
+        const firstReviewPage=await reviewChrome.eval(`(async()=>{
+          const r=await fetch('/personal/organization-applications?action=review_queue');
+          const body=await r.json();
+          return {status:r.status,count:body.applications?.length,more:!!body.next_cursor};
+        })()`)
+        assert.deepEqual(firstReviewPage,{status:200,count:100,more:true},
+          "Authorized reviewer must get a real bounded first page and cursor")
+        const unauthorizedReview=await signupChrome.eval(`(async()=>{
+          const r=await fetch('/personal/organization-applications?action=review_queue');
+          return r.status;
+        })()`)
+        assert.equal(unauthorizedReview,403,
+          "Applicant cannot read the platform-wide submitted queue")
+        await reviewChrome.send("Page.reload",{ignoreCache:true})
+        await reviewChrome.wait("!document.getElementById('workspace').hidden")
+        await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()")
+        await reviewChrome.wait("!document.getElementById('organization-review-more').hidden")
+        assert.equal(await reviewChrome.eval(
+          "document.querySelectorAll('#organization-review-list p').length"),100)
+        await reviewChrome.click("#organization-review-more")
+        await reviewChrome.wait(
+          "document.querySelectorAll('#organization-review-list p').length===101")
+        const secondPageUi=await reviewChrome.eval(`(()=>({
+          count:document.querySelectorAll('#organization-review-list p').length,
+          moreHidden:document.getElementById('organization-review-more').hidden,
+          unique:new Set(Array.from(document.querySelectorAll('#organization-review-list p')).map(
+            p=>p.textContent)).size
+        }))()`)
+        assert.deepEqual(secondPageUi,{count:101,moreHidden:true,unique:101},
+          "Real Chrome must append exactly 1 remaining distinct submitted application")
+        // A document row on the first page must stay interactive after page 2
+        // loads. The request sequence protects HTTP responses, not live rows.
+        await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.includes('B22 Pagination Edited Document'));const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='Belgeyi Güvenli Önizle');if(!button)throw Error('Missing page-1 safe preview');button.click();return true})()")
+        await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.includes('B22 Pagination Edited Document')&&p.querySelector('img')?.naturalWidth>0)")
+        const previewAfterMore=await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.includes('B22 Pagination Edited Document'));const image=row?.querySelector('img');const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='İşletmeyi Onayla');return {imageVisible:!!image&&!image.hidden,approveReady:!!button&&!button.disabled&&!button.hidden};})()")
+        assert.deepEqual(previewAfterMore,{imageVisible:true,approveReady:true},
+          'Page-1 scanned preview and gated approval must work after appending page 2')
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: page-1 safe document preview still works after page-2 pagination\\n")
+
+        // Real authorized staff button starts review, never provisions an Org.
+        // Use only an isolated task-owned application and no protected data.
+        const stagedId=reviewOverflowIds[0]
+        // Do not alter the first applicant's session or source-owned
+        // registration proof acceptance later in this journey. Use the
+        // already authenticated SECOND applicant and a disposable row.
+        await q("update da_organization_application set applicant_person_id=$1 where id=$2",
+          [foreignPersonId,stagedId])
+        const organizationCountBeforeReview=Number((await q(
+          "select count(*)::int n from da_organization"))[0].n)
+        const clickReview=await reviewChrome.eval(
+          "(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p'))"+
+          ".find(p=>p.textContent.startsWith('B22 Pagination Fixture 1 ('));"+
+          "const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='İncelemeye Al');"+
+          "if(!button)throw Error('Missing staff in-review action');button.click();return true})()")
+        assert.equal(clickReview,true)
+        await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.startsWith('B22 Pagination Fixture 1 (')&&p.textContent.includes('İncelemede'))")
+        assert.deepEqual(await q(
+          "select status,version from da_organization_application where id=$1",[stagedId]),
+          [{status:"in_review",version:2}])
+        const inReviewAudit=await q(
+          "select count(*)::int n from da_audit_event where action='organization.application_in_review' and target_id=$1",
+          [stagedId])
+        assert.equal(Number(inReviewAudit[0].n),1,"Review start must be auditable exactly once")
+        assert.equal(Number((await q("select count(*)::int n from da_organization"))[0].n),
+          organizationCountBeforeReview,"Starting review must not create a business")
+
+        const applicantStage=await foreignDraftChrome.eval(
+          "(async()=>{const r=await fetch('/personal/organization-applications');"+
+          "const body=await r.json();return {status:r.status,items:body.drafts||[]}})()")
+        assert.equal(applicantStage.status,200)
+        assert.ok(applicantStage.items.some((x:any)=>x.id===stagedId&&x.status==="in_review"),
+          "Applicant must see only their own current in-review application")
+
+        const replayReview=await reviewChrome.eval(
+          "(async()=>{const s=await(await fetch('/personal/session')).json();"+
+          "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+          "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+          "body:JSON.stringify({action:'review_decision',application_id:"+JSON.stringify(stagedId)+
+          ",expected_version:2,decision:'start_review'})});return r.status})()")
+        assert.equal(replayReview,409,"Already in review cannot be started twice")
+        const foreignReview=await foreignDraftChrome.eval(
+          "(async()=>{const s=await(await fetch('/personal/session')).json();"+
+          "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+          "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+          "body:JSON.stringify({action:'review_decision',application_id:"+JSON.stringify(stagedId)+
+          ",expected_version:2,decision:'reject',notes:'not authorized'})});return r.status})()")
+        assert.equal(foreignReview,403,"Applicant cannot issue platform review decisions")
+        const ownerWithdraw=await foreignDraftChrome.eval(
+          "(async()=>{const s=await(await fetch('/personal/session')).json();"+
+          "const r=await fetch('/personal/organization-applications',{method:'POST',"+
+          "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+          "body:JSON.stringify({action:'withdraw',application_id:"+JSON.stringify(stagedId)+
+          ",expected_version:2})});return {status:r.status,body:await r.json()}})()")
+        assert.equal(ownerWithdraw.status,200,"Applicant can withdraw an undecided in-review application")
+        assert.equal(ownerWithdraw.body.status,"withdrawn")
+        assert.deepEqual(await q(
+          "select status,version from da_organization_application where id=$1",[stagedId]),
+          [{status:"withdrawn",version:3}])
+        // The old staff row is still connected, but the applicant has
+        // withdrawn. A real reviewer reject click must show a visible 409
+        // rather than silently swallowing an unhandled rejected promise.
+        const staleReviewIndex=await reviewChrome.eval(
+          "Array.from(document.querySelectorAll('#organization-review-list p')).findIndex(p=>p.textContent.startsWith('B22 Pagination Fixture 1 ('))")
+        assert.ok(staleReviewIndex>=0)
+        await reviewChrome.input('#organization-review-list p:nth-child('+
+          (staleReviewIndex+1)+') input','Synthetic stale decision note')
+        await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.startsWith('B22 Pagination Fixture 1 ('));const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='Reddet');if(!button)throw Error('Missing staff reject');button.click();return true})()")
+        await reviewChrome.wait("document.getElementById('organization-review-status').textContent.includes('Başvuru başka işlemle değişti')")
+        assert.deepEqual(await q(
+          "select status,version from da_organization_application where id=$1",[stagedId]),
+          [{status:"withdrawn",version:3}])
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: stale staff reject HTTP409 shows visible conflict and never overwrites withdrawn application\\n")
+        const documentedWithdraw=await signupChrome.callFunction(
+          `async function(id){
+            const s=await (await fetch('/personal/session')).json();
+            const r=await fetch('/personal/organization-applications',{
+              method:'POST',
+              headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+              body:JSON.stringify({action:'withdraw',application_id:id,expected_version:4})
+            });
+            return {status:r.status,body:await r.json()};
+          }`,documentedReviewId)
+        assert.equal(documentedWithdraw.status,200)
+        assert.equal(documentedWithdraw.body.status,'withdrawn')
+        assert.equal(Number((await q('select count(*)::int n from da_organization_application_document where application_id=$1',[documentedReviewId]))[0].n),1)
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: staff starts in_review, applicant sees stage and withdraws; forged and replayed decisions denied, audit preserved\n")
+
+        await reviewChrome.eval("window.dispatchEvent(new Event('pagehide'))")
+        assert.equal(await reviewChrome.eval(
+          "document.getElementById('organization-review-list').textContent"),"",
+          "Private queue must clear on pagehide after second page")
+        assert.equal(await reviewChrome.eval(
+          "document.getElementById('organization-review-more').hidden"),true)
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: reviewer 101 submitted queue pages, unauthorized denied, stale view cleared\n")
+      }finally{
+        await q("delete from da_organization_application where id=any($1::text[])",
+          [paginationOnlyIds])
+      }
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied\n")
+    } finally {
+      await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
+    }
+
+    process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner\n")
+
+
+    // The earlier primary Customer browser is deliberately untouched by the
+    // independent review-status acceptance above.
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
     assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
       "Primary Customer cannot offer an unlink button")
@@ -7552,6 +9028,8 @@ export default async function({container}:any){
     else process.env.DOGRUADRES_TLS_KEY=previousTlsKey
     if(previousListenerPort===undefined)delete process.env.DOGRUADRES_FRONTDOOR_PORT
     else process.env.DOGRUADRES_FRONTDOOR_PORT=previousListenerPort
+    if(previousTaxDir===undefined)delete process.env.DOGRUADRES_TAX_CERTIFICATE_DIR
+    else process.env.DOGRUADRES_TAX_CERTIFICATE_DIR=previousTaxDir
     if(app)await app.close()
     await pg.end()
     rmSync(temp,{recursive:true,force:true})

@@ -100,6 +100,20 @@ export class B06Chrome {
   }
   send(method:string,params:object={}):Promise<any>{return new Promise((resolve,reject)=>{const id=++this.id,timer=setTimeout(()=>{this.pending.delete(id);reject(Error('CDP timeout '+method))},20000);this.pending.set(id,{resolve,reject,timer,method});this.ws!.send(JSON.stringify({id,method,params}))})}
   async eval(expression:string){const r=await this.send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});assert.ok(!r.exceptionDetails,'Browser evaluation failed');return r.result?.value}
+  // Pass test inputs as CDP values, never splice data into executable JS.
+  // This keeps the real Chrome session, cookies, CSRF and HTTP behavior.
+  async callFunction(functionDeclaration:string,...values:string[]){
+    const target=await this.send('Runtime.evaluate',{expression:'globalThis'});
+    assert.ok(!target.exceptionDetails&&target.result?.objectId,'Browser global object unavailable');
+    const r=await this.send('Runtime.callFunctionOn',{
+      objectId:target.result.objectId,
+      functionDeclaration,
+      arguments:values.map(value=>({value})),
+      returnByValue:true,awaitPromise:true
+    });
+    assert.ok(!r.exceptionDetails,'Browser function call failed');
+    return r.result?.value;
+  }
   async wait(expression:string){await until(async()=>await this.eval(expression)===true,20000,'B06 '+this.phase)}
   async click(selector:string){const p=await this.eval(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return null;e.scrollIntoView();const r=e.getBoundingClientRect();return r.width&&r.height?{x:r.x+r.width/2,y:r.y+r.height/2}:null})()`);assert.ok(p,'Visible control '+selector);for(const type of ['mousePressed','mouseReleased'])await this.send('Input.dispatchMouseEvent',{type,...p,button:'left',clickCount:1})}
   async input(selector:string,value:string){await this.click(selector);await this.send('Input.insertText',{text:value})}

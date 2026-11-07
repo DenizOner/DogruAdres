@@ -276,12 +276,34 @@ async function run(){
             cwd:process.cwd(),env,encoding:"utf8",timeout:file.includes('b22-audit-worker.exec.ts')?360000:210000,maxBuffer:3*1024*1024})
           if(task.B22_SMTP_CANARY)assert.ok(!String(child.stdout??"").concat(String(child.stderr??"")).includes(task.B22_SMTP_CANARY),"SMTP canary leaked to child logs")
           const valid=String(child.stdout??"").split("\n")
-            .filter(x=>/^PASS B22 Chrome:|^PASS B22 real PG16: post-primary-proof forced audit failure|^PASS B22 native organization\.read role policy:|^PASS B22 Owner role policy:|^PASS B22 protected Owner mutation negatives:|^PASS B22 protected Owner management:|^PASS B22 explicit permission:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^PASS B22 native Cart TTL units:|^PASS B22 native Mercur product workflow:|^PASS B22 Mercur 2\.4 Store regions:|^PASS B22 native Store BuyerOrg group PriceList capability:|^PASS B22 BuyerOrg native private TRY reference:|^PASS B22 Buyer catalogue:|^PASS B22 native TRY Offer list price:|^PASS B22 audited Store price group:|^PASS B22 Store price group F-01\/F-02:|^PASS B22 suspended Seller Organization:|^PASS B22 audit worker:|^PASS B22 real audit relay:|^PASS B22 audit real ACK:|^PASS B22 audit natural lease:|^PASS B22 audit native scheduler and crash restart:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x) ||
+            .filter(x=>/^PASS B22 Chrome:|^PASS B22 real PG16: post-primary-proof forced audit failure|^PASS B22 native organization\.read role policy:|^PASS B22 Owner role policy:|^PASS B22 protected Owner mutation negatives:|^PASS B22 protected Owner management:|^PASS B22 explicit permission:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^PASS B22 native Cart TTL units:|^PASS B22 native Mercur product workflow:|^PASS B22 Mercur 2\.4 Store regions:|^PASS B22 native Store BuyerOrg group PriceList capability:|^PASS B22 BuyerOrg native private TRY reference:|^PASS B22 Buyer catalogue:|^PASS B22 native TRY Offer list price:|^PASS B22 audited Store price group:|^PASS B22 Store price group F-01\/F-02:|^PASS B22 suspended Seller Organization:|^PASS B22 audit worker:|^PASS B22 real audit relay:|^PASS B22 audit real ACK:|^PASS B22 audit natural lease:|^PASS B22 audit native scheduler and crash restart:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^PASS B22 Chrome\/HTTP\/PG16: 10 MiB tax cert upload,|^PASS B22 Chrome\/HTTP\/PG16: staff unscanned document denied,|^PASS B22 Chrome\/HTTP\/PG16: corrected tax certificate|^PASS B22 Chrome\/HTTP\/PG16: PNG drag drop requires visible upload,|^PASS B22 Chrome\/HTTP\/PG16: reviewer 101 submitted queue pages,|^PASS B22 Chrome\/HTTP\/PG16: individual business PNG two retained versions,|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x) ||
+              x==="PASS B22 Owner member-permission policy: protected Owner grant/list 200 despite legacy setting; revoke 200 with audit/outbox" ||
+              x==="PASS B22 Chrome/HTTP/PG16: scanned PNG preview loaded and reviewer approval UI gated" ||
+              x==="PASS B22 Chrome/HTTP/PG16: full two-page PDF preview, approval disabled until final page scrolled" ||
+              x==="PASS B22 Chrome/HTTP/PG16: staff starts in_review, applicant sees stage and withdraws; forged and replayed decisions denied, audit preserved" ||
+              x==="PASS B22 Chrome/HTTP/PG16: changed signature triggers genuine re-scan; unchanged reuse; damaged PNG regenerated" ||
               x==="PASS B22 PG16: duplicate activity direct SQL 23514; original private draft unchanged" ||
               x==="PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner").join("\n")
-          if(child.error||child.status!==0)
+          if(child.error||child.status!==0){
+            // The long B22 child can legitimately fail at the still-blocked
+            // tax-document approval. Do not bury *completed* earlier native
+            // Member/Store browser checks in the 2500-char error tail.
+            // Output ONLY these hardcoded proof lines, not arbitrary child
+            // stdout, HTTP payloads, credentials, DOM or test fixture IDs.
+            const scoped=valid.split("\n").filter(x=>[
+              "PASS B22 Chrome: protected Owner excluded from individual products.edit; forged grant/revoke HTTP403, PG16 grant/audit unchanged",
+              "PASS B22 Chrome: no new Organization Admin assignment; Owner HTTP400, membership/audit unchanged",
+              "PASS B22 Chrome: retired company Admin invitation Owner HTTP400; no invitation or audit write",
+              "PASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit",
+              "PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged",
+              "PASS B22 Chrome: denied native Member/Store UI stays visible without product submit; verified association enables product form",
+              "PASS B22 Chrome: revoked products.edit prevents native Store connection via Owner HTTP; SellerMember and canonical audit unchanged",
+              "PASS B22 Chrome/HTTP/PG16: corrected tax certificate resubmission required new upload; two versions retained; withdrawn approval denied",
+            ].includes(x))
+            if(scoped.length)process.stdout.write(scoped.join("\n")+"\n")
             throw Error("B22 dedicated task-only child stage failed: "+sanitized(
               String(child.error??"exit "+child.status)+"\n"+String(child.stderr??"")+"\n"+String(child.stdout??"")))
+          }
           process.stdout.write(valid+"\n")
           return valid
         }
@@ -294,6 +316,23 @@ async function run(){
           assert.ok(result.includes("PASS B22 Chrome: native Admin SMTP same-origin MFA/grant GET200"))
           return
         }
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner"),
+          "Missing real Chrome/HTTP/PG16 tax certificate application, independent reviewer decision and protected Owner acceptance")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome/HTTP/PG16: staff unscanned document denied, applicant original retained, foreign denied"),
+          "Missing real HTTPS authorization boundary for unscanned staff document denial")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome/HTTP/PG16: corrected tax certificate resubmission required new upload; two versions retained; withdrawn approval denied"),
+          "Missing real Chrome/PG16 correction and preserved revision acceptance")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome/HTTP/PG16: PNG drag drop requires visible upload, private hash persisted, multi-drop denied, withdrawn without Organization"),
+          "Missing real Chrome drag/drop file selection, intentional upload, private PG16 SHA persistence and withdrawal without Organization")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome/HTTP/PG16: reviewer 101 submitted queue pages, unauthorized denied, stale view cleared"),
+          "Missing real PG16 101 submitted-application reviewer pagination, forbidden applicant and stale-view privacy checks")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied"),
+          "Missing real Chrome/HTTP/PG16 individual business two retained private document versions and independent protected Owner acceptance")
         assert.ok(result.split("\n").some(line=>line.startsWith(
           "PASS B22 Chrome: first Person signup HTTPS/PG16, mandatory mobile400, native Customer to one Person")),
           "Missing real Chrome/PG16 successful first Person signup evidence")
@@ -334,6 +373,18 @@ async function run(){
           "Missing actual role-only Owner 403 and zero-side-effect Chrome/PG16 acceptance")
         assert.ok(result.includes("PASS B22 Chrome: real MFA and dual-proof Member link with two Organization scopes"))
         assert.ok(result.includes("PASS B22 native Mercur product workflow: draft persisted, only selected Seller linked"))
+        assert.ok(result.split("\n").includes("PASS B22 Chrome: protected Owner excluded from individual products.edit; forged grant/revoke HTTP403, PG16 grant/audit unchanged"),
+          "Missing real Chrome/PG16 immutable Owner personal grant/revoke denial with zero DB side effects")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome: no new Organization Admin assignment; Owner HTTP400, membership/audit unchanged"),
+          "Missing real Owner browser/HTTP rejection of retired company Admin role")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome: retired company Admin invitation Owner HTTP400; no invitation or audit write"),
+          "Missing real Owner refusal of retired Admin invitation with no audit or invitation mutation")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit"),
+          "Missing real Chrome/PG16 refusal of unauthorized, foreign and forged native member connection")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged"),
+          "Missing real Owner UI→Mercur SellerMember persisted link, audited outcome and idempotent replay")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome: revoked products.edit prevents native Store connection via Owner HTTP; SellerMember and canonical audit unchanged"),
+          "Missing real revoked-grant refusal for existing native SellerMember and unchanged canonical audit")
         assert.ok(result.split("\n").includes("PASS B22 Buyer catalogue: real Chrome HTTPS and PG16 two published Mercur Offers under approved Buyer Org, foreign and forged scopes 403/400, no private inventory leakage and no audit writes"),
           "Missing real Chrome HTTPS/PG16 Buyer catalogue discovery, Store/Org denials and no-write evidence")
         assert.ok(result.split("\n").includes("PASS B22 Store price group F-01/F-02: suspended/de-approved Seller and suspended Buyer GET403; real first-party Member unlink between native HTTP scope and Foundation write denies grant403, zero group/audit mutation"),
@@ -360,20 +411,22 @@ async function run(){
           "Missing real pending invitation, denied role-only Owner and authorized protected Owner revoke/PG16 audit evidence")
         assert.ok(result.includes("PASS B22 explicit permission: protected Owner reads 200; role-only Admin private reads, role edit and invitation create 403; no PG16 writes"),
           "Missing protected Owner positive and role-only Admin private read/write 403 no-side-effect evidence")
-        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed invitation.manage denies Owner HTTPS list/create/revoke and Foundation writes with unchanged PG16 invitation/audit/outbox; restored Owner revokes"),
+        assert.ok(result.split("\n").includes("PASS B22 Owner member-permission policy: protected Owner grant/list 200 despite legacy setting; revoke 200 with audit/outbox"),
+          "Missing protected Owner member grant/list/revoke and audit after disabled legacy policy narrowing")
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: fixed invitation.manage keeps Owner HTTPS list200; protected Owner revokes with audit/outbox"),
           "Missing invitation.manage denied and restored real Chrome/PG16 marker")
-        assert.ok(result.split("\n").includes("PASS B22 native organization.read role policy: real PG16 protected Owner default/restored allow, centrally narrowed deny without private response; active Admin/Member unchanged, foreign and role-only Owner denied; native HTTPS ingress remains 401, zero audit/outbox mutations"),
+        assert.ok(result.split("\n").includes("PASS B22 native organization.read role policy: protected Owner remains allowed with legacy setting; Admin/Member unchanged, foreign/role-only Owner denied, native ingress401"),
           "Missing real PG16 Owner organization.read policy/role boundaries with native HTTP ingress still closed")
-        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed audit.timeline.read denies Owner HTTPS GET 403 without private audit items; Admin 403; restored Owner 200; PG16 membership/audit/outbox unchanged"),
-          "Missing real Chrome audit.timeline.read narrowed Owner and ungranted Admin 403/no data, restored Owner 200, PG16 zero write")
-        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed membership.list denies real Owner HTTPS GET 403 with no private rows or PG16 membership/audit/outbox writes; Admin 403; restored Owner 200"),
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: fixed audit.timeline.read keeps Owner HTTPS200 and Admin403; PG16 membership/audit/outbox unchanged"),
+          "Missing immutable protected Owner audit.timeline.read HTTP200, legacy Admin403 and unchanged PG16 evidence")
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: fixed membership.list keeps Owner HTTPS GET200; Admin403; PG16 data unchanged"),
           "Missing protected Owner and role-only Admin membership.list 403/private data denial, restored Owner 200 and zero-write PG16 evidence")
-        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: narrowed membership.manage denies Chrome role/revoke/protected Owner and native Foundation change; PG16 membership/audit/outbox unchanged; restored Owner role changes 200"),
+        assert.ok(result.split("\n").includes("PASS B22 Owner role policy: fixed membership.manage under legacy setting; real Owner HTTP legacy Admin reduction audited"),
           "Missing owner membership.manage role-policy HTTP/PG16 zero-write and restored positive evidence")
-        assert.ok(result.includes("PASS B22 Owner role policy: narrowed buyer.purchase denies real HTTPS and PG16 final checkout L with zero OrderGroup; default restored"),
-          "Missing real Owner role buyer.purchase narrowed-denial and restored-policy PG16/HTTP evidence")
-        assert.ok(result.includes("PASS B22 Owner role policy: narrowed products.edit denies real HTTP POST and native PG16 product/intent writes, restored default lists approved Store"),
-          "Missing real Owner role products.edit narrowed-denial/no-write and restored-policy PG16/HTTP evidence")
+        assert.ok(result.includes("PASS B22 Owner role policy: fixed buyer.purchase keeps eligible HTTPS and PG16 checkout L despite legacy setting; zero OrderGroup"),
+          "Missing protected Owner purchase HTTPS/PG16 final checkout entitlement with deprecated deployment setting")
+        assert.ok(result.includes("PASS B22 Owner role policy: fixed products.edit keeps approved Store visible via HTTP with legacy setting; no product intent write"),
+          "Missing protected Owner product edit store visibility with deprecated deployment setting")
         assert.ok(result.includes("PASS B22 real Mercur validate: real Chrome Gamma Store Buyer block denies attributed Beta Cart before OrderGroup/Order/payment writes; unblock restores L without completing Cart"),"Missing real Store block at Mercur validate evidence")
         assert.ok(result.includes("PASS B22 Chrome: authorized zero-value native Mercur split-order persisted one OrderGroup/Order and completed Cart with immutable Beta attribution; no payment or visitor checkout"),"Missing authorized native zero-value positive OrderGroup persistence evidence")
         assert.ok(result.includes("PASS B22 native payment simulation: system provider authorized before L/order; native Mercur persisted single OrderGroup/Order; only then system capture recorded; no external payment, callback or visitor checkout"),"Missing native preauthorized synthetic provider order/capture sequence evidence")
@@ -386,9 +439,9 @@ async function run(){
         assert.ok(result.includes("PASS B22 official Redis provider: independent process exit, live-lock denial, automatic TTL recovery; native Mercur Cart checkout NOT TESTED on Redis"),"Missing native Redis process exit and recovery evidence")
         assert.ok(result.includes("PASS B22 native Cart TTL units: actual PostgreSQL Cart lease bounded by 120 seconds on Mercur 2.4; checkout/payment still disabled"),"Missing native Mercur Cart lease units mismatch evidence")
         assert.ok(result.includes("PASS B22 real Mercur validate: protected Owner still authorized after self-grant revoke, but Store Buyer Organization block denies native checkout with zero OrderGroup/Order/payment; unblock restores L"),"Missing protected Owner Store-block denial and no-order/payment evidence")
-        assert.ok(result.includes("PASS B22 Chrome: real native product INSERT and protected Owner products.edit revoke serialized on PG16; committed product/audit predates revoke; next Member HTTP 403 and zero new product"),"Missing actual native-product and products.edit revoke PG16/Chrome overlap proof")
+        assert.ok(result.includes("PASS B22 Chrome: real native Member product INSERT and Owner products.edit revoke serialized on PG16; committed product/audit predates revoke; next Member HTTP 403 and zero new product"),"Missing actual native-product and products.edit revoke PG16/Chrome overlap proof")
         assert.ok(result.includes("PASS B22 Chrome: Staff grant revoke waits during real native Seller approval; HTTP200 and Seller open before revoke commit, later Staff HTTP403; authoritative origin retained"),"Missing native Staff approval × grant revoke real PG16 ordering proof")
-        assert.ok(result.includes("PASS B22 Chrome: real Mercur Seller INSERT and Owner membership revoke serialized on PG16; Seller pending plus source audit/outbox before revoke, next Owner Store POST403 and zero Seller"),"Missing real Owner membership revocation versus native Seller create PG16/Chrome overlap proof")
+        assert.ok(result.includes("PASS B22 Chrome: native Seller creation serialized before denied protected Owner removal; Seller pending, Owner remains active, no unauthorized membership audit"),"Missing serialized Seller creation and blocked Owner removal PG16/Chrome proof")
 
         // Run native Access/Index/crash test only after Chrome is finished,
         // using the same disposable database and installed Medusa modules.
