@@ -8488,7 +8488,35 @@ export default async function({container}:any){
 
     // The earlier primary Customer browser is deliberately untouched by the
     // independent review-status acceptance above.
-    await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
+    try{
+      await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
+    }catch{
+      // Diagnose the *existing* primary Customer acceptance without exposing
+      // IDs, PII, secret tokens or server internals to the public CI log.
+      // Do not pretend an empty DOM is a successful native actor binding.
+      const diagnostic=await signupChrome.eval(`(async()=>{
+        const probe=async path=>{
+          try{
+            const r=await fetch(path,{cache:'no-store'});
+            if(path!=='/personal/links')return {status:r.status};
+            const b=r.ok?await r.json():null;
+            return {status:r.status,primaryCount:Array.isArray(b?.bindings)
+              ?b.bindings.filter(x=>x.is_primary===true).length:-1};
+          }catch{return {status:0}}
+        };
+        return {
+          documentHidden:document.hidden,
+          workspaceHidden:document.getElementById('workspace')?.hidden??null,
+          loginHidden:document.getElementById('login')?.hidden??null,
+          bindingRows:document.querySelectorAll('#bindings p').length,
+          statusLoginRequired:document.getElementById('status')?.textContent.includes('Giriş gerekli')??false,
+          session:await probe('/personal/session'),
+          organizations:await probe('/personal/organizations'),
+          links:await probe('/personal/links')
+        };
+      })()`)
+      throw Error("B22 primary Customer view diagnostic (no IDs): "+JSON.stringify(diagnostic))
+    }
     assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
       "Primary Customer cannot offer an unlink button")
     const signupLinks=await signupChrome.eval(`(async()=>{
