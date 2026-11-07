@@ -134,7 +134,7 @@ describe("Audit Index version 1 validation and redaction", () => {
           .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
       }
     })
-  it("allows only protected Owner-sourced Store draft audit without private content",()=>{
+  it("indexes private Store draft saves by Owner or explicitly granted Member without content",()=>{
     const data={...source(),action:"organization.store_application_draft_saved",
       resource:"store-application-draft",target_id:"dasdraft_"+"a".repeat(32),
       previous_values:{email:"hidden@example.invalid"},
@@ -143,9 +143,26 @@ describe("Audit Index version 1 validation and redaction", () => {
     expect(envelope.target_id).toBe(data.target_id)
     expect(JSON.stringify(envelope)).not.toContain("hidden@example.invalid")
     expect(JSON.stringify(envelope)).not.toContain("private example")
-    for(const changed of [{role_context:"member"},{role_context:"platform_staff"},
+    expect(projectFoundationAuditEvent({...data,role_context:"member"}).actor.role_context).toBe("member")
+    for(const changed of [{role_context:"platform_staff"},
       {target_id:"dasdraft_invalid"},{resource:"organization"},{organization_id:"bad"}])
       expect(()=>projectFoundationAuditEvent({...data,...changed}))
+        .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+  })
+  it.each([
+    "organization.store_draft_permission_granted",
+    "organization.store_draft_permission_revoked"
+  ])("only indexes Owner Member-grant changes without private data: %s",action=>{
+    const sourceEvent={...source(),action,resource:"store-draft-permission",
+      target_id:"daprs_target",new_values:{name:"private-name",email:"secret@example.invalid"}}
+    const projected=projectFoundationAuditEvent(sourceEvent)
+    expect(projected.action).toBe(action)
+    expect(projected.actor.role_context).toBe("owner")
+    expect(JSON.stringify(projected)).not.toContain("private-name")
+    expect(JSON.stringify(projected)).not.toContain("secret@example.invalid")
+    for(const change of [{role_context:"member"},{role_context:"admin"},
+      {organization_id:"foreign"},{target_id:"sel_wrong"},{resource:"membership"}])
+      expect(()=>projectFoundationAuditEvent({...sourceEvent,...change}))
         .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
   it.each(["root", "platform-staff", "platform_staff ", "superuser"])("still rejects unsupported role %s", role => {
