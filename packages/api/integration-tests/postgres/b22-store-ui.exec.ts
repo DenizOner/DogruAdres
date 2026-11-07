@@ -1487,7 +1487,7 @@ export default async function({container}:any){
       applicationId,ownerStoreId)
     assert.equal(blockedApproval,409)
     assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
-    assert.equal((await companyRight(true,true,"B22 stale policy switch")).status,409,
+    assert.equal((await companyRight(false,true,"B22 stale policy switch")).status,409,
       "Stale switch must be rejected while company is already disabled")
     await reviewer.click("#platform-store-policy-read")
     await reviewer.wait("document.getElementById('platform-store-policy-apply').textContent.includes('aç')")
@@ -1505,7 +1505,7 @@ export default async function({container}:any){
       [organizations[0].id])
     assert.equal(enabledEvents.length,1)
     assert.equal(enabledEvents[0].actor_person_id,B.person)
-    assert.equal((await companyRight(false,false,"B22 stale policy switch")).status,409)
+    assert.equal((await companyRight(true,false,"B22 stale policy switch")).status,409)
     await reviewer.click("#store-approval-refresh")
     await reviewer.wait("document.querySelector('#store-approval-list button')?.disabled===false")
     await browser.send("Page.bringToFront")
