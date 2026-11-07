@@ -426,13 +426,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const draftWrite=path==='organization-applications'&&options.method==='POST';
     const followWrite=path==='store-follows'&&options.method==='POST';
     const policyWrite=path==='platform/store-application-policy'&&options.method==='POST';
+    const storeApplicationWrite=path==='store-applications'&&options.method==='POST';
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite;
     let data;
     try{
       data=await r.json();
-      if((groupWrite||draftWrite||followWrite||policyWrite)&&(!data||typeof data!=='object'||Array.isArray(data)))
+      if(write&&(!data||typeof data!=='object'||Array.isArray(data)))
         throw new Error('Geçersiz yazma yanıtı');
     }catch(error){
-      if(!(groupWrite||draftWrite||followWrite||policyWrite))throw error;
+      if(!write)throw error;
       const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');
       e.uncertain=true;throw e;
     }
