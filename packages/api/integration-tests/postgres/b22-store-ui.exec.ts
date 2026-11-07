@@ -1438,7 +1438,8 @@ export default async function({container}:any){
     await reviewer.click("#platform-store-policy-read")
     await reviewer.wait("document.getElementById('platform-store-policy-status').textContent.includes('açık.')")
     assert.equal(await reviewer.eval("document.getElementById('platform-store-policy-apply').disabled"),false)
-    const companyRight=async(enabled:boolean,expected:boolean,reason:string,validCsrf=true)=>{
+    const companyRight=async(enabled:boolean,expected:boolean,reason:string,
+      validCsrf=true,organizationId=organizations[0].id)=>{
       return reviewer.callFunction(
         "async function(org,e,x,reason,valid){"+
           "const s=await(await fetch('/personal/session')).json();"+
@@ -1446,7 +1447,7 @@ export default async function({container}:any){
             "headers:{'content-type':'application/json','x-csrf-token':valid==='true'?s.csrf_token:'bad'},"+
             "body:JSON.stringify({organization_id:org,expected_enabled:x==='true',enabled:e==='true',reason})});"+
           "return {status:r.status,body:await r.json()};}",
-        organizations[0].id,String(enabled),String(expected),reason,String(validCsrf))
+        organizationId,String(enabled),String(expected),reason,String(validCsrf))
     }
     const initialCompanyState=await q("select store_application_enabled from da_organization where id=$1",
       [organizations[0].id])
@@ -5916,6 +5917,8 @@ export default async function({container}:any){
     const ownerRaceBarrier=new Client({connectionString:u.toString()})
     await ownerRaceBarrier.connect()
     let ownerBarrierHeld=false,ownerPauseFn=false,ownerPauseTrigger=false
+    let gammaPolicyFinished=false
+    let gammaPolicyPending:Promise<{value?:{status:number};error?:string}>|undefined
     try{
       const [gammaMembershipBeforeRace]=await q(
         "select status,protected_owner from da_organization_membership where id=$1",
@@ -5969,16 +5972,46 @@ export default async function({container}:any){
         "return {status:r.status,body:await r.json()}})()"
       ).then((v:any)=>{ownerRevokeFinished=true;return v},
         (e:unknown)=>{ownerRevokeFinished=true;throw e})
-      // The Owner-revoke call has been initiated while the native Seller
-      // INSERT is blocked. Existing membership row locks may serialize it;
-      // do not demand an obsolete specific pg_locks waiter or fast rejection.
-      assert.equal(ownerCreateFinished,false)
+      // This same real native Seller creation holds the legal Organization
+      // row FOR SHARE across its Foundation authorization + native Mercur
+      // create workflow. A separate platform policy POST must wait on UPDATE.
+      // No second fixture Seller or mocked transaction is introduced.
+      const gammaPolicyReason="B22 concurrent native creation policy pause"
+      gammaPolicyPending=companyRight(false,true,gammaPolicyReason,true,sellerGamma.id).then(
+        value=>{gammaPolicyFinished=true;return {value}},
+        error=>{gammaPolicyFinished=true;return {error:String(error)}})
+      await until(async()=>{
+        const [w]=await q(`select count(*)::int n from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock'
+            and query ilike '%store_application_enabled%'
+            and query ilike '%da_organization%'
+            and query ilike '%for update%'`)
+        return w.n>=1
+      },19000,"Gamma policy disable waits on real native Mercur Seller INSERT")
+      assert.equal(gammaPolicyFinished,false,
+        "Platform company pause cannot commit while native Store creation is in flight")
+      assert.equal(ownerCreateFinished,false,
+        "Native creation is genuinely in flight while company policy waits")
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [sellerGamma.id]),[{store_application_enabled:true}])
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where organization_id=$1 and action='organization.store_application_right_disabled'
+          and new_values->>'reason'=$2`,[sellerGamma.id,gammaPolicyReason]))[0].n,0,
+        "Concurrent company close must not write canonical audit before its row lock")
+      // The Owner-revoke call has also been initiated while the native Seller
+      // INSERT is blocked. A denied Owner removal must still leave this
+      // company's real Owner membership and Seller flow intact.
       const [stillOwner]=await q("select status,protected_owner from da_organization_membership where id=$1",[gammaOwnerMembership.id])
       assert.equal(stillOwner.status,"active")
       assert.equal(stillOwner.protected_owner,true)
       await ownerRaceBarrier.query("ROLLBACK")
       ownerBarrierHeld=false
-      const [submitted,revoked]=await Promise.all([ownerCreatePending,ownerRevokePending])
+      const [submitted,revoked,gammaPolicyResult]=await Promise.all([
+        ownerCreatePending,ownerRevokePending,gammaPolicyPending])
+      assert.equal(gammaPolicyResult?.value?.status,200,
+        gammaPolicyResult?.error||"Platform pause must serialize AFTER real native creation")
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [sellerGamma.id]),[{store_application_enabled:false}])
       assert.equal(revoked.status,403,
         "A second Owner cannot bypass the 10+20 guarded removal process")
       assert.equal(ownerRevokeFinished,true)
@@ -6003,9 +6036,50 @@ export default async function({container}:any){
       assert.equal((await q("select count(*)::int n from seller where email=$1",[ownerRaceEmail]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_organization_seller_ownership o join da_audit_event e on e.id=o.verification_audit_event_id join da_audit_outbox x on x.source_audit_event_id=e.id where o.organization_id=$1 and o.seller_id=$2 and o.revoked_at is null and e.action='organization.store_application_created' and e.new_values->>'application_id'=$3",[sellerGamma.id,submitted.body.seller_id,ownerRaceRequest.application_id]))[0].n,1,
         "Owner native Seller requires exactly one authoritative Org link and audit/outbox")
+      // A single authorized policy change after a real native Seller INSERT
+      // has one audit/outbox and one receipt per CURRENT protected Owner.
+      const gammaPolicyAudit=await q(`select e.id,x.id as outbox_id
+        from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.organization_id=$1 and e.action='organization.store_application_right_disabled'
+          and e.new_values->>'reason'=$2`,[sellerGamma.id,gammaPolicyReason])
+      assert.equal(gammaPolicyAudit.length,1,"Exactly one company policy audit/outbox for racing native creation")
+      const gammaOwners=await q(`select m.person_id from da_organization_membership m
+        join da_person p on p.id=m.person_id
+        where m.organization_id=$1 and m.role='owner' and m.protected_owner=true
+          and m.status='active' and m.deleted_at is null and p.disabled_at is null
+          and p.deleted_at is null order by m.person_id`,[sellerGamma.id])
+      assert.equal(gammaOwners.length,2,"Two protected Gamma Owners remain after denied Owner removal")
+      const gammaReceipts=await q(`select person_id from da_notification_receipt
+        where audit_event_id=$1 order by person_id`,[gammaPolicyAudit[0].id])
+      assert.deepEqual(gammaReceipts,gammaOwners,"Only current Gamma Owners receive the private policy notice")
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      const deniedGammaId="daapp_"+randomBytes(16).toString("hex")
+      const gammaSubmitDenied=await browser.callFunction(
+        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({organization_id:org,application_id:id,"+
+        "name:'B22 Gamma post race denied',"+
+        "email:'b22-gamma-policy-denied@example.invalid',currency_code:'try'})});"+
+        "return r.status;}",sellerGamma.id,deniedGammaId)
+      assert.equal(gammaSubmitDenied,403,
+        "After racing native creation, Gamma policy must deny subsequent Owner requests")
+      assert.equal((await q("select count(*)::int n from da_store_application where id=$1",
+        [deniedGammaId]))[0].n,0,"Policy denial must not reserve a new Seller claim")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      assert.equal((await companyRight(true,false,
+        "B22 post creation race company resume",true,sellerGamma.id)).status,200)
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [sellerGamma.id]),[{store_application_enabled:true}])
+      assert.equal((await native.listSellers({id:submitted.body.seller_id}))[0].status,
+        "pending_approval","Reopening only restores the queue; no automatic Seller approval")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: native Mercur Seller creation holds company policy SHARE lock, concurrent platform disable waits then commits, single audit/outbox and two Owner notices; later creation403; pending Seller preserved on reopen\n")
       process.stdout.write("PASS B22 Chrome: native Seller creation serialized before denied protected Owner removal; Seller pending, Owner remains active, no unauthorized membership audit\n")
     }finally{
       if(ownerBarrierHeld)await ownerRaceBarrier.query("ROLLBACK")
+      if(gammaPolicyPending)await Promise.allSettled([gammaPolicyPending])
       await ownerRaceBarrier.end()
       if(ownerPauseTrigger)await q("drop trigger if exists b22_native_seller_owner_pause_v1 on seller")
       if(ownerPauseFn)await q("drop function if exists b22_native_seller_owner_pause_v1()")
