@@ -304,7 +304,26 @@ async function run(){
               "PASS B22 Chrome/HTTP/PG16: corrected tax certificate resubmission required new upload; two versions retained; withdrawn approval denied",
             ].includes(x))
             if(scoped.length)process.stdout.write(scoped.join("\n")+"\n")
-            throw Error("B22 dedicated task-only child stage failed: "+sanitized(
+            // Diagnostics must survive a long task log without disclosing
+            // request bodies, passwords, TOTP or personal records. The prior
+            // tail-only error hid both the failing source line and ETIMEDOUT.
+            let b22SourceLine="unknown"
+            for(const line of String(child.stderr??"").concat("\n",String(child.stdout??"")).split("\n").reverse()){
+              if(!line.includes('"level":"error"')||!line.includes('"stack"'))continue
+              try{
+                const item=JSON.parse(line.slice(line.indexOf("{")))
+                const frame=Array.isArray(item.stack)?item.stack.find((f:any)=>
+                  typeof f?.fileName==="string"&&f.fileName.endsWith("/b22-store-ui.exec.ts")):null
+                if(Number.isSafeInteger(frame?.lineNumber)&&frame.lineNumber>0){
+                  b22SourceLine=String(frame.lineNumber);break
+                }
+              }catch{}
+            }
+            const childCode=(child.error as NodeJS.ErrnoException|undefined)?.code??"none"
+            const nativeStatus="exit="+String(child.status??"null")+
+              " signal="+String(child.signal??"none")+
+              " child_code="+String(childCode)+" b22_source_line="+b22SourceLine
+            throw Error("B22 dedicated task-only child stage failed ["+nativeStatus+"]: "+sanitized(
               String(child.error??"exit "+child.status)+"\n"+String(child.stderr??"")+"\n"+String(child.stdout??"")))
           }
           process.stdout.write(valid+"\n")
