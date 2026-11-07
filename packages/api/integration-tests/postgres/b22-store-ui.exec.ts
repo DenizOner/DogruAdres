@@ -8481,6 +8481,15 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner\n")
 
 
+    // After a staff-initiated review and applicant withdrawal, re-open the
+    // personal view before checking the canonical primary Customer binding.
+    // Do not skip the binding assertion or bypass an expired session.
+    const primaryBindingVisible=await signupChrome.eval(
+      "!!document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
+    if(!primaryBindingVisible){
+      await signupChrome.send("Page.reload",{ignoreCache:true})
+      await signupChrome.wait("!document.getElementById('workspace').hidden")
+    }
     await signupChrome.wait("document.querySelector('#bindings p')?.textContent.includes('Giriş hesabına bağlı müşteri kaydı')")
     assert.equal(await signupChrome.eval("document.querySelectorAll('#bindings button').length"),0,
       "Primary Customer cannot offer an unlink button")
