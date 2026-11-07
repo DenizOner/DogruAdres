@@ -1652,6 +1652,11 @@ export default async function({container}:any){
       seller_id:olderPending.id,reason:"B22 task-only older Store suspension"
     }})
     assert.equal((await native.listSellers({id:olderPending.id}))[0].status,"suspended")
+    // The other Chrome window may have taken focus while the *native*
+    // suspension workflow ran. Never bypass visibility-based privacy;
+    // restore this real reviewer tab before invoking its visible page button.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
     await reviewer.click("#store-approval-newer")
     // Both pages expose one button: only page-1 Store identity proves the
     // asynchronous page switch completed before approval.
@@ -6641,6 +6646,12 @@ export default async function({container}:any){
         const recoveryHttpBefore=browser.http.filter((row:any)=>
           row.method==="POST"&&row.path==="/personal/challenge").length
         await browser.click("#challenge button")
+        // An unrelated test Chrome tab can gain foreground during MFA
+        // recovery. Re-focus the real signed-in tab and let the shipped
+        // visibilitychange handler reload its private scope; never set
+        // document.hidden or workspace.hidden directly.
+        await browser.send("Page.bringToFront")
+        await browser.wait("document.visibilityState==='visible'")
         // Distinguish actual native recovery rejection from subsequent UI
         // rendering/session failures. Never log or return a recovery code.
         await until(async()=>browser.http.filter((row:any)=>
