@@ -1592,7 +1592,85 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   // and a direct Organization reference; only Mercur Admin approves Seller.
   @InjectTransactionManager()
   async personalStoreApplications(token:string,org:string,@MedusaContext() context:Context={}){
-    return readStoreApplications(securitySql(context.transactionManager),token,org)
+    const db=securitySql(context.transactionManager)
+    const applications=await readStoreApplications(db,token,org)
+    if(!applications)return null
+    const policy=await db.execute(`select store_application_enabled from da_organization
+      where id=? and status='active' and deleted_at is null`,[org])
+    if(policy.length!==1||typeof policy[0].store_application_enabled!=="boolean")
+      return null
+    return {applications,store_application_enabled:policy[0].store_application_enabled as boolean}
+  }
+
+  // Existing platform organization.provision staff grant is the restrictive
+  // administrator scope: owner/member, Seller and store.approve grants do not
+  // grant power to disable another company's application right.
+  @InjectTransactionManager()
+  async personalPlatformStoreApplicationRight(token:string,org:string,
+    @MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"organization.provision","platform")
+    if(!staff)return null
+    const rows=await db.execute(`select id,name,store_application_enabled
+      from da_organization where id=? and status='active' and deleted_at is null`,[org])
+    if(rows.length!==1||typeof rows[0].store_application_enabled!=="boolean")return null
+    return {organization_id:rows[0].id as string,
+      name:rows[0].name as string,
+      store_application_enabled:rows[0].store_application_enabled as boolean}
+  }
+
+  @InjectTransactionManager()
+  async personalSetStoreApplicationRight(token:string,input:{
+    organization_id:string;expected_enabled:boolean;enabled:boolean;reason:string
+  },@MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       typeof input.expected_enabled!=="boolean"||typeof input.enabled!=="boolean"||
+       input.expected_enabled===input.enabled||
+       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
+       input.reason.length<10||input.reason.length>500)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const staff=await sessions.staff(token,"organization.provision","platform")
+    if(!staff)return null
+    const grant=await db.execute(`select id from da_platform_staff_grant
+      where id=? and person_id=? and task='organization.provision' and resource='platform'
+      and revoked_at is null and (expires_at is null or expires_at>clock_timestamp())
+      for share`,[staff.grant_id,staff.person_id])
+    if(grant.length!==1)return null
+    // Serializes against active native Store creation/approval, both of which
+    // hold this same row FOR SHARE until their workflow has finished.
+    const rows=await db.execute(`select store_application_enabled
+      from da_organization where id=? and status='active' and deleted_at is null
+      for update`,[input.organization_id])
+    if(rows.length!==1||typeof rows[0].store_application_enabled!=="boolean")return null
+    const prior=rows[0].store_application_enabled as boolean
+    if(prior!==input.expected_enabled)return {status:"conflict" as const}
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:staff.person_id,actor_type:staff.actor_type,actor_id:staff.actor_id,
+      role_context:"platform_staff",organization_id:input.organization_id,
+      action:input.enabled?"organization.store_application_right_enabled":
+        "organization.store_application_right_disabled",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"organization",
+      target_id:input.organization_id,
+      previous_values:{store_application_enabled:prior},
+      new_values:{store_application_enabled:input.enabled,
+        reason:input.reason,staff_grant_id:staff.grant_id},
+      occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    const manager=context.transactionManager
+    if(!manager||typeof manager!=="object"||!("flush" in manager)||
+       typeof manager.flush!=="function")throw new Error("Foundation transaction unavailable")
+    await manager.flush()
+    const updated=await db.execute(`update da_organization
+      set store_application_enabled=?,updated_at=clock_timestamp()
+      where id=? and store_application_enabled=? returning id`,
+      [input.enabled,input.organization_id,prior])
+    if(updated.length!==1)throw new IdentityAccessDenied()
+    return {status:"updated" as const,
+      organization_id:input.organization_id,
+      store_application_enabled:input.enabled}
   }
 
   /** B22 Owner membership revoke vs native Mercur Seller creation.
@@ -1730,6 +1808,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!fresh||fresh.grant_id!==staff.grant_id)return null
     const candidate=await this.personalReviewableStoreApplications(token,target,context)
     if(!candidate||candidate.length!==1)return null
+    // The right is independent of Seller status. A disabled company may keep
+    // existing open Stores, but must not receive a new native approval.
+    const policy=await db.execute(`select store_application_enabled
+      from da_organization where id=? and status='active' and deleted_at is null
+      for share`,[candidate[0].organization_id])
+    if(policy.length!==1||policy[0].store_application_enabled!==true)return null
+    const latest=await this.personalReviewableStoreApplications(token,target,context)
+    if(!latest||latest.length!==1||latest[0].on_hold)return null
     return execute(context)
   }
 
@@ -1743,7 +1829,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
     if(!staff)return null
     const rows=await db.execute(`select a.id application_id,a.seller_id,
-        a.organization_id,d.name organization_name
+        a.organization_id,d.name organization_name,
+        d.store_application_enabled
       from da_store_application a
       join da_organization d on d.id=a.organization_id
         and d.status='active' and d.deleted_at is null
@@ -1773,11 +1860,17 @@ export default class DogruAdresAccessModuleService extends MedusaService({
          !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id) ||
          typeof r.organization_id!=="string" ||
          !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(r.organization_id) ||
-         typeof r.organization_name!=="string") ||
+         typeof r.organization_name!=="string" ||
+         typeof r.store_application_enabled!=="boolean") ||
        new Set(rows.map(r=>r.seller_id)).size!==rows.length)
       throw new IdentityAccessDenied()
-    return (target?rows:rows.slice(0,30)) as Array<{application_id:string;seller_id:string;
-      organization_id:string;organization_name:string}>
+    return (target?rows:rows.slice(0,30)).map(r=>({
+      application_id:r.application_id as string,
+      seller_id:r.seller_id as string,
+      organization_id:r.organization_id as string,
+      organization_name:r.organization_name as string,
+      on_hold:r.store_application_enabled===false
+    }))
   }
 
   // B22: legal ownership candidates are NOT a grant, and never leave this
