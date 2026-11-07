@@ -134,6 +134,20 @@ describe("Audit Index version 1 validation and redaction", () => {
           .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
       }
     })
+  it("allows only protected Owner-sourced Store draft audit without private content",()=>{
+    const data={...source(),action:"organization.store_application_draft_saved",
+      resource:"store-application-draft",target_id:"dasdraft_"+"a".repeat(32),
+      previous_values:{email:"hidden@example.invalid"},
+      new_values:{name:"private example"}}
+    const envelope=projectFoundationAuditEvent(data)
+    expect(envelope.target_id).toBe(data.target_id)
+    expect(JSON.stringify(envelope)).not.toContain("hidden@example.invalid")
+    expect(JSON.stringify(envelope)).not.toContain("private example")
+    for(const changed of [{role_context:"member"},{role_context:"platform_staff"},
+      {target_id:"dasdraft_invalid"},{resource:"organization"},{organization_id:"bad"}])
+      expect(()=>projectFoundationAuditEvent({...data,...changed}))
+        .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+  })
   it.each(["root", "platform-staff", "platform_staff ", "superuser"])("still rejects unsupported role %s", role => {
     expect(() => projectFoundationAuditEvent({ ...source(), role_context: role })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
