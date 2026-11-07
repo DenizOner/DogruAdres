@@ -1452,7 +1452,7 @@ export default async function({container}:any){
         "email:'member-forged@example.invalid',currency_code:'try'})});return r.status}",
         betaScope,forgedStoreId)
       assert.equal(forgedOfficial,403,"Member draft permission cannot submit native Seller")
-      const delegatedName="B22 delegated Store draft "+rand
+      const delegatedName="B22 delegate "+rand
       const delegatedEmail="delegated-"+rand+"@example.invalid"
       await browser.input("#store-draft-form input[name=name]",delegatedName)
       await browser.input("#store-draft-form input[name=email]",delegatedEmail)
@@ -1508,7 +1508,7 @@ export default async function({container}:any){
       assert.equal((await q(`select count(*)::int n from da_store_application where organization_id=$1`,
         [betaScope]))[0].n,0,
         "Owner grants and Member draft edits must never create native Seller")
-      process.stdout.write("PASS B22 Chrome: Owner grants and revokes private Member Store draft access; separate signed-in Member saves durable Organization draft, cannot submit/grant, revocation blocks stale GET/POST, audit/outbox/notifications retained, zero Seller\\n")
+      process.stdout.write("PASS B22 Chrome: Owner grants and revokes private Member Store draft access; separate signed-in Member saves durable Organization draft, cannot submit/grant, revocation blocks stale GET/POST, audit/outbox/notifications retained, zero Seller\n")
     }finally{
       // Restore only this synthetic legacy role fixture; no protected Owner,
       // Store, or production membership is modified by the test.
