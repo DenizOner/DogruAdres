@@ -7551,48 +7551,53 @@ export default async function({container}:any){
 
     // 9. Confidential duplicate tax-identifier check:
     const foreignAppId="daorgapp_"+randomBytes(16).toString("hex")
-    await foreignDraftChrome.eval(`(async()=>{`+
-      `const s=await (await fetch('/personal/session')).json();`+
-      `await fetch('/personal/organization-applications',{`+
-        `method:'POST',`+
-        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
-        `body:JSON.stringify({`+
-          `application_id:${JSON.stringify(foreignAppId)},`+
-          `expected_version:0,`+
-          `business_kind:'legal_company',`+
-          `legal_name:'Foreign Duplicate Company',`+
-          `landline_phone:'+90 212 555 99 99',`+
-          `tax_identifier:${JSON.stringify(b22TaxId)},`+
-          `declared_activities:['service_repair','insurance_claims'],`+
-          `primary_activity:'service_repair'`+
-        `})`+
-      `});`+
-      `await fetch('/personal/organization-applications',{`+
-        `method:'POST',`+
-        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
-        `body:JSON.stringify({`+
-          `action:'upload_document',`+
-          `application_id:${JSON.stringify(foreignAppId)},`+
-          `expected_version:1,`+
-          `filename:'tax-certificate.pdf',`+
-          `file_base64:${JSON.stringify(twoPagePdfBase64)}`+
-        `})`+
-      `});`+
-    `})()`)
-
-    const duplicateSubmitRes = await foreignDraftChrome.eval(`(async()=>{`+
-      `const s=await (await fetch('/personal/session')).json();`+
-      `const r=await fetch('/personal/organization-applications',{`+
-        `method:'POST',`+
-        `headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},`+
-        `body:JSON.stringify({`+
-          `action:'submit',`+
-          `application_id:${JSON.stringify(foreignAppId)},`+
-          `expected_version:2`+
-        `})`+
-      `});`+
-      `return {status:r.status,body:await r.json()};`+
-    `})()`)
+    // Inject fixture data as CDP values, not executable source. Keep every
+    // request inside the foreign applicant's real Chrome/HTTPS/CSRF session.
+    const foreignSetup=await foreignDraftChrome.callFunction(
+      `async function(applicationId,taxIdentifier,pdfBase64){
+        const s=await (await fetch('/personal/session')).json();
+        const headers={'content-type':'application/json','x-csrf-token':s.csrf_token};
+        const create=await fetch('/personal/organization-applications',{
+          method:'POST',headers,
+          body:JSON.stringify({
+            application_id:applicationId,
+            expected_version:0,
+            business_kind:'legal_company',
+            legal_name:'Foreign Duplicate Company',
+            landline_phone:'+90 212 555 99 99',
+            tax_identifier:taxIdentifier,
+            declared_activities:['service_repair','insurance_claims'],
+            primary_activity:'service_repair'
+          })
+        });
+        const upload=await fetch('/personal/organization-applications',{
+          method:'POST',headers,
+          body:JSON.stringify({
+            action:'upload_document',
+            application_id:applicationId,
+            expected_version:1,
+            filename:'tax-certificate.pdf',
+            file_base64:pdfBase64
+          })
+        });
+        return {createStatus:create.status,uploadStatus:upload.status};
+      }`,
+      foreignAppId,b22TaxId,twoPagePdfBase64)
+    assert.deepEqual(foreignSetup,{createStatus:200,uploadStatus:200},
+      "Foreign applicant must save draft and upload through real HTTPS")
+    const duplicateSubmitRes=await foreignDraftChrome.callFunction(
+      `async function(applicationId){
+        const s=await (await fetch('/personal/session')).json();
+        const r=await fetch('/personal/organization-applications',{
+          method:'POST',
+          headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+          body:JSON.stringify({
+            action:'submit',application_id:applicationId,expected_version:2
+          })
+        });
+        return {status:r.status,body:await r.json()};
+      }`,
+      foreignAppId)
     assert.equal(duplicateSubmitRes.status, 200)
     assert.equal(duplicateSubmitRes.body.status, "submitted")
     const app1Row=(await q("select duplicate_review_required from da_organization_application where id=$1",[b22TaxAppId]))[0]
