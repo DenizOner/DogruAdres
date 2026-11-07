@@ -7780,7 +7780,7 @@ export default async function({container}:any){
         const button=Array.from(row?.querySelectorAll('button')||[])
           .find(b=>b.textContent==='Belgeyi Güvenli Önizle');
         if(!button)throw Error('Missing reviewed document preview action');
-        button.click();return true;
+        button.click();return row.textContent.includes('Virüs taramasından geçiriliyor');
       })()`)
       assert.equal(openUnsafePreview,true)
       // Distinguish a real fail-closed image error from an HTTP/DOM stall.
@@ -7814,12 +7814,19 @@ export default async function({container}:any){
         const button=Array.from(row?.querySelectorAll('button')||[])
           .find(b=>b.textContent==='İşletmeyi Onayla');
         const image=row?.querySelector('img');
+        const label=row?.textContent||'';
         return {ready:!!button&&!button.hidden&&!button.disabled,
-          rasterVisible:!!image&&!image.hidden&&image.naturalWidth>0};
+          rasterVisible:!!image&&!image.hidden&&image.naturalWidth>0,
+          scanComplete:label.includes('Virüs taramasından geçirilmiştir'),
+          scanUnverified:label.includes('Virüs taraması doğrulanamadı')};
       })()`)
       assert.equal(approvalState.ready,scanEnabled,
         "Only a genuinely scanned and rendered preview may unlock review UI; preview must fail closed when scan or browser decode fails")
       assert.equal(approvalState.rasterVisible,scanEnabled)
+      assert.equal(approvalState.scanComplete,scanEnabled,
+        "Only a real successful safe preview may display completed antivirus scan")
+      assert.equal(approvalState.scanUnverified,!scanEnabled,
+        "Unavailable scanner or preview must display unsuccessful verification")
       if(scanEnabled)process.stdout.write("PASS B22 Chrome/HTTP/PG16: scanned PNG preview loaded and reviewer approval UI gated\n")
       if(scanEnabled){
         // Both pages must reach the actual browser from the protected, scanned
@@ -7932,11 +7939,15 @@ export default async function({container}:any){
           submitHidden:document.getElementById('organization-application-submit').hidden};
       })()`)
       assert.ok(correctionSelection.status.includes("Dosya seçildi:"))
+      assert.ok(correctionSelection.status.includes("Henüz virüs taramasından geçirilmedi"),
+        "Selecting a file must not claim successful antivirus scanning")
       assert.equal(correctionSelection.submitHidden,true)
       assert.equal(Number((await q("select count(*)::int n from da_organization_application_document where application_id=$1",[foreignAppId]))[0].n),1,
         "Selecting a file must not upload it")
       await foreignDraftChrome.click("#organization-document-upload")
       await foreignDraftChrome.wait("document.getElementById('organization-document-status').textContent.includes('başarıyla yüklendi')")
+      assert.equal(await foreignDraftChrome.eval("document.getElementById('organization-document-status').textContent.includes('Virüs taraması henüz yapılmadı')"),true,
+        "Upload completion must never claim that a ClamAV scan occurred")
       await foreignDraftChrome.wait("!document.getElementById('organization-application-submit').hidden && !document.getElementById('organization-application-submit').disabled")
       assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
         [{status:"draft",version:5}])

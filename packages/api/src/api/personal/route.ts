@@ -205,8 +205,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <button type="submit">Taslağı kaydet</button>
     </form>
     <div id="organization-document-section" hidden style="margin-top:1em;padding:1em;border:1px solid #ccc">
-      <h3>Vergi Levhası (Onaylı Belge)</h3>
-      <p>PDF, JPEG veya PNG biçiminde, en fazla 10 MiB. Belge güvenli özel alanda saklanır; başvuru gönderilmeden işletme yetkisi verilmez.</p>
+      <h3>Vergi levhası (başvuru belgesi)</h3>
+      <p>PDF, JPEG veya PNG biçiminde, en fazla 10 MiB. Belge güvenli özel alanda saklanır; başvuru gönderilmeden işletme yetkisi verilmez. Yükleme, virüs taramasının tamamlandığı anlamına gelmez; tarama yetkili inceleme sırasında yapılır.</p>
       <div id="organization-document-dropzone" role="group" aria-label="Vergi levhası dosyası bırakma alanı" style="padding:1em;border:1px dashed #777">
         <p>PDF, JPEG veya PNG dosyasını buraya sürükleyip bırakın ya da dosya seçicisini kullanın.</p>
         <label>Belge dosyası seçin
@@ -503,7 +503,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           dlBtn.onclick=()=>{
             window.open('/personal/organization-applications?action=document&application_id='+encodeURIComponent(item.id),'_blank');
           };
-          row.append(dlBtn);
+          const scanHelp=document.createElement('span');
+          scanHelp.textContent=' — Virüs taraması durumu burada doğrulanmadı; yetkili incelemede kontrol edilir.';
+          row.append(scanHelp,dlBtn);
         }
         if(['draft','correction_requested'].includes(item.status)){
           button.type='button';button.textContent=item.status==='correction_requested'?'Düzelt ve yeniden gönder':'Taslağı düzenle';
@@ -513,7 +515,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           organizationDraftId=item.id;organizationDraftVersion=item.version;
           organizationDocumentSelection=null;
           el('organization-document-file').value='';
-          el('organization-document-status').textContent='';
+          el('organization-document-status').textContent=item.has_document?
+            'Bu belge için virüs taraması durumu burada doğrulanmadı; yetkili incelemede kontrol edilecek.':
+            'Henüz belge yüklenmedi ve virüs taraması yapılmadı.';
           const form=el('organization-draft-form');
           for(const input of form.querySelectorAll('input[name=declared_activities]'))
             input.checked=item.declared_activities.includes(input.value);
@@ -617,7 +621,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         row.textContent=item.legal_name+' ('+item.business_kind+', VKN/TCKN: '+item.tax_identifier+')'+dupText+' — Durum: '+item.status;
         if(item.has_document){
           const message=document.createElement('span');
-          message.textContent=' — Vergi levhası: güvenli tarama ve inceleme hazır değil; görevli indirmesi kapalı.';
+          message.textContent=' — Vergi levhası: bu oturumda virüs taraması henüz doğrulanmadı; yalnız güvenli önizleme ile kontrol edilebilir. Ham belge indirmesi kapalı.';
           row.append(message);
         }
         const notesInput=document.createElement('input');
@@ -649,7 +653,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         // allows approval only after a fresh local malware scan and isolated
         // rasterization; this button is NOT a client-side authority grant.
         const previewNote=document.createElement('span');
-        previewNote.textContent=' — Güvenli tarama ve önizleme yapılmadı; onay kapalı.';
+        previewNote.setAttribute('role','status');
+        previewNote.setAttribute('aria-live','polite');
+        previewNote.textContent=' — Virüs taraması bu oturumda henüz yapılmadı; güvenli önizleme ve onay kapalı.';
         row.append(previewNote);
         if(item.has_document){
           const previewBtn=document.createElement('button');
@@ -685,9 +691,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             // unreadable page. Enable the UI approval only at its bottom.
             previewReady=previewBox.scrollHeight-previewBox.scrollTop-previewBox.clientHeight<=4;
             approveBtn.hidden=!previewReady;approveBtn.disabled=!previewReady;
+            // A successful preview follows ClamAV verdicts for the
+            // original and rasterized document; not a permanent guarantee.
             previewNote.textContent=previewReady?
-              ' — Güvenli görselin tamamı gösterildi; onayda tarama tekrarlanır.':
-              ' — Belgenin bütün sayfalarını görmek için görselin sonuna kaydırın.';
+              ' — Virüs taramasından geçirilmiştir: mevcut imzalarla tehdit algılanmadı. Güvenli görselin tamamı gösterildi; onayda tarama tekrarlanır.':
+              ' — Virüs taramasından geçirilmiştir: mevcut imzalarla tehdit algılanmadı. Belgenin bütün sayfalarını görmek için görselin sonuna kaydırın; onayda tarama tekrarlanır.';
           };
           previewBox.onscroll=updateCompletePreview;
           previewBtn.onclick=()=>{
@@ -695,7 +703,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             previewReady=false;approveBtn.hidden=true;approveBtn.disabled=true;
             previewBtn.disabled=true;safeImage.hidden=true;previewBox.hidden=true;
             previewBox.scrollTop=0;
-            previewNote.textContent=' — Yerel tarama ve güvenli görsel hazırlanıyor.';
+            previewNote.textContent=' — Virüs taramasından geçiriliyor; güvenli görsel hazırlanıyor.';
             safeImage.onload=()=>{
               if(!stillAuthorizedView()||!row.isConnected)return;
               safeImage.hidden=false;previewBox.hidden=false;
@@ -707,7 +715,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               previewReady=false;safeImage.hidden=true;previewBox.hidden=true;
               approveBtn.hidden=true;approveBtn.disabled=true;
               previewBtn.disabled=false;
-              previewNote.textContent=' — Tarama veya güvenli önizleme kullanılamıyor; onay kapalı.';
+              previewNote.textContent=' — Virüs taraması doğrulanamadı veya güvenli görsel açılamadı. Tarama veya güvenli önizleme kullanılamıyor; onay kapalı. Belgeyi açmayın; yeniden deneyin.';
             };
             safeImage.src='/personal/organization-applications?action=review_preview&application_id='+
               encodeURIComponent(item.id);
@@ -862,7 +870,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const id=organizationDraftId,version=organizationDraftVersion,epoch=viewEpoch;
     const mutation=++organizationDraftMutation;
     lockOrganizationDraftSelection(true);
-    el('organization-document-status').textContent='Belge yükleniyor…';
+    el('organization-document-status').textContent='Belge yükleniyor… Virüs taraması henüz yapılmıyor.';
     try{
       const reader=new FileReader();
       const base64Promise=new Promise((resolve,reject)=>{
@@ -883,7 +891,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       });
       if(mutation!==organizationDraftMutation||epoch!==viewEpoch)return;
       organizationDraftVersion=result.version;
-      el('organization-document-status').textContent='Vergi levhası başarıyla yüklendi.';
+      el('organization-document-status').textContent='Vergi levhası başarıyla yüklendi. Virüs taraması henüz yapılmadı; yetkili incelemesi sırasında kontrol edilecek.';
       el('organization-document-info').textContent='Yüklü vergi levhası: v'+result.document.version+' ('+result.document.mime_type+', '+result.document.original_byte_length+' bayt)';
       el('organization-application-submit').hidden=false;
       organizationDocumentSelection=null;
@@ -916,7 +924,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
     organizationDocumentSelection=file;
     el('organization-application-submit').hidden=true;
-    el('organization-document-status').textContent='Dosya seçildi: '+file.name+'. Yüklemek için Belgeyi yükle düğmesine basın.';
+    el('organization-document-status').textContent='Dosya seçildi: '+file.name+'. Henüz virüs taramasından geçirilmedi. Yüklemek için Belgeyi yükle düğmesine basın.';
   }
   el('organization-document-file').onchange=e=>chooseOrganizationDocument(e.currentTarget.files?.[0]);
   const taxDropzone=el('organization-document-dropzone');
