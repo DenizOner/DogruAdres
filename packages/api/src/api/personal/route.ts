@@ -1596,7 +1596,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             form.elements.namedItem('name').value=d.name;
             form.elements.namedItem('email').value=d.email;
             form.elements.namedItem('currency_code').value=d.currency_code;
-            storeDraftKey=d.id;storeDraftVersion=d.version;
+            storeDraftKey=d.id;storeDraftVersion=d.version;storeDraftEditEpoch++;
             form.querySelector('button[type=submit]').disabled=false;
             message.textContent='Taslak düzenleniyor; değişiklikler henüz kaydedilmedi.';
           };
@@ -1631,7 +1631,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   let applicationRequest=0,applicationKey='',applicationRole='';
-  let storeDraftKey='',storeDraftVersion=0;
+  let storeDraftKey='',storeDraftVersion=0,storeDraftEditEpoch=0;
   el('store-applications-refresh').onclick=()=>{
     if(currentOrg&&['owner','admin'].includes(applicationRole))
       void storeApplications(currentOrg,organizationRequest,applicationRole);
@@ -1639,7 +1639,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('store-draft-new').onclick=()=>{
     const form=el('store-draft-form');
     if(form.hidden||!currentOrg||document.hidden)return;
-    storeDraftKey='';storeDraftVersion=0;form.reset();
+    storeDraftKey='';storeDraftVersion=0;storeDraftEditEpoch++;form.reset();
     form.querySelector('button[type=submit]').disabled=false;
     el('store-application-status').textContent='Yeni bir mağaza taslağı hazırlanıyor.';
   };
@@ -1649,21 +1649,23 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!org||document.hidden||form.hidden||applicationRole!=='owner')return;
     const submit=form.querySelector('button[type=submit]');submit.disabled=true;
     if(!storeDraftKey)storeDraftKey='dasdraft_'+crypto.randomUUID().replace(/-/g,'');
-    const key=storeDraftKey,version=storeDraftVersion,fields=new FormData(form);
+    const key=storeDraftKey,version=storeDraftVersion,editEpoch=storeDraftEditEpoch,fields=new FormData(form);
     try{
       const result=await api('store-applications',{method:'POST',body:JSON.stringify({
         action:'save_draft',organization_id:org,draft_id:key,expected_version:version,
         name:String(fields.get('name')||'').trim(),email:String(fields.get('email')||'').trim(),
         currency_code:String(fields.get('currency_code')||'').toLowerCase()
       })});
-      if(request!==organizationRequest||currentOrg!==org)return;
+      if(request!==organizationRequest||currentOrg!==org||
+         storeDraftKey!==key||storeDraftEditEpoch!==editEpoch)return;
       if(result.draft_id!==key||result.status!=='draft'||result.version!==version+1)
         throw Error('Taslak kaydı doğrulanamadı');
       storeDraftVersion=result.version;submit.disabled=false;
       el('store-application-status').textContent='Taslak kaydedildi. Henüz başvuru gönderilmedi veya mağaza oluşturulmadı.';
       void storeApplications(org,request,'owner',true);
     }catch(e){
-      if(request!==organizationRequest||currentOrg!==org)return;
+      if(request!==organizationRequest||currentOrg!==org||
+         storeDraftKey!==key||storeDraftEditEpoch!==editEpoch)return;
       el('store-application-status').textContent=e.uncertain?
         'Taslak sonucu belirsiz; tekrar kaydetmeden önce kayıtları yenileyin.':
         'Taslak kaydedilemedi: '+e.message;
