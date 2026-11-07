@@ -1466,7 +1466,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(typeof form.reset==='function')form.reset();
     const submit=typeof form.querySelector==='function'?form.querySelector('button'):null;
     if(submit)submit.disabled=false;
-    applicationKey='';
+    applicationKey='';applicationRole='';
   }
   let storeApprovalRequest=0,storeApprovalPage=0;
   function clearStoreApprovals(){
@@ -1542,6 +1542,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   };
   async function storeApplications(org,request,role,keepOutcome=false){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+    // Keep the verified Organization role separate from the transient form
+    // visibility, which a platform-wide pause can legitimately hide.
+    if(['owner','admin'].includes(role))applicationRole=role;
     const sequence=++applicationRequest;
     const panel=el('store-application-panel'),list=el('store-application-list'),message=el('store-application-status');
     panel.hidden=false;
@@ -1577,10 +1580,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       message.textContent=keepOutcome?message.textContent+' Başvuru listesi şu anda yenilenemedi.':'Başvurular güvenli biçimde okunamadı.';
     }
   }
-  let applicationRequest=0,applicationKey='';
+  let applicationRequest=0,applicationKey='',applicationRole='';
   el('store-applications-refresh').onclick=()=>{
-    if(currentOrg)void storeApplications(currentOrg,organizationRequest,
-      el('store-application-form').hidden?'admin':'owner');
+    if(currentOrg&&['owner','admin'].includes(applicationRole))
+      void storeApplications(currentOrg,organizationRequest,applicationRole);
   };
   el('store-application-form').onsubmit=async event=>{
     event.preventDefault();
