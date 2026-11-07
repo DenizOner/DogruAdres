@@ -1689,6 +1689,12 @@ export default async function({container}:any){
       const holderPid=(await staffBarrier.query("select pg_backend_pid()::int pid")).rows[0].pid as number
       const revokePid=(await staffRevoker.query("select pg_backend_pid()::int pid")).rows[0].pid as number
       await staffBarrier.query("select pg_advisory_xact_lock(hashtext('b22-seller-open-pause'),hashtext($1))",[ownerStoreId])
+      // Creating the independent PG16 barrier can leave this authenticated
+      // Chrome tab in the background. Restore the real tab (never override
+      // document.hidden or workspace.hidden), then require the actual
+      // authorized Store action to be visible before dispatching its click.
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible' && !document.getElementById('workspace').hidden && !!document.querySelector('#store-approval-list button')?.getClientRects().length")
       await reviewer.click("#store-approval-list button")
       await until(async()=>{
         const [w]=await q("select count(*)::int n from pg_locks h join pg_locks w on w.locktype=h.locktype and w.database=h.database and w.classid=h.classid and w.objid=h.objid and w.objsubid=h.objsubid and w.pid<>h.pid and w.granted=false where h.locktype='advisory' and h.pid=$1 and h.granted=true",[holderPid])
