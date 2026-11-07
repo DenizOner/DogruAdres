@@ -658,7 +658,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           safeImage.alt='Güvenli taramadan geçen vergi levhasının tüm sayfaları';
           safeImage.hidden=true;
           safeImage.style.display='block';
-          safeImage.style.maxWidth='100%';
+          // Keep PDF pages at a legible width even inside a narrow two-column
+          // workspace. A scaled-to-fit tall PNG otherwise falsely appears
+          // fully viewed without scrolling through the document.
+          safeImage.style.width='600px';
+          safeImage.style.maxWidth='none';
           safeImage.style.height='auto';
           safeImage.referrerPolicy='no-referrer';
           const previewBox=document.createElement('div');
@@ -669,6 +673,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           previewBox.style.maxWidth='min(100%, 600px)';
           previewBox.style.maxHeight='950px';
           previewBox.style.overflowY='auto';
+          previewBox.style.overflowX='auto';
           previewBox.append(safeImage);
           const approveBtn=document.createElement('button');
           approveBtn.type='button';approveBtn.textContent='İşletmeyi Onayla';
