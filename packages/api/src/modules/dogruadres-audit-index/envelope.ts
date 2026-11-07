@@ -19,6 +19,7 @@ const resources = {
   "organization.store_unfollowed": "buyer-store-follow",
   "organization.store_application_right_disabled": "organization",
   "organization.store_application_right_enabled": "organization",
+  "organization.store_application_draft_saved": "store-application-draft",
 } as const
 const isCompanyPolicyAction = (action: string) =>
   action === "organization.store_application_right_disabled" ||
@@ -35,7 +36,7 @@ const schema = z.object({
     role_context: z.enum(["platform_administrator", "platform_staff", "owner", "admin", "member"]).nullable(),
   }).strict(),
   action: z.enum(Object.keys(resources) as [keyof typeof resources, ...(keyof typeof resources)[]]),
-  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow"]),
+  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow", "store-application-draft"]),
   target_id: reference,
   occurred_at: timestamp,
 }).strict()
@@ -46,6 +47,12 @@ const schema = z.object({
     (value.actor.role_context === "owner" &&
      /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
+  // Draft input is private and no native Seller exists. Only a current
+  // protected Owner may produce this scoped canonical audit action.
+  .refine(value => value.action !== "organization.store_application_draft_saved" ||
+    (value.actor.role_context === "owner" &&
+     /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^dasdraft_[0-9a-f]{32}$/.test(value.target_id)))
   // The real Staff permission is granted to the canonical Person after
   // strong authentication, regardless of which verified native actor type
   // ('user' / 'member' / 'customer') their current Person session binds.

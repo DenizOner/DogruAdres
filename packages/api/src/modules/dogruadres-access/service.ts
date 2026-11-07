@@ -30,6 +30,7 @@ import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedS
 import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
+import {readStoreDrafts,authorizedStoreDraftOwner,storeDraftPayload,type StoreDraftInput} from "./store-application-draft"
 import {
   listOrganizationDrafts,
   saveOrganizationDraft,
@@ -1599,7 +1600,61 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       where id=? and status='active' and deleted_at is null`,[org])
     if(policy.length!==1||typeof policy[0].store_application_enabled!=="boolean")
       return null
-    return {applications,store_application_enabled:policy[0].store_application_enabled as boolean}
+    const drafts=await readStoreDrafts(db,token,org)
+    return {applications,store_application_enabled:policy[0].store_application_enabled as boolean,
+      drafts:drafts?.drafts??[],has_more_drafts:drafts?.has_more_drafts??false}
+  }
+
+  /** A save is only Organization-private input. No native Seller, irreversible
+   * reservation, Store entitlement, or application submission is performed. */
+  @InjectTransactionManager()
+  async personalSaveStoreApplicationDraft(token:string,input:StoreDraftInput,
+    @MedusaContext() context:Context={}){
+    const parsed=storeDraftPayload.safeParse(input)
+    if(!parsed.success)throw new IdentityAccessDenied()
+    const value=parsed.data,db=securitySql(context.transactionManager)
+    const actor=await authorizedStoreDraftOwner(db,token,value.organization_id)
+    if(!actor)return null
+    await db.execute(`select pg_advisory_xact_lock(hashtext('b22-store-draft'),hashtext(?))`,
+      [value.draft_id])
+    const rows=await db.execute(`select organization_id,status,version
+      from da_store_application_draft where id=? for update`,[value.draft_id])
+    if(rows.length>1)throw new IdentityAccessDenied()
+    if(rows.length&&rows[0].organization_id!==value.organization_id)return null
+    if(rows.length&&rows[0].status!=="draft")return {conflict:true as const}
+    const beforeVersion=rows.length?Number(rows[0].version):0
+    if(!Number.isSafeInteger(beforeVersion)||beforeVersion!==value.expected_version)
+      return {conflict:true as const}
+    if(beforeVersion===0){
+      await db.execute(`insert into da_store_application_draft
+        (id,organization_id,created_by_person_id,updated_by_person_id,name,email,currency_code)
+        values(?,?,?,?,?,?,?)`,
+        [value.draft_id,value.organization_id,actor.person_id,actor.person_id,
+          value.name,value.email,value.currency_code])
+    }else{
+      const updated=await db.execute(`update da_store_application_draft
+        set name=?,email=?,currency_code=?,updated_by_person_id=?,
+          version=version+1,updated_at=clock_timestamp()
+        where id=? and organization_id=? and version=? and status='draft'
+        returning id`,[value.name,value.email,value.currency_code,actor.person_id,
+          value.draft_id,value.organization_id,beforeVersion])
+      if(updated.length!==1)throw new IdentityAccessDenied()
+    }
+    // Canonical audit and outbox commit atomically with the draft. Never copy
+    // name/email or free-text Store contact details to the Audit Index.
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
+      role_context:"owner",organization_id:value.organization_id,
+      action:"organization.store_application_draft_saved",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"store-application-draft",
+      target_id:value.draft_id,
+      previous_values:{version:beforeVersion},
+      new_values:{version:beforeVersion+1},
+      occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    return {conflict:false as const,draft_id:value.draft_id,status:"draft" as const,
+      version:beforeVersion+1}
   }
 
   // A dedicated platform task is required. Holding organization.provision or

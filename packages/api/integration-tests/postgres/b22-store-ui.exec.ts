@@ -1197,6 +1197,77 @@ export default async function({container}:any){
     // No extra Store-to-Organization approval or native dashboard login.
     await browser.select(organizations[0].name,"owner")
     await browser.wait("!document.getElementById('store-application-form').hidden")
+    // An Owner can create/reopen/edit a PRIVATE Organization Store draft
+    // without creating any native Seller or irreversible application claim.
+    await browser.wait("!document.getElementById('store-draft-form').hidden")
+    // B06Chrome.input inserts at caret; replace existing text via real CDP
+    // Ctrl+A key events as the user would, never direct DOM value mutation.
+    const replaceStoreDraftText=async(selector:string,value:string)=>{
+      await browser.click(selector)
+      await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:"a",code:"KeyA",
+        modifiers:2,windowsVirtualKeyCode:65})
+      await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:"a",code:"KeyA",
+        modifiers:2,windowsVirtualKeyCode:65})
+      await browser.send("Input.insertText",{text:value})
+    }
+    const draftName="B22 draft "+rand,draftEdited="B22 revised draft "+rand
+    const draftEmail="draft-"+rand+"@example.invalid"
+    await browser.input("#store-draft-form input[name=name]",draftName)
+    await browser.input("#store-draft-form input[name=email]",draftEmail)
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
+    const draftUrl="/personal/store-applications?organization_id="+encodeURIComponent(organizations[0].id)
+    const storedDrafts=await get(draftUrl)
+    assert.equal(storedDrafts.status,200)
+    assert.equal(storedDrafts.body.drafts.length,1)
+    const storeDraftId=storedDrafts.body.drafts[0].id
+    assert.match(storeDraftId,/^dasdraft_[0-9a-f]{32}$/)
+    assert.equal(storedDrafts.body.drafts[0].name,draftName)
+    assert.equal(storedDrafts.body.drafts[0].version,1)
+    assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n,0,"Saving drafts may not create a Seller claim")
+    await browser.wait("document.querySelector('#store-application-list button')?.textContent==='Taslağı düzenle'")
+    await browser.click("#store-application-list button")
+    await replaceStoreDraftText("#store-draft-form input[name=name]",draftEdited)
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
+    const editedDrafts=await get(draftUrl)
+    assert.equal(editedDrafts.body.drafts.length,1)
+    assert.equal(editedDrafts.body.drafts[0].id,storeDraftId)
+    assert.equal(editedDrafts.body.drafts[0].name,draftEdited)
+    assert.equal(editedDrafts.body.drafts[0].version,2)
+    const saveDraft=async(payload:Record<string,unknown>,validCsrf=true)=>browser.eval(`(async()=>{
+      const s=await (await fetch('/personal/session')).json()
+      const r=await fetch('/personal/store-applications',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':${validCsrf?"s.csrf_token":"'invalid'"}},
+        body:JSON.stringify(${JSON.stringify(payload)})})
+      return {status:r.status,body:await r.json()}
+    })()`)
+    const draftRequest={action:"save_draft",organization_id:organizations[0].id,
+      draft_id:storeDraftId,expected_version:1,name:"Stale draft",email:draftEmail,currency_code:"try"}
+    assert.equal((await saveDraft(draftRequest)).status,409,
+      "A stale form may not overwrite the latest Organization draft")
+    assert.equal((await saveDraft({...draftRequest,expected_version:2},false)).status,403,
+      "Native session Owner draft writes still require valid CSRF")
+    assert.equal((await saveDraft({...draftRequest,organization_id:organizations[2].id,
+      expected_version:2})).status,403,
+      "An unrelated Organization cannot read or alter another Store draft")
+    assert.equal((await get("/personal/store-applications?organization_id="+
+      encodeURIComponent(organizations[2].id))).status,403)
+    assert.deepEqual(await q(`select version,name from da_store_application_draft where id=$1`,
+      [storeDraftId]),[{version:2,name:draftEdited}],
+      "Stale and foreign writes may not change durable draft input")
+    const draftAudit=await q(`select e.action,e.target_id,x.id as outbox_id
+      from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.action='organization.store_application_draft_saved'
+        and e.target_id=$2 order by e.occurred_at`,[organizations[0].id,storeDraftId])
+    assert.equal(draftAudit.length,2)
+    assert.ok(draftAudit.every((x:any)=>x.action==="organization.store_application_draft_saved"&&
+      x.target_id===storeDraftId&&typeof x.outbox_id==="string"))
+    assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n,0,
+      "Two successful drafts and rejected retries create zero native Store applications")
+    process.stdout.write("PASS B22 Chrome: Owner Store draft saved, edited, reloaded with version and audit/outbox; stale409, CSRF403, foreign403; zero native Seller applications\n")
     const applicationName="B22 Owner application "+rand
     const applicationEmail="b22-owner-app-"+rand+"@example.invalid"
     await browser.input("#store-application-form input[name=name]",applicationName)
@@ -1522,6 +1593,157 @@ export default async function({container}:any){
     await browser.click("#store-applications-refresh")
     await browser.wait("document.getElementById('store-application-status').textContent.includes('durduruldu')")
     assert.equal(await browser.eval("document.getElementById('store-application-form').hidden"),true)
+    // Pausing new Store applications must not destroy/hide an unfinished
+    // Organization draft. Its edit is still Owner-authorized but NOT submit.
+    await browser.wait("!document.getElementById('store-draft-form').hidden")
+    await browser.wait("document.querySelector('#store-application-list button')?.textContent==='Taslağı düzenle'")
+    await browser.click("#store-application-list button")
+    const pausedDraftName="B22 paused edit "+rand
+    await replaceStoreDraftText("#store-draft-form input[name=name]",pausedDraftName)
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
+    const [pausedDraft]=await q("select name,version from da_store_application_draft where id=$1",[storeDraftId])
+    assert.deepEqual(pausedDraft,{name:pausedDraftName,version:3})
+    assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n,appCountBefore)
+    process.stdout.write("PASS B22 Chrome: paused company Store draft remains editable but native Owner submit is denied\n")
+    // The native HTTPS request for draft A commits to the disposable PG16 DB,
+    // but its browser-visible response arrives after the Owner creates draft B.
+    // Keep the authorized request real: hold only the response at window.fetch.
+    await browser.wait("!document.getElementById('store-draft-form').hidden")
+    await browser.wait("document.querySelector('#store-application-list button')?.textContent==='Taslağı düzenle'")
+    await browser.click("#store-application-list button")
+    const lateDraftName="B22 late reply "+rand
+    await replaceStoreDraftText("#store-draft-form input[name=name]",lateDraftName)
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);window.__daDraftRaceFetch=window.fetch;"+
+      "window.__daDraftRaceHeld=false;"+
+      "window.fetch=(resource,options)=>{"+
+      "const url=typeof resource==='string'?resource:resource?.url;"+
+      "if(url==='/personal/store-applications'&&options?.method==='POST'&&"+
+      "!window.__daDraftRaceHeld){"+
+      "window.__daDraftRaceHeld=true;"+
+      "return original(resource,options).then(response=>new Promise(resolve=>{"+
+      "window.__daDraftRaceRelease=()=>resolve(response)"+
+      "}))}return original(resource,options)"+
+      "};return true})()")
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("typeof window.__daDraftRaceRelease==='function'")
+    assert.deepEqual(await q("select name,version from da_store_application_draft where id=$1",
+      [storeDraftId]),[{name:lateDraftName,version:4}],
+      "The native draft A write must commit before the held browser response")
+    await browser.click("#store-draft-new")
+    const secondDraftName="B22 second draft "+rand
+    const secondDraftEmail="second-draft-"+rand+"@example.invalid"
+    await browser.input("#store-draft-form input[name=name]",secondDraftName)
+    await browser.input("#store-draft-form input[name=email]",secondDraftEmail)
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
+    const [secondDraft]=((await get(draftUrl)).body.drafts as any[]).filter(d=>d.name===secondDraftName)
+    assert.ok(secondDraft&&/^dasdraft_[0-9a-f]{32}$/.test(secondDraft.id))
+    assert.notEqual(secondDraft.id,storeDraftId)
+    assert.equal(secondDraft.version,1)
+    await browser.eval("(()=>{"+
+      "window.__daDraftRaceRelease();window.fetch=window.__daDraftRaceFetch;"+
+      "delete window.__daDraftRaceRelease;delete window.__daDraftRaceFetch;return true})()")
+    await browser.wait("!document.getElementById('store-draft-form').hidden")
+    // Reuse the same B editor after A's late reply. If A has overwritten B's
+    // version, the next real HTTPS update gets 409 instead of committing.
+    const corruptDraftName="B22 corrupt reply "+rand
+    await replaceStoreDraftText("#store-draft-form input[name=name]",corruptDraftName)
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);window.__daDraftMalformedFetch=window.fetch;"+
+      "window.__daDraftMalformedPosts=0;"+
+      "window.fetch=(resource,options)=>{"+
+      "const url=typeof resource==='string'?resource:resource?.url;"+
+      "if(url==='/personal/store-applications'&&options?.method==='POST'){"+
+      "window.__daDraftMalformedPosts++;"+
+      "return original(resource,options).then(response=>"+
+      "response.status===200?new Response('{',{status:200,"+
+      "headers:{'Content-Type':'application/json'}}):response)"+
+      "}return original(resource,options)"+
+      "};return true})()")
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("window.__daDraftMalformedPosts===1&&"+
+      "document.getElementById('store-application-status').textContent.includes('Taslak sonucu belirsiz')")
+    assert.deepEqual(await q("select name,version from da_store_application_draft where id=$1",
+      [secondDraft.id]),[{name:corruptDraftName,version:2}],
+      "A real successful B update must remain durable despite corrupted browser JSON")
+    assert.equal(await browser.eval("document.querySelector('#store-draft-form button[type=submit]').disabled"),
+      true,"Unknown HTTP outcome must prevent blind retry")
+    await browser.click("#store-draft-form button[type=submit]")
+    assert.equal(await browser.eval("window.__daDraftMalformedPosts"),1,
+      "Clicking a disabled form must never send a duplicate Store draft write")
+    await browser.eval("(()=>{window.fetch=window.__daDraftMalformedFetch;"+
+      "delete window.__daDraftMalformedFetch;return true})()")
+    await browser.click("#store-applications-refresh")
+    await browser.wait("document.getElementById('store-application-list').textContent.includes("+
+      JSON.stringify("Kaydedilmiş mağaza taslağı (gönderilmedi) — "+corruptDraftName)+")")
+    assert.equal((await q("select count(*)::int n from da_store_application_draft where organization_id=$1",
+      [organizations[0].id]))[0].n,2,
+      "Two distinct private drafts, no duplicate after ambiguous HTTP response")
+    assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n,appCountBefore,
+      "Draft race and corrupt reply must not create a native Seller application")
+    process.stdout.write("PASS B22 Chrome: delayed native A draft reply cannot corrupt new B version; B durable update with browser-only malformed 200 remains uncertain, duplicate blocked, two private drafts, no Seller created\n")
+    // A valid JSON object with a mismatched draft ID still cannot prove the
+    // result of a real committed HTTPS POST. Corrupt only the Chrome-visible
+    // response; keep the native service and PostgreSQL writes untouched.
+    await browser.wait("document.querySelector('#store-application-list button')?.closest('p')?.textContent.includes("+
+      JSON.stringify(corruptDraftName)+")")
+    await browser.click("#store-application-list button")
+    const semanticDraftEmail="semantic-draft-"+rand+"@example.invalid"
+    await replaceStoreDraftText("#store-draft-form input[name=email]",semanticDraftEmail)
+    const auditBeforeSemantic=Number((await q(
+      "select count(*)::int n from da_audit_event where target_id=$1 and action='organization.store_application_draft_saved'",
+      [secondDraft.id]))[0].n)
+    assert.equal(auditBeforeSemantic,2,
+      "Only the B draft's original create and malformed-response update exist")
+    await browser.eval("(()=>{"+
+      "const original=window.fetch.bind(window);window.__daDraftSemanticFetch=window.fetch;"+
+      "window.__daDraftSemanticPosts=0;"+
+      "window.fetch=(resource,options)=>{"+
+      "const url=typeof resource==='string'?resource:resource?.url;"+
+      "if(url==='/personal/store-applications'&&options?.method==='POST'){"+
+      "window.__daDraftSemanticPosts++;"+
+      "return original(resource,options).then(async response=>{"+
+      "if(response.status!==200)return response;"+
+      "const data=await response.clone().json();"+
+      "if(data.status!=='draft'||data.version!==3)return response;"+
+      "return new Response(JSON.stringify({...data,draft_id:'dasdraft_'+'0'.repeat(32)}),"+
+      "{status:200,headers:{'Content-Type':'application/json'}})"+
+      "})}return original(resource,options)"+
+      "};return true})()")
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("window.__daDraftSemanticPosts===1&&"+
+      "document.getElementById('store-application-status').textContent.includes('Taslak sonucu belirsiz')")
+    assert.deepEqual(await q(
+      "select name,email,version from da_store_application_draft where id=$1",
+      [secondDraft.id]),[{name:corruptDraftName,email:semanticDraftEmail,version:3}],
+      "A valid but mismatched success JSON must not undo the real DB commit")
+    assert.equal(await browser.eval("document.querySelector('#store-draft-form button[type=submit]').disabled"),
+      true,"A semantically mismatched successful reply must block blind retry")
+    await browser.click("#store-draft-form button[type=submit]")
+    assert.equal(await browser.eval("window.__daDraftSemanticPosts"),1,
+      "A failed contract check must not generate a duplicate HTTPS POST")
+    await browser.eval("(()=>{window.fetch=window.__daDraftSemanticFetch;"+
+      "delete window.__daDraftSemanticFetch;return true})()")
+    const semanticDrafts=(await get(draftUrl)).body.drafts
+    assert.equal(semanticDrafts.find((d:any)=>d.id===secondDraft.id)?.version,3,
+      "Owner's authorized read can reconcile the durable B draft version")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where target_id=$1 and action='organization.store_application_draft_saved'",
+      [secondDraft.id]))[0].n),auditBeforeSemantic+1,
+      "One committed B update must create exactly one canonical audit")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_outbox o join da_audit_event e on e.id=o.source_audit_event_id where e.target_id=$1 and e.action='organization.store_application_draft_saved'",
+      [secondDraft.id]))[0].n),auditBeforeSemantic+1,
+      "A duplicate click cannot create an extra outbox")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n),appCountBefore,
+      "A mismatched success reply must never create a native Seller application")
+    process.stdout.write("PASS B22 Chrome: native successful Store draft POST with parseable mismatched 200 JSON remains uncertain; single persistent B v3, one audit/outbox, no duplicate request or Seller application\n")
     const deniedAppId="daapp_"+randomBytes(16).toString("hex")
     const deniedWhilePaused=await browser.callFunction(
       "async function(org,id){"+

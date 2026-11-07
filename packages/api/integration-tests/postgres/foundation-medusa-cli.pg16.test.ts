@@ -348,6 +348,10 @@ async function run(){
         assert.ok(result.split("\n").includes(
           "PASS B22 Chrome/HTTP/PG16: native Mercur Seller approval holds company policy SHARE lock, concurrent platform disable waits then commits, one audit/outbox and current Owner notice; post-disable Owner application403; existing Store open; policy reopened"),
           "Missing real PG16 company policy pause vs native Mercur Seller approval lock collision, ordering, audit/outbox and private notice proof")
+        assert.ok(result.includes("PASS B22 Chrome: Owner Store draft saved, edited, reloaded with version and audit/outbox; stale409, CSRF403, foreign403; zero native Seller applications"),
+          "Missing real private Owner Store draft persistence and negative Chrome/PG16 acceptance")
+        assert.ok(result.includes("PASS B22 Chrome: paused company Store draft remains editable but native Owner submit is denied"),
+          "Missing retained editable Store draft while native submissions are paused")
         assert.ok(result.split("\n").includes(
           "PASS B22 Chrome/HTTP/PG16: platform company Store application pause/reopen, private Owner 403, CSRF 403, native pending on hold, old Store open, audit/outbox and no auto-approval"),
           "Missing real Chrome/HTTP/PG16 platform company policy pause/reopen, private authorization, pending Seller, and audit/outbox proof")
