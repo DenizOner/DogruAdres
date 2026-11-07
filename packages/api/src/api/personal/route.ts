@@ -1612,7 +1612,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('store-application-form').hidden=
         role!=='owner'||!result.store_application_enabled;
       if(!result.store_application_enabled){
-        message.textContent='Platform tarafından yeni mağaza başvuruları durduruldu. Önceki başvurular korunuyor; mevcut faal mağazalar etkilenmez.';
+        const paused='Platform tarafından yeni mağaza başvuruları durduruldu. Önceki başvurular korunuyor; mevcut faal mağazalar etkilenmez.';
+        // A draft can still be saved during a platform pause. Preserve its
+        // confirmed outcome instead of immediately overwriting it with the
+        // separate submission-disabled warning on the list refresh.
+        message.textContent=keepOutcome&&message.textContent?
+          message.textContent+' '+paused:paused;
       }else if(!keepOutcome){
         message.textContent=result.applications.length?
           'Başvurular güncellendi; mağaza onayı ayrı yürütülür.':
