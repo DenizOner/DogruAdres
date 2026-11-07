@@ -111,7 +111,7 @@ describe("B22 distinct products.edit grant (SQL mock only)",()=>{
 
 describe("B22 shared Owner action policy (pure decision, NOT live policy administration)",()=>{
   it("grants the currently approved Owner defaults only with fresh protected membership proof",()=>{
-    expect(DEFAULT_OWNER_ACTIONS).toEqual(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read","organization.read","price.group.manage","store.follow","store.application.draft.manage"]
+    expect(DEFAULT_OWNER_ACTIONS).toEqual(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read","organization.read","price.group.manage","store.follow","store.application.draft.manage"])
     expect(Object.isFrozen(DEFAULT_OWNER_ACTIONS)).toBe(true)
     for(const action of DEFAULT_OWNER_ACTIONS){
       expect(ownerRoleAllows(action)).toBe(true)
