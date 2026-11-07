@@ -1435,9 +1435,19 @@ export default async function({container}:any){
         betaAdminMembership.id)
       assert.equal(await reviewer.callFunction("async function(org,id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/personal/store-draft-permissions',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':'invalid'},body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",betaScope,betaAdminMembership.id),403,
         "A missing valid CSRF cannot issue draft permission")
+      const beforeGrantUi=await reviewer.eval("({hidden:document.hidden,workspaceHidden:document.getElementById('workspace').hidden,formReady:typeof document.getElementById('store-draft-grants-form').onsubmit==='function',buttonDisabled:document.querySelector('#store-draft-grants-form button[value=grant]').disabled})")
+      assert.deepEqual(beforeGrantUi,{hidden:false,workspaceHidden:false,formReady:true,buttonDisabled:false},
+        "Visible Owner must have an enabled, wired draft grant control")
+      await reviewer.eval("(()=>{const prior=window.fetch.bind(window);window.__daGrantProbe={starts:0,done:0,status:null};window.__daGrantPriorFetch=window.fetch;window.fetch=(resource,options)=>{const url=typeof resource==='string'?resource:resource?.url;if(url==='/personal/store-draft-permissions'&&options?.method==='POST'){window.__daGrantProbe.starts++;return prior(resource,options).then(response=>{window.__daGrantProbe.done++;window.__daGrantProbe.status=response.status;return response})}return prior(resource,options)};return true})()")
       await reviewer.click("#store-draft-grants-form button[value=grant]")
-      await reviewer.wait("(()=>{const t=document.getElementById('store-draft-grants-status').textContent;return t.includes('izin verildi')||t.includes('İzin işlemi reddedildi')||t.includes('İzin sonucu belirsiz')})()")
+      const grantProbe=await reviewer.eval("({starts:window.__daGrantProbe.starts,done:window.__daGrantProbe.done,status:window.__daGrantProbe.status})")
+      assert.equal(grantProbe.starts,1,
+        "Visible Owner grant submit must dispatch exactly one real HTTPS POST")
+      await reviewer.wait("window.__daGrantProbe.done===1")
       const grantFeedback=String(await reviewer.eval("document.getElementById('store-draft-grants-status').textContent"))
+      const grantHttpStatus=Number(await reviewer.eval("window.__daGrantProbe.status"))
+      await reviewer.eval("(()=>{window.fetch=window.__daGrantPriorFetch;delete window.__daGrantPriorFetch;delete window.__daGrantProbe;return true})()")
+      assert.equal(grantHttpStatus,200,"Native Owner grant POST status; UI="+grantFeedback)
       assert.ok(grantFeedback.includes('izin verildi'),
         "Owner draft grant outcome must be confirmed: "+grantFeedback)
       const [activeGrant]=await q(`select id,membership_id,revoked_at from da_organization_store_draft_permission
