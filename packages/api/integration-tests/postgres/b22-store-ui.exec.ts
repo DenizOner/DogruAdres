@@ -1402,6 +1402,120 @@ export default async function({container}:any){
         [e.id]))[0].n,1,
         "Staff provisioning canonical/security audit must commit together")
     }
+    // B22 approved independent company policy: an administrator can pause
+    // NEW Store requests without suspending an existing native Mercur Store.
+    // The pending Seller remains pending and must not be auto-approved on reopen.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    await reviewer.click("#staff")
+    await reviewer.wait("!document.getElementById('platform-store-policy-panel').hidden")
+    await reviewer.input("#platform-store-policy-form input[name=organization_id]",
+      organizations[0].id)
+    await reviewer.click("#platform-store-policy-read")
+    await reviewer.wait("document.getElementById('platform-store-policy-status').textContent.includes('açık.')")
+    assert.equal(await reviewer.eval("document.getElementById('platform-store-policy-apply').disabled"),false)
+    const companyRight=async(enabled:boolean,expected:boolean,reason:string,validCsrf=true)=>{
+      return reviewer.callFunction(
+        "async function(org,e,x,reason,valid){"+
+          "const s=await(await fetch('/personal/session')).json();"+
+          "const r=await fetch('/personal/platform/store-application-policy',{method:'POST',"+
+            "headers:{'content-type':'application/json','x-csrf-token':valid==='true'?s.csrf_token:'bad'},"+
+            "body:JSON.stringify({organization_id:org,expected_enabled:x==='true',enabled:e==='true',reason})});"+
+          "return {status:r.status,body:await r.json()};}",
+        organizations[0].id,String(enabled),String(expected),reason,String(validCsrf))
+    }
+    const initialCompanyState=await q("select store_application_enabled from da_organization where id=$1",
+      [organizations[0].id])
+    assert.deepEqual(initialCompanyState,[{store_application_enabled:true}])
+    assert.equal((await get("/personal/platform/store-application-policy?organization_id="+
+      encodeURIComponent(organizations[0].id))).status,403,
+      "Owner cannot read platform-only policy administration")
+    assert.equal((await companyRight(false,true,"B22 synthetic suspension",false)).status,403)
+    assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+      [organizations[0].id]),initialCompanyState,
+      "CSRF failure must not mutate policy")
+    await reviewer.input("#platform-store-policy-form input[name=reason]",
+      "B22 synthetic company application pause")
+    await reviewer.click("#platform-store-policy-apply")
+    await reviewer.wait("document.getElementById('platform-store-policy-status').textContent.includes('kapatıldı')")
+    assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+      [organizations[0].id]),[{store_application_enabled:false}])
+    const stoppedAudit=await q("select e.id,e.action,e.actor_person_id,x.id outbox_id,"+
+      "e.new_values->>'reason' reason from da_audit_event e"+
+      " join da_audit_outbox x on x.source_audit_event_id=e.id"+
+      " where e.organization_id=$1 and e.action='organization.store_application_right_disabled'",
+      [organizations[0].id])
+    assert.equal(stoppedAudit.length,1)
+    assert.equal(stoppedAudit[0].actor_person_id,B.person)
+    assert.equal(stoppedAudit[0].reason,"B22 synthetic company application pause")
+    const appCountBefore=Number((await q(
+      "select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n)
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.click("#store-applications-refresh")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('durduruldu')")
+    assert.equal(await browser.eval("document.getElementById('store-application-form').hidden"),true)
+    const deniedAppId="daapp_"+randomBytes(16).toString("hex")
+    const deniedWhilePaused=await browser.callFunction(
+      "async function(org,id){"+
+      "const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-applications',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({organization_id:org,application_id:id,name:'B22 blocked new Store',"+
+      "email:'b22-blocked-new-store@example.invalid',currency_code:'try'})});"+
+      "return r.status;}",organizations[0].id,deniedAppId)
+    assert.equal(deniedWhilePaused,403,"Active protected Owner cannot bypass platform pause")
+    assert.equal(Number((await q("select count(*)::int n from da_store_application where id=$1",
+      [deniedAppId]))[0].n),0)
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n),appCountBefore)
+    assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
+    assert.equal((await native.listSellers({id:stores[0].id}))[0].status,"open",
+      "Company application pause cannot suspend a previously approved Seller")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    await reviewer.click("#store-approval-refresh")
+    await reviewer.wait("document.getElementById('store-approval-list').textContent.includes('inceleme bekletiliyor')")
+    assert.equal(await reviewer.eval("document.querySelector('#store-approval-list button').disabled"),true)
+    const blockedApproval=await reviewer.callFunction(
+      "async function(id,seller){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({application_id:id,seller_id:seller})});return r.status;}",
+      applicationId,ownerStoreId)
+    assert.equal(blockedApproval,409)
+    assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
+    assert.equal((await companyRight(true,false,"B22 stale policy switch")).status,409,
+      "Stale switch must be rejected while company is already disabled")
+    await reviewer.click("#platform-store-policy-read")
+    await reviewer.wait("document.getElementById('platform-store-policy-apply').textContent.includes('aç')")
+    await reviewer.input("#platform-store-policy-form input[name=reason]",
+      "B22 synthetic company application reopen")
+    await reviewer.click("#platform-store-policy-apply")
+    await reviewer.wait("document.getElementById('platform-store-policy-status').textContent.includes('açıldı')")
+    assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+      [organizations[0].id]),[{store_application_enabled:true}])
+    assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval",
+      "Reopen only returns prior application to review queue, never auto-approves")
+    const enabledEvents=await q("select e.actor_person_id,x.id outbox_id from da_audit_event e"+
+      " join da_audit_outbox x on x.source_audit_event_id=e.id"+
+      " where e.organization_id=$1 and e.action='organization.store_application_right_enabled'",
+      [organizations[0].id])
+    assert.equal(enabledEvents.length,1)
+    assert.equal(enabledEvents[0].actor_person_id,B.person)
+    assert.equal((await companyRight(false,false,"B22 stale policy switch")).status,409)
+    await reviewer.click("#store-approval-refresh")
+    await reviewer.wait("document.querySelector('#store-approval-list button')?.disabled===false")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.click("#store-applications-refresh")
+    await browser.wait("!document.getElementById('store-application-form').hidden")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    process.stdout.write("PASS B22 Chrome/HTTP/PG16: platform company Store application pause/reopen, private Owner 403, CSRF 403, native pending on hold, old Store open, audit/outbox and no auto-approval\\n")
+
     await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",
       [staffOrgGrantId])
     assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform')).status)()"),403)
