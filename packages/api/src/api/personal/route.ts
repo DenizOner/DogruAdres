@@ -417,13 +417,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const groupWrite=path==='store-price-groups'&&options.method==='POST';
     const draftWrite=path==='organization-applications'&&options.method==='POST';
     const followWrite=path==='store-follows'&&options.method==='POST';
+    const policyWrite=path==='platform/store-application-policy'&&options.method==='POST';
     let data;
     try{
       data=await r.json();
-      if((groupWrite||draftWrite||followWrite)&&(!data||typeof data!=='object'||Array.isArray(data)))
+      if((groupWrite||draftWrite||followWrite||policyWrite)&&(!data||typeof data!=='object'||Array.isArray(data)))
         throw new Error('Geçersiz yazma yanıtı');
     }catch(error){
-      if(!(groupWrite||draftWrite||followWrite))throw error;
+      if(!(groupWrite||draftWrite||followWrite||policyWrite))throw error;
       const e=new Error('Sonuç belirsiz. İşlemi yeniden göndermeyin; kayıt kontrolü gerekli.');
       e.uncertain=true;throw e;
     }
@@ -3208,8 +3209,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(seq!==platformStoreRequest||epoch!==viewEpoch||
          document.hidden||el('workspace').hidden||policyInput.value.trim()!==org)return;
       if(result.status!=='updated'||result.organization_id!==org||
-         result.store_application_enabled!==!current.enabled)
-        throw Error('İşlem doğrulanamadı');
+         result.store_application_enabled!==!current.enabled){
+        const uncertain=new Error('İşlem yanıtı doğrulanamadı');
+        uncertain.uncertain=true;
+        throw uncertain;
+      }
       policyStatus.textContent='Şirketin yeni mağaza başvuru hakkı '+
         (result.store_application_enabled?'açıldı.':'kapatıldı; bekleyenler korunuyor.')+
         ' Son durum yeniden doğrulansın.';
