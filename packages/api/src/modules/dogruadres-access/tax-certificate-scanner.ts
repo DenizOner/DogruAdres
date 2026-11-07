@@ -58,7 +58,7 @@ async function command(socketPath: string, data?: Buffer): Promise<string> {
     socket.on("connect", () => {
       if (done) return
       if (!data) {
-        socket.write(Buffer.from("zVERSION\0", "ascii"))
+        socket.write(Buffer.from("zVERSIONCOMMANDS\0", "ascii"))
         return
       }
       const header = Buffer.from("zINSTREAM\0", "ascii")
@@ -84,7 +84,9 @@ async function command(socketPath: string, data?: Buffer): Promise<string> {
 /**
  * This is usable only with a trusted local Unix socket under OS ACLs.
  * The daemon's virus database date is checked for every scan; a missing,
- * stale, future-dated or disabled VERSION reply fails closed.
+ * stale, future-dated or malformed VERSIONCOMMANDS reply fails closed.
+ * VERSION may be disabled on a hardened ClamAV daemon; VERSIONCOMMANDS
+ * independently reports the loaded database timestamp and advertised commands.
  */
 export async function verifyTaxCertificateWithClamd(
   content: Buffer, configuredSocket = process.env.DOGRUADRES_CLAMD_SOCKET
@@ -96,9 +98,11 @@ export async function verifyTaxCertificateWithClamd(
       !isAbsolute(configuredSocket) || configuredSocket.includes("\0"))
     return refuse()
 
-  const version = await command(configuredSocket)
-  const match = /^ClamAV [^/\s]+\/([1-9][0-9]*)\/(.+)$/.exec(version)
-  if (!match) return refuse()
+  const metadata = await command(configuredSocket)
+  // Do not treat a disabled VERSION endpoint or a generic PONG as freshness.
+  // This response is the official, NUL-terminated VERSIONCOMMANDS format.
+  const match = /^ClamAV [^/\s]+\/([1-9][0-9]*)\/([^|\r\n]+)\| COMMANDS: ([A-Z]+(?: [A-Z]+)*)$/.exec(metadata)
+  if (!match || !match[3].split(" ").includes("INSTREAM")) return refuse()
   const updated = Date.parse(match[2])
   const age = Date.now() - updated
   if (!Number.isFinite(updated) || age < -FUTURE_SKEW_MS ||

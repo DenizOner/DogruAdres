@@ -11,7 +11,8 @@ describe("B22 local ClamAV scanner fail-closed transport", () => {
   const sample = Buffer.from("%PDF-1.7\n% synthetic scanner-only fixture\n%%EOF\n")
   async function withDaemon(
     verdict: string, date: string,
-    run: (path: string, frames: Buffer[]) => Promise<void>
+    run: (path: string, frames: Buffer[]) => Promise<void>,
+    metadataReply?: string
   ) {
     const dir = await mkdtemp(join(tmpdir(), "da-clamd-"))
     const path = join(dir, "scan.sock")
@@ -25,9 +26,11 @@ describe("B22 local ClamAV scanner fail-closed transport", () => {
       socket.on("data", bytes => {
         received = Buffer.concat([received, bytes])
         if (!mode) {
-          if (received.subarray(0, 9).toString("ascii") === "zVERSION\0") {
+          if (received.subarray(0, 17).toString("ascii") === "zVERSIONCOMMANDS\0") {
             mode = "version"
-            socket.end(Buffer.from("ClamAV 1.4.3/28001/" + date + "\0"))
+            const response = metadataReply ??
+              ("ClamAV 1.4.3/28001/" + date + "| COMMANDS: SCAN VERSIONCOMMANDS INSTREAM")
+            socket.end(Buffer.from(response + "\0"))
             return
           }
           if (received.subarray(0, 10).toString("ascii") !== "zINSTREAM\0") return
@@ -89,6 +92,23 @@ describe("B22 local ClamAV scanner fail-closed transport", () => {
           .rejects.toBeInstanceOf(TaxCertificateScannerUnavailable)
         expect(frames).toHaveLength(0)
       })
+    }
+  })
+
+
+  it("rejects unavailable, malformed or non-INSTREAM database metadata without reading document bytes", async () => {
+    const date = new Date().toUTCString()
+    for (const metadata of [
+      "COMMAND UNAVAILABLE",
+      "ClamAV 1.4.3/28001/" + date + "| COMMANDS: SCAN VERSION",
+      "ClamAV 1.4.3/28001/" + date,
+      "ClamAV 1.4.3/28001/" + date + "| COMMANDS: INSTREAM\nPONG"
+    ]) {
+      await withDaemon("stream: OK", date, async (path, frames) => {
+        await expect(verifyTaxCertificateWithClamd(sample, path))
+          .rejects.toBeInstanceOf(TaxCertificateScannerUnavailable)
+        expect(frames).toHaveLength(0)
+      }, metadata)
     }
   })
 
