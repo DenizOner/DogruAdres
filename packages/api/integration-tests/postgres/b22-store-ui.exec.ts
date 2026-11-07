@@ -1397,6 +1397,127 @@ export default async function({container}:any){
     const reviewer=new B06Chrome(host,"B");browsers.push(reviewer)
     await reviewer.start(crt)
     await reviewer.login(B.email,B.password,B.person)
+    // Store draft delegation uses a real Owner browser and a distinct
+    // real Member browser against the SAME disposable HTTPS/PG16 state.
+    // A's historical Beta Admin role is temporarily an ordinary Member in
+    // this synthetic fixture only; restore it after the narrow acceptance.
+    const betaScope=organizations[1].id
+    const [legacyBeta]=await q(`select role,protected_owner from da_organization_membership
+      where id=$1`,[betaAdminMembership.id])
+    assert.deepEqual(legacyBeta,{role:"admin",protected_owner:false})
+    const [memberFixture]=await q(`update da_organization_membership
+      set role='member',updated_at=clock_timestamp()
+      where id=$1 and role='admin' and protected_owner=false
+      returning id`,[betaAdminMembership.id])
+    assert.equal(memberFixture?.id,betaAdminMembership.id)
+    try{
+      await browser.send("Page.bringToFront")
+      await browser.select(organizations[1].name,"member")
+      assert.equal(await browser.callFunction("async function(org){return (await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org))).status}",betaScope),403,
+        "An ungranted Member cannot read another private Organization draft")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.select(organizations[1].name,"owner")
+      await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden")
+      assert.equal(await reviewer.eval("document.querySelector('#store-draft-grants-form select[name=membership_id]').value"),
+        betaAdminMembership.id)
+      assert.equal(await reviewer.callFunction("async function(org,id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/personal/store-draft-permissions',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':'invalid'},body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",betaScope,betaAdminMembership.id),403,
+        "A missing valid CSRF cannot issue draft permission")
+      await reviewer.click("#store-draft-grants-form button[value=grant]")
+      await reviewer.wait("document.getElementById('store-draft-grants-status').textContent.includes('izin verildi')")
+      const [activeGrant]=await q(`select id,membership_id,revoked_at from da_organization_store_draft_permission
+        where person_id=$1 and organization_id=$2 and revoked_at is null`,[A.person,betaScope])
+      assert.ok(activeGrant&&/^dasdpg_[A-Za-z0-9_-]+$/.test(activeGrant.id))
+      assert.equal(activeGrant.membership_id,betaAdminMembership.id)
+      assert.equal(activeGrant.revoked_at,null)
+      await browser.send("Page.bringToFront")
+      await browser.select(organizations[1].name,"member")
+      await browser.wait("!document.getElementById('store-draft-form').hidden")
+      assert.equal(await browser.eval("document.getElementById('store-application-form').hidden"),true,
+        "An authorized Member gets ONLY the draft form, never official submit")
+      assert.equal(await browser.callFunction("async function(org){return (await fetch('/personal/store-draft-permissions?organization_id='+encodeURIComponent(org))).status}",betaScope),403,
+        "A delegated Member cannot inspect Owner-only grant management")
+      const memberAttempt=await browser.callFunction(
+        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",
+        betaScope,betaAdminMembership.id)
+      assert.equal(memberAttempt,403,"A Member cannot delegate this permission")
+      const forgedStoreId="daapp_"+randomBytes(16).toString("hex")
+      const forgedOfficial=await browser.callFunction(
+        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({organization_id:org,application_id:id,name:'Forged Member Store',"+
+        "email:'member-forged@example.invalid',currency_code:'try'})});return r.status}",
+        betaScope,forgedStoreId)
+      assert.equal(forgedOfficial,403,"Member draft permission cannot submit native Seller")
+      const delegatedName="B22 delegated Store draft "+rand
+      const delegatedEmail="delegated-"+rand+"@example.invalid"
+      await browser.input("#store-draft-form input[name=name]",delegatedName)
+      await browser.input("#store-draft-form input[name=email]",delegatedEmail)
+      await browser.click("#store-draft-form button[type=submit]")
+      await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
+      const [delegatedDraft]=await q(`select id,version,created_by_person_id,
+        updated_by_person_id,name from da_store_application_draft
+        where organization_id=$1 and name=$2`,[betaScope,delegatedName])
+      assert.equal(delegatedDraft.version,1)
+      assert.equal(delegatedDraft.created_by_person_id,A.person)
+      assert.equal(delegatedDraft.updated_by_person_id,A.person)
+      assert.equal((await q(`select count(*)::int n from da_audit_event e
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.target_id=$1 and e.action='organization.store_application_draft_saved'
+          and e.role_context='member'`,[delegatedDraft.id]))[0].n,1,
+        "Exactly one auditable delegated Member draft creation")
+      const memberNotices=await browser.callFunction(
+        "async function(org){const r=await fetch('/personal/notifications?organization='+encodeURIComponent(org));"+
+        "return {status:r.status,body:await r.json()}}",betaScope)
+      assert.equal(memberNotices.status,200)
+      assert.ok(memberNotices.body.notifications.some((n:any)=>
+        n.title==='Mağaza taslağı hazırlama izni verildi'))
+      await reviewer.send("Page.bringToFront")
+      await reviewer.select(organizations[1].name,"owner")
+      await reviewer.wait("document.getElementById('store-application-list').textContent.includes("+
+        JSON.stringify(delegatedName)+")")
+      await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden")
+      await reviewer.click("#store-draft-grants-form button[value=revoke]")
+      await reviewer.wait("document.getElementById('store-draft-grants-status').textContent.includes('izin kaldırıldı')")
+      assert.equal((await q(`select count(*)::int n from da_organization_store_draft_permission
+        where id=$1 and revoked_at is not null`,[activeGrant.id]))[0].n,1)
+      await browser.send("Page.bringToFront")
+      await browser.select(organizations[1].name,"member")
+      assert.equal(await browser.callFunction(
+        "async function(org){return (await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org))).status}",betaScope),403)
+      const deniedAfterRevoke=await browser.callFunction(
+        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({action:'save_draft',organization_id:org,draft_id:id,expected_version:1,"+
+        "name:'Unauthorized edit',email:'revoke@example.invalid',currency_code:'try'})});return r.status}",
+        betaScope,delegatedDraft.id)
+      assert.equal(deniedAfterRevoke,403,"Revocation blocks stale HTTP draft writer")
+      assert.deepEqual(await q(`select name,version from da_store_application_draft where id=$1`,
+        [delegatedDraft.id]),[{name:delegatedName,version:1}],
+        "Revocation must retain unchanged Organization draft")
+      const revokedNotice=await browser.callFunction(
+        "async function(org){const r=await fetch('/personal/notifications?organization='+encodeURIComponent(org));"+
+        "return {status:r.status,body:await r.json()}}",betaScope)
+      assert.equal(revokedNotice.status,200)
+      assert.ok(revokedNotice.body.notifications.some((n:any)=>
+        n.title==='Mağaza taslağı hazırlama izni kaldırıldı'))
+      assert.equal((await q(`select count(*)::int n from da_store_application where organization_id=$1`,
+        [betaScope]))[0].n,0,
+        "Owner grants and Member draft edits must never create native Seller")
+      process.stdout.write("PASS B22 Chrome: Owner grants and revokes private Member Store draft access; separate signed-in Member saves durable Organization draft, cannot submit/grant, revocation blocks stale GET/POST, audit/outbox/notifications retained, zero Seller\\n")
+    }finally{
+      // Restore only this synthetic legacy role fixture; no protected Owner,
+      // Store, or production membership is modified by the test.
+      await q(`update da_organization_membership set role='admin',
+        updated_at=clock_timestamp() where id=$1 and role='member' and protected_owner=false`,
+        [betaAdminMembership.id])
+      await browser.send("Page.bringToFront")
+      await browser.select(organizations[0].name,"owner")
+    }
     // CR-01: a real strongly authenticated Staff browser provisions a new
     // Organization using the installed personal HTTP route and native Medusa
     // user/Person binding. Its canonical audit/outbox producer must emit the
