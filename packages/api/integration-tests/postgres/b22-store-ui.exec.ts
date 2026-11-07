@@ -1666,6 +1666,8 @@ export default async function({container}:any){
     await staffRevoker.connect()
     let sellerPauseFn=false,sellerPauseTrigger=false,staffBarrierHeld=false
     let staffRevokeDone=false
+    let companyPolicySwitchDone=false
+    let companyPolicySwitch:Promise<{value?:{status:number};error?:string}>|undefined
     const beforeStoreApprovals=reviewer.http.filter(
       (x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST").length
     try{
@@ -1697,6 +1699,38 @@ export default async function({container}:any){
         return w.n>=1
       },19000,"Real PG16 Staff grant revoke waits on approval's locked grant row")
       assert.equal(staffRevokeDone,false,"Permission revoke cannot commit before approved Store write finishes")
+      // The approved company policy must serialize against the REAL native
+      // Mercur Seller approval, not only a synthetic SELECT or a revoked grant.
+      // Seller's task-only UPDATE is still blocked by our advisory barrier;
+      // approval holds the canonical Organization row FOR SHARE in its
+      // Foundation transaction until native workflow + readback complete.
+      const policyCollisionReason="B22 concurrent native approval policy pause"
+      const beforePolicyCollision=await q(`select count(*)::int n from
+        da_audit_event where organization_id=$1 and
+        action='organization.store_application_right_disabled'
+        and new_values->>'reason'=$2`,[organizations[0].id,policyCollisionReason])
+      assert.equal(beforePolicyCollision[0].n,0)
+      companyPolicySwitch=companyRight(false,true,policyCollisionReason).then(
+        value=>{companyPolicySwitchDone=true;return {value}},
+        error=>{companyPolicySwitchDone=true;return {error:String(error)}})
+      await until(async()=>{
+        // The policy request must reach the real PostgreSQL FOR UPDATE and
+        // WAIT for the approval transaction's Organization SHARE row lock.
+        const [w]=await q(`select count(*)::int n from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock'
+            and query ilike '%store_application_enabled%'
+            and query ilike '%da_organization%'
+            and query ilike '%for update%'`)
+        return w.n>=1
+      },19000,"Policy disable waits on native Seller approval Organization lock")
+      assert.equal(companyPolicySwitchDone,false,"Company cannot close before native approval commits")
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [organizations[0].id]),[{store_application_enabled:true}],
+        "The uncommitted platform pause must not be visible to other readers")
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where organization_id=$1 and action='organization.store_application_right_disabled'
+        and new_values->>'reason'=$2`,[organizations[0].id,policyCollisionReason]))[0].n,0,
+        "No policy audit/outbox before the canonical company row lock is acquired")
       assert.equal((await q("select count(*)::int n from da_platform_staff_grant where id=$1 and revoked_at is null",[grantId]))[0].n,1)
       assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval",
         "The uncommitted native Seller UPDATE is not visible to outside readers")
@@ -1709,6 +1743,37 @@ export default async function({container}:any){
         return http.length===beforeStoreApprovals+1&&http[http.length-1].status===200&&
           rows.length===1&&rows[0].status==="open"&&!!rows[0].approved_at
       },19000,"Real Chrome Staff approval HTTP200 with committed native Seller open")
+      const blockedPolicyResult=await companyPolicySwitch
+      assert.equal(blockedPolicyResult?.value?.status,200,
+        blockedPolicyResult?.error||"Policy pause must commit only after native approval")
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [organizations[0].id]),[{store_application_enabled:false}],
+        "A committed policy pause prevents later new Store actions")
+      assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"open",
+        "Native approval committed before policy pause; existing Seller stays open")
+      const policyCollisionAudit=await q(`select e.id,x.id as outbox_id from da_audit_event e
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.organization_id=$1 and e.action='organization.store_application_right_disabled'
+          and e.new_values->>'reason'=$2`,[organizations[0].id,policyCollisionReason])
+      assert.equal(policyCollisionAudit.length,1,"Exactly one canonical pause audit/outbox after racing approval")
+      const policyCollisionReceipts=await q(`select n.person_id from da_notification_receipt n
+        where n.audit_event_id=$1`,[policyCollisionAudit[0].id])
+      assert.deepEqual(policyCollisionReceipts,[{person_id:A.person}],
+        "Only the remaining current protected Owner gets the private race notice")
+      const blockedSubsequent=await browser.callFunction(
+        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',headers:{"+
+        "'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({organization_id:org,application_id:id,"+
+        "name:'B22 concurrent pause post check',"+
+        "email:'b22-after-policy-pause@example.invalid',currency_code:'try'})});"+
+        "return r.status;}",organizations[0].id,"daapp_"+randomBytes(16).toString("hex"))
+      assert.equal(blockedSubsequent,403,
+        "New Owner submission must fail after the concurrent pause commits")
+      assert.equal((await companyRight(true,false,"B22 post race company resume")).status,200)
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [organizations[0].id]),[{store_application_enabled:true}],
+        "Restore the test-only company policy without changing Seller history")
       const revoked=await revokePending
       assert.equal(revoked.rows.length,1)
       assert.ok(revoked.rows[0].revoked_at)
@@ -1717,9 +1782,11 @@ export default async function({container}:any){
         "Current platform Staff revoke must deny all subsequent Store approvals")
       assert.equal((await q("select count(*)::int n from da_store_application where id=$1 and seller_id=$2 and status='created'",[applicationId,ownerStoreId]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_organization_seller_ownership where organization_id=$1 and seller_id=$2 and revoked_at is null",[organizations[0].id,ownerStoreId]))[0].n,1)
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: native Mercur Seller approval holds company policy SHARE lock, concurrent platform disable waits then commits, one audit/outbox and current Owner notice; post-disable Owner application403; existing Store open; policy reopened\n")
       process.stdout.write("PASS B22 Chrome: Staff grant revoke waits during real native Seller approval; HTTP200 and Seller open before revoke commit, later Staff HTTP403; authoritative origin retained\n")
     }finally{
       if(staffBarrierHeld)await staffBarrier.query("ROLLBACK")
+      if(companyPolicySwitch)await Promise.allSettled([companyPolicySwitch])
       await staffRevoker.end()
       await staffBarrier.end()
       if(sellerPauseTrigger)await q("drop trigger if exists b22_staff_native_seller_pause_v1 on seller")
