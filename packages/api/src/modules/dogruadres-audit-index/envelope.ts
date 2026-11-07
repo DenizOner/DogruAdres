@@ -17,7 +17,12 @@ const resources = {
   "organization.invitation_accepted": "invitation",
   "organization.store_followed": "buyer-store-follow",
   "organization.store_unfollowed": "buyer-store-follow",
+  "organization.store_application_right_disabled": "organization",
+  "organization.store_application_right_enabled": "organization",
 } as const
+const isCompanyPolicyAction = (action: string) =>
+  action === "organization.store_application_right_disabled" ||
+  action === "organization.store_application_right_enabled"
 const schema = z.object({
   version: z.literal(1),
   source_module: z.literal(FOUNDATION_AUDIT_SOURCE),
@@ -41,11 +46,19 @@ const schema = z.object({
     (value.actor.role_context === "owner" &&
      /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
-  // Only the two provisioning actions are emitted by the canonical Staff
-  // producer. A valid role alone must not make a different action authentic.
+  // Platform company-policy events must be sourced from an authenticated
+  // Staff user and address the exact legal Organization, never another target.
+  .refine(value => !isCompanyPolicyAction(value.action) ||
+    (value.actor.role_context === "platform_staff" &&
+     value.actor.type === "user" &&
+     /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     value.target_id === value.organization_id))
+  // Only explicitly registered canonical Staff actions may cross the Index
+  // boundary. A valid Staff role alone does not authorize arbitrary events.
   .refine(value => value.actor.role_context !== "platform_staff" ||
     value.action === "organization.provisioned" ||
-    value.action === "organization.owner_assigned")
+    value.action === "organization.owner_assigned" ||
+    isCompanyPolicyAction(value.action))
 
 export type AuditIndexEnvelopeV1 = z.infer<typeof schema>
 export function validateAuditIndexEnvelope(value: unknown): AuditIndexEnvelopeV1 {

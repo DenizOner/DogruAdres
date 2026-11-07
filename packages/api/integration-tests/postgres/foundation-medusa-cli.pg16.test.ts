@@ -465,6 +465,8 @@ async function run(){
           "Missing native worker crash/Index/ACK/replay evidence")
         assert.ok(audit.includes("PASS B22 real audit relay: native Owner Store follow/unfollow delivered by Medusa worker to Buyer-only Audit Index, two matching envelopes and durable ACKs"),
           "Missing real indexed Store-follow audit delivery and ACK")
+        assert.ok(audit.includes("PASS B22 real audit relay: platform company policy disable/reopen delivered by native Medusa Access/Index, redacted envelopes, durable ACKs and scoped timeline"),
+          "Missing real Access/Index receipt, redaction and Organization timeline delivery for platform policy changes")
         for(const proof of ["PASS B22 audit real ACK: committed receipt lost,",
           "PASS B22 audit natural lease: DB clock 60s,",
           "PASS B22 audit native scheduler and crash restart: true Medusa cron,"])
