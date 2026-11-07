@@ -1660,8 +1660,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       })});
       if(request!==organizationRequest||currentOrg!==org||
          storeDraftKey!==key||storeDraftEditEpoch!==editEpoch)return;
-      if(result.draft_id!==key||result.status!=='draft'||result.version!==version+1)
-        throw Error('Taslak kaydı doğrulanamadı');
+      if(result.draft_id!==key||result.status!=='draft'||result.version!==version+1){
+        const e=new Error('Taslak kaydı doğrulanamadı; önce kayıtları yenileyin.');
+        e.uncertain=true;throw e;
+      }
       storeDraftVersion=result.version;submit.disabled=false;
       el('store-application-status').textContent='Taslak kaydedildi. Henüz başvuru gönderilmedi veya mağaza oluşturulmadı.';
       void storeApplications(org,request,'owner',true);
