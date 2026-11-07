@@ -25,7 +25,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     const candidates=await service.personalReviewableStoreApplications(token,undefined,{},page)
     if(!candidates)return res.status(403).json({message:"Access denied"})
     const native=req.scope.resolve<{listSellers(filter:object):Promise<any[]>}>("seller")
-    const pending:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string}>=[]
+    const pending:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string;on_hold:boolean}>=[]
     for(const item of candidates){
       const sellers=await native.listSellers({id:item.seller_id})
       if(sellers.length!==1||sellers[0].id!==item.seller_id)continue
@@ -56,6 +56,8 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   try{
     const check=await svc.personalReviewableStoreApplications(token,parsed.data)
     if(!check||check.length!==1)return res.status(403).json({message:"Access denied"})
+    if(check[0].on_hold)
+      return res.status(409).json({message:"Company Store applications are on hold"})
     const native=req.scope.resolve<{listSellers(filter:object):Promise<any[]>}>("seller")
     const before=await native.listSellers({id:parsed.data.seller_id})
     if(before.length!==1||before[0].id!==parsed.data.seller_id||
@@ -69,6 +71,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
       token,parsed.data,async(context:Context)=>{
         const fresh=await svc.personalReviewableStoreApplications(token,parsed.data,context)
         if(!fresh||fresh.length!==1)return "denied" as const
+        if(fresh[0].on_hold)return "conflict" as const
         const pending=await native.listSellers({id:parsed.data.seller_id})
         if(pending.length!==1||pending[0].id!==parsed.data.seller_id||
            pending[0].status!=="pending_approval"||pending[0].approved_at)
