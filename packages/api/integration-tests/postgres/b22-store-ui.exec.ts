@@ -1677,8 +1677,8 @@ export default async function({container}:any){
     await browser.eval("(()=>{window.fetch=window.__daDraftMalformedFetch;"+
       "delete window.__daDraftMalformedFetch;return true})()")
     await browser.click("#store-applications-refresh")
-    await browser.wait("document.getElementById('store-application-list').textContent.includes('"+
-      "Kaydedilmiş mağaza taslağı (gönderilmedi) — '+\u0020"+JSON.stringify(corruptDraftName)+")")
+    await browser.wait("document.getElementById('store-application-list').textContent.includes("+
+      JSON.stringify("Kaydedilmiş mağaza taslağı (gönderilmedi) — "+corruptDraftName)+")")
     assert.equal((await q("select count(*)::int n from da_store_application_draft where organization_id=$1",
       [organizations[0].id]))[0].n,2,
       "Two distinct private drafts, no duplicate after ambiguous HTTP response")
