@@ -386,8 +386,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <h3>Şirketin yeni mağaza başvuru hakkı</h3>
     <p>Bu işlem yalnız yetkili platform görevlisine açıktır. Mevcut faal mağazalar bu ayardan etkilenmez. Bekleyen başvurular karar verilmeden korunur.</p>
     <form id="platform-store-policy-form">
-      <label>Şirket kimliği<input name="organization_id" pattern="daorg_[A-Za-z0-9_-]{1,80}" required></label>
-      <label>İşlem gerekçesi<input name="reason" minlength="10" maxlength="500" required></label>
+      <label>Şirket kimliği<input id="platform-store-policy-organization" name="organization_id" pattern="daorg_[A-Za-z0-9_-]{1,80}" required></label>
+      <label>İşlem gerekçesi<input id="platform-store-policy-reason" name="reason" minlength="10" maxlength="500" required></label>
       <button id="platform-store-policy-read" type="button">Mevcut hakkı doğrula</button>
       <button id="platform-store-policy-apply" type="submit" disabled>Henüz durum doğrulanmadı</button>
     </form>
@@ -3142,11 +3142,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   const policyForm=el('platform-store-policy-form');
   const policyStatus=el('platform-store-policy-status');
   const policyApply=el('platform-store-policy-apply');
-  const policyInput=policyForm.elements.namedItem('organization_id');
+  const policyInput=el('platform-store-policy-organization');
   function clearPlatformStorePolicy(){
     platformStoreRequest++;platformStorePolicy=null;
     policyApply.disabled=true;policyApply.textContent='Henüz durum doğrulanmadı';
-    policyForm.reset();policyStatus.textContent='';
+    if(typeof policyForm.reset==='function')policyForm.reset();
+    el('platform-store-policy-reason').value='';policyStatus.textContent='';
     el('platform-store-policy-panel').hidden=true;
   }
   policyInput.oninput=()=>{
@@ -3185,7 +3186,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   policyForm.onsubmit=async event=>{
     event.preventDefault();
     const org=String(policyInput.value||'').trim(),current=platformStorePolicy,
-      reason=String(policyForm.elements.namedItem('reason').value||'').trim(),
+      reason=String(el('platform-store-policy-reason').value||'').trim(),
       epoch=viewEpoch,seq=++platformStoreRequest;
     policyApply.disabled=true;platformStorePolicy=null;
     if(!current||current.organization_id!==org||reason.length<10||reason.length>500){
@@ -3208,7 +3209,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       policyStatus.textContent='Şirketin yeni mağaza başvuru hakkı '+
         (result.store_application_enabled?'açıldı.':'kapatıldı; bekleyenler korunuyor.')+
         ' Son durum yeniden doğrulansın.';
-      policyForm.elements.namedItem('reason').value='';
+      el('platform-store-policy-reason').value='';
     }catch(error){
       if(seq!==platformStoreRequest||epoch!==viewEpoch)return;
       policyStatus.textContent=error.uncertain?
