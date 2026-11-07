@@ -1583,6 +1583,20 @@ export default async function({container}:any){
     await browser.click("#store-applications-refresh")
     await browser.wait("document.getElementById('store-application-status').textContent.includes('durduruldu')")
     assert.equal(await browser.eval("document.getElementById('store-application-form').hidden"),true)
+    // Pausing new Store applications must not destroy/hide an unfinished
+    // Organization draft. Its edit is still Owner-authorized but NOT submit.
+    await browser.wait("!document.getElementById('store-draft-form').hidden")
+    await browser.wait("document.querySelector('#store-application-list button')?.textContent==='Taslağı düzenle'")
+    await browser.click("#store-application-list button")
+    const pausedDraftName="B22 paused edit "+rand
+    await browser.input("#store-draft-form input[name=name]",pausedDraftName)
+    await browser.click("#store-draft-form button[type=submit]")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
+    const [pausedDraft]=await q("select name,version from da_store_application_draft where id=$1",[draftId])
+    assert.deepEqual(pausedDraft,{name:pausedDraftName,version:3})
+    assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n,appCountBefore)
+    process.stdout.write("PASS B22 Chrome: paused company Store draft remains editable but native Owner submit is denied\\n")
     const deniedAppId="daapp_"+randomBytes(16).toString("hex")
     const deniedWhilePaused=await browser.callFunction(
       "async function(org,id){"+
