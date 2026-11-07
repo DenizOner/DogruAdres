@@ -618,6 +618,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       panel.hidden=false;
       for(const item of data.applications){
         const row=document.createElement('p');
+        // A loaded row remains active while the same reviewer loads another page.
+        // Only the async list response itself is tied to the request counter.
+        const currentReviewView=()=>epoch===viewEpoch&&
+          currentPersonId===person&&!document.hidden&&
+          !el('workspace').hidden&&row.isConnected;
         const dupText=item.duplicate_review_required?' [Mükerrerlik İncelemesi Gerekli]':'';
         row.textContent=item.legal_name+' ('+item.business_kind+', VKN/TCKN: '+item.tax_identifier+')'+dupText+
           ' — Durum: '+(item.status==='in_review'?'İncelemede':'İnceleme bekliyor');
@@ -635,9 +640,6 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           // The page-1 button remains valid when the *same* Person opens
           // page 2. Request counters protect stale async list responses, not
           // live buttons. Server still rechecks staff grant and CAS version.
-          const currentReviewView=()=>epoch===viewEpoch&&
-            currentPersonId===person&&!document.hidden&&
-            !el('workspace').hidden&&row.isConnected;
           startBtn.onclick=async()=>{
             if(!currentReviewView()||startBtn.disabled)return;
             startBtn.disabled=true;
@@ -715,7 +717,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           approveBtn.hidden=true;approveBtn.disabled=true;
           let previewReady=false;
           const updateCompletePreview=()=>{
-            if(!stillAuthorizedView()||!row.isConnected||safeImage.hidden)return;
+            if(!currentReviewView()||!row.isConnected||safeImage.hidden)return;
             // A combined all-page PNG must not be scaled down into a single
             // unreadable page. Enable the UI approval only at its bottom.
             previewReady=previewBox.scrollHeight-previewBox.scrollTop-previewBox.clientHeight<=4;
@@ -728,19 +730,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           };
           previewBox.onscroll=updateCompletePreview;
           previewBtn.onclick=()=>{
-            if(!stillAuthorizedView()||!row.isConnected)return;
+            if(!currentReviewView()||!row.isConnected)return;
             previewReady=false;approveBtn.hidden=true;approveBtn.disabled=true;
             previewBtn.disabled=true;safeImage.hidden=true;previewBox.hidden=true;
             previewBox.scrollTop=0;
             previewNote.textContent=' — ClamAV güncelliği kontrol ediliyor; gerekirse yeniden taranıyor ve güvenli görsel hazırlanıyor.';
             safeImage.onload=()=>{
-              if(!stillAuthorizedView()||!row.isConnected)return;
+              if(!currentReviewView()||!row.isConnected)return;
               safeImage.hidden=false;previewBox.hidden=false;
               previewBtn.disabled=false;
               updateCompletePreview();
             };
             safeImage.onerror=()=>{
-              if(!stillAuthorizedView()||!row.isConnected)return;
+              if(!currentReviewView()||!row.isConnected)return;
               previewReady=false;safeImage.hidden=true;previewBox.hidden=true;
               approveBtn.hidden=true;approveBtn.disabled=true;
               previewBtn.disabled=false;
@@ -750,7 +752,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               encodeURIComponent(item.id);
           };
           approveBtn.onclick=async()=>{
-            if(!previewReady||approveBtn.disabled||!stillAuthorizedView()||!row.isConnected)return;
+            if(!previewReady||approveBtn.disabled||!currentReviewView()||!row.isConnected)return;
             previewReady=false;approveBtn.disabled=true;
             try{
               await api('organization-applications',{method:'POST',body:JSON.stringify({
@@ -762,7 +764,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             }catch{
               // Authorization, scan freshness, preview failure and stale
               // document versions never produce optimistic UI success.
-              if(stillAuthorizedView()&&row.isConnected){
+              if(currentReviewView()&&row.isConnected){
                 safeImage.hidden=true;previewBox.hidden=true;approveBtn.hidden=true;
                 previewNote.textContent=' — Onay tamamlanamadı; güvenli incelemeyi yeniden başlatın.';
                 previewBtn.disabled=false;
