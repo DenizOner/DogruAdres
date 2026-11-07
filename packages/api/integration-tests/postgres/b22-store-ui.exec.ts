@@ -8546,6 +8546,20 @@ export default async function({container}:any){
         assert.deepEqual(await q(
           "select status,version from da_organization_application where id=$1",[stagedId]),
           [{status:"withdrawn",version:3}])
+        // The old staff row is still connected, but the applicant has
+        // withdrawn. A real reviewer reject click must show a visible 409
+        // rather than silently swallowing an unhandled rejected promise.
+        const staleReviewIndex=await reviewChrome.eval(
+          "Array.from(document.querySelectorAll('#organization-review-list p')).findIndex(p=>p.textContent.startsWith('B22 Pagination Fixture 1 ('))")
+        assert.ok(staleReviewIndex>=0)
+        await reviewChrome.input('#organization-review-list p:nth-child('+
+          (staleReviewIndex+1)+') input','Synthetic stale decision note')
+        await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.startsWith('B22 Pagination Fixture 1 ('));const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='Reddet');if(!button)throw Error('Missing staff reject');button.click();return true})()")
+        await reviewChrome.wait("document.getElementById('organization-review-status').textContent.includes('Başvuru başka işlemle değişti')")
+        assert.deepEqual(await q(
+          "select status,version from da_organization_application where id=$1",[stagedId]),
+          [{status:"withdrawn",version:3}])
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: stale staff reject HTTP409 shows visible conflict and never overwrites withdrawn application\\n")
         const documentedWithdraw=await signupChrome.callFunction(
           `async function(id){
             const s=await (await fetch('/personal/session')).json();
