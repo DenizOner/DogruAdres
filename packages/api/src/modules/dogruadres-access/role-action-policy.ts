@@ -7,7 +7,7 @@
 export type OrganizationAction = "buyer.purchase" | "products.edit" | "invitation.manage" | "membership.manage" | "membership.list" | "audit.timeline.read" | "organization.read" | "price.group.manage" | "store.follow" | "store.application.draft.manage"
 
 export const DEFAULT_OWNER_ACTIONS: readonly OrganizationAction[] =
-  Object.freeze(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read","organization.read","price.group.manage","store.follow","store.application.draft.manage"]
+  Object.freeze(["buyer.purchase","products.edit","invitation.manage","membership.manage","membership.list","audit.timeline.read","organization.read","price.group.manage","store.follow","store.application.draft.manage"])
 
 /** One central decision, using server-authenticated membership and action
  * proofs. Historic Organization "admin" rows have no inherent management
