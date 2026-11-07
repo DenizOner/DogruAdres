@@ -1439,8 +1439,9 @@ export default async function({container}:any){
     await reviewer.wait("document.getElementById('platform-store-policy-status').textContent.includes('açık.')")
     assert.equal(await reviewer.eval("document.getElementById('platform-store-policy-apply').disabled"),false)
     const companyRight=async(enabled:boolean,expected:boolean,reason:string,
-      validCsrf=true,organizationId=organizations[0].id)=>{
-      return reviewer.callFunction(
+      validCsrf=true,organizationId=organizations[0].id,
+      actingBrowser:B06Chrome=reviewer)=>{
+      return actingBrowser.callFunction(
         "async function(org,e,x,reason,valid){"+
           "const s=await(await fetch('/personal/session')).json();"+
           "const r=await fetch('/personal/platform/store-application-policy',{method:'POST',"+
@@ -1705,13 +1706,25 @@ export default async function({container}:any){
       // Seller's task-only UPDATE is still blocked by our advisory barrier;
       // approval holds the canonical Organization row FOR SHARE in its
       // Foundation transaction until native workflow + readback complete.
+      // The approval's Staff session locks its own Person/session epoch.
+      // A second request using that same Person would wait on an unrelated
+      // session row and could give false race evidence. Give the OTHER actual
+      // signed-in Person A an explicitly scoped, synthetic platform task
+      // grant for this one test, then revoke that grant in finally.
+      const policyCollisionGrantId="da_staff_policy_race_"+rand
+      await q(`insert into da_platform_staff_grant
+        (id,person_id,task,resource,granted_by_person_id,reason)
+        values($1,$2,'store.application.policy.manage','platform',$2,
+        'B22 task-only independent platform policy race')`,
+        [policyCollisionGrantId,A.person])
       const policyCollisionReason="B22 concurrent native approval policy pause"
       const beforePolicyCollision=await q(`select count(*)::int n from
         da_audit_event where organization_id=$1 and
         action='organization.store_application_right_disabled'
         and new_values->>'reason'=$2`,[organizations[0].id,policyCollisionReason])
       assert.equal(beforePolicyCollision[0].n,0)
-      companyPolicySwitch=companyRight(false,true,policyCollisionReason).then(
+      companyPolicySwitch=companyRight(false,true,policyCollisionReason,
+        true,organizations[0].id,browser).then(
         value=>{companyPolicySwitchDone=true;return {value}},
         error=>{companyPolicySwitchDone=true;return {error:String(error)}})
       await until(async()=>{
@@ -1773,9 +1786,10 @@ export default async function({container}:any){
         "return r.status;}",organizations[0].id,"daapp_"+randomBytes(16).toString("hex"))
       assert.equal(blockedSubsequent,403,
         "New Owner submission must fail after the concurrent pause commits")
+      assert.equal((await companyRight(true,false,"B22 post race company resume",
+        true,organizations[0].id,browser)).status,200)
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
-      assert.equal((await companyRight(true,false,"B22 post race company resume")).status,200)
       assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
         [organizations[0].id]),[{store_application_enabled:true}],
         "Restore the test-only company policy without changing Seller history")
@@ -1792,6 +1806,8 @@ export default async function({container}:any){
     }finally{
       if(staffBarrierHeld)await staffBarrier.query("ROLLBACK")
       if(companyPolicySwitch)await Promise.allSettled([companyPolicySwitch])
+      await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",
+        ["da_staff_policy_race_"+rand])
       await staffRevoker.end()
       await staffBarrier.end()
       if(sellerPauseTrigger)await q("drop trigger if exists b22_staff_native_seller_pause_v1 on seller")
