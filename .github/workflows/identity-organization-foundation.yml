@@ -388,6 +388,14 @@ jobs:
           # /usr/sbin/clamd is forbidden from binding under RUNNER_TEMP.
           conf=/etc/clamav/clamd.conf
           test -r "$conf"
+          # This distro daemon disables VERSION. Keep ClamAV signature-age
+          # verification mandatory; enable only local metadata on disposable CI.
+          if grep -Eq '^[[:space:]]*EnableVersionCommand[[:space:]]+no([[:space:]]*)$' "$conf"; then
+            sudo sed -i -E 's/^[[:space:]]*EnableVersionCommand[[:space:]]+no([[:space:]]*)$/EnableVersionCommand yes/' "$conf"
+          elif ! grep -Eq '^[[:space:]]*EnableVersionCommand[[:space:]]+yes([[:space:]]*)$' "$conf"; then
+            echo 'EnableVersionCommand yes' | sudo tee -a "$conf" >/dev/null
+          fi
+          grep -Eq '^[[:space:]]*EnableVersionCommand[[:space:]]+yes([[:space:]]*)$' "$conf"
           sock=$(awk '$1=="LocalSocket" {print $2}' "$conf" | head -n1)
           case "$sock" in
             /run/clamav/clamd.ctl|/var/run/clamav/clamd.ctl) ;;
@@ -419,44 +427,6 @@ jobs:
             import { verifyTaxCertificateWithClamd, TaxCertificateScannerUnavailable } from "./packages/api/src/modules/dogruadres-access/tax-certificate-scanner.ts";
             import { makeSafeTaxCertificatePreview } from "./packages/api/src/modules/dogruadres-access/tax-certificate-safe-preview.ts";
             const png=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8//8/AwMDEwMDAwMDAwAkBgMB/DXemwAAAABJRU5ErkJggg==","base64");
-            // The daemon was started successfully, but the first real
-            // application-level scanner check failed. Probe genuine clamd
-            // protocol responses with ONLY this public synthetic fixture,
-            // not private documents or configuration secrets.
-            const {createConnection}=await import("node:net");
-            async function rawReply(request) {
-              return await new Promise((resolve,reject)=>{
-                const socket=createConnection({path:process.env.DOGRUADRES_CLAMD_SOCKET});
-                let reply=Buffer.alloc(0),done=false;
-                const fail=()=>{if(done)return;done=true;socket.destroy();reject(Error("clamd protocol probe did not return a terminated reply"));};
-                socket.setTimeout(15000);
-                socket.on("error",fail);
-                socket.on("timeout",fail);
-                socket.on("close",()=>{if(!done)fail()});
-                socket.on("connect",()=>socket.write(request));
-                socket.on("data",bytes=>{
-                  if(done)return;
-                  reply=Buffer.concat([reply,bytes]);
-                  if(reply.length>384)return fail();
-                  const end=reply.indexOf(0);
-                  if(end!==-1){
-                    done=true;socket.destroy();
-                    resolve(reply.subarray(0,end).toString("utf8"));
-                  }
-                });
-              });
-            }
-            const version=await rawReply(Buffer.from("zVERSION\0"));
-            const v=/^ClamAV [^/\s]+\/([1-9][0-9]*)\/(.+)$/.exec(version);
-            console.log("B22 raw clamd VERSION (engine/DB date only):",JSON.stringify(version));
-            console.log("B22 version policy:",JSON.stringify({
-              parsed:!!v,ageHours:v?(Date.now()-Date.parse(v[2]))/3600000:null
-            }));
-            const frame=Buffer.allocUnsafe(4);frame.writeUInt32BE(png.length,0);
-            const raw=await rawReply(Buffer.concat([
-              Buffer.from("zINSTREAM\0"),frame,png,Buffer.alloc(4)
-            ]));
-            console.log("B22 raw ClamAV synthetic INSTREAM verdict:",JSON.stringify(raw));
             await verifyTaxCertificateWithClamd(png);
             console.log("PASS B22: real ClamAV clean PNG stream accepted");
             const eicar=Buffer.from(String.raw`X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*`);
