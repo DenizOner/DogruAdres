@@ -1408,6 +1408,19 @@ export default async function({container}:any){
       encodeURIComponent(organizations[0].id)
     assert.equal(await reviewer.callFunction("async function(path){return (await fetch(path)).status}",companyPolicyPath),403,
       "Organization provision and Store approve grants must not authorize policy changes")
+    // A platform reviewer with no membership in Alpha cannot read its private
+    // notifications, even if they hold organization.provision/store.approve.
+    const noticePath="/personal/notifications?organization="+encodeURIComponent(organizations[0].id)
+    assert.equal(await reviewer.callFunction(
+      "async function(path){return (await fetch(path)).status}",noticePath),403,
+      "Platform Staff grant alone must not reveal a company's private notices")
+    // Add another real, signed-in Person as a protected Owner of this same
+    // company. The reversible task-only membership tests per-Owner delivery;
+    // no native Seller right or platform task is inferred from this membership.
+    const [temporaryNotificationCoOwner]=await foundation.createMemberships([{
+      organization_id:organizations[0].id,person_id:B.person,role:"owner",
+      status:"active",protected_owner:true
+    }])
     const policyGrantId="da_staff_policy_"+rand
     await q(`insert into da_platform_staff_grant
       (id,person_id,task,resource,granted_by_person_id,reason)
@@ -1466,18 +1479,23 @@ export default async function({container}:any){
       and p.deleted_at is null order by m.person_id`,[organizations[0].id])
     const companyNotices=await q(`select n.person_id from da_notification_receipt n
       where n.audit_event_id=$1 order by n.person_id`,[stoppedAudit[0].id])
-    assert.ok(receiptOwners.length>=1)
+    assert.equal(receiptOwners.length,2,
+      "Two independently signed-in protected Owners must each receive the policy event")
     assert.deepEqual(companyNotices,receiptOwners,
       "One private policy notice per current protected Owner, no foreign recipient")
-    const noticePath="/personal/notifications?organization="+encodeURIComponent(organizations[0].id)
     const closedNotices=await get(noticePath)
     assert.equal(closedNotices.status,200)
     assert.equal(closedNotices.body.notifications.filter((n:any)=>
       n.title==="Yeni mağaza başvuru hakkı durduruldu" &&
       n.context===organizations[0].name).length,1)
-    assert.equal((await reviewer.callFunction(
-      "async function(path){return (await fetch(path)).status}",noticePath)),403,
-      "Staff with no Organization Owner membership cannot read company policy notices")
+    const secondOwnerNotices=await reviewer.callFunction(
+      "async function(path){const r=await fetch(path);return {status:r.status,body:await r.json()}}",
+      noticePath)
+    assert.equal(secondOwnerNotices.status,200)
+    assert.equal(secondOwnerNotices.body.notifications.filter((n:any)=>
+      n.title==="Yeni mağaza başvuru hakkı durduruldu" &&
+      n.context===organizations[0].name).length,1,
+      "The other current protected Owner must see exactly one private pause notice")
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.click("#notification-bell")
@@ -1551,6 +1569,39 @@ export default async function({container}:any){
       ('organization.store_application_right_enabled','organization.store_application_right_disabled')`,
       [organizations[0].id])
     assert.equal(companyTotal[0].n,receiptOwners.length*2)
+    const reopenedForSecondOwner=await reviewer.callFunction(
+      "async function(path){const r=await fetch(path);return {status:r.status,body:await r.json()}}",
+      noticePath)
+    assert.equal(reopenedForSecondOwner.status,200)
+    assert.equal(reopenedForSecondOwner.body.notifications.filter((n:any)=>
+      n.title==="Yeni mağaza başvuru hakkı açıldı" &&
+      n.context===organizations[0].name).length,1,
+      "Both protected Owners receive the reopen event without duplicate notices")
+    // Simulate an authoritative membership revocation in this isolated test
+    // database. This tests the live per-request notification privacy filter,
+    // not the already separately accepted Owner removal workflow.
+    const revokedCoOwner=await q(`update da_organization_membership
+      set status='revoked',revoked_at=clock_timestamp(),updated_at=clock_timestamp()
+      where id=$1 and organization_id=$2 and person_id=$3
+        and role='owner' and protected_owner=true and status='active'
+      returning id`,[temporaryNotificationCoOwner.id,organizations[0].id,B.person])
+    assert.equal(revokedCoOwner.length,1)
+    const privateAfterRevoke=await reviewer.callFunction(
+      "async function(){const r=await fetch('/personal/notifications');"+
+      "return {status:r.status,body:await r.json()}}")
+    assert.equal(privateAfterRevoke.status,200)
+    assert.equal(privateAfterRevoke.body.notifications.some((n:any)=>
+      n.context===organizations[0].name),false,
+      "Revoked Owner may not view previously delivered company notices")
+    const [staleCompanyNotice]=await q(`select id from da_notification_receipt
+      where audit_event_id=$1 and person_id=$2`,[stoppedAudit[0].id,B.person])
+    assert.ok(staleCompanyNotice?.id)
+    assert.equal(await reviewer.callFunction(
+      "async function(id){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/notifications',{method:'POST',headers:{"+
+      "'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({id})});return r.status}",staleCompanyNotice.id),403,
+      "Revoked Owner cannot mark an old private company notice as read")
     assert.equal((await companyRight(true,false,"B22 stale policy switch")).status,409)
     await reviewer.click("#store-approval-refresh")
     await reviewer.wait("document.querySelector('#store-approval-list button')?.disabled===false")
