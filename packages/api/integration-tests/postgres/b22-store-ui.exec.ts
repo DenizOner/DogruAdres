@@ -1412,6 +1412,12 @@ export default async function({container}:any){
     assert.equal(memberFixture?.id,betaAdminMembership.id)
     try{
       await browser.send("Page.bringToFront")
+      // The real signed-in browser populated its Organization menu before
+      // this disposable membership changed. Reload to observe fresh role
+      // metadata instead of asking a stale menu to contain "Member".
+      await browser.send("Page.reload",{ignoreCache:true})
+      await browser.wait("Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+
+        JSON.stringify(organizations[1].name+" — member")+")")
       await browser.select(organizations[1].name,"member")
       assert.equal(await browser.callFunction("async function(org){return (await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org))).status}",betaScope),403,
         "An ungranted Member cannot read another private Organization draft")
