@@ -52,10 +52,13 @@ async function command(socketPath: string, data?: Buffer): Promise<string> {
       if (!line || line.includes("\n") || line.includes("\r")) return fail()
       succeed(line)
     })
+    // clamd expects an INSTREAM terminator followed by a reply on the same
+    // still-open socket. A client write-side FIN can be interpreted as an
+    // incomplete command by the real daemon; close only after its verdict.
     socket.on("connect", () => {
       if (done) return
       if (!data) {
-        socket.end(Buffer.from("zVERSION\0", "ascii"))
+        socket.write(Buffer.from("zVERSION\0", "ascii"))
         return
       }
       const header = Buffer.from("zINSTREAM\0", "ascii")
@@ -63,7 +66,7 @@ async function command(socketPath: string, data?: Buffer): Promise<string> {
       const writeNext = () => {
         if (done) return
         if (at === data.length) {
-          socket.end(Buffer.alloc(4))
+          socket.write(Buffer.alloc(4))
           return
         }
         const length = Math.min(CHUNK, data.length - at)
