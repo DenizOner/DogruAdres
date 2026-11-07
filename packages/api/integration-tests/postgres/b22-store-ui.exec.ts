@@ -7796,6 +7796,7 @@ export default async function({container}:any){
       assert.equal(approvalState.ready,scanEnabled,
         "Only a genuinely scanned and rendered preview may unlock review UI")
       assert.equal(approvalState.rasterVisible,scanEnabled)
+      if(scanEnabled)process.stdout.write("PASS B22 Chrome/HTTP/PG16: scanned PNG preview loaded and reviewer approval UI gated\n")
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: staff unscanned document denied, applicant original retained, foreign denied\n")
 
       const correctionRes = await reviewChrome.eval(`(async()=>{`+
@@ -7909,8 +7910,47 @@ export default async function({container}:any){
       assert.equal(revised[1].is_current,true)
       assert.equal(revised[1].original_sha256,createHash("sha256").update(correctedPdf).digest("hex"))
       for(const doc of revised)assert.ok(readFileSync(join(taxDir,doc.storage_key)).length>8)
-      await foreignDraftChrome.click("#organization-application-submit")
-      await foreignDraftChrome.wait("document.getElementById('organization-draft-status').textContent.includes('Başvuru platform incelemesine başarıyla gönderildi')")
+      // Observe only the synthetic submission's HTTP status. The existing
+      // real UI button remains the actor; never replace it with a direct POST.
+      await foreignDraftChrome.eval(`(()=>{
+        const original=window.fetch,trace={original,seen:false,http:null};
+        window.__b22SubmitTrace=trace;
+        window.fetch=(...args)=>{
+          const opts=args[1]||{};
+          if(opts.method==='POST'&&String(opts.body||'').includes('"action":"submit"')){
+            trace.seen=true;
+            return original(...args).then(r=>{trace.http=r.status;return r;},
+              e=>{trace.http=-1;throw e;});
+          }
+          return original(...args);
+        };
+        return true;
+      })()`)
+      try{
+        await foreignDraftChrome.click("#organization-application-submit")
+        await foreignDraftChrome.wait("document.getElementById('organization-draft-status').textContent.includes('Başvuru platform incelemesine başarıyla gönderildi')")
+      }catch(error){
+        const actual=await q("select status,version from da_organization_application where id=$1",[foreignAppId])
+        const browser=await foreignDraftChrome.eval(`(()=>{
+          const note=document.getElementById('organization-draft-status')?.textContent||'';
+          const button=document.getElementById('organization-application-submit');
+          return {requestSeen:!!window.__b22SubmitTrace?.seen,
+            httpStatus:window.__b22SubmitTrace?.http??null,
+            uiState:note.includes('Başvuru sonucu belirsiz')?'uncertain':
+              note.includes('Taslak değişmiş')?'conflict':
+              note.includes('Başvuru gönderilemedi')?'failed':
+              note.includes('Başvuru platform incelemesine başarıyla gönderildi')?'success':'other',
+            buttonDisabled:!!button?.disabled};
+        })()`)
+        throw Error("B22 real corrected resubmission did not confirm: "+
+          JSON.stringify({applicationState:actual,browser})+"; "+String(error))
+      }finally{
+        await foreignDraftChrome.eval(`(()=>{
+          const t=window.__b22SubmitTrace;
+          if(t){window.fetch=t.original;delete window.__b22SubmitTrace;}
+          return true;
+        })()`)
+      }
       assert.deepEqual(await q("select status,version from da_organization_application where id=$1",[foreignAppId]),
         [{status:"submitted",version:6}])
       // Withdraw the resubmitted application through its actual submitted-row
