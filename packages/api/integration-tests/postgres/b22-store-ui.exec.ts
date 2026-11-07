@@ -8114,7 +8114,22 @@ export default async function({container}:any){
       assert.equal(Number((await q("select count(*)::int n from da_organization_application_document where application_id=$1",[foreignAppId]))[0].n),2,"Withdraw must retain both private tax certificate revisions")
       const withdrawOutbox=await q("select x.id from da_audit_event a join da_security_outbox x on x.audit_event_id=a.id where a.target_id=$1 and a.action='organization.application_withdrawn'",[foreignAppId])
       assert.equal(withdrawOutbox.length,1,"Withdraw requires one durable outboxed audit")
-      const deniedAfterWithdraw=await reviewChrome.eval(`(async()=>{const s=await (await fetch('/personal/session')).json();const r=await fetch('/personal/organization-applications',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},body:JSON.stringify({action:'review_decision',application_id:${JSON.stringify(foreignAppId)},expected_version:7,decision:'approve'})});return r.status})()`)
+      // CodeQL #25 (original line 7503): use CDP value arguments rather than
+      // building executable JavaScript from the withdrawn application ID.
+      const deniedAfterWithdraw=await reviewChrome.callFunction(
+        `async function(applicationId){
+          const s=await (await fetch('/personal/session')).json();
+          const r=await fetch('/personal/organization-applications',{
+            method:'POST',
+            headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+            body:JSON.stringify({
+              action:'review_decision',application_id:applicationId,
+              expected_version:7,decision:'approve'
+            })
+          });
+          return r.status;
+        }`,
+        foreignAppId)
       assert.equal(deniedAfterWithdraw,409,"Staff may not approve an applicant-withdrawn application")
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: corrected tax certificate resubmission required new upload; two versions retained; withdrawn approval denied\n")
 
