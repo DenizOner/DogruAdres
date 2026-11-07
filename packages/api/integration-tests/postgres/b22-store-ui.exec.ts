@@ -1402,12 +1402,23 @@ export default async function({container}:any){
         [e.id]))[0].n,1,
         "Staff provisioning canonical/security audit must commit together")
     }
+    // Existing organization-provision and store-approve grants confer no
+    // company application-policy authority without an additional explicit grant.
+    const companyPolicyPath='/personal/platform/store-application-policy?organization_id='+
+      encodeURIComponent(organizations[0].id)
+    assert.equal(await reviewer.eval(`(async()=> (await fetch(${JSON.stringify(companyPolicyPath)})).status)()`),403,
+      "Organization provision and Store approve grants must not authorize policy changes")
+    const policyGrantId="da_staff_policy_"+rand
+    await q(`insert into da_platform_staff_grant
+      (id,person_id,task,resource,granted_by_person_id,reason)
+      values($1,$2,'store.application.policy.manage','platform',$2,
+        'B22 isolated company policy gate')`,[policyGrantId,B.person])
     // B22 approved independent company policy: an administrator can pause
     // NEW Store requests without suspending an existing native Mercur Store.
     // The pending Seller remains pending and must not be auto-approved on reopen.
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
-    await reviewer.click("#staff")
+    await reviewer.click("#platform-store-policy-open")
     await reviewer.wait("!document.getElementById('platform-store-policy-panel').hidden")
     await reviewer.input("#platform-store-policy-form input[name=organization_id]",
       organizations[0].id)
@@ -5483,6 +5494,10 @@ export default async function({container}:any){
       assert.equal(grantRow.length,1)
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
+      // Switching between real Chrome profiles triggers a private UI reload;
+      // avoid asserting a transient list before its authenticated refresh.
+      await reviewer.wait(`Array.from(document.querySelectorAll('#organizations button')).
+        some(b=>b.textContent===${JSON.stringify(organizations[0].name+' — member')})`)
       await reviewer.select(organizations[0].name,"member")
       const memberDraftStores=()=>reviewer.eval(`(async()=>{
         const r=await fetch('/personal/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
