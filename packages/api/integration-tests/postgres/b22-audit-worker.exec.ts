@@ -227,8 +227,11 @@ export default async function({container}:any){
         const auditIndex=container.resolve("dogruadresAuditIndex") as any
         const timeline=await auditIndex.readOrganizationTimeline(policyOrg,100)
         for(const event of policyEvents)
+          // readOrganizationTimeline is already SQL-filtered by policyOrg.
+          // The read DTO deliberately omits organization_id; do not expand
+          // private timeline fields merely to satisfy this acceptance test.
           assert.ok(timeline.some((e:any)=>e.source_event_id===event.id &&
-            e.organization_id===policyOrg && e.action===event.action),
+            e.target_id===policyOrg && e.action===event.action),
             "Company policy event must appear in the scoped Audit Index timeline")
         process.stdout.write("PASS B22 real audit relay: platform company policy disable/reopen delivered by native Medusa Access/Index, redacted envelopes, durable ACKs and scoped timeline\n")
       }finally{
