@@ -655,31 +655,51 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           const previewBtn=document.createElement('button');
           previewBtn.type='button';previewBtn.textContent='Belgeyi Güvenli Önizle';
           const safeImage=document.createElement('img');
-          safeImage.alt='Güvenli taramadan geçen vergi levhası önizlemesi';
+          safeImage.alt='Güvenli taramadan geçen vergi levhasının tüm sayfaları';
           safeImage.hidden=true;
-          safeImage.style.maxWidth='min(100%, 600px)';
-          safeImage.style.maxHeight='640px';
-          safeImage.style.objectFit='contain';
+          safeImage.style.display='block';
+          safeImage.style.maxWidth='100%';
+          safeImage.style.height='auto';
           safeImage.referrerPolicy='no-referrer';
+          const previewBox=document.createElement('div');
+          previewBox.hidden=true;
+          previewBox.tabIndex=0;
+          previewBox.setAttribute('role','region');
+          previewBox.setAttribute('aria-label','Vergi levhasının tüm sayfaları, aşağı kaydırarak inceleyin');
+          previewBox.style.maxWidth='min(100%, 600px)';
+          previewBox.style.maxHeight='950px';
+          previewBox.style.overflowY='auto';
+          previewBox.append(safeImage);
           const approveBtn=document.createElement('button');
           approveBtn.type='button';approveBtn.textContent='İşletmeyi Onayla';
           approveBtn.hidden=true;approveBtn.disabled=true;
           let previewReady=false;
+          const updateCompletePreview=()=>{
+            if(!stillAuthorizedView()||!row.isConnected||safeImage.hidden)return;
+            // A combined all-page PNG must not be scaled down into a single
+            // unreadable page. Enable the UI approval only at its bottom.
+            previewReady=previewBox.scrollHeight-previewBox.scrollTop-previewBox.clientHeight<=4;
+            approveBtn.hidden=!previewReady;approveBtn.disabled=!previewReady;
+            previewNote.textContent=previewReady?
+              ' — Güvenli görselin tamamı gösterildi; onayda tarama tekrarlanır.':
+              ' — Belgenin bütün sayfalarını görmek için görselin sonuna kaydırın.';
+          };
+          previewBox.onscroll=updateCompletePreview;
           previewBtn.onclick=()=>{
             if(!stillAuthorizedView()||!row.isConnected)return;
             previewReady=false;approveBtn.hidden=true;approveBtn.disabled=true;
-            previewBtn.disabled=true;safeImage.hidden=true;
+            previewBtn.disabled=true;safeImage.hidden=true;previewBox.hidden=true;
+            previewBox.scrollTop=0;
             previewNote.textContent=' — Yerel tarama ve güvenli görsel hazırlanıyor.';
             safeImage.onload=()=>{
               if(!stillAuthorizedView()||!row.isConnected)return;
-              previewReady=true;safeImage.hidden=false;
-              approveBtn.hidden=false;approveBtn.disabled=false;
+              safeImage.hidden=false;previewBox.hidden=false;
               previewBtn.disabled=false;
-              previewNote.textContent=' — Yalnız güvenli görsel gösteriliyor; onay sırasında tarama tekrarlanır.';
+              updateCompletePreview();
             };
             safeImage.onerror=()=>{
               if(!stillAuthorizedView()||!row.isConnected)return;
-              previewReady=false;safeImage.hidden=true;
+              previewReady=false;safeImage.hidden=true;previewBox.hidden=true;
               approveBtn.hidden=true;approveBtn.disabled=true;
               previewBtn.disabled=false;
               previewNote.textContent=' — Tarama veya güvenli önizleme kullanılamıyor; onay kapalı.';
@@ -701,13 +721,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               // Authorization, scan freshness, preview failure and stale
               // document versions never produce optimistic UI success.
               if(stillAuthorizedView()&&row.isConnected){
-                safeImage.hidden=true;approveBtn.hidden=true;
+                safeImage.hidden=true;previewBox.hidden=true;approveBtn.hidden=true;
                 previewNote.textContent=' — Onay tamamlanamadı; güvenli incelemeyi yeniden başlatın.';
                 previewBtn.disabled=false;
               }
             }
           };
-          row.append(previewBtn,safeImage,approveBtn);
+          row.append(previewBtn,previewBox,approveBtn);
         }
         list.append(row);
       }

@@ -15,6 +15,12 @@ export class TaxCertificateSafePreviewUnavailable extends Error {
 const MAX_PNG_BYTES = 4 * 1024 * 1024
 const TIMEOUT_MS = 12_000
 
+// Execute every PDF page inside the same networkless Bubblewrap namespace.
+// The original exists only on the isolated tmpfs, never in a host/public file.
+// Missing pages, an exhausted resource budget or a broken decoder reject the
+// entire preview, including the independent approval-time recheck.
+const PDF_ALL_PAGES_RUNNER = "import re, subprocess, sys\nfrom pathlib import Path\ntry:\n    data = sys.stdin.buffer.read(10485761)\n    if not 8 <= len(data) <= 10485760: raise ValueError(\"size\")\n    source = \"/tmp/da-review-input.pdf\"\n    with open(source, \"xb\") as file: file.write(data)\n    info = subprocess.run([\"/usr/bin/pdfinfo\", source], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3, check=True).stdout.decode(\"ascii\", \"replace\")\n    matches = re.findall(r\"^Pages:\\s*([1-9][0-9]*)\\s*$\", info, re.M)\n    if len(matches) != 1: raise ValueError(\"page count\")\n    count = int(matches[0])\n    subprocess.run([\"/usr/bin/pdftoppm\", \"-f\", \"1\", \"-l\", str(count), \"-scale-to\", \"900\", \"-png\", source, \"/tmp/da-review-page\"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8, check=True)\n    files = []\n    for path in Path(\"/tmp\").glob(\"da-review-page-*.png\"):\n        matched = re.fullmatch(r\"da-review-page-([0-9]+)\\.png\", path.name)\n        if not matched: raise ValueError(\"unexpected page\")\n        files.append((int(matched.group(1)), str(path)))\n    files.sort()\n    if len(files) != count or any(page != i for i, (page, _) in enumerate(files, 1)): raise ValueError(\"missing page\")\n    subprocess.run([\"/usr/bin/convert\", *[name for _, name in files], \"-append\", \"-strip\", \"png:-\"], stdout=sys.stdout.buffer, stderr=subprocess.DEVNULL, timeout=4, check=True)\nexcept Exception:\n    sys.exit(1)"
+
 function refuse(): never { throw new TaxCertificateSafePreviewUnavailable() }
 
 async function rasterize(content: Buffer, mime: TaxCertificateFormat["mimeType"]): Promise<Buffer> {
@@ -22,7 +28,7 @@ async function rasterize(content: Buffer, mime: TaxCertificateFormat["mimeType"]
   // Only trusted, fixed executable paths and fixed arguments, never a
   // filename, shell, user-owned path, URL or caller-selected delegate.
   const render = mime === "application/pdf"
-    ? ["/usr/bin/pdftoppm", "-f", "1", "-l", "1", "-singlefile", "-scale-to", "900", "-png", "-"]
+    ? ["/usr/bin/python3", "-I", "-c", PDF_ALL_PAGES_RUNNER]
     : ["/usr/bin/convert", mime === "image/png" ? "png:-" : "jpeg:-",
         "-auto-orient", "-strip", "-resize", "900x900>", "png:-"]
   const bwrap = [
@@ -43,7 +49,9 @@ async function rasterize(content: Buffer, mime: TaxCertificateFormat["mimeType"]
   // prlimit constrains memory, CPU and output files for the entire child
   // family. Bubblewrap independently denies network, persistent filesystem,
   // host processes and privileged IPC. Missing protection is never optional.
-  const args = ["--as=536870912", "--cpu=9", "--fsize=5242880",
+  // The isolated temporary input may be the approved full 10 MiB PDF.
+  // PNG bytes leaving the sandbox remain separately capped at 4 MiB.
+  const args = ["--as=536870912", "--cpu=9", "--fsize=16777216",
     "--", "/usr/bin/bwrap", ...bwrap]
   return new Promise<Buffer>((resolve,reject) => {
     const child = spawn("/usr/bin/prlimit", args, {
