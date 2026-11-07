@@ -1760,6 +1760,8 @@ export default async function({container}:any){
         where n.audit_event_id=$1`,[policyCollisionAudit[0].id])
       assert.deepEqual(policyCollisionReceipts,[{person_id:A.person}],
         "Only the remaining current protected Owner gets the private race notice")
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
       const blockedSubsequent=await browser.callFunction(
         "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
         "const r=await fetch('/personal/store-applications',{method:'POST',headers:{"+
@@ -1770,6 +1772,8 @@ export default async function({container}:any){
         "return r.status;}",organizations[0].id,"daapp_"+randomBytes(16).toString("hex"))
       assert.equal(blockedSubsequent,403,
         "New Owner submission must fail after the concurrent pause commits")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
       assert.equal((await companyRight(true,false,"B22 post race company resume")).status,200)
       assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
         [organizations[0].id]),[{store_application_enabled:true}],
