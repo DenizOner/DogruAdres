@@ -8384,6 +8384,10 @@ export default async function({container}:any){
       // traverse page two on disposable PostgreSQL, not just fetch page one.
       const reviewOverflowIds=Array.from({length:101},()=>
         "daorgapp_"+randomBytes(16).toString("hex"))
+      // Exactly one of 101 queue rows is created, scanned and submitted through
+      // a real applicant browser. The other 100 are disposable pagination rows.
+      const documentedReviewId=reviewOverflowIds[1]
+      const paginationOnlyIds=reviewOverflowIds.filter(id=>id!==documentedReviewId)
       try{
         await q(`insert into da_organization_application
           (id,applicant_person_id,business_kind,legal_name,landline_phone,
@@ -8394,7 +8398,56 @@ export default async function({container}:any){
             'service_repair','submitted',1,
             clock_timestamp()-(x.ordinality*interval '1 second')
           from unnest($1::text[]) with ordinality as x(id,ordinality)`,
-          [reviewOverflowIds,signupPerson,draftLandline])
+          [paginationOnlyIds,signupPerson,draftLandline])
+        const documentedCreate=await signupChrome.callFunction(
+          `async function(id){
+            const s=await (await fetch('/personal/session')).json();
+            const r=await fetch('/personal/organization-applications',{
+              method:'POST',
+              headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+              body:JSON.stringify({application_id:id,expected_version:0,
+                business_kind:'legal_company',legal_name:'B22 Pagination Document Fixture',
+                landline_phone:'+90 212 555 00 00',tax_identifier:'1087654321',
+                declared_activities:['service_repair'],primary_activity:'service_repair'})
+            });
+            return {status:r.status,body:await r.json()};
+          }`,documentedReviewId)
+        assert.equal(documentedCreate.status,201)
+        assert.equal(documentedCreate.body.version,1)
+        const documentedUpload=await signupChrome.callFunction(
+          `async function(id,png){
+            const s=await (await fetch('/personal/session')).json();
+            const r=await fetch('/personal/organization-applications',{
+              method:'POST',
+              headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+              body:JSON.stringify({action:'upload_document',application_id:id,
+                expected_version:1,filename:'pagination-certificate.png',file_base64:png})
+            });
+            return {status:r.status,body:await r.json()};
+          }`,documentedReviewId,onePixelPng)
+        assert.equal(documentedUpload.status,200)
+        assert.equal(documentedUpload.body.version,2)
+        await signupChrome.click('#organization-draft-refresh')
+        await signupChrome.wait("Array.from(document.querySelectorAll('#organization-draft-list p')).some(p=>p.textContent.includes('B22 Pagination Document Fixture'))")
+        await signupChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-draft-list p')).find(p=>p.textContent.includes('B22 Pagination Document Fixture'));const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='Taslağı düzenle');if(!button)throw Error('Documented draft edit missing');button.click();return true})()")
+        await signupChrome.click('#organization-draft-form input[name=legal_name]')
+        await signupChrome.eval("document.querySelector('#organization-draft-form input[name=legal_name]').select()")
+        await signupChrome.send('Input.insertText',{text:'B22 Pagination Edited Document'})
+        await signupChrome.click('#organization-draft-form button[type=submit]')
+        await signupChrome.wait("document.getElementById('organization-draft-status').textContent.includes('Yüklü vergi levhası korundu')")
+        const persistedDocumentUi=await signupChrome.eval("({info:document.getElementById('organization-document-info').textContent,submitHidden:document.getElementById('organization-application-submit').hidden})")
+        assert.match(persistedDocumentUi.info,/Yüklü vergi levhası: v1/)
+        assert.equal(persistedDocumentUi.submitHidden,false,
+          'Changing only application details must preserve submit with existing scanned document')
+        assert.deepEqual(await q('select status,version from da_organization_application where id=$1',[documentedReviewId]),
+          [{status:'draft',version:3}])
+        assert.equal(Number((await q('select count(*)::int n from da_organization_application_document where application_id=$1',[documentedReviewId]))[0].n),1,
+          'Details-only edit must not re-upload or replace the document')
+        await signupChrome.click('#organization-application-submit')
+        await signupChrome.wait("document.getElementById('organization-draft-status').textContent.includes('Başvuru platform incelemesine başarıyla gönderildi')")
+        assert.deepEqual(await q('select status,version from da_organization_application where id=$1',[documentedReviewId]),
+          [{status:'submitted',version:4}])
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: details-only edit preserves scanned document, submit UI and one private revision\\n")
         const firstReviewPage=await reviewChrome.eval(`(async()=>{
           const r=await fetch('/personal/organization-applications?action=review_queue');
           const body=await r.json();
@@ -8425,6 +8478,14 @@ export default async function({container}:any){
         }))()`)
         assert.deepEqual(secondPageUi,{count:101,moreHidden:true,unique:101},
           "Real Chrome must append exactly 1 remaining distinct submitted application")
+        // A document row on the first page must stay interactive after page 2
+        // loads. The request sequence protects HTTP responses, not live rows.
+        await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.includes('B22 Pagination Edited Document'));const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='Belgeyi Güvenli Önizle');if(!button)throw Error('Missing page-1 safe preview');button.click();return true})()")
+        await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.includes('B22 Pagination Edited Document')&&p.querySelector('img')?.naturalWidth>0)")
+        const previewAfterMore=await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.includes('B22 Pagination Edited Document'));const image=row?.querySelector('img');const button=Array.from(row?.querySelectorAll('button')||[]).find(b=>b.textContent==='İşletmeyi Onayla');return {imageVisible:!!image&&!image.hidden,approveReady:!!button&&!button.disabled&&!button.hidden};})()")
+        assert.deepEqual(previewAfterMore,{imageVisible:true,approveReady:true},
+          'Page-1 scanned preview and gated approval must work after appending page 2')
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: page-1 safe document preview still works after page-2 pagination\\n")
 
         // Real authorized staff button starts review, never provisions an Org.
         // Use only an isolated task-owned application and no protected data.
@@ -8485,6 +8546,19 @@ export default async function({container}:any){
         assert.deepEqual(await q(
           "select status,version from da_organization_application where id=$1",[stagedId]),
           [{status:"withdrawn",version:3}])
+        const documentedWithdraw=await signupChrome.callFunction(
+          `async function(id){
+            const s=await (await fetch('/personal/session')).json();
+            const r=await fetch('/personal/organization-applications',{
+              method:'POST',
+              headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+              body:JSON.stringify({action:'withdraw',application_id:id,expected_version:4})
+            });
+            return {status:r.status,body:await r.json()};
+          }`,documentedReviewId)
+        assert.equal(documentedWithdraw.status,200)
+        assert.equal(documentedWithdraw.body.status,'withdrawn')
+        assert.equal(Number((await q('select count(*)::int n from da_organization_application_document where application_id=$1',[documentedReviewId]))[0].n),1)
         process.stdout.write("PASS B22 Chrome/HTTP/PG16: staff starts in_review, applicant sees stage and withdraws; forged and replayed decisions denied, audit preserved\n")
 
         await reviewChrome.eval("window.dispatchEvent(new Event('pagehide'))")
@@ -8496,7 +8570,7 @@ export default async function({container}:any){
         process.stdout.write("PASS B22 Chrome/HTTP/PG16: reviewer 101 submitted queue pages, unauthorized denied, stale view cleared\n")
       }finally{
         await q("delete from da_organization_application where id=any($1::text[])",
-          [reviewOverflowIds])
+          [paginationOnlyIds])
       }
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied\n")
     } finally {
