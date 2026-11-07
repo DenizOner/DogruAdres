@@ -230,7 +230,7 @@ export default async function({container}:any){
           assert.ok(timeline.some((e:any)=>e.source_event_id===event.id &&
             e.organization_id===policyOrg && e.action===event.action),
             "Company policy event must appear in the scoped Audit Index timeline")
-        process.stdout.write("PASS B22 real audit relay: platform company policy disable/reopen delivered by native Medusa Access/Index, redacted envelopes, durable ACKs and scoped timeline\\n")
+        process.stdout.write("PASS B22 real audit relay: platform company policy disable/reopen delivered by native Medusa Access/Index, redacted envelopes, durable ACKs and scoped timeline\n")
       }finally{
         for(const row of policyOriginal)
           await q("update da_audit_outbox set created_at=$2 where id=$1",
