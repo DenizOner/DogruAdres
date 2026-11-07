@@ -660,28 +660,52 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           };
           row.append(startBtn);
         }
+        const reviewOutcome=document.createElement('span');
+        reviewOutcome.setAttribute('role','status');
+        reviewOutcome.setAttribute('aria-live','polite');
         const correctBtn=document.createElement('button');
         correctBtn.type='button';correctBtn.textContent='Düzeltme İste';
-        correctBtn.onclick=async()=>{
-          if(!notesInput.value.trim()){alert('Düzeltme notu zorunludur.');return;}
-          await api('organization-applications',{method:'POST',body:JSON.stringify({
-            action:'review_decision',application_id:item.id,expected_version:item.version,
-            decision:'request_correction',notes:notesInput.value.trim()
-          })});
-          await refreshOrganizationReviews();
-        };
-        row.append(correctBtn);
         const rejectBtn=document.createElement('button');
         rejectBtn.type='button';rejectBtn.textContent='Reddet';
-        rejectBtn.onclick=async()=>{
-          if(!notesInput.value.trim()){alert('Ret gerekçesi zorunludur.');return;}
-          await api('organization-applications',{method:'POST',body:JSON.stringify({
-            action:'review_decision',application_id:item.id,expected_version:item.version,
-            decision:'reject',notes:notesInput.value.trim()
-          })});
-          await refreshOrganizationReviews();
+        const submitReviewDecision=async(decision,button)=>{
+          if(!currentReviewView()||button.disabled)return;
+          const notes=notesInput.value.trim();
+          if(!notes){
+            reviewOutcome.textContent=decision==='reject'?
+              ' — Ret gerekçesi zorunludur.':' — Düzeltme notu zorunludur.';
+            return;
+          }
+          correctBtn.disabled=true;rejectBtn.disabled=true;
+          reviewOutcome.textContent=' — Karar gönderiliyor…';
+          try{
+            const result=await api('organization-applications',{method:'POST',
+              body:JSON.stringify({action:'review_decision',application_id:item.id,
+                expected_version:item.version,decision,notes})});
+            if(!currentReviewView())return;
+            if(result.status!==(decision==='reject'?'rejected':'correction_requested'))
+              throw Error('Karar sonucu doğrulanamadı');
+            await refreshOrganizationReviews();
+          }catch(error){
+            if(!currentReviewView())return;
+            if(error.httpStatus===409){
+              // The old row is stale: never replay a decision under a new version.
+              await refreshOrganizationReviews();
+              if(epoch===viewEpoch&&currentPersonId===person&&
+                 !document.hidden&&!el('workspace').hidden)
+                el('organization-review-status').textContent=
+                  'Başvuru başka işlemle değişti; güncel inceleme kuyruğu yüklendi. Karar kaydedilmedi.';
+              return;
+            }
+            reviewOutcome.textContent=error.uncertain?
+              ' — Karar sonucu belirsiz. Tekrar göndermeyin; kuyruğu yenileyip güncel durumu kontrol edin.':
+              ' — Karar tamamlanamadı. Yetkinizi ve başvuru durumunu kontrol edin.';
+            // Unknown outcome must not be blindly retried from this row.
+            if(!error.uncertain){correctBtn.disabled=false;rejectBtn.disabled=false;}
+          }
         };
-        row.append(rejectBtn);
+        correctBtn.onclick=()=>void submitReviewDecision('request_correction',correctBtn);
+        rejectBtn.onclick=()=>void submitReviewDecision('reject',rejectBtn);
+        row.append(correctBtn,rejectBtn,reviewOutcome);
         // Raw PDFs and images never enter the staff browser. The backend
         // allows approval only after a fresh local malware scan and isolated
         // rasterization; this button is NOT a client-side authority grant.
@@ -2417,6 +2441,43 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             }
           };
           line.append(' ',connect);
+        }
+        // Historical Organization Admin may retain an earlier personal
+        // products.edit grant. Do not permit a new grant or native Store link,
+        // but do expose the existing server-authorized revoke operation.
+        const legacy=members.memberships.find(m=>m.person_id===grant.person_id&&
+          m.role==='admin'&&m.status==='active'&&m.protected_owner===false&&
+          typeof m.id==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(m.id));
+        if(legacy){
+          const revoke=document.createElement('button');
+          revoke.type='button';revoke.textContent='Eski Admin ürün iznini iptal et';
+          revoke.onclick=async()=>{
+            if(revoke.disabled||seq!==productPermissionRequest||
+               request!==organizationRequest||currentOrg!==org||
+               document.hidden||el('workspace').hidden)return;
+            revoke.disabled=true;
+            statusEl.textContent='Eski izin iptali kontrol ediliyor…';
+            try{
+              const result=await api('store-product-permissions',{method:'POST',
+                body:JSON.stringify({action:'revoke',organization_id:org,
+                  seller_id:grant.seller_id,membership_id:legacy.id})});
+              if(seq!==productPermissionRequest||request!==organizationRequest||
+                 currentOrg!==org||document.hidden)return;
+              if(result.status!=='revoked')throw Error('İptal sonucu doğrulanamadı');
+              await productPermissions(org,request,true);
+              if(request===organizationRequest&&currentOrg===org&&!document.hidden)
+                statusEl.textContent='Eski Admin ürün izni iptal edildi.';
+              void productDraftStores(org,request);
+            }catch(error){
+              if(seq!==productPermissionRequest||request!==organizationRequest||
+                 currentOrg!==org)return;
+              statusEl.textContent=error.uncertain?
+                'İptal sonucu belirsiz. Tekrar göndermeyin; izin listesini yenileyip doğrulayın.':
+                'Eski ürün izni iptal edilemedi. Yetkiyi ve kaydı kontrol edin.';
+              if(!error.uncertain)revoke.disabled=false;
+            }
+          };
+          line.append(' ',revoke);
         }
         grantList.append(line);
       }
