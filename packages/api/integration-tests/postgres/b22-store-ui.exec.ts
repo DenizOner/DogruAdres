@@ -5976,18 +5976,6 @@ export default async function({container}:any){
         "Native Seller insertion is uncommitted while its transaction waits")
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
-      const ownerRevokeRequest={
-        action:"revoke",organization_id:sellerGamma.id,
-        membership_id:gammaOwnerMembership.id
-      }
-      let ownerRevokeFinished=false
-      const ownerRevokePending=reviewer.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/memberships',{method:'POST',"+
-        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-        "body:JSON.stringify("+JSON.stringify(ownerRevokeRequest)+")});"+
-        "return {status:r.status,body:await r.json()}})()"
-      ).then((v:any)=>{ownerRevokeFinished=true;return v},
-        (e:unknown)=>{ownerRevokeFinished=true;throw e})
       // This same real native Seller creation holds the legal Organization
       // row FOR SHARE across its Foundation authorization + native Mercur
       // create workflow. A separate platform policy POST must wait on UPDATE.
@@ -6014,9 +6002,26 @@ export default async function({container}:any){
         where organization_id=$1 and action='organization.store_application_right_disabled'
           and new_values->>'reason'=$2`,[sellerGamma.id,gammaPolicyReason]))[0].n,0,
         "Concurrent company close must not write canonical audit before its row lock")
-      // The Owner-revoke call has also been initiated while the native Seller
-      // INSERT is blocked. A denied Owner removal must still leave this
-      // company's real Owner membership and Seller flow intact.
+      // Launch the pre-existing protected Owner-removal negative while the
+      // Seller INSERT is still in-flight. Crucially, start the POLICY request
+      // first: both use Person B, whose Foundation session row is locked per
+      // request. Otherwise the policy would wait on the session rather than
+      // on the Organization row, creating false concurrency evidence.
+      const ownerRevokeRequest={
+        action:"revoke",organization_id:sellerGamma.id,
+        membership_id:gammaOwnerMembership.id
+      }
+      let ownerRevokeFinished=false
+      const ownerRevokePending=reviewer.eval("(async()=>{const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/memberships',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify("+JSON.stringify(ownerRevokeRequest)+")});"+
+        "return {status:r.status,body:await r.json()}})()"
+      ).then((v:any)=>{ownerRevokeFinished=true;return v},
+        (e:unknown)=>{ownerRevokeFinished=true;throw e})
+      // The Owner-revoke call is now in flight while native Seller INSERT
+      // remains blocked, and B's policy request holds its session lock.
+      // The revocation must still fail without touching the protected Owner.
       const [stillOwner]=await q("select status,protected_owner from da_organization_membership where id=$1",[gammaOwnerMembership.id])
       assert.equal(stillOwner.status,"active")
       assert.equal(stillOwner.protected_owner,true)
