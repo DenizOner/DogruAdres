@@ -498,8 +498,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       // Revalidate the exact current private file at the moment of approval.
       // An existing metadata row is not evidence of a still-readable document.
       // Never use the applicant's raw download as the review path.
-      // A fresh scan and isolated rasterization are mandatory under the
-      // Foundation transaction lock at the exact moment of approval.
+      // Recheck file integrity and live ClamAV identity under the Foundation
+      // transaction lock. Rescan or rebuild the isolated preview only when
+      // the cached security evidence is stale or invalid.
       const preview=await readOrganizationApplicationReviewPreview(
         sql,token,request.applicationId)
       if(!preview?.content?.length)throw new TaxCertificateReviewUnavailable()
