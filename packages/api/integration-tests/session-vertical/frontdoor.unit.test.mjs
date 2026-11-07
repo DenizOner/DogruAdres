@@ -17,11 +17,14 @@ test("B22 Store follow has exact private GET and CSRF POST ingress only",()=>{
 
 test("B22 Store applications and active Store read have exact public method/path contracts",()=>{
   for(const method of ["GET","POST"])
-    assert.equal(allowedPublicRequest(method,"/personal/store-applications"),true)
+    for(const path of ["/personal/store-applications","/personal/store-draft-permissions"])
+      assert.equal(allowedPublicRequest(method,path),true)
   assert.equal(allowedPublicRequest("GET","/personal/organization-stores"),true)
   assert.equal(allowedPublicRequest("GET","/personal/catalog"),true)
   assert.equal(allowedPublicRequest("POST","/personal/catalog"),false)
   for(const [path,method] of [
+    ["/personal/store-draft-permissions","PATCH"],["/personal/store-draft-permissions","DELETE"],
+    ["/personal/store-draft-permissions","OPTIONS"],["/personal/store-draft-permissions/other","POST"],
     ["/personal/store-applications","PATCH"],["/personal/store-applications","DELETE"],
     ["/personal/store-applications","OPTIONS"],["/personal/store-applications","HEAD"],
     ["/personal/store-applications/other","POST"],["/personal/organization-stores","POST"],
