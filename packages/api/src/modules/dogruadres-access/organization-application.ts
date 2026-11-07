@@ -114,7 +114,7 @@ export async function listOrganizationDrafts(
       (select original_sha256 from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_sha256,
       (select version from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_version
     from da_organization_application
-    where applicant_person_id=? and status in ('draft','withdrawn','submitted','correction_requested','rejected','approved')
+    where applicant_person_id=? and status in ('draft','withdrawn','submitted','in_review','correction_requested','rejected','approved')
     ${cursor?"and (updated_at < ?::timestamptz or (updated_at = ?::timestamptz and id > ?))":""}
     order by updated_at desc,id asc limit 101`,
     cursor?[session.person_id,cursor.updatedAt,cursor.updatedAt,cursor.id]:
@@ -223,12 +223,12 @@ export async function withdrawOrganizationDraft(
   if(rows.length>1)throw new IdentityAccessDenied()
   // Do not disclose existence or status of another Person's application.
   if(rows.length!==1||rows[0].applicant_person_id!==session.person_id)return null
-  if(!["draft","submitted","correction_requested"].includes(rows[0].status)||
+  if(!["draft","submitted","in_review","correction_requested"].includes(rows[0].status)||
      Number(rows[0].version)!==input.expected_version)
     return {conflict:true as const}
   const updated=await db.execute(`update da_organization_application
     set status='withdrawn',version=version+1,updated_at=clock_timestamp()
-    where id=? and applicant_person_id=? and status in ('draft','submitted','correction_requested') and version=?
+    where id=? and applicant_person_id=? and status in ('draft','submitted','in_review','correction_requested') and version=?
     returning version`,[input.application_id,session.person_id,input.expected_version])
   if(updated.length!==1) return {conflict:true as const}
   const auditId="daaud_"+randomUUID()
@@ -467,7 +467,7 @@ export async function submitOrganizationApplication(
   // 4. Confidential duplicate review check (#44)
   const duplicateApps=await db.execute(
     `select id from da_organization_application
-     where tax_identifier=? and status in ('submitted','approved') and id<>?`,
+     where tax_identifier=? and status in ('submitted','in_review','approved') and id<>?`,
     [app.tax_identifier, input.application_id]
   )
   const duplicateOrgs=await db.execute(
@@ -543,7 +543,7 @@ export async function readOrganizationApplicationDocument(
   if(!isApplicant){
     // A reviewer is authorized only once the applicant actually submits.
     // Pre-submission, correction and terminal private documents remain applicant-only.
-    if(appRows[0].status!=="submitted")return null
+    if(!["submitted","in_review"].includes(appRows[0].status))return null
     const staff=await new IdentitySessions(db).staff(token,"organization.review","platform")
     if(!staff)return null
     // Fail closed for every submitted PDF/JPEG/PNG until both a genuine server
@@ -605,7 +605,7 @@ export async function readOrganizationApplicationReviewPreview(
   const rows=await db.execute(
     `select applicant_person_id,status,version from da_organization_application
      where id=? for share`,[applicationId])
-  if(rows.length!==1||rows[0].status!=="submitted"||
+  if(rows.length!==1||!["submitted","in_review"].includes(rows[0].status)||
      rows[0].applicant_person_id===session.person_id)return null
   // Exclusive per-document lock prevents two simultaneous staff previews
   // repeating the same ClamAV update; this is the existing PG16 transaction.
@@ -698,7 +698,7 @@ export async function listSubmittedOrganizationApplications(
        (select original_sha256 from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_sha256,
        (select version from da_organization_application_document where application_id=da_organization_application.id and is_current=true limit 1) as doc_version
      from da_organization_application
-     where status = 'submitted'
+     where status in ('submitted','in_review')
      ${cursor?"and (updated_at < ?::timestamptz or (updated_at = ?::timestamptz and id > ?))":""}
      order by updated_at desc, id asc limit 101`,
     cursor?[cursor.updatedAt,cursor.updatedAt,cursor.id]:[]
@@ -744,7 +744,7 @@ export const reviewApplicationPayload = z.object({
   action: z.literal("review_decision"),
   application_id: z.string().regex(/^daorgapp_[0-9a-f]{32}$/),
   expected_version: z.number().int().positive(),
-  decision: z.enum(["request_correction", "reject", "approve"]),
+  decision: z.enum(["start_review", "request_correction", "reject", "approve"]),
   notes: z.string().trim().min(2).max(1000).optional(),
 }).strict()
 export type ReviewApplicationPayload = z.infer<typeof reviewApplicationPayload>
@@ -800,7 +800,7 @@ export async function reviewOrganizationApplication(
   if (rows.length !== 1) return null
   const app = rows[0]
 
-  if (app.status !== "submitted") {
+  if (!["submitted","in_review"].includes(app.status)) {
     return { conflict: true as const }
   }
   if (Number(app.version) !== input.expected_version) {
@@ -812,13 +812,42 @@ export async function reviewOrganizationApplication(
   // A platform reviewer must never decide their own application.
   if (staffSession.person_id === app.applicant_person_id) return null
 
+  if (input.decision === "start_review") {
+    // This is a status transition by authorized platform staff, never an
+    // automatic Organization/Owner approval.
+    if(app.status!=="submitted")return {conflict:true as const}
+    const updated=await db.execute(
+      `update da_organization_application
+       set status='in_review',reviewed_by_person_id=?,reviewed_at=clock_timestamp(),
+           version=version+1,updated_at=clock_timestamp()
+       where id=? and status='submitted' and version=? returning version`,
+      [staffSession.person_id,input.application_id,input.expected_version]
+    )
+    if(updated.length!==1)return {conflict:true as const}
+    const auditId="daaud_"+randomUUID()
+    await db.execute(
+      `insert into da_audit_event
+       (id,actor_person_id,actor_type,actor_id,action,module,resource,target_id,
+        occurred_at,created_at,updated_at)
+       values(?,?,?,?,'organization.application_in_review','dogruadres-access',
+              'organization-application',?,clock_timestamp(),now(),now())`,
+      [auditId,staffSession.person_id,staffSession.actor_type,staffSession.actor_id,input.application_id]
+    )
+    await db.execute(
+      `insert into da_security_outbox(id,audit_event_id,created_at) values(?,?,now())`,
+      [randomUUID(),auditId]
+    )
+    return {conflict:false as const,application_id:input.application_id,
+      status:"in_review" as const,version:Number(updated[0].version)}
+  }
+
   if (input.decision === "request_correction") {
     if (!input.notes) throw new IdentityAccessDenied()
     const updated = await db.execute(
       `update da_organization_application
        set status='correction_requested', review_notes=?, reviewed_by_person_id=?, reviewed_at=clock_timestamp(),
            version=version+1, updated_at=clock_timestamp()
-       where id=? and status='submitted' and version=?
+       where id=? and status in ('submitted','in_review') and version=?
        returning version`,
       [input.notes, staffSession.person_id, input.application_id, input.expected_version]
     )
@@ -849,7 +878,7 @@ export async function reviewOrganizationApplication(
       `update da_organization_application
        set status='rejected', review_notes=?, reviewed_by_person_id=?, reviewed_at=clock_timestamp(),
            version=version+1, updated_at=clock_timestamp()
-       where id=? and status='submitted' and version=?
+       where id=? and status in ('submitted','in_review') and version=?
        returning version`,
       [input.notes, staffSession.person_id, input.application_id, input.expected_version]
     )
@@ -916,7 +945,7 @@ export async function reviewOrganizationApplication(
        set status='approved', organization_id=?, review_notes=?,
            reviewed_by_person_id=?, reviewed_at=clock_timestamp(),
            version=version+1, updated_at=clock_timestamp()
-       where id=? and status='submitted' and version=?
+       where id=? and status in ('submitted','in_review') and version=?
        returning version`,
       [orgId,input.notes??null,staffSession.person_id,input.application_id,input.expected_version]
     )

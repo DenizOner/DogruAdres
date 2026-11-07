@@ -474,7 +474,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           /^[A-Za-z0-9_-]{1,256}$/.test(data.next_cursor)))
         throw Error('Taslaklar doğrulanamadı');
       for(const item of data.drafts){
-        if(!item||typeof item.id!=='string'||!['draft','withdrawn','submitted','correction_requested','rejected','approved'].includes(item.status)||
+        if(!item||typeof item.id!=='string'||!['draft','withdrawn','submitted','in_review','correction_requested','rejected','approved'].includes(item.status)||
           !Number.isSafeInteger(item.version)||item.version<1||
           !['individual_business','legal_company'].includes(item.business_kind)||
           !Array.isArray(item.declared_activities)||item.declared_activities.length>6||
@@ -485,7 +485,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const row=document.createElement('p'),button=document.createElement('button');
         row.textContent=item.legal_name+(
           item.status==='draft'?' — Taslak (henüz gönderilmedi)':
-          item.status==='submitted'?' — Başvuru gönderildi (onay bekliyor)':
+          item.status==='submitted'?' — Başvuru gönderildi (inceleme bekliyor)':
+          item.status==='in_review'?' — İncelemede (platform görevlisi değerlendiriyor)':
           item.status==='correction_requested'?' — Düzeltme istendi':
           item.status==='rejected'?' — Başvuru reddedildi':
           item.status==='approved'?' — Başvuru onaylandı':
@@ -544,7 +545,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         };
           row.append(button);
         }
-        if(item.status==='submitted'){
+        if(['submitted','in_review'].includes(item.status)){
           const withdrawSubmitted=document.createElement('button');
           withdrawSubmitted.type='button';withdrawSubmitted.textContent='Başvuruyu geri çek';
           withdrawSubmitted.disabled=organizationDraftSaving;
@@ -618,7 +619,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       for(const item of data.applications){
         const row=document.createElement('p');
         const dupText=item.duplicate_review_required?' [Mükerrerlik İncelemesi Gerekli]':'';
-        row.textContent=item.legal_name+' ('+item.business_kind+', VKN/TCKN: '+item.tax_identifier+')'+dupText+' — Durum: '+item.status;
+        row.textContent=item.legal_name+' ('+item.business_kind+', VKN/TCKN: '+item.tax_identifier+')'+dupText+
+          ' — Durum: '+(item.status==='in_review'?'İncelemede':'İnceleme bekliyor');
         if(item.has_document){
           const message=document.createElement('span');
           message.textContent=' — Vergi levhası: bu oturumda virüs taraması henüz doğrulanmadı; yalnız güvenli önizleme ile kontrol edilebilir. Ham belge indirmesi kapalı.';
@@ -627,6 +629,27 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const notesInput=document.createElement('input');
         notesInput.placeholder='İnceleme / düzeltme notu';
         row.append(notesInput);
+        if(item.status==='submitted'){
+          const startBtn=document.createElement('button');
+          startBtn.type='button';startBtn.textContent='İncelemeye Al';
+          startBtn.onclick=async()=>{
+            if(!stillAuthorizedView()||!row.isConnected)return;
+            startBtn.disabled=true;
+            try{
+              await api('organization-applications',{method:'POST',body:JSON.stringify({
+                action:'review_decision',application_id:item.id,expected_version:item.version,
+                decision:'start_review'
+              })});
+              if(stillAuthorizedView())await refreshOrganizationReviews();
+            }catch{
+              if(stillAuthorizedView()&&row.isConnected){
+                startBtn.disabled=false;
+                el('organization-review-status').textContent='İncelemeye alma doğrulanamadı; başvuru kuyruğunu yenileyin.';
+              }
+            }
+          };
+          row.append(startBtn);
+        }
         const correctBtn=document.createElement('button');
         correctBtn.type='button';correctBtn.textContent='Düzeltme İste';
         correctBtn.onclick=async()=>{
