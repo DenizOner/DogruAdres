@@ -314,7 +314,7 @@ export default async function({container}:any){
             "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
             [event.id]))[0].n,1)
         }
-        process.stdout.write("PASS B22 real audit relay: two Owner Store draft sources delivered by native Medusa worker; redacted per-Organization envelopes, single Index rows and durable ACKs\\n")
+        process.stdout.write("PASS B22 real audit relay: two Owner Store draft sources delivered by native Medusa worker; redacted per-Organization envelopes, single Index rows and durable ACKs\n")
       }finally{
         for(const original of draftOriginal)
           await q("update da_audit_outbox set created_at=$2 where id=$1",
