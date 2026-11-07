@@ -723,8 +723,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             // A successful preview follows ClamAV verdicts for the
             // original and rasterized document; not a permanent guarantee.
             previewNote.textContent=previewReady?
-              ' — Virüs taramasından geçirilmiştir: mevcut imzalarla tehdit algılanmadı. Güvenli görselin tamamı gösterildi; onayda tarama tekrarlanır.':
-              ' — Virüs taramasından geçirilmiştir: mevcut imzalarla tehdit algılanmadı. Belgenin bütün sayfalarını görmek için görselin sonuna kaydırın; onayda tarama tekrarlanır.';
+              ' — Virüs taramasından geçirilmiştir: mevcut imzalarla tehdit algılanmadı. Güvenli görselin tamamı gösterildi; onayda belge bütünlüğü ve ClamAV imza güncelliği doğrulanır, gerekirse yeniden taranır.':
+              ' — Virüs taramasından geçirilmiştir: mevcut imzalarla tehdit algılanmadı. Belgenin bütün sayfalarını görmek için görselin sonuna kaydırın; onayda belge bütünlüğü ve ClamAV imza güncelliği doğrulanır, gerekirse yeniden taranır.';
           };
           previewBox.onscroll=updateCompletePreview;
           previewBtn.onclick=()=>{
