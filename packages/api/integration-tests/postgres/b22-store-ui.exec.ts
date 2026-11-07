@@ -7944,7 +7944,19 @@ export default async function({container}:any){
         "select version,storage_key,original_sha256,is_current from da_organization_application_document where application_id=$1 order by version",
         [foreignAppId])
       assert.equal(priorRevisions.length,1)
-      const correctedPdf=Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\n0 1\n0000000000 65535 f\n% replacement document\ntrailer\n<<>>\nstartxref\n9\n%%EOF\n","ascii")
+      // Replace the former EOF-shaped PDF stub: upload now requires a genuine
+      // ClamAV scan AND sandbox rendering before marking a correction saved.
+      // Change exactly eight metadata bytes so PDF xref offsets and both pages
+      // remain valid, while the immutable original SHA-256 really changes.
+      const correctedPdf=Buffer.from(twoPagePdfBase64,"base64")
+      const previousTitle=Buffer.from("/Title (untitled)","ascii")
+      const correctedTitle=Buffer.from("/Title (changed!)","ascii")
+      assert.equal(previousTitle.length,correctedTitle.length)
+      const titleOffset=correctedPdf.indexOf(previousTitle)
+      assert.ok(titleOffset>0,"Expected known two-page PDF metadata")
+      correctedTitle.copy(correctedPdf,titleOffset)
+      assert.notEqual(createHash("sha256").update(correctedPdf).digest("hex"),
+        createHash("sha256").update(Buffer.from(twoPagePdfBase64,"base64")).digest("hex"))
       const correctionSelection=await foreignDraftChrome.eval(`(()=>{
         const raw=atob(${JSON.stringify(correctedPdf.toString("base64"))});
         const file=new File([Uint8Array.from(raw,c=>c.charCodeAt(0))],
@@ -7963,7 +7975,14 @@ export default async function({container}:any){
       assert.equal(Number((await q("select count(*)::int n from da_organization_application_document where application_id=$1",[foreignAppId]))[0].n),1,
         "Selecting a file must not upload it")
       await foreignDraftChrome.click("#organization-document-upload")
-      await foreignDraftChrome.wait("document.getElementById('organization-document-status').textContent.includes('başarıyla yüklendi')")
+      try {
+        await foreignDraftChrome.wait("document.getElementById('organization-document-status').textContent.includes('başarıyla yüklendi') || document.getElementById('organization-document-status').textContent.includes('başarısız oldu')")
+      }catch(error){
+        const state=await foreignDraftChrome.eval("document.getElementById('organization-document-status').textContent")
+        throw Error("B22 correction upload remained unresolved: "+state+"; "+String(error))
+      }
+      assert.equal(await foreignDraftChrome.eval("document.getElementById('organization-document-status').textContent.includes('başarıyla yüklendi')"),true,
+        "Updated real PDF must pass ClamAV and isolated preview during corrected upload")
       assert.equal(await foreignDraftChrome.eval("document.getElementById('organization-document-status').textContent.includes('virüs taramasından geçirildi')"),true,
         "Only a successfully scanned and persistently stored upload may claim clean ClamAV status")
       await foreignDraftChrome.wait("!document.getElementById('organization-application-submit').hidden && !document.getElementById('organization-application-submit').disabled")
