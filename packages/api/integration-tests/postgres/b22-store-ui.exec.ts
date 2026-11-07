@@ -4544,6 +4544,41 @@ export default async function({container}:any){
     assert.equal(revokeAudit[0].n,1,"Revocation requires canonical outbox")
     process.stdout.write("PASS B22 Chrome: Owner grants active Member scoped products.edit, retry idempotent, foreign Member/staff 403, Owner revokes with PG16 audit/outbox\n")
 
+    // A legacy Admin may retain a product grant even though new Admin grants
+    // are forbidden. Use the Owner's actual browser to revoke that one grant.
+    const legacyRegrant=await browser.eval("(async()=>{"+
+      "const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-product-permissions',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify("+JSON.stringify(sameRequest)+")});"+
+      "return {status:r.status,body:await r.json()}})()")
+    assert.equal(legacyRegrant.status,200)
+    assert.equal(legacyRegrant.body.status,'active')
+    const legacyGrantId=legacyRegrant.body.grant_id
+    await q("update da_organization_membership set role='admin',protected_owner=false,updated_at=clock_timestamp() where id=$1",
+      [alphaMember.id])
+    try{
+      await browser.click('#memberships-refresh')
+      await browser.wait("Array.from(document.querySelectorAll('#product-grants-list button')).some(b=>b.textContent==='Eski Admin ürün iznini iptal et')")
+      const ordinaryOptions=await browser.eval(
+        "Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).map(o=>o.value)")
+      assert.equal(ordinaryOptions.includes(alphaMember.id),false,
+        "Legacy Admin must not become eligible for a new personal product grant")
+      await browser.eval("Array.from(document.querySelectorAll('#product-grants-list button')).find(b=>b.textContent==='Eski Admin ürün iznini iptal et').click()")
+      await until(async()=> (await q("select revoked_at from da_store_product_permission where id=$1",
+        [legacyGrantId]))[0]?.revoked_at!=null,19000,
+        "Owner must revoke the historical Admin grant through real Chrome")
+      await browser.wait("document.getElementById('product-grants-status').textContent.includes('Eski Admin ürün izni iptal edildi')")
+      assert.deepEqual(await q("select role,status,protected_owner from da_organization_membership where id=$1",
+        [alphaMember.id]),[{role:'admin',status:'active',protected_owner:false}])
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: Owner revokes legacy Admin products.edit through existing API without restoring Admin grants\n")
+    }finally{
+      await q("update da_organization_membership set role='member',protected_owner=false,updated_at=clock_timestamp() where id=$1",
+        [alphaMember.id])
+      await browser.click('#memberships-refresh')
+      await browser.wait("Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).some(o=>o.value==="+JSON.stringify(alphaMember.id)+")")
+    }
+
     // Verify the PR #256 policy boundary with this SAME active protected Owner:
     // actual Chrome/HTTPS endpoints, task-only PG16 rows and audit/outbox.
     const previousPermissionPolicy=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
