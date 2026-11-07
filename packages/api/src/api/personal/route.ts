@@ -1747,8 +1747,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-draft-grants-status').textContent='';
     el('store-draft-grants-list').replaceChildren();
     const form=el('store-draft-grants-form');
-    form.elements.namedItem('membership_id').replaceChildren();
-    for(const button of form.querySelectorAll('button'))button.disabled=true;
+    // Preserve private concealment in both actual browsers and the existing
+    // reduced DOM regression harness (which need not implement forms API).
+    if(form && form.elements && typeof form.elements.namedItem==='function'){
+      const select=form.elements.namedItem('membership_id');
+      if(select && typeof select.replaceChildren==='function')select.replaceChildren();
+    }
+    if(form && typeof form.querySelectorAll==='function')
+      for(const button of form.querySelectorAll('button'))button.disabled=true;
   }
   async function storeDraftPermissions(org,request,keepOutcome=false){
     if(request!==organizationRequest||currentOrg!==org||document.hidden||
