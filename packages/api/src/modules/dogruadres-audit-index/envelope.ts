@@ -46,11 +46,12 @@ const schema = z.object({
     (value.actor.role_context === "owner" &&
      /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
-  // Platform company-policy events must be sourced from an authenticated
-  // Staff user and address the exact legal Organization, never another target.
+  // The real Staff permission is granted to the canonical Person after
+  // strong authentication, regardless of which verified native actor type
+  // ('user' / 'member' / 'customer') their current Person session binds.
+  // Keep role, Organization scope and target restrictions fail-closed.
   .refine(value => !isCompanyPolicyAction(value.action) ||
     (value.actor.role_context === "platform_staff" &&
-     value.actor.type === "user" &&
      /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      value.target_id === value.organization_id))
   // Only explicitly registered canonical Staff actions may cross the Index

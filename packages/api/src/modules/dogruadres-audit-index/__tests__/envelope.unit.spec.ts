@@ -106,28 +106,33 @@ describe("Audit Index version 1 validation and redaction", () => {
   it.each(["organization.store_application_right_disabled",
     "organization.store_application_right_enabled"])(
     "indexes a canonical Staff company policy %s with private reason/grant redacted", action => {
-      const event={
-        ...source(),role_context:"platform_staff",action,resource:"organization",
-        target_id:"daorg_example",previous_values:{secret:"do-not-project"},
-        new_values:{reason:"do-not-project",staff_grant_id:"do-not-project"},
+      // IdentitySessions.staff() grants a Person-scoped task to strong sessions
+      // of any of these three verified native actor types.
+      for(const actorType of ["user","member","customer"] as const) {
+        const event={
+          ...source(),actor_type:actorType,role_context:"platform_staff",
+          action,resource:"organization",target_id:"daorg_example",
+          previous_values:{secret:"do-not-project"},
+          new_values:{reason:"do-not-project",staff_grant_id:"do-not-project"},
+        }
+        const projected=projectFoundationAuditEvent(event)
+        expect(projected.actor.role_context).toBe("platform_staff")
+        expect(projected.actor.type).toBe(actorType)
+        expect(projected.action).toBe(action)
+        expect(projected.resource).toBe("organization")
+        expect(projected.target_id).toBe(projected.organization_id)
+        expect(validateAuditIndexEnvelope(projected)).toEqual(projected)
+        expect(JSON.stringify(projected)).not.toContain("do-not-project")
+        expect(Object.keys(projected).sort()).toEqual([
+          "action","actor","occurred_at","organization_id","resource",
+          "source_event_id","source_module","target_id","version"])
+        for(const change of [
+          {role_context:"owner"}, {role_context:"member"},
+          {target_id:"daorg_foreign"}, {resource:"membership"},
+          {organization_id:"wrong_scope"}, {actor_type:"administrator"},
+        ]) expect(() => projectFoundationAuditEvent({...event,...change}))
+          .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
       }
-      const projected=projectFoundationAuditEvent(event)
-      expect(projected.actor.role_context).toBe("platform_staff")
-      expect(projected.actor.type).toBe("user")
-      expect(projected.action).toBe(action)
-      expect(projected.resource).toBe("organization")
-      expect(projected.target_id).toBe(projected.organization_id)
-      expect(validateAuditIndexEnvelope(projected)).toEqual(projected)
-      expect(JSON.stringify(projected)).not.toContain("do-not-project")
-      expect(Object.keys(projected).sort()).toEqual([
-        "action","actor","occurred_at","organization_id","resource",
-        "source_event_id","source_module","target_id","version"])
-      for(const change of [
-        {role_context:"owner"}, {role_context:"member"}, {actor_type:"member"},
-        {target_id:"daorg_foreign"}, {resource:"membership"},
-        {organization_id:"wrong_scope"},
-      ]) expect(() => projectFoundationAuditEvent({...event,...change}))
-        .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
     })
   it.each(["root", "platform-staff", "platform_staff ", "superuser"])("still rejects unsupported role %s", role => {
     expect(() => projectFoundationAuditEvent({ ...source(), role_context: role })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
