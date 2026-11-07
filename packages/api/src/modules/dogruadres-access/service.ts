@@ -30,7 +30,7 @@ import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedS
 import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
-import {readStoreDrafts,authorizedStoreDraftOwner,storeDraftPayload,type StoreDraftInput} from "./store-application-draft"
+import {readStoreDrafts,authorizedStoreDraftActor,verifiedStoreDraftGrant,storeDraftPayload,type StoreDraftInput} from "./store-application-draft"
 import {
   listOrganizationDrafts,
   saveOrganizationDraft,
@@ -1594,15 +1594,20 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalStoreApplications(token:string,org:string,@MedusaContext() context:Context={}){
     const db=securitySql(context.transactionManager)
-    const applications=await readStoreApplications(db,token,org)
+    const drafts=await readStoreDrafts(db,token,org)
+    if(!drafts)return null
+    // An explicitly authorized Member sees only unfinished Organization
+    // drafts. Official Seller applications are an Owner-only resource.
+    const applications=drafts.draft_role==="owner"?
+      await readStoreApplications(db,token,org):[]
     if(!applications)return null
     const policy=await db.execute(`select store_application_enabled from da_organization
       where id=? and status='active' and deleted_at is null`,[org])
     if(policy.length!==1||typeof policy[0].store_application_enabled!=="boolean")
       return null
-    const drafts=await readStoreDrafts(db,token,org)
     return {applications,store_application_enabled:policy[0].store_application_enabled as boolean,
-      drafts:drafts?.drafts??[],has_more_drafts:drafts?.has_more_drafts??false}
+      draft_role:drafts.draft_role,drafts:drafts.drafts,
+      has_more_drafts:drafts.has_more_drafts}
   }
 
   /** A save is only Organization-private input. No native Seller, irreversible
@@ -1613,7 +1618,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const parsed=storeDraftPayload.safeParse(input)
     if(!parsed.success)throw new IdentityAccessDenied()
     const value=parsed.data,db=securitySql(context.transactionManager)
-    const actor=await authorizedStoreDraftOwner(db,token,value.organization_id)
+    const actor=await authorizedStoreDraftActor(db,token,value.organization_id)
     if(!actor)return null
     await db.execute(`select pg_advisory_xact_lock(hashtext('b22-store-draft'),hashtext(?))`,
       [value.draft_id])
@@ -1644,7 +1649,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // name/email or free-text Store contact details to the Audit Index.
     const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
-      role_context:"owner",organization_id:value.organization_id,
+      role_context:actor.role_context,organization_id:value.organization_id,
       action:"organization.store_application_draft_saved",
       module:DOGRUADRES_AUDIT_MODULE,resource:"store-application-draft",
       target_id:value.draft_id,
@@ -1655,6 +1660,144 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!audit?.id)throw new IdentityAccessDenied()
     return {conflict:false as const,draft_id:value.draft_id,status:"draft" as const,
       version:beforeVersion+1}
+  }
+
+  /** Owner lists active Members and a bounded list of personally issued
+   * Store draft permissions, never native Seller/Member role grants.
+   */
+  @InjectTransactionManager()
+  async personalListStoreDraftPermissions(token:string,org:string,
+    @MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const actor=await sessions.organizations(token,org,false)
+    if(!actor||actor.organizations.length!==1||actor.organizations[0].role!=="owner"||
+       !organizationActionAllowed("owner","membership.list",
+         await isCurrentProtectedOwner(db,actor.person_id,org),false))return null
+    const members=await db.execute(`select m.id as membership_id,m.person_id
+      from da_organization_membership m
+      join da_person p on p.id=m.person_id and p.disabled_at is null and p.deleted_at is null
+      where m.organization_id=? and m.role='member' and m.protected_owner=false
+        and m.status='active' and m.revoked_at is null and m.deleted_at is null
+      order by m.id limit 101`,[org])
+    if(members.length>100||members.some(m=>typeof m.membership_id!=="string"||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(m.membership_id)||
+       typeof m.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)))
+      throw new IdentityAccessDenied()
+    const grants=await db.execute(`select g.id,g.person_id,g.membership_id
+      from da_organization_store_draft_permission g
+      join da_audit_event e on e.id=g.source_audit_event_id and e.deleted_at is null
+        and e.module='dogruadres-access' and e.actor_person_id=g.issued_by_person_id
+        and e.organization_id=g.organization_id and e.target_id=g.person_id
+        and e.action='organization.store_draft_permission_granted'
+        and e.resource='store-draft-permission'
+        and e.new_values->>'grant_id'=g.id
+        and e.new_values->>'person_id'=g.person_id
+        and e.new_values->>'membership_id'=g.membership_id
+        and e.new_values->>'permission'=g.permission
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+        and x.source_module='dogruadres-access' and x.deleted_at is null
+      where g.organization_id=? and g.permission='store.application.draft.manage'
+        and g.revoked_at is null order by g.id limit 101`,[org])
+    if(grants.length>100||grants.some(g=>typeof g.id!=="string"||
+       !/^dasdpg_[A-Za-z0-9_-]+$/.test(g.id)||
+       typeof g.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)||
+       typeof g.membership_id!=="string"||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(g.membership_id)))
+      throw new IdentityAccessDenied()
+    return {members,grants}
+  }
+
+  /** Same Foundation transaction, provenance, and Owner guard as the existing
+   * buyer permission writer. The immutable Owner group itself is unchanged.
+   */
+  @InjectTransactionManager()
+  async personalChangeStoreDraftPermission(
+    token:string,input:{action:"grant"|"revoke";organization_id:string;membership_id:string},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
+       !["grant","revoke"].includes(input.action))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const actor=await sessions.current(token,true,false)
+    if(!actor)return null
+    const organization=await sessions.organizations(token,input.organization_id,false)
+    if(!organization||organization.person_id!==actor.person_id||
+       organization.organizations.length!==1||organization.organizations[0].role!=="owner"||
+       !organizationActionAllowed("owner","membership.manage",
+         await isCurrentProtectedOwner(db,actor.person_id,input.organization_id),false))
+      return null
+    const target=await db.execute(`select m.person_id from da_organization_membership m
+      join da_person p on p.id=m.person_id
+      join da_organization o on o.id=m.organization_id and o.status='active' and o.deleted_at is null
+      where m.id=? and m.organization_id=? and m.role='member'
+        and m.protected_owner=false and m.revoked_at is null and m.deleted_at is null
+        ${input.action==="grant"?"and m.status='active' and p.disabled_at is null and p.deleted_at is null":""}
+      for share of m,p,o`,[input.membership_id,input.organization_id])
+    if(target.length!==1||typeof target[0].person_id!=="string"||
+       !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
+    const personId=target[0].person_id as string
+    // A revoked grant cannot authorize an in-flight draft: both paths take
+    // the identical transaction-scoped lock before inspecting the grant.
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-store-draft-grant'),hashtext(?))`,
+      [input.organization_id+":"+personId])
+    const active=await db.execute(`select id,membership_id
+      from da_organization_store_draft_permission
+      where person_id=? and organization_id=?
+        and permission='store.application.draft.manage' and revoked_at is null
+      for update`,[personId,input.organization_id])
+    if(active.length>1||active.some(g=>typeof g.id!=="string"||
+        !/^dasdpg_[A-Za-z0-9_-]+$/.test(g.id)||
+        typeof g.membership_id!=="string"))throw new IdentityAccessDenied()
+    if(input.action==="grant"){
+      if(active.length){
+        if(active[0].membership_id!==input.membership_id||
+           !await verifiedStoreDraftGrant(db,personId,input.organization_id,input.membership_id))
+          throw new IdentityAccessDenied()
+        return {status:"active" as const,grant_id:active[0].id as string}
+      }
+      const grantId="dasdpg_"+randomUUID()
+      const [audit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
+        role_context:"owner",organization_id:input.organization_id,
+        action:"organization.store_draft_permission_granted",module:DOGRUADRES_AUDIT_MODULE,
+        resource:"store-draft-permission",target_id:personId,
+        new_values:{grant_id:grantId,person_id:personId,
+          membership_id:input.membership_id,permission:"store.application.draft.manage"},
+        occurred_at:new Date()
+      }],context)
+      if(!audit?.id)throw new IdentityAccessDenied()
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      await db.execute(`insert into da_organization_store_draft_permission
+        (id,person_id,organization_id,membership_id,permission,
+         issued_by_person_id,source_audit_event_id)
+        values (?,?,?,?,'store.application.draft.manage',?,?)`,
+        [grantId,personId,input.organization_id,input.membership_id,actor.person_id,audit.id])
+      await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
+        values (?,?,?)`,["danot_"+randomUUID(),personId,audit.id])
+      return {status:"active" as const,grant_id:grantId}
+    }
+    if(!active.length)return {status:"revoked" as const,grant_id:null}
+    const grantId=active[0].id as string
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
+      role_context:"owner",organization_id:input.organization_id,
+      action:"organization.store_draft_permission_revoked",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-draft-permission",target_id:personId,
+      previous_values:{grant_id:grantId,person_id:personId,
+        membership_id:active[0].membership_id,permission:"store.application.draft.manage"},
+      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const result=await db.execute(`update da_organization_store_draft_permission
+      set revoked_at=clock_timestamp() where id=? and revoked_at is null returning id`,[grantId])
+    if(result.length!==1)throw new IdentityAccessDenied()
+    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
+      values (?,?,?)`,["danot_"+randomUUID(),personId,audit.id])
+    return {status:"revoked" as const,grant_id:grantId}
   }
 
   // A dedicated platform task is required. Holding organization.provision or
