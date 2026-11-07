@@ -1,4 +1,4 @@
-﻿import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
+import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
 import type { OutboxClaim, DeliveryErrorCode } from "./audit-delivery-policy"
 import { hasRecentMfaProof } from "./mfa-management"
 import {
@@ -30,7 +30,24 @@ import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedS
 import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
-import {listOrganizationDrafts,saveOrganizationDraft,withdrawOrganizationDraft,type DraftPayload,type WithdrawDraftPayload,type OrganizationDraftCursor} from "./organization-application"
+import {
+  listOrganizationDrafts,
+  saveOrganizationDraft,
+  withdrawOrganizationDraft,
+  saveOrganizationDocument,
+  submitOrganizationApplication,
+  readOrganizationApplicationDocument,
+  readOrganizationApplicationReviewPreview,
+  TaxCertificateReviewUnavailable,
+  listSubmittedOrganizationApplications,
+  reviewOrganizationApplication,
+  type ReviewApplicationPayload,
+  type DraftPayload,
+  type WithdrawDraftPayload,
+  type UploadDocumentPayload,
+  type SubmitApplicationPayload,
+  type OrganizationDraftCursor,
+} from "./organization-application"
 
 export type ActorReference = Readonly<{ actor_type: string; actor_id: string }>
 
@@ -39,6 +56,7 @@ type ProvisionOrganizationInput = Readonly<{
   provisioned_by: ActorReference
   initial_owners: ActorReference[]
   staff_grant_id?: string
+  staff_task?: "organization.provision"|"organization.review"
 }>
 
 type ChangeMembershipInput = Readonly<{
@@ -219,7 +237,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   }
   @InjectTransactionManager()
   async personalChangeMembershipRole(token:string,org:string,membership:string,role:'member'|'admin',@MedusaContext() context:Context={}) {
-    if(role!=='member'&&role!=='admin')throw new MedusaError(MedusaError.Types.INVALID_DATA,'Invalid role')
+    // Direct service calls must also refuse retired Organization Admin.
+    // Historical Admin rows may only be reduced to ordinary Member.
+    if(role==='admin')throw new MedusaError(MedusaError.Types.FORBIDDEN,'Access denied')
+    if(role!=='member')throw new MedusaError(MedusaError.Types.INVALID_DATA,'Invalid role')
     const sql=securitySql(context.transactionManager)
     await sql.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-owner-change'),hashtext(?))`,[org])
     const sessions=new IdentitySessions(sql),identity=await sessions.current(token,true)
@@ -243,12 +264,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {id:result.id,role:result.role,status:result.status}
   }
 
-  /**
-   * B07: an existing active member can become a protected Owner, and an
-   * existing protected Owner can return to Admin only when another protected
-   * Owner remains. All invariant checks and audit/outbox writes remain in the
-   * existing transaction-bound changeMembership implementation.
-   */
+  /** B07 promotion uses the current protected membership and transaction.
+   * Owner removal/downgrade must follow the separately approved strong
+   * verification, notification and 10+20 day process (#39), not this old
+   * immediate Owner->Admin action. */
   @InjectTransactionManager()
   async personalManageProtectedOwner(
     token: string,
@@ -270,15 +289,19 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           await isCurrentProtectedOwner(sql,identity.person_id,org),false)) {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, 'Access denied')
     }
+    // Do not let an old strong session bypass the approved Owner removal
+    // workflow, even when another active protected Owner exists.
+    if (role === 'admin') {
+      throw new MedusaError(MedusaError.Types.FORBIDDEN,
+        'Protected Owner reduction requires the approved safety workflow')
+    }
     const target = await this.getMembershipInOrganization(membership, org, context)
     if (!target) {
       throw new MedusaError(MedusaError.Types.NOT_FOUND, 'Membership not found in the selected Organization')
     }
     // Explicit B07 operation states, not a backdoor to revoked membership
     // reactivation or ordinary B06 role controls.
-    if (target.status !== 'active' ||
-        (role === 'owner' && (target.protected_owner || target.role === 'owner')) ||
-        (role === 'admin' && (!target.protected_owner || target.role !== 'owner'))) {
+    if (target.status !== 'active' || target.protected_owner || target.role === 'owner') {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, 'Owner operation denied')
     }
     const result = await this.changeMembership({
@@ -428,6 +451,105 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalWithdrawOrganizationApplicationDraft(token:string,input:WithdrawDraftPayload,@MedusaContext() context:Context={}) {
     return withdrawOrganizationDraft(securitySql(context.transactionManager),token,input)
+  }
+
+  @InjectTransactionManager()
+  async personalSaveOrganizationApplicationDocument(
+    token:string,input:UploadDocumentPayload,overrideRoot?:string,@MedusaContext() context:Context={}
+  ) {
+    return saveOrganizationDocument(securitySql(context.transactionManager),token,input,overrideRoot)
+  }
+
+  @InjectTransactionManager()
+  async personalSubmitOrganizationApplication(
+    token:string,input:SubmitApplicationPayload,overrideRoot?:string,@MedusaContext() context:Context={}
+  ) {
+    return submitOrganizationApplication(securitySql(context.transactionManager),token,input,overrideRoot)
+  }
+
+  @InjectTransactionManager()
+  async personalReadOrganizationApplicationDocument(
+    token:string,applicationId:string,overrideRoot?:string,@MedusaContext() context:Context={}
+  ) {
+    return readOrganizationApplicationDocument(securitySql(context.transactionManager),token,applicationId,overrideRoot)
+  }
+
+  @InjectTransactionManager()
+  async personalReadOrganizationApplicationReviewPreview(
+    token:string,applicationId:string,@MedusaContext() context:Context={}
+  ) {
+    return readOrganizationApplicationReviewPreview(
+      securitySql(context.transactionManager),token,applicationId)
+  }
+
+  @InjectTransactionManager()
+  async personalSubmittedOrganizationApplications(
+    token:string,cursor?:OrganizationDraftCursor,@MedusaContext() context:Context={}
+  ) {
+    return listSubmittedOrganizationApplications(securitySql(context.transactionManager),token,cursor)
+  }
+
+  @InjectTransactionManager()
+  async personalReviewOrganizationApplication(
+    token:string,input:ReviewApplicationPayload,@MedusaContext() context:Context={}
+  ) {
+    const sql=securitySql(context.transactionManager)
+    return reviewOrganizationApplication(sql,token,input,async request=>{
+      // Revalidate the exact current private file at the moment of approval.
+      // An existing metadata row is not evidence of a still-readable document.
+      // Never use the applicant's raw download as the review path.
+      // A fresh scan and isolated rasterization are mandatory under the
+      // Foundation transaction lock at the exact moment of approval.
+      const preview=await readOrganizationApplicationReviewPreview(
+        sql,token,request.applicationId)
+      if(!preview?.content?.length)throw new TaxCertificateReviewUnavailable()
+
+      // The applicant may be offline, but must still be an ACTIVE canonical
+      // Person backed by a CURRENT verified native actor, not merely an ID.
+      const candidates=await sql.execute(`select actor_type,actor_id
+        from da_login_binding where person_id=?
+        and verified_at is not null and revoked_at is null for share`,
+        [request.applicantPersonId])
+      if(candidates.length!==1)throw new IdentityAccessDenied()
+      const ownerActor:ActorReference={
+        actor_type:candidates[0].actor_type,actor_id:candidates[0].actor_id
+      }
+      const verified=await this.verifyProvisionOwnerActors_(sql,[ownerActor])
+      if(verified.size!==1||!verified.has(request.applicantPersonId))
+        throw new IdentityAccessDenied()
+
+      // Use the same existing Foundation native Organization/Owner workflow
+      // as ordinary platform provisioning. The scoped review permission is
+      // valid ONLY for this already-submitted, independently approved record.
+      const result=await this.provisionOrganization({
+        name:request.legalName,
+        initial_owners:[ownerActor],
+        provisioned_by:{
+          actor_type:request.reviewerActorType,actor_id:request.reviewerActorId
+        },
+        staff_grant_id:request.reviewerGrantId,
+        staff_task:"organization.review",
+      },context)
+      const manager=context.transactionManager
+      if(!manager||typeof manager!=="object"||!("flush" in manager)||
+        typeof manager.flush!=="function")
+        throw new Error("Foundation transaction manager unavailable")
+      await manager.flush()
+      const updated=await sql.execute(`update da_organization
+        set tax_identifier=?,updated_at=clock_timestamp()
+        where id=? and tax_identifier is null returning id`,
+        [request.taxIdentifier,result.organization.id])
+      if(updated.length!==1)throw new IdentityAccessDenied()
+
+      // Preserve the canonical Foundation security delivery for native
+      // Organization/Owner events in the SAME transaction.
+      await sql.execute(`insert into da_security_outbox(id,audit_event_id,created_at)
+        select 'security_'||id,id,clock_timestamp() from da_audit_event
+        where organization_id=? and action in
+        ('organization.provisioned','organization.owner_assigned')
+        on conflict(audit_event_id) do nothing`,[result.organization.id])
+      return {organizationId:result.organization.id}
+    })
   }
 
   @InjectTransactionManager()
@@ -822,13 +944,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return new MfaPersistence(sql).setPlatformPolicy(mode, expectedVersion, actor)
   }
 
-  @InjectTransactionManager()
-  async provisionPersonalOrganization(token: string, input: Omit<ProvisionOrganizationInput,"provisioned_by">, @MedusaContext() context:Context={}) {
-    const sql=securitySql(context.transactionManager)
-    const staff=await new IdentitySessions(sql).staff(token,"organization.provision","platform")
-    if(!staff)throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
-
-    for (const owner of input.initial_owners) {
+  /**
+   * Existing native Owner evidence checks, shared by ordinary provisioning
+   * and approved B22 applications. Never infer ownership from an email,
+   * an applicant-submitted Person ID, or unverified actor mapping.
+   */
+  private async verifyProvisionOwnerActors_(
+    sql:SecuritySql,owners:ActorReference[]
+  ):Promise<Set<string>> {
+    for (const owner of owners) {
       if (!supportedActorTypes.has(owner?.actor_type) || !owner?.actor_id) {
         throw new MedusaError(MedusaError.Types.INVALID_DATA, "Invalid initial Owner")
       }
@@ -836,13 +960,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
 
     // Deterministic advisory lock ordering matching AccountLinking (da-actor-link)
     // to serialize against concurrent linking/unlinking without deadlock.
-    const actorLinkKeys = [...new Set(input.initial_owners.map(o => `${o.actor_type}:${o.actor_id}`))].sort()
+    const actorLinkKeys = [...new Set(owners.map(o => `${o.actor_type}:${o.actor_id}`))].sort()
     for (const key of actorLinkKeys) {
       await sql.execute(`select pg_advisory_xact_lock(hashtext('da-actor-link'), hashtext(?))`, [key])
     }
 
     const ownerPersonIds = new Set<string>()
-    for (const owner of input.initial_owners) {
+    for (const owner of owners) {
       // Step A: Inspect all active verified proofs with row-level shared locks.
       // Do not join with da_actor_mapping or da_person yet to avoid masking conflicting proofs.
       const loginProofs = await sql.execute(
@@ -895,9 +1019,19 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       ownerPersonIds.add(verifiedPersonId)
     }
 
-    if (ownerPersonIds.size !== input.initial_owners.length) {
+    if (ownerPersonIds.size !== owners.length) {
       throw new MedusaError(MedusaError.Types.INVALID_DATA, "Initial Owners must be distinct canonical Persons")
     }
+    return ownerPersonIds
+  }
+
+  @InjectTransactionManager()
+  async provisionPersonalOrganization(token: string, input: Omit<ProvisionOrganizationInput,"provisioned_by">, @MedusaContext() context:Context={}) {
+    const sql=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(sql).staff(token,"organization.provision","platform")
+    if(!staff)throw new MedusaError(MedusaError.Types.FORBIDDEN,"Platform staff grant and strong authentication required")
+
+    await this.verifyProvisionOwnerActors_(sql,input.initial_owners)
     const result=await this.provisionOrganization({...input,staff_grant_id:staff.grant_id,provisioned_by:{actor_type:staff.actor_type,actor_id:staff.actor_id}},context)
     // Generated MedusaService writes may still be pending in this transaction's
     // identity map. Flush before the raw SELECT/FK insert; commit stays owned here.
@@ -1077,7 +1211,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         module: DOGRUADRES_AUDIT_MODULE,
         resource: "organization",
         target_id: organization.id,
-        new_values: { name: organization.name, initial_owner_count: memberships.length, ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:"organization.provision",staff_resource:"platform"}:{}) },
+        new_values: { name: organization.name, initial_owner_count: memberships.length, ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:(input.staff_task??"organization.provision"),staff_resource:"platform"}:{}) },
         occurred_at: new Date(),
       },
       ...memberships.map((membership, index) => ({
@@ -1091,7 +1225,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         resource: "membership",
         target_id: membership.id,
         new_values: { role: "owner", protected_owner: true, person_id: owners[index].id,
-          ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:"organization.provision",staff_resource:"platform"}:{}) },
+          ...(input.staff_grant_id?{staff_grant_id:input.staff_grant_id,staff_task:(input.staff_task??"organization.provision"),staff_resource:"platform"}:{}) },
         occurred_at: new Date(),
       })),
     ], sharedContext)
@@ -1140,6 +1274,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         protected_owner: true,
       }, {}, sharedContext)
       if (!isOwnerDemotionAllowed(ownerCount.length)) throw new MedusaError(MedusaError.Types.FORBIDDEN, "The last active protected Owner cannot be demoted or revoked")
+      // Last-Owner protection alone is insufficient. The 30-day seniority and
+      // 10+20 notice/appeal gates are not implemented on this ordinary
+      // mutation route; reject before any role, audit or outbox write.
+      throw new MedusaError(MedusaError.Types.FORBIDDEN,
+        "Protected Owner reduction requires the approved safety workflow")
     }
 
     const nextRole = input.role ?? target.role
@@ -1176,6 +1315,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     input: Readonly<{ organization_id: string; actor_person_id: string; actor_type: string; actor_id: string; email: string; role: "admin" | "member" }>,
     @MedusaContext() sharedContext: Context = {}
   ) {
+    // Workflow and direct module invocations cannot bypass the public
+    // membership invitation schema to create a retired company Admin.
+    if(input.role!=="member")
+      throw new MedusaError(MedusaError.Types.FORBIDDEN,"Organization Admin invitations are not permitted")
     const actorMembership = await this.getActiveMembership(input.actor_person_id, input.organization_id, sharedContext)
     if (!actorMembership || !organizationActionAllowed(
           actorMembership.role,"invitation.manage",
@@ -1305,6 +1448,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     })) {
       throw new MedusaError(MedusaError.Types.FORBIDDEN, "Invitation is invalid, expired, revoked, or already used")
     }
+    // Historical pending Admin invitations are kept for Owner inspection
+    // and revocation, but must never activate an obsolete higher role.
+    if(invitation.role!=="member")
+      throw new MedusaError(MedusaError.Types.FORBIDDEN,"Legacy Organization Admin invitations cannot be accepted")
     // The Organization can be suspended or soft-deleted after invitation
     // issuance. Lock its live row in this SAME transaction before touching
     // Person/membership/invitation. A concurrent suspension must serialize.
@@ -1670,7 +1817,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_person p on p.id=m.person_id
       where m.id=? and m.organization_id=? and m.deleted_at is null
         and p.disabled_at is null and p.deleted_at is null
-        ${input.action==="grant"?"and m.status='active'":""}
+        -- Protected Owner permissions are not editable individual grants.
+        -- Legacy admin may only have an older personal grant revoked.
+        and m.role in ('member','admin') and m.protected_owner=false
+        ${input.action==="grant"?"and m.role='member' and m.status='active'":""}
       for share of m,p`,[input.membership_id,input.organization_id])
     if(target.length!==1||typeof target[0].person_id!=="string"||
        !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
@@ -1723,6 +1873,124 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       returning id`,[grantId])
     if(result.length!==1||!event.id)throw new IdentityAccessDenied()
     return {status:"revoked" as const,grant_id:grantId}
+  }
+
+
+  /**
+   * B22: the Owner activates an ALREADY AUDITED products.edit grant for an
+   * ALREADY VERIFIED native Member. This is never identity registration,
+   * Organization membership creation or an independent product permission.
+   * The Store/Person grant lock is shared with Owner revoke and draft writes.
+   * Native link creation emits Mercur's seller_member.created event; if its
+   * outcome is uncertain the caller must read native membership, not replay
+   * an assumed failure.
+   */
+  @InjectTransactionManager()
+  async personalWithStoreMemberConnectionLock(
+    token:string,
+    input:{organization_id:string;seller_id:string;membership_id:string},
+    execute:(memberId:string,context:Context)=>Promise<{created:boolean}>,
+    @MedusaContext() context:Context={}
+  ):Promise<{created:boolean}|null>{
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
+       typeof execute!=="function")throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const sessions=new IdentitySessions(db)
+    const current=await sessions.current(token,true,false)
+    if(!current)return null
+    const org=await sessions.organizations(token,input.organization_id,false)
+    if(!org||org.person_id!==current.person_id||org.organizations.length!==1||
+       org.organizations[0].role!=="owner"||
+       !organizationActionAllowed("owner","membership.manage",
+         await isCurrentProtectedOwner(db,current.person_id,input.organization_id),false))
+      return null
+
+    // Ordinary member ONLY: historical Organization admin and protected Owner
+    // roles cannot become technical Store members through this narrow action.
+    const targets=await db.execute(
+      "select m.person_id from da_organization_membership m "+
+      "join da_person p on p.id=m.person_id "+
+      "where m.id=? and m.organization_id=? and m.role='member' "+
+      "and m.protected_owner=false and m.status='active' "+
+      "and m.deleted_at is null and m.revoked_at is null "+
+      "and p.disabled_at is null and p.deleted_at is null for share of m,p",
+      [input.membership_id,input.organization_id])
+    if(targets.length!==1||typeof targets[0].person_id!=="string"||
+       !/^daprs_[A-Za-z0-9_-]+$/.test(targets[0].person_id)||
+       targets[0].person_id===current.person_id)return null
+    const targetPerson=targets[0].person_id as string
+
+    // Same lock as permission grant/revoke and native draft creation.
+    await db.execute(
+      "select pg_advisory_xact_lock(hashtext('b22-products-edit'),hashtext(?))",
+      [input.organization_id+":"+input.seller_id+":"+targetPerson])
+    if(!await verifiedStoreProductEditGrant(db,targetPerson,
+         input.organization_id,input.seller_id))return null
+    if(!(await platformApprovedSellerIds(db,input.organization_id))
+       .includes(input.seller_id))return null
+    const ownership=await db.execute(
+      "select seller_id from da_organization_seller_ownership "+
+      "where organization_id=? and seller_id=? and revoked_at is null for share",
+      [input.organization_id,input.seller_id])
+    if(ownership.length!==1)return null
+
+    // A secondary Member must have completed the existing native password/MFA
+    // proof. A primary Member is accepted only with its verified login binding.
+    // Neither email equality nor a SellerMember flag binds two Persons.
+    const secondary=await db.execute(
+      "select b.actor_id,b.auth_identity_id from da_verified_actor_binding b "+
+      "join da_actor_mapping a on a.person_id=b.person_id "+
+      "and a.actor_type='member' and a.actor_id=b.actor_id and a.deleted_at is null "+
+      "where b.person_id=? and b.actor_type='member' "+
+      "and b.verified_at is not null and b.revoked_at is null for share of b,a",
+      [targetPerson])
+    const primary=await db.execute(
+      "select l.actor_id,l.auth_identity_id from da_login_binding l "+
+      "join da_actor_mapping a on a.person_id=l.person_id "+
+      "and a.actor_type='member' and a.actor_id=l.actor_id and a.deleted_at is null "+
+      "where l.person_id=? and l.actor_type='member' "+
+      "and l.verified_at is not null and l.revoked_at is null for share of l,a",
+      [targetPerson])
+    const bindings=[...secondary,...primary]
+    if(bindings.length!==1||typeof bindings[0].actor_id!=="string"||
+       !/^mem_[A-Za-z0-9_-]+$/.test(bindings[0].actor_id)||
+       typeof bindings[0].auth_identity_id!=="string"||
+       !bindings[0].auth_identity_id)return null
+    const nativeMemberId=bindings[0].actor_id as string
+    const outcome=await execute(nativeMemberId,context)
+    if(!outcome||typeof outcome.created!=="boolean")throw new IdentityAccessDenied()
+    // Reconcile native success after an interrupted Foundation audit write:
+    // an existing correctly-scoped native link may be confirmed, but not
+    // duplicated, and it is never itself a products.edit permission.
+    const audits=await db.execute(
+      "select e.id,exists(select 1 from da_audit_outbox x "+
+      "where x.source_audit_event_id=e.id and x.source_module='dogruadres-access' "+
+      "and x.deleted_at is null) as proof from da_audit_event e "+
+      "where e.action='organization.store_native_member_connection_confirmed' "+
+      "and e.module='dogruadres-access' and e.resource='store-member-connection' "+
+      "and e.organization_id=? and e.target_id=? "+
+      "and e.new_values->>'person_id'=? and e.new_values->>'member_id'=? "+
+      "and e.deleted_at is null limit 2",
+      [input.organization_id,input.seller_id,targetPerson,nativeMemberId])
+    if(audits.length>1||audits.some(r=>r.proof!==true))
+      throw new IdentityAccessDenied()
+    if(!audits.length){
+      await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:current.person_id,actor_type:current.actor_type,
+        actor_id:current.actor_id,role_context:"owner",
+        organization_id:input.organization_id,
+        action:"organization.store_native_member_connection_confirmed",
+        module:DOGRUADRES_AUDIT_MODULE,resource:"store-member-connection",
+        target_id:input.seller_id,
+        new_values:{person_id:targetPerson,member_id:nativeMemberId,
+          role_id:"role_seller_support",source_permission:"products.edit"},
+        occurred_at:new Date()
+      }],context)
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+    }
+    return outcome
   }
 
   @InjectTransactionManager()

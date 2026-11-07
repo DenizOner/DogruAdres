@@ -9,7 +9,7 @@ describe('MFA settings shell contract (not browser acceptance)',()=>{
    expect(html).toContain('id="mfa-seed" type="password"');expect(html).toContain('id="mfa-codes-value" hidden')
    for(const name of ['required','optional','disabled'])expect(html).toContain('type="radio" name="platform_mode" value="'+name+'"')
    expect(html).toContain('<option value="member">Üye</option>')
-   expect(html).toContain('<option value="admin">Yönetici</option>')
+   expect(html).not.toContain('<option value="admin">Yönetici</option>')
    expect(html).toContain('const role=inviteData.get(\'role\')')
    expect(html).not.toMatch(/localStorage|sessionStorage|console\.log/)
    const code=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1]).join('\n')

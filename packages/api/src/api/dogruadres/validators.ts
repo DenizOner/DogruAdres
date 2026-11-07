@@ -17,7 +17,8 @@ export const changeMembershipBody = z.object({
 
 export const createInvitationBody = z.object({
   email: z.string().trim().email().max(320),
-  role: z.enum(["admin", "member"]),
+  // Company Admin was retired: this route cannot create a new Admin invitation.
+  role: z.literal("member"),
 })
 
 export const acceptInvitationBody = z.object({
