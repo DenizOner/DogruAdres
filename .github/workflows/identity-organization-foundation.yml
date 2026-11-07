@@ -343,7 +343,7 @@ jobs:
           command -v certutil
           command -v google-chrome
       - name: B22 free ClamAV signature database and isolated renderer — task-only PR
-        if: github.event_name != 'workflow_dispatch' && github.head_ref == 'feature/b22-tax-certificate-admission-20261105'
+        if: github.event_name != 'workflow_dispatch'
         timeout-minutes: 8
         shell: bash
         run: |
