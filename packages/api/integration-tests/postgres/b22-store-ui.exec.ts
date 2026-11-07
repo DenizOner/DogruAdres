@@ -7861,6 +7861,55 @@ export default async function({container}:any){
         await reviewChrome.eval("(()=>{const row=Array.from(document.querySelectorAll('#organization-review-list p')).find(p=>p.textContent.includes('Foreign Duplicate Company'));const box=row?.querySelector('[role=region]');if(!box)throw Error('Missing accessible page scroll');box.scrollTop=box.scrollHeight;return true})()");
         await reviewChrome.wait("Array.from(document.querySelectorAll('#organization-review-list p')).some(p=>p.textContent.includes('Foreign Duplicate Company')&&Array.from(p.querySelectorAll('button')).some(b=>b.textContent==='İşletmeyi Onayla'&&!b.hidden&&!b.disabled))");
         process.stdout.write("PASS B22 Chrome/HTTP/PG16: full two-page PDF preview, approval disabled until final page scrolled\n");
+
+        // The daemon stays genuine. Only this disposable task-only PostgreSQL
+        // row simulates evidence previously recorded under an old signature.
+        const signedPreviewUrl='/personal/organization-applications?action=review_preview&application_id='+encodeURIComponent(foreignAppId);
+        const fetchSignedPreview=()=>reviewChrome.eval(
+          "(async()=>{const r=await fetch("+JSON.stringify(signedPreviewUrl)+");return {status:r.status,type:r.headers.get('content-type')}})()");
+        const beforeRenewal=(await q(
+          "select scanned_clamav_identity,safe_preview_sha256,scanned_at::text scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+          [foreignAppId]))[0];
+        assert.ok(beforeRenewal?.scanned_clamav_identity);
+        const identityParts=beforeRenewal.scanned_clamav_identity.split("/");
+        assert.equal(identityParts.length,3);
+        assert.ok(Number(identityParts[1])>1);
+        const staleIdentity=identityParts[0]+"/"+(Number(identityParts[1])-1)+"/"+identityParts[2];
+        await q("update da_organization_application_document set scanned_clamav_identity=$1 where application_id=$2 and is_current=true",
+          [staleIdentity,foreignAppId]);
+        const freshPreview=await fetchSignedPreview();
+        assert.equal(freshPreview.status,200,"Signature change requires successful real ClamAV renewal");
+        assert.equal(freshPreview.type,"image/png");
+        const afterRenewal=(await q(
+          "select scanned_clamav_identity,safe_preview_sha256,scanned_at::text scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+          [foreignAppId]))[0];
+        assert.equal(afterRenewal.scanned_clamav_identity,beforeRenewal.scanned_clamav_identity);
+        assert.equal(afterRenewal.safe_preview_sha256,beforeRenewal.safe_preview_sha256,
+          "Signature-only renewal must preserve identical PNG rather than re-rendering");
+        assert.notEqual(afterRenewal.scanned_at,beforeRenewal.scanned_at);
+        assert.equal((await fetchSignedPreview()).status,200);
+        const afterSecond=(await q(
+          "select scanned_clamav_identity,safe_preview_sha256,scanned_at::text scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+          [foreignAppId]))[0];
+        assert.deepEqual(afterSecond,afterRenewal,
+          "Repeated same-signature review must not rewrite scan evidence");
+
+        // A damaged PNG hash cannot authorize a cached image; regenerate
+        // under the real sandbox and scanner (no disabled safety checks).
+        await q("update da_organization_application_document set safe_preview_sha256=$1 where application_id=$2 and is_current=true",
+          ["0".repeat(64),foreignAppId]);
+        const repairedPreview=await fetchSignedPreview();
+        assert.equal(repairedPreview.status,200,"Damaged cached PNG must be regenerated safely");
+        assert.equal(repairedPreview.type,"image/png");
+        const afterRepair=(await q(
+          "select scanned_clamav_identity,safe_preview_sha256,scanned_at::text scanned_at from da_organization_application_document where application_id=$1 and is_current=true",
+          [foreignAppId]))[0];
+        assert.equal(afterRepair.scanned_clamav_identity,beforeRenewal.scanned_clamav_identity);
+        assert.match(afterRepair.safe_preview_sha256,/^[0-9a-f]{64}$/);
+        assert.notEqual(afterRepair.safe_preview_sha256,"0".repeat(64));
+        assert.notEqual(afterRepair.scanned_at,afterSecond.scanned_at);
+        process.stdout.write("PASS B22 Chrome/HTTP/PG16: changed signature triggers genuine re-scan; unchanged reuse; damaged PNG regenerated\n");
+
       }
 
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: staff unscanned document denied, applicant original retained, foreign denied\n")
