@@ -1423,6 +1423,13 @@ export default async function({container}:any){
         "An ungranted Member cannot read another private Organization draft")
       await reviewer.send("Page.bringToFront")
       await reviewer.select(organizations[1].name,"owner")
+      const grantScope=await reviewer.callFunction(
+        "async function(org){const r=await fetch('/personal/store-draft-permissions?organization_id='+encodeURIComponent(org));"+
+        "const body=await r.json();return {status:r.status,memberCount:Array.isArray(body.members)?body.members.length:-1,"+
+        "grantCount:Array.isArray(body.grants)?body.grants.length:-1}}",
+        betaScope)
+      assert.deepEqual(grantScope,{status:200,memberCount:1,grantCount:0},
+        "Owner native Store draft grant API must return exactly one active Member")
       await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden")
       assert.equal(await reviewer.eval("document.querySelector('#store-draft-grants-form select[name=membership_id]').value"),
         betaAdminMembership.id)
