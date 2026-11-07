@@ -505,6 +505,38 @@ describe("B22 private business application DRAFT — never an Organization",()=>
     expect(res.status).toHaveBeenLastCalledWith(403)
   })
 
+  it("refuses an unscanned upload before private file, metadata or audit mutation",async()=>{
+    const os=require("node:os"),path=require("node:path"),fsp=require("node:fs/promises")
+    const root=await fsp.mkdtemp(path.join(os.tmpdir(),"da-b22-scan-refuse-"))
+    const sessionSpy=jest.spyOn(IdentitySessions.prototype,"current").mockResolvedValue({
+      person_id:"daprs_applicant",actor_type:"customer",actor_id:"cus_app"
+    } as any)
+    const failedScan=(safePreview.prepareScannedTaxCertificatePreview as jest.Mock)
+      .mockRejectedValue(new safePreview.TaxCertificateSafePreviewUnavailable())
+    const exec=jest.fn(async(sql:string)=>{
+      if(sql.includes("from da_organization_application where id=? for update"))
+        return [{applicant_person_id:"daprs_applicant",status:"draft",version:1}]
+      return []
+    })
+    const input={action:"upload_document" as const,
+      application_id:payload.application_id,expected_version:1,
+      filename:"levha.pdf",
+      file_base64:Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n","ascii").toString("base64")}
+    try{
+      await expect(saveOrganizationDocument({execute:exec},"opaque",input,root))
+        .rejects.toBeInstanceOf(safePreview.TaxCertificateSafePreviewUnavailable)
+      expect(failedScan).toHaveBeenCalledTimes(1)
+      expect(await fsp.readdir(root)).toEqual([])
+      const statements=exec.mock.calls.map(([sql])=>String(sql))
+      expect(statements.some(sql=>/insert into |update da_/.test(sql))).toBe(false)
+      expect(statements.some(sql=>sql.includes("insert into da_audit_event"))).toBe(false)
+    }finally{
+      failedScan.mockReset()
+      sessionSpy.mockRestore()
+      await fsp.rm(root,{recursive:true,force:true})
+    }
+  })
+
   it("saveOrganizationDocument persists to private storage outside checkout and links metadata with max version", async () => {
     const os = require("node:os")
     const path = require("node:path")
