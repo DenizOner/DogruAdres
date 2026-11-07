@@ -255,7 +255,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <label>Para birimi (3 harf)<input name="currency_code" pattern="[a-z]{3}" maxlength="3" value="try" required></label>
       <button type="submit">Mağaza başvurusu oluştur</button>
     </form>
-    <button id="store-applications-refresh" type="button">Başvuruları yenile</button>
+    <form id="store-draft-form" hidden>
+      <p>Bu taslak yalnız seçili kuruluşa aittir. Kaydetmek başvuruyu göndermez ve mağaza açmaz.</p>
+      <label>Önerilen mağaza adı<input name="name" required minlength="3" maxlength="40"></label>
+      <label>Mağaza iletişim e-postası<input name="email" type="email" required maxlength="254"></label>
+      <label>Para birimi<input name="currency_code" pattern="[a-z]{3}" maxlength="3" value="try" required></label>
+      <button type="submit">Taslağı kaydet</button>
+      <button id="store-draft-new" type="button">Yeni taslak</button>
+    </form>
+    <button id="store-applications-refresh" type="button">Başvuruları ve taslakları yenile</button>
   </section>
   <section id="org-stores-panel" hidden aria-labelledby="org-stores-title" style="grid-column:1/-1">
     <h3 id="org-stores-title">Seçili kuruluşun mağazaları</h3>
@@ -1464,11 +1472,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-application-list').replaceChildren();
     el('store-application-status').textContent='';
     el('store-application-form').hidden=true;
+    el('store-draft-form').hidden=true;
+    const draftForm=el('store-draft-form');
+    if(typeof draftForm.reset==='function')draftForm.reset();
+    const draftSubmit=typeof draftForm.querySelector==='function'?draftForm.querySelector('button[type=submit]'):null;
+    if(draftSubmit)draftSubmit.disabled=false;
     const form=el('store-application-form');
     if(typeof form.reset==='function')form.reset();
     const submit=typeof form.querySelector==='function'?form.querySelector('button'):null;
     if(submit)submit.disabled=false;
-    applicationKey='';applicationRole='';
+    applicationKey='';applicationRole='';storeDraftKey='';storeDraftVersion=0;
   }
   let storeApprovalRequest=0,storeApprovalPage=0;
   function clearStoreApprovals(){
@@ -1551,11 +1564,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const panel=el('store-application-panel'),list=el('store-application-list'),message=el('store-application-status');
     panel.hidden=false;
     el('store-application-form').hidden=true;
+    el('store-draft-form').hidden=true;
     list.replaceChildren();if(!keepOutcome)message.textContent='Başvurular kontrol ediliyor…';
     try{
       const result=await api('store-applications?organization_id='+encodeURIComponent(org));
       if(request!==organizationRequest||sequence!==applicationRequest||currentOrg!==org||document.hidden)return;
       if(typeof result.store_application_enabled!=='boolean'||
+         !Array.isArray(result.drafts)||result.drafts.length>30||
+         typeof result.has_more_drafts!=='boolean'||
+         result.drafts.some(d=>!/^dasdraft_[a-f0-9]{32}$/.test(d?.id)||
+           typeof d.name!=='string'||typeof d.email!=='string'||
+           typeof d.currency_code!=='string'||!Number.isSafeInteger(d.version)||d.version<1)||
          !Array.isArray(result.applications)||result.applications.length>30||
         result.applications.some(a=>!/^daapp_[a-f0-9]{32}$/.test(a?.id)||!['reserved','creating','created'].includes(a?.status)||
           !(a.seller_id===null||a.seller_id===undefined||typeof a.seller_id==='string')))
@@ -1566,6 +1585,30 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           ' — '+a.id+(a.seller_id?' — '+a.seller_id:'');
         list.append(line);
       }
+      if(role==='owner'){
+        for(const d of result.drafts){
+          const line=document.createElement('p'),edit=document.createElement('button');
+          line.textContent='Kaydedilmiş mağaza taslağı (gönderilmedi) — '+d.name+' — v'+d.version+' ';
+          edit.type='button';edit.textContent='Taslağı düzenle';
+          edit.onclick=()=>{
+            if(currentOrg!==org||organizationRequest!==request||document.hidden)return;
+            const form=el('store-draft-form');
+            form.elements.namedItem('name').value=d.name;
+            form.elements.namedItem('email').value=d.email;
+            form.elements.namedItem('currency_code').value=d.currency_code;
+            storeDraftKey=d.id;storeDraftVersion=d.version;
+            form.querySelector('button[type=submit]').disabled=false;
+            message.textContent='Taslak düzenleniyor; değişiklikler henüz kaydedilmedi.';
+          };
+          line.append(edit);list.append(line);
+        }
+        if(result.has_more_drafts){
+          const warning=document.createElement('p');
+          warning.textContent='Daha eski taslaklar da bulunuyor; bu görünüm son 30 kaydı listeler.';
+          list.append(warning);
+        }
+      }
+      el('store-draft-form').hidden=role!=='owner';
       el('store-application-form').hidden=
         role!=='owner'||!result.store_application_enabled;
       if(!result.store_application_enabled){
@@ -1583,9 +1626,44 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   let applicationRequest=0,applicationKey='',applicationRole='';
+  let storeDraftKey='',storeDraftVersion=0;
   el('store-applications-refresh').onclick=()=>{
     if(currentOrg&&['owner','admin'].includes(applicationRole))
       void storeApplications(currentOrg,organizationRequest,applicationRole);
+  };
+  el('store-draft-new').onclick=()=>{
+    const form=el('store-draft-form');
+    if(form.hidden||!currentOrg||document.hidden)return;
+    storeDraftKey='';storeDraftVersion=0;form.reset();
+    form.querySelector('button[type=submit]').disabled=false;
+    el('store-application-status').textContent='Yeni bir mağaza taslağı hazırlanıyor.';
+  };
+  el('store-draft-form').onsubmit=async event=>{
+    event.preventDefault();
+    const org=currentOrg,request=organizationRequest,form=event.currentTarget;
+    if(!org||document.hidden||form.hidden||applicationRole!=='owner')return;
+    const submit=form.querySelector('button[type=submit]');submit.disabled=true;
+    if(!storeDraftKey)storeDraftKey='dasdraft_'+crypto.randomUUID().replace(/-/g,'');
+    const key=storeDraftKey,version=storeDraftVersion,fields=new FormData(form);
+    try{
+      const result=await api('store-applications',{method:'POST',body:JSON.stringify({
+        action:'save_draft',organization_id:org,draft_id:key,expected_version:version,
+        name:String(fields.get('name')||'').trim(),email:String(fields.get('email')||'').trim(),
+        currency_code:String(fields.get('currency_code')||'').toLowerCase()
+      })});
+      if(request!==organizationRequest||currentOrg!==org)return;
+      if(result.draft_id!==key||result.status!=='draft'||result.version!==version+1)
+        throw Error('Taslak kaydı doğrulanamadı');
+      storeDraftVersion=result.version;submit.disabled=false;
+      el('store-application-status').textContent='Taslak kaydedildi. Henüz başvuru gönderilmedi veya mağaza oluşturulmadı.';
+      void storeApplications(org,request,'owner',true);
+    }catch(e){
+      if(request!==organizationRequest||currentOrg!==org)return;
+      el('store-application-status').textContent=e.uncertain?
+        'Taslak sonucu belirsiz; tekrar kaydetmeden önce kayıtları yenileyin.':
+        'Taslak kaydedilemedi: '+e.message;
+      if(!e.uncertain)submit.disabled=false;
+    }
   };
   el('store-application-form').onsubmit=async event=>{
     event.preventDefault();
