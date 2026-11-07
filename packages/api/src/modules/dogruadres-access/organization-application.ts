@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { z } from "@medusajs/framework/zod"
 import { IdentityAccessDenied, IdentitySessions, type SecuritySql } from "./identity-session"
 import {
@@ -11,7 +11,13 @@ import {
   readPrivateTaxCertificate,
   writePrivateTaxCertificate,
 } from "./private-tax-certificate-store"
-import { makeSafeTaxCertificatePreview } from "./tax-certificate-safe-preview"
+import {
+  prepareScannedTaxCertificatePreview,
+  rescanTaxCertificateAndPreview,
+  TAX_CERTIFICATE_PREVIEW_MAX_BYTES,
+  TAX_CERTIFICATE_PREVIEW_RENDERER_REVISION,
+} from "./tax-certificate-safe-preview"
+import { currentClamdSignatureIdentity } from "./tax-certificate-scanner"
 
 // The six activity declarations have no verified status, discount, Organization
 // or Store entitlement. The customer's submitted profile is only a draft.
@@ -290,6 +296,14 @@ export async function saveOrganizationDocument(
       return {conflict:true as const}
   }
 
+  // This is the only admission path: authorize first, then scan the original
+  // and isolated PNG with the genuine local ClamAV signatures before storage.
+  // Unavailable/unsafe scanning fails the entire upload and never marks it clean.
+  const scanned=await prepareScannedTaxCertificatePreview(fileBytes,prepared.mimeType)
+  const previewSha256=createHash("sha256").update(scanned.png).digest("hex")
+  if(await currentClamdSignatureIdentity()!==scanned.scanIdentity)
+    throw new TaxCertificateReviewUnavailable()
+
   // Persist to private directory outside checkout and public static
   const rootDir=overrideRoot??process.env.DOGRUADRES_TAX_CERTIFICATE_DIR
   if(!rootDir)throw new InvalidTaxCertificate()
@@ -312,8 +326,12 @@ export async function saveOrganizationDocument(
   const docId="da_doc_"+randomUUID().replaceAll("-","")
   await db.execute(
     `insert into da_organization_application_document
-      (id, application_id, applicant_person_id, storage_key, internal_name, mime_type, compression, original_byte_length, original_sha256, stored_byte_length, version, is_current)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true)`,
+      (id, application_id, applicant_person_id, storage_key, internal_name,
+       mime_type, compression, original_byte_length, original_sha256,
+       stored_byte_length, version, is_current,
+       scanned_clamav_identity, preview_renderer_revision,
+       safe_preview_png, safe_preview_sha256, scanned_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?, ?, clock_timestamp())`,
     [
       docId,
       input.application_id,
@@ -326,6 +344,10 @@ export async function saveOrganizationDocument(
       stored.originalSha256,
       stored.storedByteLength,
       nextDocVer,
+      scanned.scanIdentity,
+      TAX_CERTIFICATE_PREVIEW_RENDERER_REVISION,
+      scanned.png,
+      previewSha256,
     ]
   )
 
@@ -573,32 +595,83 @@ export async function readOrganizationApplicationReviewPreview(
   db: SecuritySql, token: string, applicationId: string, overrideRoot?: string
 ) {
   if(typeof applicationId!=="string"||!draftId.test(applicationId))return null
-  const staff = await new IdentitySessions(db).staff(token,"organization.review","platform")
+  const staff=await new IdentitySessions(db).staff(token,"organization.review","platform")
   if(!staff)return null
-  const session = await new IdentitySessions(db).current(token,false,false)
+  const session=await new IdentitySessions(db).current(token,false,false)
   if(!session)return null
-  const rows = await db.execute(
+
+  // The current application is authorized on EVERY access, before any scanner
+  // or expensive decoder work. Same lock order as owner upload and approval.
+  const rows=await db.execute(
     `select applicant_person_id,status,version from da_organization_application
      where id=? for share`,[applicationId])
   if(rows.length!==1||rows[0].status!=="submitted"||
      rows[0].applicant_person_id===session.person_id)return null
-  const docs = await db.execute(
-    `select storage_key,internal_name,mime_type,compression,original_byte_length,
-       original_sha256,stored_byte_length,version
+  // Exclusive per-document lock prevents two simultaneous staff previews
+  // repeating the same ClamAV update; this is the existing PG16 transaction.
+  const docs=await db.execute(
+    `select id,storage_key,internal_name,mime_type,compression,original_byte_length,
+       original_sha256,stored_byte_length,version,scanned_clamav_identity,
+       preview_renderer_revision,safe_preview_png,safe_preview_sha256
      from da_organization_application_document
-     where application_id=? and is_current=true for share`,[applicationId])
+     where application_id=? and is_current=true for update`,[applicationId])
   if(docs.length!==1)throw new TaxCertificateReviewUnavailable()
   const doc=docs[0]
   const rootDir=overrideRoot??process.env.DOGRUADRES_TAX_CERTIFICATE_DIR
   if(!rootDir)throw new TaxCertificateReviewUnavailable()
+
+  // A positive historical scan is never authorization or a substitute for
+  // verifying the exact original bytes on disk (existing SHA-256 guard).
   const original=await readPrivateTaxCertificate(rootDir,{
     storageKey:doc.storage_key,internalName:doc.internal_name,
     mimeType:doc.mime_type,compression:doc.compression,
     originalByteLength:Number(doc.original_byte_length),
     originalSha256:doc.original_sha256,
-    storedByteLength:Number(doc.stored_byte_length)
+    storedByteLength:Number(doc.stored_byte_length),
   })
-  const preview=await makeSafeTaxCertificatePreview(original,doc.mime_type)
+  const activeIdentity=await currentClamdSignatureIdentity()
+  const cached=Buffer.isBuffer(doc.safe_preview_png)?doc.safe_preview_png:null
+  const validCache=cached!==null&&cached.length>=64&&
+    cached.length<=TAX_CERTIFICATE_PREVIEW_MAX_BYTES&&
+    typeof doc.safe_preview_sha256==="string"&&
+    /^[0-9a-f]{64}$/.test(doc.safe_preview_sha256)&&
+    createHash("sha256").update(cached).digest("hex")===doc.safe_preview_sha256&&
+    doc.preview_renderer_revision===TAX_CERTIFICATE_PREVIEW_RENDERER_REVISION
+  let preview:Buffer
+  if(validCache&&cached!==null&&doc.scanned_clamav_identity===activeIdentity){
+    // No INSTREAM and no renderer when the exact immutable document, PNG and
+    // actual loaded ClamAV engine/signature generation are unchanged.
+    preview=cached
+  }else{
+    let scanIdentity:string
+    if(validCache&&cached!==null){
+      // Signature-only update: scan original and cached PNG, not the PDF
+      // renderer. Missing identity or invalid verdict fails closed.
+      scanIdentity=await rescanTaxCertificateAndPreview(original,cached)
+      preview=cached
+    }else{
+      // Historical NULL evidence, a broken cache, or new renderer policy:
+      // fresh scan and isolated all-page rendering are mandatory.
+      const generated=await prepareScannedTaxCertificatePreview(original,doc.mime_type)
+      scanIdentity=generated.scanIdentity
+      preview=generated.png
+    }
+    if(scanIdentity!==activeIdentity)throw new TaxCertificateReviewUnavailable()
+    const updated=await db.execute(
+      `update da_organization_application_document
+       set scanned_clamav_identity=?,preview_renderer_revision=?,
+           safe_preview_png=?,safe_preview_sha256=?,
+           scanned_at=clock_timestamp(),updated_at=clock_timestamp()
+       where id=? and is_current=true and version=? returning id`,
+      [scanIdentity,TAX_CERTIFICATE_PREVIEW_RENDERER_REVISION,
+       preview,createHash("sha256").update(preview).digest("hex"),
+       doc.id,doc.version])
+    if(updated.length!==1)throw new TaxCertificateReviewUnavailable()
+  }
+  // A scan database reload during this transaction cannot silently reuse
+  // the prior result. The next access will re-scan if the database changed.
+  if(await currentClamdSignatureIdentity()!==activeIdentity)
+    throw new TaxCertificateReviewUnavailable()
   return {content:preview,mimeType:"image/png" as const,
     applicationVersion:Number(rows[0].version),documentVersion:Number(doc.version)}
 }
