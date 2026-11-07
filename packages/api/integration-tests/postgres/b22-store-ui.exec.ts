@@ -1257,7 +1257,7 @@ export default async function({container}:any){
     assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
       [organizations[0].id]))[0].n,0,
       "Two successful drafts and rejected retries create zero native Store applications")
-    process.stdout.write("PASS B22 Chrome/PG16: Owner Store draft saved, edited, reloaded with version and audit/outbox; stale409, CSRF403, foreign403; zero native Seller applications\\n")
+    process.stdout.write("PASS B22 Chrome: Owner Store draft saved, edited, reloaded with version and audit/outbox; stale409, CSRF403, foreign403; zero native Seller applications\\n")
     const applicationName="B22 Owner application "+rand
     const applicationEmail="b22-owner-app-"+rand+"@example.invalid"
     await browser.input("#store-application-form input[name=name]",applicationName)
