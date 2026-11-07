@@ -382,6 +382,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="pending-invitations-refresh" type="button">Davetleri yenile</button>
   </section>
   <button id="staff">Platform yetkisini kontrol et</button>
+  <section id="platform-store-policy-panel" hidden style="grid-column:1/-1">
+    <h3>Şirketin yeni mağaza başvuru hakkı</h3>
+    <p>Bu işlem yalnız yetkili platform görevlisine açıktır. Mevcut faal mağazalar bu ayardan etkilenmez. Bekleyen başvurular karar verilmeden korunur.</p>
+    <form id="platform-store-policy-form">
+      <label>Şirket kimliği<input name="organization_id" pattern="daorg_[A-Za-z0-9_-]{1,80}" required></label>
+      <label>İşlem gerekçesi<input name="reason" minlength="10" maxlength="500" required></label>
+      <button id="platform-store-policy-read" type="button">Mevcut hakkı doğrula</button>
+      <button id="platform-store-policy-apply" type="submit" disabled>Henüz durum doğrulanmadı</button>
+    </form>
+    <p id="platform-store-policy-status" role="status" aria-live="polite"></p>
+  </section>
   <h2>Kuruluş oluşturma</h2><p>Bu işlem açık platform görevi ve güncel güçlü doğrulama gerektirir. İlk iki Owner sunucuda doğrulanır.</p>
   <form id="provision"><label>Yeni kuruluş adı<input name="name" maxlength="200" required></label><label>Birinci Owner türü<select name="type1"><option>user</option><option>member</option><option>customer</option></select></label><label>Birinci Owner kimliği<input name="owner1" required></label><label>İkinci Owner türü<select name="type2"><option>user</option><option>member</option><option>customer</option></select></label><label>İkinci Owner kimliği<input name="owner2" required></label><button>Kuruluş oluştur</button></form><pre id="provision-result"></pre>
   <h2>Satıcı ve müşteri çalışma bağlamı</h2><form id="seller"><label>Satıcı kimliği<input name="seller" required></label><button>Satıcı erişimini doğrula</button></form><button id="customer">Müşteri bağlamımı aç</button><pre id="actor-result"></pre>
@@ -1478,7 +1489,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          data.pending.some(row=>!/^daapp_[a-f0-9]{32}$/.test(row?.application_id)||
            !/^sel_[A-Za-z0-9_-]+$/.test(row?.seller_id)||
            !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row?.organization_id)||
-           typeof row?.organization_name!=='string'||typeof row?.name!=='string'))
+           typeof row?.organization_name!=='string'||typeof row?.name!=='string'||
+           typeof row?.on_hold!=='boolean'))
         throw new Error('Onay listesi doğrulanamadı');
       panel.hidden=false;list.replaceChildren();
       el('store-approval-older').hidden=!data.has_more;
@@ -1488,8 +1500,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         data.has_more?'Bu sayfada bekleyen mağaza yok; önceki başvurulara bakın.':'Bu sayfada onay bekleyen mağaza yok.';
       for(const entry of data.pending){
         const line=document.createElement('p'),button=document.createElement('button');
-        line.textContent=entry.organization_name+' — '+entry.name+' — '+entry.seller_id+' ';
+        line.textContent=entry.organization_name+' — '+entry.name+' — '+entry.seller_id+
+          (entry.on_hold?' — Yeni mağaza başvuru hakkı kapalı; inceleme bekletiliyor.':'')+' ';
         button.type='button';button.textContent='Mağazayı onayla';
+        button.disabled=entry.on_hold;
         button.onclick=async()=>{
           button.disabled=true;
           message.textContent='Mağaza onayı gönderiliyor…';
@@ -1531,12 +1545,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const sequence=++applicationRequest;
     const panel=el('store-application-panel'),list=el('store-application-list'),message=el('store-application-status');
     panel.hidden=false;
-    el('store-application-form').hidden=role!=='owner';
+    el('store-application-form').hidden=true;
     list.replaceChildren();if(!keepOutcome)message.textContent='Başvurular kontrol ediliyor…';
     try{
       const result=await api('store-applications?organization_id='+encodeURIComponent(org));
       if(request!==organizationRequest||sequence!==applicationRequest||currentOrg!==org||document.hidden)return;
-      if(!Array.isArray(result.applications)||result.applications.length>30||
+      if(typeof result.store_application_enabled!=='boolean'||
+         !Array.isArray(result.applications)||result.applications.length>30||
         result.applications.some(a=>!/^daapp_[a-f0-9]{32}$/.test(a?.id)||!['reserved','creating','created'].includes(a?.status)||
           !(a.seller_id===null||a.seller_id===undefined||typeof a.seller_id==='string')))
         throw new Error('Başvuru yanıtı doğrulanamadı');
@@ -1546,7 +1561,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           ' — '+a.id+(a.seller_id?' — '+a.seller_id:'');
         list.append(line);
       }
-      if(!keepOutcome)message.textContent=result.applications.length?'Başvurular güncellendi; mağaza onayı ayrı yürütülür.':'Henüz mağaza başvurusu bulunmuyor.';
+      el('store-application-form').hidden=
+        role!=='owner'||!result.store_application_enabled;
+      if(!result.store_application_enabled){
+        message.textContent='Platform tarafından yeni mağaza başvuruları durduruldu. Önceki başvurular korunuyor; mevcut faal mağazalar etkilenmez.';
+      }else if(!keepOutcome){
+        message.textContent=result.applications.length?
+          'Başvurular güncellendi; mağaza onayı ayrı yürütülür.':
+          'Henüz mağaza başvurusu bulunmuyor.';
+      }
     }catch(e){
       if(request!==organizationRequest||sequence!==applicationRequest||currentOrg!==org)return;
       list.replaceChildren();
