@@ -22,7 +22,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     return res.status(400).json({message:"Invalid context"})
   try{
     const applications=await access(req).personalStoreApplications(sessionToken(req),parsed.data.organization_id)
-    return applications?res.status(200).json({applications}):
+    return applications?res.status(200).json(applications):
       res.status(403).json({message:"Access denied"})
   }catch{return res.status(503).json({message:"Unavailable"})}
 }

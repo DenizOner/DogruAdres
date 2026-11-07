@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { IdentityAccessDenied, IdentitySessions, type SecuritySql } from './identity-session'
 
-/** Foundation-owned projection, not the email delivery store. Never serialize audit data. */
+/** Foundation-owned per-Person projection. Never serialize staff audit payloads. */
 export class PersonalNotifications {
   constructor(private readonly db: SecuritySql) {}
 
@@ -16,23 +16,60 @@ export class PersonalNotifications {
 
   async list(token: string, offset = 0, organization?: string) {
     const s = await this.authorize(token, organization)
-    const rows = await this.db.execute(`with authorized as (select n.id,n.created_at,n.read_at
-      from da_notification_receipt n join da_audit_event a on a.id=n.audit_event_id
-      where n.person_id=? and a.actor_person_id=n.person_id and a.action='session.locked'
-        and a.module='dogruadres-access' and a.resource='identity-session'
-        and a.organization_id is null and a.deleted_at is null
-        and exists(select 1 from da_security_outbox o where o.audit_event_id=a.id)
-      ) select (select count(*) from authorized where read_at is null) as unread_count,
-        (select count(*) from authorized) as total,
-        coalesce((select json_agg(page) from (select id,created_at,read_at from authorized
-          order by created_at desc,id desc limit 50 offset ?) page),'[]'::json) as items`, [s.person_id,offset])
-    // One consistent statement for page/count; no audit fields leave this method.
+    // Session-lock receipts are personal. Company-policy receipts require a
+    // CURRENT protected Owner of the exact legal Organization, not the staff
+    // actor who wrote the source audit or any native SellerMember role.
+    const rows = await this.db.execute(`with authorized as (
+      select n.id,n.created_at,n.read_at,a.action,o.name as organization_name
+      from da_notification_receipt n
+      join da_audit_event a on a.id=n.audit_event_id
+      left join da_organization o on o.id=a.organization_id
+      where n.person_id=? and a.deleted_at is null and a.module='dogruadres-access'
+      and (
+        (a.action='session.locked' and a.actor_person_id=n.person_id
+          and a.resource='identity-session' and a.organization_id is null
+          and exists(select 1 from da_security_outbox x where x.audit_event_id=a.id))
+        or
+        (a.action in ('organization.store_application_right_enabled',
+                      'organization.store_application_right_disabled')
+          and a.resource='organization'
+          and (?='' or a.organization_id=?)
+          and o.status='active' and o.deleted_at is null
+          and exists(select 1 from da_organization_membership m
+            where m.person_id=n.person_id and m.organization_id=a.organization_id
+              and m.status='active' and m.deleted_at is null
+              and m.role='owner' and m.protected_owner=true)
+          and exists(select 1 from da_audit_outbox x
+            where x.source_audit_event_id=a.id))
+      )
+    ) select (select count(*) from authorized where read_at is null) as unread_count,
+      (select count(*) from authorized) as total,
+      coalesce((select json_agg(page) from (
+        select id,created_at,read_at,action,organization_name from authorized
+        order by created_at desc,id desc limit 50 offset ?
+      ) page),'[]'::json) as items`,
+      [s.person_id, organization ?? '', organization ?? '', offset])
+    // Exactly one SQL statement determines the list, unread count and page.
+    // A stored reason, actor identifier or staff grant never crosses the API.
     return {
-      notifications: rows[0].items.map((n: {id:string;created_at:string;read_at:string|null}) => ({
-        id: n.id, created_at: n.created_at, read_at: n.read_at,
-        title: 'Oturum kilitlendi', context: 'Kişisel hesabınız',
-        description: 'Bir tarayıcı oturumunuz kilitlendi. Yeniden açmak için giriş yapabilirsiniz.',
-      })),
+      notifications: rows[0].items.map((n: {
+        id:string;created_at:string;read_at:string|null;
+        action:string;organization_name:string|null
+      }) => {
+        const locked = n.action === 'session.locked'
+        const opened = n.action === 'organization.store_application_right_enabled'
+        return {
+          id:n.id,created_at:n.created_at,read_at:n.read_at,
+          title:locked?'Oturum kilitlendi':opened?
+            'Yeni mağaza başvuru hakkı açıldı':'Yeni mağaza başvuru hakkı durduruldu',
+          context:locked?'Kişisel hesabınız':n.organization_name,
+          description:locked?
+            'Bir tarayıcı oturumunuz kilitlendi. Yeniden açmak için giriş yapabilirsiniz.':
+            opened?
+            'Şirketiniz yeniden yeni mağaza başvurusu gönderebilir. Bekleyen başvurular otomatik onaylanmaz.':
+            'Şirketinizin yeni mağaza başvuruları durduruldu. Mevcut faal mağazalar etkilenmez.'
+        }
+      }),
       unread_count: Number(rows[0]?.unread_count ?? 0),
       next_offset: offset + 50 < Number(rows[0].total) ? offset + 50 : null,
     }
@@ -40,13 +77,30 @@ export class PersonalNotifications {
 
   async read(token: string, id: string, organization?: string) {
     const s = await this.authorize(token, organization)
-    const rows = await this.db.execute(`select n.id,n.read_at from da_notification_receipt n
+    const rows = await this.db.execute(`select n.id,n.read_at
+      from da_notification_receipt n
       join da_audit_event a on a.id=n.audit_event_id
-      where n.id=? and n.person_id=? and a.actor_person_id=n.person_id
-        and a.action='session.locked' and a.module='dogruadres-access'
-        and a.resource='identity-session' and a.organization_id is null and a.deleted_at is null
-        and exists(select 1 from da_security_outbox o where o.audit_event_id=a.id)
-      for update of n`, [id, s.person_id])
+      left join da_organization o on o.id=a.organization_id
+      where n.id=? and n.person_id=? and a.deleted_at is null
+        and a.module='dogruadres-access'
+        and (
+          (a.action='session.locked' and a.actor_person_id=n.person_id
+            and a.resource='identity-session' and a.organization_id is null
+            and exists(select 1 from da_security_outbox x where x.audit_event_id=a.id))
+          or
+          (a.action in ('organization.store_application_right_enabled',
+                        'organization.store_application_right_disabled')
+            and a.resource='organization'
+            and (?='' or a.organization_id=?)
+            and o.status='active' and o.deleted_at is null
+            and exists(select 1 from da_organization_membership m
+              where m.person_id=n.person_id and m.organization_id=a.organization_id
+                and m.status='active' and m.deleted_at is null
+                and m.role='owner' and m.protected_owner=true)
+            and exists(select 1 from da_audit_outbox x
+              where x.source_audit_event_id=a.id))
+        ) for update of n`,
+      [id,s.person_id,organization ?? '',organization ?? ''])
     if (rows.length !== 1) throw new IdentityAccessDenied()
     if (rows[0].read_at === null) {
       await this.db.execute(`update da_notification_receipt set read_at=clock_timestamp() where id=?`, [id])

@@ -273,10 +273,15 @@ async function run(){
         }
         function invoke(file:string,env:NodeJS.ProcessEnv,direct=false){
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
-            cwd:process.cwd(),env,encoding:"utf8",timeout:file.includes('b22-audit-worker.exec.ts')?360000:210000,maxBuffer:3*1024*1024})
+            cwd:process.cwd(),env,encoding:"utf8",timeout:file.includes('b22-audit-worker.exec.ts')?360000:
+              file.includes('b22-store-ui.exec.ts')?300000:210000,
+            maxBuffer:3*1024*1024})
           if(task.B22_SMTP_CANARY)assert.ok(!String(child.stdout??"").concat(String(child.stderr??"")).includes(task.B22_SMTP_CANARY),"SMTP canary leaked to child logs")
           const valid=String(child.stdout??"").split("\n")
             .filter(x=>/^PASS B22 Chrome:|^PASS B22 real PG16: post-primary-proof forced audit failure|^PASS B22 native organization\.read role policy:|^PASS B22 Owner role policy:|^PASS B22 protected Owner mutation negatives:|^PASS B22 protected Owner management:|^PASS B22 explicit permission:|^PASS B22 pre-revocation control:|^PASS B22 real Mercur validate:|^PASS B22 native payment simulation:|^PASS B22 native completed Cart retry:|^PASS B22 native payment denial:|^PASS B22 post-L cutoff:|^PASS B22 concurrent native Cart checkout:|^PASS B22 PostgreSQL expired lock behavior:|^OBSERVED B22 abrupt Medusa process exit:|^PASS B22 official Redis provider:|^PASS B22 native Cart TTL units:|^PASS B22 native Mercur product workflow:|^PASS B22 Mercur 2\.4 Store regions:|^PASS B22 native Store BuyerOrg group PriceList capability:|^PASS B22 BuyerOrg native private TRY reference:|^PASS B22 Buyer catalogue:|^PASS B22 native TRY Offer list price:|^PASS B22 audited Store price group:|^PASS B22 Store price group F-01\/F-02:|^PASS B22 suspended Seller Organization:|^PASS B22 audit worker:|^PASS B22 real audit relay:|^PASS B22 audit real ACK:|^PASS B22 audit natural lease:|^PASS B22 audit native scheduler and crash restart:|^PASS B22 native reconciliation confirmed:|^PASS B22 CR-03 real Chrome\/HTTP\/PG16:|^PASS B22 Chrome\/HTTP\/PG16: 10 MiB tax cert upload,|^PASS B22 Chrome\/HTTP\/PG16: staff unscanned document denied,|^PASS B22 Chrome\/HTTP\/PG16: corrected tax certificate|^PASS B22 Chrome\/HTTP\/PG16: PNG drag drop requires visible upload,|^PASS B22 Chrome\/HTTP\/PG16: reviewer 101 submitted queue pages,|^PASS B22 Chrome\/HTTP\/PG16: individual business PNG two retained versions,|^NOT TESTED B22 Chrome:|^PASS B22 test fixture:|^PASS B06 disposable native activation/.test(x) ||
+              x==="PASS B22 Chrome/HTTP/PG16: native Mercur Seller approval holds company policy SHARE lock, concurrent platform disable waits then commits, one audit/outbox and current Owner notice; post-disable Owner application403; existing Store open; policy reopened" ||
+              x==="PASS B22 Chrome/HTTP/PG16: native Mercur Seller creation holds company policy SHARE lock, concurrent platform disable waits then commits, single audit/outbox and two Owner notices; later creation403; pending Seller preserved on reopen" ||
+              x==="PASS B22 Chrome/HTTP/PG16: platform company Store application pause/reopen, private Owner 403, CSRF 403, native pending on hold, old Store open, audit/outbox and no auto-approval" ||
               x==="PASS B22 Owner member-permission policy: protected Owner grant/list 200 despite legacy setting; revoke 200 with audit/outbox" ||
               x==="PASS B22 Chrome/HTTP/PG16: scanned PNG preview loaded and reviewer approval UI gated" ||
               x==="PASS B22 Chrome/HTTP/PG16: full two-page PDF preview, approval disabled until final page scrolled" ||
@@ -301,7 +306,26 @@ async function run(){
               "PASS B22 Chrome/HTTP/PG16: corrected tax certificate resubmission required new upload; two versions retained; withdrawn approval denied",
             ].includes(x))
             if(scoped.length)process.stdout.write(scoped.join("\n")+"\n")
-            throw Error("B22 dedicated task-only child stage failed: "+sanitized(
+            // Diagnostics must survive a long task log without disclosing
+            // request bodies, passwords, TOTP or personal records. The prior
+            // tail-only error hid both the failing source line and ETIMEDOUT.
+            let b22SourceLine="unknown"
+            for(const line of String(child.stderr??"").concat("\n",String(child.stdout??"")).split("\n").reverse()){
+              if(!line.includes('"level":"error"')||!line.includes('"stack"'))continue
+              try{
+                const item=JSON.parse(line.slice(line.indexOf("{")))
+                const frame=Array.isArray(item.stack)?item.stack.find((f:any)=>
+                  typeof f?.fileName==="string"&&f.fileName.endsWith("/b22-store-ui.exec.ts")):null
+                if(Number.isSafeInteger(frame?.lineNumber)&&frame.lineNumber>0){
+                  b22SourceLine=String(frame.lineNumber);break
+                }
+              }catch{}
+            }
+            const childCode=(child.error as NodeJS.ErrnoException|undefined)?.code??"none"
+            const nativeStatus="exit="+String(child.status??"null")+
+              " signal="+String(child.signal??"none")+
+              " child_code="+String(childCode)+" b22_source_line="+b22SourceLine
+            throw Error("B22 dedicated task-only child stage failed ["+nativeStatus+"]: "+sanitized(
               String(child.error??"exit "+child.status)+"\n"+String(child.stderr??"")+"\n"+String(child.stdout??"")))
           }
           process.stdout.write(valid+"\n")
@@ -316,6 +340,17 @@ async function run(){
           assert.ok(result.includes("PASS B22 Chrome: native Admin SMTP same-origin MFA/grant GET200"))
           return
         }
+        assert.ok(result.includes("PASS B22 Chrome: primary Customer native MFA Person session and explicit Staff grant changed company policy through HTTPS, CSRF denied, two canonical Customer audit/outboxes and Owner-only notices; foreign audit denied, revoked task 403"),
+          "Missing linked Customer Staff Chrome HTTPS and PG16 canonical audit proof")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome/HTTP/PG16: native Mercur Seller creation holds company policy SHARE lock, concurrent platform disable waits then commits, single audit/outbox and two Owner notices; later creation403; pending Seller preserved on reopen"),
+          "Missing real PostgreSQL company policy vs native Mercur Seller create overlap, canonical audit/outbox, Owner notices and denied subsequent Store evidence")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome/HTTP/PG16: native Mercur Seller approval holds company policy SHARE lock, concurrent platform disable waits then commits, one audit/outbox and current Owner notice; post-disable Owner application403; existing Store open; policy reopened"),
+          "Missing real PG16 company policy pause vs native Mercur Seller approval lock collision, ordering, audit/outbox and private notice proof")
+        assert.ok(result.split("\n").includes(
+          "PASS B22 Chrome/HTTP/PG16: platform company Store application pause/reopen, private Owner 403, CSRF 403, native pending on hold, old Store open, audit/outbox and no auto-approval"),
+          "Missing real Chrome/HTTP/PG16 platform company policy pause/reopen, private authorization, pending Seller, and audit/outbox proof")
         assert.ok(result.split("\n").includes(
           "PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner"),
           "Missing real Chrome/HTTP/PG16 tax certificate application, independent reviewer decision and protected Owner acceptance")
@@ -453,6 +488,10 @@ async function run(){
           "Missing native worker crash/Index/ACK/replay evidence")
         assert.ok(audit.includes("PASS B22 real audit relay: native Owner Store follow/unfollow delivered by Medusa worker to Buyer-only Audit Index, two matching envelopes and durable ACKs"),
           "Missing real indexed Store-follow audit delivery and ACK")
+        assert.ok(audit.includes("PASS B22 real audit relay: platform company policy disable/reopen delivered by native Medusa Access/Index, redacted envelopes, durable ACKs and scoped timeline"),
+          "Missing real Access/Index receipt, redaction and Organization timeline delivery for platform policy changes")
+        assert.ok(audit.includes("PASS B22 real audit relay: primary native Customer Staff HTTPS policy events delivered with Customer actor, redacted durable ACKs and scoped Owner timeline"),
+          "Missing linked Customer Staff HTTP producer and Access/Index relay acceptance")
         for(const proof of ["PASS B22 audit real ACK: committed receipt lost,",
           "PASS B22 audit natural lease: DB clock 60s,",
           "PASS B22 audit native scheduler and crash restart: true Medusa cron,"])

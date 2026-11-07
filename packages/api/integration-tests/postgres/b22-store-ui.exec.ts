@@ -1402,6 +1402,253 @@ export default async function({container}:any){
         [e.id]))[0].n,1,
         "Staff provisioning canonical/security audit must commit together")
     }
+    // Existing organization-provision and store-approve grants confer no
+    // company application-policy authority without an additional explicit grant.
+    const companyPolicyPath='/personal/platform/store-application-policy?organization_id='+
+      encodeURIComponent(organizations[0].id)
+    assert.equal(await reviewer.callFunction("async function(path){return (await fetch(path)).status}",companyPolicyPath),403,
+      "Organization provision and Store approve grants must not authorize policy changes")
+    // A platform reviewer with no membership in Alpha cannot read its private
+    // notifications, even if they hold organization.provision/store.approve.
+    const noticePath="/personal/notifications?organization="+encodeURIComponent(organizations[0].id)
+    assert.equal(await reviewer.callFunction(
+      "async function(path){return (await fetch(path)).status}",noticePath),403,
+      "Platform Staff grant alone must not reveal a company's private notices")
+    // Add another real, signed-in Person as a protected Owner of this same
+    // company. The reversible task-only membership tests per-Owner delivery;
+    // no native Seller right or platform task is inferred from this membership.
+    const [temporaryNotificationCoOwner]=await foundation.createMemberships([{
+      organization_id:organizations[0].id,person_id:B.person,role:"owner",
+      status:"active",protected_owner:true
+    }])
+    const policyGrantId="da_staff_policy_"+rand
+    await q(`insert into da_platform_staff_grant
+      (id,person_id,task,resource,granted_by_person_id,reason)
+      values($1,$2,'store.application.policy.manage','platform',$2,
+        'B22 isolated company policy gate')`,[policyGrantId,B.person])
+    // B22 approved independent company policy: an administrator can pause
+    // NEW Store requests without suspending an existing native Mercur Store.
+    // The pending Seller remains pending and must not be auto-approved on reopen.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    await reviewer.click("#platform-store-policy-open")
+    await reviewer.wait("!document.getElementById('platform-store-policy-panel').hidden")
+    await reviewer.input("#platform-store-policy-form input[name=organization_id]",
+      organizations[0].id)
+    await reviewer.click("#platform-store-policy-read")
+    await reviewer.wait("document.getElementById('platform-store-policy-status').textContent.includes('açık.')")
+    assert.equal(await reviewer.eval("document.getElementById('platform-store-policy-apply').disabled"),false)
+    const companyRight=async(enabled:boolean,expected:boolean,reason:string,
+      validCsrf=true,organizationId=organizations[0].id,
+      actingBrowser:B06Chrome=reviewer,expectedVersion?:number)=>{
+      // Test-only snapshot of current committed revision. Historical replay
+      // tests pass an explicit older version; product UI always uses HTTP GET.
+      const [current]=await q("select store_application_version from da_organization where id=$1",
+        [organizationId])
+      assert.ok(current)
+      const version=expectedVersion??current.store_application_version
+      assert.ok(Number.isSafeInteger(version)&&version>=0&&version<2147483647)
+      return actingBrowser.callFunction(
+        "async function(org,e,x,reason,valid,version){"+
+          "const s=await(await fetch('/personal/session')).json();"+
+          "const r=await fetch('/personal/platform/store-application-policy',{method:'POST',"+
+            "headers:{'content-type':'application/json','x-csrf-token':valid==='true'?s.csrf_token:'bad'},"+
+            "body:JSON.stringify({organization_id:org,expected_enabled:x==='true',expected_version:Number(version),enabled:e==='true',reason})});"+
+          "return {status:r.status,body:await r.json()};}",
+        organizationId,String(enabled),String(expected),reason,String(validCsrf),String(version))
+    }
+    const initialCompanyState=await q("select store_application_enabled from da_organization where id=$1",
+      [organizations[0].id])
+    assert.deepEqual(initialCompanyState,[{store_application_enabled:true}])
+    const [initialPolicyRevision]=await q(
+      "select store_application_version from da_organization where id=$1",
+      [organizations[0].id])
+    assert.equal(initialPolicyRevision.store_application_version,0)
+    assert.equal((await get("/personal/platform/store-application-policy?organization_id="+
+      encodeURIComponent(organizations[0].id))).status,403,
+      "Owner cannot read platform-only policy administration")
+    assert.equal((await companyRight(false,true,"B22 synthetic suspension",false)).status,403)
+    assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+      [organizations[0].id]),initialCompanyState,
+      "CSRF failure must not mutate policy")
+    await reviewer.input("#platform-store-policy-form input[name=reason]",
+      "B22 synthetic company application pause")
+    await reviewer.click("#platform-store-policy-apply")
+    await reviewer.wait("document.getElementById('platform-store-policy-status').textContent.includes('kapatıldı')")
+    assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+      [organizations[0].id]),[{store_application_enabled:false}])
+    const stoppedAudit=await q("select e.id,e.action,e.actor_person_id,x.id outbox_id,"+
+      "e.new_values->>'reason' reason from da_audit_event e"+
+      " join da_audit_outbox x on x.source_audit_event_id=e.id"+
+      " where e.organization_id=$1 and e.action='organization.store_application_right_disabled'",
+      [organizations[0].id])
+    assert.equal(stoppedAudit.length,1)
+    assert.equal(stoppedAudit[0].actor_person_id,B.person)
+    assert.equal(stoppedAudit[0].reason,"B22 synthetic company application pause")
+    const receiptOwners=await q(`select m.person_id from da_organization_membership m
+      join da_person p on p.id=m.person_id
+      where m.organization_id=$1 and m.role='owner' and m.protected_owner=true
+      and m.status='active' and m.deleted_at is null and p.disabled_at is null
+      and p.deleted_at is null order by m.person_id`,[organizations[0].id])
+    const companyNotices=await q(`select n.person_id from da_notification_receipt n
+      where n.audit_event_id=$1 order by n.person_id`,[stoppedAudit[0].id])
+    assert.equal(receiptOwners.length,2,
+      "Two independently signed-in protected Owners must each receive the policy event")
+    assert.deepEqual(companyNotices,receiptOwners,
+      "One private policy notice per current protected Owner, no foreign recipient")
+    const closedNotices=await get(noticePath)
+    assert.equal(closedNotices.status,200)
+    assert.equal(closedNotices.body.notifications.filter((n:any)=>
+      n.title==="Yeni mağaza başvuru hakkı durduruldu" &&
+      n.context===organizations[0].name).length,1)
+    const secondOwnerNotices=await reviewer.callFunction(
+      "async function(path){const r=await fetch(path);return {status:r.status,body:await r.json()}}",
+      noticePath)
+    assert.equal(secondOwnerNotices.status,200)
+    assert.equal(secondOwnerNotices.body.notifications.filter((n:any)=>
+      n.title==="Yeni mağaza başvuru hakkı durduruldu" &&
+      n.context===organizations[0].name).length,1,
+      "The other current protected Owner must see exactly one private pause notice")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.click("#notification-bell")
+    await browser.wait("document.getElementById('notification-list').textContent.includes('Yeni mağaza başvuru hakkı durduruldu')")
+    await browser.click("#notification-bell")
+    const appCountBefore=Number((await q(
+      "select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n)
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.click("#store-applications-refresh")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('durduruldu')")
+    assert.equal(await browser.eval("document.getElementById('store-application-form').hidden"),true)
+    const deniedAppId="daapp_"+randomBytes(16).toString("hex")
+    const deniedWhilePaused=await browser.callFunction(
+      "async function(org,id){"+
+      "const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-applications',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({organization_id:org,application_id:id,name:'B22 blocked new Store',"+
+      "email:'b22-blocked-new-store@example.invalid',currency_code:'try'})});"+
+      "return r.status;}",organizations[0].id,deniedAppId)
+    assert.equal(deniedWhilePaused,403,"Active protected Owner cannot bypass platform pause")
+    assert.equal(Number((await q("select count(*)::int n from da_store_application where id=$1",
+      [deniedAppId]))[0].n),0)
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_application where organization_id=$1",
+      [organizations[0].id]))[0].n),appCountBefore)
+    assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
+    assert.equal((await native.listSellers({id:stores[0].id}))[0].status,"open",
+      "Company application pause cannot suspend a previously approved Seller")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    await reviewer.click("#store-approval-refresh")
+    await reviewer.wait("document.getElementById('store-approval-list').textContent.includes('inceleme bekletiliyor')")
+    assert.equal(await reviewer.eval("document.querySelector('#store-approval-list button').disabled"),true)
+    const blockedApproval=await reviewer.callFunction(
+      "async function(id,seller){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({application_id:id,seller_id:seller})});return r.status;}",
+      applicationId,ownerStoreId)
+    assert.equal(blockedApproval,409)
+    assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
+    assert.equal((await companyRight(false,true,"B22 stale policy switch")).status,409,
+      "Stale switch must be rejected while company is already disabled")
+    await reviewer.click("#platform-store-policy-read")
+    await reviewer.wait("document.getElementById('platform-store-policy-apply').textContent.includes('aç')")
+    await reviewer.input("#platform-store-policy-form input[name=reason]",
+      "B22 synthetic company application reopen")
+    await reviewer.click("#platform-store-policy-apply")
+    await reviewer.wait("document.getElementById('platform-store-policy-status').textContent.includes('açıldı')")
+    assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+      [organizations[0].id]),[{store_application_enabled:true}])
+    const [afterReopenRevision]=await q(
+      "select store_application_version from da_organization where id=$1",
+      [organizations[0].id])
+    assert.equal(afterReopenRevision.store_application_version,2)
+    const policyAuditBeforeReplay=await q(`select count(*)::int n from da_audit_event
+      where organization_id=$1 and action in
+      ('organization.store_application_right_disabled','organization.store_application_right_enabled')`,
+      [organizations[0].id])
+    // Actual ABA replay: TRUE -> FALSE -> TRUE cannot reuse revision zero.
+    assert.equal((await companyRight(false,true,"B22 stale pause replay after reopen",
+      true,organizations[0].id,reviewer,
+      initialPolicyRevision.store_application_version)).status,409)
+    assert.deepEqual(await q(
+      "select store_application_enabled,store_application_version from da_organization where id=$1",
+      [organizations[0].id]),
+      [{store_application_enabled:true,store_application_version:2}])
+    assert.deepEqual(await q(`select count(*)::int n from da_audit_event
+      where organization_id=$1 and action in
+      ('organization.store_application_right_disabled','organization.store_application_right_enabled')`,
+      [organizations[0].id]),policyAuditBeforeReplay,
+      "Stale replay cannot write audit, outbox or private notices")
+    assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval",
+      "Reopen only returns prior application to review queue, never auto-approves")
+    const enabledEvents=await q("select e.actor_person_id,x.id outbox_id from da_audit_event e"+
+      " join da_audit_outbox x on x.source_audit_event_id=e.id"+
+      " where e.organization_id=$1 and e.action='organization.store_application_right_enabled'",
+      [organizations[0].id])
+    assert.equal(enabledEvents.length,1)
+    assert.equal(enabledEvents[0].actor_person_id,B.person)
+    const reopenedNotices=await get(noticePath)
+    assert.equal(reopenedNotices.status,200)
+    assert.equal(reopenedNotices.body.notifications.filter((n:any)=>
+      n.title==="Yeni mağaza başvuru hakkı açıldı" &&
+      n.context===organizations[0].name).length,1)
+    const companyTotal=await q(`select count(*)::int n from da_notification_receipt n
+      join da_audit_event e on e.id=n.audit_event_id
+      where e.organization_id=$1 and e.action in
+      ('organization.store_application_right_enabled','organization.store_application_right_disabled')`,
+      [organizations[0].id])
+    assert.equal(companyTotal[0].n,receiptOwners.length*2)
+    const reopenedForSecondOwner=await reviewer.callFunction(
+      "async function(path){const r=await fetch(path);return {status:r.status,body:await r.json()}}",
+      noticePath)
+    assert.equal(reopenedForSecondOwner.status,200)
+    assert.equal(reopenedForSecondOwner.body.notifications.filter((n:any)=>
+      n.title==="Yeni mağaza başvuru hakkı açıldı" &&
+      n.context===organizations[0].name).length,1,
+      "Both protected Owners receive the reopen event without duplicate notices")
+    // In this disposable fixture only, change the same real Person's
+    // protected Owner membership to an ordinary active Member. The current
+    // server authorization must immediately hide old Owner-only notices,
+    // while the established B22 Member tests reuse the SAME membership id.
+    // This is not the product's protected Owner demotion procedure.
+    const formerOwnerMember=await q(`update da_organization_membership
+      set role='member',protected_owner=false,updated_at=clock_timestamp()
+      where id=$1 and organization_id=$2 and person_id=$3
+        and role='owner' and protected_owner=true and status='active'
+      returning id`,[temporaryNotificationCoOwner.id,organizations[0].id,B.person])
+    assert.equal(formerOwnerMember.length,1)
+    const privateAfterRevoke=await reviewer.callFunction(
+      "async function(){const r=await fetch('/personal/notifications');"+
+      "return {status:r.status,body:await r.json()}}")
+    assert.equal(privateAfterRevoke.status,200)
+    assert.equal(privateAfterRevoke.body.notifications.some((n:any)=>
+      n.context===organizations[0].name),false,
+      "Former Owner now ordinary Member may not view previous Owner-only notices")
+    const [staleCompanyNotice]=await q(`select id from da_notification_receipt
+      where audit_event_id=$1 and person_id=$2`,[stoppedAudit[0].id,B.person])
+    assert.ok(staleCompanyNotice?.id)
+    assert.equal(await reviewer.callFunction(
+      "async function(id){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/notifications',{method:'POST',headers:{"+
+      "'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({id})});return r.status}",staleCompanyNotice.id),403,
+      "Former Owner now ordinary Member cannot mark an old Owner-only notice read")
+    assert.equal((await companyRight(true,false,"B22 stale policy switch")).status,409)
+    await reviewer.click("#store-approval-refresh")
+    await reviewer.wait("document.querySelector('#store-approval-list button')?.disabled===false")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.click("#store-applications-refresh")
+    await browser.wait("!document.getElementById('store-application-form').hidden")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    process.stdout.write("PASS B22 Chrome/HTTP/PG16: platform company Store application pause/reopen, private Owner 403, CSRF 403, native pending on hold, old Store open, audit/outbox and no auto-approval\n")
+
     await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",
       [staffOrgGrantId])
     assert.equal(await reviewer.eval("(async()=> (await fetch('/personal/platform')).status)()"),403)
@@ -1410,7 +1657,7 @@ export default async function({container}:any){
       [provisionName+" revoked"]))[0].n,0)
     // Separate store.approve grant remains valid; Staff and Owner roles
     // cannot silently inherit each other's permissions.
-    process.stdout.write("PASS B22 Chrome: real Staff Organization provision HTTP201 and protected Owner persisted, two canonical platform_staff audit/outboxes project safely; CSRF/foreign actor/revoked grant denied\\n")
+    process.stdout.write("PASS B22 Chrome: real Staff Organization provision HTTP201 and protected Owner persisted, two canonical platform_staff audit/outboxes project safely; CSRF/foreign actor/revoked grant denied\n")
     reviewer.phase="platform-store-review"
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
@@ -1437,6 +1684,11 @@ export default async function({container}:any){
       seller_id:olderPending.id,reason:"B22 task-only older Store suspension"
     }})
     assert.equal((await native.listSellers({id:olderPending.id}))[0].status,"suspended")
+    // The other Chrome window may have taken focus while the *native*
+    // suspension workflow ran. Never bypass visibility-based privacy;
+    // restore this real reviewer tab before invoking its visible page button.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
     await reviewer.click("#store-approval-newer")
     // Both pages expose one button: only page-1 Store identity proves the
     // asynchronous page switch completed before approval.
@@ -1453,6 +1705,8 @@ export default async function({container}:any){
     await staffRevoker.connect()
     let sellerPauseFn=false,sellerPauseTrigger=false,staffBarrierHeld=false
     let staffRevokeDone=false
+    let companyPolicySwitchDone=false
+    let companyPolicySwitch:Promise<{value?:{status:number};error?:string}>|undefined
     const beforeStoreApprovals=reviewer.http.filter(
       (x:any)=>x.path==="/personal/platform/stores"&&x.method==="POST").length
     try{
@@ -1467,6 +1721,12 @@ export default async function({container}:any){
       const holderPid=(await staffBarrier.query("select pg_backend_pid()::int pid")).rows[0].pid as number
       const revokePid=(await staffRevoker.query("select pg_backend_pid()::int pid")).rows[0].pid as number
       await staffBarrier.query("select pg_advisory_xact_lock(hashtext('b22-seller-open-pause'),hashtext($1))",[ownerStoreId])
+      // Creating the independent PG16 barrier can leave this authenticated
+      // Chrome tab in the background. Restore the real tab (never override
+      // document.hidden or workspace.hidden), then require the actual
+      // authorized Store action to be visible before dispatching its click.
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible' && !document.getElementById('workspace').hidden && !!document.querySelector('#store-approval-list button')?.getClientRects().length")
       await reviewer.click("#store-approval-list button")
       await until(async()=>{
         const [w]=await q("select count(*)::int n from pg_locks h join pg_locks w on w.locktype=h.locktype and w.database=h.database and w.classid=h.classid and w.objid=h.objid and w.objsubid=h.objsubid and w.pid<>h.pid and w.granted=false where h.locktype='advisory' and h.pid=$1 and h.granted=true",[holderPid])
@@ -1484,6 +1744,50 @@ export default async function({container}:any){
         return w.n>=1
       },19000,"Real PG16 Staff grant revoke waits on approval's locked grant row")
       assert.equal(staffRevokeDone,false,"Permission revoke cannot commit before approved Store write finishes")
+      // The approved company policy must serialize against the REAL native
+      // Mercur Seller approval, not only a synthetic SELECT or a revoked grant.
+      // Seller's task-only UPDATE is still blocked by our advisory barrier;
+      // approval holds the canonical Organization row FOR SHARE in its
+      // Foundation transaction until native workflow + readback complete.
+      // The approval's Staff session locks its own Person/session epoch.
+      // A second request using that same Person would wait on an unrelated
+      // session row and could give false race evidence. Give the OTHER actual
+      // signed-in Person A an explicitly scoped, synthetic platform task
+      // grant for this one test, then revoke that grant in finally.
+      const policyCollisionGrantId="da_staff_policy_race_"+rand
+      await q(`insert into da_platform_staff_grant
+        (id,person_id,task,resource,granted_by_person_id,reason)
+        values($1,$2,'store.application.policy.manage','platform',$2,
+        'B22 task-only independent platform policy race')`,
+        [policyCollisionGrantId,A.person])
+      const policyCollisionReason="B22 concurrent native approval policy pause"
+      const beforePolicyCollision=await q(`select count(*)::int n from
+        da_audit_event where organization_id=$1 and
+        action='organization.store_application_right_disabled'
+        and new_values->>'reason'=$2`,[organizations[0].id,policyCollisionReason])
+      assert.equal(beforePolicyCollision[0].n,0)
+      companyPolicySwitch=companyRight(false,true,policyCollisionReason,
+        true,organizations[0].id,browser).then(
+        value=>{companyPolicySwitchDone=true;return {value}},
+        error=>{companyPolicySwitchDone=true;return {error:String(error)}})
+      await until(async()=>{
+        // The policy request must reach the real PostgreSQL FOR UPDATE and
+        // WAIT for the approval transaction's Organization SHARE row lock.
+        const [w]=await q(`select count(*)::int n from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock'
+            and query ilike '%store_application_enabled%'
+            and query ilike '%da_organization%'
+            and query ilike '%for update%'`)
+        return w.n>=1
+      },19000,"Policy disable waits on native Seller approval Organization lock")
+      assert.equal(companyPolicySwitchDone,false,"Company cannot close before native approval commits")
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [organizations[0].id]),[{store_application_enabled:true}],
+        "The uncommitted platform pause must not be visible to other readers")
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where organization_id=$1 and action='organization.store_application_right_disabled'
+        and new_values->>'reason'=$2`,[organizations[0].id,policyCollisionReason]))[0].n,0,
+        "No policy audit/outbox before the canonical company row lock is acquired")
       assert.equal((await q("select count(*)::int n from da_platform_staff_grant where id=$1 and revoked_at is null",[grantId]))[0].n,1)
       assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval",
         "The uncommitted native Seller UPDATE is not visible to outside readers")
@@ -1496,6 +1800,42 @@ export default async function({container}:any){
         return http.length===beforeStoreApprovals+1&&http[http.length-1].status===200&&
           rows.length===1&&rows[0].status==="open"&&!!rows[0].approved_at
       },19000,"Real Chrome Staff approval HTTP200 with committed native Seller open")
+      const blockedPolicyResult=await companyPolicySwitch
+      assert.equal(blockedPolicyResult?.value?.status,200,
+        blockedPolicyResult?.error||"Policy pause must commit only after native approval")
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [organizations[0].id]),[{store_application_enabled:false}],
+        "A committed policy pause prevents later new Store actions")
+      assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"open",
+        "Native approval committed before policy pause; existing Seller stays open")
+      const policyCollisionAudit=await q(`select e.id,x.id as outbox_id from da_audit_event e
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.organization_id=$1 and e.action='organization.store_application_right_disabled'
+          and e.new_values->>'reason'=$2`,[organizations[0].id,policyCollisionReason])
+      assert.equal(policyCollisionAudit.length,1,"Exactly one canonical pause audit/outbox after racing approval")
+      const policyCollisionReceipts=await q(`select n.person_id from da_notification_receipt n
+        where n.audit_event_id=$1`,[policyCollisionAudit[0].id])
+      assert.deepEqual(policyCollisionReceipts,[{person_id:A.person}],
+        "Only the remaining current protected Owner gets the private race notice")
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      const blockedSubsequent=await browser.callFunction(
+        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',headers:{"+
+        "'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({organization_id:org,application_id:id,"+
+        "name:'B22 concurrent pause post check',"+
+        "email:'b22-after-policy-pause@example.invalid',currency_code:'try'})});"+
+        "return r.status;}",organizations[0].id,"daapp_"+randomBytes(16).toString("hex"))
+      assert.equal(blockedSubsequent,403,
+        "New Owner submission must fail after the concurrent pause commits")
+      assert.equal((await companyRight(true,false,"B22 post race company resume",
+        true,organizations[0].id,browser)).status,200)
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [organizations[0].id]),[{store_application_enabled:true}],
+        "Restore the test-only company policy without changing Seller history")
       const revoked=await revokePending
       assert.equal(revoked.rows.length,1)
       assert.ok(revoked.rows[0].revoked_at)
@@ -1504,9 +1844,13 @@ export default async function({container}:any){
         "Current platform Staff revoke must deny all subsequent Store approvals")
       assert.equal((await q("select count(*)::int n from da_store_application where id=$1 and seller_id=$2 and status='created'",[applicationId,ownerStoreId]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_organization_seller_ownership where organization_id=$1 and seller_id=$2 and revoked_at is null",[organizations[0].id,ownerStoreId]))[0].n,1)
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: native Mercur Seller approval holds company policy SHARE lock, concurrent platform disable waits then commits, one audit/outbox and current Owner notice; post-disable Owner application403; existing Store open; policy reopened\n")
       process.stdout.write("PASS B22 Chrome: Staff grant revoke waits during real native Seller approval; HTTP200 and Seller open before revoke commit, later Staff HTTP403; authoritative origin retained\n")
     }finally{
       if(staffBarrierHeld)await staffBarrier.query("ROLLBACK")
+      if(companyPolicySwitch)await Promise.allSettled([companyPolicySwitch])
+      await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",
+        ["da_staff_policy_race_"+rand])
       await staffRevoker.end()
       await staffBarrier.end()
       if(sellerPauseTrigger)await q("drop trigger if exists b22_staff_native_seller_pause_v1 on seller")
@@ -1541,10 +1885,9 @@ export default async function({container}:any){
     assert.equal(afterReview[0].status,"open")
     assert.ok(afterReview[0].approved_at)
 
-    const [alphaMember]=await foundation.createMemberships([{
-      organization_id:organizations[0].id,person_id:B.person,role:"member",
-      status:"active",protected_owner:false
-    }])
+    // This is the very same task-created membership whose Owner authority
+    // was removed above; do not create a duplicate Person/Organization row.
+    const alphaMember=temporaryNotificationCoOwner
     await verifyMembershipNonDisclosure({organizationId:organizations[0].id,
       activeId:alphaMember.id,foreignId:betaAdminMembership.id,personId:B.person,
       browser:reviewer,foundation,q})
@@ -5369,6 +5712,12 @@ export default async function({container}:any){
       assert.equal(grantRow.length,1)
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
+      // The test changed the platform company policy while this second
+      // browser was elsewhere. Rebuild the authenticated Organization list
+      // through the same real Page.reload path used by earlier B22 scenarios.
+      // This must not grant authority or manufacture a Member option.
+      await reviewer.send("Page.reload",{ignoreCache:true})
+      await reviewer.wait("document.getElementById('workspace').hidden===false")
       await reviewer.select(organizations[0].name,"member")
       const memberDraftStores=()=>reviewer.eval(`(async()=>{
         const r=await fetch('/personal/product-drafts?organization_id='+${JSON.stringify(organizations[0].id)})
@@ -5399,6 +5748,7 @@ export default async function({container}:any){
         where person_id=$1 and actor_type='member' and revoked_at is null`,[B.person])
       assert.equal(bMemberBindings.length,1)
       assert.equal(bMemberBindings[0].actor_id,bNativeMember.id)
+
       const withoutStore=await memberDraftStores()
       assert.deepEqual(withoutStore,{status:200,stores:[]},
         "A verified Member without a native SellerMember association has no Store")
@@ -5627,6 +5977,8 @@ export default async function({container}:any){
     const ownerRaceBarrier=new Client({connectionString:u.toString()})
     await ownerRaceBarrier.connect()
     let ownerBarrierHeld=false,ownerPauseFn=false,ownerPauseTrigger=false
+    let gammaPolicyFinished=false
+    let gammaPolicyPending:Promise<{value?:{status:number};error?:string}>|undefined
     try{
       const [gammaMembershipBeforeRace]=await q(
         "select status,protected_owner from da_organization_membership where id=$1",
@@ -5668,6 +6020,37 @@ export default async function({container}:any){
         "Native Seller insertion is uncommitted while its transaction waits")
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
+      // This same real native Seller creation holds the legal Organization
+      // row FOR SHARE across its Foundation authorization + native Mercur
+      // create workflow. A separate platform policy POST must wait on UPDATE.
+      // No second fixture Seller or mocked transaction is introduced.
+      const gammaPolicyReason="B22 concurrent native creation policy pause"
+      gammaPolicyPending=companyRight(false,true,gammaPolicyReason,true,sellerGamma.id).then(
+        value=>{gammaPolicyFinished=true;return {value}},
+        error=>{gammaPolicyFinished=true;return {error:String(error)}})
+      await until(async()=>{
+        const [w]=await q(`select count(*)::int n from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock'
+            and query ilike '%store_application_enabled%'
+            and query ilike '%da_organization%'
+            and query ilike '%for update%'`)
+        return w.n>=1
+      },19000,"Gamma policy disable waits on real native Mercur Seller INSERT")
+      assert.equal(gammaPolicyFinished,false,
+        "Platform company pause cannot commit while native Store creation is in flight")
+      assert.equal(ownerCreateFinished,false,
+        "Native creation is genuinely in flight while company policy waits")
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [sellerGamma.id]),[{store_application_enabled:true}])
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where organization_id=$1 and action='organization.store_application_right_disabled'
+          and new_values->>'reason'=$2`,[sellerGamma.id,gammaPolicyReason]))[0].n,0,
+        "Concurrent company close must not write canonical audit before its row lock")
+      // Launch the pre-existing protected Owner-removal negative while the
+      // Seller INSERT is still in-flight. Crucially, start the POLICY request
+      // first: both use Person B, whose Foundation session row is locked per
+      // request. Otherwise the policy would wait on the session rather than
+      // on the Organization row, creating false concurrency evidence.
       const ownerRevokeRequest={
         action:"revoke",organization_id:sellerGamma.id,
         membership_id:gammaOwnerMembership.id
@@ -5680,16 +6063,20 @@ export default async function({container}:any){
         "return {status:r.status,body:await r.json()}})()"
       ).then((v:any)=>{ownerRevokeFinished=true;return v},
         (e:unknown)=>{ownerRevokeFinished=true;throw e})
-      // The Owner-revoke call has been initiated while the native Seller
-      // INSERT is blocked. Existing membership row locks may serialize it;
-      // do not demand an obsolete specific pg_locks waiter or fast rejection.
-      assert.equal(ownerCreateFinished,false)
+      // The Owner-revoke call is now in flight while native Seller INSERT
+      // remains blocked, and B's policy request holds its session lock.
+      // The revocation must still fail without touching the protected Owner.
       const [stillOwner]=await q("select status,protected_owner from da_organization_membership where id=$1",[gammaOwnerMembership.id])
       assert.equal(stillOwner.status,"active")
       assert.equal(stillOwner.protected_owner,true)
       await ownerRaceBarrier.query("ROLLBACK")
       ownerBarrierHeld=false
-      const [submitted,revoked]=await Promise.all([ownerCreatePending,ownerRevokePending])
+      const [submitted,revoked,gammaPolicyResult]=await Promise.all([
+        ownerCreatePending,ownerRevokePending,gammaPolicyPending])
+      assert.equal(gammaPolicyResult?.value?.status,200,
+        gammaPolicyResult?.error||"Platform pause must serialize AFTER real native creation")
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [sellerGamma.id]),[{store_application_enabled:false}])
       assert.equal(revoked.status,403,
         "A second Owner cannot bypass the 10+20 guarded removal process")
       assert.equal(ownerRevokeFinished,true)
@@ -5714,9 +6101,50 @@ export default async function({container}:any){
       assert.equal((await q("select count(*)::int n from seller where email=$1",[ownerRaceEmail]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_organization_seller_ownership o join da_audit_event e on e.id=o.verification_audit_event_id join da_audit_outbox x on x.source_audit_event_id=e.id where o.organization_id=$1 and o.seller_id=$2 and o.revoked_at is null and e.action='organization.store_application_created' and e.new_values->>'application_id'=$3",[sellerGamma.id,submitted.body.seller_id,ownerRaceRequest.application_id]))[0].n,1,
         "Owner native Seller requires exactly one authoritative Org link and audit/outbox")
+      // A single authorized policy change after a real native Seller INSERT
+      // has one audit/outbox and one receipt per CURRENT protected Owner.
+      const gammaPolicyAudit=await q(`select e.id,x.id as outbox_id
+        from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.organization_id=$1 and e.action='organization.store_application_right_disabled'
+          and e.new_values->>'reason'=$2`,[sellerGamma.id,gammaPolicyReason])
+      assert.equal(gammaPolicyAudit.length,1,"Exactly one company policy audit/outbox for racing native creation")
+      const gammaOwners=await q(`select m.person_id from da_organization_membership m
+        join da_person p on p.id=m.person_id
+        where m.organization_id=$1 and m.role='owner' and m.protected_owner=true
+          and m.status='active' and m.deleted_at is null and p.disabled_at is null
+          and p.deleted_at is null order by m.person_id`,[sellerGamma.id])
+      assert.equal(gammaOwners.length,2,"Two protected Gamma Owners remain after denied Owner removal")
+      const gammaReceipts=await q(`select person_id from da_notification_receipt
+        where audit_event_id=$1 order by person_id`,[gammaPolicyAudit[0].id])
+      assert.deepEqual(gammaReceipts,gammaOwners,"Only current Gamma Owners receive the private policy notice")
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      const deniedGammaId="daapp_"+randomBytes(16).toString("hex")
+      const gammaSubmitDenied=await browser.callFunction(
+        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({organization_id:org,application_id:id,"+
+        "name:'B22 Gamma post race denied',"+
+        "email:'b22-gamma-policy-denied@example.invalid',currency_code:'try'})});"+
+        "return r.status;}",sellerGamma.id,deniedGammaId)
+      assert.equal(gammaSubmitDenied,403,
+        "After racing native creation, Gamma policy must deny subsequent Owner requests")
+      assert.equal((await q("select count(*)::int n from da_store_application where id=$1",
+        [deniedGammaId]))[0].n,0,"Policy denial must not reserve a new Seller claim")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      assert.equal((await companyRight(true,false,
+        "B22 post creation race company resume",true,sellerGamma.id)).status,200)
+      assert.deepEqual(await q("select store_application_enabled from da_organization where id=$1",
+        [sellerGamma.id]),[{store_application_enabled:true}])
+      assert.equal((await native.listSellers({id:submitted.body.seller_id}))[0].status,
+        "pending_approval","Reopening only restores the queue; no automatic Seller approval")
+      process.stdout.write("PASS B22 Chrome/HTTP/PG16: native Mercur Seller creation holds company policy SHARE lock, concurrent platform disable waits then commits, single audit/outbox and two Owner notices; later creation403; pending Seller preserved on reopen\n")
       process.stdout.write("PASS B22 Chrome: native Seller creation serialized before denied protected Owner removal; Seller pending, Owner remains active, no unauthorized membership audit\n")
     }finally{
       if(ownerBarrierHeld)await ownerRaceBarrier.query("ROLLBACK")
+      if(gammaPolicyPending)await Promise.allSettled([gammaPolicyPending])
       await ownerRaceBarrier.end()
       if(ownerPauseTrigger)await q("drop trigger if exists b22_native_seller_owner_pause_v1 on seller")
       if(ownerPauseFn)await q("drop function if exists b22_native_seller_owner_pause_v1()")
@@ -6257,6 +6685,12 @@ export default async function({container}:any){
         const recoveryHttpBefore=browser.http.filter((row:any)=>
           row.method==="POST"&&row.path==="/personal/challenge").length
         await browser.click("#challenge button")
+        // An unrelated test Chrome tab can gain foreground during MFA
+        // recovery. Re-focus the real signed-in tab and let the shipped
+        // visibilitychange handler reload its private scope; never set
+        // document.hidden or workspace.hidden directly.
+        await browser.send("Page.bringToFront")
+        await browser.wait("document.visibilityState==='visible'")
         // Distinguish actual native recovery rejection from subsequent UI
         // rendering/session failures. Never log or return a recovery code.
         await until(async()=>browser.http.filter((row:any)=>
@@ -6998,6 +7432,8 @@ export default async function({container}:any){
     await signupChrome.click("#login button")
     await signupChrome.wait("!document.getElementById('workspace').hidden || !document.getElementById('mfa-enrollment').hidden")
     const needMfa=await signupChrome.eval("!document.getElementById('mfa-enrollment').hidden")
+    let signupSeed:string|null=null
+    let signupEnrollmentCounter:number|null=null
     if(needMfa){
       await signupChrome.input("#mfa-enroll-start input[name=email]",signupEmail)
       await signupChrome.input("#mfa-enroll-start input[name=password]",signupPassword)
@@ -7006,9 +7442,60 @@ export default async function({container}:any){
       const seedUrl=await signupChrome.eval("document.getElementById('mfa-seed').value")
       const seed=seedUrl.startsWith("otpauth:")?new URL(seedUrl).searchParams.get("secret"):seedUrl
       assert.ok(seed)
+      signupSeed=seed
+      signupEnrollmentCounter=Math.floor(Date.now()/30000)
       await signupChrome.input("#mfa-enroll-verify input[name=code]",otp(seed!))
       await signupChrome.click("#mfa-enroll-verify button")
+    }else{
+      // Optional platform MFA does not force the enrollment UI. This task
+      // creates a genuine native Medusa TOTP factor on its already verified,
+      // disposable PRIMARY Customer identity; it does not forge Person login,
+      // Staff authority or strong session. Actual Chrome password/TOTP follows.
+      const enrolled=await auth.listAuthMfa(
+        {auth_identity_id:registered[0].auth_identity_id,status:"enabled"},{take:2})
+      assert.equal(enrolled.length,0,"Optional Customer should not have a factor")
+      const native=await auth.startAuthMfa({
+        auth_identity_id:registered[0].auth_identity_id,
+        provider:"totp",issuer:"B22 registered primary Customer"})
+      assert.ok(native?.mfa?.id&&native.secret)
+      signupSeed=native.secret
+      signupEnrollmentCounter=Math.floor(Date.now()/30000)
+      await auth.verifyAuthMfa({
+        id:native.mfa.id,auth_identity_id:registered[0].auth_identity_id,
+        code:otp(native.secret)})
+      assert.equal((await auth.listAuthMfa(
+        {auth_identity_id:registered[0].auth_identity_id,status:"enabled"},{take:2})).length,1)
     }
+    await signupChrome.wait(`!document.getElementById('workspace').hidden&&
+      document.getElementById('person').textContent===${JSON.stringify('Person: '+signupPerson)}`)
+    // Enrollment-only scope cannot exercise a sensitive Staff mutation.
+    // Complete the real Medusa password+TOTP challenge on this exact native
+    // primary Customer before claiming a strong browser session.
+    assert.ok(signupSeed&&signupEnrollmentCounter!==null,
+      "Real native MFA factor must exist before Customer Staff login")
+    await until(async()=>Math.floor(Date.now()/30000)>signupEnrollmentCounter!,
+      45000,"First Customer full login must use a fresh native TOTP counter")
+    await signupChrome.send("Page.bringToFront")
+    await signupChrome.wait("document.visibilityState==='visible'")
+    // A real visitor logs out before logging back in for strong native MFA.
+    // Do not fake the UI state by toggling DOM.hidden from the test.
+    const preLogoutCookie=await signupChrome.token()
+    assert.match(preLogoutCookie??"",/^[A-Za-z0-9_-]{43}$/)
+    await signupChrome.click("#logout")
+    await signupChrome.wait("!document.getElementById('login').hidden&&"+
+      "document.getElementById('workspace').hidden")
+    const [revokedFirstCustomerSession]=await q(
+      "select status from da_browser_session where id=$1",
+      [createHash("sha256").update(preLogoutCookie!).digest("hex")])
+    assert.equal(revokedFirstCustomerSession?.status,"revoked",
+      "Real browser logout must revoke first Customer session before re-login")
+    await signupChrome.input("#login input[name=email]",signupEmail)
+    await signupChrome.input("#login input[name=password]",signupPassword)
+    await signupChrome.click("#login button")
+    await signupChrome.wait("!document.getElementById('challenge').hidden")
+    await signupChrome.input("#challenge input[name=code]",otp(signupSeed!))
+    signupSeed=null
+    await signupChrome.click("#challenge button")
     await signupChrome.wait(`!document.getElementById('workspace').hidden&&
       document.getElementById('person').textContent===${JSON.stringify('Person: '+signupPerson)}`)
     const ownPhone=await signupChrome.eval(`(async()=>{
@@ -7018,6 +7505,95 @@ export default async function({container}:any){
         version:data.version,verified:data.phone_verified};
     })()`)
     assert.deepEqual(ownPhone,{status:200,mobile:signupPhone,version:1,verified:false})
+
+    // This registered Person's PRIMARY native Customer is the authorized
+    // first-party sign-in identity. Merely linked secondary Customers must NOT
+    // gain a second login binding or a separate buyer/Staff account.
+    const primaryCustomerToken=await signupChrome.token()
+    assert.match(primaryCustomerToken??"",/^[A-Za-z0-9_-]{43}$/)
+    const primaryCustomerSessions=await q(
+      "select person_id,actor_type,actor_id,mfa_purpose,last_strong_auth_at"+
+      " from da_browser_session where id=$1 and status='active'",
+      [createHash("sha256").update(primaryCustomerToken!).digest("hex")])
+    assert.equal(primaryCustomerSessions.length,1)
+    assert.equal(primaryCustomerSessions[0].person_id,signupPerson)
+    assert.equal(primaryCustomerSessions[0].actor_type,"customer")
+    assert.equal(primaryCustomerSessions[0].actor_id,registered[0].actor_id)
+    assert.equal(primaryCustomerSessions[0].mfa_purpose,"full")
+    assert.ok(primaryCustomerSessions[0].last_strong_auth_at)
+    const primaryPolicyUrl="/personal/platform/store-application-policy?organization_id="+
+      encodeURIComponent(organizations[0].id)
+    const customerReadPolicy=()=>signupChrome.callFunction(
+      "async function(url){return (await fetch(url)).status}",primaryPolicyUrl)
+    const customerPauseReason="B22 primary Customer Staff policy pause"
+    const customerReopenReason="B22 primary Customer Staff policy reopen"
+    assert.equal(await customerReadPolicy(),403,
+      "A newly registered Customer must not inherit platform task authority")
+    assert.equal((await companyRight(false,true,customerPauseReason,true,
+      organizations[0].id,signupChrome)).status,403)
+    const primaryPolicyGrantId="da_staff_customer_policy_"+rand
+    // The fixture explicitly grants this ONE platform task to the canonical
+    // Person in the disposable CI DB; native Customer does not confer it.
+    await q(`insert into da_platform_staff_grant
+      (id,person_id,task,resource,granted_by_person_id,reason)
+      values($1,$2,'store.application.policy.manage','platform',$2,
+      'B22 isolated registered Customer policy actor')`,
+      [primaryPolicyGrantId,signupPerson])
+    try{
+      assert.equal(await customerReadPolicy(),200,
+        "Explicit task plus real strong Customer session may read platform policy")
+      assert.equal(await signupChrome.callFunction(
+        "async function(org){return (await fetch('/personal/audit-timeline?organization='+encodeURIComponent(org))).status}",
+        organizations[0].id),403,
+        "Unrelated Person cannot read company audit despite a platform Staff task")
+      assert.deepEqual(await q(
+        "select store_application_enabled from da_organization where id=$1",
+        [organizations[0].id]),[{store_application_enabled:true}])
+      assert.equal((await companyRight(false,true,customerPauseReason,false,
+        organizations[0].id,signupChrome)).status,403,
+        "A valid Staff Customer session cannot bypass same-origin CSRF")
+      assert.equal((await companyRight(false,true,customerPauseReason,true,
+        organizations[0].id,signupChrome)).status,200)
+      assert.equal((await companyRight(true,false,customerReopenReason,true,
+        organizations[0].id,signupChrome)).status,200)
+      assert.deepEqual(await q(
+        "select store_application_enabled from da_organization where id=$1",
+        [organizations[0].id]),[{store_application_enabled:true}],
+        "Customer Staff policy pair must restore Company state")
+      const customerPolicyEvents=await q(
+        "select e.id,e.action,e.actor_type,e.actor_id,e.actor_person_id,e.role_context,"+
+        " x.id as outbox_id from da_audit_event e"+
+        " join da_audit_outbox x on x.source_audit_event_id=e.id"+
+        " where e.organization_id=$1 and e.new_values->>'reason'=any($2::text[])"+
+        " and e.action in ('organization.store_application_right_disabled',"+
+        " 'organization.store_application_right_enabled') order by e.action",
+        [organizations[0].id,[customerPauseReason,customerReopenReason]])
+      assert.deepEqual(customerPolicyEvents.map(e=>e.action),[
+        "organization.store_application_right_disabled",
+        "organization.store_application_right_enabled",
+      ],"Both live primary Customer Staff HTTP changes need canonical audit/outbox")
+      for(const event of customerPolicyEvents){
+        assert.equal(event.actor_type,"customer")
+        assert.equal(event.actor_id,registered[0].actor_id)
+        assert.equal(event.actor_person_id,signupPerson)
+        assert.equal(event.role_context,"platform_staff")
+        assert.deepEqual(await q(
+          "select person_id from da_notification_receipt where audit_event_id=$1",
+          [event.id]),[{person_id:A.person}],
+          "Only current Company protected Owner receives a policy receipt")
+      }
+    }finally{
+      await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",
+        [primaryPolicyGrantId])
+    }
+    assert.equal(await customerReadPolicy(),403,
+      "Customer's platform task revoke must deny future reads immediately")
+    assert.equal((await companyRight(false,true,"B22 Customer grant revoked",
+      true,organizations[0].id,signupChrome)).status,403)
+    assert.deepEqual(await q(
+      "select store_application_enabled from da_organization where id=$1",
+      [organizations[0].id]),[{store_application_enabled:true}])
+    process.stdout.write("PASS B22 Chrome: primary Customer native MFA Person session and explicit Staff grant changed company policy through HTTPS, CSRF denied, two canonical Customer audit/outboxes and Owner-only notices; foreign audit denied, revoked task 403\n")
 
     // One Person starts and reopens an Organization application DRAFT only.
     // No tax document, legal approval, protected Owner or commerce right yet.

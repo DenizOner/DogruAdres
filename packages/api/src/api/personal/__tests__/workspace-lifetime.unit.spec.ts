@@ -26,6 +26,23 @@ const tick=()=>new Promise<void>(r=>setImmediate(r))
 async function answer(h:ReturnType<typeof harness>,path:string,data:any,ok=true){const p=h.pending.find(p=>p.path===path&&!p.answered)!;p.answered=true;p.resolve({ok,status:ok?200:403,json:async()=>data});await tick()}
 async function loaded(h:ReturnType<typeof harness>){await answer(h,'/personal/session',{person_id:'private-person',csrf_token:'csrf'});await answer(h,'/personal/organizations',{person_id:'private-person',organizations:[{id:'A',name:'private-org',role:'owner'}]})}
 
+describe('B22 platform Store application policy write response',()=>{
+  it('treats unreadable HTTP 200 as an uncertain mutation, never a safe rejection',async()=>{
+    const h=harness()
+    const outcome=runInContext(
+      "api('platform/store-application-policy',{method:'POST',body:'{}'}).then("+ 
+      "()=>({success:true}),e=>({uncertain:e.uncertain,message:e.message}))",
+      h.context) as Promise<{uncertain?:boolean;success?:boolean;message?:string}>
+    const pending=h.pending.find(x=>x.path==='/personal/platform/store-application-policy')
+    expect(pending).toBeDefined()
+    pending.resolve({ok:true,status:200,json:async()=>{throw Error('truncated JSON')}})
+    const value=await outcome
+    expect(value.success).toBeUndefined()
+    expect(value.uncertain).toBe(true)
+    expect(value.message).toContain('Sonuç belirsiz')
+  })
+})
+
 describe('selected Organization native Seller UI (script regression, not backend proof)',()=>{
   it('requires Organization, sends the selected scope, and ignores late cross-Organization responses',async()=>{
     const h=harness();
