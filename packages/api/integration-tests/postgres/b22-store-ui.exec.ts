@@ -1577,22 +1577,24 @@ export default async function({container}:any){
       n.title==="Yeni mağaza başvuru hakkı açıldı" &&
       n.context===organizations[0].name).length,1,
       "Both protected Owners receive the reopen event without duplicate notices")
-    // Simulate an authoritative membership revocation in this isolated test
-    // database. This tests the live per-request notification privacy filter,
-    // not the already separately accepted Owner removal workflow.
-    const revokedCoOwner=await q(`update da_organization_membership
-      set status='revoked',revoked_at=clock_timestamp(),updated_at=clock_timestamp()
+    // In this disposable fixture only, change the same real Person's
+    // protected Owner membership to an ordinary active Member. The current
+    // server authorization must immediately hide old Owner-only notices,
+    // while the established B22 Member tests reuse the SAME membership id.
+    // This is not the product's protected Owner demotion procedure.
+    const formerOwnerMember=await q(`update da_organization_membership
+      set role='member',protected_owner=false,updated_at=clock_timestamp()
       where id=$1 and organization_id=$2 and person_id=$3
         and role='owner' and protected_owner=true and status='active'
       returning id`,[temporaryNotificationCoOwner.id,organizations[0].id,B.person])
-    assert.equal(revokedCoOwner.length,1)
+    assert.equal(formerOwnerMember.length,1)
     const privateAfterRevoke=await reviewer.callFunction(
       "async function(){const r=await fetch('/personal/notifications');"+
       "return {status:r.status,body:await r.json()}}")
     assert.equal(privateAfterRevoke.status,200)
     assert.equal(privateAfterRevoke.body.notifications.some((n:any)=>
       n.context===organizations[0].name),false,
-      "Revoked Owner may not view previously delivered company notices")
+      "Former Owner now ordinary Member may not view previous Owner-only notices")
     const [staleCompanyNotice]=await q(`select id from da_notification_receipt
       where audit_event_id=$1 and person_id=$2`,[stoppedAudit[0].id,B.person])
     assert.ok(staleCompanyNotice?.id)
@@ -1601,7 +1603,7 @@ export default async function({container}:any){
       "const r=await fetch('/personal/notifications',{method:'POST',headers:{"+
       "'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({id})});return r.status}",staleCompanyNotice.id),403,
-      "Revoked Owner cannot mark an old private company notice as read")
+      "Former Owner now ordinary Member cannot mark an old Owner-only notice read")
     assert.equal((await companyRight(true,false,"B22 stale policy switch")).status,409)
     await reviewer.click("#store-approval-refresh")
     await reviewer.wait("document.querySelector('#store-approval-list button')?.disabled===false")
@@ -1752,10 +1754,9 @@ export default async function({container}:any){
     assert.equal(afterReview[0].status,"open")
     assert.ok(afterReview[0].approved_at)
 
-    const [alphaMember]=await foundation.createMemberships([{
-      organization_id:organizations[0].id,person_id:B.person,role:"member",
-      status:"active",protected_owner:false
-    }])
+    // This is the very same task-created membership whose Owner authority
+    // was removed above; do not create a duplicate Person/Organization row.
+    const alphaMember=temporaryNotificationCoOwner
     await verifyMembershipNonDisclosure({organizationId:organizations[0].id,
       activeId:alphaMember.id,foreignId:betaAdminMembership.id,personId:B.person,
       browser:reviewer,foundation,q})
