@@ -2278,15 +2278,75 @@ export default async function({container}:any){
       assert.equal(memberNotices.status,200)
       assert.ok(memberNotices.body.notifications.some((n:any)=>
         n.title==='Mağaza taslağı hazırlama izni verildi'))
+      // P2: an existing valid grant must remain revocable when a second
+      // Member later receives the same name with no accepted invitation.
+      const [lateTwin]=await foundation.createPeople([{
+        display_name:"B22 Yetkili Test Çalışanı"
+      }])
+      const [lateTwinMembership]=await foundation.createMemberships([{
+        organization_id:betaScope,person_id:lateTwin.id,
+        role:"member",status:"active",protected_owner:false
+      }])
+      assert.ok(lateTwinMembership.id!==betaAdminMembership.id)
       await reviewer.send("Page.bringToFront")
       await reviewer.select(organizations[1].name,"owner")
       await reviewer.wait("document.getElementById('store-application-list').textContent.includes("+
         JSON.stringify(delegatedName)+")")
-      await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden")
+      await reviewer.click("#store-draft-grants-refresh")
+      await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+        "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===2")
+      const optionsAfterCollision=await reviewer.eval(
+        "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options,"+
+        "o=>({value:o.value,disabled:o.disabled,text:o.textContent}))")
+      assert.equal(optionsAfterCollision.find((o:any)=>
+        o.value===betaAdminMembership.id)?.disabled,false,
+        "Existing active grant remains selectable only for revocation")
+      assert.equal(optionsAfterCollision.find((o:any)=>
+        o.value===lateTwinMembership.id)?.disabled,true,
+        "New indistinguishable Member cannot receive a grant")
+      assert.ok(optionsAfterCollision.every((o:any)=>
+        !o.text.includes("daprs_")&&!o.text.includes("daomem_")),
+        "Never show technical IDs to distinguish employees")
+      await reviewer.eval("(()=>{const s=document.querySelector('#store-draft-grants-form select[name=membership_id]');"+
+        "s.value="+JSON.stringify(betaAdminMembership.id)+";"+
+        "s.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+      await reviewer.wait("document.querySelector('#store-draft-grants-form button[value=grant]').disabled && "+
+        "!document.querySelector('#store-draft-grants-form button[value=revoke]').disabled")
+      const postCount=reviewer.http.filter((h:any)=>
+        h.path==="/personal/store-draft-permissions"&&h.method==="POST").length
+      await reviewer.click("#store-draft-grants-form button[value=grant]")
+      assert.equal(reviewer.http.filter((h:any)=>
+        h.path==="/personal/store-draft-permissions"&&h.method==="POST").length,
+        postCount,"Ambiguous new grant must not dispatch an HTTP request")
+      assert.equal((await q(`select count(*)::int n
+        from da_organization_store_draft_permission
+        where person_id=$1 and organization_id=$2 and revoked_at is null`,
+        [A.person,betaScope]))[0].n,1,
+        "Original grant survives the name collision until revoked")
+      assert.equal((await q(`select count(*)::int n
+        from da_organization_store_draft_permission
+        where person_id=$1 and organization_id=$2`,
+        [lateTwin.id,betaScope]))[0].n,0,
+        "Late identical-name Member must never receive a grant")
       await reviewer.click("#store-draft-grants-form button[value=revoke]")
       await reviewer.wait("document.getElementById('store-draft-grants-status').textContent.includes('izni kaldırıldı')")
       assert.equal((await q(`select count(*)::int n from da_organization_store_draft_permission
         where id=$1 and revoked_at is not null`,[activeGrant.id]))[0].n,1)
+      const lateTwinAudits=await q(`select e.action,x.id as outbox_id
+        from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.organization_id=$1 and e.target_id=$2
+          and e.resource='store-draft-permission'
+        order by e.action`,[betaScope,A.person])
+      assert.deepEqual(lateTwinAudits.map((e:any)=>e.action),[
+        "organization.store_draft_permission_granted",
+        "organization.store_draft_permission_revoked"
+      ],"One canonical grant and revoke outbox after same-name late joiner")
+      assert.equal((await q(`select count(*)::int n from da_audit_event e
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.organization_id=$1 and e.target_id=$2
+          and e.resource='store-draft-permission'`,
+        [betaScope,lateTwin.id]))[0].n,0,
+        "Late identical-name Member has zero grant/revoke audit/outbox")
       await browser.send("Page.bringToFront")
       await browser.select(organizations[1].name,"member")
       assert.equal(await browser.callFunction(
