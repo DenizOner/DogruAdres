@@ -276,6 +276,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <button type="submit" name="action" value="revoke">Taslak için Yetkisiz yap</button>
     </form>
     <div id="store-draft-grants-list"></div>
+    <button type="button" id="store-draft-grants-newer" hidden>Önceki çalışanlar</button>
+    <button type="button" id="store-draft-grants-older" hidden>Sonraki çalışanlar</button>
     <button type="button" id="store-draft-grants-refresh">İzinleri yenile</button>
   </section>
   <section id="org-stores-panel" hidden aria-labelledby="org-stores-title" style="grid-column:1/-1">
@@ -1748,9 +1750,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   };
 
-  let storeDraftPermissionRequest=0;
+  let storeDraftPermissionRequest=0,storeDraftCursor='',storeDraftNextCursor=null;
+  const storeDraftCursorHistory=[];
   function clearStoreDraftPermissions(){
     storeDraftPermissionRequest++;
+    storeDraftCursor='';storeDraftNextCursor=null;storeDraftCursorHistory.length=0;
+    el('store-draft-grants-older').hidden=true;el('store-draft-grants-newer').hidden=true;
     el('store-draft-grants-panel').hidden=true;
     el('store-draft-grants-status').textContent='';
     el('store-draft-grants-list').replaceChildren();
@@ -1773,11 +1778,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     panel.hidden=true;
     if(!keepOutcome)message.textContent='Çalışan taslak izinleri kontrol ediliyor…';
     try{
-      const data=await api('store-draft-permissions?organization_id='+encodeURIComponent(org));
+      const data=await api('store-draft-permissions?organization_id='+encodeURIComponent(org)+
+        (storeDraftCursor?'&after='+encodeURIComponent(storeDraftCursor):''));
       if(seq!==storeDraftPermissionRequest||request!==organizationRequest||
          currentOrg!==org||document.hidden)return;
       if(!Array.isArray(data.members)||!Array.isArray(data.grants)||
-         data.members.length>100||data.grants.length>100||
+         data.members.length>30||data.grants.length>30||
+         typeof data.has_more!=='boolean'||
+         !(data.next_cursor===null||
+           (typeof data.next_cursor==='string'&&
+             /^[A-Za-z0-9_-]{1,128}$/.test(data.next_cursor)))||
+         data.has_more!==(data.next_cursor!==null)||
+         (data.has_more&&data.next_cursor!==data.members.at(-1)?.membership_id)||
          data.members.some(m=>typeof m.person_id!=='string'||
            !/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)||
            typeof m.membership_id!=='string'||
@@ -1788,7 +1800,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
            typeof g.membership_id!=='string'||
            !/^[A-Za-z0-9_-]{1,128}$/.test(g.membership_id))||
          new Set(data.members.map(m=>m.membership_id)).size!==data.members.length||
-         new Set(data.grants.map(g=>g.person_id)).size!==data.grants.length)
+         new Set(data.members.map(m=>m.person_id)).size!==data.members.length||
+         new Set(data.grants.map(g=>g.person_id)).size!==data.grants.length||
+         data.grants.some(g=>!data.members.some(m=>
+           m.person_id===g.person_id&&m.membership_id===g.membership_id)))
         throw new Error('İzin bilgileri doğrulanamadı');
       const select=form.elements.namedItem('membership_id'),previous=select.value;
       select.replaceChildren();list.replaceChildren();
@@ -1805,6 +1820,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       if(data.members.some(m=>m.membership_id===previous))select.value=previous;
       for(const button of form.querySelectorAll('button'))button.disabled=!data.members.length;
+      storeDraftNextCursor=data.next_cursor;
+      el('store-draft-grants-older').hidden=!data.has_more;
+      el('store-draft-grants-newer').hidden=storeDraftCursorHistory.length===0;
       panel.hidden=false;
       if(!keepOutcome)message.textContent=data.members.length?
         'Üyelerin güncel kişisel taslak izinleri gösteriliyor.':
@@ -1817,6 +1835,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   el('store-draft-grants-refresh').onclick=()=>{
     if(currentOrg)void storeDraftPermissions(currentOrg,organizationRequest);
+  };
+  el('store-draft-grants-older').onclick=()=>{
+    if(!currentOrg||!storeDraftNextCursor||document.hidden)return;
+    storeDraftCursorHistory.push(storeDraftCursor);
+    storeDraftCursor=storeDraftNextCursor;storeDraftNextCursor=null;
+    void storeDraftPermissions(currentOrg,organizationRequest);
+  };
+  el('store-draft-grants-newer').onclick=()=>{
+    if(!currentOrg||!storeDraftCursorHistory.length||document.hidden)return;
+    storeDraftCursor=storeDraftCursorHistory.pop();
+    storeDraftNextCursor=null;
+    void storeDraftPermissions(currentOrg,organizationRequest);
   };
   el('store-draft-grants-form').onsubmit=async event=>{
     event.preventDefault();
