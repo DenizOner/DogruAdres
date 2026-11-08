@@ -93,10 +93,21 @@ type AdvisoryLockManager = Readonly<{
 // Reuse the installed Medusa/Zod email contract already applied to new
 // personal registrations and Organization invitation requests. Synthetic or
 // corrupt historical invitation values do not identify an employee.
+// A corrupt invitation must not be a distinct identity in SQL but hidden
+// in the Owner UI. Zod validates emails; this shared conservative grammar
+// is applied in both SQL identity comparisons and the Owner response.
+const acceptedInviteEmailPattern="^[A-Za-z0-9_+%-]+([.][A-Za-z0-9_+%-]+)*@[A-Za-z0-9]+([A-Za-z0-9-]{0,61}[A-Za-z0-9]){0,1}([.][A-Za-z0-9]+([A-Za-z0-9-]{0,61}[A-Za-z0-9]){0,1})+$"
+const acceptedInviteEmailRegex=new RegExp(acceptedInviteEmailPattern,"i")
 const invitationContactSchema=z.string().trim().email().max(254)
 function usableInvitationContact(value:unknown):string|null {
   const result=invitationContactSchema.safeParse(value)
-  return result.success?result.data:null
+  return result.success&&acceptedInviteEmailRegex.test(result.data)?result.data:null
+}
+// Only literal, source-controlled SQL table aliases are accepted.
+function acceptedInviteSqlLabel(alias:"inv"|"oinv"):string {
+  return `case when length(btrim(${alias}.recipient_email))<=254
+    and btrim(${alias}.recipient_email) ~* '${acceptedInviteEmailPattern}'
+    then lower(btrim(${alias}.recipient_email)) else '' end`
 }
 
 const activeStatus = "active"
@@ -1775,8 +1786,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             and other.deleted_at is null
             and lower(btrim(coalesce(op.display_name,'')))=
                 lower(btrim(coalesce(p.display_name,'')))
-            and lower(btrim(coalesce(oinv.recipient_email,'')))=
-                lower(btrim(coalesce(inv.recipient_email,'')))
+            and ${acceptedInviteSqlLabel("oinv")}=
+                ${acceptedInviteSqlLabel("inv")}
             and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then op.mobile_phone end,'')=
                 coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone end,'')
         ) as label_unique_in_organization,
@@ -1804,8 +1815,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             and other_grant.revoked_at is null
             and lower(btrim(coalesce(op.display_name,'')))=
                 lower(btrim(coalesce(p.display_name,'')))
-            and lower(btrim(coalesce(oinv.recipient_email,'')))=
-                lower(btrim(coalesce(inv.recipient_email,'')))
+            and ${acceptedInviteSqlLabel("oinv")}=
+                ${acceptedInviteSqlLabel("inv")}
             and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then op.mobile_phone end,'')=
                 coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone end,'')
         ) as other_active_grant_same_label
@@ -1953,8 +1964,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
               and other.deleted_at is null
               and lower(btrim(coalesce(op.display_name,'')))=
                   lower(btrim(coalesce(p.display_name,'')))
-              and lower(btrim(coalesce(oinv.recipient_email,'')))=
-                  lower(btrim(coalesce(inv.recipient_email,'')))
+              and ${acceptedInviteSqlLabel("oinv")}=
+                  ${acceptedInviteSqlLabel("inv")}
               and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$'
                 then op.mobile_phone end,'')=
                   coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$'
@@ -2046,8 +2057,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         and other.revoked_at is null and other.deleted_at is null
         and lower(btrim(coalesce(op.display_name,'')))=
             lower(btrim(coalesce(p.display_name,'')))
-        and lower(btrim(coalesce(oinv.recipient_email,'')))=
-            lower(btrim(coalesce(inv.recipient_email,'')))
+        and ${acceptedInviteSqlLabel("oinv")}=
+            ${acceptedInviteSqlLabel("inv")}
         and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then op.mobile_phone end,'')=
             coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone end,'')
       limit 1`,[input.membership_id,input.organization_id,personId])
