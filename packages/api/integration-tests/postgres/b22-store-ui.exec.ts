@@ -1772,6 +1772,10 @@ export default async function({container}:any){
       "NFKC-compatible fullwidth characters reserve the same Store name")
     assert.equal((await submit({...data,
       application_id:newCollisionApplicationId(),email:collisionEmail,
+      name:applicationName.replace("Owner application","Owner\u00a0\u00a0application")})).status,409,
+      "Unicode compatibility spaces and repeated blanks cannot bypass the reservation")
+    assert.equal((await submit({...data,
+      application_id:newCollisionApplicationId(),email:collisionEmail,
       name:stores[0].name.toUpperCase()})).status,409,
       "A legacy native Seller's name cannot be claimed by a new application")
     assert.deepEqual(await q(`select count(*)::int n from da_store_application
