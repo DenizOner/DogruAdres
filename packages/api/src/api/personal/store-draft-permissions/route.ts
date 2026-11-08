@@ -7,8 +7,7 @@ export const AUTHENTICATE=false
 const org=z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/)
 const payload=z.object({
   action:z.enum(["grant","revoke"]),organization_id:org,
-  membership_id:z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
-  expected_mobile_version:z.number().int().min(0).max(2147483646).optional()
+  membership_id:z.string().regex(/^[A-Za-z0-9_-]{1,128}$/)
 }).strict()
 
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
