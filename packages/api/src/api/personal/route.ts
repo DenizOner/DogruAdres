@@ -1846,7 +1846,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       for(const m of data.members){
         const label=labelFor(m);
-        const identifiable=!!label&&m.label_unique_in_organization===true&&
+        const identifiable=!!label&&(!!m.mobile_phone||!!m.invitation_email)&&
+          m.label_unique_in_organization===true&&
           labelCounts.get(label)===1;
         const granted=data.grants.some(g=>g.person_id===m.person_id&&
           g.membership_id===m.membership_id);
