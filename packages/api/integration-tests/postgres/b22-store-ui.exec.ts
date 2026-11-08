@@ -1927,7 +1927,42 @@ export default async function({container}:any){
       await reviewer.click("#store-approval-newer")
     // Both pages expose one button: only page-1 Store identity proves the
     // asynchronous page switch completed before approval.
-    await reviewer.wait(`document.querySelectorAll('#store-approval-list button').length===1 && document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`)
+    const pageOneReviewVisible=`document.visibilityState==='visible' &&
+      !document.getElementById('workspace').hidden &&
+      document.querySelectorAll('#store-approval-list button').length===1 &&
+      document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`
+    try{
+      await until(async()=>await reviewer.eval(pageOneReviewVisible)===true,
+        8000,"B22 Staff approval first-page navigation")
+    }catch{
+      // Page focus may re-trigger a stale page-2 request after a prior
+      // suspended Seller changes the list. A single normal reload rechecks
+      // the same authenticated Staff task; no DOM privacy guard is bypassed.
+      await reviewer.send("Page.bringToFront")
+      await reviewer.send("Page.reload",{ignoreCache:true})
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible' && "+
+        "!document.getElementById('workspace').hidden && "+
+        "!document.getElementById('store-approval-panel').hidden")
+      await reviewer.click("#store-approval-refresh")
+      try{
+        await reviewer.wait(pageOneReviewVisible)
+      }catch{
+        // Never serialize Store names, Session values or private payloads.
+        const safeState=await reviewer.eval(
+          "({visible:document.visibilityState==='visible',"+
+          "workspaceHidden:document.getElementById('workspace').hidden,"+
+          "panelHidden:document.getElementById('store-approval-panel').hidden,"+
+          "listCount:document.querySelectorAll('#store-approval-list button').length,"+
+          "olderHidden:document.getElementById('store-approval-older').hidden,"+
+          "newerHidden:document.getElementById('store-approval-newer').hidden})")
+        const statuses=reviewer.http.filter((h:any)=>
+          ['/personal','/personal/session','/personal/platform/stores'].includes(h.path))
+          .slice(-10).map((h:any)=>({path:h.path,status:h.status}))
+        throw Error("B22 Store first page could not revalidate: "+
+          JSON.stringify({safeState,statuses}))
+      }
+    }
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
     // The real browser button invokes Mercur's native approval. Hold the
     // task-only seller status UPDATE with an independent PG16 advisory lock,
