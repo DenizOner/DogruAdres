@@ -957,7 +957,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
     values('daaud_'||gen_random_uuid()::text,$1,'user',$2,$3,
       'organization.store_application_created','dogruadres-access',
       'store-application',$4,'owner',
-      jsonb_build_object('application_id',$5,'status','pending_approval'),
+      jsonb_build_object('application_id',$5::text,'status','pending_approval'),
       clock_timestamp()) returning id`,
     [x.ownerId,x.ownerActor,x.org,seller.id,app])
   assert.ok(origin?.id)
