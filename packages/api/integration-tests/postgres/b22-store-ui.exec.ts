@@ -7648,7 +7648,7 @@ export default async function({container}:any){
     }])
     assert.match(secondGammaOwner.id,/^[A-Za-z0-9_-]+$/)
     const ownerRaceEmail="b22-owner-revoke-race-"+rand+"@example.invalid"
-    const ownerRaceName="B22 Owner in-flight Store "+rand
+    const ownerRaceName="B22 Owner race Store "+rand
     const ownerRaceRequest={organization_id:sellerGamma.id,
       application_id:"daapp_"+randomBytes(16).toString("hex"),
       name:ownerRaceName,email:ownerRaceEmail,currency_code:"try"}
