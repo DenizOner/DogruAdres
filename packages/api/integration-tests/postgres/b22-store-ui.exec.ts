@@ -991,9 +991,34 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   assert.equal(await reviewer.eval("document.querySelector('#store-approval-list p button')?.disabled"),true,
     "Approval is paused even though reasoned rejection is permitted")
   assert.equal(await reviewer.eval("document.querySelector('#store-approval-list p button[data-store-reject]')?.disabled"),false)
+  // Let the real POST complete, then corrupt only its browser-visible 200
+  // body. This proves the native decision persists while the UI refuses a
+  // blind second write. The disposable CI page is the only interception scope.
+  await reviewer.eval(`(()=>{
+    const original=window.fetch;
+    window.__b22RejectPostCount=0;
+    window.fetch=async(...args)=>{
+      const url=String(args[0]),method=args[1]?.method;
+      if(url!=='/personal/platform/stores'||method!=='POST')
+        return original(...args);
+      window.__b22RejectPostCount++;
+      const response=await original(...args);
+      if(response.status!==200)return response;
+      return new Response('{broken JSON',{
+        status:200,headers:{'content-type':'application/json'}
+      });
+    };
+  })()`)
   await reviewer.input("#store-approval-list p textarea",reason)
   await reviewer.click("#store-approval-list p button[data-store-reject]")
-  await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('gerekçesiyle reddedildi')")
+  await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Ret sonucu belirsiz')")
+  assert.equal(await reviewer.eval("window.__b22RejectPostCount"),1)
+  assert.equal(await reviewer.eval("document.querySelector('#store-approval-list p button[data-store-reject]').disabled"),true,
+    "Malformed success response must keep the rejection action disabled")
+  assert.equal(await reviewer.eval("document.querySelector('#store-approval-list p button').disabled"),true,
+    "Malformed success response must keep approval disabled too")
+  assert.equal(await reviewer.eval("window.__b22RejectPostCount"),1,
+    "Chrome must not issue a second Store decision")
   const [terminated]=await native.listSellers({id:seller.id})
   assert.equal(terminated.status,"terminated")
   assert.equal(terminated.status_reason,reason)
