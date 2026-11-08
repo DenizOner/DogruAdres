@@ -1756,7 +1756,6 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Read one extra row for has_more, never refuse a larger organization.
     const rows=await db.execute(`select m.id as membership_id,m.person_id,
         p.display_name as member_name,inv.recipient_email as invitation_email,
-        p.mobile_version as mobile_version,
         case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone else null end as mobile_phone,
         not exists (
           select 1 from da_organization_membership other
@@ -1828,8 +1827,6 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        !/^[A-Za-z0-9_-]{1,128}$/.test(m.membership_id)||
        typeof m.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)||
        typeof m.label_unique_in_organization!=="boolean"||
-        !Number.isSafeInteger(m.mobile_version)||m.mobile_version<0||
-        m.mobile_version>2147483646||
        typeof m.other_active_grant_same_label!=="boolean"))
       throw new IdentityAccessDenied()
     const has_more=rows.length>30
@@ -1848,7 +1845,6 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       other_active_grant_same_label:m.other_active_grant_same_label as boolean,
       member_name:typeof m.member_name==="string"&&m.member_name.trim().length>0&&
         m.member_name.trim().length<=160?m.member_name.trim():null,
-      mobile_version:m.mobile_version as number,
       mobile_phone:typeof m.mobile_phone==="string"&&
         /^\+?[0-9]{6,20}$/.test(m.mobile_phone)?m.mobile_phone:null,
       invitation_email:usableInvitationContact(m.invitation_email)
@@ -1891,7 +1887,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
    */
   @InjectTransactionManager()
   async personalChangeStoreDraftPermission(
-    token:string,input:{action:"grant"|"revoke";organization_id:string;membership_id:string;expected_mobile_version?:number},
+    token:string,input:{action:"grant"|"revoke";organization_id:string;membership_id:string},
     @MedusaContext() context:Context={}
   ){
     if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
@@ -1906,7 +1902,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        !organizationActionAllowed("owner","membership.manage",
          await isCurrentProtectedOwner(db,actor.person_id,input.organization_id),false))
       return null
-    const target=await db.execute(`select m.person_id,p.mobile_version from da_organization_membership m
+    const target=await db.execute(`select m.person_id from da_organization_membership m
       join da_person p on p.id=m.person_id
       join da_organization o on o.id=m.organization_id and o.status='active' and o.deleted_at is null
       where m.id=? and m.organization_id=? and m.role='member'
@@ -1915,15 +1911,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       for share of m,p,o`,[input.membership_id,input.organization_id])
     if(target.length!==1||typeof target[0].person_id!=="string"||
        !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
-    // Mobile changes use the existing Person version counter. The UI supplies
-    // the version it actually displayed; stale phone selections cannot grant
-    // rights to an employee who has changed their contact in the meantime.
-    const currentVersion=target[0].mobile_version
-    const suppliedVersion=input.expected_mobile_version
-    if((input.action==="grant"||suppliedVersion!==undefined)&&
-       (typeof suppliedVersion!=="number"||!Number.isSafeInteger(suppliedVersion)||suppliedVersion<0||
-        suppliedVersion>2147483646||currentVersion!==suppliedVersion))
-      throw new IdentityAccessDenied()
+    // Membership identity and Owner authority are checked on the live records.
+    // Personal phone changes alone never change which Member is the target.
     const personId=target[0].person_id as string
     // A revoked grant cannot authorize an in-flight draft: both paths take
     // the identical transaction-scoped lock before inspecting the grant.
