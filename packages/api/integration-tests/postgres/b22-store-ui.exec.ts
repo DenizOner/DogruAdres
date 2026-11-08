@@ -1012,10 +1012,17 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   assert.equal(audits[0].new_values.reason,reason)
   assert.equal(audits[0].new_values.status,"terminated")
   assert.ok(audits[0].outbox_id)
-  assert.equal((await q(`select count(*)::int n from da_notification_receipt n
+  const [recipientCount]=await q(`select count(*)::int n from da_notification_receipt n
     join da_audit_event e on e.id=n.audit_event_id
     where e.action='organization.store_application_rejected'
-      and e.organization_id=$1 and e.target_id=$2`,[x.org,seller.id]))[0].n,1)
+      and e.organization_id=$1 and e.target_id=$2`,[x.org,seller.id])
+  const [eligibleOwners]=await q(`select count(*)::int n from da_organization_membership m
+    join da_person p on p.id=m.person_id
+    where m.organization_id=$1 and m.role='owner' and m.protected_owner=true
+      and m.status='active' and m.deleted_at is null
+      and p.disabled_at is null and p.deleted_at is null`,[x.org])
+  assert.equal(recipientCount.n,eligibleOwners.n,
+    "One private receipt for each active protected Owner, none for other Members")
   await browser.send("Page.bringToFront")
   const owner=await browser.callFunction("async function(org){"+
     "const r=await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org));"+
