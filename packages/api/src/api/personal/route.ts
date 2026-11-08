@@ -1576,6 +1576,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         reason.placeholder='Ret gerekçesi (en az 10 karakter)';
         const reject=document.createElement('button');
         reject.type='button';reject.textContent='Gerekçeyle reddet';
+        reject.dataset.storeReject='true';
         reject.onclick=async()=>{
           const explanation=reason.value.trim();
           if(explanation.length<10||explanation.length>500){
