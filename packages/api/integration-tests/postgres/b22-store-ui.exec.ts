@@ -2303,6 +2303,44 @@ export default async function({container}:any){
     assert.equal(endedRows.length,1)
     assert.equal(endedRows[0].status,"revoked")
     assert.ok(endedRows[0].revoked_at)
+    // An ended membership must still receive its own private revocation
+    // receipt. It must NOT regain company access or expose its former name.
+    const exitNoticeRecords=await q(`select n.id from da_notification_receipt n
+      join da_audit_event a on a.id=n.audit_event_id
+      where n.person_id=$1 and a.organization_id=$2
+        and a.action='organization.store_draft_permission_revoked'
+        and a.new_values->>'source'='membership_exit'`,[B.person,rejoinOrg.id])
+    assert.equal(exitNoticeRecords.length,1,
+      "Membership exit must persist one personal revocation receipt")
+    const exitNoticeId=exitNoticeRecords[0].id
+    await reviewer.send("Page.bringToFront")
+    const exitFeed=await reviewer.callFunction(
+      "async function(){const r=await fetch('/personal/notifications');return {status:r.status,body:await r.json()}}")
+    assert.equal(exitFeed.status,200)
+    const exitNotice=exitFeed.body.notifications.find((n:any)=>n.id===exitNoticeId)
+    assert.ok(exitNotice,"Former Member must see personal exit notification")
+    assert.equal(exitNotice.title,"Mağaza taslağı hazırlama izni kaldırıldı")
+    assert.equal(exitNotice.context,null,
+      "Former Organization identity must not cross exited membership boundary")
+    assert.equal(await reviewer.callFunction(
+      "async function(org){return (await fetch('/personal/notifications?organization='+encodeURIComponent(org))).status}",
+      rejoinOrg.id),403,
+      "Former Member must not recover scoped Organization notifications")
+    await browser.send("Page.bringToFront")
+    assert.equal(await browser.callFunction(
+      "async function(id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/personal/notifications',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({id})});return r.status}",exitNoticeId),403,
+      "Even a protected Owner must not read another Person's private receipt")
+    await reviewer.send("Page.bringToFront")
+    const exitRead=await reviewer.callFunction(
+      "async function(id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/personal/notifications',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({id})});return r.status}",exitNoticeId)
+    assert.equal(exitRead,200,"Recipient can mark ended-membership notice as read")
+    const [exitReadRow]=await q(`select read_at from da_notification_receipt where id=$1`,[exitNoticeId])
+    assert.ok(exitReadRow.read_at,"Private notification read must persist")
+    await browser.send("Page.bringToFront")
     // Synthetic isolated reactivation mirrors the existing unique
     // Person/Organization membership identity. The re-acceptance workflow
     // itself is outside this focused authorization regression.
