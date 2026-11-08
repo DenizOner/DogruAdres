@@ -1119,13 +1119,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   async function notifications(offset=0){
     const request=++notificationRequest;
-    const organization=new URLSearchParams(location.search).get('organization');
-    const notificationPath='notifications'+(organization?'?organization='+encodeURIComponent(organization):'');
+    // The personal bell must not inherit a revoked/stale Organization URL.
+    // The backend authorizes each receipt by Person and live entitlement.
+    const notificationPath='notifications';
     el('notification-list').replaceChildren();el('notification-list').setAttribute('aria-busy','true');
     el('notification-status').textContent='Bildirimler yükleniyor…';el('notification-count').textContent='';
     el('notification-next').hidden=true;
     try{
-      const data=await api(notificationPath+(organization?'&':'?')+'offset='+offset);
+      const data=await api(notificationPath+'?offset='+offset);
       if(request!==notificationRequest)return;
       notificationOffset=offset;notificationNext=data.next_offset;
       el('notification-count').textContent='('+data.unread_count+' okunmamış)';
