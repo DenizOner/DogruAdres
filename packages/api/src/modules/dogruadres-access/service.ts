@@ -1744,7 +1744,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const cursor=after??""
     // Keyset pagination avoids an offset proportional to total company size.
     // Read one extra row for has_more, never refuse a larger organization.
-    const rows=await db.execute(`select m.id as membership_id,m.person_id
+    const rows=await db.execute(`select m.id as membership_id,m.person_id,
+        p.display_name as member_name,
+        (select i.recipient_email from da_organization_invitation i
+          where i.organization_id=m.organization_id
+            and i.accepted_by_person_id=m.person_id
+            and i.status='accepted' and i.role='member'
+            and i.deleted_at is null
+          order by i.accepted_at desc nulls last,i.id desc limit 1) as invitation_email
       from da_organization_membership m
       join da_person p on p.id=m.person_id and p.disabled_at is null and p.deleted_at is null
       where m.organization_id=? and m.role='member' and m.protected_owner=false
@@ -1756,7 +1763,17 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        typeof m.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)))
       throw new IdentityAccessDenied()
     const has_more=rows.length>30
-    const members=rows.slice(0,30)
+    // Only current canonical Person name and that Organization's accepted
+    // invitation address may identify a Member to their protected Owner.
+    // Neither an unrelated actor login nor a private mobile is disclosed.
+    const members=rows.slice(0,30).map(m=>({
+      membership_id:m.membership_id as string,person_id:m.person_id as string,
+      member_name:typeof m.member_name==="string"&&m.member_name.trim().length>0&&
+        m.member_name.trim().length<=160?m.member_name.trim():null,
+      invitation_email:typeof m.invitation_email==="string"&&
+        m.invitation_email.trim().length>0&&m.invitation_email.trim().length<=254?
+        m.invitation_email.trim():null
+    }))
     if(new Set(members.map(m=>m.membership_id)).size!==members.length||
        new Set(members.map(m=>m.person_id)).size!==members.length)
       throw new IdentityAccessDenied()
