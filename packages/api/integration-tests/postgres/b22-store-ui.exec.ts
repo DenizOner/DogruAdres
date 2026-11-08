@@ -2488,6 +2488,45 @@ export default async function({container}:any){
       largeMemberOrg.id,legacyNoContact.id)
     assert.equal(missingContactPost,403,
       "Forged direct Owner POST must deny otherwise unique name with no contact")
+    // A real invitation is created with a valid address, then ONLY this
+    // isolated PostgreSQL fixture corrupts that historical value to "invalid@".
+    // No real user, external SMTP or production record is involved.
+    const legacyBadInvite=await foundation.createOrganizationInvitation({
+      organization_id:largeMemberOrg.id,
+      actor_person_id:A.person,actor_type:"user",actor_id:A.actor,
+      email:"b22-legacy-"+rand+"@example.invalid",role:"member"
+    })
+    await q(`update da_organization_invitation
+      set status='accepted',accepted_by_person_id=$1,
+          accepted_at=clock_timestamp(),recipient_email='invalid@'
+      where id=$2 and organization_id=$3`,
+      [legacyNoContact.person_id,legacyBadInvite.id,largeMemberOrg.id])
+    const invalidAddressList=await browser.callFunction(
+      "async function(org,id){const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org));const d=await r.json();"+
+      "const member=d.members.find(m=>m.membership_id===id);"+
+      "return {status:r.status,phone:member?.mobile_phone,email:member?.invitation_email}}",
+      largeMemberOrg.id,legacyNoContact.id)
+    assert.deepEqual(invalidAddressList,{status:200,phone:null,email:null},
+      "Malformed accepted invitation email must not be exposed as usable contact")
+    const badEmailDirectPost=await browser.callFunction(
+      "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'grant',organization_id:org,"+
+      "membership_id:id,expected_mobile_version:0})});return r.status}",
+      largeMemberOrg.id,legacyNoContact.id)
+    assert.equal(badEmailDirectPost,403,
+      "Owner direct grant cannot treat invalid@ as a contact")
+    assert.equal((await q(`select count(*)::int n
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2`,
+      [largeMemberOrg.id,legacyNoContact.person_id]))[0].n,0)
+    assert.equal((await q(`select count(*)::int n from da_audit_event
+      where organization_id=$1 and target_id=$2
+        and resource='store-draft-permission'`,
+      [largeMemberOrg.id,legacyNoContact.person_id]))[0].n,0,
+      "Denied invalid invitation must not produce grant or audit")
     // Also reject a forged grant with a *valid-looking* but identical mobile
     // for two same-name Members. This proves the server's collision check is
     // independent of the missing-contact check and of the disabled UI.
