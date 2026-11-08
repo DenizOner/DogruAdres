@@ -1448,7 +1448,7 @@ export default async function({container}:any){
       const grantHttpStatus=Number(await reviewer.eval("window.__daGrantProbe.status"))
       await reviewer.eval("(()=>{window.fetch=window.__daGrantPriorFetch;delete window.__daGrantPriorFetch;delete window.__daGrantProbe;return true})()")
       assert.equal(grantHttpStatus,200,"Native Owner grant POST status; UI="+grantFeedback)
-      assert.ok(grantFeedback.includes('izin verildi'),
+      assert.ok(grantFeedback.includes('izni verildi'),
         "Owner draft grant outcome must be confirmed: "+grantFeedback)
       const [activeGrant]=await q(`select id,membership_id,revoked_at from da_organization_store_draft_permission
         where person_id=$1 and organization_id=$2 and revoked_at is null`,[A.person,betaScope])
@@ -1507,7 +1507,7 @@ export default async function({container}:any){
         JSON.stringify(delegatedName)+")")
       await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden")
       await reviewer.click("#store-draft-grants-form button[value=revoke]")
-      await reviewer.wait("document.getElementById('store-draft-grants-status').textContent.includes('izin kaldırıldı')")
+      await reviewer.wait("document.getElementById('store-draft-grants-status').textContent.includes('izni kaldırıldı')")
       assert.equal((await q(`select count(*)::int n from da_organization_store_draft_permission
         where id=$1 and revoked_at is not null`,[activeGrant.id]))[0].n,1)
       await browser.send("Page.bringToFront")
