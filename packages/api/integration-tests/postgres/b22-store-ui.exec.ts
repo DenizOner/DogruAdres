@@ -1911,6 +1911,10 @@ export default async function({container}:any){
       "Company application pause cannot suspend a previously approved Seller")
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
+    // The extra Member/Owner tab journey makes visibilitychange trigger a
+    // fresh asynchronous private-workspace reload. Wait for the platform
+    // Staff's real HTTP-scoped panel before interacting with its button.
+    await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
     await reviewer.click("#store-approval-refresh")
     await reviewer.wait("document.getElementById('store-approval-list').textContent.includes('inceleme bekletiliyor')")
     assert.equal(await reviewer.eval("document.querySelector('#store-approval-list button').disabled"),true)
