@@ -1758,6 +1758,29 @@ export default async function({container}:any){
       name:applicationName,email:applicationEmail,currency_code:"try"}
     const replay=await submit(data)
     assert.equal(replay.status,200);assert.equal(replay.body.seller_id,ownerStoreId)
+    // A newly submitted name must not impersonate an existing Seller:
+    // same Organization, Unicode NFKC equivalent or a legacy native Seller.
+    // Each 409 must happen BEFORE creating a second Foundation application.
+    const secondApplication=()=>("daapp_"+randomBytes(16).toString("hex"))
+    const collisionEmail="b22-collision-"+rand+"@example.invalid"
+    assert.equal((await submit({...data,
+      application_id:secondApplication(),email:collisionEmail,
+      name:applicationName.toUpperCase()})).status,409)
+    assert.equal((await submit({...data,
+      application_id:secondApplication(),email:collisionEmail,
+      name:"Ｂ２２"+applicationName.slice(3)})).status,409,
+      "NFKC-compatible fullwidth characters reserve the same Store name")
+    assert.equal((await submit({...data,
+      application_id:secondApplication(),email:collisionEmail,
+      name:stores[0].name.toUpperCase()})).status,409,
+      "A legacy native Seller's name cannot be claimed by a new application")
+    assert.deepEqual(await q(`select count(*)::int n from da_store_application
+      where organization_id=$1`,[organizations[0].id]),[{n:1}],
+      "Every equivalent-name conflict must leave no second application or Seller claim")
+    const [nameClaim]=await q(`select store_name_hash from da_store_application
+      where id=$1`,[applicationId])
+    assert.match(nameClaim.store_name_hash,/^[a-f0-9]{64}$/)
+    process.stdout.write("PASS B22 PG16/Chrome: global normalized Store name claim; case/NFKC/native legacy conflicts409, no second application or Seller\n")
     assert.equal((await submit({...data,name:applicationName+" changed"})).status,403)
     assert.equal((await submit({...data,organization_id:organizations[2].id,
       application_id:"daapp_"+randomBytes(16).toString("hex")})).status,403)
