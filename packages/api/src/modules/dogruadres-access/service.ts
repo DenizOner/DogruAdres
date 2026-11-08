@@ -1913,7 +1913,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const currentVersion=target[0].mobile_version
     const suppliedVersion=input.expected_mobile_version
     if((input.action==="grant"||suppliedVersion!==undefined)&&
-       (!Number.isSafeInteger(suppliedVersion)||suppliedVersion<0||
+       (typeof suppliedVersion!=="number"||!Number.isSafeInteger(suppliedVersion)||suppliedVersion<0||
         suppliedVersion>2147483646||currentVersion!==suppliedVersion))
       throw new IdentityAccessDenied()
     const personId=target[0].person_id as string
