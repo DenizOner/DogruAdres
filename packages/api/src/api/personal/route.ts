@@ -1753,8 +1753,25 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
 
   let storeDraftPermissionRequest=0,storeDraftCursor='',storeDraftNextCursor=null;
   const storeDraftCursorHistory=[];
+  let storeDraftGrantable=new Set(),storeDraftRevocable=new Set();
+  let storeDraftPermissionsVerified=false,storeDraftWritePending=false,storeDraftWriteUncertain=false;
+  function updateStoreDraftActionButtons(){
+    const form=el('store-draft-grants-form');
+    const select=form?.elements?.namedItem?.('membership_id');
+    const value=select?.selectedOptions?.[0]?.disabled?null:select?.value;
+    const permitted=!!value&&storeDraftPermissionsVerified&&
+      !storeDraftWritePending&&!storeDraftWriteUncertain&&!document.hidden&&
+      !el('workspace').hidden&&!el('store-draft-grants-panel').hidden;
+    form.querySelector('button[value=grant]').disabled=
+      !permitted||!storeDraftGrantable.has(value);
+    form.querySelector('button[value=revoke]').disabled=
+      !permitted||!storeDraftRevocable.has(value);
+  }
   function clearStoreDraftPermissions(){
     storeDraftPermissionRequest++;
+    storeDraftGrantable.clear();storeDraftRevocable.clear();
+    storeDraftPermissionsVerified=false;storeDraftWritePending=false;
+    storeDraftWriteUncertain=false;
     storeDraftCursor='';storeDraftNextCursor=null;storeDraftCursorHistory.length=0;
     el('store-draft-grants-older').hidden=true;el('store-draft-grants-newer').hidden=true;
     el('store-draft-grants-panel').hidden=true;
@@ -1774,6 +1791,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(request!==organizationRequest||currentOrg!==org||document.hidden||
        el('workspace').hidden)return;
     const seq=++storeDraftPermissionRequest;
+    storeDraftPermissionsVerified=false;
     const panel=el('store-draft-grants-panel'),form=el('store-draft-grants-form');
     const list=el('store-draft-grants-list'),message=el('store-draft-grants-status');
     panel.hidden=true;
@@ -1814,6 +1832,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         throw new Error('İzin bilgileri doğrulanamadı');
       const select=form.elements.namedItem('membership_id'),previous=select.value;
       select.replaceChildren();list.replaceChildren();
+      storeDraftGrantable.clear();storeDraftRevocable.clear();
       // Display only authorized, human-readable Organization identities.
       // Ambiguous or absent labels must never cause a misdirected grant.
       const labelFor=m=>[m.member_name,m.invitation_email].filter(Boolean).join(' — ');
@@ -1823,16 +1842,22 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       for(const m of data.members){
         const label=labelFor(m);
-        const selectable=!!label&&m.label_unique_in_organization===true&&
+        const identifiable=!!label&&m.label_unique_in_organization===true&&
           labelCounts.get(label)===1;
-        const option=document.createElement('option');
-        option.value=m.membership_id;
-        option.disabled=!selectable;
-        option.textContent=selectable?label:
-          'Çalışanın kimliği ayırt edilemiyor; izin verilemez';
-        select.append(option);
         const granted=data.grants.some(g=>g.person_id===m.person_id&&
           g.membership_id===m.membership_id);
+        if(identifiable)storeDraftGrantable.add(m.membership_id);
+        // Already-active grants must remain revocable even if another Member
+        // later acquires the same name. Never grant on an ambiguous identity.
+        if(granted)storeDraftRevocable.add(m.membership_id);
+        const option=document.createElement('option');
+        option.value=m.membership_id;
+        option.disabled=!identifiable&&!granted;
+        option.textContent=identifiable?label:granted?
+          (label||'Adı doğrulanamayan çalışan')+
+          ' — kimlik belirsiz; yalnız mevcut izni kaldırabilirsiniz':
+          'Çalışanın kimliği ayırt edilemiyor; yeni izin verilemez';
+        select.append(option);
         const line=document.createElement('p');
         line.textContent=option.textContent+' — taslak: '+(granted?'Yetkili':'Yetkisiz')+
           ' (kişisel izin; resmî gönderim yalnız Owner)';
@@ -1841,11 +1866,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const selected=Array.from(select.options).find(o=>o.value===previous&&!o.disabled);
       if(selected)select.value=previous;
       else select.selectedIndex=Array.from(select.options).findIndex(o=>!o.disabled);
-      for(const button of form.querySelectorAll('button'))button.disabled=select.selectedIndex<0;
+      // A choice may revoke a verified active grant while being ineligible
+      // for a new grant. Selection changes recompute each action separately.
+      select.onchange=updateStoreDraftActionButtons;
       storeDraftNextCursor=data.next_cursor;
       el('store-draft-grants-older').hidden=!data.has_more;
       el('store-draft-grants-newer').hidden=storeDraftCursorHistory.length===0;
       panel.hidden=false;
+      storeDraftPermissionsVerified=true;
+      storeDraftWritePending=false;storeDraftWriteUncertain=false;
+      updateStoreDraftActionButtons();
       if(!keepOutcome)message.textContent=data.members.length?
         'Üyelerin güncel kişisel taslak izinleri gösteriliyor.':
         'Şirkette yetki verilebilecek etkin üye bulunmuyor.';
@@ -1875,16 +1905,20 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(document.hidden||el('workspace').hidden)return;
     const org=currentOrg,request=organizationRequest,form=event.currentTarget;
     const action=event.submitter?.value;
-    if(!org||!['grant','revoke'].includes(action))return;
-    const buttons=Array.from(form.querySelectorAll('button'));
-    for(const button of buttons)button.disabled=true;
+    if(!org||!['grant','revoke'].includes(action)||
+       storeDraftWritePending||storeDraftWriteUncertain||!storeDraftPermissionsVerified)return;
     const chosen=form.elements.namedItem('membership_id');
-    if(chosen.selectedIndex<0||chosen.selectedOptions[0]?.disabled){
+    const membership_id=chosen.value;
+    const allowed=chosen.selectedIndex>=0&&!chosen.selectedOptions[0]?.disabled&&
+      (action==='grant'?storeDraftGrantable:storeDraftRevocable).has(membership_id);
+    if(!allowed){
       el('store-draft-grants-status').textContent=
-        'Çalışanın kimliği ayırt edilemiyor; izin işlemi yapılamaz.';
+        'Yeni izin için çalışan ayırt edilebilir olmalı; mevcut izin yalnız kayıtlı üyelikten kaldırılabilir.';
+      updateStoreDraftActionButtons();
       return;
     }
-    const membership_id=chosen.value;
+    storeDraftWritePending=true;
+    updateStoreDraftActionButtons();
     try{
       const result=await api('store-draft-permissions',{method:'POST',
         body:JSON.stringify({action,organization_id:org,membership_id})});
@@ -1897,13 +1931,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       el('store-draft-grants-status').textContent=action==='grant'?
         'Çalışana taslak düzenleme izni verildi. Başvuru gönderme hakkı verilmedi.':
         'Çalışanın taslak düzenleme izni kaldırıldı. Şirket taslakları korundu.';
+      storeDraftWritePending=false;
       void storeDraftPermissions(org,request,true);
     }catch(e){
       if(request!==organizationRequest||currentOrg!==org)return;
+      storeDraftWritePending=false;
+      storeDraftWriteUncertain=!!e.uncertain;
+      // An uncertain or denied write needs a fresh authorized read before
+      // the next attempt; neither error may enable a stale grant button.
+      storeDraftPermissionsVerified=false;
+      updateStoreDraftActionButtons();
       el('store-draft-grants-status').textContent=e.uncertain?
         'İzin sonucu belirsiz; işlemi tekrarlamadan önce izinleri yenileyin.':
-        'İzin işlemi reddedildi: '+e.message;
-      if(!e.uncertain)for(const button of buttons)button.disabled=false;
+        'İzin işlemi reddedildi; yeniden denemeden önce izinleri yenileyin.';
     }
   };
 
