@@ -9,7 +9,6 @@ import {
 } from "@medusajs/framework/utils"
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
-import { z } from "@medusajs/framework/zod"
 import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
