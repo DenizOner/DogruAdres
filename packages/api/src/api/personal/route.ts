@@ -1811,6 +1811,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          (data.has_more&&data.next_cursor!==data.members.at(-1)?.membership_id)||
          data.members.some(m=>typeof m.label_unique_in_organization!=='boolean'||
            typeof m.other_active_grant_same_label!=='boolean'||
+           !(m.mobile_phone===null||
+             (typeof m.mobile_phone==='string'&&/^\+?[0-9]{6,20}$/.test(m.mobile_phone)))||
            !(m.member_name===null||
            (typeof m.member_name==='string'&&m.member_name.trim().length>0&&m.member_name.length<=160))||
            !(m.invitation_email===null||
@@ -1836,7 +1838,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       storeDraftGrantable.clear();storeDraftRevocable.clear();
       // Display only authorized, human-readable Organization identities.
       // Ambiguous or absent labels must never cause a misdirected grant.
-      const labelFor=m=>[m.member_name,m.invitation_email].filter(Boolean).join(' — ');
+      const labelFor=m=>[m.member_name,m.invitation_email,
+         m.mobile_phone?'Cep: '+m.mobile_phone:null].filter(Boolean).join(' — ');
       const labelCounts=new Map();
       for(const m of data.members){
         const label=labelFor(m);if(label)labelCounts.set(label,(labelCounts.get(label)||0)+1);
