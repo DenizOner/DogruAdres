@@ -124,6 +124,9 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     if(!result)return res.status(403).json({message:"Recent MFA and Organization Owner required"})
     if(result.status==="conflict")return res.status(409).json({message:"Draft was already submitted or changed"})
     if(result.status==="name_taken")return res.status(409).json({message:"Store name unavailable; choose another name"})
+    if(result.status==="name_unverified")return res.status(409).json({
+      message:"Existing application requires a current name review"
+    })
     if(result.status==="created")return res.status(200).json({application_id:input.application_id,seller_id:result.seller_id,status:"pending_approval",...(input.draft_id?{draft_id:input.draft_id}:{})})
     if(result.status!=="reserved")
       return res.status(409).json({message:"Application processing; check status instead of retrying"})
