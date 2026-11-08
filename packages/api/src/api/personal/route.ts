@@ -442,7 +442,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const followWrite=path==='store-follows'&&options.method==='POST';
     const policyWrite=path==='platform/store-application-policy'&&options.method==='POST';
     const storeApplicationWrite=path==='store-applications'&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite;
+    const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite;
     let data;
     try{
       data=await r.json();
@@ -1790,7 +1791,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
              /^[A-Za-z0-9_-]{1,128}$/.test(data.next_cursor)))||
          data.has_more!==(data.next_cursor!==null)||
          (data.has_more&&data.next_cursor!==data.members.at(-1)?.membership_id)||
-         data.members.some(m=>typeof m.person_id!=='string'||
+         data.members.some(m=>!(m.member_name===null||
+           (typeof m.member_name==='string'&&m.member_name.trim().length>0&&m.member_name.length<=160))||
+           !(m.invitation_email===null||
+             (typeof m.invitation_email==='string'&&
+              m.invitation_email.includes('@')&&m.invitation_email.length<=254))||
+           typeof m.person_id!=='string'||
            !/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)||
            typeof m.membership_id!=='string'||
            !/^[A-Za-z0-9_-]{1,128}$/.test(m.membership_id))||
@@ -1807,19 +1813,33 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         throw new Error('İzin bilgileri doğrulanamadı');
       const select=form.elements.namedItem('membership_id'),previous=select.value;
       select.replaceChildren();list.replaceChildren();
+      // Display only authorized, human-readable Organization identities.
+      // Ambiguous or absent labels must never cause a misdirected grant.
+      const labelFor=m=>[m.member_name,m.invitation_email].filter(Boolean).join(' — ');
+      const labelCounts=new Map();
       for(const m of data.members){
+        const label=labelFor(m);if(label)labelCounts.set(label,(labelCounts.get(label)||0)+1);
+      }
+      for(const m of data.members){
+        const label=labelFor(m);
+        const selectable=!!label&&labelCounts.get(label)===1;
         const option=document.createElement('option');
-        option.value=m.membership_id;option.textContent=m.person_id+' — Üye';
+        option.value=m.membership_id;
+        option.disabled=!selectable;
+        option.textContent=selectable?label:
+          'Çalışanın kimliği ayırt edilemiyor; izin verilemez';
         select.append(option);
         const granted=data.grants.some(g=>g.person_id===m.person_id&&
           g.membership_id===m.membership_id);
         const line=document.createElement('p');
-        line.textContent=m.person_id+' — taslak: '+(granted?'Yetkili':'Yetkisiz')+
+        line.textContent=option.textContent+' — taslak: '+(granted?'Yetkili':'Yetkisiz')+
           ' (kişisel izin; resmî gönderim yalnız Owner)';
         list.append(line);
       }
-      if(data.members.some(m=>m.membership_id===previous))select.value=previous;
-      for(const button of form.querySelectorAll('button'))button.disabled=!data.members.length;
+      const selected=Array.from(select.options).find(o=>o.value===previous&&!o.disabled);
+      if(selected)select.value=previous;
+      else select.selectedIndex=Array.from(select.options).findIndex(o=>!o.disabled);
+      for(const button of form.querySelectorAll('button'))button.disabled=select.selectedIndex<0;
       storeDraftNextCursor=data.next_cursor;
       el('store-draft-grants-older').hidden=!data.has_more;
       el('store-draft-grants-newer').hidden=storeDraftCursorHistory.length===0;
@@ -1856,7 +1876,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!org||!['grant','revoke'].includes(action))return;
     const buttons=Array.from(form.querySelectorAll('button'));
     for(const button of buttons)button.disabled=true;
-    const membership_id=form.elements.namedItem('membership_id').value;
+    const chosen=form.elements.namedItem('membership_id');
+    if(chosen.selectedIndex<0||chosen.selectedOptions[0]?.disabled){
+      el('store-draft-grants-status').textContent=
+        'Çalışanın kimliği ayırt edilemiyor; izin işlemi yapılamaz.';
+      return;
+    }
+    const membership_id=chosen.value;
     try{
       const result=await api('store-draft-permissions',{method:'POST',
         body:JSON.stringify({action,organization_id:org,membership_id})});
