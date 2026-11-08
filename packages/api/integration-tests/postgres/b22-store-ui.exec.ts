@@ -1785,7 +1785,7 @@ export default async function({container}:any){
       where id=$1`,[applicationId])
     assert.match(nameClaim.store_name_hash,/^[a-f0-9]{64}$/)
     process.stdout.write("PASS B22 PG16/Chrome: global normalized Store name claim; case/NFKC/native legacy conflicts409, no second application or Seller\n")
-    assert.equal((await submit({...data,name:applicationName+" changed"})).status,403)
+    assert.equal((await submit({...data,name:applicationName.replace("Owner","Other")})).status,403)
     assert.equal((await submit({...data,organization_id:organizations[2].id,
       application_id:"daapp_"+randomBytes(16).toString("hex")})).status,403)
     assert.equal((await q("select count(*)::int n from da_store_application where person_id=$1",[A.person]))[0].n,1)
