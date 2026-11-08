@@ -1946,7 +1946,7 @@ export default async function({container}:any){
     await reviewer.input("#platform-store-policy-form input[name=organization_id]",
       organizations[0].id)
     await reviewer.click("#platform-store-policy-read")
-    await reviewer.wait("document.getElementById('platform-store-policy-apply').textContent.includes('a')")
+    await reviewer.wait("document.getElementById('platform-store-policy-apply').textContent.includes('aç')")
     await reviewer.input("#platform-store-policy-form input[name=reason]",
       "B22 synthetic company application reopen")
     await reviewer.click("#platform-store-policy-apply")
