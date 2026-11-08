@@ -247,6 +247,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <section id="store-application-panel" hidden style="grid-column:1/-1">
     <h3>Kuruluşun mağaza başvuruları</h3>
     <p>Kuruluş Owner'ı yeni mağaza başvurusu oluşturur. Mağaza doğrudan bu kuruluşa bağlanır; faaliyete geçmesi için platform yöneticisinin ayrıca mağazayı onaylaması gerekir.</p>
+    <p>Kaydedilmiş taslağı yalnız korunan şirket Owner yetkilisi, güncel güçlü kimlik doğrulamasıyla gönderebilir. Çalışan taslak izni başvuru gönderme hakkı vermez.</p>
     <p id="store-application-status" role="status" aria-live="polite"></p>
     <div id="store-application-list"></div>
     <form id="store-application-form" hidden>
@@ -1632,7 +1633,48 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             form.querySelector('button[type=submit]').disabled=false;
             message.textContent='Taslak düzenleniyor; değişiklikler henüz kaydedilmedi.';
           };
-          line.append(edit);list.append(line);
+          line.append(edit);
+          if(role==='owner'&&result.store_application_enabled){
+            const send=document.createElement('button');
+            send.type='button';send.textContent='Bu taslağı resmî başvuruya gönder';
+            send.onclick=async()=>{
+              if(send.disabled||currentOrg!==org||organizationRequest!==request||
+                 sequence!==applicationRequest||document.hidden)return;
+              send.disabled=true;
+              const appId='daapp_'+crypto.randomUUID().replace(/-/g,'');
+              try{
+                const outcome=await api('store-applications',{method:'POST',body:JSON.stringify({
+                  action:'submit_draft',organization_id:org,draft_id:d.id,
+                  expected_version:d.version,application_id:appId
+                })});
+                if(currentOrg!==org||organizationRequest!==request||
+                   sequence!==applicationRequest)return;
+                if(outcome.application_id!==appId||outcome.draft_id!==d.id||
+                   outcome.status!=='pending_approval'){
+                  const err=new Error('Başvurunun sonucu belirsiz; kayıtları yenileyin.');
+                  err.uncertain=true;throw err;
+                }
+                message.textContent='Taslak başvuruya gönderildi. Mağaza platform onayını bekliyor.';
+                void storeApplications(org,request,'owner',true);
+              }catch(err){
+                if(currentOrg!==org||organizationRequest!==request||
+                   sequence!==applicationRequest)return;
+                if(err.httpStatus===409){
+                  message.textContent='Taslak başka işlemle değişti veya gönderildi. Güncel kayıtları yenileyin.';
+                  void storeApplications(org,request,'owner',true);
+                  return;
+                }
+                message.textContent=err.uncertain?
+                  'Başvuru sonucu belirsiz. Tekrar göndermeyin; kayıtları yenileyin.':
+                  err.httpStatus===403?
+                    'Gönderim reddedildi. Korunan Owner ve güncel MFA ile yeniden giriş gerekli.':
+                    'Başvuru gönderilemedi: '+err.message;
+                if(!err.uncertain)send.disabled=false;
+              }
+            };
+            line.append(send);
+          }
+          list.append(line);
         }
         if(result.has_more_drafts){
           const warning=document.createElement('p');
