@@ -2292,6 +2292,9 @@ export default async function({container}:any){
       await reviewer.select(organizations[1].name,"owner")
       await reviewer.wait("document.getElementById('store-application-list').textContent.includes("+
         JSON.stringify(delegatedName)+")")
+      // Organization selection resolves before its separate protected grant
+      // list finishes loading. Wait for the real panel, not just the role.
+      await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden")
       await reviewer.click("#store-draft-grants-refresh")
       await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
         "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===2")
