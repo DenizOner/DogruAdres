@@ -2255,6 +2255,70 @@ export default async function({container}:any){
       await browser.select(organizations[0].name,"owner")
     }
 
+    // Distinct disposable Organization: a grant from an ended membership
+    // cannot revive when the same Person rejoins; the Owner must explicitly
+    // authorize the NEW membership. Preserve both source audits and history.
+    const [rejoinOrg]=await foundation.createOrganizations([{
+      name:"B22 Rejoin "+rand,status:"active"
+    }])
+    const [rejoinOwner,rejoinOld]=await foundation.createMemberships([
+      {organization_id:rejoinOrg.id,person_id:A.person,role:"owner",
+       status:"active",protected_owner:true},
+      {organization_id:rejoinOrg.id,person_id:B.person,role:"member",
+       status:"active",protected_owner:false}
+    ])
+    assert.ok(rejoinOwner.id&&rejoinOld.id)
+    await browser.send("Page.bringToFront")
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+
+      JSON.stringify(rejoinOrg.name+" — owner")+")")
+    await browser.select(rejoinOrg.name,"owner")
+    const grantRejoin=async(membershipId:string)=>browser.callFunction(
+      "async function(org,id){const session=await(await fetch('/personal/session')).json();"+
+      "const response=await fetch('/personal/store-draft-permissions',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});"+
+      "return {status:response.status,body:await response.json()}}",
+      rejoinOrg.id,membershipId)
+    const firstRejoinGrant=await grantRejoin(rejoinOld.id)
+    assert.equal(firstRejoinGrant.status,200)
+    assert.equal(firstRejoinGrant.body.status,"active")
+    const ended=await q(`update da_organization_membership
+      set status='revoked',revoked_at=clock_timestamp(),updated_at=clock_timestamp()
+      where id=$1 and role='member' and status='active' and protected_owner=false
+      returning id`,[rejoinOld.id])
+    assert.equal(ended.length,1)
+    const [rejoinNew]=await foundation.createMemberships([{
+      organization_id:rejoinOrg.id,person_id:B.person,role:"member",
+      status:"active",protected_owner:false
+    }])
+    assert.notEqual(rejoinNew.id,rejoinOld.id)
+    const secondRejoinGrant=await grantRejoin(rejoinNew.id)
+    assert.equal(secondRejoinGrant.status,200,
+      "Explicit Owner grant must work for a rejoined Member, not re-enable old membership")
+    assert.equal(secondRejoinGrant.body.status,"active")
+    assert.notEqual(secondRejoinGrant.body.grant_id,firstRejoinGrant.body.grant_id)
+    const rejoinRows=await q(`select id,membership_id,revoked_at
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2 order by created_at,id`,
+      [rejoinOrg.id,B.person])
+    assert.equal(rejoinRows.length,2)
+    assert.equal(rejoinRows.filter((row:any)=>row.revoked_at===null).length,1)
+    assert.equal(rejoinRows.find((row:any)=>row.membership_id===rejoinOld.id)?.revoked_at!==null,true)
+    assert.equal(rejoinRows.find((row:any)=>row.membership_id===rejoinNew.id)?.revoked_at,null)
+    const rejoinAudits=await q(`select e.action from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.target_id=$2
+      and e.resource='store-draft-permission'
+      order by e.occurred_at,e.id`,[rejoinOrg.id,B.person])
+    assert.deepEqual(rejoinAudits.map((row:any)=>row.action).sort(),[
+      "organization.store_draft_permission_granted",
+      "organization.store_draft_permission_granted",
+      "organization.store_draft_permission_revoked"
+    ])
+    await browser.select(organizations[0].name,"owner")
+    process.stdout.write("PASS B22 Chrome/PG16: rejoined Member receives no automatic draft privilege; explicit new Owner grant retires stale membership grant with canonical audit/outbox\\n")
+
     // This is the very same task-created membership whose Owner authority
     // was removed above; do not create a duplicate Person/Organization row.
     const alphaMember=temporaryNotificationCoOwner
