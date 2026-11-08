@@ -1285,6 +1285,21 @@ export default class DogruAdresAccessModuleService extends MedusaService({
 
     const nextRole = input.role ?? target.role
     const nextStatus = input.status ?? target.status
+    const leavesOrdinaryMember=target.role==="member" &&
+      (nextStatus!=="active" || nextRole!=="member")
+    const membershipDb=securitySql(sharedContext.transactionManager)
+    if(leavesOrdinaryMember){
+      // A draft writer locks this membership FOR SHARE before acquiring its
+      // per-Person grant lock. Lock the row first here (FOR UPDATE) to keep
+      // concurrent Member-save / membership-revocation ordering acyclic.
+      const locked=await membershipDb.execute(`select id from da_organization_membership
+        where id=? and person_id=? and organization_id=? for update`,
+        [target.id,target.person_id,input.organization_id])
+      if(locked.length!==1)throw new IdentityAccessDenied()
+      await membershipDb.execute(`select pg_advisory_xact_lock(
+        hashtext('b22-store-draft-grant'),hashtext(?))`,
+        [input.organization_id+":"+target.person_id])
+    }
     const updated = await this.updateMemberships({
       id: target.id,
       role: nextRole,
@@ -1309,6 +1324,44 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const auditManager=sharedContext.transactionManager as {flush():Promise<void>}
     await auditManager.flush()
     await securitySql(sharedContext.transactionManager).execute(`insert into da_security_outbox(id,audit_event_id,created_at) values(?,?,clock_timestamp())`,['security_'+membershipAudit.id,membershipAudit.id])
+    if(leavesOrdinaryMember){
+      // Revocation/role exit is a terminal authorization event, not a
+      // temporary pause: a later invitation accepting the SAME membership ID
+      // cannot resurrect an old Store draft permission.
+      const activeDraftGrant=await membershipDb.execute(`select id from da_organization_store_draft_permission
+        where person_id=? and organization_id=? and membership_id=?
+          and permission='store.application.draft.manage' and revoked_at is null
+        for update`,[target.person_id,input.organization_id,target.id])
+      if(activeDraftGrant.length>1)throw new IdentityAccessDenied()
+      if(activeDraftGrant.length===1){
+        const grantId=activeDraftGrant[0].id
+        if(typeof grantId!=="string"||!/^dasdpg_[A-Za-z0-9_-]+$/.test(grantId)||
+           !await verifiedStoreDraftGrant(
+             membershipDb,target.person_id,input.organization_id,target.id))
+          throw new IdentityAccessDenied()
+        const [grantAudit]=await this.persistAuditEventsWithOutbox_([{
+          actor_id:input.actor_id,actor_type:input.actor_type,
+          actor_person_id:input.actor_person_id,role_context:actorMembership.role,
+          organization_id:input.organization_id,
+          action:"organization.store_draft_permission_revoked",
+          module:DOGRUADRES_AUDIT_MODULE,resource:"store-draft-permission",
+          target_id:target.person_id,
+          previous_values:{grant_id:grantId,person_id:target.person_id,
+            membership_id:target.id,permission:"store.application.draft.manage"},
+          new_values:{grant_id:grantId,status:"revoked",source:"membership_exit"},
+          occurred_at:new Date()
+        }],sharedContext)
+        if(!grantAudit?.id)throw new IdentityAccessDenied()
+        await auditManager.flush()
+        const retired=await membershipDb.execute(`update da_organization_store_draft_permission
+          set revoked_at=clock_timestamp() where id=? and revoked_at is null
+          returning id`,[grantId])
+        if(retired.length!==1)throw new IdentityAccessDenied()
+        await membershipDb.execute(`insert into da_notification_receipt
+          (id,person_id,audit_event_id) values (?,?,?)`,
+          ["danot_"+randomUUID(),target.person_id,grantAudit.id])
+      }
+    }
     return updated
   }
 
@@ -1751,67 +1804,53 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(active.length>1||active.some(g=>typeof g.id!=="string"||
         !/^dasdpg_[A-Za-z0-9_-]+$/.test(g.id)||
         typeof g.membership_id!=="string"))throw new IdentityAccessDenied()
-    // A grant belongs to the exact membership, not just the Person. If the
-    // employee left and joined again, the historical (now ineffective) grant
-    // must not silently reactivate or block an explicit new Owner decision.
-    if(active.length){
-      const old=active[0]
-      if(!await verifiedStoreDraftGrant(
-        db,personId,input.organization_id,old.membership_id))
-        throw new IdentityAccessDenied()
-      if(input.action==="grant" && old.membership_id===input.membership_id)
-        return {status:"active" as const,grant_id:old.id as string}
-      if(input.action==="grant"){
-        const livePrevious=await db.execute(`select id from da_organization_membership
-          where id=? and person_id=? and organization_id=?
-            and role='member' and protected_owner=false and status='active'
-            and revoked_at is null and deleted_at is null
-          for share`,[old.membership_id,personId,input.organization_id])
-        // Distinct simultaneous live memberships are an inconsistent scope,
-        // not permission to overwrite a current Member's active grant.
-        if(livePrevious.length!==0)throw new IdentityAccessDenied()
+    if(input.action==="grant"){
+      if(active.length){
+        if(active[0].membership_id!==input.membership_id||
+           !await verifiedStoreDraftGrant(db,personId,input.organization_id,input.membership_id))
+          throw new IdentityAccessDenied()
+        return {status:"active" as const,grant_id:active[0].id as string}
       }
-      const [revocationAudit]=await this.persistAuditEventsWithOutbox_([{
+      const grantId="dasdpg_"+randomUUID()
+      const [audit]=await this.persistAuditEventsWithOutbox_([{
         actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
         role_context:"owner",organization_id:input.organization_id,
-        action:"organization.store_draft_permission_revoked",module:DOGRUADRES_AUDIT_MODULE,
+        action:"organization.store_draft_permission_granted",module:DOGRUADRES_AUDIT_MODULE,
         resource:"store-draft-permission",target_id:personId,
-        previous_values:{grant_id:old.id,person_id:personId,
-          membership_id:old.membership_id,permission:"store.application.draft.manage"},
-        new_values:{grant_id:old.id,status:"revoked"},occurred_at:new Date()
+        new_values:{grant_id:grantId,person_id:personId,
+          membership_id:input.membership_id,permission:"store.application.draft.manage"},
+        occurred_at:new Date()
       }],context)
-      if(!revocationAudit?.id)throw new IdentityAccessDenied()
+      if(!audit?.id)throw new IdentityAccessDenied()
       await (context.transactionManager as {flush():Promise<void>}).flush()
-      const retired=await db.execute(`update da_organization_store_draft_permission
-        set revoked_at=clock_timestamp() where id=? and revoked_at is null returning id`,
-        [old.id])
-      if(retired.length!==1)throw new IdentityAccessDenied()
+      await db.execute(`insert into da_organization_store_draft_permission
+        (id,person_id,organization_id,membership_id,permission,
+         issued_by_person_id,source_audit_event_id)
+        values (?,?,?,?,'store.application.draft.manage',?,?)`,
+        [grantId,personId,input.organization_id,input.membership_id,actor.person_id,audit.id])
       await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-        values (?,?,?)`,["danot_"+randomUUID(),personId,revocationAudit.id])
+        values (?,?,?)`,["danot_"+randomUUID(),personId,audit.id])
+      return {status:"active" as const,grant_id:grantId}
     }
-    if(input.action==="revoke")
-      return {status:"revoked" as const,grant_id:(active[0]?.id as string|undefined)??null}
-
-    const grantId="dasdpg_"+randomUUID()
-    const [grantAudit]=await this.persistAuditEventsWithOutbox_([{
+    if(!active.length)return {status:"revoked" as const,grant_id:null}
+    const grantId=active[0].id as string
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
       role_context:"owner",organization_id:input.organization_id,
-      action:"organization.store_draft_permission_granted",module:DOGRUADRES_AUDIT_MODULE,
+      action:"organization.store_draft_permission_revoked",module:DOGRUADRES_AUDIT_MODULE,
       resource:"store-draft-permission",target_id:personId,
-      new_values:{grant_id:grantId,person_id:personId,
-        membership_id:input.membership_id,permission:"store.application.draft.manage"},
-      occurred_at:new Date()
+      previous_values:{grant_id:grantId,person_id:personId,
+        membership_id:active[0].membership_id,permission:"store.application.draft.manage"},
+      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
     }],context)
-    if(!grantAudit?.id)throw new IdentityAccessDenied()
+    if(!audit?.id)throw new IdentityAccessDenied()
     await (context.transactionManager as {flush():Promise<void>}).flush()
-    await db.execute(`insert into da_organization_store_draft_permission
-      (id,person_id,organization_id,membership_id,permission,
-       issued_by_person_id,source_audit_event_id)
-      values (?,?,?,?,'store.application.draft.manage',?,?)`,
-      [grantId,personId,input.organization_id,input.membership_id,actor.person_id,grantAudit.id])
+    const result=await db.execute(`update da_organization_store_draft_permission
+      set revoked_at=clock_timestamp() where id=? and revoked_at is null returning id`,[grantId])
+    if(result.length!==1)throw new IdentityAccessDenied()
     await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-      values (?,?,?)`,["danot_"+randomUUID(),personId,grantAudit.id])
-    return {status:"active" as const,grant_id:grantId}
+      values (?,?,?)`,["danot_"+randomUUID(),personId,audit.id])
+    return {status:"revoked" as const,grant_id:grantId}
   }
 
   // A dedicated platform task is required. Holding organization.provision or
