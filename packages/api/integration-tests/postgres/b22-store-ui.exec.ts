@@ -2584,18 +2584,20 @@ export default async function({container}:any){
     const twoGrantedNamesakes=[orderedMembers[1],orderedMembers[91]]
     assert.equal(twoGrantedNamesakes.length,2)
     const grantBoth=await browser.callFunction(
-      "async function(org,ids){const session=await(await fetch('/personal/session')).json();"+
+      "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
+      "const session=await(await fetch('/personal/session')).json();"+
       "const statuses=[];for(const id of ids){const r=await fetch('/personal/store-draft-permissions',"+
       "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
       "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});"+
       "statuses.push(r.status)}return statuses}",largeMemberOrg.id,
-      twoGrantedNamesakes.map(m=>m.id))
+      JSON.stringify(twoGrantedNamesakes.map(m=>m.id)))
     assert.deepEqual(grantBoth,[200,200],
       "Both distinct Members originally receive individually authorized grants")
     await q("update da_person set display_name=$1 where id=any($2::text[])",
       ["B22 İki Önceden Yetkili Adaş",twoGrantedNamesakes.map(m=>m.person_id)])
     const collisionPages=await browser.callFunction(
-      "async function(org,ids){let after='',found=[],pages=[];for(let i=0;i<5;i++){"+
+      "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
+      "let after='',found=[],pages=[];for(let i=0;i<5;i++){"+
       "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
       "const data=await r.json();pages.push(r.status);"+
@@ -2603,7 +2605,7 @@ export default async function({container}:any){
       "found.push({id:m.membership_id,flag:m.other_active_grant_same_label,"+
       "unique:m.label_unique_in_organization,granted:data.grants.some(g=>g.membership_id===m.membership_id)});"+
       "}if(!data.has_more)break;after=data.next_cursor;}return {found,pages}}",
-      largeMemberOrg.id,twoGrantedNamesakes.map(m=>m.id))
+      largeMemberOrg.id,JSON.stringify(twoGrantedNamesakes.map(m=>m.id)))
     assert.deepEqual(collisionPages.pages,[200,200,200,200],
       "Owner protected GET must read all four pages after label collision")
     assert.deepEqual(collisionPages.found.map((m:any)=>[m.flag,m.unique,m.granted]),
@@ -2657,12 +2659,13 @@ export default async function({container}:any){
       }
     }
     const deniedAmbiguous=await browser.callFunction(
-      "async function(org,ids){const session=await(await fetch('/personal/session')).json();"+
+      "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
+      "const session=await(await fetch('/personal/session')).json();"+
       "const result=[];for(const id of ids){const r=await fetch('/personal/store-draft-permissions',"+
       "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
       "body:JSON.stringify({action:'revoke',organization_id:org,membership_id:id})});"+
       "result.push(r.status)}return result}",largeMemberOrg.id,
-      twoGrantedNamesakes.map(m=>m.id))
+      JSON.stringify(twoGrantedNamesakes.map(m=>m.id)))
     assert.deepEqual(deniedAmbiguous,[403,403],
       "Even a direct Owner POST may not silently revoke the wrong namesake")
     const surviving=await q(`select person_id,count(*)::int n
