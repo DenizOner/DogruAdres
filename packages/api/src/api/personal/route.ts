@@ -1568,7 +1568,42 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             if(!e.uncertain)button.disabled=false;
           }
         };
-        line.append(button);list.append(line);
+        // A reasoned rejection remains available during a company
+        // application pause. Approval remains disabled until policy reopens.
+        const reason=document.createElement('textarea');
+        reason.setAttribute('aria-label','Mağaza başvurusu ret gerekçesi');
+        reason.maxLength=500;
+        reason.placeholder='Ret gerekçesi (en az 10 karakter)';
+        const reject=document.createElement('button');
+        reject.type='button';reject.textContent='Gerekçeyle reddet';
+        reject.onclick=async()=>{
+          const explanation=reason.value.trim();
+          if(explanation.length<10||explanation.length>500){
+            message.textContent='Ret gerekçesi 10–500 karakter olmalıdır.';
+            return;
+          }
+          reject.disabled=true;button.disabled=true;
+          message.textContent='Mağaza başvurusu reddediliyor…';
+          try{
+            const result=await api('platform/stores',{method:'POST',
+              body:JSON.stringify({action:'reject',
+                application_id:entry.application_id,seller_id:entry.seller_id,
+                reason:explanation})});
+            if(result.application_id!==entry.application_id||
+               result.seller_id!==entry.seller_id||result.status!=='rejected')
+              throw new Error('Ret sonucu doğrulanamadı');
+            if(epoch!==viewEpoch||document.hidden)return;
+            message.textContent='Mağaza başvurusu gerekçesiyle reddedildi; mevcut onaylı mağazalar etkilenmedi.';
+            void refreshStoreApprovals(true);
+          }catch(e){
+            if(epoch!==viewEpoch||document.hidden)return;
+            message.textContent=e.uncertain?
+              'Ret sonucu belirsiz; yeniden göndermeyin, listeyi kontrol edin.':
+              'Başvuru reddedilemedi: '+e.message;
+            if(!e.uncertain){reject.disabled=false;button.disabled=entry.on_hold;}
+          }
+        };
+        line.append(button,reason,reject);list.append(line);
       }
     }catch(e){
       if(seq!==storeApprovalRequest||epoch!==viewEpoch)return;
@@ -1607,15 +1642,25 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          result.draft_role!==role||
          !Array.isArray(result.applications)||result.applications.length>30||
         result.applications.some(a=>!/^daapp_[a-f0-9]{32}$/.test(a?.id)||!['reserved','creating','created'].includes(a?.status)||
-          !(a.seller_id===null||a.seller_id===undefined||typeof a.seller_id==='string')))
+          !(a.seller_id===null||a.seller_id===undefined||typeof a.seller_id==='string')||
+          !['pending_approval','open','suspended','terminated','unknown'].includes(a?.seller_status)||
+          !(a.rejection_reason===null||typeof a.rejection_reason==='string'&&a.rejection_reason.length<=500)))
         throw new Error('Başvuru yanıtı doğrulanamadı');
       // A Member receives only unfinished drafts, never official applications.
       if(role==='member'&&result.applications.length!==0)throw new Error('Başvuru kapsamı geçersiz');
       applicationRole=role;
       for(const a of result.applications){
         const line=document.createElement('p');
-        line.textContent=(a.status==='created'?'Mağaza başvurusu kaydedildi':'Başvuru işlem sonucu kontrol edilmeli')+
-          ' — '+a.id+(a.seller_id?' — '+a.seller_id:'');
+        const resultLabel=a.status!=='created'?'Başvuru işlem sonucu kontrol edilmeli':
+          a.seller_status==='pending_approval'?'Mağaza başvurusu onay bekliyor':
+          a.seller_status==='open'?'Mağaza onaylandı':
+          a.seller_status==='suspended'?'Mağaza askıya alındı':
+          a.seller_status==='terminated'?'Mağaza başvurusu reddedildi':
+          'Başvurunun güncel mağaza sonucu doğrulanamadı';
+        line.textContent=resultLabel+' — '+a.id+
+          (a.seller_id?' — '+a.seller_id:'')+
+          (a.seller_status==='terminated'&&a.rejection_reason?
+            ' — Ret gerekçesi: '+a.rejection_reason:'');
         list.append(line);
       }
       if(['owner','member'].includes(role)){
