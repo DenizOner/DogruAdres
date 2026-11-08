@@ -2292,7 +2292,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Keep the irreversible claim before native Seller creation; never hold
     // this lock across separate transactions or guess an uncertain outcome.
     const names=await db.execute(`select encode(sha256(convert_to(
-      lower(normalize(regexp_replace(btrim(?),'[[:space:]]+',' ','g'),NFKC)),
+      lower(regexp_replace(btrim(normalize(?,NFKC)),'[[:space:]]+',' ','g')),
       'UTF8')),'hex') as store_name_hash`,[input.name])
     const nameHash=names[0]?.store_name_hash
     if(names.length!==1||typeof nameHash!=="string"||
@@ -2308,8 +2308,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const nativeExisting=await db.execute(`select id from seller
       where (deleted_at is null or
         deleted_at>clock_timestamp()-interval '30 days')
-        and encode(sha256(convert_to(lower(normalize(
-          regexp_replace(btrim(name),'[[:space:]]+',' ','g'),NFKC)),
+        and encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(name,NFKC)),
+          '[[:space:]]+',' ','g')),
           'UTF8')),'hex')=? limit 1`,[nameHash])
     if(nativeExisting.length)return {status:"name_taken" as const}
     await db.execute(`insert into da_store_application
