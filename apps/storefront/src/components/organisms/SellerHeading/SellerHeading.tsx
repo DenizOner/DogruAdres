@@ -1,4 +1,5 @@
 import { SellerInfo } from "@/components/molecules"
+import { sanitizeRichText } from "@/lib/helpers/sanitize-rich-text"
 import { SellerDTO } from "@mercurjs/types"
 import { Chat } from "../Chat/Chat"
 import { HttpTypes } from "@medusajs/types"
@@ -32,11 +33,11 @@ export const SellerHeading = ({
         )}
       </div>
       <div className="px-5 pb-5">
-        <p
-          dangerouslySetInnerHTML={{
-            __html: seller.description ?? "",
-          }}
+        <div
           className="label-md"
+          dangerouslySetInnerHTML={{
+            __html: sanitizeRichText(seller.description ?? ""),
+          }}
         />
       </div>
     </div>

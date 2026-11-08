@@ -8,6 +8,8 @@ on:
       - '.github/workflows/governance-automation.yml'
       - 'quality/automation/**'
       - 'quality/e2e/**'
+      - 'apps/storefront/src/components/organisms/SellerHeading/**'
+      - 'apps/storefront/src/lib/helpers/sanitize-rich-text.ts'
   workflow_dispatch:
   schedule:
     - cron: '17 7 * * 1'
@@ -21,7 +23,7 @@ concurrency:
 
 jobs:
   tooling:
-    name: Automation tooling self-test (NOT product acceptance)
+    name: Automation tooling and SellerHeading Chromium (NOT full storefront E2E)
     if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -39,18 +41,27 @@ jobs:
           package-manager-cache: false
       - name: Pure Node status renderer tests
         run: node --test quality/automation/repo-pulse.test.mjs
+      - name: Setup Bun for locked storefront component dependencies
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+      - name: Install existing locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Bundle actual SellerHeading with synthetic child widgets
+        run: node quality/e2e/build_seller_heading_browser.mjs
       - name: Install isolated free Playwright tooling
         run: |
           python3 -m venv /tmp/da-playwright-venv
           /tmp/da-playwright-venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir playwright==1.56.0
           /tmp/da-playwright-venv/bin/python -m playwright install --with-deps chromium
-      - name: Real Chromium tool check (NOT DogruAdres user test)
+      - name: Chromium tooling and actual SellerHeading component checks
         env:
           PYTHONDONTWRITEBYTECODE: '1'
+          BROWSER_TEST_BUNDLE: ${{ runner.temp }}/da-seller-heading-browser.js
         run: |
           /tmp/da-playwright-venv/bin/python -m unittest discover -s quality/e2e -p 'test_*.py' -v
-          echo '### Tooling only — product acceptance NOT TESTED' >> "$GITHUB_STEP_SUMMARY"
-          echo 'This job checks Chromium/Playwright interaction on a synthetic in-memory HTML page. No DoğruAdres API, login, database, authorization or B01–B21 journey is exercised.' >> "$GITHUB_STEP_SUMMARY"
+          echo '### SellerHeading: real component in Chrome (synthetic Seller), NOT full Next.js E2E' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This checks the actual SellerHeading HTML rendering with mocked unrelated children. No Seller API, Next.js page hydration, HTTP, login, database or authorization journey is exercised.' >> "$GITHUB_STEP_SUMMARY"
 
   pulse:
     name: GitHub project pulse (metadata only)
