@@ -2690,6 +2690,83 @@ export default async function({container}:any){
       from da_store_application where organization_id=$1`,
       [largeMemberOrg.id]))[0].n,0,
       "Ambiguous permission handling must never create a Seller")
+
+    // Real registration requires a mobile phone and invitation requires email.
+    // Earlier fixtures deliberately lacked BOTH contacts; prove that an
+    // existing distinct Person mobile restores a single Member's revoke,
+    // without adding another table, granting anyone access, or mass-revoking.
+    const employeeMobiles=["+905550010001","+905550010002"]
+    for(let i=0;i<2;i++)await q(
+      "update da_person set mobile_phone=$1,mobile_version=1 where id=$2",
+      [employeeMobiles[i],twoGrantedNamesakes[i].person_id])
+    const restoredContacts=await browser.callFunction(
+      "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
+      "let after='',found=[],pages=[];for(let i=0;i<5;i++){"+
+      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
+      "const data=await r.json();pages.push(r.status);"+
+      "for(const m of data.members){if(ids.includes(m.membership_id))"+
+      "found.push({id:m.membership_id,phone:m.mobile_phone,"+
+      "flag:m.other_active_grant_same_label,unique:m.label_unique_in_organization,"+
+      "granted:data.grants.some(g=>g.membership_id===m.membership_id)});"+
+      "}if(!data.has_more)break;after=data.next_cursor;}return {found,pages}}",
+      largeMemberOrg.id,JSON.stringify(twoGrantedNamesakes.map(m=>m.id)))
+    assert.deepEqual(restoredContacts.pages,[200,200,200,200])
+    assert.deepEqual(restoredContacts.found.map((m:any)=>
+      [m.phone,m.flag,m.unique,m.granted]),[
+      [employeeMobiles[0],false,true,true],
+      [employeeMobiles[1],false,true,true]
+    ],"Two same-name Members with distinct recorded mobile numbers are individually selectable")
+
+    // On page four the Owner intentionally selects only the second Member.
+    await browser.click("#store-draft-grants-refresh")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===11")
+    const targetEmployee=twoGrantedNamesakes[1]
+    const candidates=await browser.eval(
+      "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options,"+
+      "o=>({value:o.value,text:o.textContent,disabled:o.disabled}))")
+    const candidate=candidates.find((c:any)=>c.value===targetEmployee.id)
+    assert.equal(candidate?.disabled,false,
+      "The intended same-name Member is individually selectable with a different mobile")
+    assert.ok(candidate?.text.includes(employeeMobiles[1]),
+      "The Owner sees the intended Member's phone before the single-person revoke")
+    await browser.eval("(()=>{const select=document.querySelector("+
+      "'#store-draft-grants-form select[name=membership_id]');"+
+      "select.value="+JSON.stringify(targetEmployee.id)+";"+
+      "select.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+    await browser.wait("!document.querySelector('#store-draft-grants-form button[value=revoke]').disabled")
+    await browser.click("#store-draft-grants-form button[value=revoke]")
+    await until(async()=>(await q(`select count(*)::int n
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2 and revoked_at is not null`,
+      [largeMemberOrg.id,targetEmployee.person_id]))[0].n===1,
+      19000,"Only the selected same-name Member's grant is revoked")
+    const finalGrants=await q(`select person_id,
+      count(*) filter(where revoked_at is null)::int active,
+      count(*) filter(where revoked_at is not null)::int revoked
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=any($2::text[])
+      group by person_id`,
+      [largeMemberOrg.id,twoGrantedNamesakes.map(m=>m.person_id)])
+    assert.deepEqual(
+      finalGrants.map((g:any)=>[g.person_id,g.active,g.revoked]).sort((a:any,b:any)=>a[0].localeCompare(b[0])),
+      [[twoGrantedNamesakes[0].person_id,1,0],[twoGrantedNamesakes[1].person_id,0,1]]
+        .sort((a:any,b:any)=>a[0].localeCompare(b[0])),
+      "The other same-name Member must retain the original active grant")
+    const revokeAudits=await q(`select e.target_id
+      from da_audit_event e join da_audit_outbox x
+        on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.action='organization.store_draft_permission_revoked'
+        and e.target_id=any($2::text[])`,
+      [largeMemberOrg.id,twoGrantedNamesakes.map(m=>m.person_id)])
+    assert.deepEqual(revokeAudits,[{target_id:targetEmployee.person_id}],
+      "Only the intended Person has a canonical revoke audit/outbox")
+    assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
+      [largeMemberOrg.id]))[0].n,0,"A contact-based revoke never starts native Seller submission")
+    process.stdout.write(
+      "PASS B22 Chrome: same-name active Members with distinct canonical mobiles on pages 1 and 4: Owner revokes only selected page-4 member, other grant remains; exactly one revoke audit/outbox, zero Seller\\n")
+
     await browser.select(organizations[0].name,"owner")
     process.stdout.write("PASS B22 Chrome: two existing active grants with identical later name across page 1 and 4: no ambiguous individual revoke UI/HTTP/audit, both grants intact, zero Seller\\n")
     process.stdout.write("PASS B22 Chrome: 101 active Members; cross-page identical no-invite names disabled, zero unauthorized grants/audit/outbox, unrelated Organization ignored; last identifiable Member grant/revoke and uncertain POST recovery, audit/outbox, foreign Person 403, invalid cursor 400, zero Seller\\n")
