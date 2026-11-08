@@ -275,6 +275,7 @@ async function run(){
         // arbitrary child output. Require these real negative acceptance
         // results so a missing scenario cannot masquerade as a PASS.
         const storeDraftNegativeMarkers=[
+          "PASS B22 PG16/Chrome: global normalized Store name claim; case/NFKC/native legacy conflicts409, no second application or Seller",
           "PASS B22 Chrome/PG16: before-submit stale draft409/zero Seller; concurrent distinct application keys 201+409, one native pending Seller and one durable Origin/audit/outbox",
           "PASS B22 Chrome/PG16: genuine Owner's expired strong proof and temporarily disabled company policy deny same draft with 403, zero native Seller and unchanged private draft",
           "PASS B22 Chrome/PG16: injected native Seller finalization interruption 503, durable creating/submitting, same/different retry409, no duplicate Seller, fault trigger removed",
