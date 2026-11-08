@@ -7022,7 +7022,7 @@ export default async function({container}:any){
       assert.equal(repeatDraft.body.seller_id,submittedApplication.seller_id)
       assert.equal((await ownerDraftPost("daapp_"+randomBytes(16).toString("hex"),1)).status,409,
         "A different request ID cannot create a second Seller from one draft")
-      assert.equal((await ownerDraftPost(submittedApplication.id,0)).status,409,
+      assert.equal((await ownerDraftPost(submittedApplication.id,2)).status,409,
         "Stale draft version may not reuse a successful submission")
       assert.equal((await q(`select count(*)::int n from da_store_application
         where organization_id=$1`,[organizations[1].id]))[0].n,1)
