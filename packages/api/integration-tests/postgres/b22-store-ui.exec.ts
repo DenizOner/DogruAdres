@@ -2416,6 +2416,15 @@ export default async function({container}:any){
         and role='member' and status='active' order by id`,[largeMemberOrg.id])
     assert.equal(orderedMembers.length,101)
     const lastMember=orderedMembers[100]
+    // Modern registration has a phone. These synthetic membership fixtures
+    // deliberately bypassed that route, so equip eligible employees with
+    // distinct recorded phones while retaining three legacy no-contact cases.
+    const legacyNoContact=orderedMembers[2]
+    for(let i=0;i<orderedMembers.length;i++){
+      if([0,2,90].includes(i))continue
+      await q("update da_person set mobile_phone=$1,mobile_version=1 where id=$2",
+        ["+905551"+String(i+1).padStart(6,"0"),orderedMembers[i].person_id])
+    }
     // P2: two active Members on DIFFERENT 30-row pages have identical
     // names and no accepted invitation email. Neither may be grantable.
     const nameTwins=[orderedMembers[0],orderedMembers[90]]
@@ -2457,6 +2466,41 @@ export default async function({container}:any){
       {status:200,count:30,grantCount:0,more:true,cursor:true,ambiguous:0,lastUnique:null},
       {status:200,count:11,grantCount:0,more:false,cursor:false,ambiguous:1,lastUnique:true}
     ],"101 Members: cross-page name twins ambiguous, foreign Company ignored, last unique")
+    // Unique name is NOT sufficient for a new grant when this older
+    // Member has neither phone nor accepted company invitation email.
+    const emptyLegacySelection=await browser.callFunction(
+      "async function(org,id){const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org));const d=await r.json();"+
+      "const member=d.members.find(m=>m.membership_id===id);"+
+      "return {status:r.status,phone:member?.mobile_phone,email:member?.invitation_email,"+
+      "name:member?.member_name,unique:member?.label_unique_in_organization}}",
+      largeMemberOrg.id,legacyNoContact.id)
+    assert.equal(emptyLegacySelection.status,200)
+    assert.equal(emptyLegacySelection.phone,null)
+    assert.equal(emptyLegacySelection.email,null)
+    assert.equal(emptyLegacySelection.unique,true,
+      "Unique name alone is not adequate proof of intended grant target")
+    const missingContactPost=await browser.callFunction(
+      "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",
+      largeMemberOrg.id,legacyNoContact.id)
+    assert.equal(missingContactPost,403,
+      "Forged direct Owner POST must deny otherwise unique name with no contact")
+    assert.equal((await q(`select count(*)::int n from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2`,
+      [largeMemberOrg.id,legacyNoContact.person_id]))[0].n,0)
+    assert.equal((await q(`select count(*)::int n from da_audit_event
+      where organization_id=$1 and target_id=$2 and resource='store-draft-permission'`,
+      [largeMemberOrg.id,legacyNoContact.person_id]))[0].n,0,
+      "Denied unknown contact must leave no audit record")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden")
+    const noContactOption=await browser.eval(
+      "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options,"+
+      "o=>({value:o.value,disabled:o.disabled}))")
+    assert.equal(noContactOption.find((o:any)=>o.value===legacyNoContact.id)?.disabled,true,
+      "Owner UI must also disable granting to a unique-name no-contact legacy employee")
     assert.equal(await reviewer.callFunction(
       "async function(org){return (await fetch('/personal/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org))).status}",largeMemberOrg.id),403,
@@ -2598,6 +2642,10 @@ export default async function({container}:any){
       JSON.stringify(twoGrantedNamesakes.map(m=>m.id)))
     assert.deepEqual(grantBoth,[200,200],
       "Both distinct Members originally receive individually authorized grants")
+    // After granting, emulate a legacy data regression where both contacts
+    // become absent. Together with the same name they are truly ambiguous.
+    await q("update da_person set mobile_phone=null where id=any($1::text[])",
+      [twoGrantedNamesakes.map(m=>m.person_id)])
     await q("update da_person set display_name=$1 where id=any($2::text[])",
       ["B22 İki Önceden Yetkili Adaş",twoGrantedNamesakes.map(m=>m.person_id)])
     const collisionPages=await browser.callFunction(
@@ -2776,6 +2824,10 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Chrome: two existing active grants with identical later name across page 1 and 4: no ambiguous individual revoke UI/HTTP/audit, both grants intact, zero Seller\\n")
     process.stdout.write("PASS B22 Chrome: 101 active Members; cross-page identical no-invite names disabled, zero unauthorized grants/audit/outbox, unrelated Organization ignored; last identifiable Member grant/revoke and uncertain POST recovery, audit/outbox, foreign Person 403, invalid cursor 400, zero Seller\\n")
 
+    // B was originally an isolated no-phone fixture. Restore a standard
+    // current contact for the distinct existing Member rejoin test.
+    await q("update da_person set mobile_phone=$1,mobile_version=1 where id=$2",
+      ["+905551888888",B.person])
     // Distinct disposable Organization: a grant from an ended membership
     // cannot revive when the same Person rejoins; the Owner must explicitly
     // authorize the NEW membership. Preserve both source audits and history.
