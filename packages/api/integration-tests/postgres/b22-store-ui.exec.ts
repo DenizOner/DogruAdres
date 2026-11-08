@@ -996,6 +996,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   // blind second write. The disposable CI page is the only interception scope.
   await reviewer.eval(`(()=>{
     const original=window.fetch;
+    window.__b22RejectOriginalFetch=original;
     window.__b22RejectPostCount=0;
     window.fetch=async(...args)=>{
       const url=String(args[0]),method=args[1]?.method;
@@ -1019,6 +1020,10 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
     "Malformed success response must keep approval disabled too")
   assert.equal(await reviewer.eval("window.__b22RejectPostCount"),1,
     "Chrome must not issue a second Store decision")
+  // The injection is disposable: restore the genuine browser transport
+  // before subsequent unrelated platform decision scenarios execute.
+  await reviewer.eval("(()=>{window.fetch=window.__b22RejectOriginalFetch;"+
+    "delete window.__b22RejectOriginalFetch;return true})()")
   const [terminated]=await native.listSellers({id:seller.id})
   assert.equal(terminated.status,"terminated")
   assert.equal(terminated.status_reason,reason)
@@ -1066,6 +1071,14 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   assert.equal(JSON.stringify(notice.body).includes(reason),false,
     "A private alert must not copy arbitrary staff reason text")
   await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  // An uncertain successful write must be reconciled with a fresh
+  // authorized GET. Its terminated Seller must disappear from the
+  // pending-review UI; there must be no retry of the write.
+  await reviewer.click("#store-approval-refresh")
+  await reviewer.wait("!document.getElementById('store-approval-list').textContent.includes("+JSON.stringify(seller.id)+")")
+  assert.equal(await reviewer.eval("window.__b22RejectPostCount"),1,
+    "Readback must not issue another platform Store decision")
   process.stdout.write("PASS B22 Chrome/PG16: protected platform Staff reasoned pending Seller rejection during company pause, native terminated without approval, private Owner status and redacted notice, one audit/outbox, Owner/CSRF/short reason/replay denied\n")
 }
 
