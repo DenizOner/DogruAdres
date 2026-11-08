@@ -2243,7 +2243,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!actor)return null
     if(input.draft_id!==undefined&&
        (!/^dasdraft_[0-9a-f]{32}$/.test(input.draft_id)||
-        !Number.isSafeInteger(input.draft_version)||input.draft_version!<1))
+        typeof input.draft_version!=="number"||
+        !Number.isSafeInteger(input.draft_version)||input.draft_version<1))
       throw new IdentityAccessDenied()
     if(input.draft_id===undefined&&input.draft_version!==undefined)
       throw new IdentityAccessDenied()
