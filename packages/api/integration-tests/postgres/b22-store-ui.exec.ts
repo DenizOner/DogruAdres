@@ -975,7 +975,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
       "const session=await(await fetch('/personal/session')).json();"+
       "const r=await fetch('/personal/platform/stores',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':"+
-      "(invalid?'invalid':session.csrf_token)},body:JSON.stringify(body)});"+
+      "(invalid==='true'?'invalid':session.csrf_token)},body:JSON.stringify(body)});"+
       "return {status:r.status,body:await r.json()}}",
       JSON.stringify(body),invalidCsrf?"true":"false")
   const target={application_id:app,seller_id:seller.id}
@@ -1008,7 +1008,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
     where e.action='organization.store_application_rejected'
       and e.organization_id=$1 and e.target_id=$2`,[x.org,seller.id])
   assert.equal(audits.length,1)
-  assert.equal(audits[0].actor_person_id,x.ownerId,false) // real Staff, not Owner
+  assert.notEqual(audits[0].actor_person_id,x.ownerId,"Staff is not Organization Owner")
   assert.equal(audits[0].new_values.reason,reason)
   assert.equal(audits[0].new_values.status,"terminated")
   assert.ok(audits[0].outbox_id)
