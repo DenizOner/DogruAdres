@@ -1,10 +1,15 @@
 import {POST} from "../store-applications/route"
+import {POST as reviewStorePOST} from "../platform/stores/route"
 import {access,csrf,enabled,sessionToken} from "../security"
-import {createSellerAccountWorkflow} from "@mercurjs/core/workflows"
+import {createSellerAccountWorkflow,terminateSellerWorkflow,approveSellerWorkflow} from "@mercurjs/core/workflows"
 jest.mock("../security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
-jest.mock("@mercurjs/core/workflows",()=>({createSellerAccountWorkflow:jest.fn()}))
+jest.mock("@mercurjs/core/workflows",()=>({
+  createSellerAccountWorkflow:jest.fn(),
+  terminateSellerWorkflow:jest.fn(),
+  approveSellerWorkflow:jest.fn()
+}))
 describe("B22 protected Owner Store application gate",()=>{
   const data={organization_id:"daorg_a",application_id:"daapp_"+"a".repeat(32),
     name:"Owner Store",email:"owner@example.invalid",currency_code:"try"}
@@ -122,4 +127,97 @@ describe("B22 protected Owner Store application gate",()=>{
     expect(run).not.toHaveBeenCalled()
   })
 
+})
+
+/** Native Mercur remains the Seller lifecycle authority. These are targeted
+ * handler contracts; real HTTPS/native-PG16 proof is tracked separately.
+ */
+describe("B22 platform staff reasoned pending Store rejection",()=>{
+  const target={application_id:"daapp_"+"a".repeat(32),seller_id:"sel_pending_a"}
+  const reason="Synthetic policy rejection for this pending application"
+  let req:any,res:any,svc:any,native:any,terminateRun:any,approveRun:any
+  let seller:{id:string;status:string;approved_at:null|string;status_reason:null|string}
+  beforeEach(()=>{
+    jest.resetAllMocks()
+    seller={id:target.seller_id,status:"pending_approval",approved_at:null,status_reason:null}
+    svc={
+      personalReviewableStoreApplications:jest.fn().mockResolvedValue([{
+        ...target,organization_id:"daorg_a",organization_name:"Test Org",on_hold:true
+      }]),
+      personalWithStoreApprovalStaffLock:jest.fn(async(_t:string,_a:any,cb:(ctx:any)=>Promise<unknown>)=>cb({})),
+      personalRecordStoreApplicationRejection:jest.fn().mockResolvedValue({status:"rejected"})
+    }
+    native={listSellers:jest.fn(async()=>[{...seller}])}
+    terminateRun=jest.fn(async({input}:any)=>{
+      seller.status="terminated";seller.status_reason=input.reason
+    })
+    approveRun=jest.fn()
+    ;(terminateSellerWorkflow as unknown as jest.Mock).mockReturnValue({run:terminateRun})
+    ;(approveSellerWorkflow as unknown as jest.Mock).mockReturnValue({run:approveRun})
+    ;(access as jest.Mock).mockReturnValue(svc)
+    ;(enabled as jest.Mock).mockReturnValue(true)
+    ;(csrf as jest.Mock).mockResolvedValue(true)
+    ;(sessionToken as jest.Mock).mockReturnValue("opaque")
+    req={body:{...target,action:"reject",reason},headers:{},
+      scope:{resolve:jest.fn(()=>native)}}
+    res={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),json:jest.fn().mockReturnThis()}
+  })
+  it("rejects pending Seller with reason while application policy is paused",async()=>{
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({...target,status:"rejected"})
+    expect(svc.personalWithStoreApprovalStaffLock).toHaveBeenCalledWith(
+      "opaque",{...target,decision:"reject"},expect.any(Function))
+    expect(terminateRun).toHaveBeenCalledTimes(1)
+    expect(terminateRun).toHaveBeenCalledWith({input:{seller_id:target.seller_id,reason}})
+    expect(svc.personalRecordStoreApplicationRejection).toHaveBeenCalledWith(
+      "opaque",{...target,reason},expect.any(Object))
+    expect(approveRun).not.toHaveBeenCalled()
+  })
+  it("does not approve while a company has paused new Store applications",async()=>{
+    req.body={...target}
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(terminateRun).not.toHaveBeenCalled()
+    expect(approveRun).not.toHaveBeenCalled()
+  })
+  it("denies revoked staff, wrong target and current open Seller before native workflow",async()=>{
+    svc.personalReviewableStoreApplications.mockResolvedValueOnce(null)
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(terminateRun).not.toHaveBeenCalled()
+    res.status.mockClear()
+    svc.personalReviewableStoreApplications.mockResolvedValue([{
+      ...target,organization_id:"daorg_a",on_hold:true
+    }])
+    seller.status="open"
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(terminateRun).not.toHaveBeenCalled()
+  })
+  it("denies invalid CSRF and missing reason with zero writes",async()=>{
+    ;(csrf as jest.Mock).mockResolvedValueOnce(false)
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    res.status.mockClear()
+    req.body.reason="too short"
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(terminateRun).not.toHaveBeenCalled()
+    expect(svc.personalRecordStoreApplicationRejection).not.toHaveBeenCalled()
+  })
+  it("does not repeat native terminate after canonical Foundation failure",async()=>{
+    svc.personalRecordStoreApplicationRejection.mockRejectedValue(new Error("synthetic DB rollback"))
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(503)
+    expect(res.json).toHaveBeenCalledWith({
+      message:"Outcome uncertain; check approval status"
+    })
+    expect(terminateRun).toHaveBeenCalledTimes(1)
+    // A second direct request observes native TERMINATED before any workflow.
+    res.status.mockClear()
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(terminateRun).toHaveBeenCalledTimes(1)
+  })
 })

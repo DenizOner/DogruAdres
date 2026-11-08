@@ -30,9 +30,30 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   if(!parsed.success||req.headers["x-seller-id"]!==undefined)
     return res.status(400).json({message:"Invalid context"})
   try{
-    const applications=await access(req).personalStoreApplications(sessionToken(req),parsed.data.organization_id)
-    return applications?res.status(200).json(applications):
-      res.status(403).json({message:"Access denied"})
+    const result=await access(req).personalStoreApplications(sessionToken(req),parsed.data.organization_id)
+    if(!result)return res.status(403).json({message:"Access denied"})
+    // Official applications are visible only to the current protected Owner,
+    // never to a delegated draft Member. Native Seller is the ONLY status
+    // authority; a DoğruAdres created-application row is not approval.
+    const native=req.scope.resolve<{listSellers(filter:object):Promise<any[]>}>("seller")
+    const applications:Array<(typeof result.applications)[number]&{seller_status:string;rejection_reason:string|null}>=[]
+    for(const app of result.applications){
+      let seller_status="unknown",rejection_reason:null|string=null
+      if(app.status==="created"&&app.seller_id){
+        const sellers=await native.listSellers({id:app.seller_id})
+        if(sellers.length===1&&sellers[0].id===app.seller_id){
+          const value=sellers[0].status
+          if(["pending_approval","open","suspended","terminated"].includes(value))
+            seller_status=value
+          if(value==="terminated"&&typeof sellers[0].status_reason==="string"&&
+             sellers[0].status_reason.length>=10&&
+             sellers[0].status_reason.length<=500)
+            rejection_reason=sellers[0].status_reason
+        }
+      }
+      applications.push({...app,seller_status,rejection_reason})
+    }
+    return res.status(200).json({...result,applications})
   }catch{return res.status(503).json({message:"Unavailable"})}
 }
 export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{

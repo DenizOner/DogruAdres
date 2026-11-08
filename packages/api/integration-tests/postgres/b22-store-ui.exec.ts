@@ -926,6 +926,162 @@ async function verifyStoreDraftSubmissionNegativePaths(
     [uncertainDraft.draftId]))[0].n,0)
   process.stdout.write("PASS B22 Chrome/PG16: injected native Seller finalization interruption 503, durable creating/submitting, same/different retry409, no duplicate Seller, fault trigger removed\n")
 }
+
+/** Only disposable B22 CI fixtures: native Mercur Seller, existing Foundation
+ * Origin chain and real Chrome first-party Staff/Owner sessions. No production
+ * Seller or protected data is touched.
+ */
+async function verifyReasonedStoreRejectionDuringPause(x:{
+  reviewer:B06Chrome;browser:B06Chrome;native:any;
+  q:(sql:string,params?:any[])=>Promise<any[]>;
+  org:string;orgName:string;ownerId:string;ownerActor:string;
+  memberId:string;authIdentityId:string;rand:string
+}){
+  const {reviewer,browser,native,q}=x
+  const reason="B22 synthetic rejected pending Store: required details are incomplete"
+  const [seller]=await native.createSellers([{
+    name:"B22 reasoned rejection "+x.rand,
+    email:"b22-reject-"+x.rand+"@example.invalid",currency_code:"try"
+  }])
+  assert.ok(seller?.id)
+  assert.equal(seller.status,"pending_approval")
+  const app="daapp_"+randomBytes(16).toString("hex")
+  await q(`insert into da_store_application
+    (id,organization_id,person_id,member_actor_id,member_auth_identity_id,
+     request_fingerprint,status,seller_id)
+    values($1,$2,$3,$4,$5,repeat('a',64),'created',$6)`,
+    [app,x.org,x.ownerId,x.memberId,x.authIdentityId,seller.id])
+  const [origin]=await q(`insert into da_audit_event
+    (id,actor_person_id,actor_type,actor_id,organization_id,action,module,
+     resource,target_id,role_context,new_values,occurred_at)
+    values('daaud_'||gen_random_uuid()::text,$1,'user',$2,$3,
+      'organization.store_application_created','dogruadres-access',
+      'store-application',$4,'owner',
+      jsonb_build_object('application_id',$5::text,'status','pending_approval'),
+      clock_timestamp()) returning id`,
+    [x.ownerId,x.ownerActor,x.org,seller.id,app])
+  assert.ok(origin?.id)
+  await q(`insert into da_audit_outbox
+    (id,source_audit_event_id,source_module,envelope)
+    values('daaob_'||gen_random_uuid()::text,$1,'dogruadres-access','{}'::jsonb)`,
+    [origin.id])
+  await q(`insert into da_organization_seller_ownership
+    (id,organization_id,seller_id,verification_audit_event_id,verified_at)
+    values('daown_'||gen_random_uuid()::text,$1,$2,$3,clock_timestamp())`,
+    [x.org,seller.id,origin.id])
+
+  const direct=async(client:B06Chrome,body:object,invalidCsrf=false)=>
+    client.callFunction("async function(body,invalid){"+
+      "const session=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':"+
+      "(invalid==='true'?'invalid':session.csrf_token)},body:body});"+
+      "return {status:r.status,body:await r.json()}}",
+      JSON.stringify(body),invalidCsrf?"true":"false")
+  const target={application_id:app,seller_id:seller.id}
+  assert.equal((await direct(browser,{...target,action:"reject",reason})).status,403,
+    "Organization Owner cannot review or reject its own Store")
+  assert.equal((await direct(reviewer,{...target,action:"reject",reason:"short"})).status,400)
+  assert.equal((await direct(reviewer,{...target,action:"reject",reason},true)).status,403)
+  assert.equal((await native.listSellers({id:seller.id}))[0].status,"pending_approval")
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  await reviewer.click("#store-approval-refresh")
+  await reviewer.wait("document.querySelector('#store-approval-list p')?.textContent.includes("+JSON.stringify(seller.name)+")")
+  assert.equal(await reviewer.eval("document.querySelector('#store-approval-list p button')?.disabled"),true,
+    "Approval is paused even though reasoned rejection is permitted")
+  assert.equal(await reviewer.eval("document.querySelector('#store-approval-list p button[data-store-reject]')?.disabled"),false)
+  // Let the real POST complete, then corrupt only its browser-visible 200
+  // body. This proves the native decision persists while the UI refuses a
+  // blind second write. The disposable CI page is the only interception scope.
+  await reviewer.eval(`(()=>{
+    const original=window.fetch;
+    window.__b22RejectOriginalFetch=original;
+    window.__b22RejectPostCount=0;
+    window.fetch=async(...args)=>{
+      const url=String(args[0]),method=args[1]?.method;
+      if(url!=='/personal/platform/stores'||method!=='POST')
+        return original(...args);
+      window.__b22RejectPostCount++;
+      const response=await original(...args);
+      if(response.status!==200)return response;
+      return new Response('{broken JSON',{
+        status:200,headers:{'content-type':'application/json'}
+      });
+    };
+  })()`)
+  await reviewer.input("#store-approval-list p textarea",reason)
+  await reviewer.click("#store-approval-list p button[data-store-reject]")
+  await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Ret sonucu belirsiz')")
+  assert.equal(await reviewer.eval("window.__b22RejectPostCount"),1)
+  assert.equal(await reviewer.eval("document.querySelector('#store-approval-list p button[data-store-reject]').disabled"),true,
+    "Malformed success response must keep the rejection action disabled")
+  assert.equal(await reviewer.eval("document.querySelector('#store-approval-list p button').disabled"),true,
+    "Malformed success response must keep approval disabled too")
+  assert.equal(await reviewer.eval("window.__b22RejectPostCount"),1,
+    "Chrome must not issue a second Store decision")
+  // The injection is disposable: restore the genuine browser transport
+  // before subsequent unrelated platform decision scenarios execute.
+  await reviewer.eval("(()=>{window.fetch=window.__b22RejectOriginalFetch;"+
+    "delete window.__b22RejectOriginalFetch;return true})()")
+  const [terminated]=await native.listSellers({id:seller.id})
+  assert.equal(terminated.status,"terminated")
+  assert.equal(terminated.status_reason,reason)
+  assert.equal(terminated.approved_at,null)
+  assert.equal((await native.listSellers({id:seller.id}))[0].status,"terminated")
+  assert.equal((await direct(reviewer,{...target,action:"reject",reason})).status,409,
+    "A terminally rejected Seller cannot be rejected a second time")
+  assert.equal((await direct(reviewer,target)).status,409,
+    "The same rejected Seller cannot later be approved")
+  const audits=await q(`select e.actor_person_id,e.new_values,x.id as outbox_id
+    from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+    where e.action='organization.store_application_rejected'
+      and e.organization_id=$1 and e.target_id=$2`,[x.org,seller.id])
+  assert.equal(audits.length,1)
+  assert.notEqual(audits[0].actor_person_id,x.ownerId,"Staff is not Organization Owner")
+  assert.equal(audits[0].new_values.reason,reason)
+  assert.equal(audits[0].new_values.status,"terminated")
+  assert.ok(audits[0].outbox_id)
+  const [recipientCount]=await q(`select count(*)::int n from da_notification_receipt n
+    join da_audit_event e on e.id=n.audit_event_id
+    where e.action='organization.store_application_rejected'
+      and e.organization_id=$1 and e.target_id=$2`,[x.org,seller.id])
+  const [eligibleOwners]=await q(`select count(*)::int n from da_organization_membership m
+    join da_person p on p.id=m.person_id
+    where m.organization_id=$1 and m.role='owner' and m.protected_owner=true
+      and m.status='active' and m.deleted_at is null
+      and p.disabled_at is null and p.deleted_at is null`,[x.org])
+  assert.equal(recipientCount.n,eligibleOwners.n,
+    "One private receipt for each active protected Owner, none for other Members")
+  await browser.send("Page.bringToFront")
+  const owner=await browser.callFunction("async function(org){"+
+    "const r=await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org));"+
+    "return {status:r.status,body:await r.json()}}",x.org)
+  assert.equal(owner.status,200)
+  const match=owner.body.applications.find((a:any)=>a.id===app)
+  assert.ok(match)
+  assert.equal(match.seller_status,"terminated")
+  assert.equal(match.rejection_reason,reason)
+  const notice=await browser.callFunction("async function(org){"+
+    "const r=await fetch('/personal/notifications?organization='+encodeURIComponent(org));"+
+    "return {status:r.status,body:await r.json()}}",x.org)
+  assert.equal(notice.status,200)
+  assert.equal(notice.body.notifications.filter((n:any)=>
+    n.title==="Mağaza başvurusu reddedildi"&&n.context===x.orgName).length,1)
+  assert.equal(JSON.stringify(notice.body).includes(reason),false,
+    "A private alert must not copy arbitrary staff reason text")
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  // An uncertain successful write must be reconciled with a fresh
+  // authorized GET. Its terminated Seller must disappear from the
+  // pending-review UI; there must be no retry of the write.
+  await reviewer.click("#store-approval-refresh")
+  await reviewer.wait("!document.getElementById('store-approval-list').textContent.includes("+JSON.stringify(seller.id)+")")
+  assert.equal(await reviewer.eval("window.__b22RejectPostCount"),1,
+    "Readback must not issue another platform Store decision")
+  process.stdout.write("PASS B22 Chrome/PG16: protected platform Staff reasoned pending Seller rejection during company pause, native terminated without approval, private Owner status and redacted notice, one audit/outbox, Owner/CSRF/short reason/replay denied\n")
+}
+
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   const preparing=process.env.B22_UI_PREPARE==="true"
@@ -2056,6 +2212,11 @@ export default async function({container}:any){
       applicationId,ownerStoreId)
     assert.equal(blockedApproval,409)
     assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
+    await verifyReasonedStoreRejectionDuringPause({
+      reviewer,browser,native,q,org:organizations[0].id,
+      orgName:organizations[0].name,ownerId:A.person,ownerActor:A.actor,
+      memberId:member.id,authIdentityId:reg.authIdentity.id,rand
+    })
     assert.equal((await companyRight(false,true,"B22 stale policy switch")).status,409,
       "Stale switch must be rejected while company is already disabled")
     await reviewer.click("#platform-store-policy-read")
@@ -2142,8 +2303,15 @@ export default async function({container}:any){
       "body:JSON.stringify({id})});return r.status}",staleCompanyNotice.id),403,
       "Former Owner now ordinary Member cannot mark an old Owner-only notice read")
     assert.equal((await companyRight(true,false,"B22 stale policy switch")).status,409)
-    await reviewer.click("#store-approval-refresh")
-    await reviewer.wait("document.querySelector('#store-approval-list button')?.disabled===false")
+    // Changing this real Person's Owner membership invalidates the page's
+    // loaded organization scope. Its existing visibility/focus observer
+    // correctly conceals the old private workspace. Reopen with the live
+    // session and newly verified scope, never force hidden=false.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.send("Page.reload",{ignoreCache:true})
+    await reviewer.wait("document.visibilityState==='visible'&&!document.getElementById('workspace').hidden")
+    await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+    await reviewer.wait("document.querySelector('#store-approval-list button:not([data-store-reject])')?.disabled===false")
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.click("#store-applications-refresh")
@@ -2165,7 +2333,7 @@ export default async function({container}:any){
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
-    await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
+    await reviewer.wait("document.querySelectorAll('#store-approval-list button:not([data-store-reject])').length===1")
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
     // Real staff Chrome can approve a native pending Seller on page 2;
     // the remaining 30 fake Seller IDs confer no lifecycle or authority.
@@ -2174,7 +2342,7 @@ export default async function({container}:any){
     await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('sayfa 2') || document.getElementById('store-approval-status').textContent.includes('Bu sayfada')")
     assert.equal(await reviewer.eval("document.getElementById('store-approval-newer').hidden"),false)
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),false)
-    await reviewer.wait("document.querySelectorAll('#store-approval-list button').length===1")
+    await reviewer.wait("document.querySelectorAll('#store-approval-list button:not([data-store-reject])').length===1")
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(olderPending.name)})`),true)
     await reviewer.click("#store-approval-list button")
     await until(async()=>{
@@ -2210,7 +2378,7 @@ export default async function({container}:any){
     // asynchronous page switch completed before approval.
     const pageOneReviewVisible=`document.visibilityState==='visible' &&
       !document.getElementById('workspace').hidden &&
-      document.querySelectorAll('#store-approval-list button').length===1 &&
+      document.querySelectorAll('#store-approval-list button:not([data-store-reject])').length===1 &&
       document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`
     try{
       await until(async()=>await reviewer.eval(pageOneReviewVisible)===true,

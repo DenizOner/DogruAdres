@@ -19,6 +19,7 @@ const resources = {
   "organization.store_unfollowed": "buyer-store-follow",
   "organization.store_application_right_disabled": "organization",
   "organization.store_application_right_enabled": "organization",
+  "organization.store_application_rejected": "store-application",
   "organization.store_application_draft_saved": "store-application-draft",
   "organization.store_draft_permission_granted": "store-draft-permission",
   "organization.store_draft_permission_revoked": "store-draft-permission",
@@ -38,7 +39,7 @@ const schema = z.object({
     role_context: z.enum(["platform_administrator", "platform_staff", "owner", "admin", "member"]).nullable(),
   }).strict(),
   action: z.enum(Object.keys(resources) as [keyof typeof resources, ...(keyof typeof resources)[]]),
-  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow", "store-application-draft", "store-draft-permission"]),
+  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow", "store-application", "store-application-draft", "store-draft-permission"]),
   target_id: reference,
   occurred_at: timestamp,
 }).strict()
@@ -69,11 +70,18 @@ const schema = z.object({
     (value.actor.role_context === "platform_staff" &&
      /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      value.target_id === value.organization_id))
+  // A pending Seller rejection is a platform Staff decision, never an
+  // Organization Owner role or a native SellerMember implicit entitlement.
+  .refine(value => value.action !== "organization.store_application_rejected" ||
+    (value.actor.role_context === "platform_staff" &&
+     /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
   // Only explicitly registered canonical Staff actions may cross the Index
   // boundary. A valid Staff role alone does not authorize arbitrary events.
   .refine(value => value.actor.role_context !== "platform_staff" ||
     value.action === "organization.provisioned" ||
     value.action === "organization.owner_assigned" ||
+    value.action === "organization.store_application_rejected" ||
     isCompanyPolicyAction(value.action))
 
 export type AuditIndexEnvelopeV1 = z.infer<typeof schema>

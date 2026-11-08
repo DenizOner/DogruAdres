@@ -2366,11 +2366,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
    */
   @InjectTransactionManager()
   async personalWithStoreApprovalStaffLock<T>(
-    token:string,target:{application_id:string;seller_id:string},
+    token:string,target:{application_id:string;seller_id:string;decision?:"reject"},
     execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
   ):Promise<T|null>{
     if(!/^daapp_[0-9a-f]{32}$/.test(target.application_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
+       (target.decision!==undefined&&target.decision!=="reject")||
        typeof execute!=="function")throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
     const staff=await sessions.staff(token,"store.approve","platform")
@@ -2385,17 +2386,80 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(locked.length!==1||locked[0].id!==staff.grant_id)return null
     const fresh=await sessions.staff(token,"store.approve","platform")
     if(!fresh||fresh.grant_id!==staff.grant_id)return null
+    // Both platform decisions share ONE per-Seller lock across their entire
+    // native workflow and readback. Independent staff grants must not let an
+    // approve and reject race to two conflicting terminal states.
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-platform-store-decision'),hashtext(?))",
+      [target.seller_id])
     const candidate=await this.personalReviewableStoreApplications(token,target,context)
     if(!candidate||candidate.length!==1)return null
-    // The right is independent of Seller status. A disabled company may keep
-    // existing open Stores, but must not receive a new native approval.
-    const policy=await db.execute(`select store_application_enabled
-      from da_organization where id=? and status='active' and deleted_at is null
-      for share`,[candidate[0].organization_id])
-    if(policy.length!==1||policy[0].store_application_enabled!==true)return null
+    // An already submitted application may be REJECTED even while the
+    // company's new-application policy is paused. Only new native APPROVAL
+    // remains blocked. Neither choice changes existing open Stores.
+    if(target.decision!=="reject"){
+      const policy=await db.execute(`select store_application_enabled
+        from da_organization where id=? and status='active' and deleted_at is null
+        for share`,[candidate[0].organization_id])
+      if(policy.length!==1||policy[0].store_application_enabled!==true)return null
+    }
     const latest=await this.personalReviewableStoreApplications(token,target,context)
-    if(!latest||latest.length!==1||latest[0].on_hold)return null
+    if(!latest||latest.length!==1||
+       (target.decision!=="reject"&&latest[0].on_hold))return null
     return execute(context)
+  }
+
+  /** Auditable staff decision after Mercur has actually terminated a PENDING
+   * Seller; store the reason privately, never in the derived public index.
+   * Failure after the native step stays uncertain and is never auto-retried.
+   */
+  @InjectTransactionManager()
+  async personalRecordStoreApplicationRejection(token:string,target:{
+    application_id:string;seller_id:string;reason:string
+  },@MedusaContext() context:Context={}){
+    if(!/^daapp_[0-9a-f]{32}$/.test(target.application_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
+       typeof target.reason!=="string"||target.reason.trim()!==target.reason||
+       target.reason.length<10||target.reason.length>500)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
+    if(!staff)return null
+    const matching=await this.personalReviewableStoreApplications(token,target,context)
+    if(!matching||matching.length!==1)return null
+    const prior=await db.execute(`select id from da_audit_event
+      where organization_id=? and resource='store-application'
+        and action='organization.store_application_rejected'
+        and target_id=? and deleted_at is null limit 2`,
+      [matching[0].organization_id,target.seller_id])
+    if(prior.length)return {status:"conflict" as const}
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:staff.person_id,actor_type:staff.actor_type,
+      actor_id:staff.actor_id,role_context:"platform_staff",
+      organization_id:matching[0].organization_id,
+      action:"organization.store_application_rejected",
+      module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-application",target_id:target.seller_id,
+      new_values:{application_id:target.application_id,status:"terminated",
+        reason:target.reason,staff_grant_id:staff.grant_id},
+      occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    const manager=context.transactionManager
+    if(!manager||typeof manager!=="object"||!("flush" in manager)||
+       typeof manager.flush!=="function")
+      throw new Error("Foundation transaction unavailable")
+    await manager.flush()
+    // A private, redacted Owner notification: the precise free-text reason
+    // stays in native Seller and canonical audit, not the notification list.
+    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
+      select 'danot_'||gen_random_uuid()::text,m.person_id,?
+      from da_organization_membership m join da_person p on p.id=m.person_id
+      where m.organization_id=? and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.deleted_at is null
+        and p.disabled_at is null and p.deleted_at is null
+      on conflict(audit_event_id,person_id) do nothing`,
+      [audit.id,matching[0].organization_id])
+    return {status:"rejected" as const,organization_id:matching[0].organization_id}
   }
 
   @InjectTransactionManager()

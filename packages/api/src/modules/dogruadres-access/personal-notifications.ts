@@ -35,8 +35,13 @@ export class PersonalNotifications {
           and exists(select 1 from da_security_outbox x where x.audit_event_id=a.id))
         or
         (a.action in ('organization.store_application_right_enabled',
-                      'organization.store_application_right_disabled')
-          and a.resource='organization'
+                      'organization.store_application_right_disabled',
+                      'organization.store_application_rejected')
+          and ((a.action='organization.store_application_rejected'
+                and a.resource='store-application'
+                and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
+            or (a.action<>'organization.store_application_rejected'
+                and a.resource='organization' and a.target_id=a.organization_id))
           and (?='' or a.organization_id=?)
           and o.status='active' and o.deleted_at is null
           and exists(select 1 from da_organization_membership m
@@ -94,17 +99,20 @@ export class PersonalNotifications {
         const opened = n.action === 'organization.store_application_right_enabled'
         const draftGranted=n.action === 'organization.store_draft_permission_granted'
         const draftRevoked=n.action === 'organization.store_draft_permission_revoked'
+        const storeRejected=n.action === 'organization.store_application_rejected'
         return {
           id:n.id,created_at:n.created_at,read_at:n.read_at,
           title:locked?'Oturum kilitlendi':draftGranted?
             'Mağaza taslağı hazırlama izni verildi':draftRevoked?
-            'Mağaza taslağı hazırlama izni kaldırıldı':opened?
+            'Mağaza taslağı hazırlama izni kaldırıldı':storeRejected?
+            'Mağaza başvurusu reddedildi':opened?
             'Yeni mağaza başvuru hakkı açıldı':'Yeni mağaza başvuru hakkı durduruldu',
           context:locked?'Kişisel hesabınız':n.organization_name,
           description:locked?
             'Bir tarayıcı oturumunuz kilitlendi. Yeniden açmak için giriş yapabilirsiniz.':
             draftGranted?'Bu şirkette mağaza başvuru taslağı hazırlayıp düzenleyebilirsiniz; başvuru gönderemezsiniz.':
             draftRevoked?'Bu şirketin mağaza başvuru taslaklarına erişim izniniz kaldırıldı.':
+            storeRejected?'Şirketinizin bekleyen mağaza başvurusu platform tarafından reddedildi. Ayrıntıları yalnız yetkili şirket alanından inceleyebilirsiniz.':
             opened?
             'Şirketiniz yeniden yeni mağaza başvurusu gönderebilir. Bekleyen başvurular otomatik onaylanmaz.':
             'Şirketinizin yeni mağaza başvuruları durduruldu. Mevcut faal mağazalar etkilenmez.'
@@ -129,8 +137,13 @@ export class PersonalNotifications {
             and exists(select 1 from da_security_outbox x where x.audit_event_id=a.id))
           or
           (a.action in ('organization.store_application_right_enabled',
-                        'organization.store_application_right_disabled')
-            and a.resource='organization'
+                        'organization.store_application_right_disabled',
+                        'organization.store_application_rejected')
+            and ((a.action='organization.store_application_rejected'
+                  and a.resource='store-application'
+                  and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
+              or (a.action<>'organization.store_application_rejected'
+                  and a.resource='organization' and a.target_id=a.organization_id))
             and (?='' or a.organization_id=?)
             and o.status='active' and o.deleted_at is null
             and exists(select 1 from da_organization_membership m
