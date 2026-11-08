@@ -2283,6 +2283,115 @@ export default async function({container}:any){
       await browser.select(organizations[0].name,"owner")
     }
 
+    // P2 regression: 101 real synthetic active Members in one disposable
+    // Organization. Owner must page every Member without leaking other
+    // Organizations, granting Seller rights or bypassing live authorization.
+    const [largeMemberOrg]=await foundation.createOrganizations([{
+      name:"B22 Member pages "+rand,status:"active"
+    }])
+    const syntheticPeople=await foundation.createPeople(
+      Array.from({length:101},()=>({})))
+    assert.equal(syntheticPeople.length,101)
+    const largeMemberships=await foundation.createMemberships([
+      {organization_id:largeMemberOrg.id,person_id:A.person,role:"owner",
+       status:"active",protected_owner:true},
+      ...syntheticPeople.map(person=>({
+        organization_id:largeMemberOrg.id,person_id:person.id,
+        role:"member",status:"active",protected_owner:false
+      }))
+    ])
+    assert.equal(largeMemberships.length,102)
+    const orderedMembers=await q(`select id,person_id
+      from da_organization_membership where organization_id=$1
+        and role='member' and status='active' order by id`,[largeMemberOrg.id])
+    assert.equal(orderedMembers.length,101)
+    const lastMember=orderedMembers[100]
+    await browser.send("Page.bringToFront")
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+
+      JSON.stringify(largeMemberOrg.name+" — owner")+")")
+    await browser.select(largeMemberOrg.name,"owner")
+    const pages=await browser.callFunction(
+      "async function(org){let after='',out=[];for(let i=0;i<5;i++){"+
+      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
+      "const d=await r.json();out.push({status:r.status,count:d.members?.length,"+
+      "grantCount:d.grants?.length,more:d.has_more,cursor:!!d.next_cursor});"+
+      "if(!d.has_more)break;after=d.next_cursor;}return out}",largeMemberOrg.id)
+    assert.deepEqual(pages,[
+      {status:200,count:30,grantCount:0,more:true,cursor:true},
+      {status:200,count:30,grantCount:0,more:true,cursor:true},
+      {status:200,count:30,grantCount:0,more:true,cursor:true},
+      {status:200,count:11,grantCount:0,more:false,cursor:false}
+    ],"101 active Members must be fully reachable through four bounded pages")
+    assert.equal(await reviewer.callFunction(
+      "async function(org){return (await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org))).status}",largeMemberOrg.id),403,
+      "A different Person without this Organization may not list its Members")
+    assert.equal(await browser.callFunction(
+      "async function(org){return (await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org)+'&after=../foreign')).status}",largeMemberOrg.id),400,
+      "Forged pagination cursor must be rejected before a database read")
+    const pageSizes=[30,30,30,11]
+    for(let index=0;index<pageSizes.length;index++){
+      await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+        "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length==="+pageSizes[index])
+      const nav=await browser.eval(
+        "({next:!document.getElementById('store-draft-grants-older').hidden,"+
+        "prev:!document.getElementById('store-draft-grants-newer').hidden})")
+      assert.deepEqual(nav,{next:index<3,prev:index>0},
+        "Visible Owner pagination controls must reflect each real page")
+      if(index<3)await browser.click("#store-draft-grants-older")
+    }
+    const memberOnFinalPage=await browser.eval(
+      "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options)"+
+      ".some(o=>o.value==="+JSON.stringify(lastMember.id)+")")
+    assert.equal(memberOnFinalPage,true,"101st Member must be selectable in Owner UI")
+    await browser.eval(
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').value="+
+      JSON.stringify(lastMember.id))
+    await browser.click("#store-draft-grants-form button[value=grant]")
+    await until(async()=>(await q(`select count(*)::int n
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2 and membership_id=$3
+        and revoked_at is null`,
+      [largeMemberOrg.id,lastMember.person_id,lastMember.id]))[0].n===1,
+      19000,"101st Member's real Owner draft grant persisted")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+      "document.querySelector('#store-draft-grants-form button[value=revoke]').disabled===false")
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').value"),
+      lastMember.id,"Refresh must preserve the selected Member on page four")
+    await browser.click("#store-draft-grants-form button[value=revoke]")
+    await until(async()=>(await q(`select count(*)::int n
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2 and membership_id=$3
+        and revoked_at is not null`,
+      [largeMemberOrg.id,lastMember.person_id,lastMember.id]))[0].n===1,
+      19000,"101st Member's revocation persisted")
+    const largeAudits=await q(`select e.action,x.id as outbox_id
+      from da_audit_event e join da_audit_outbox x
+        on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.target_id=$2
+        and e.action in ('organization.store_draft_permission_granted',
+                         'organization.store_draft_permission_revoked')
+      order by e.action`,[largeMemberOrg.id,lastMember.person_id])
+    assert.deepEqual(largeAudits.map(e=>e.action),[
+      "organization.store_draft_permission_granted",
+      "organization.store_draft_permission_revoked"
+    ],"Owner grant and revoke from page four must each have canonical outbox")
+    assert.equal((await q(`select count(*)::int n
+      from da_store_application where organization_id=$1`,
+      [largeMemberOrg.id]))[0].n,0,
+      "Employee-list pagination must never create a native Seller")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+      "!document.getElementById('store-draft-grants-newer').hidden")
+    await browser.click("#store-draft-grants-newer")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===30")
+    await browser.select(organizations[0].name,"owner")
+    process.stdout.write("PASS B22 Chrome/PG16: 101 active Members navigate four protected Owner permission pages, last Member grant/revoke durable audit/outbox, foreign Person 403, forged cursor 400, zero Seller\\n")
+
     // Distinct disposable Organization: a grant from an ended membership
     // cannot revive when the same Person rejoins; the Owner must explicitly
     // authorize the NEW membership. Preserve both source audits and history.
