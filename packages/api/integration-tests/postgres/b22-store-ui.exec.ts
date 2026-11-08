@@ -2314,12 +2314,29 @@ export default async function({container}:any){
       "Membership exit must persist one personal revocation receipt")
     const exitNoticeId=exitNoticeRecords[0].id
     await reviewer.send("Page.bringToFront")
+    reviewer.phase="member-exit-personal-notice"
+    const personalSessionAfterExit=await reviewer.callFunction(
+      "async function(){return (await fetch('/personal/session')).status}")
+    assert.equal(personalSessionAfterExit,200,
+      "Organization membership revocation must not silently erase the Person sign-in")
     // Reload the real former Member on a stale Organization-specific URL.
     // Company authorization must still fail, but the personal bell must
     // return as an unscoped Person resource, not require the old membership.
     await reviewer.eval(`history.replaceState(null,'','/personal?organization='+encodeURIComponent(${JSON.stringify(rejoinOrg.id)}))`)
     await reviewer.send("Page.reload",{ignoreCache:true})
-    await reviewer.wait("location.pathname==='/personal' && location.search==='' && !document.getElementById('notification-bell').hidden")
+    try{
+      await reviewer.wait("location.pathname==='/personal' && location.search==='' && !document.getElementById('notification-bell').hidden")
+    }catch{
+      // Diagnostic is intentionally bounded to booleans and HTTP status codes:
+      // no Person, Organization identifiers, page text, tokens or credentials.
+      const safeState=await reviewer.eval("({queryPresent:!!location.search,documentHidden:document.hidden,loginHidden:document.getElementById('login').hidden,workspaceHidden:document.getElementById('workspace').hidden,bellHidden:document.getElementById('notification-bell').hidden})")
+      const safeHttp=reviewer.http.filter((h:any)=>
+        ['/personal','/personal/session','/personal/organizations',
+         '/personal/notifications','/personal/links'].includes(h.path))
+        .slice(-12).map((h:any)=>({path:h.path,status:h.status}))
+      throw Error("B22 member exit personal inbox UI not ready: "+
+        JSON.stringify({safeState,safeHttp}))
+    }
     await reviewer.click("#notification-bell")
     await reviewer.wait("document.getElementById('notification-list').textContent.includes('Mağaza taslağı hazırlama izni kaldırıldı')")
     const exitedInboxText=String(await reviewer.eval("document.getElementById('notification-list').textContent"))
