@@ -1911,6 +1911,12 @@ export default async function({container}:any){
     // restore this real reviewer tab before invoking its visible page button.
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
+    // Hidden-tab privacy can conceal the entire workspace. A normal reload
+    // must re-authorize the real Staff session; never force hidden=false.
+    if(await reviewer.eval("document.getElementById('workspace').hidden")){
+      await reviewer.send("Page.reload",{ignoreCache:true})
+      await reviewer.send("Page.bringToFront")
+    }
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
     // Privacy-preserving tab restoration may re-run the Staff list from page
     // zero. Do not click a newly hidden page-2 navigation control; use the
@@ -1955,7 +1961,22 @@ export default async function({container}:any){
       // document.hidden or workspace.hidden), then require the actual
       // authorized Store action to be visible before dispatching its click.
       await reviewer.send("Page.bringToFront")
-      await reviewer.wait("document.visibilityState==='visible' && !document.getElementById('workspace').hidden && !!document.querySelector('#store-approval-list button')?.getClientRects().length")
+      // A hidden tab clears its private workspace. Restore only through a
+      // real authenticated page reload, never by changing DOM hidden flags.
+      if(await reviewer.eval("document.getElementById('workspace').hidden")){
+        await reviewer.send("Page.reload",{ignoreCache:true})
+        await reviewer.send("Page.bringToFront")
+      }
+      try{
+        await reviewer.wait("document.visibilityState==='visible' && !document.getElementById('workspace').hidden && !!document.querySelector('#store-approval-list button')?.getClientRects().length")
+      }catch{
+        const state=await reviewer.eval("({documentHidden:document.hidden,workspaceHidden:document.getElementById('workspace').hidden,loginHidden:document.getElementById('login').hidden,panelHidden:document.getElementById('store-approval-panel').hidden,visibleButton:!!document.querySelector('#store-approval-list button')?.getClientRects().length})")
+        const http=reviewer.http.filter((h:any)=>
+          ['/personal','/personal/session','/personal/platform/stores'].includes(h.path))
+          .slice(-10).map((h:any)=>({path:h.path,status:h.status}))
+        throw Error("B22 Staff Store approval UI restore failed: "+
+          JSON.stringify({state,http}))
+      }
       await reviewer.click("#store-approval-list button")
       await until(async()=>{
         const [w]=await q("select count(*)::int n from pg_locks h join pg_locks w on w.locktype=h.locktype and w.database=h.database and w.classid=h.classid and w.objid=h.objid and w.objsubid=h.objsubid and w.pid<>h.pid and w.granted=false where h.locktype='advisory' and h.pid=$1 and h.granted=true",[holderPid])
