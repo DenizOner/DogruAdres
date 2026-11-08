@@ -12,6 +12,9 @@ describe("B22 protected Owner Store application gate",()=>{
   beforeEach(()=>{
     jest.resetAllMocks()
     svc={
+      personalPrepareStoreApplicationFromDraft:jest.fn().mockResolvedValue({
+        ...data,draft_id:"dasdraft_"+"b".repeat(32),draft_version:2
+      }),
       reserveStoreApplication:jest.fn().mockResolvedValue({status:"reserved"}),
       claimStoreApplication:jest.fn().mockResolvedValue({
         member_id:"mem_a",member_auth_identity_id:"auth_a"}),
@@ -68,4 +71,55 @@ describe("B22 protected Owner Store application gate",()=>{
     expect(res.json).toHaveBeenCalledWith({message:"Outcome uncertain; check application status"})
     expect(run).toHaveBeenCalledTimes(1)
   })
+  it("uses ONLY persisted draft fields for the native Seller, not browser-supplied values",async()=>{
+    const input={action:"submit_draft",organization_id:data.organization_id,
+      application_id:data.application_id,draft_id:"dasdraft_"+"b".repeat(32),
+      expected_version:2}
+    req.body={...input}
+    await POST(req,res)
+    expect(svc.personalPrepareStoreApplicationFromDraft).toHaveBeenCalledWith("opaque",input)
+    expect(svc.reserveStoreApplication).toHaveBeenCalledWith("opaque",{
+      ...data,draft_id:input.draft_id,draft_version:2
+    })
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(run).toHaveBeenCalledWith({input:{
+      auth_identity_id:"auth_a",member_id:"mem_a",
+      seller:{name:data.name,email:data.email,currency_code:"try"}
+    }})
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      application_id:data.application_id,draft_id:input.draft_id,
+      status:"pending_approval"
+    }))
+  })
+  it("rejects stale draft before reservation or native Seller workflow",async()=>{
+    req.body={action:"submit_draft",organization_id:data.organization_id,
+      application_id:data.application_id,draft_id:"dasdraft_"+"b".repeat(32),
+      expected_version:1}
+    svc.personalPrepareStoreApplicationFromDraft.mockResolvedValue({conflict:true})
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(svc.reserveStoreApplication).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
+  it("rejects non-Owner/expired MFA and foreign drafts without any native write",async()=>{
+    req.body={action:"submit_draft",organization_id:data.organization_id,
+      application_id:data.application_id,draft_id:"dasdraft_"+"b".repeat(32),
+      expected_version:2}
+    svc.personalPrepareStoreApplicationFromDraft.mockResolvedValue(null)
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(svc.reserveStoreApplication).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
+  it("stops a different reservation for the same submitted draft",async()=>{
+    req.body={action:"submit_draft",organization_id:data.organization_id,
+      application_id:data.application_id,draft_id:"dasdraft_"+"b".repeat(32),
+      expected_version:2}
+    svc.reserveStoreApplication.mockResolvedValue({status:"conflict"})
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(svc.claimStoreApplication).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
+
 })
