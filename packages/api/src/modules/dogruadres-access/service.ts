@@ -89,26 +89,18 @@ type AdvisoryLockManager = Readonly<{
   execute: (query: string, parameters: string[]) => Promise<unknown>
 }>
 
-// Only an intentionally conservative ASCII subset of historical accepted
-// invitation emails can distinguish employees. The identical literal grammar
-// is used for SQL identity comparisons and the Owner response. Do not apply
-// extra Zod/UI-only filtering: a contact hidden in the UI must never be
-// treated as a distinct identity by SQL. New invitations still use the native
-// Medusa/Zod email contract at their existing ingress boundary.
-// Dot-separated components are disjoint, avoiding nested ambiguous repetition
-// and catastrophic backtracking on adversarial legacy values.
+// Historical invitation contact may distinguish Members only if SQL
+// accepts it as a conservative ASCII address. The database computes the
+// single normalized value for BOTH Owner-visible contact and the cross-page
+// grant/revoke collision comparisons; never run a second JS validator over
+// the result. New invitations retain their native Medusa/Zod ingress check.
+// The C collation gives POSIX ASCII ranges stable meaning across locales.
 const acceptedInviteEmailPattern="^[A-Za-z0-9_+%-]+([.][A-Za-z0-9_+%-]+)*@[A-Za-z0-9]+([-][A-Za-z0-9]+)*([.][A-Za-z0-9]+([-][A-Za-z0-9]+)*)*[.][A-Za-z]{2,}$"
-const acceptedInviteEmailRegex=new RegExp(acceptedInviteEmailPattern)
-function usableInvitationContact(value:unknown):string|null {
-  if(typeof value!=="string")return null
-  const normalized=value.trim()
-  return normalized.length<=254&&acceptedInviteEmailRegex.test(normalized)?normalized:null
-}
 // Only literal, source-controlled SQL table aliases are accepted.
 function acceptedInviteSqlLabel(alias:"inv"|"oinv"):string {
   return `case when length(btrim(${alias}.recipient_email))<=254
-    and btrim(${alias}.recipient_email) ~ '${acceptedInviteEmailPattern}'
-    then lower(btrim(${alias}.recipient_email)) else '' end`
+    and btrim(${alias}.recipient_email) collate "C" ~ '${acceptedInviteEmailPattern}'
+    then lower(btrim(${alias}.recipient_email) collate "C") else '' end`
 }
 
 const activeStatus = "active"
@@ -1767,7 +1759,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Keyset pagination avoids an offset proportional to total company size.
     // Read one extra row for has_more, never refuse a larger organization.
     const rows=await db.execute(`select m.id as membership_id,m.person_id,
-        p.display_name as member_name,inv.recipient_email as invitation_email,
+        p.display_name as member_name,${acceptedInviteSqlLabel("inv")} as invitation_email,
         case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone else null end as mobile_phone,
         not exists (
           select 1 from da_organization_membership other
@@ -1859,7 +1851,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         m.member_name.trim().length<=160?m.member_name.trim():null,
       mobile_phone:typeof m.mobile_phone==="string"&&
         /^\+?[0-9]{6,20}$/.test(m.mobile_phone)?m.mobile_phone:null,
-      invitation_email:usableInvitationContact(m.invitation_email)
+      invitation_email:typeof m.invitation_email==="string"&&
+        m.invitation_email.length>0?m.invitation_email:null
     }))
     if(new Set(members.map(m=>m.membership_id)).size!==members.length||
        new Set(members.map(m=>m.person_id)).size!==members.length)
@@ -1946,7 +1939,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       // and a distinct visible label within this entire Organization are
       // required. The target Person row is already locked by the transaction.
       const readable=await db.execute(`select p.display_name,
-          p.mobile_phone,inv.recipient_email,
+          p.mobile_phone,${acceptedInviteSqlLabel("inv")} as recipient_email,
           exists(
             select 1 from da_organization_membership other
             join da_person op on op.id=other.person_id
@@ -1989,7 +1982,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       if(readable.length!==1||readable[0].ambiguous!==false||
          !(typeof readable[0].mobile_phone==="string"&&
            /^\+?[0-9]{6,20}$/.test(readable[0].mobile_phone))&&
-         !usableInvitationContact(readable[0].recipient_email))
+         !(typeof readable[0].recipient_email==="string"&&
+           readable[0].recipient_email.length>0))
         throw new IdentityAccessDenied()
       if(active.length){
         if(active[0].membership_id!==input.membership_id||
