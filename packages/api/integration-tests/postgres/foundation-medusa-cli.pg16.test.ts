@@ -271,6 +271,14 @@ async function run(){
           B06_EVIDENCE_DIR:join(process.env.RUNNER_TEMP??"/not-authorized",
             process.env.B22_ADMIN_SMTP==="true"?"b22-admin-smtp-evidence":"b22-ui-r1-evidence")
         }
+        // The runner only publishes fixed redacted proof lines, never
+        // arbitrary child output. Require these real negative acceptance
+        // results so a missing scenario cannot masquerade as a PASS.
+        const storeDraftNegativeMarkers=[
+          "PASS B22 Chrome/PG16: before-submit stale draft409/zero Seller; concurrent distinct application keys 201+409, one native pending Seller and one durable Origin/audit/outbox",
+          "PASS B22 Chrome/PG16: genuine Owner's expired strong proof and temporarily disabled company policy deny same draft with 403, zero native Seller and unchanged private draft",
+          "PASS B22 Chrome/PG16: injected native Seller finalization interruption 503, durable creating/submitting, same/different retry409, no duplicate Seller, fault trigger removed",
+        ] as const
         function invoke(file:string,env:NodeJS.ProcessEnv,direct=false){
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
             cwd:process.cwd(),env,encoding:"utf8",timeout:file.includes('b22-audit-worker.exec.ts')?360000:
@@ -288,7 +296,8 @@ async function run(){
               x==="PASS B22 Chrome/HTTP/PG16: staff starts in_review, applicant sees stage and withdraws; forged and replayed decisions denied, audit preserved" ||
               x==="PASS B22 Chrome/HTTP/PG16: changed signature triggers genuine re-scan; unchanged reuse; damaged PNG regenerated" ||
               x==="PASS B22 PG16: duplicate activity direct SQL 23514; original private draft unchanged" ||
-              x==="PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner").join("\n")
+              x==="PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner" ||
+              storeDraftNegativeMarkers.includes(x as (typeof storeDraftNegativeMarkers)[number])).join("\n")
           if(child.error||child.status!==0){
             // The long B22 child can legitimately fail at the still-blocked
             // tax-document approval. Do not bury *completed* earlier native
@@ -340,6 +349,9 @@ async function run(){
           assert.ok(result.includes("PASS B22 Chrome: native Admin SMTP same-origin MFA/grant GET200"))
           return
         }
+        for(const marker of storeDraftNegativeMarkers)
+          assert.ok(result.split("\n").includes(marker),
+            "Missing mandatory real Chrome/PG16 Store draft negative acceptance proof")
         assert.ok(result.includes("PASS B22 Chrome: primary Customer native MFA Person session and explicit Staff grant changed company policy through HTTPS, CSRF denied, two canonical Customer audit/outboxes and Owner-only notices; foreign audit denied, revoked task 403"),
           "Missing linked Customer Staff Chrome HTTPS and PG16 canonical audit proof")
         assert.ok(result.split("\n").includes(

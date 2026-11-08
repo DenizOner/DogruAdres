@@ -5,6 +5,7 @@ import {createSellerAccountWorkflow} from "@mercurjs/core/workflows"
 import {access,csrf,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 import {storeDraftPayload} from "../../../modules/dogruadres-access/store-application-draft"
+import type {StoreRequest} from "../../../modules/dogruadres-access/store-application"
 
 export const AUTHENTICATE=false
 const payload=z.object({
@@ -15,6 +16,13 @@ const payload=z.object({
   currency_code:z.string().regex(/^[a-z]{3}$/),
 }).strict()
 const query=z.object({organization_id:z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/)}).strict()
+const draftSubmission=z.object({
+  action:z.literal("submit_draft"),
+  organization_id:z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/),
+  draft_id:z.string().regex(/^dasdraft_[0-9a-f]{32}$/),
+  expected_version:z.number().int().min(1).max(2147483647),
+  application_id:z.string().regex(/^daapp_[0-9a-f]{32}$/)
+}).strict()
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Cache-Control","no-store")
   if(!enabled())return res.status(503).json({message:"Unavailable"})
@@ -49,19 +57,42 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
           "Outcome uncertain; read drafts"})
     }
   }
-  const parsed=payload.safeParse(req.body)
-  if(!parsed.success)return res.status(400).json({message:"Invalid application"})
   const token=sessionToken(req),svc=access(req)
+  let input:StoreRequest
+  if((req.body as {action?:unknown}|null)?.action==="submit_draft"){
+    const parsed=draftSubmission.safeParse(req.body)
+    if(!parsed.success)return res.status(400).json({message:"Invalid draft submission"})
+    try{
+      const prepared=await svc.personalPrepareStoreApplicationFromDraft(token,parsed.data)
+      if(!prepared)return res.status(403).json({message:"Recent MFA and Organization Owner required"})
+      if("conflict" in prepared)return res.status(409).json({message:"Draft changed; refresh before submitting"})
+      // Persisted draft values are revalidated before the irreversible native call.
+      const valid=payload.safeParse({
+        organization_id:prepared.organization_id,application_id:prepared.application_id,
+        name:prepared.name,email:prepared.email,currency_code:prepared.currency_code
+      })
+      if(!valid.success)return res.status(403).json({message:"Invalid stored draft"})
+      input=prepared
+    }catch(error){
+      return res.status(error instanceof IdentityAccessDenied?403:503)
+        .json({message:error instanceof IdentityAccessDenied?"Access denied":"Unavailable"})
+    }
+  }else{
+    const parsed=payload.safeParse(req.body)
+    if(!parsed.success)return res.status(400).json({message:"Invalid application"})
+    input=parsed.data
+  }
   try{
     // The first transaction reserves a unique ID, actor and exact payload.
     // A retry can NEVER create a second Seller. Unknown outcome stays locked
     // for operator reconciliation, never guessed from name/email matches.
-    const result=await svc.reserveStoreApplication(token,parsed.data)
+    const result=await svc.reserveStoreApplication(token,input)
     if(!result)return res.status(403).json({message:"Recent MFA and Organization Owner required"})
-    if(result.status==="created")return res.status(200).json({application_id:parsed.data.application_id,seller_id:result.seller_id,status:"pending_approval"})
+    if(result.status==="conflict")return res.status(409).json({message:"Draft was already submitted or changed"})
+    if(result.status==="created")return res.status(200).json({application_id:input.application_id,seller_id:result.seller_id,status:"pending_approval",...(input.draft_id?{draft_id:input.draft_id}:{})})
     if(result.status!=="reserved")
       return res.status(409).json({message:"Application processing; check status instead of retrying"})
-    const claimed=await svc.claimStoreApplication(token,parsed.data)
+    const claimed=await svc.claimStoreApplication(token,input)
     if(!claimed)return res.status(409).json({message:"Application processing"})
     const native=req.scope.resolve<{listMembers(filter:object):Promise<any[]>}>("seller")
     // A completed claim is intentionally COMMITTED before any native create.
@@ -69,7 +100,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     // Foundation completion. A concurrent revoke either wins before this
     // guard (no native create) or waits for both records to complete.
     const outcome=await svc.personalWithStoreApplicationOwnerLock(
-      token,parsed.data,async(context:Context)=>{
+      token,input,async(context:Context)=>{
         const members=await native.listMembers({id:claimed.member_id,is_active:true})
         if(members.length!==1||members[0].id!==claimed.member_id)
           throw new IdentityAccessDenied()
@@ -78,14 +109,14 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
             input:{
               auth_identity_id:claimed.member_auth_identity_id,
               member_id:claimed.member_id,
-              seller:{name:parsed.data.name,email:parsed.data.email,
-                currency_code:parsed.data.currency_code}
+              seller:{name:input.name,email:input.email,
+                currency_code:input.currency_code}
             }
           })
           if(!seller||!/^sel_[A-Za-z0-9_-]+$/.test(seller.id)||
              seller.status!=="pending_approval"||seller.approved_at)
             throw new Error("Native Seller outcome uncertain")
-          const completed=await svc.finishStoreApplication(token,parsed.data,seller.id,context)
+          const completed=await svc.finishStoreApplication(token,input,seller.id,context)
           if(!completed)throw new Error("Native Seller outcome uncertain")
           return {seller_id:seller.id as string}
         }catch{
@@ -96,7 +127,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
         }
       })
     if(!outcome)return res.status(403).json({message:"Access denied"})
-    return res.status(201).json({application_id:parsed.data.application_id,seller_id:outcome.seller_id,status:"pending_approval"})
+    return res.status(201).json({application_id:input.application_id,seller_id:outcome.seller_id,status:"pending_approval",...(input.draft_id?{draft_id:input.draft_id}:{})})
   }catch(e){
     if(e instanceof IdentityAccessDenied)return res.status(403).json({message:"Access denied"})
     // This may be a successful native write followed by a lost confirmation.

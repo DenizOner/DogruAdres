@@ -4,11 +4,15 @@ import {ActorDelegation} from "./actor-delegation"
 
 export type StoreRequest = Readonly<{
   organization_id:string; application_id:string; name:string;
-  email:string; currency_code:string
+  email:string; currency_code:string;
+  // Present only for Owner-approved submission of a persisted private draft.
+  // The existing direct Store application fingerprint is left unchanged.
+  draft_id?:string; draft_version?:number
 }>
 export const storeRequestFingerprint=(request:StoreRequest)=>
   createHash("sha256").update(JSON.stringify([
-    request.organization_id,request.name,request.email,request.currency_code
+    request.organization_id,request.name,request.email,request.currency_code,
+    ...(request.draft_id===undefined?[]:["submitted-draft-v1",request.draft_id,request.draft_version])
   ])).digest("hex")
 
 export async function eligibleOwner(db:SecuritySql,token:string,org:string){

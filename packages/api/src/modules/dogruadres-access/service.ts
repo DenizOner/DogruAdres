@@ -2174,6 +2174,39 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       store_application_version:updated[0].store_application_version as number}
   }
 
+  /** Resolve ONLY the persisted draft for Owner's fresh-MFA approval. The
+   * browser supplies its ID/version, never trusted Seller name/email values.
+   * Reservation rechecks this same snapshot under the draft row lock.
+   */
+  @InjectTransactionManager()
+  async personalPrepareStoreApplicationFromDraft(token:string,input:{
+    organization_id:string;draft_id:string;expected_version:number;application_id:string
+  },@MedusaContext() context:Context={}):Promise<StoreRequest|{conflict:true}|null>{
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^dasdraft_[0-9a-f]{32}$/.test(input.draft_id)||
+       !/^daapp_[0-9a-f]{32}$/.test(input.application_id)||
+       !Number.isSafeInteger(input.expected_version)||input.expected_version<1)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    if(!await eligibleOwner(db,token,input.organization_id))return null
+    const rows=await db.execute(`select name,email,currency_code,status,version,submitted_application_id
+      from da_store_application_draft where id=? and organization_id=? limit 2`,
+      [input.draft_id,input.organization_id])
+    if(rows.length!==1)return null
+    const draft=rows[0]
+    if(!Number.isSafeInteger(draft.version)||
+       typeof draft.name!=="string"||typeof draft.email!=="string"||
+       typeof draft.currency_code!=="string")throw new IdentityAccessDenied()
+    if(draft.version!==input.expected_version||
+       !(draft.status==="draft"&&draft.submitted_application_id===null||
+         ["submitting","submitted"].includes(draft.status)&&
+           draft.submitted_application_id===input.application_id))
+      return {conflict:true}
+    return {organization_id:input.organization_id,application_id:input.application_id,
+      name:draft.name,email:draft.email,currency_code:draft.currency_code,
+      draft_id:input.draft_id,draft_version:input.expected_version}
+  }
+
   /** B22 Owner membership revoke vs native Mercur Seller creation.
    * The canonical protected Owner membership is held FOR SHARE for the entire
    * native workflow and Foundation audit completion. The existing separately
@@ -2208,22 +2241,58 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   async reserveStoreApplication(token:string,input:StoreRequest,@MedusaContext() context:Context={}){
     const db=securitySql(context.transactionManager),actor=await eligibleOwner(db,token,input.organization_id)
     if(!actor)return null
+    if(input.draft_id!==undefined&&
+       (!/^dasdraft_[0-9a-f]{32}$/.test(input.draft_id)||
+        typeof input.draft_version!=="number"||
+        !Number.isSafeInteger(input.draft_version)||input.draft_version<1))
+      throw new IdentityAccessDenied()
+    if(input.draft_id===undefined&&input.draft_version!==undefined)
+      throw new IdentityAccessDenied()
     const fingerprint=storeRequestFingerprint(input)
     await db.execute(`select pg_advisory_xact_lock(hashtext('b22-store-application'),hashtext(?))`,
       [input.application_id])
+    // Different request IDs must not turn one private draft into two Sellers.
+    // Member saves also lock this row and require status='draft'.
+    let draft:null|{status:string;submitted_application_id:string|null}=null
+    if(input.draft_id!==undefined){
+      const rows=await db.execute(`select name,email,currency_code,version,status,submitted_application_id
+        from da_store_application_draft
+        where id=? and organization_id=? for update`,
+        [input.draft_id,input.organization_id])
+      if(rows.length!==1)return {status:"conflict" as const}
+      const d=rows[0]
+      if(d.name!==input.name||d.email!==input.email||
+         d.currency_code!==input.currency_code||d.version!==input.draft_version||
+         !(d.status==="draft"&&d.submitted_application_id===null||
+           ["submitting","submitted"].includes(d.status)&&
+             d.submitted_application_id===input.application_id))
+        return {status:"conflict" as const}
+      draft={status:d.status,submitted_application_id:d.submitted_application_id}
+    }
     const prior=await db.execute(`select * from da_store_application where id=? for update`,[input.application_id])
     if(prior.length>1)throw new IdentityAccessDenied()
     if(prior.length){
       const r=prior[0]
       if(r.organization_id!==input.organization_id||r.person_id!==actor.person_id||
-         r.member_actor_id!==actor.member_id||r.request_fingerprint!==fingerprint)
+         r.member_actor_id!==actor.member_id||r.request_fingerprint!==fingerprint||
+         (draft!==null&&(draft.status==="draft"||
+            draft.submitted_application_id!==input.application_id)))
         throw new IdentityAccessDenied()
       return {status:r.status as string,seller_id:r.seller_id as string|null}
     }
+    if(draft!==null&&draft.status!=="draft")return {status:"conflict" as const}
     await db.execute(`insert into da_store_application
       (id,organization_id,person_id,member_actor_id,member_auth_identity_id,request_fingerprint,status)
       values(?,?,?,?,?,?,'reserved')`,[input.application_id,input.organization_id,actor.person_id,
       actor.member_id,actor.member_auth_identity_id,fingerprint])
+    if(input.draft_id!==undefined){
+      const bound=await db.execute(`update da_store_application_draft
+        set status='submitting',submitted_application_id=?,updated_at=clock_timestamp()
+        where id=? and organization_id=? and status='draft' and version=?
+          and submitted_application_id is null returning id`,
+        [input.application_id,input.draft_id,input.organization_id,input.draft_version])
+      if(bound.length!==1)throw new IdentityAccessDenied()
+    }
     return {status:"reserved" as const,seller_id:null}
   }
 
@@ -2259,7 +2328,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       role_context:"owner",organization_id:input.organization_id,
       action:"organization.store_application_created",module:DOGRUADRES_AUDIT_MODULE,
       resource:"store-application",target_id:sellerId,
-      new_values:{application_id:input.application_id,status:"pending_approval"},
+      new_values:{application_id:input.application_id,status:"pending_approval",
+        ...(input.draft_id?{draft_id:input.draft_id,draft_version:input.draft_version}:{})},
       occurred_at:new Date()
     }],context)
     // The Medusa createAuditEvents/createAuditOutboxes calls stage ORM writes.
@@ -2274,6 +2344,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       status='created',updated_at=clock_timestamp()
       where id=? and status='creating' returning id`,[sellerId,input.application_id])
     if(finish.length!==1)throw new IdentityAccessDenied()
+    if(input.draft_id!==undefined){
+      const submitted=await db.execute(`update da_store_application_draft
+        set status='submitted',updated_at=clock_timestamp()
+        where id=? and organization_id=? and submitted_application_id=?
+          and version=? and status='submitting'
+        returning id`,[input.draft_id,input.organization_id,input.application_id,input.draft_version])
+      if(submitted.length!==1)throw new IdentityAccessDenied()
+    }
     return {seller_id:sellerId}
   }
 
