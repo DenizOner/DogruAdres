@@ -5168,7 +5168,7 @@ export default async function({container}:any){
     const gammaApplication={
       organization_id:sellerGamma.id,
       application_id:"daapp_"+randomBytes(16).toString("hex"),
-      name:"B22 Gamma independent Store "+rand,
+      name:"B22 Gamma Store "+rand,
       email:"b22-gamma-store-"+rand+"@example.invalid",currency_code:"try"
     }
     const gammaSubmitted=await submit(gammaApplication)
