@@ -165,6 +165,24 @@ describe("Audit Index version 1 validation and redaction", () => {
       expect(()=>projectFoundationAuditEvent({...sourceEvent,...change}))
         .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
+  it("redacts private Staff Store rejection reason and denies forged Owner roles",()=>{
+    const event={...source(),role_context:"platform_staff",
+      action:"organization.store_application_rejected",
+      resource:"store-application",target_id:"sel_pending_store",
+      new_values:{reason:"PRIVATE-REVIEW-MESSAGE",staff_grant_id:"PRIVATE-GRANT"},
+      previous_values:{name:"PRIVATE-NAME"}}
+    const envelope=projectFoundationAuditEvent(event)
+    expect(envelope.action).toBe("organization.store_application_rejected")
+    expect(envelope.actor.role_context).toBe("platform_staff")
+    expect(envelope.target_id).toBe("sel_pending_store")
+    expect(JSON.stringify(envelope)).not.toContain("PRIVATE-")
+    expect(validateAuditIndexEnvelope(envelope)).toEqual(envelope)
+    for(const change of [{role_context:"owner"},{role_context:"member"},
+      {resource:"membership"},{target_id:"not_a_seller"},
+      {organization_id:"foreign"}])
+      expect(()=>projectFoundationAuditEvent({...event,...change}))
+        .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+  })
   it.each(["root", "platform-staff", "platform_staff ", "superuser"])("still rejects unsupported role %s", role => {
     expect(() => projectFoundationAuditEvent({ ...source(), role_context: role })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
