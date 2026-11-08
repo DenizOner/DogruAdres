@@ -1328,6 +1328,16 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       // Revocation/role exit is a terminal authorization event, not a
       // temporary pause: a later invitation accepting the SAME membership ID
       // cannot resurrect an old Store draft permission.
+      // Older authorized migration-ledger scopes may run membership changes
+      // before this B22 optional draft-permission table is installed. No row
+      // means no draft grant can exist or authorize an action. Preserve the
+      // pre-existing membership route instead of throwing undefined_table.
+      const installed=await membershipDb.execute(`select
+        to_regclass('public.da_organization_store_draft_permission') is not null
+        as present`)
+      if(installed.length!==1||typeof installed[0].present!=="boolean")
+        throw new IdentityAccessDenied()
+      if(installed[0].present){
       const activeDraftGrant=await membershipDb.execute(`select id from da_organization_store_draft_permission
         where person_id=? and organization_id=? and membership_id=?
           and permission='store.application.draft.manage' and revoked_at is null
@@ -1360,6 +1370,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         await membershipDb.execute(`insert into da_notification_receipt
           (id,person_id,audit_event_id) values (?,?,?)`,
           ["danot_"+randomUUID(),target.person_id,grantAudit.id])
+      }
       }
     }
     return updated
