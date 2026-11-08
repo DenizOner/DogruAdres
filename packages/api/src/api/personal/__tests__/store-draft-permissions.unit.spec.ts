@@ -55,6 +55,26 @@ describe("B22 private Store draft Member grant route (unit, not Chrome/PG16)",()
     await POST(req,res)
     expect(res.status).toHaveBeenLastCalledWith(200)
   })
+  it("uses a validated opaque Member cursor only within the Owner list",async()=>{
+    await GET(req,res)
+    expect(svc.personalListStoreDraftPermissions).toHaveBeenLastCalledWith(
+      "opaque","daorg_a",null)
+    req.query.after="daomem_another"
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(svc.personalListStoreDraftPermissions).toHaveBeenLastCalledWith(
+      "opaque","daorg_a","daomem_another")
+    const calls=svc.personalListStoreDraftPermissions.mock.calls.length
+    for(const invalid of ["", "bad cursor", "../other", "a".repeat(129), "☺"]){
+      req.query.after=invalid
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(400)
+    }
+    expect(svc.personalListStoreDraftPermissions).toHaveBeenCalledTimes(calls)
+    req.query={organization_id:"daorg_a",after:"daomem_another",person_id:"daprs_other"}
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(400)
+  })
   it("both list and modify fail closed on missing Owner scope",async()=>{
     svc.personalListStoreDraftPermissions.mockResolvedValue(null)
     await GET(req,res)
