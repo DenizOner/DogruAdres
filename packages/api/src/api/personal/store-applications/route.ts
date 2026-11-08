@@ -36,7 +36,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     // never to a delegated draft Member. Native Seller is the ONLY status
     // authority; a DoğruAdres created-application row is not approval.
     const native=req.scope.resolve<{listSellers(filter:object):Promise<any[]>}>("seller")
-    const applications=[]
+    const applications:Array<(typeof result.applications)[number]&{seller_status:string;rejection_reason:string|null}>=[]
     for(const app of result.applications){
       let seller_status="unknown",rejection_reason:null|string=null
       if(app.status==="created"&&app.seller_id){
