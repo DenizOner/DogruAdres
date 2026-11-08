@@ -645,6 +645,101 @@ async function verifyNativeOrganizationReadPolicy({
   process.stdout.write("PASS B22 native organization.read role policy: protected Owner remains allowed with legacy setting; Admin/Member unchanged, foreign/role-only Owner denied, native ingress401\n")
 }
 
+/** Final-head real Chrome + native Medusa + isolated PG16 acceptance of the
+ * previously saved Member draft. A separate helper keeps the existing large
+ * B22 program inside TypeScript's per-function control-flow analysis limit.
+ */
+async function verifyOwnerSubmittedMemberDraft(
+  reviewer:B06Chrome,browser:B06Chrome,
+  organizations:{id:string;name:string}[],rand:string,
+  ownerPersonId:string,native:any,
+  q:(sql:string,params?:any[])=>Promise<any[]>
+):Promise<void>{
+      // An earlier Member prepared a durable Beta draft; their explicit draft
+      // permission was revoked. Only Beta's independently authenticated,
+      // protected Owner can now submit that SAME saved version. Reuse Mercur
+      // native Seller workflow; no second Seller mechanism or private payload.
+      const submittedDraftName="B22 delegate "+rand
+      const [ownerReviewedDraft]=await q(`select id,name,email,version,status
+        from da_store_application_draft where organization_id=$1 and name=$2`,
+        [organizations[1].id,submittedDraftName])
+      assert.ok(ownerReviewedDraft)
+      assert.equal(ownerReviewedDraft.status,"draft")
+      assert.equal(ownerReviewedDraft.version,1)
+      await reviewer.select(organizations[1].name,"owner")
+      await reviewer.wait("Array.from(document.querySelectorAll('#store-application-list p')).some("+
+        "p=>p.textContent.includes("+JSON.stringify(submittedDraftName)+") && "+
+        "Array.from(p.querySelectorAll('button')).some(b=>b.textContent==='Bu taslağı resmî başvuruya gönder'))")
+      const unauthorizedDraftSubmit=await browser.callFunction(
+        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({action:'submit_draft',organization_id:org,draft_id:id,"+
+        "expected_version:1,application_id:'daapp_'+'b'.repeat(32)})});return r.status}",
+        organizations[1].id,ownerReviewedDraft.id)
+      assert.equal(unauthorizedDraftSubmit,403,
+        "Revoked Member cannot convert a retained company draft into Seller")
+      const deniedSubmitCsrf=await reviewer.callFunction(
+        "async function(org,id){const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':'invalid'},"+
+        "body:JSON.stringify({action:'submit_draft',organization_id:org,draft_id:id,"+
+        "expected_version:1,application_id:'daapp_'+'c'.repeat(32)})});return r.status}",
+        organizations[1].id,ownerReviewedDraft.id)
+      assert.equal(deniedSubmitCsrf,403,"Owner draft submission requires first-party CSRF")
+      await reviewer.click("#store-application-list p button:nth-of-type(2)")
+      await reviewer.wait("document.getElementById('store-application-status').textContent.includes('Taslak başvuruya gönderildi')")
+      const [sentDraft]=await q(`select status,version,name,email,submitted_application_id
+        from da_store_application_draft where id=$1`,[ownerReviewedDraft.id])
+      assert.equal(sentDraft.status,"submitted")
+      assert.equal(sentDraft.version,1)
+      assert.equal(sentDraft.name,submittedDraftName)
+      assert.equal(sentDraft.email,ownerReviewedDraft.email)
+      assert.match(sentDraft.submitted_application_id,/^daapp_[0-9a-f]{32}$/)
+      const [submittedApplication]=await q(`select id,status,seller_id,person_id
+        from da_store_application where id=$1`,[sentDraft.submitted_application_id])
+      assert.equal(submittedApplication.id,sentDraft.submitted_application_id)
+      assert.equal(submittedApplication.status,"created")
+      assert.equal(submittedApplication.person_id,ownerPersonId)
+      assert.match(submittedApplication.seller_id,/^sel_[A-Za-z0-9_-]+$/)
+      const [sellerFromDraft]=await native.listSellers({id:submittedApplication.seller_id})
+      assert.equal(sellerFromDraft.name,ownerReviewedDraft.name)
+      assert.equal(sellerFromDraft.status,"pending_approval")
+      assert.equal(sellerFromDraft.approved_at,null)
+      const submittedAudit=await q(`select e.actor_person_id,e.new_values,x.id as outbox_id
+        from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.action='organization.store_application_created'
+          and e.organization_id=$1 and e.target_id=$2`,
+        [organizations[1].id,submittedApplication.seller_id])
+      assert.equal(submittedAudit.length,1)
+      assert.equal(submittedAudit[0].actor_person_id,ownerPersonId)
+      assert.equal(submittedAudit[0].new_values.draft_id,ownerReviewedDraft.id)
+      assert.equal(submittedAudit[0].new_values.draft_version,1)
+      const ownerDraftPost=async(id:string,version:number)=>
+        reviewer.callFunction("async function(org,draft,app,ver){"+
+          "const s=await(await fetch('/personal/session')).json();"+
+          "const r=await fetch('/personal/store-applications',{method:'POST',"+
+          "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+          "body:JSON.stringify({action:'submit_draft',organization_id:org,draft_id:draft,"+
+          "expected_version:Number(ver),application_id:app})});"+
+          "return {status:r.status,body:await r.json()}}",
+          organizations[1].id,ownerReviewedDraft.id,id,String(version))
+      const repeatDraft=await ownerDraftPost(submittedApplication.id,1)
+      assert.equal(repeatDraft.status,200)
+      assert.equal(repeatDraft.body.seller_id,submittedApplication.seller_id)
+      assert.equal((await ownerDraftPost("daapp_"+randomBytes(16).toString("hex"),1)).status,409,
+        "A different request ID cannot create a second Seller from one draft")
+      assert.equal((await ownerDraftPost(submittedApplication.id,2)).status,409,
+        "Stale draft version may not reuse a successful submission")
+      assert.equal((await q(`select count(*)::int n from da_store_application
+        where organization_id=$1`,[organizations[1].id]))[0].n,1)
+      assert.equal((await q(`select count(*)::int n from da_organization_seller_ownership
+        where organization_id=$1 and seller_id=$2 and revoked_at is null`,
+        [organizations[1].id,submittedApplication.seller_id]))[0].n,1)
+      process.stdout.write("PASS B22 Chrome: revoked Member's preserved Store draft submitted once by fresh-MFA protected Owner through native Mercur; duplicate/stale/CSRF/Member denied, PG16 draft/app/ownership/audit/outbox persisted, Seller pending only\n")
+      await reviewer.select(organizations[0].name,"member")
+
+ }
+ 
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   const preparing=process.env.B22_UI_PREPARE==="true"
@@ -6949,88 +7044,7 @@ export default async function({container}:any){
       assert.equal(bMemberBindings.length,1)
       assert.equal(bMemberBindings[0].actor_id,bNativeMember.id)
 
-      // An earlier Member prepared a durable Beta draft; their explicit draft
-      // permission was revoked. Only Beta's independently authenticated,
-      // protected Owner can now submit that SAME saved version. Reuse Mercur
-      // native Seller workflow; no second Seller mechanism or private payload.
-      const submittedDraftName="B22 delegate "+rand
-      const [ownerReviewedDraft]=await q(`select id,name,email,version,status
-        from da_store_application_draft where organization_id=$1 and name=$2`,
-        [organizations[1].id,submittedDraftName])
-      assert.ok(ownerReviewedDraft)
-      assert.equal(ownerReviewedDraft.status,"draft")
-      assert.equal(ownerReviewedDraft.version,1)
-      await reviewer.select(organizations[1].name,"owner")
-      await reviewer.wait("Array.from(document.querySelectorAll('#store-application-list p')).some("+
-        "p=>p.textContent.includes("+JSON.stringify(submittedDraftName)+") && "+
-        "Array.from(p.querySelectorAll('button')).some(b=>b.textContent==='Bu taslağı resmî başvuruya gönder'))")
-      const unauthorizedDraftSubmit=await browser.callFunction(
-        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-applications',{method:'POST',"+
-        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-        "body:JSON.stringify({action:'submit_draft',organization_id:org,draft_id:id,"+
-        "expected_version:1,application_id:'daapp_'+'b'.repeat(32)})});return r.status}",
-        organizations[1].id,ownerReviewedDraft.id)
-      assert.equal(unauthorizedDraftSubmit,403,
-        "Revoked Member cannot convert a retained company draft into Seller")
-      const deniedSubmitCsrf=await reviewer.callFunction(
-        "async function(org,id){const r=await fetch('/personal/store-applications',{method:'POST',"+
-        "headers:{'content-type':'application/json','x-csrf-token':'invalid'},"+
-        "body:JSON.stringify({action:'submit_draft',organization_id:org,draft_id:id,"+
-        "expected_version:1,application_id:'daapp_'+'c'.repeat(32)})});return r.status}",
-        organizations[1].id,ownerReviewedDraft.id)
-      assert.equal(deniedSubmitCsrf,403,"Owner draft submission requires first-party CSRF")
-      await reviewer.click("#store-application-list p button:nth-of-type(2)")
-      await reviewer.wait("document.getElementById('store-application-status').textContent.includes('Taslak başvuruya gönderildi')")
-      const [sentDraft]=await q(`select status,version,name,email,submitted_application_id
-        from da_store_application_draft where id=$1`,[ownerReviewedDraft.id])
-      assert.equal(sentDraft.status,"submitted")
-      assert.equal(sentDraft.version,1)
-      assert.equal(sentDraft.name,submittedDraftName)
-      assert.equal(sentDraft.email,ownerReviewedDraft.email)
-      assert.match(sentDraft.submitted_application_id,/^daapp_[0-9a-f]{32}$/)
-      const [submittedApplication]=await q(`select id,status,seller_id,person_id
-        from da_store_application where id=$1`,[sentDraft.submitted_application_id])
-      assert.equal(submittedApplication.id,sentDraft.submitted_application_id)
-      assert.equal(submittedApplication.status,"created")
-      assert.equal(submittedApplication.person_id,B.person)
-      assert.match(submittedApplication.seller_id,/^sel_[A-Za-z0-9_-]+$/)
-      const [sellerFromDraft]=await native.listSellers({id:submittedApplication.seller_id})
-      assert.equal(sellerFromDraft.name,ownerReviewedDraft.name)
-      assert.equal(sellerFromDraft.status,"pending_approval")
-      assert.equal(sellerFromDraft.approved_at,null)
-      const submittedAudit=await q(`select e.actor_person_id,e.new_values,x.id as outbox_id
-        from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
-        where e.action='organization.store_application_created'
-          and e.organization_id=$1 and e.target_id=$2`,
-        [organizations[1].id,submittedApplication.seller_id])
-      assert.equal(submittedAudit.length,1)
-      assert.equal(submittedAudit[0].actor_person_id,B.person)
-      assert.equal(submittedAudit[0].new_values.draft_id,ownerReviewedDraft.id)
-      assert.equal(submittedAudit[0].new_values.draft_version,1)
-      const ownerDraftPost=async(id:string,version:number)=>
-        reviewer.callFunction("async function(org,draft,app,ver){"+
-          "const s=await(await fetch('/personal/session')).json();"+
-          "const r=await fetch('/personal/store-applications',{method:'POST',"+
-          "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-          "body:JSON.stringify({action:'submit_draft',organization_id:org,draft_id:draft,"+
-          "expected_version:ver,application_id:app})});"+
-          "return {status:r.status,body:await r.json()}}",
-          organizations[1].id,ownerReviewedDraft.id,id,version)
-      const repeatDraft=await ownerDraftPost(submittedApplication.id,1)
-      assert.equal(repeatDraft.status,200)
-      assert.equal(repeatDraft.body.seller_id,submittedApplication.seller_id)
-      assert.equal((await ownerDraftPost("daapp_"+randomBytes(16).toString("hex"),1)).status,409,
-        "A different request ID cannot create a second Seller from one draft")
-      assert.equal((await ownerDraftPost(submittedApplication.id,2)).status,409,
-        "Stale draft version may not reuse a successful submission")
-      assert.equal((await q(`select count(*)::int n from da_store_application
-        where organization_id=$1`,[organizations[1].id]))[0].n,1)
-      assert.equal((await q(`select count(*)::int n from da_organization_seller_ownership
-        where organization_id=$1 and seller_id=$2 and revoked_at is null`,
-        [organizations[1].id,submittedApplication.seller_id]))[0].n,1)
-      process.stdout.write("PASS B22 Chrome: revoked Member's preserved Store draft submitted once by fresh-MFA protected Owner through native Mercur; duplicate/stale/CSRF/Member denied, PG16 draft/app/ownership/audit/outbox persisted, Seller pending only\n")
-      await reviewer.select(organizations[0].name,"member")
+      await verifyOwnerSubmittedMemberDraft(reviewer,browser,organizations,rand,B.person,native,q)
 
       const withoutStore=await memberDraftStores()
       assert.deepEqual(withoutStore,{status:200,stores:[]},
