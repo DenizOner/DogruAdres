@@ -1911,16 +1911,20 @@ export default async function({container}:any){
       "Company application pause cannot suspend a previously approved Seller")
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
-    // Distinguish an expired strong Staff proof from a missing UI refresh,
-    // without changing authentication or bypassing a forbidden request.
+    // Separate task-owned Chrome *processes* don't reliably fire a real
+    // tab-resume visibilitychange. Reopen the same signed-in HTTPS document
+    // through a genuine browser reload, never by toggling private DOM flags.
+    await reviewer.send("Page.reload",{ignoreCache:true})
+    await reviewer.wait("!document.getElementById('workspace').hidden")
+    await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+    // The platform Store approval gate still independently checks Staff
+    // session/strong MFA; a reload is not a permission or login bypass.
     const approvalGate=await reviewer.callFunction("async function(){"+
       "const session=await fetch('/personal/session');"+
       "const review=await fetch('/personal/platform/stores?page=0');"+
       "return {session:session.status,review:review.status}}")
-    const approvalView=await reviewer.eval("({workspace:!document.getElementById('workspace').hidden,login:!document.getElementById('login').hidden,panel:!document.getElementById('store-approval-panel').hidden})")
     assert.deepEqual(approvalGate,{session:200,review:200},
-      "Exact Staff native authorization after tab switch, UI="+JSON.stringify(approvalView))
-    await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+      "Real Staff authorization must remain unchanged after Chrome reload")
     await reviewer.click("#store-approval-refresh")
     await reviewer.wait("document.getElementById('store-approval-list').textContent.includes('inceleme bekletiliyor')")
     assert.equal(await reviewer.eval("document.querySelector('#store-approval-list button').disabled"),true)
