@@ -1911,7 +1911,14 @@ export default async function({container}:any){
     // restore this real reviewer tab before invoking its visible page button.
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
-    await reviewer.click("#store-approval-newer")
+    await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+    // Privacy-preserving tab restoration may re-run the Staff list from page
+    // zero. Do not click a newly hidden page-2 navigation control; use the
+    // actual visible refresh action when the browser already reset to page 0.
+    if(await reviewer.eval("document.getElementById('store-approval-newer').hidden"))
+      await reviewer.click("#store-approval-refresh")
+    else
+      await reviewer.click("#store-approval-newer")
     // Both pages expose one button: only page-1 Store identity proves the
     // asynchronous page switch completed before approval.
     await reviewer.wait(`document.querySelectorAll('#store-approval-list button').length===1 && document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`)
