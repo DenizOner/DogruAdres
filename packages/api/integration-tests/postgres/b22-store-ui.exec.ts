@@ -2303,8 +2303,15 @@ export default async function({container}:any){
       "body:JSON.stringify({id})});return r.status}",staleCompanyNotice.id),403,
       "Former Owner now ordinary Member cannot mark an old Owner-only notice read")
     assert.equal((await companyRight(true,false,"B22 stale policy switch")).status,409)
-    await reviewer.click("#store-approval-refresh")
-    await reviewer.wait("document.querySelector('#store-approval-list button')?.disabled===false")
+    // Changing this real Person's Owner membership invalidates the page's
+    // loaded organization scope. Its existing visibility/focus observer
+    // correctly conceals the old private workspace. Reopen with the live
+    // session and newly verified scope, never force hidden=false.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.send("Page.reload",{ignoreCache:true})
+    await reviewer.wait("document.visibilityState==='visible'&&!document.getElementById('workspace').hidden")
+    await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+    await reviewer.wait("document.querySelector('#store-approval-list button:not([data-store-reject])')?.disabled===false")
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.click("#store-applications-refresh")
