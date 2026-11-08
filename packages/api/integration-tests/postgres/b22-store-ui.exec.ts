@@ -2488,6 +2488,21 @@ export default async function({container}:any){
       largeMemberOrg.id,legacyNoContact.id)
     assert.equal(missingContactPost,403,
       "Forged direct Owner POST must deny otherwise unique name with no contact")
+    // Also reject a forged grant with a *valid-looking* but identical mobile
+    // for two same-name Members. This proves the server's collision check is
+    // independent of the missing-contact check and of the disabled UI.
+    await q("update da_person set mobile_phone=$1 where id=any($2::text[])",
+      ["+905550001777",nameTwins.map(m=>m.person_id)])
+    const ambiguousContactPost=await browser.callFunction(
+      "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",
+      largeMemberOrg.id,nameTwins[0].id)
+    assert.equal(ambiguousContactPost,403,
+      "Owner direct grant must reject two visible identical name+mobile recipients")
+    await q("update da_person set mobile_phone=null where id=any($1::text[])",
+      [nameTwins.map(m=>m.person_id)])
     assert.equal((await q(`select count(*)::int n from da_organization_store_draft_permission
       where organization_id=$1 and person_id=$2`,
       [largeMemberOrg.id,legacyNoContact.person_id]))[0].n,0)
