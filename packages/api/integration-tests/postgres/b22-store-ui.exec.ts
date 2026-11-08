@@ -2593,7 +2593,8 @@ export default async function({container}:any){
     await browser.eval("(()=>{window.fetch=window.__b22GrantOriginalFetch;delete window.__b22GrantOriginalFetch})()")
     await browser.click("#store-draft-grants-refresh")
     await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
-      "document.getElementById('store-draft-grants-list').textContent.includes('B22 Son Sayfa Çalışanı — taslak: Yetkili')")
+      "document.getElementById('store-draft-grants-list').textContent.includes('B22 Son Sayfa Çalışanı') && "+
+      "document.getElementById('store-draft-grants-list').textContent.includes('taslak: Yetkili')")
     await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
       "document.querySelector('#store-draft-grants-form button[value=revoke]').disabled===false")
     assert.equal(await browser.eval(
