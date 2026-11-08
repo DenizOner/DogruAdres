@@ -2278,10 +2278,15 @@ export default async function({container}:any){
       assert.equal(memberNotices.status,200)
       assert.ok(memberNotices.body.notifications.some((n:any)=>
         n.title==='Mağaza taslağı hazırlama izni verildi'))
-      // P2: an existing valid grant must remain revocable when a second
-      // Member later receives the same name with no accepted invitation.
+      // P2: preserve a genuinely indistinguishable employee, not just the
+      // same name: copy the original synthetic Member's visible contact too.
+      // With different phones the Owner must instead be able to pick one.
+      const [originalContact]=await q(
+        "select mobile_phone from da_person where id=$1",[A.person])
       const [lateTwin]=await foundation.createPeople([{
-        display_name:"B22 Yetkili Test Çalışanı"
+        display_name:"B22 Yetkili Test Çalışanı",
+        ...(typeof originalContact?.mobile_phone==="string"?
+          {mobile_phone:originalContact.mobile_phone}:{})
       }])
       const [lateTwinMembership]=await foundation.createMemberships([{
         organization_id:betaScope,person_id:lateTwin.id,
