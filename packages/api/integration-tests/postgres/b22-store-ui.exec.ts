@@ -1034,7 +1034,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   assert.equal(JSON.stringify(notice.body).includes(reason),false,
     "A private alert must not copy arbitrary staff reason text")
   await reviewer.send("Page.bringToFront")
-  process.stdout.write("PASS B22 Chrome/PG16: protected platform Staff reasoned pending Seller rejection during company pause, native terminated without approval, private Owner status and redacted notice, one audit/outbox, Owner/CSRF/short reason/replay denied\\n")
+  process.stdout.write("PASS B22 Chrome/PG16: protected platform Staff reasoned pending Seller rejection during company pause, native terminated without approval, private Owner status and redacted notice, one audit/outbox, Owner/CSRF/short reason/replay denied\n")
 }
 
 export default async function({container}:any){
