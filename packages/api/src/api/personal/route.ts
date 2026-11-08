@@ -1754,6 +1754,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   let storeDraftPermissionRequest=0,storeDraftCursor='',storeDraftNextCursor=null;
   const storeDraftCursorHistory=[];
   let storeDraftGrantable=new Set(),storeDraftRevocable=new Set();
+  const storeDraftMobileVersions=new Map();
   let storeDraftPermissionsVerified=false,storeDraftWritePending=false,storeDraftWriteUncertain=false;
   function updateStoreDraftActionButtons(){
     const form=el('store-draft-grants-form');
@@ -1769,7 +1770,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   function clearStoreDraftPermissions(){
     storeDraftPermissionRequest++;
-    storeDraftGrantable.clear();storeDraftRevocable.clear();
+    storeDraftGrantable.clear();storeDraftRevocable.clear();storeDraftMobileVersions.clear();
     storeDraftPermissionsVerified=false;storeDraftWritePending=false;
     storeDraftWriteUncertain=false;
     storeDraftCursor='';storeDraftNextCursor=null;storeDraftCursorHistory.length=0;
@@ -1811,6 +1812,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          (data.has_more&&data.next_cursor!==data.members.at(-1)?.membership_id)||
          data.members.some(m=>typeof m.label_unique_in_organization!=='boolean'||
            typeof m.other_active_grant_same_label!=='boolean'||
+           !Number.isSafeInteger(m.mobile_version)||m.mobile_version<0||
+           m.mobile_version>2147483646||
            !(m.mobile_phone===null||
              (typeof m.mobile_phone==='string'&&/^[+]?[0-9]{6,20}$/.test(m.mobile_phone)))||
            !(m.member_name===null||
@@ -1835,7 +1838,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         throw new Error('İzin bilgileri doğrulanamadı');
       const select=form.elements.namedItem('membership_id'),previous=select.value;
       select.replaceChildren();list.replaceChildren();
-      storeDraftGrantable.clear();storeDraftRevocable.clear();
+      storeDraftGrantable.clear();storeDraftRevocable.clear();storeDraftMobileVersions.clear();
       // Display only authorized, human-readable Organization identities.
       // Ambiguous or absent labels must never cause a misdirected grant.
       const labelFor=m=>[m.member_name,m.invitation_email,
@@ -1845,6 +1848,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const label=labelFor(m);if(label)labelCounts.set(label,(labelCounts.get(label)||0)+1);
       }
       for(const m of data.members){
+        storeDraftMobileVersions.set(m.membership_id,m.mobile_version);
         const label=labelFor(m);
         const identifiable=!!label&&(!!m.mobile_phone||!!m.invitation_email)&&
           m.label_unique_in_organization===true&&
@@ -1920,7 +1924,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
        storeDraftWritePending||storeDraftWriteUncertain||!storeDraftPermissionsVerified)return;
     const chosen=form.elements.namedItem('membership_id');
     const membership_id=chosen.value;
+    const expected_mobile_version=storeDraftMobileVersions.get(membership_id);
     const allowed=chosen.selectedIndex>=0&&!chosen.selectedOptions[0]?.disabled&&
+      Number.isSafeInteger(expected_mobile_version)&&
       (action==='grant'?storeDraftGrantable:storeDraftRevocable).has(membership_id);
     if(!allowed){
       el('store-draft-grants-status').textContent=
@@ -1932,7 +1938,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     updateStoreDraftActionButtons();
     try{
       const result=await api('store-draft-permissions',{method:'POST',
-        body:JSON.stringify({action,organization_id:org,membership_id})});
+        body:JSON.stringify({action,organization_id:org,membership_id,expected_mobile_version})});
       if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
       if(result.status!==(action==='grant'?'active':'revoked')||
          !(result.grant_id===null||
