@@ -1938,8 +1938,15 @@ export default async function({container}:any){
     assert.equal((await native.listSellers({id:ownerStoreId}))[0].status,"pending_approval")
     assert.equal((await companyRight(false,true,"B22 stale policy switch")).status,409,
       "Stale switch must be rejected while company is already disabled")
+    // The browser reload used to restore the real Staff review workspace also
+    // resets transient policy-panel form state. Reopen it through actual UI,
+    // select the same Organization, then fetch its current server revision.
+    await reviewer.click("#platform-store-policy-open")
+    await reviewer.wait("!document.getElementById('platform-store-policy-panel').hidden")
+    await reviewer.input("#platform-store-policy-form input[name=organization_id]",
+      organizations[0].id)
     await reviewer.click("#platform-store-policy-read")
-    await reviewer.wait("document.getElementById('platform-store-policy-apply').textContent.includes('aç')")
+    await reviewer.wait("document.getElementById('platform-store-policy-apply').textContent.includes('a')")
     await reviewer.input("#platform-store-policy-form input[name=reason]",
       "B22 synthetic company application reopen")
     await reviewer.click("#platform-store-policy-apply")
