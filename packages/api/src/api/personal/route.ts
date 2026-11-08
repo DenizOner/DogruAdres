@@ -1456,7 +1456,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(request===organizationRequest&&currentOrg===id&&!el('pending-invitations-panel').hidden)
         void pendingInvitations(id,request);
       if(request===organizationRequest)status('Kuruluş erişimi doğrulandı');
-    }catch(e){if(request!==organizationRequest)return;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('detail').textContent='';clearMemberships();clearOrganizationStores();clearPendingInvitations();el('memberships-status').textContent=membershipError(e);status(e.message)}
+    }catch(e){if(request!==organizationRequest)return;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('detail').textContent='';clearMemberships();clearOrganizationStores();clearPendingInvitations();el('memberships-status').textContent=membershipError(e);
+      // A removed Organization must remain denied, but its former Member
+      // still has a Person-scoped inbox for the revocation notice.
+      // The server independently checks the live personal session.
+      if(currentPersonId&&!document.hidden&&!el('workspace').hidden){
+        el('notification-bell').hidden=false;void notifications();
+      }
+      status(e.message)}
   }
   function clearProductPermissions(){
     productPermissionRequest++;
