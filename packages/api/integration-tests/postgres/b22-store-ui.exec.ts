@@ -1761,17 +1761,17 @@ export default async function({container}:any){
     // A newly submitted name must not impersonate an existing Seller:
     // same Organization, Unicode NFKC equivalent or a legacy native Seller.
     // Each 409 must happen BEFORE creating a second Foundation application.
-    const secondApplication=()=>("daapp_"+randomBytes(16).toString("hex"))
+    const newCollisionApplicationId=()=>("daapp_"+randomBytes(16).toString("hex"))
     const collisionEmail="b22-collision-"+rand+"@example.invalid"
     assert.equal((await submit({...data,
-      application_id:secondApplication(),email:collisionEmail,
+      application_id:newCollisionApplicationId(),email:collisionEmail,
       name:applicationName.toUpperCase()})).status,409)
     assert.equal((await submit({...data,
-      application_id:secondApplication(),email:collisionEmail,
+      application_id:newCollisionApplicationId(),email:collisionEmail,
       name:"Ｂ２２"+applicationName.slice(3)})).status,409,
       "NFKC-compatible fullwidth characters reserve the same Store name")
     assert.equal((await submit({...data,
-      application_id:secondApplication(),email:collisionEmail,
+      application_id:newCollisionApplicationId(),email:collisionEmail,
       name:stores[0].name.toUpperCase()})).status,409,
       "A legacy native Seller's name cannot be claimed by a new application")
     assert.deepEqual(await q(`select count(*)::int n from da_store_application
