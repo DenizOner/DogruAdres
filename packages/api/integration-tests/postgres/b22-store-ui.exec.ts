@@ -5173,6 +5173,19 @@ export default async function({container}:any){
     }
     const gammaSubmitted=await submit(gammaApplication)
     assert.equal(gammaSubmitted.status,201)
+    // Person A is a genuine Owner of Alpha and Gamma. A second distinct
+    // Organization cannot acquire Alpha's reserved name even when its
+    // own new Store application would otherwise be authorized.
+    const crossOrgName=await submit({...gammaApplication,
+      application_id:"daapp_"+randomBytes(16).toString("hex"),
+      email:"b22-gamma-name-collision-"+rand+"@example.invalid",
+      name:applicationName.toUpperCase()})
+    assert.equal(crossOrgName.status,409,
+      "Global Store name reservation applies across legal Organizations")
+    assert.equal((await q(`select count(*)::int n from da_store_application
+      where organization_id=$1`,[sellerGamma.id]))[0].n,1,
+      "Name conflict may not create another Gamma application")
+    process.stdout.write("PASS B22 Chrome/PG16: separate legal Organization Owner cannot reuse Alpha normalized Store name; Gamma original Seller retained\\n")
     const gammaSellerId=gammaSubmitted.body.seller_id as string
     assert.match(gammaSellerId,/^sel_[A-Za-z0-9_-]+$/)
     assert.notEqual(gammaSellerId,ownerStoreId)
