@@ -2231,6 +2231,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       where id=? and organization_id=? and person_id=?
         and member_actor_id=? and member_auth_identity_id=?
         and request_fingerprint=? and status='creating' and seller_id is null
+        and store_name_hash is not null
       for share`,[input.application_id,input.organization_id,actor.person_id,
         actor.member_id,actor.member_auth_identity_id,storeRequestFingerprint(input)])
     if(rows.length!==1)return null
@@ -2278,6 +2279,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
          (draft!==null&&(draft.status==="draft"||
             draft.submitted_application_id!==input.application_id)))
         throw new IdentityAccessDenied()
+      // Historical reserved/creating rows have no verified normalized name
+      // claim. Fail closed before their legacy native creation can bypass a
+      // newer Organization's global claim. Created rows remain readable.
+      if(r.status!=="created"&&r.store_name_hash===null)
+        return {status:"name_unverified" as const,seller_id:null}
       return {status:r.status as string,seller_id:r.seller_id as string|null}
     }
     if(draft!==null&&draft.status!=="draft")return {status:"conflict" as const}
