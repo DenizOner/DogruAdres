@@ -1746,6 +1746,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Read one extra row for has_more, never refuse a larger organization.
     const rows=await db.execute(`select m.id as membership_id,m.person_id,
         p.display_name as member_name,inv.recipient_email as invitation_email,
+        case when p.mobile_phone ~ '^[+]?[0-9]{6,20}$' then p.mobile_phone else null end as mobile_phone,
         not exists (
           select 1 from da_organization_membership other
           join da_person op on op.id=other.person_id
@@ -1766,6 +1767,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
                 lower(btrim(coalesce(p.display_name,'')))
             and lower(btrim(coalesce(oinv.recipient_email,'')))=
                 lower(btrim(coalesce(inv.recipient_email,'')))
+            and coalesce(case when op.mobile_phone ~ '^[+]?[0-9]{6,20}$' then op.mobile_phone end,'')=
+                coalesce(case when p.mobile_phone ~ '^[+]?[0-9]{6,20}$' then p.mobile_phone end,'')
         ) as label_unique_in_organization,
         exists (
           select 1 from da_organization_store_draft_permission other_grant
@@ -1793,6 +1796,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
                 lower(btrim(coalesce(p.display_name,'')))
             and lower(btrim(coalesce(oinv.recipient_email,'')))=
                 lower(btrim(coalesce(inv.recipient_email,'')))
+            and coalesce(case when op.mobile_phone ~ '^[+]?[0-9]{6,20}$' then op.mobile_phone end,'')=
+                coalesce(case when p.mobile_phone ~ '^[+]?[0-9]{6,20}$' then p.mobile_phone end,'')
         ) as other_active_grant_same_label
       from da_organization_membership m
       join da_person p on p.id=m.person_id and p.disabled_at is null and p.deleted_at is null
@@ -1815,9 +1820,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        typeof m.other_active_grant_same_label!=="boolean"))
       throw new IdentityAccessDenied()
     const has_more=rows.length>30
-    // Only current canonical Person name and that Organization's accepted
-    // invitation address may identify a Member to their protected Owner.
-    // Neither an unrelated actor login nor a private mobile is disclosed.
+    // Only current Organization Members are visible to their protected Owner.
+    // Use canonical phone and accepted company invitation email to distinguish
+    // employees. Neither contact alone authenticates a Person, and no foreign
+    // Organization or unlinked native actor contact may be disclosed.
     const members=rows.slice(0,30).map(m=>({
       membership_id:m.membership_id as string,person_id:m.person_id as string,
       // Derived solely from current eligible Members in the requested
@@ -1829,6 +1835,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       other_active_grant_same_label:m.other_active_grant_same_label as boolean,
       member_name:typeof m.member_name==="string"&&m.member_name.trim().length>0&&
         m.member_name.trim().length<=160?m.member_name.trim():null,
+      mobile_phone:typeof m.mobile_phone==="string"&&
+        /^\+?[0-9]{6,20}$/.test(m.mobile_phone)?m.mobile_phone:null,
       invitation_email:typeof m.invitation_email==="string"&&
         m.invitation_email.trim().length>0&&m.invitation_email.trim().length<=254?
         m.invitation_email.trim():null
@@ -1939,7 +1947,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }
     if(!active.length)return {status:"revoked" as const,grant_id:null}
     // The Owner UI cannot distinguish two already-authorized people
-    // sharing a name and an absent/company-invitation email. Reject direct
+    // sharing name, accepted invitation email and usable mobile. Reject direct
     // stale/forged individual revoke requests too; never pick a Person ID
     // silently. Only same-Organization active memberships are compared.
     const ambiguousRevocation=await db.execute(`select 1
@@ -1979,6 +1987,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             lower(btrim(coalesce(p.display_name,'')))
         and lower(btrim(coalesce(oinv.recipient_email,'')))=
             lower(btrim(coalesce(inv.recipient_email,'')))
+        and coalesce(case when op.mobile_phone ~ '^[+]?[0-9]{6,20}$' then op.mobile_phone end,'')=
+            coalesce(case when p.mobile_phone ~ '^[+]?[0-9]{6,20}$' then p.mobile_phone end,'')
       limit 1`,[input.membership_id,input.organization_id,personId])
     if(ambiguousRevocation.length)throw new IdentityAccessDenied()
     const grantId=active[0].id as string
