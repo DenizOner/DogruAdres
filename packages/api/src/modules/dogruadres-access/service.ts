@@ -9,6 +9,7 @@ import {
 } from "@medusajs/framework/utils"
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
+import { z } from "@medusajs/framework/zod"
 import { ActorMapping, AuditEvent, AuditOutbox, Invitation, Membership, Organization, Person } from "./models"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { mayAcceptInvitation } from "./invitation-policy"
@@ -88,6 +89,15 @@ type FoundationAuditInput = {
 type AdvisoryLockManager = Readonly<{
   execute: (query: string, parameters: string[]) => Promise<unknown>
 }>
+
+// Reuse the installed Medusa/Zod email contract already applied to new
+// personal registrations and Organization invitation requests. Synthetic or
+// corrupt historical invitation values do not identify an employee.
+const invitationContactSchema=z.string().trim().email().max(254)
+function usableInvitationContact(value:unknown):string|null {
+  const result=invitationContactSchema.safeParse(value)
+  return result.success?result.data:null
+}
 
 const activeStatus = "active"
 const supportedActorTypes = new Set(["user", "member", "customer"])
@@ -1841,9 +1851,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       mobile_version:m.mobile_version as number,
       mobile_phone:typeof m.mobile_phone==="string"&&
         /^\+?[0-9]{6,20}$/.test(m.mobile_phone)?m.mobile_phone:null,
-      invitation_email:typeof m.invitation_email==="string"&&
-        m.invitation_email.trim().length>0&&m.invitation_email.trim().length<=254?
-        m.invitation_email.trim():null
+      invitation_email:usableInvitationContact(m.invitation_email)
     }))
     if(new Set(members.map(m=>m.membership_id)).size!==members.length||
        new Set(members.map(m=>m.person_id)).size!==members.length)
@@ -1980,10 +1988,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       if(readable.length!==1||readable[0].ambiguous!==false||
          !(typeof readable[0].mobile_phone==="string"&&
            /^\+?[0-9]{6,20}$/.test(readable[0].mobile_phone))&&
-         !(typeof readable[0].recipient_email==="string"&&
-           readable[0].recipient_email.includes("@")&&
-           readable[0].recipient_email.trim().length>0&&
-           readable[0].recipient_email.trim().length<=254))
+         !usableInvitationContact(readable[0].recipient_email))
         throw new IdentityAccessDenied()
       if(active.length){
         if(active[0].membership_id!==input.membership_id||
