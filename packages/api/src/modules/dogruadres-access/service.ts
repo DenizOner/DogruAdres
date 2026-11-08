@@ -1726,28 +1726,43 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       version:beforeVersion+1}
   }
 
-  /** Owner lists active Members and a bounded list of personally issued
-   * Store draft permissions, never native Seller/Member role grants.
+  /** Page through currently eligible Members without a company-size cap.
+   * Grants are returned only for this exact page, never another Organization
+   * or another Member. Native Seller/Member roles grant no draft authority.
    */
   @InjectTransactionManager()
-  async personalListStoreDraftPermissions(token:string,org:string,
+  async personalListStoreDraftPermissions(token:string,org:string,after:string|null=null,
     @MedusaContext() context:Context={}){
-    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org))throw new IdentityAccessDenied()
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org)||
+       (after!==null&&!/^[A-Za-z0-9_-]{1,128}$/.test(after)))
+      throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
     const actor=await sessions.organizations(token,org,false)
     if(!actor||actor.organizations.length!==1||actor.organizations[0].role!=="owner"||
        !organizationActionAllowed("owner","membership.list",
          await isCurrentProtectedOwner(db,actor.person_id,org),false))return null
-    const members=await db.execute(`select m.id as membership_id,m.person_id
+    const cursor=after??""
+    // Keyset pagination avoids an offset proportional to total company size.
+    // Read one extra row for has_more, never refuse a larger organization.
+    const rows=await db.execute(`select m.id as membership_id,m.person_id
       from da_organization_membership m
       join da_person p on p.id=m.person_id and p.disabled_at is null and p.deleted_at is null
       where m.organization_id=? and m.role='member' and m.protected_owner=false
         and m.status='active' and m.revoked_at is null and m.deleted_at is null
-      order by m.id limit 101`,[org])
-    if(members.length>100||members.some(m=>typeof m.membership_id!=="string"||
+        and (?='' or m.id>?)
+      order by m.id limit 31`,[org,cursor,cursor])
+    if(rows.length>31||rows.some(m=>typeof m.membership_id!=="string"||
        !/^[A-Za-z0-9_-]{1,128}$/.test(m.membership_id)||
        typeof m.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)))
       throw new IdentityAccessDenied()
+    const has_more=rows.length>30
+    const members=rows.slice(0,30)
+    if(new Set(members.map(m=>m.membership_id)).size!==members.length||
+       new Set(members.map(m=>m.person_id)).size!==members.length)
+      throw new IdentityAccessDenied()
+    const next_cursor=has_more?members[members.length-1].membership_id:null
+    if(!members.length)return {members,grants:[],has_more:false,next_cursor:null}
+    const ids=members.map(m=>m.membership_id)
     const grants=await db.execute(`select g.id,g.person_id,g.membership_id
       from da_organization_store_draft_permission g
       join da_audit_event e on e.id=g.source_audit_event_id and e.deleted_at is null
@@ -1762,14 +1777,17 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_audit_outbox x on x.source_audit_event_id=e.id
         and x.source_module='dogruadres-access' and x.deleted_at is null
       where g.organization_id=? and g.permission='store.application.draft.manage'
-        and g.revoked_at is null order by g.id limit 101`,[org])
-    if(grants.length>100||grants.some(g=>typeof g.id!=="string"||
+        and g.revoked_at is null and g.membership_id in (${ids.map(()=>"?").join(",")})
+      order by g.id limit 31`,[org,...ids])
+    if(grants.length>30||grants.some(g=>typeof g.id!=="string"||
        !/^dasdpg_[A-Za-z0-9_-]+$/.test(g.id)||
        typeof g.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)||
        typeof g.membership_id!=="string"||
-       !/^[A-Za-z0-9_-]{1,128}$/.test(g.membership_id)))
+       !/^[A-Za-z0-9_-]{1,128}$/.test(g.membership_id)||
+       !members.some(m=>m.membership_id===g.membership_id&&m.person_id===g.person_id))||
+       new Set(grants.map(g=>g.person_id)).size!==grants.length)
       throw new IdentityAccessDenied()
-    return {members,grants}
+    return {members,grants,has_more,next_cursor}
   }
 
   /** Same Foundation transaction, provenance, and Owner guard as the existing
