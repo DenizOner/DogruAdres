@@ -1918,6 +1918,60 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         !/^dasdpg_[A-Za-z0-9_-]+$/.test(g.id)||
         typeof g.membership_id!=="string"))throw new IdentityAccessDenied()
     if(input.action==="grant"){
+      // A current protected Owner cannot grant to an unidentifiable legacy
+      // employee, even by a forged direct HTTP POST. Names alone are never
+      // enough: at least a valid recorded phone or accepted invitation email
+      // and a distinct visible label within this entire Organization are
+      // required. The target Person row is already locked by the transaction.
+      const readable=await db.execute(`select p.display_name,
+          p.mobile_phone,inv.recipient_email,
+          exists(
+            select 1 from da_organization_membership other
+            join da_person op on op.id=other.person_id
+              and op.disabled_at is null and op.deleted_at is null
+            left join lateral (
+              select oi.recipient_email from da_organization_invitation oi
+              where oi.organization_id=other.organization_id
+                and oi.accepted_by_person_id=other.person_id
+                and oi.status='accepted' and oi.role='member'
+                and oi.deleted_at is null
+              order by oi.accepted_at desc nulls last,oi.id desc limit 1
+            ) oinv on true
+            where other.organization_id=m.organization_id and other.id<>m.id
+              and other.role='member' and other.protected_owner=false
+              and other.status='active' and other.revoked_at is null
+              and other.deleted_at is null
+              and lower(btrim(coalesce(op.display_name,'')))=
+                  lower(btrim(coalesce(p.display_name,'')))
+              and lower(btrim(coalesce(oinv.recipient_email,'')))=
+                  lower(btrim(coalesce(inv.recipient_email,'')))
+              and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$'
+                then op.mobile_phone end,'')=
+                  coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$'
+                    then p.mobile_phone end,'')
+          ) as ambiguous
+        from da_organization_membership m
+        join da_person p on p.id=m.person_id
+          and p.disabled_at is null and p.deleted_at is null
+        left join lateral (
+          select i.recipient_email from da_organization_invitation i
+          where i.organization_id=m.organization_id
+            and i.accepted_by_person_id=m.person_id
+            and i.status='accepted' and i.role='member'
+            and i.deleted_at is null
+          order by i.accepted_at desc nulls last,i.id desc limit 1
+        ) inv on true
+        where m.id=? and m.organization_id=? and m.person_id=?
+          and m.status='active' and m.revoked_at is null and m.deleted_at is null
+        limit 2`,[input.membership_id,input.organization_id,personId])
+      if(readable.length!==1||readable[0].ambiguous!==false||
+         !(typeof readable[0].mobile_phone==="string"&&
+           /^\+?[0-9]{6,20}$/.test(readable[0].mobile_phone))&&
+         !(typeof readable[0].recipient_email==="string"&&
+           readable[0].recipient_email.includes("@")&&
+           readable[0].recipient_email.trim().length>0&&
+           readable[0].recipient_email.trim().length<=254))
+        throw new IdentityAccessDenied()
       if(active.length){
         if(active[0].membership_id!==input.membership_id||
            !await verifiedStoreDraftGrant(db,personId,input.organization_id,input.membership_id))
