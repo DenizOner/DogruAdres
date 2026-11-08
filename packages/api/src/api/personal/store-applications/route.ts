@@ -8,10 +8,23 @@ import {storeDraftPayload} from "../../../modules/dogruadres-access/store-applic
 import type {StoreRequest} from "../../../modules/dogruadres-access/store-application"
 
 export const AUTHENTICATE=false
+// Store display-name contract is separate from a legal Organization title.
+// Human evaluation of misleading brands/generic categories remains an Admin
+// review decision; automatic checks here cover only objective invalid forms.
+const validStoreName=(name:string)=>{
+  const normalized=name.normalize("NFKC")
+  const graphemes=Array.from(new Intl.Segmenter("und",{
+    granularity:"grapheme"
+  }).segment(name)).length
+  return name.length<=120&&graphemes>=3&&graphemes<=40&&
+    !/[\\x00-\\x1f\\x7f]/.test(name)&&!/^\\p{Number}+$/u.test(normalized)&&
+    !/(?:\\.|^)(?:com(?:\\.tr)?|net|org(?:\\.tr)?)(?:$|\\s)/iu.test(name)&&
+    !/(?:^|\\s)(?:ltd\\.?\\s*şti\\.?|a\\.?\\s*ş\\.?|limited\\s+şirketi|anonim\\s+şirketi)$/iu.test(name)
+}
 const payload=z.object({
   organization_id:z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/),
   application_id:z.string().regex(/^daapp_[0-9a-f]{32}$/),
-  name:z.string().trim().min(2).max(120),
+  name:z.string().trim().refine(validStoreName),
   email:z.string().email().max(254),
   currency_code:z.string().regex(/^[a-z]{3}$/),
 }).strict()
@@ -110,6 +123,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     const result=await svc.reserveStoreApplication(token,input)
     if(!result)return res.status(403).json({message:"Recent MFA and Organization Owner required"})
     if(result.status==="conflict")return res.status(409).json({message:"Draft was already submitted or changed"})
+    if(result.status==="name_taken")return res.status(409).json({message:"Store name unavailable; choose another name"})
     if(result.status==="created")return res.status(200).json({application_id:input.application_id,seller_id:result.seller_id,status:"pending_approval",...(input.draft_id?{draft_id:input.draft_id}:{})})
     if(result.status!=="reserved")
       return res.status(409).json({message:"Application processing; check status instead of retrying"})
