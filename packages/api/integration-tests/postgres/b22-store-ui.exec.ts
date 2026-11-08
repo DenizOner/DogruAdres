@@ -2532,6 +2532,8 @@ export default async function({container}:any){
     // independent of the missing-contact check and of the disabled UI.
     await q("update da_person set mobile_phone=$1 where id=any($2::text[])",
       ["+905550001777",nameTwins.map(m=>m.person_id)])
+    // A truncated address and a numeric-TLD address rejected by the UI
+    // must not become two distinct SQL identities (previous P2 regression).
     // Two different corrupt invited addresses are *not* two visible labels.
     // Cross-page checks and POST must normalize both to the same absent email,
     // even though raw database strings differ. Only disposable test data.
@@ -2545,7 +2547,7 @@ export default async function({container}:any){
         set status='accepted',accepted_by_person_id=$1,accepted_at=clock_timestamp(),
             recipient_email=$2
         where id=$3 and organization_id=$4`,
-        [nameTwins[i].person_id,i===0?"invalid@":"broken@",invite.id,largeMemberOrg.id])
+        [nameTwins[i].person_id,i===0?"invalid@":"broken@host.123",invite.id,largeMemberOrg.id])
     }
     const corruptLabels=await browser.callFunction(
       "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
