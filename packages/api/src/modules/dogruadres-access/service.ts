@@ -2281,10 +2281,36 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       return {status:r.status as string,seller_id:r.seller_id as string|null}
     }
     if(draft!==null&&draft.status!=="draft")return {status:"conflict" as const}
+    // PostgreSQL computes the *same* NFKC, whitespace and case-insensitive
+    // name key for existing native Sellers and all new Organization claims.
+    // Keep the irreversible claim before native Seller creation; never hold
+    // this lock across separate transactions or guess an uncertain outcome.
+    const names=await db.execute(`select encode(sha256(convert_to(
+      lower(normalize(regexp_replace(btrim(?),'[[:space:]]+',' ','g'),NFKC)),
+      'UTF8')),'hex') as store_name_hash`,[input.name])
+    const nameHash=names[0]?.store_name_hash
+    if(names.length!==1||typeof nameHash!=="string"||
+       !/^[a-f0-9]{64}$/.test(nameHash))throw new IdentityAccessDenied()
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-global-store-name'),hashtext(?))`,[nameHash])
+    const reserved=await db.execute(`select id from da_store_application
+      where store_name_hash=? limit 1`,[nameHash])
+    if(reserved.length)return {status:"name_taken" as const}
+    // A legacy native Seller may predate DoğruAdres name claims. Read only
+    // its name, with no cross-Organization details in the HTTP response.
+    // A deleted Seller also keeps the name during the approved 30-day hold.
+    const nativeExisting=await db.execute(`select id from seller
+      where (deleted_at is null or
+        deleted_at>clock_timestamp()-interval '30 days')
+        and encode(sha256(convert_to(lower(normalize(
+          regexp_replace(btrim(name),'[[:space:]]+',' ','g'),NFKC)),
+          'UTF8')),'hex')=? limit 1`,[nameHash])
+    if(nativeExisting.length)return {status:"name_taken" as const}
     await db.execute(`insert into da_store_application
-      (id,organization_id,person_id,member_actor_id,member_auth_identity_id,request_fingerprint,status)
-      values(?,?,?,?,?,?,'reserved')`,[input.application_id,input.organization_id,actor.person_id,
-      actor.member_id,actor.member_auth_identity_id,fingerprint])
+      (id,organization_id,person_id,member_actor_id,member_auth_identity_id,
+       request_fingerprint,store_name_hash,status)
+      values(?,?,?,?,?,?,?,'reserved')`,[input.application_id,input.organization_id,actor.person_id,
+      actor.member_id,actor.member_auth_identity_id,fingerprint,nameHash])
     if(input.draft_id!==undefined){
       const bound=await db.execute(`update da_store_application_draft
         set status='submitting',submitted_application_id=?,updated_at=clock_timestamp()
