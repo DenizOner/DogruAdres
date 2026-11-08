@@ -2434,6 +2434,13 @@ export default async function({container}:any){
             and e.resource='store-draft-permission'`,
           [largeMemberOrg.id,twin.person_id]))[0].n,0,
           "No audit/outbox must be created for an ambiguous grant")
+        // The defensive submit handler may disable both form actions.
+        // Recover by re-reading permissions through the real Owner UI,
+        // never by overriding the disabled state in the DOM.
+        await browser.click("#store-draft-grants-refresh")
+        await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+          "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length==="+pageSizes[index]+
+          " && !document.querySelector('#store-draft-grants-form button[value=grant]').disabled")
       }
       assert.deepEqual(nav,{next:index<3,prev:index>0},
         "Visible Owner pagination controls must reflect each real page")
