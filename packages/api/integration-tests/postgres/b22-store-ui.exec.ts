@@ -2484,7 +2484,7 @@ export default async function({container}:any){
       "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
       "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id,expected_mobile_version:0})});return r.status}",
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",
       largeMemberOrg.id,legacyNoContact.id)
     assert.equal(missingContactPost,403,
       "Forged direct Owner POST must deny otherwise unique name with no contact")
@@ -2514,7 +2514,7 @@ export default async function({container}:any){
       "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
       "body:JSON.stringify({action:'grant',organization_id:org,"+
-      "membership_id:id,expected_mobile_version:0})});return r.status}",
+      "membership_id:id})});return r.status}",
       largeMemberOrg.id,legacyNoContact.id)
     assert.equal(badEmailDirectPost,403,
       "Owner direct grant cannot treat invalid@ as a contact")
@@ -2536,7 +2536,7 @@ export default async function({container}:any){
       "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
       "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id,expected_mobile_version:0})});return r.status}",
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",
       largeMemberOrg.id,nameTwins[0].id)
     assert.equal(ambiguousContactPost,403,
       "Owner direct grant must reject two visible identical name+mobile recipients")
@@ -2623,23 +2623,24 @@ export default async function({container}:any){
       "document.querySelector('#store-draft-grants-form select[name=membership_id]').selectedOptions[0].textContent"))
       .includes("B22 Son Sayfa Çalışanı"),
       "Owner selects a named Member rather than an opaque internal code")
-    // The Owner saw the earlier mobile version. Changing the employee's
-    // number invalidates that stale selection even though the stable Member
-    // ID still exists. No grant or audit may be created before refresh.
+    // The Owner has already selected the exact Member in this Organization.
+    // Their own mobile edit must NOT force reselecting or deny the grant.
+    // The subsequent real POST (with a deliberately truncated browser-only
+    // response) proves the grant persists for this Member, not a namesake.
+    const shownPhone=(await q("select mobile_phone from da_person where id=$1",
+      [lastMember.person_id]))[0].mobile_phone
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').selectedOptions[0].textContent.includes("+
+      JSON.stringify(shownPhone)+")"),true)
     await q("update da_person set mobile_phone=$1,mobile_version=mobile_version+1 where id=$2",
       ["+905551777777",lastMember.person_id])
-    await browser.click("#store-draft-grants-form button[value=grant]")
-    await browser.wait("document.getElementById('store-draft-grants-status').textContent.includes('İzin işlemi reddedildi')")
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').value"),
+      lastMember.id,"Phone update must never change the selected Membership target")
     assert.equal((await q(`select count(*)::int n from da_organization_store_draft_permission
       where organization_id=$1 and person_id=$2 and revoked_at is null`,
       [largeMemberOrg.id,lastMember.person_id]))[0].n,0,
-      "Stale mobile selection cannot grant")
-    await browser.click("#store-draft-grants-refresh")
-    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
-      "!document.querySelector('#store-draft-grants-form button[value=grant]').disabled")
-    assert.equal(await browser.eval(
-      "document.querySelector('#store-draft-grants-form select[name=membership_id]').value"),
-      lastMember.id,"Refresh keeps the intended employee after rejecting stale contact")
+      "Phone edit alone never creates a grant")
     // The authorized POST commits, but only this browser's response body
     // is synthetically broken. The UI must say UNCERTAIN rather than DENIED.
     await browser.eval("(()=>{const original=window.fetch.bind(window);"+
@@ -2655,7 +2656,7 @@ export default async function({container}:any){
       where organization_id=$1 and person_id=$2 and membership_id=$3
         and revoked_at is null`,
       [largeMemberOrg.id,lastMember.person_id,lastMember.id]))[0].n===1,
-      19000,"101st Member's real Owner draft grant persisted")
+      19000,"101st Member grant persists despite a mobile update after Owner selection")
     await browser.wait("document.getElementById('store-draft-grants-status').textContent.includes('sonucu belirsiz')")
     assert.equal(await browser.eval(
       "document.querySelector('#store-draft-grants-form button[value=grant]').disabled && "+
@@ -2709,7 +2710,7 @@ export default async function({container}:any){
       "const session=await(await fetch('/personal/session')).json();"+
       "const statuses=[];for(const id of ids){const r=await fetch('/personal/store-draft-permissions',"+
       "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
-      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id,expected_mobile_version:1})});"+
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});"+
       "statuses.push(r.status)}return statuses}",largeMemberOrg.id,
       JSON.stringify(twoGrantedNamesakes.map(m=>m.id)))
     assert.deepEqual(grantBoth,[200,200],
@@ -2922,7 +2923,7 @@ export default async function({container}:any){
       "async function(org,id){const session=await(await fetch('/personal/session')).json();"+
       "const response=await fetch('/personal/store-draft-permissions',"+
       "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
-      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id,expected_mobile_version:1})});"+
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});"+
       "return {status:response.status,body:await response.json()}}",
       rejoinOrg.id,membershipId)
     const firstRejoinGrant=await grantRejoin(rejoinOld.id)
