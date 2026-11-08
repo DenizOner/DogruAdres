@@ -11,6 +11,10 @@ function fixture() {
     execute: jest.fn(async(sql:string)=>
       sql.includes("from da_organization where id=? and status='active'")
         ? [{id:"daorg_test"}]
+        : sql.includes("from da_organization_membership") && sql.includes("for update")
+          ? [{id:"member_target"}]
+        : sql.includes("to_regclass('public.da_organization_store_draft_permission')")
+          ? [{present:false}]
         : sql.includes("m.protected_owner=true")?[{id:"damem_protected"}]:[]),
     flush: jest.fn(async () => undefined)
   } } as unknown as Context
