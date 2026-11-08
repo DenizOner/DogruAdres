@@ -1812,7 +1812,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          data.members.some(m=>typeof m.label_unique_in_organization!=='boolean'||
            typeof m.other_active_grant_same_label!=='boolean'||
            !(m.mobile_phone===null||
-             (typeof m.mobile_phone==='string'&&/^\+?[0-9]{6,20}$/.test(m.mobile_phone)))||
+             (typeof m.mobile_phone==='string'&&/^[+]?[0-9]{6,20}$/.test(m.mobile_phone)))||
            !(m.member_name===null||
            (typeof m.member_name==='string'&&m.member_name.trim().length>0&&m.member_name.length<=160))||
            !(m.invitation_email===null||
