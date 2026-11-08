@@ -2314,6 +2314,17 @@ export default async function({container}:any){
       "Membership exit must persist one personal revocation receipt")
     const exitNoticeId=exitNoticeRecords[0].id
     await reviewer.send("Page.bringToFront")
+    // Reload the real former Member on a stale Organization-specific URL.
+    // Company authorization must still fail, but the personal bell must
+    // return as an unscoped Person resource, not require the old membership.
+    await reviewer.eval(`history.replaceState(null,'','/personal?organization='+encodeURIComponent(${JSON.stringify(rejoinOrg.id)}))`)
+    await reviewer.send("Page.reload",{ignoreCache:true})
+    await reviewer.wait("location.pathname==='/personal' && location.search==='' && !document.getElementById('notification-bell').hidden")
+    await reviewer.click("#notification-bell")
+    await reviewer.wait("document.getElementById('notification-list').textContent.includes('Mağaza taslağı hazırlama izni kaldırıldı')")
+    const exitedInboxText=String(await reviewer.eval("document.getElementById('notification-list').textContent"))
+    assert.equal(exitedInboxText.includes(rejoinOrg.name),false,
+      "Former Member's private bell must not reveal exited Organization name")
     const exitFeed=await reviewer.callFunction(
       "async function(){const r=await fetch('/personal/notifications');return {status:r.status,body:await r.json()}}")
     assert.equal(exitFeed.status,200)
