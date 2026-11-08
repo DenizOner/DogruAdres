@@ -1810,6 +1810,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          data.has_more!==(data.next_cursor!==null)||
          (data.has_more&&data.next_cursor!==data.members.at(-1)?.membership_id)||
          data.members.some(m=>typeof m.label_unique_in_organization!=='boolean'||
+           typeof m.other_active_grant_same_label!=='boolean'||
            !(m.member_name===null||
            (typeof m.member_name==='string'&&m.member_name.trim().length>0&&m.member_name.length<=160))||
            !(m.invitation_email===null||
@@ -1847,14 +1848,20 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const granted=data.grants.some(g=>g.person_id===m.person_id&&
           g.membership_id===m.membership_id);
         if(identifiable)storeDraftGrantable.add(m.membership_id);
-        // Already-active grants must remain revocable even if another Member
-        // later acquires the same name. Never grant on an ambiguous identity.
-        if(granted)storeDraftRevocable.add(m.membership_id);
+        // A single currently granted Person may be safely revoked after
+        // a late ungranted namesake joins. Two indistinguishable ACTIVE
+        // recipients, even on different pages, must never be individually
+        // revocable: the Owner cannot tell whose private access would end.
+        const revocable=granted&&m.other_active_grant_same_label===false;
+        if(revocable)storeDraftRevocable.add(m.membership_id);
         const option=document.createElement('option');
         option.value=m.membership_id;
-        option.disabled=!identifiable&&!granted;
-        option.textContent=identifiable?label:granted?
+        option.disabled=!(identifiable||revocable);
+        option.textContent=identifiable?label:granted&&
+          m.other_active_grant_same_label?
           (label||'Adı doğrulanamayan çalışan')+
+          ' — aynı kimlikle birden fazla etkin izin; tek tek iptal edilemez':
+          granted?(label||'Adı doğrulanamayan çalışan')+
           ' — kimlik belirsiz; yalnız mevcut izni kaldırabilirsiniz':
           'Çalışanın kimliği ayırt edilemiyor; yeni izin verilemez';
         select.append(option);
