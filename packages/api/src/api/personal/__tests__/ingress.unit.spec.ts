@@ -42,13 +42,17 @@ describe("personal ingress (unit contract only)",()=>{
   })
   it("admits only B22 scoped Store application GET/POST and Store read GET (not native Seller mutations)",async()=>{
     for(const method of ["GET","POST"]){
-      const {next}=await probe("/personal/store-applications",method)
-      expect(next).toHaveBeenCalledTimes(1)
+      for(const path of ["/personal/store-applications","/personal/store-draft-permissions"]){
+        const {next}=await probe(path,method)
+        expect(next).toHaveBeenCalledTimes(1)
+      }
     }
     expect((await probe("/personal/organization-stores","GET")).next).toHaveBeenCalledTimes(1)
     expect((await probe("/personal/catalog","GET")).next).toHaveBeenCalledTimes(1)
     expect((await probe("/personal/catalog","POST")).res.status).toHaveBeenCalledWith(401)
     for(const [path,method] of [
+      ["/personal/store-draft-permissions","PATCH"],["/personal/store-draft-permissions","DELETE"],
+      ["/personal/store-draft-permissions","OPTIONS"],["/personal/store-draft-permissions/other","POST"],
       ["/personal/store-applications","PATCH"],["/personal/store-applications","DELETE"],
       ["/personal/store-applications","OPTIONS"],["/personal/store-applications","HEAD"],
       ["/personal/store-applications/another","POST"],["/personal/store-applications/","PUT"],

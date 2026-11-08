@@ -320,6 +320,80 @@ export default async function({container}:any){
           await q("update da_audit_outbox set created_at=$2 where id=$1",
             [original.id,original.created_at])
       }
+      // Deliver the real Owner grant, real Member draft save, and Owner
+      // revocation from the same Chrome/HTTPS/PG16 task database. Native
+      // relay must accept Member draft role but never private draft fields.
+      const [memberDraft]=await q(`select id,organization_id,created_by_person_id,
+        name,email from da_store_application_draft
+        where name like 'B22 delegate %'`)
+      assert.ok(memberDraft&&/^dasdraft_[0-9a-f]{32}$/.test(memberDraft.id),
+        "The real Member draft must exist before audit indexing")
+      const delegatedEvents=await q(`select e.id,e.action,e.resource,e.role_context,
+        e.organization_id,e.target_id,o.id as outbox_id,o.created_at
+        from da_audit_event e join da_audit_outbox o
+          on o.source_audit_event_id=e.id
+        where e.module='dogruadres-access'
+          and e.organization_id=$1
+          and ((e.action='organization.store_application_draft_saved'
+                  and e.target_id=$2 and e.role_context='member')
+            or (e.action in ('organization.store_draft_permission_granted',
+                             'organization.store_draft_permission_revoked')
+                  and e.target_id=$3 and e.role_context='owner'))
+          and o.status='pending' and o.attempt_count=0
+          and o.lease_token is null order by e.action,e.id`,
+        [memberDraft.organization_id,memberDraft.id,memberDraft.created_by_person_id])
+      assert.equal(delegatedEvents.length,3,
+        "Owner grant, Member save and Owner revoke each create one native audit/outbox")
+      assert.deepEqual(delegatedEvents.map(e=>e.action).sort(),[
+        "organization.store_application_draft_saved",
+        "organization.store_draft_permission_granted",
+        "organization.store_draft_permission_revoked"])
+      const delegatedOriginal=delegatedEvents.map(e=>({
+        id:e.outbox_id,created_at:e.created_at}))
+      try{
+        const shifted=await q(`update da_audit_outbox
+          set created_at=(select min(created_at) from da_audit_outbox)-interval '6 days'
+            +(array_position($1::text[],id)-1)*interval '1 second'
+          where id=any($1::text[]) and status='pending'
+            and attempt_count=0 and lease_token is null returning id`,
+          [delegatedEvents.map(e=>e.outbox_id)])
+        assert.equal(shifted.length,3)
+        const delivered=await runAuditRelayBatch(container,3)
+        assert.equal(delivered.delivered,3)
+        assert.equal(delivered.lastOutcome,'delivered')
+        for(const event of delegatedEvents){
+          const rows=await q(`select o.status,o.delivered_at,o.attempt_count,
+            o.lease_token,i.source_event_id,i.organization_id,i.target_id,
+            i.action,i.resource,i.envelope
+            from da_audit_outbox o join da_audit_index_entry i
+              on i.source_event_id=o.source_audit_event_id
+            where o.id=$1`,[event.outbox_id])
+          assert.equal(rows.length,1,"One durable Index event per delegated source")
+          const row=rows[0]
+          assert.equal(row.status,"delivered")
+          assert.ok(row.delivered_at)
+          assert.equal(row.attempt_count,1)
+          assert.equal(row.lease_token,null)
+          assert.equal(row.source_event_id,event.id)
+          assert.equal(row.organization_id,event.organization_id)
+          assert.equal(row.target_id,event.target_id)
+          assert.equal(row.action,event.action)
+          assert.equal(row.resource,event.resource)
+          const envelope=typeof row.envelope==="string"?JSON.parse(row.envelope):row.envelope
+          assert.equal(envelope.actor.role_context,event.role_context)
+          assert.equal(envelope.source_event_id,event.id)
+          assert.equal(envelope.target_id,event.target_id)
+          assert.equal(JSON.stringify(envelope).includes(memberDraft.name),false)
+          assert.equal(JSON.stringify(envelope).includes(memberDraft.email),false)
+          assert.equal((await q(`select count(*)::int n from da_audit_index_entry
+            where source_event_id=$1`,[event.id]))[0].n,1)
+        }
+        process.stdout.write("PASS B22 real audit relay: Owner grant, Member private Store draft and Owner revocation delivered through native Medusa worker, redacted envelopes, one Index row/ACK each\n")
+      }finally{
+        for(const original of delegatedOriginal)
+          await q("update da_audit_outbox set created_at=$2 where id=$1",
+            [original.id,original.created_at])
+      }
       await realAuditRelayRecovery(container,q)
     }finally{
       for(const row of originals)

@@ -22,7 +22,12 @@ export function organizationActionAllowed(
   auditedMemberGrant: boolean,
 ): boolean {
   if(role==="owner")return protectedOwner===true && DEFAULT_OWNER_ACTIONS.includes(action)
-  if(role==="member" || role==="admin")return !["invitation.manage","membership.manage","membership.list","audit.timeline.read","price.group.manage","store.follow","store.application.draft.manage"].includes(action) &&
+  // Only an explicit, current audited Person×Organization grant permits
+  // a non-Owner to prepare an unfinished draft. Legacy company "admin" is
+  // not a role and must never inherit this new permission.
+  if(action==="store.application.draft.manage")
+    return role==="member" && auditedMemberGrant===true
+  if(role==="member" || role==="admin")return !["invitation.manage","membership.manage","membership.list","audit.timeline.read","price.group.manage","store.follow"].includes(action) &&
     auditedMemberGrant===true
   return false
 }

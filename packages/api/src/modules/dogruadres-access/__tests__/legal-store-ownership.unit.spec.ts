@@ -119,8 +119,11 @@ describe("B22 shared Owner action policy (pure decision, NOT live policy adminis
       expect(organizationActionAllowed("owner",action,false,true)).toBe(false)
       expect(organizationActionAllowed("member",action,false,false)).toBe(false)
       expect(organizationActionAllowed("admin",action,false,false)).toBe(false)
-      expect(organizationActionAllowed("member",action,false,true)).toBe(!["invitation.manage","membership.manage","membership.list","audit.timeline.read","price.group.manage","store.follow","store.application.draft.manage"].includes(action))
+      expect(organizationActionAllowed("member",action,false,true)).toBe(!["invitation.manage","membership.manage","membership.list","audit.timeline.read","price.group.manage","store.follow"].includes(action))
     }
+    expect(organizationActionAllowed("admin","store.application.draft.manage",false,true)).toBe(false)
+    expect(organizationActionAllowed("member","store.application.draft.manage",false,true)).toBe(true)
+    expect(organizationActionAllowed("member","store.application.draft.manage",false,false)).toBe(false)
     expect(organizationActionAllowed("platform_staff","products.edit",true,true)).toBe(false)
   })
   it("immutable protected Owner policy cannot be narrowed by a request or personal grant",()=>{

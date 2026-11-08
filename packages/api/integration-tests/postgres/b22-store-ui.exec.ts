@@ -1911,10 +1911,58 @@ export default async function({container}:any){
     // restore this real reviewer tab before invoking its visible page button.
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
-    await reviewer.click("#store-approval-newer")
+    // Hidden-tab privacy can conceal the entire workspace. A normal reload
+    // must re-authorize the real Staff session; never force hidden=false.
+    if(await reviewer.eval("document.getElementById('workspace').hidden")){
+      await reviewer.send("Page.reload",{ignoreCache:true})
+      await reviewer.send("Page.bringToFront")
+    }
+    await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+    // Privacy-preserving tab restoration may re-run the Staff list from page
+    // zero. Do not click a newly hidden page-2 navigation control; use the
+    // actual visible refresh action when the browser already reset to page 0.
+    if(await reviewer.eval("document.getElementById('store-approval-newer').hidden"))
+      await reviewer.click("#store-approval-refresh")
+    else
+      await reviewer.click("#store-approval-newer")
     // Both pages expose one button: only page-1 Store identity proves the
     // asynchronous page switch completed before approval.
-    await reviewer.wait(`document.querySelectorAll('#store-approval-list button').length===1 && document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`)
+    const pageOneReviewVisible=`document.visibilityState==='visible' &&
+      !document.getElementById('workspace').hidden &&
+      document.querySelectorAll('#store-approval-list button').length===1 &&
+      document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`
+    try{
+      await until(async()=>await reviewer.eval(pageOneReviewVisible)===true,
+        8000,"B22 Staff approval first-page navigation")
+    }catch{
+      // Page focus may re-trigger a stale page-2 request after a prior
+      // suspended Seller changes the list. A single normal reload rechecks
+      // the same authenticated Staff task; no DOM privacy guard is bypassed.
+      await reviewer.send("Page.bringToFront")
+      await reviewer.send("Page.reload",{ignoreCache:true})
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible' && "+
+        "!document.getElementById('workspace').hidden && "+
+        "!document.getElementById('store-approval-panel').hidden")
+      await reviewer.click("#store-approval-refresh")
+      try{
+        await reviewer.wait(pageOneReviewVisible)
+      }catch{
+        // Never serialize Store names, Session values or private payloads.
+        const safeState=await reviewer.eval(
+          "({visible:document.visibilityState==='visible',"+
+          "workspaceHidden:document.getElementById('workspace').hidden,"+
+          "panelHidden:document.getElementById('store-approval-panel').hidden,"+
+          "listCount:document.querySelectorAll('#store-approval-list button').length,"+
+          "olderHidden:document.getElementById('store-approval-older').hidden,"+
+          "newerHidden:document.getElementById('store-approval-newer').hidden})")
+        const statuses=reviewer.http.filter((h:any)=>
+          ['/personal','/personal/session','/personal/platform/stores'].includes(h.path))
+          .slice(-10).map((h:any)=>({path:h.path,status:h.status}))
+        throw Error("B22 Store first page could not revalidate: "+
+          JSON.stringify({safeState,statuses}))
+      }
+    }
     assert.equal(await reviewer.eval(`document.getElementById('store-approval-list').textContent.includes(${JSON.stringify(applicationName)})`),true)
     // The real browser button invokes Mercur's native approval. Hold the
     // task-only seller status UPDATE with an independent PG16 advisory lock,
@@ -1948,7 +1996,22 @@ export default async function({container}:any){
       // document.hidden or workspace.hidden), then require the actual
       // authorized Store action to be visible before dispatching its click.
       await reviewer.send("Page.bringToFront")
-      await reviewer.wait("document.visibilityState==='visible' && !document.getElementById('workspace').hidden && !!document.querySelector('#store-approval-list button')?.getClientRects().length")
+      // A hidden tab clears its private workspace. Restore only through a
+      // real authenticated page reload, never by changing DOM hidden flags.
+      if(await reviewer.eval("document.getElementById('workspace').hidden")){
+        await reviewer.send("Page.reload",{ignoreCache:true})
+        await reviewer.send("Page.bringToFront")
+      }
+      try{
+        await reviewer.wait("document.visibilityState==='visible' && !document.getElementById('workspace').hidden && !!document.querySelector('#store-approval-list button')?.getClientRects().length")
+      }catch{
+        const state=await reviewer.eval("({documentHidden:document.hidden,workspaceHidden:document.getElementById('workspace').hidden,loginHidden:document.getElementById('login').hidden,panelHidden:document.getElementById('store-approval-panel').hidden,visibleButton:!!document.querySelector('#store-approval-list button')?.getClientRects().length})")
+        const http=reviewer.http.filter((h:any)=>
+          ['/personal','/personal/session','/personal/platform/stores'].includes(h.path))
+          .slice(-10).map((h:any)=>({path:h.path,status:h.status}))
+        throw Error("B22 Staff Store approval UI restore failed: "+
+          JSON.stringify({state,http}))
+      }
       await reviewer.click("#store-approval-list button")
       await until(async()=>{
         const [w]=await q("select count(*)::int n from pg_locks h join pg_locks w on w.locktype=h.locktype and w.database=h.database and w.classid=h.classid and w.objid=h.objid and w.objsubid=h.objsubid and w.pid<>h.pid and w.granted=false where h.locktype='advisory' and h.pid=$1 and h.granted=true",[holderPid])
@@ -2106,6 +2169,915 @@ export default async function({container}:any){
     assert.equal(afterReview.length,1)
     assert.equal(afterReview[0].status,"open")
     assert.ok(afterReview[0].approved_at)
+
+    // Store draft delegation uses a real Owner browser and a distinct
+    // real Member browser against the SAME disposable HTTPS/PG16 state.
+    // A's historical Beta Admin role is temporarily an ordinary Member in
+    // this synthetic fixture only; restore it after the narrow acceptance.
+    const betaScope=organizations[1].id
+    // Synthetic legacy Member originally lacked a human-readable Person
+    // label. The Owner may grant only to an identifiable company employee.
+    await q("update da_person set display_name=$1 where id=$2",
+      ["B22 Yetkili Test Çalışanı",A.person])
+    const [legacyBeta]=await q(`select role,protected_owner from da_organization_membership
+      where id=$1`,[betaAdminMembership.id])
+    assert.deepEqual(legacyBeta,{role:"admin",protected_owner:false})
+    const [memberFixture]=await q(`update da_organization_membership
+      set role='member',updated_at=clock_timestamp()
+      where id=$1 and role='admin' and protected_owner=false
+      returning id`,[betaAdminMembership.id])
+    assert.equal(memberFixture?.id,betaAdminMembership.id)
+    try{
+      await browser.send("Page.bringToFront")
+      // The real signed-in browser populated its Organization menu before
+      // this disposable membership changed. Reload to observe fresh role
+      // metadata instead of asking a stale menu to contain "Member".
+      await browser.send("Page.reload",{ignoreCache:true})
+      await browser.wait("Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+
+        JSON.stringify(organizations[1].name+" — member")+")")
+      await browser.select(organizations[1].name,"member")
+      assert.equal(await browser.callFunction("async function(org){return (await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org))).status}",betaScope),403,
+        "An ungranted Member cannot read another private Organization draft")
+      await reviewer.send("Page.bringToFront")
+      await reviewer.select(organizations[1].name,"owner")
+      const grantScope=await reviewer.callFunction(
+        "async function(org){const r=await fetch('/personal/store-draft-permissions?organization_id='+encodeURIComponent(org));"+
+        "const body=await r.json();return {status:r.status,memberCount:Array.isArray(body.members)?body.members.length:-1,"+
+        "grantCount:Array.isArray(body.grants)?body.grants.length:-1}}",
+        betaScope)
+      assert.deepEqual(grantScope,{status:200,memberCount:1,grantCount:0},
+        "Owner native Store draft grant API must return exactly one active Member")
+      await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden")
+      assert.equal(await reviewer.eval("document.querySelector('#store-draft-grants-form select[name=membership_id]').value"),
+        betaAdminMembership.id)
+      assert.equal(await reviewer.callFunction("async function(org,id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/personal/store-draft-permissions',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':'invalid'},body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",betaScope,betaAdminMembership.id),403,
+        "A missing valid CSRF cannot issue draft permission")
+      const beforeGrantUi=await reviewer.eval("({hidden:document.hidden,workspaceHidden:document.getElementById('workspace').hidden,formReady:typeof document.getElementById('store-draft-grants-form').onsubmit==='function',buttonDisabled:document.querySelector('#store-draft-grants-form button[value=grant]').disabled})")
+      assert.deepEqual(beforeGrantUi,{hidden:false,workspaceHidden:false,formReady:true,buttonDisabled:false},
+        "Visible Owner must have an enabled, wired draft grant control")
+      await reviewer.eval("(()=>{const prior=window.fetch.bind(window);window.__daGrantProbe={starts:0,done:0,status:null};window.__daGrantPriorFetch=window.fetch;window.fetch=(resource,options)=>{const url=typeof resource==='string'?resource:resource?.url;if(url==='/personal/store-draft-permissions'&&options?.method==='POST'){window.__daGrantProbe.starts++;return prior(resource,options).then(response=>{window.__daGrantProbe.done++;window.__daGrantProbe.status=response.status;return response})}return prior(resource,options)};return true})()")
+      await reviewer.click("#store-draft-grants-form button[value=grant]")
+      const grantProbe=await reviewer.eval("({starts:window.__daGrantProbe.starts,done:window.__daGrantProbe.done,status:window.__daGrantProbe.status})")
+      assert.equal(grantProbe.starts,1,
+        "Visible Owner grant submit must dispatch exactly one real HTTPS POST")
+      await reviewer.wait("window.__daGrantProbe.done===1")
+      const grantFeedback=String(await reviewer.eval("document.getElementById('store-draft-grants-status').textContent"))
+      const grantHttpStatus=Number(await reviewer.eval("window.__daGrantProbe.status"))
+      await reviewer.eval("(()=>{window.fetch=window.__daGrantPriorFetch;delete window.__daGrantPriorFetch;delete window.__daGrantProbe;return true})()")
+      assert.equal(grantHttpStatus,200,"Native Owner grant POST status; UI="+grantFeedback)
+      assert.ok(grantFeedback.includes('izni verildi'),
+        "Owner draft grant outcome must be confirmed: "+grantFeedback)
+      const [activeGrant]=await q(`select id,membership_id,revoked_at from da_organization_store_draft_permission
+        where person_id=$1 and organization_id=$2 and revoked_at is null`,[A.person,betaScope])
+      assert.ok(activeGrant&&/^dasdpg_[A-Za-z0-9_-]+$/.test(activeGrant.id))
+      assert.equal(activeGrant.membership_id,betaAdminMembership.id)
+      assert.equal(activeGrant.revoked_at,null)
+      await browser.send("Page.bringToFront")
+      await browser.select(organizations[1].name,"member")
+      await browser.wait("!document.getElementById('store-draft-form').hidden")
+      assert.equal(await browser.eval("document.getElementById('store-application-form').hidden"),true,
+        "An authorized Member gets ONLY the draft form, never official submit")
+      assert.equal(await browser.callFunction("async function(org){return (await fetch('/personal/store-draft-permissions?organization_id='+encodeURIComponent(org))).status}",betaScope),403,
+        "A delegated Member cannot inspect Owner-only grant management")
+      const memberAttempt=await browser.callFunction(
+        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",
+        betaScope,betaAdminMembership.id)
+      assert.equal(memberAttempt,403,"A Member cannot delegate this permission")
+      const forgedStoreId="daapp_"+randomBytes(16).toString("hex")
+      const forgedOfficial=await browser.callFunction(
+        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({organization_id:org,application_id:id,name:'Forged Member Store',"+
+        "email:'member-forged@example.invalid',currency_code:'try'})});return r.status}",
+        betaScope,forgedStoreId)
+      assert.equal(forgedOfficial,403,"Member draft permission cannot submit native Seller")
+      const delegatedName="B22 delegate "+rand
+      const delegatedEmail="delegated-"+rand+"@example.invalid"
+      await browser.input("#store-draft-form input[name=name]",delegatedName)
+      await browser.input("#store-draft-form input[name=email]",delegatedEmail)
+      await browser.click("#store-draft-form button[type=submit]")
+      await browser.wait("document.getElementById('store-application-status').textContent.includes('Taslak kaydedildi')")
+      const [delegatedDraft]=await q(`select id,version,created_by_person_id,
+        updated_by_person_id,name from da_store_application_draft
+        where organization_id=$1 and name=$2`,[betaScope,delegatedName])
+      assert.equal(delegatedDraft.version,1)
+      assert.equal(delegatedDraft.created_by_person_id,A.person)
+      assert.equal(delegatedDraft.updated_by_person_id,A.person)
+      assert.equal((await q(`select count(*)::int n from da_audit_event e
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.target_id=$1 and e.action='organization.store_application_draft_saved'
+          and e.role_context='member'`,[delegatedDraft.id]))[0].n,1,
+        "Exactly one auditable delegated Member draft creation")
+      const memberNotices=await browser.callFunction(
+        "async function(org){const r=await fetch('/personal/notifications?organization='+encodeURIComponent(org));"+
+        "return {status:r.status,body:await r.json()}}",betaScope)
+      assert.equal(memberNotices.status,200)
+      assert.ok(memberNotices.body.notifications.some((n:any)=>
+        n.title==='Mağaza taslağı hazırlama izni verildi'))
+      // P2: preserve a genuinely indistinguishable employee, not just the
+      // same name: copy the original synthetic Member's visible contact too.
+      // With different phones the Owner must instead be able to pick one.
+      const [originalContact]=await q(
+        "select mobile_phone from da_person where id=$1",[A.person])
+      const [lateTwin]=await foundation.createPeople([{
+        display_name:"B22 Yetkili Test Çalışanı",
+        ...(typeof originalContact?.mobile_phone==="string"?
+          {mobile_phone:originalContact.mobile_phone}:{})
+      }])
+      const [lateTwinMembership]=await foundation.createMemberships([{
+        organization_id:betaScope,person_id:lateTwin.id,
+        role:"member",status:"active",protected_owner:false
+      }])
+      assert.ok(lateTwinMembership.id!==betaAdminMembership.id)
+      await reviewer.send("Page.bringToFront")
+      await reviewer.select(organizations[1].name,"owner")
+      await reviewer.wait("document.getElementById('store-application-list').textContent.includes("+
+        JSON.stringify(delegatedName)+")")
+      // Organization selection resolves before its separate protected grant
+      // list finishes loading. Wait for the real panel, not just the role.
+      await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden")
+      await reviewer.click("#store-draft-grants-refresh")
+      await reviewer.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+        "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===2")
+      const optionsAfterCollision=await reviewer.eval(
+        "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options,"+
+        "o=>({value:o.value,disabled:o.disabled,text:o.textContent}))")
+      assert.equal(optionsAfterCollision.find((o:any)=>
+        o.value===betaAdminMembership.id)?.disabled,false,
+        "Existing active grant remains selectable only for revocation")
+      assert.equal(optionsAfterCollision.find((o:any)=>
+        o.value===lateTwinMembership.id)?.disabled,true,
+        "New indistinguishable Member cannot receive a grant")
+      assert.ok(optionsAfterCollision.every((o:any)=>
+        !o.text.includes("daprs_")&&!o.text.includes("daomem_")),
+        "Never show technical IDs to distinguish employees")
+      await reviewer.eval("(()=>{const s=document.querySelector('#store-draft-grants-form select[name=membership_id]');"+
+        "s.value="+JSON.stringify(betaAdminMembership.id)+";"+
+        "s.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+      await reviewer.wait("document.querySelector('#store-draft-grants-form button[value=grant]').disabled && "+
+        "!document.querySelector('#store-draft-grants-form button[value=revoke]').disabled")
+      const postCount=reviewer.http.filter((h:any)=>
+        h.path==="/personal/store-draft-permissions"&&h.method==="POST").length
+      await reviewer.click("#store-draft-grants-form button[value=grant]")
+      assert.equal(reviewer.http.filter((h:any)=>
+        h.path==="/personal/store-draft-permissions"&&h.method==="POST").length,
+        postCount,"Ambiguous new grant must not dispatch an HTTP request")
+      assert.equal((await q(`select count(*)::int n
+        from da_organization_store_draft_permission
+        where person_id=$1 and organization_id=$2 and revoked_at is null`,
+        [A.person,betaScope]))[0].n,1,
+        "Original grant survives the name collision until revoked")
+      assert.equal((await q(`select count(*)::int n
+        from da_organization_store_draft_permission
+        where person_id=$1 and organization_id=$2`,
+        [lateTwin.id,betaScope]))[0].n,0,
+        "Late identical-name Member must never receive a grant")
+      await reviewer.click("#store-draft-grants-form button[value=revoke]")
+      await reviewer.wait("document.getElementById('store-draft-grants-status').textContent.includes('izni kaldırıldı')")
+      assert.equal((await q(`select count(*)::int n from da_organization_store_draft_permission
+        where id=$1 and revoked_at is not null`,[activeGrant.id]))[0].n,1)
+      const lateTwinAudits=await q(`select e.action,x.id as outbox_id
+        from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.organization_id=$1 and e.target_id=$2
+          and e.resource='store-draft-permission'
+        order by e.action`,[betaScope,A.person])
+      assert.deepEqual(lateTwinAudits.map((e:any)=>e.action),[
+        "organization.store_draft_permission_granted",
+        "organization.store_draft_permission_revoked"
+      ],"One canonical grant and revoke outbox after same-name late joiner")
+      assert.equal((await q(`select count(*)::int n from da_audit_event e
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.organization_id=$1 and e.target_id=$2
+          and e.resource='store-draft-permission'`,
+        [betaScope,lateTwin.id]))[0].n,0,
+        "Late identical-name Member has zero grant/revoke audit/outbox")
+      await browser.send("Page.bringToFront")
+      await browser.select(organizations[1].name,"member")
+      assert.equal(await browser.callFunction(
+        "async function(org){return (await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org))).status}",betaScope),403)
+      const deniedAfterRevoke=await browser.callFunction(
+        "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({action:'save_draft',organization_id:org,draft_id:id,expected_version:1,"+
+        "name:'Unauthorized edit',email:'revoke@example.invalid',currency_code:'try'})});return r.status}",
+        betaScope,delegatedDraft.id)
+      assert.equal(deniedAfterRevoke,403,"Revocation blocks stale HTTP draft writer")
+      assert.deepEqual(await q(`select name,version from da_store_application_draft where id=$1`,
+        [delegatedDraft.id]),[{name:delegatedName,version:1}],
+        "Revocation must retain unchanged Organization draft")
+      const revokedNotice=await browser.callFunction(
+        "async function(org){const r=await fetch('/personal/notifications?organization='+encodeURIComponent(org));"+
+        "return {status:r.status,body:await r.json()}}",betaScope)
+      assert.equal(revokedNotice.status,200)
+      assert.ok(revokedNotice.body.notifications.some((n:any)=>
+        n.title==='Mağaza taslağı hazırlama izni kaldırıldı'))
+      assert.equal((await q(`select count(*)::int n from da_store_application where organization_id=$1`,
+        [betaScope]))[0].n,0,
+        "Owner grants and Member draft edits must never create native Seller")
+      process.stdout.write("PASS B22 Chrome: Owner grants and revokes private Member Store draft access; separate signed-in Member saves durable Organization draft, cannot submit/grant, revocation blocks stale GET/POST, audit/outbox/notifications retained, zero Seller\n")
+    }finally{
+      // Restore only this synthetic legacy role fixture; no protected Owner,
+      // Store, or production membership is modified by the test.
+      await q(`update da_organization_membership set role='admin',
+        updated_at=clock_timestamp() where id=$1 and role='member' and protected_owner=false`,
+        [betaAdminMembership.id])
+      await browser.send("Page.bringToFront")
+      await browser.select(organizations[0].name,"owner")
+    }
+
+    // P2 regression: 101 real synthetic active Members in one disposable
+    // Organization. Owner must page every Member without leaking other
+    // Organizations, granting Seller rights or bypassing live authorization.
+    const [largeMemberOrg]=await foundation.createOrganizations([{
+      name:"B22 Member pages "+rand,status:"active"
+    }])
+    const syntheticPeople=await foundation.createPeople(
+      Array.from({length:101},(_,index)=>({
+        display_name:index===0?null:
+          "B22 Sentetik Çalışan "+String(index+1).padStart(3,"0")
+      })))
+    assert.equal(syntheticPeople.length,101)
+    const largeMemberships=await foundation.createMemberships([
+      {organization_id:largeMemberOrg.id,person_id:A.person,role:"owner",
+       status:"active",protected_owner:true},
+      ...syntheticPeople.map(person=>({
+        organization_id:largeMemberOrg.id,person_id:person.id,
+        role:"member",status:"active",protected_owner:false
+      }))
+    ])
+    assert.equal(largeMemberships.length,102)
+    const orderedMembers=await q(`select id,person_id
+      from da_organization_membership where organization_id=$1
+        and role='member' and status='active' order by id`,[largeMemberOrg.id])
+    assert.equal(orderedMembers.length,101)
+    const lastMember=orderedMembers[100]
+    // Modern registration has a phone. These synthetic membership fixtures
+    // deliberately bypassed that route, so equip eligible employees with
+    // distinct recorded phones while retaining three legacy no-contact cases.
+    const legacyNoContact=orderedMembers[2]
+    for(let i=0;i<orderedMembers.length;i++){
+      if([0,2,90].includes(i))continue
+      await q("update da_person set mobile_phone=$1,mobile_version=1 where id=$2",
+        ["+905551"+String(i+1).padStart(6,"0"),orderedMembers[i].person_id])
+    }
+    // P2: two active Members on DIFFERENT 30-row pages have identical
+    // names and no accepted invitation email. Neither may be grantable.
+    const nameTwins=[orderedMembers[0],orderedMembers[90]]
+    await q("update da_person set display_name=$1 where id=any($2::text[])",
+      ["B22 Aynı İsimli Çalışan",nameTwins.map(m=>m.person_id)])
+    // A matching name in an unrelated Organization MUST NOT affect this
+    // company's unambiguous last Member; synthetic data only.
+    const [unrelatedOrg]=await foundation.createOrganizations([{
+      name:"B22 Unrelated Member names "+rand,status:"active"
+    }])
+    const [unrelatedPerson]=await foundation.createPeople([{
+      display_name:"B22 Son Sayfa Çalışanı"
+    }])
+    await foundation.createMemberships([{
+      organization_id:unrelatedOrg.id,person_id:unrelatedPerson.id,
+      role:"member",status:"active",protected_owner:false
+    }])
+    // Keep a checkable display label on the exact last Member even when
+    // generated membership IDs sort in a different order from creation.
+    await q("update da_person set display_name=$1 where id=$2",
+      ["B22 Son Sayfa Çalışanı",lastMember.person_id])
+    await browser.send("Page.bringToFront")
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+
+      JSON.stringify(largeMemberOrg.name+" — owner")+")")
+    await browser.select(largeMemberOrg.name,"owner")
+    const pages=await browser.callFunction(
+      "async function(org){let after='',out=[];for(let i=0;i<5;i++){"+
+      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
+      "const d=await r.json();out.push({status:r.status,count:d.members?.length,"+
+      "grantCount:d.grants?.length,more:d.has_more,cursor:!!d.next_cursor,"+
+      "ambiguous:d.members?.filter(m=>!m.label_unique_in_organization).length,"+
+      "lastUnique:d.members?.find(m=>m.member_name==='B22 Son Sayfa Çalışanı')?.label_unique_in_organization??null});"+
+      "if(!d.has_more)break;after=d.next_cursor;}return out}",largeMemberOrg.id)
+    assert.deepEqual(pages,[
+      {status:200,count:30,grantCount:0,more:true,cursor:true,ambiguous:1,lastUnique:null},
+      {status:200,count:30,grantCount:0,more:true,cursor:true,ambiguous:0,lastUnique:null},
+      {status:200,count:30,grantCount:0,more:true,cursor:true,ambiguous:0,lastUnique:null},
+      {status:200,count:11,grantCount:0,more:false,cursor:false,ambiguous:1,lastUnique:true}
+    ],"101 Members: cross-page name twins ambiguous, foreign Company ignored, last unique")
+    // Unique name is NOT sufficient for a new grant when this older
+    // Member has neither phone nor accepted company invitation email.
+    const emptyLegacySelection=await browser.callFunction(
+      "async function(org,id){const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org));const d=await r.json();"+
+      "const member=d.members.find(m=>m.membership_id===id);"+
+      "return {status:r.status,phone:member?.mobile_phone,email:member?.invitation_email,"+
+      "name:member?.member_name,unique:member?.label_unique_in_organization}}",
+      largeMemberOrg.id,legacyNoContact.id)
+    assert.equal(emptyLegacySelection.status,200)
+    assert.equal(emptyLegacySelection.phone,null)
+    assert.equal(emptyLegacySelection.email,null)
+    assert.equal(emptyLegacySelection.unique,true,
+      "Unique name alone is not adequate proof of intended grant target")
+    const missingContactPost=await browser.callFunction(
+      "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",
+      largeMemberOrg.id,legacyNoContact.id)
+    assert.equal(missingContactPost,403,
+      "Forged direct Owner POST must deny otherwise unique name with no contact")
+    // A real invitation is created with a valid address, then ONLY this
+    // isolated PostgreSQL fixture corrupts that historical value to "invalid@".
+    // No real user, external SMTP or production record is involved.
+    const legacyBadInvite=await foundation.createOrganizationInvitation({
+      organization_id:largeMemberOrg.id,
+      actor_person_id:A.person,actor_type:"user",actor_id:A.actor,
+      email:"b22-legacy-"+rand+"@example.invalid",role:"member"
+    })
+    await q(`update da_organization_invitation
+      set status='accepted',accepted_by_person_id=$1,
+          accepted_at=clock_timestamp(),recipient_email='invalid@'
+      where id=$2 and organization_id=$3`,
+      [legacyNoContact.person_id,legacyBadInvite.id,largeMemberOrg.id])
+    const invalidAddressList=await browser.callFunction(
+      "async function(org,id){const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org));const d=await r.json();"+
+      "const member=d.members.find(m=>m.membership_id===id);"+
+      "return {status:r.status,phone:member?.mobile_phone,email:member?.invitation_email}}",
+      largeMemberOrg.id,legacyNoContact.id)
+    assert.deepEqual(invalidAddressList,{status:200,phone:null,email:null},
+      "Malformed accepted invitation email must not be exposed as usable contact")
+    const badEmailDirectPost=await browser.callFunction(
+      "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'grant',organization_id:org,"+
+      "membership_id:id})});return r.status}",
+      largeMemberOrg.id,legacyNoContact.id)
+    assert.equal(badEmailDirectPost,403,
+      "Owner direct grant cannot treat invalid@ as a contact")
+    assert.equal((await q(`select count(*)::int n
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2`,
+      [largeMemberOrg.id,legacyNoContact.person_id]))[0].n,0)
+    assert.equal((await q(`select count(*)::int n from da_audit_event
+      where organization_id=$1 and target_id=$2
+        and resource='store-draft-permission'`,
+      [largeMemberOrg.id,legacyNoContact.person_id]))[0].n,0,
+      "Denied invalid invitation must not produce grant or audit")
+    // Also reject a forged grant with a *valid-looking* but identical mobile
+    // for two same-name Members. This proves the server's collision check is
+    // independent of the missing-contact check and of the disabled UI.
+    await q("update da_person set mobile_phone=$1 where id=any($2::text[])",
+      ["+905550001777",nameTwins.map(m=>m.person_id)])
+    // A truncated address and a numeric-TLD address rejected by the UI
+    // must not become two distinct SQL identities (previous P2 regression).
+    // Two different corrupt invited addresses are *not* two visible labels.
+    // Cross-page checks and POST must normalize both to the same absent email,
+    // even though raw database strings differ. Only disposable test data.
+    for(let i=0;i<nameTwins.length;i++){
+      const invite=await foundation.createOrganizationInvitation({
+        organization_id:largeMemberOrg.id,
+        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,
+        email:"b22-corrupt-label-"+rand+"-"+i+"@example.invalid",role:"member"
+      })
+      await q(`update da_organization_invitation
+        set status='accepted',accepted_by_person_id=$1,accepted_at=clock_timestamp(),
+            recipient_email=$2
+        where id=$3 and organization_id=$4`,
+        [nameTwins[i].person_id,i===0?"invalid@":"broken@host.123",invite.id,largeMemberOrg.id])
+    }
+    const corruptLabels=await browser.callFunction(
+      "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
+      "let after='',found=[];for(let i=0;i<5;i++){"+
+      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
+      "const data=await r.json();if(r.status!==200)throw Error('permissions GET denied');"+
+      "for(const m of data.members){if(ids.includes(m.membership_id))"+
+      "found.push({id:m.membership_id,email:m.invitation_email,"+
+      "phone:m.mobile_phone,unique:m.label_unique_in_organization});"+
+      "}if(!data.has_more)break;after=data.next_cursor;}return found}",
+      largeMemberOrg.id,JSON.stringify(nameTwins.map(m=>m.id)))
+    assert.equal(corruptLabels.length,2)
+    assert.ok(corruptLabels.every((m:any)=>m.email===null&&
+      m.phone==="+905550001777"&&m.unique===false),
+      "Two malformed invites must be indistinguishable in both Owner GET and server label checks")
+    const ambiguousContactPost=await browser.callFunction(
+      "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});return r.status}",
+      largeMemberOrg.id,nameTwins[0].id)
+    assert.equal(ambiguousContactPost,403,
+      "Owner direct grant must reject two visible identical name+mobile recipients")
+    await q("update da_person set mobile_phone=null where id=any($1::text[])",
+      [nameTwins.map(m=>m.person_id)])
+    assert.equal((await q(`select count(*)::int n from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2`,
+      [largeMemberOrg.id,legacyNoContact.person_id]))[0].n,0)
+    assert.equal((await q(`select count(*)::int n from da_audit_event
+      where organization_id=$1 and target_id=$2 and resource='store-draft-permission'`,
+      [largeMemberOrg.id,legacyNoContact.person_id]))[0].n,0,
+      "Denied unknown contact must leave no audit record")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden")
+    const noContactOption=await browser.eval(
+      "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options,"+
+      "o=>({value:o.value,disabled:o.disabled}))")
+    assert.equal(noContactOption.find((o:any)=>o.value===legacyNoContact.id)?.disabled,true,
+      "Owner UI must also disable granting to a unique-name no-contact legacy employee")
+    assert.equal(await reviewer.callFunction(
+      "async function(org){return (await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org))).status}",largeMemberOrg.id),403,
+      "A different Person without this Organization may not list its Members")
+    assert.equal(await browser.callFunction(
+      "async function(org){return (await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org)+'&after=../foreign')).status}",largeMemberOrg.id),400,
+      "Forged pagination cursor must be rejected before a database read")
+    const pageSizes=[30,30,30,11]
+    for(let index=0;index<pageSizes.length;index++){
+      await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+        "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length==="+pageSizes[index])
+      const nav=await browser.eval(
+        "({next:!document.getElementById('store-draft-grants-older').hidden,"+
+        "prev:!document.getElementById('store-draft-grants-newer').hidden})")
+      const visibleMembershipLabels=await browser.eval(
+        "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options,"+
+        "o=>({value:o.value,text:o.textContent,disabled:o.disabled}))")
+      assert.ok(visibleMembershipLabels.every((o:any)=>
+        !o.text.includes("daprs_")&&!o.text.includes("daomem_")),
+        "Owner must not see internal Person/Membership IDs as staff names")
+      if(index===0||index===3){
+        const twin=index===0?nameTwins[0]:nameTwins[1]
+        const option=visibleMembershipLabels.find((o:any)=>o.value===twin.id)
+        assert.equal(option?.disabled,true,
+          "Cross-page identical Member name with no invitation must be disabled")
+        const postBefore=browser.http.filter((h:any)=>
+          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length
+        await browser.eval("document.querySelector('#store-draft-grants-form select[name=membership_id]').value="+
+          JSON.stringify(twin.id))
+        await browser.click("#store-draft-grants-form button[value=grant]")
+        assert.equal(browser.http.filter((h:any)=>
+          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length,
+          postBefore,"Disabled name twin must not send any grant POST")
+        assert.equal((await q(`select count(*)::int n
+          from da_organization_store_draft_permission
+          where organization_id=$1 and person_id=$2`,
+          [largeMemberOrg.id,twin.person_id]))[0].n,0,
+          "Cross-page ambiguous identity cannot gain a Store draft grant")
+        assert.equal((await q(`select count(*)::int n from da_audit_event e
+          join da_audit_outbox x on x.source_audit_event_id=e.id
+          where e.organization_id=$1 and e.target_id=$2
+            and e.resource='store-draft-permission'`,
+          [largeMemberOrg.id,twin.person_id]))[0].n,0,
+          "No audit/outbox must be created for an ambiguous grant")
+        // The defensive submit handler may disable both form actions.
+        // Recover by re-reading permissions through the real Owner UI,
+        // never by overriding the disabled state in the DOM.
+        await browser.click("#store-draft-grants-refresh")
+        await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+          "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length==="+pageSizes[index]+
+          " && !document.querySelector('#store-draft-grants-form button[value=grant]').disabled")
+      }
+      assert.deepEqual(nav,{next:index<3,prev:index>0},
+        "Visible Owner pagination controls must reflect each real page")
+      if(index<3)await browser.click("#store-draft-grants-older")
+    }
+    const memberOnFinalPage=await browser.eval(
+      "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options)"+
+      ".some(o=>o.value==="+JSON.stringify(lastMember.id)+")")
+    assert.equal(memberOnFinalPage,true,"101st Member must be selectable in Owner UI")
+    await browser.eval(
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').value="+
+      JSON.stringify(lastMember.id))
+    assert.ok(String(await browser.eval(
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').selectedOptions[0].textContent"))
+      .includes("B22 Son Sayfa Çalışanı"),
+      "Owner selects a named Member rather than an opaque internal code")
+    // The Owner has already selected the exact Member in this Organization.
+    // Their own mobile edit must NOT force reselecting or deny the grant.
+    // The subsequent real POST (with a deliberately truncated browser-only
+    // response) proves the grant persists for this Member, not a namesake.
+    const shownPhone=(await q("select mobile_phone from da_person where id=$1",
+      [lastMember.person_id]))[0].mobile_phone
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').selectedOptions[0].textContent.includes("+
+      JSON.stringify(shownPhone)+")"),true)
+    await q("update da_person set mobile_phone=$1,mobile_version=mobile_version+1 where id=$2",
+      ["+905551777777",lastMember.person_id])
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').value"),
+      lastMember.id,"Phone update must never change the selected Membership target")
+    assert.equal((await q(`select count(*)::int n from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2 and revoked_at is null`,
+      [largeMemberOrg.id,lastMember.person_id]))[0].n,0,
+      "Phone edit alone never creates a grant")
+    // The authorized POST commits, but only this browser's response body
+    // is synthetically broken. The UI must say UNCERTAIN rather than DENIED.
+    await browser.eval("(()=>{const original=window.fetch.bind(window);"+
+      "window.__b22GrantOriginalFetch=window.fetch;"+
+      "window.fetch=(resource,options)=>{const path=typeof resource==='string'?resource:resource?.url;"+
+      "if(path==='/personal/store-draft-permissions'&&options?.method==='POST')"+
+      "return original(resource,options).then(r=>r.status===200?"+
+      "new Response('{\\\"status\\\":',{status:200,headers:{'content-type':'application/json'}}):r);"+
+      "return original(resource,options)};return true})()")
+    await browser.click("#store-draft-grants-form button[value=grant]")
+    await until(async()=>(await q(`select count(*)::int n
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2 and membership_id=$3
+        and revoked_at is null`,
+      [largeMemberOrg.id,lastMember.person_id,lastMember.id]))[0].n===1,
+      19000,"101st Member grant persists despite a mobile update after Owner selection")
+    await browser.wait("document.getElementById('store-draft-grants-status').textContent.includes('sonucu belirsiz')")
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-draft-grants-form button[value=grant]').disabled && "+
+      "document.querySelector('#store-draft-grants-form button[value=revoke]').disabled"),true,
+      "Truncated successful POST must leave duplicate grants/revokes disabled")
+    await browser.eval("(()=>{window.fetch=window.__b22GrantOriginalFetch;delete window.__b22GrantOriginalFetch})()")
+    await browser.click("#store-draft-grants-refresh")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+      "document.getElementById('store-draft-grants-list').textContent.includes('B22 Son Sayfa Çalışanı') && "+
+      "document.getElementById('store-draft-grants-list').textContent.includes('taslak: Yetkili')")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+      "document.querySelector('#store-draft-grants-form button[value=revoke]').disabled===false")
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').value"),
+      lastMember.id,"Refresh must preserve the selected Member on page four")
+    await browser.click("#store-draft-grants-form button[value=revoke]")
+    await until(async()=>(await q(`select count(*)::int n
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2 and membership_id=$3
+        and revoked_at is not null`,
+      [largeMemberOrg.id,lastMember.person_id,lastMember.id]))[0].n===1,
+      19000,"101st Member's revocation persisted")
+    const largeAudits=await q(`select e.action,x.id as outbox_id
+      from da_audit_event e join da_audit_outbox x
+        on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.target_id=$2
+        and e.action in ('organization.store_draft_permission_granted',
+                         'organization.store_draft_permission_revoked')
+      order by e.action`,[largeMemberOrg.id,lastMember.person_id])
+    assert.deepEqual(largeAudits.map(e=>e.action),[
+      "organization.store_draft_permission_granted",
+      "organization.store_draft_permission_revoked"
+    ],"Owner grant and revoke from page four must each have canonical outbox")
+    assert.equal((await q(`select count(*)::int n
+      from da_store_application where organization_id=$1`,
+      [largeMemberOrg.id]))[0].n,0,
+      "Employee-list pagination must never create a native Seller")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+      "!document.getElementById('store-draft-grants-newer').hidden")
+    await browser.click("#store-draft-grants-newer")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===30")
+
+    // P2: two different Members across page 1/page 4 each get a valid grant
+    // while distinguishable, then acquire the same visible name. Neither
+    // individual revoke may be offered or accepted. No silent all-revoke.
+    const twoGrantedNamesakes=[orderedMembers[1],orderedMembers[91]]
+    assert.equal(twoGrantedNamesakes.length,2)
+    const grantBoth=await browser.callFunction(
+      "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
+      "const session=await(await fetch('/personal/session')).json();"+
+      "const statuses=[];for(const id of ids){const r=await fetch('/personal/store-draft-permissions',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});"+
+      "statuses.push(r.status)}return statuses}",largeMemberOrg.id,
+      JSON.stringify(twoGrantedNamesakes.map(m=>m.id)))
+    assert.deepEqual(grantBoth,[200,200],
+      "Both distinct Members originally receive individually authorized grants")
+    // After granting, emulate a legacy data regression where both contacts
+    // become absent. Together with the same name they are truly ambiguous.
+    await q("update da_person set mobile_phone=null where id=any($1::text[])",
+      [twoGrantedNamesakes.map(m=>m.person_id)])
+    await q("update da_person set display_name=$1 where id=any($2::text[])",
+      ["B22 İki Önceden Yetkili Adaş",twoGrantedNamesakes.map(m=>m.person_id)])
+    const collisionPages=await browser.callFunction(
+      "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
+      "let after='',found=[],pages=[];for(let i=0;i<5;i++){"+
+      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
+      "const data=await r.json();pages.push(r.status);"+
+      "for(const m of data.members){if(ids.includes(m.membership_id))"+
+      "found.push({id:m.membership_id,flag:m.other_active_grant_same_label,"+
+      "unique:m.label_unique_in_organization,granted:data.grants.some(g=>g.membership_id===m.membership_id)});"+
+      "}if(!data.has_more)break;after=data.next_cursor;}return {found,pages}}",
+      largeMemberOrg.id,JSON.stringify(twoGrantedNamesakes.map(m=>m.id)))
+    assert.deepEqual(collisionPages.pages,[200,200,200,200],
+      "Owner protected GET must read all four pages after label collision")
+    assert.deepEqual(collisionPages.found.map((m:any)=>[m.flag,m.unique,m.granted]),
+      [[true,false,true],[true,false,true]],
+      "Two active same-label grants must be marked ambiguous across all pages")
+    // Navigate page 3 -> 2 -> 1, test the first Member; page 1 -> 4
+    // for the other. Do not alter DOM option disabled status in tests.
+    for(let i=0;i<2;i++){
+      await browser.click("#store-draft-grants-newer")
+      await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+        "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===30")
+    }
+    for(let index=0;index<4;index++){
+      if(index===3){
+        await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+          "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===11")
+      }
+      if(index===0||index===3){
+        await browser.click("#store-draft-grants-refresh")
+        await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+          "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length==="+
+          (index===3?11:30))
+        const selected=index===0?twoGrantedNamesakes[0]:twoGrantedNamesakes[1]
+        const decision=await browser.eval(
+          "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options,"+
+          "o=>({value:o.value,disabled:o.disabled,text:o.textContent}))")
+        const option=decision.find((o:any)=>o.value===selected.id)
+        assert.equal(option?.disabled,true,
+          "Wrong-person individual revoke must be disabled on every page")
+        assert.ok(option.text.includes("birden fazla etkin izin"),
+          "Owner must see why conflicting grants are not individually revocable")
+        const before=browser.http.filter((h:any)=>
+          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length
+        await browser.eval("(()=>{const select=document.querySelector("+
+          "'#store-draft-grants-form select[name=membership_id]');"+
+          "select.value="+JSON.stringify(selected.id)+";"+
+          "select.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+        assert.equal(await browser.eval(
+          "document.querySelector('#store-draft-grants-form button[value=revoke]').disabled"),
+          true,"User cannot submit ambiguous individual revoke")
+        await browser.click("#store-draft-grants-form button[value=revoke]")
+        assert.equal(browser.http.filter((h:any)=>
+          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length,before,
+          "Disabled ambiguous revoke must send zero POST requests")
+      }
+      if(index<3){
+        await browser.click("#store-draft-grants-older")
+        await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+          "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length==="+
+          (index===2?11:30))
+      }
+    }
+    const deniedAmbiguous=await browser.callFunction(
+      "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
+      "const session=await(await fetch('/personal/session')).json();"+
+      "const result=[];for(const id of ids){const r=await fetch('/personal/store-draft-permissions',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({action:'revoke',organization_id:org,membership_id:id})});"+
+      "result.push(r.status)}return result}",largeMemberOrg.id,
+      JSON.stringify(twoGrantedNamesakes.map(m=>m.id)))
+    assert.deepEqual(deniedAmbiguous,[403,403],
+      "Even a direct Owner POST may not silently revoke the wrong namesake")
+    const surviving=await q(`select person_id,count(*)::int n
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=any($2::text[])
+        and revoked_at is null group by person_id order by person_id`,
+      [largeMemberOrg.id,twoGrantedNamesakes.map(m=>m.person_id)])
+    assert.equal(surviving.length,2)
+    assert.ok(surviving.every((m:any)=>m.n===1),
+      "Rejected ambiguous revocations must leave both original grants intact")
+    const onlyGrantAudits=await q(`select e.action,count(*)::int n
+      from da_audit_event e join da_audit_outbox x
+        on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.target_id=any($2::text[])
+        and e.resource='store-draft-permission'
+      group by e.action order by e.action`,
+      [largeMemberOrg.id,twoGrantedNamesakes.map(m=>m.person_id)])
+    assert.deepEqual(onlyGrantAudits,[{
+      action:"organization.store_draft_permission_granted",n:2
+    }],"Two original grants but zero erroneous revoke audit/outbox")
+    assert.equal((await q(`select count(*)::int n
+      from da_store_application where organization_id=$1`,
+      [largeMemberOrg.id]))[0].n,0,
+      "Ambiguous permission handling must never create a Seller")
+
+    // Real registration requires a mobile phone and invitation requires email.
+    // Earlier fixtures deliberately lacked BOTH contacts; prove that an
+    // existing distinct Person mobile restores a single Member's revoke,
+    // without adding another table, granting anyone access, or mass-revoking.
+    const employeeMobiles=["+905550010001","+905550010002"]
+    for(let i=0;i<2;i++)await q(
+      "update da_person set mobile_phone=$1,mobile_version=1 where id=$2",
+      [employeeMobiles[i],twoGrantedNamesakes[i].person_id])
+    const restoredContacts=await browser.callFunction(
+      "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
+      "let after='',found=[],pages=[];for(let i=0;i<5;i++){"+
+      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
+      "const data=await r.json();pages.push(r.status);"+
+      "for(const m of data.members){if(ids.includes(m.membership_id))"+
+      "found.push({id:m.membership_id,phone:m.mobile_phone,"+
+      "flag:m.other_active_grant_same_label,unique:m.label_unique_in_organization,"+
+      "granted:data.grants.some(g=>g.membership_id===m.membership_id)});"+
+      "}if(!data.has_more)break;after=data.next_cursor;}return {found,pages}}",
+      largeMemberOrg.id,JSON.stringify(twoGrantedNamesakes.map(m=>m.id)))
+    assert.deepEqual(restoredContacts.pages,[200,200,200,200])
+    assert.deepEqual(restoredContacts.found.map((m:any)=>
+      [m.phone,m.flag,m.unique,m.granted]),[
+      [employeeMobiles[0],false,true,true],
+      [employeeMobiles[1],false,true,true]
+    ],"Two same-name Members with distinct recorded mobile numbers are individually selectable")
+
+    // On page four the Owner intentionally selects only the second Member.
+    await browser.click("#store-draft-grants-refresh")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===11")
+    const targetEmployee=twoGrantedNamesakes[1]
+    const candidates=await browser.eval(
+      "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options,"+
+      "o=>({value:o.value,text:o.textContent,disabled:o.disabled}))")
+    const candidate=candidates.find((c:any)=>c.value===targetEmployee.id)
+    assert.equal(candidate?.disabled,false,
+      "The intended same-name Member is individually selectable with a different mobile")
+    assert.ok(candidate?.text.includes(employeeMobiles[1]),
+      "The Owner sees the intended Member's phone before the single-person revoke")
+    await browser.eval("(()=>{const select=document.querySelector("+
+      "'#store-draft-grants-form select[name=membership_id]');"+
+      "select.value="+JSON.stringify(targetEmployee.id)+";"+
+      "select.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+    await browser.wait("!document.querySelector('#store-draft-grants-form button[value=revoke]').disabled")
+    await browser.click("#store-draft-grants-form button[value=revoke]")
+    await until(async()=>(await q(`select count(*)::int n
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2 and revoked_at is not null`,
+      [largeMemberOrg.id,targetEmployee.person_id]))[0].n===1,
+      19000,"Only the selected same-name Member's grant is revoked")
+    const finalGrants=await q(`select person_id,
+      count(*) filter(where revoked_at is null)::int active,
+      count(*) filter(where revoked_at is not null)::int revoked
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=any($2::text[])
+      group by person_id`,
+      [largeMemberOrg.id,twoGrantedNamesakes.map(m=>m.person_id)])
+    assert.deepEqual(
+      finalGrants.map((g:any)=>[g.person_id,g.active,g.revoked]).sort((a:any,b:any)=>a[0].localeCompare(b[0])),
+      [[twoGrantedNamesakes[0].person_id,1,0],[twoGrantedNamesakes[1].person_id,0,1]]
+        .sort((a:any,b:any)=>a[0].localeCompare(b[0])),
+      "The other same-name Member must retain the original active grant")
+    const revokeAudits=await q(`select e.target_id
+      from da_audit_event e join da_audit_outbox x
+        on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.action='organization.store_draft_permission_revoked'
+        and e.target_id=any($2::text[])`,
+      [largeMemberOrg.id,twoGrantedNamesakes.map(m=>m.person_id)])
+    assert.deepEqual(revokeAudits,[{target_id:targetEmployee.person_id}],
+      "Only the intended Person has a canonical revoke audit/outbox")
+    assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1",
+      [largeMemberOrg.id]))[0].n,0,"A contact-based revoke never starts native Seller submission")
+    process.stdout.write(
+      "PASS B22 Chrome: same-name active Members with distinct canonical mobiles on pages 1 and 4: Owner revokes only selected page-4 member, other grant remains; exactly one revoke audit/outbox, zero Seller\\n")
+
+    await browser.select(organizations[0].name,"owner")
+    process.stdout.write("PASS B22 Chrome: two existing active grants with identical later name across page 1 and 4: no ambiguous individual revoke UI/HTTP/audit, both grants intact, zero Seller\\n")
+    process.stdout.write("PASS B22 Chrome: 101 active Members; cross-page identical no-invite names disabled, zero unauthorized grants/audit/outbox, unrelated Organization ignored; last identifiable Member grant/revoke and uncertain POST recovery, audit/outbox, foreign Person 403, invalid cursor 400, zero Seller\\n")
+
+    // B was originally an isolated no-phone fixture. Restore a standard
+    // current contact for the distinct existing Member rejoin test.
+    await q("update da_person set mobile_phone=$1,mobile_version=1 where id=$2",
+      ["+905551888888",B.person])
+    // Distinct disposable Organization: a grant from an ended membership
+    // cannot revive when the same Person rejoins; the Owner must explicitly
+    // authorize the NEW membership. Preserve both source audits and history.
+    const [rejoinOrg]=await foundation.createOrganizations([{
+      name:"B22 Rejoin "+rand,status:"active"
+    }])
+    const [rejoinOwner,rejoinOld]=await foundation.createMemberships([
+      {organization_id:rejoinOrg.id,person_id:A.person,role:"owner",
+       status:"active",protected_owner:true},
+      {organization_id:rejoinOrg.id,person_id:B.person,role:"member",
+       status:"active",protected_owner:false}
+    ])
+    assert.ok(rejoinOwner.id&&rejoinOld.id)
+    await browser.send("Page.bringToFront")
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+
+      JSON.stringify(rejoinOrg.name+" — owner")+")")
+    await browser.select(rejoinOrg.name,"owner")
+    const grantRejoin=async(membershipId:string)=>browser.callFunction(
+      "async function(org,id){const session=await(await fetch('/personal/session')).json();"+
+      "const response=await fetch('/personal/store-draft-permissions',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});"+
+      "return {status:response.status,body:await response.json()}}",
+      rejoinOrg.id,membershipId)
+    const firstRejoinGrant=await grantRejoin(rejoinOld.id)
+    assert.equal(firstRejoinGrant.status,200)
+    assert.equal(firstRejoinGrant.body.status,"active")
+    const ended=await browser.callFunction(
+      "async function(org,id){const session=await(await fetch('/personal/session')).json();"+
+      "const response=await fetch('/personal/memberships',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({organization_id:org,membership_id:id})});"+
+      "return {status:response.status,body:await response.json()}}",
+      rejoinOrg.id,rejoinOld.id)
+    assert.equal(ended.status,200,"Real Owner revokes the Member using existing membership API")
+    const endedRows=await q(`select status,revoked_at from da_organization_membership
+      where id=$1`,[rejoinOld.id])
+    assert.equal(endedRows.length,1)
+    assert.equal(endedRows[0].status,"revoked")
+    assert.ok(endedRows[0].revoked_at)
+    // An ended membership must still receive its own private revocation
+    // receipt. It must NOT regain company access or expose its former name.
+    const exitNoticeRecords=await q(`select n.id from da_notification_receipt n
+      join da_audit_event a on a.id=n.audit_event_id
+      where n.person_id=$1 and a.organization_id=$2
+        and a.action='organization.store_draft_permission_revoked'
+        and a.new_values->>'source'='membership_exit'`,[B.person,rejoinOrg.id])
+    assert.equal(exitNoticeRecords.length,1,
+      "Membership exit must persist one personal revocation receipt")
+    const exitNoticeId=exitNoticeRecords[0].id
+    await reviewer.send("Page.bringToFront")
+    reviewer.phase="member-exit-personal-notice"
+    const personalSessionAfterExit=await reviewer.callFunction(
+      "async function(){return (await fetch('/personal/session')).status}")
+    assert.equal(personalSessionAfterExit,200,
+      "Organization membership revocation must not silently erase the Person sign-in")
+    // Reload the real former Member on a stale Organization-specific URL.
+    // Company authorization must still fail, but the personal bell must
+    // return as an unscoped Person resource, not require the old membership.
+    await reviewer.eval(`history.replaceState(null,'','/personal?organization='+encodeURIComponent(${JSON.stringify(rejoinOrg.id)}))`)
+    await reviewer.send("Page.reload",{ignoreCache:true})
+    try{
+      await reviewer.wait("location.pathname==='/personal' && location.search==='' && !document.getElementById('notification-bell').hidden")
+    }catch{
+      // Diagnostic is intentionally bounded to booleans and HTTP status codes:
+      // no Person, Organization identifiers, page text, tokens or credentials.
+      const safeState=await reviewer.eval("({queryPresent:!!location.search,documentHidden:document.hidden,loginHidden:document.getElementById('login').hidden,workspaceHidden:document.getElementById('workspace').hidden,bellHidden:document.getElementById('notification-bell').hidden})")
+      const safeHttp=reviewer.http.filter((h:any)=>
+        ['/personal','/personal/session','/personal/organizations',
+         '/personal/notifications','/personal/links'].includes(h.path))
+        .slice(-12).map((h:any)=>({path:h.path,status:h.status}))
+      throw Error("B22 member exit personal inbox UI not ready: "+
+        JSON.stringify({safeState,safeHttp}))
+    }
+    await reviewer.click("#notification-bell")
+    await reviewer.wait("document.getElementById('notification-list').textContent.includes('Mağaza taslağı hazırlama izni kaldırıldı')")
+    const exitedInboxText=String(await reviewer.eval("document.getElementById('notification-list').textContent"))
+    assert.equal(exitedInboxText.includes(rejoinOrg.name),false,
+      "Former Member's private bell must not reveal exited Organization name")
+    const exitFeed=await reviewer.callFunction(
+      "async function(){const r=await fetch('/personal/notifications');return {status:r.status,body:await r.json()}}")
+    assert.equal(exitFeed.status,200)
+    const exitNotice=exitFeed.body.notifications.find((n:any)=>n.id===exitNoticeId)
+    assert.ok(exitNotice,"Former Member must see personal exit notification")
+    assert.equal(exitNotice.title,"Mağaza taslağı hazırlama izni kaldırıldı")
+    assert.equal(exitNotice.context,null,
+      "Former Organization identity must not cross exited membership boundary")
+    assert.equal(await reviewer.callFunction(
+      "async function(org){return (await fetch('/personal/notifications?organization='+encodeURIComponent(org))).status}",
+      rejoinOrg.id),403,
+      "Former Member must not recover scoped Organization notifications")
+    await browser.send("Page.bringToFront")
+    assert.equal(await browser.callFunction(
+      "async function(id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/personal/notifications',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({id})});return r.status}",exitNoticeId),403,
+      "Even a protected Owner must not read another Person's private receipt")
+    await reviewer.send("Page.bringToFront")
+    const exitRead=await reviewer.callFunction(
+      "async function(id){const s=await(await fetch('/personal/session')).json();const r=await fetch('/personal/notifications',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({id})});return r.status}",exitNoticeId)
+    assert.equal(exitRead,200,"Recipient can mark ended-membership notice as read")
+    const [exitReadRow]=await q(`select read_at from da_notification_receipt where id=$1`,[exitNoticeId])
+    assert.ok(exitReadRow.read_at,"Private notification read must persist")
+    await browser.send("Page.bringToFront")
+    // Synthetic isolated reactivation mirrors the existing unique
+    // Person/Organization membership identity. The re-acceptance workflow
+    // itself is outside this focused authorization regression.
+    const restored=await q(`update da_organization_membership
+      set status='active',revoked_at=null,updated_at=clock_timestamp()
+      where id=$1 and status='revoked' and protected_owner=false
+      returning id`,[rejoinOld.id])
+    assert.equal(restored.length,1)
+    assert.equal((await q(`select count(*)::int n from da_organization_store_draft_permission
+      where membership_id=$1 and revoked_at is null`,[rejoinOld.id]))[0].n,0,
+      "An invitation restoring the same membership ID cannot revive stale draft authority")
+    const secondRejoinGrant=await grantRejoin(rejoinOld.id)
+    assert.equal(secondRejoinGrant.status,200,
+      "Owner must explicitly grant a reactivated membership new Store draft permission")
+    assert.equal(secondRejoinGrant.body.status,"active")
+    assert.notEqual(secondRejoinGrant.body.grant_id,firstRejoinGrant.body.grant_id)
+    const rejoinRows=await q(`select id,membership_id,revoked_at
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=$2 order by created_at,id`,
+      [rejoinOrg.id,B.person])
+    assert.equal(rejoinRows.length,2)
+    assert.equal(rejoinRows.filter((row:any)=>row.revoked_at===null).length,1)
+    assert.equal(rejoinRows.find((row:any)=>row.id===firstRejoinGrant.body.grant_id)?.revoked_at!==null,true)
+    assert.equal(rejoinRows.find((row:any)=>row.id===secondRejoinGrant.body.grant_id)?.revoked_at,null)
+    assert.ok(rejoinRows.every((row:any)=>row.membership_id===rejoinOld.id),
+      "The canonical Organization membership ID is reused; the authority grant ID is not")
+    const rejoinAudits=await q(`select e.action from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.target_id=$2
+      and e.resource='store-draft-permission'
+      order by e.occurred_at,e.id`,[rejoinOrg.id,B.person])
+    assert.deepEqual(rejoinAudits.map((row:any)=>row.action).sort(),[
+      "organization.store_draft_permission_granted",
+      "organization.store_draft_permission_granted",
+      "organization.store_draft_permission_revoked"
+    ])
+    await browser.select(organizations[0].name,"owner")
+    process.stdout.write("PASS B22 Chrome/PG16: revoked Member loses draft grant atomically; synthetic same-membership reactivation grants no automatic right; fresh Owner grant and canonical audit/outbox verified\n")
 
     // This is the very same task-created membership whose Owner authority
     // was removed above; do not create a duplicate Person/Organization row.
@@ -2597,6 +3569,12 @@ export default async function({container}:any){
     }
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
+    // The earlier independent Member/Owner acceptance uses two task-owned
+    // Chrome processes. Refresh this real authenticated document before
+    // opening the existing price-group workspace; no DOM role spoofing.
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+
+      JSON.stringify(organizations[0].name+" — owner")+")")
     await browser.select(organizations[0].name,"owner")
     await browser.wait("!document.getElementById('store-price-group-panel').hidden")
     const groupListAuditStart=Number((await q(
@@ -9422,10 +10400,15 @@ export default async function({container}:any){
         })()`)
         assert.equal(unauthorizedReview,403,
           "Applicant cannot read the platform-wide submitted queue")
+        await reviewChrome.send("Page.bringToFront")
+        await reviewChrome.wait("document.visibilityState==='visible'")
         await reviewChrome.send("Page.reload",{ignoreCache:true})
         await reviewChrome.wait("!document.getElementById('workspace').hidden")
         await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()")
-        await reviewChrome.wait("!document.getElementById('organization-review-more').hidden")
+        await reviewChrome.wait("!document.getElementById('organization-review-panel').hidden && "+
+          "!document.getElementById('organization-review-more').hidden && "+
+          "(()=>{const r=document.getElementById('organization-review-more').getBoundingClientRect();"+
+          "return r.width>0&&r.height>0})()")
         assert.equal(await reviewChrome.eval(
           "document.querySelectorAll('#organization-review-list p').length"),100)
         await reviewChrome.click("#organization-review-more")

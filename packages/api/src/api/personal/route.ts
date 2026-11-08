@@ -265,6 +265,21 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     </form>
     <button id="store-applications-refresh" type="button">Başvuruları ve taslakları yenile</button>
   </section>
+
+  <section id="store-draft-grants-panel" hidden style="grid-column:1/-1">
+    <h3>Çalışanın mağaza başvuru taslağı izni</h3>
+    <p>Yalnız korunan Owner, kendi şirketindeki etkin üyeye süresiz kişisel taslak izni verir veya geri alır. Bu izin mağaza başvurusu gönderme ya da mağaza açma hakkı vermez.</p>
+    <p id="store-draft-grants-status" role="status" aria-live="polite"></p>
+    <form id="store-draft-grants-form">
+      <label>Şirket üyesi<select name="membership_id" required></select></label>
+      <button type="submit" name="action" value="grant">Taslak için Yetkili yap</button>
+      <button type="submit" name="action" value="revoke">Taslak için Yetkisiz yap</button>
+    </form>
+    <div id="store-draft-grants-list"></div>
+    <button type="button" id="store-draft-grants-newer" hidden>Önceki çalışanlar</button>
+    <button type="button" id="store-draft-grants-older" hidden>Sonraki çalışanlar</button>
+    <button type="button" id="store-draft-grants-refresh">İzinleri yenile</button>
+  </section>
   <section id="org-stores-panel" hidden aria-labelledby="org-stores-title" style="grid-column:1/-1">
     <h3 id="org-stores-title">Seçili kuruluşun mağazaları</h3>
     <p>Yalnızca bu kuruluşta oluşturulmuş, Mercur tarafından ayrıca onaylanmış ve erişim yetkiniz bulunan faal mağazalar listelenir. Bu görünüm satın alma veya satış işlemi yetkisi vermez.</p>
@@ -427,7 +442,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const followWrite=path==='store-follows'&&options.method==='POST';
     const policyWrite=path==='platform/store-application-policy'&&options.method==='POST';
     const storeApplicationWrite=path==='store-applications'&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite;
+    const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite;
     let data;
     try{
       data=await r.json();
@@ -1106,13 +1122,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   async function notifications(offset=0){
     const request=++notificationRequest;
-    const organization=new URLSearchParams(location.search).get('organization');
-    const notificationPath='notifications'+(organization?'?organization='+encodeURIComponent(organization):'');
+    // The personal bell must not inherit a revoked/stale Organization URL.
+    // The backend authorizes each receipt by Person and live entitlement.
+    const notificationPath='notifications';
     el('notification-list').replaceChildren();el('notification-list').setAttribute('aria-busy','true');
     el('notification-status').textContent='Bildirimler yükleniyor…';el('notification-count').textContent='';
     el('notification-next').hidden=true;
     try{
-      const data=await api(notificationPath+(organization?'&':'?')+'offset='+offset);
+      const data=await api(notificationPath+'?offset='+offset);
       if(request!==notificationRequest)return;
       notificationOffset=offset;notificationNext=data.next_offset;
       el('notification-count').textContent='('+data.unread_count+' okunmamış)';
@@ -1430,19 +1447,27 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         el('memberships-status').textContent='Uye listesi ve davet yonetimi icin yetki gerekli.';
       }
       if(request===organizationRequest&&currentOrg===id){
-        if(['owner','admin'].includes(managerRole))void storeApplications(id,request,managerRole);
+        if(['owner','member'].includes(managerRole))void storeApplications(id,request,managerRole);
         void organizationStores(id,request);
         void productDraftStores(id,request);
         void buyerContext(id,request);
         if(managerRole==='owner')void buyerFollowList(id,request);
         if(managerRole==='owner')void productPermissions(id,request);
         if(managerRole==='owner')void buyerPermissions(id,request);
+        if(managerRole==='owner')void storeDraftPermissions(id,request);
         if(managerRole==='owner')void storeBlockStores(id,request);
       }
       if(request===organizationRequest&&currentOrg===id&&!el('pending-invitations-panel').hidden)
         void pendingInvitations(id,request);
       if(request===organizationRequest)status('Kuruluş erişimi doğrulandı');
-    }catch(e){if(request!==organizationRequest)return;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('detail').textContent='';clearMemberships();clearOrganizationStores();clearPendingInvitations();el('memberships-status').textContent=membershipError(e);status(e.message)}
+    }catch(e){if(request!==organizationRequest)return;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('detail').textContent='';clearMemberships();clearOrganizationStores();clearPendingInvitations();el('memberships-status').textContent=membershipError(e);
+      // A removed Organization must remain denied, but its former Member
+      // still has a Person-scoped inbox for the revocation notice.
+      // The server independently checks the live personal session.
+      if(currentPersonId&&!document.hidden&&!el('workspace').hidden){
+        el('notification-bell').hidden=false;void notifications();
+      }
+      status(e.message)}
   }
   function clearProductPermissions(){
     productPermissionRequest++;
@@ -1461,6 +1486,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     clearStoreBlock();
     clearProductPermissions();
     clearBuyerPermissions();
+    clearStoreDraftPermissions();
     clearBuyerContext();
     clearBuyerFollowList();
     clearProductDraft();
@@ -1561,7 +1587,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
     // Keep the verified Organization role separate from the transient form
     // visibility, which a platform-wide pause can legitimately hide.
-    if(['owner','admin'].includes(role))applicationRole=role;
+    if(!['owner','member'].includes(role))return;
     const sequence=++applicationRequest;
     const panel=el('store-application-panel'),list=el('store-application-list'),message=el('store-application-status');
     panel.hidden=false;
@@ -1577,17 +1603,21 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          result.drafts.some(d=>!/^dasdraft_[a-f0-9]{32}$/.test(d?.id)||
            typeof d.name!=='string'||typeof d.email!=='string'||
            typeof d.currency_code!=='string'||!Number.isSafeInteger(d.version)||d.version<1)||
+         result.draft_role!==role||
          !Array.isArray(result.applications)||result.applications.length>30||
         result.applications.some(a=>!/^daapp_[a-f0-9]{32}$/.test(a?.id)||!['reserved','creating','created'].includes(a?.status)||
           !(a.seller_id===null||a.seller_id===undefined||typeof a.seller_id==='string')))
         throw new Error('Başvuru yanıtı doğrulanamadı');
+      // A Member receives only unfinished drafts, never official applications.
+      if(role==='member'&&result.applications.length!==0)throw new Error('Başvuru kapsamı geçersiz');
+      applicationRole=role;
       for(const a of result.applications){
         const line=document.createElement('p');
         line.textContent=(a.status==='created'?'Mağaza başvurusu kaydedildi':'Başvuru işlem sonucu kontrol edilmeli')+
           ' — '+a.id+(a.seller_id?' — '+a.seller_id:'');
         list.append(line);
       }
-      if(role==='owner'){
+      if(['owner','member'].includes(role)){
         for(const d of result.drafts){
           const line=document.createElement('p'),edit=document.createElement('button');
           line.textContent='Kaydedilmiş mağaza taslağı (gönderilmedi) — '+d.name+' — v'+d.version+' ';
@@ -1610,7 +1640,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           list.append(warning);
         }
       }
-      el('store-draft-form').hidden=role!=='owner';
+      el('store-draft-form').hidden=false;
       el('store-application-form').hidden=
         role!=='owner'||!result.store_application_enabled;
       if(!result.store_application_enabled){
@@ -1629,13 +1659,21 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(request!==organizationRequest||sequence!==applicationRequest||currentOrg!==org)return;
       list.replaceChildren();
       if(e.httpStatus===401){concealPrivateView();el('login').hidden=false;return}
+      if(e.httpStatus===403){
+        panel.hidden=true;el('store-draft-form').hidden=true;
+        el('store-application-form').hidden=true;
+        applicationRole='';storeDraftKey='';storeDraftVersion=0;storeDraftEditEpoch++;
+        const form=el('store-draft-form');form.reset();
+        status('Bu şirketin mağaza taslaklarına erişim izniniz yok.');
+        return;
+      }
       message.textContent=keepOutcome?message.textContent+' Başvuru listesi şu anda yenilenemedi.':'Başvurular güvenli biçimde okunamadı.';
     }
   }
   let applicationRequest=0,applicationKey='',applicationRole='';
   let storeDraftKey='',storeDraftVersion=0,storeDraftEditEpoch=0;
   el('store-applications-refresh').onclick=()=>{
-    if(currentOrg&&['owner','admin'].includes(applicationRole))
+    if(currentOrg&&['owner','member'].includes(applicationRole))
       void storeApplications(currentOrg,organizationRequest,applicationRole);
   };
   el('store-draft-new').onclick=()=>{
@@ -1648,7 +1686,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('store-draft-form').onsubmit=async event=>{
     event.preventDefault();
     const org=currentOrg,request=organizationRequest,form=event.currentTarget;
-    if(!org||document.hidden||form.hidden||applicationRole!=='owner')return;
+    if(!org||document.hidden||form.hidden||!['owner','member'].includes(applicationRole))return;
     const submit=form.querySelector('button[type=submit]');submit.disabled=true;
     if(!storeDraftKey)storeDraftKey='dasdraft_'+crypto.randomUUID().replace(/-/g,'');
     const key=storeDraftKey,version=storeDraftVersion,editEpoch=storeDraftEditEpoch,fields=new FormData(form);
@@ -1666,10 +1704,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       storeDraftVersion=result.version;submit.disabled=false;
       el('store-application-status').textContent='Taslak kaydedildi. Henüz başvuru gönderilmedi veya mağaza oluşturulmadı.';
-      void storeApplications(org,request,'owner',true);
+      void storeApplications(org,request,applicationRole,true);
     }catch(e){
       if(request!==organizationRequest||currentOrg!==org||
          storeDraftKey!==key||storeDraftEditEpoch!==editEpoch)return;
+      if(e.httpStatus===403){
+        el('store-application-panel').hidden=true;
+        el('store-draft-form').hidden=true;
+        el('store-application-list').replaceChildren();
+        form.reset();storeDraftKey='';storeDraftVersion=0;storeDraftEditEpoch++;
+        applicationRole='';status('Taslak izniniz iptal edildi veya erişiminiz sona erdi.');
+        return;
+      }
       el('store-application-status').textContent=e.uncertain?
         'Taslak sonucu belirsiz; tekrar kaydetmeden önce kayıtları yenileyin.':
         'Taslak kaydedilemedi: '+e.message;
@@ -1704,6 +1750,214 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(!e.uncertain){applicationKey='';button.disabled=false}
     }
   };
+
+  let storeDraftPermissionRequest=0,storeDraftCursor='',storeDraftNextCursor=null;
+  const storeDraftCursorHistory=[];
+  let storeDraftGrantable=new Set(),storeDraftRevocable=new Set();
+  let storeDraftPermissionsVerified=false,storeDraftWritePending=false,storeDraftWriteUncertain=false;
+  function updateStoreDraftActionButtons(){
+    const form=el('store-draft-grants-form');
+    const select=form?.elements?.namedItem?.('membership_id');
+    const value=select?.selectedOptions?.[0]?.disabled?null:select?.value;
+    const permitted=!!value&&storeDraftPermissionsVerified&&
+      !storeDraftWritePending&&!storeDraftWriteUncertain&&!document.hidden&&
+      !el('workspace').hidden&&!el('store-draft-grants-panel').hidden;
+    form.querySelector('button[value=grant]').disabled=
+      !permitted||!storeDraftGrantable.has(value);
+    form.querySelector('button[value=revoke]').disabled=
+      !permitted||!storeDraftRevocable.has(value);
+  }
+  function clearStoreDraftPermissions(){
+    storeDraftPermissionRequest++;
+    storeDraftGrantable.clear();storeDraftRevocable.clear();
+    storeDraftPermissionsVerified=false;storeDraftWritePending=false;
+    storeDraftWriteUncertain=false;
+    storeDraftCursor='';storeDraftNextCursor=null;storeDraftCursorHistory.length=0;
+    el('store-draft-grants-older').hidden=true;el('store-draft-grants-newer').hidden=true;
+    el('store-draft-grants-panel').hidden=true;
+    el('store-draft-grants-status').textContent='';
+    el('store-draft-grants-list').replaceChildren();
+    const form=el('store-draft-grants-form');
+    // Preserve private concealment in both actual browsers and the existing
+    // reduced DOM regression harness (which need not implement forms API).
+    if(form && form.elements && typeof form.elements.namedItem==='function'){
+      const select=form.elements.namedItem('membership_id');
+      if(select && typeof select.replaceChildren==='function')select.replaceChildren();
+    }
+    if(form && typeof form.querySelectorAll==='function')
+      for(const button of form.querySelectorAll('button'))button.disabled=true;
+  }
+  async function storeDraftPermissions(org,request,keepOutcome=false){
+    if(request!==organizationRequest||currentOrg!==org||document.hidden||
+       el('workspace').hidden)return;
+    const seq=++storeDraftPermissionRequest;
+    storeDraftPermissionsVerified=false;
+    const panel=el('store-draft-grants-panel'),form=el('store-draft-grants-form');
+    const list=el('store-draft-grants-list'),message=el('store-draft-grants-status');
+    panel.hidden=true;
+    if(!keepOutcome)message.textContent='Çalışan taslak izinleri kontrol ediliyor…';
+    try{
+      const data=await api('store-draft-permissions?organization_id='+encodeURIComponent(org)+
+        (storeDraftCursor?'&after='+encodeURIComponent(storeDraftCursor):''));
+      if(seq!==storeDraftPermissionRequest||request!==organizationRequest||
+         currentOrg!==org||document.hidden)return;
+      if(!Array.isArray(data.members)||!Array.isArray(data.grants)||
+         data.members.length>30||data.grants.length>30||
+         typeof data.has_more!=='boolean'||
+         !(data.next_cursor===null||
+           (typeof data.next_cursor==='string'&&
+             /^[A-Za-z0-9_-]{1,128}$/.test(data.next_cursor)))||
+         data.has_more!==(data.next_cursor!==null)||
+         (data.has_more&&data.next_cursor!==data.members.at(-1)?.membership_id)||
+         data.members.some(m=>typeof m.label_unique_in_organization!=='boolean'||
+           typeof m.other_active_grant_same_label!=='boolean'||
+           !(m.mobile_phone===null||
+             (typeof m.mobile_phone==='string'&&/^[+]?[0-9]{6,20}$/.test(m.mobile_phone)))||
+           !(m.member_name===null||
+           (typeof m.member_name==='string'&&m.member_name.trim().length>0&&m.member_name.length<=160))||
+           !(m.invitation_email===null||
+             (typeof m.invitation_email==='string'&&
+              m.invitation_email.includes('@')&&m.invitation_email.length<=254))||
+           typeof m.person_id!=='string'||
+           !/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)||
+           typeof m.membership_id!=='string'||
+           !/^[A-Za-z0-9_-]{1,128}$/.test(m.membership_id))||
+         data.grants.some(g=>typeof g.id!=='string'||
+           !/^dasdpg_[A-Za-z0-9_-]+$/.test(g.id)||
+           typeof g.person_id!=='string'||!/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)||
+           typeof g.membership_id!=='string'||
+           !/^[A-Za-z0-9_-]{1,128}$/.test(g.membership_id))||
+         new Set(data.members.map(m=>m.membership_id)).size!==data.members.length||
+         new Set(data.members.map(m=>m.person_id)).size!==data.members.length||
+         new Set(data.grants.map(g=>g.person_id)).size!==data.grants.length||
+         data.grants.some(g=>!data.members.some(m=>
+           m.person_id===g.person_id&&m.membership_id===g.membership_id)))
+        throw new Error('İzin bilgileri doğrulanamadı');
+      const select=form.elements.namedItem('membership_id'),previous=select.value;
+      select.replaceChildren();list.replaceChildren();
+      storeDraftGrantable.clear();storeDraftRevocable.clear();
+      // Display only authorized, human-readable Organization identities.
+      // Ambiguous or absent labels must never cause a misdirected grant.
+      const labelFor=m=>[m.member_name,m.invitation_email,
+         m.mobile_phone?'Cep: '+m.mobile_phone:null].filter(Boolean).join(' — ');
+      const labelCounts=new Map();
+      for(const m of data.members){
+        const label=labelFor(m);if(label)labelCounts.set(label,(labelCounts.get(label)||0)+1);
+      }
+      for(const m of data.members){
+        const label=labelFor(m);
+        const identifiable=!!label&&(!!m.mobile_phone||!!m.invitation_email)&&
+          m.label_unique_in_organization===true&&
+          labelCounts.get(label)===1;
+        const granted=data.grants.some(g=>g.person_id===m.person_id&&
+          g.membership_id===m.membership_id);
+        if(identifiable)storeDraftGrantable.add(m.membership_id);
+        // A single currently granted Person may be safely revoked after
+        // a late ungranted namesake joins. Two indistinguishable ACTIVE
+        // recipients, even on different pages, must never be individually
+        // revocable: the Owner cannot tell whose private access would end.
+        const revocable=granted&&m.other_active_grant_same_label===false;
+        if(revocable)storeDraftRevocable.add(m.membership_id);
+        const option=document.createElement('option');
+        option.value=m.membership_id;
+        option.disabled=!(identifiable||revocable);
+        option.textContent=identifiable?label:granted&&
+          m.other_active_grant_same_label?
+          (label||'Adı doğrulanamayan çalışan')+
+          ' — aynı kimlikle birden fazla etkin izin; tek tek iptal edilemez':
+          granted?(label||'Adı doğrulanamayan çalışan')+
+          ' — kimlik belirsiz; yalnız mevcut izni kaldırabilirsiniz':
+          'Çalışanın kimliği ayırt edilemiyor; yeni izin verilemez';
+        select.append(option);
+        const line=document.createElement('p');
+        line.textContent=option.textContent+' — taslak: '+(granted?'Yetkili':'Yetkisiz')+
+          ' (kişisel izin; resmî gönderim yalnız Owner)';
+        list.append(line);
+      }
+      const selected=Array.from(select.options).find(o=>o.value===previous&&!o.disabled);
+      if(selected)select.value=previous;
+      else select.selectedIndex=Array.from(select.options).findIndex(o=>!o.disabled);
+      // A choice may revoke a verified active grant while being ineligible
+      // for a new grant. Selection changes recompute each action separately.
+      select.onchange=updateStoreDraftActionButtons;
+      storeDraftNextCursor=data.next_cursor;
+      el('store-draft-grants-older').hidden=!data.has_more;
+      el('store-draft-grants-newer').hidden=storeDraftCursorHistory.length===0;
+      panel.hidden=false;
+      storeDraftPermissionsVerified=true;
+      storeDraftWritePending=false;storeDraftWriteUncertain=false;
+      updateStoreDraftActionButtons();
+      if(!keepOutcome)message.textContent=data.members.length?
+        'Üyelerin güncel kişisel taslak izinleri gösteriliyor.':
+        'Şirkette yetki verilebilecek etkin üye bulunmuyor.';
+    }catch(e){
+      if(seq!==storeDraftPermissionRequest||request!==organizationRequest||currentOrg!==org)return;
+      clearStoreDraftPermissions();
+      message.textContent='Çalışan taslak izinleri güvenle okunamadı.';
+    }
+  }
+  el('store-draft-grants-refresh').onclick=()=>{
+    if(currentOrg)void storeDraftPermissions(currentOrg,organizationRequest);
+  };
+  el('store-draft-grants-older').onclick=()=>{
+    if(!currentOrg||!storeDraftNextCursor||document.hidden)return;
+    storeDraftCursorHistory.push(storeDraftCursor);
+    storeDraftCursor=storeDraftNextCursor;storeDraftNextCursor=null;
+    void storeDraftPermissions(currentOrg,organizationRequest);
+  };
+  el('store-draft-grants-newer').onclick=()=>{
+    if(!currentOrg||!storeDraftCursorHistory.length||document.hidden)return;
+    storeDraftCursor=storeDraftCursorHistory.pop();
+    storeDraftNextCursor=null;
+    void storeDraftPermissions(currentOrg,organizationRequest);
+  };
+  el('store-draft-grants-form').onsubmit=async event=>{
+    event.preventDefault();
+    if(document.hidden||el('workspace').hidden)return;
+    const org=currentOrg,request=organizationRequest,form=event.currentTarget;
+    const action=event.submitter?.value;
+    if(!org||!['grant','revoke'].includes(action)||
+       storeDraftWritePending||storeDraftWriteUncertain||!storeDraftPermissionsVerified)return;
+    const chosen=form.elements.namedItem('membership_id');
+    const membership_id=chosen.value;
+    const allowed=chosen.selectedIndex>=0&&!chosen.selectedOptions[0]?.disabled&&
+      (action==='grant'?storeDraftGrantable:storeDraftRevocable).has(membership_id);
+    if(!allowed){
+      el('store-draft-grants-status').textContent=
+        'Yeni izin için çalışan ayırt edilebilir olmalı; mevcut izin yalnız kayıtlı üyelikten kaldırılabilir.';
+      updateStoreDraftActionButtons();
+      return;
+    }
+    storeDraftWritePending=true;
+    updateStoreDraftActionButtons();
+    try{
+      const result=await api('store-draft-permissions',{method:'POST',
+        body:JSON.stringify({action,organization_id:org,membership_id})});
+      if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+      if(result.status!==(action==='grant'?'active':'revoked')||
+         !(result.grant_id===null||
+           (typeof result.grant_id==='string'&&/^dasdpg_[A-Za-z0-9_-]+$/.test(result.grant_id)))){
+        const e=new Error('İzin sonucu belirsiz');e.uncertain=true;throw e;
+      }
+      el('store-draft-grants-status').textContent=action==='grant'?
+        'Çalışana taslak düzenleme izni verildi. Başvuru gönderme hakkı verilmedi.':
+        'Çalışanın taslak düzenleme izni kaldırıldı. Şirket taslakları korundu.';
+      storeDraftWritePending=false;
+      void storeDraftPermissions(org,request,true);
+    }catch(e){
+      if(request!==organizationRequest||currentOrg!==org)return;
+      storeDraftWritePending=false;
+      storeDraftWriteUncertain=!!e.uncertain;
+      // An uncertain or denied write needs a fresh authorized read before
+      // the next attempt; neither error may enable a stale grant button.
+      storeDraftPermissionsVerified=false;
+      updateStoreDraftActionButtons();
+      el('store-draft-grants-status').textContent=e.uncertain?
+        'İzin sonucu belirsiz; işlemi tekrarlamadan önce izinleri yenileyin.':
+        'İzin işlemi reddedildi; yeniden denemeden önce izinleri yenileyin.';
+    }
+  };
+
   // Store Buyer Organization policy remains separate from member permissions.
   // Only this selected legal Organization's Owner sees the controls; the
   // server independently checks fresh Owner, verified Store origin and native

@@ -16,11 +16,15 @@ export class PersonalNotifications {
 
   async list(token: string, offset = 0, organization?: string) {
     const s = await this.authorize(token, organization)
-    // Session-lock receipts are personal. Company-policy receipts require a
-    // CURRENT protected Owner of the exact legal Organization, not the staff
-    // actor who wrote the source audit or any native SellerMember role.
+    // Personal receipts remain scoped to the recipient. A membership-exit
+    // revocation notice remains readable after role removal, without returning
+    // the former company's name or any company resource. Normal company
+    // policy and draft notices still require live Organization membership.
     const rows = await this.db.execute(`with authorized as (
-      select n.id,n.created_at,n.read_at,a.action,o.name as organization_name
+      select n.id,n.created_at,n.read_at,a.action,
+        case when a.action='organization.store_draft_permission_revoked'
+          and a.new_values->>'source'='membership_exit'
+          then null else o.name end as organization_name
       from da_notification_receipt n
       join da_audit_event a on a.id=n.audit_event_id
       left join da_organization o on o.id=a.organization_id
@@ -41,6 +45,34 @@ export class PersonalNotifications {
               and m.role='owner' and m.protected_owner=true)
           and exists(select 1 from da_audit_outbox x
             where x.source_audit_event_id=a.id))
+        or
+        (a.action in ('organization.store_draft_permission_granted',
+                      'organization.store_draft_permission_revoked')
+          and a.resource='store-draft-permission'
+          and a.target_id=n.person_id
+          and (?='' or a.organization_id=?)
+          and o.status='active' and o.deleted_at is null
+          and exists(select 1 from da_organization_membership m
+            where m.person_id=n.person_id and m.organization_id=a.organization_id
+              and m.role='member' and m.status='active'
+              and m.revoked_at is null and m.deleted_at is null)
+          and exists(select 1 from da_audit_outbox x
+            where x.source_audit_event_id=a.id))
+        or
+        (a.action='organization.store_draft_permission_revoked'
+          and a.resource='store-draft-permission'
+          and a.role_context='owner' and a.target_id=n.person_id
+          and a.new_values->>'source'='membership_exit'
+          and (?='' or a.organization_id=?)
+          and a.previous_values->>'person_id'=n.person_id
+          and exists(select 1 from da_organization_membership old_m
+            where old_m.id=a.previous_values->>'membership_id'
+              and old_m.person_id=n.person_id
+              and old_m.organization_id=a.organization_id)
+          and exists(select 1 from da_audit_outbox x
+            where x.source_audit_event_id=a.id
+              and x.source_module='dogruadres-access'
+              and x.deleted_at is null))
       )
     ) select (select count(*) from authorized where read_at is null) as unread_count,
       (select count(*) from authorized) as total,
@@ -48,7 +80,9 @@ export class PersonalNotifications {
         select id,created_at,read_at,action,organization_name from authorized
         order by created_at desc,id desc limit 50 offset ?
       ) page),'[]'::json) as items`,
-      [s.person_id, organization ?? '', organization ?? '', offset])
+      [s.person_id, organization ?? '', organization ?? '',
+       organization ?? '', organization ?? '',
+       organization ?? '', organization ?? '', offset])
     // Exactly one SQL statement determines the list, unread count and page.
     // A stored reason, actor identifier or staff grant never crosses the API.
     return {
@@ -58,13 +92,19 @@ export class PersonalNotifications {
       }) => {
         const locked = n.action === 'session.locked'
         const opened = n.action === 'organization.store_application_right_enabled'
+        const draftGranted=n.action === 'organization.store_draft_permission_granted'
+        const draftRevoked=n.action === 'organization.store_draft_permission_revoked'
         return {
           id:n.id,created_at:n.created_at,read_at:n.read_at,
-          title:locked?'Oturum kilitlendi':opened?
+          title:locked?'Oturum kilitlendi':draftGranted?
+            'Mağaza taslağı hazırlama izni verildi':draftRevoked?
+            'Mağaza taslağı hazırlama izni kaldırıldı':opened?
             'Yeni mağaza başvuru hakkı açıldı':'Yeni mağaza başvuru hakkı durduruldu',
           context:locked?'Kişisel hesabınız':n.organization_name,
           description:locked?
             'Bir tarayıcı oturumunuz kilitlendi. Yeniden açmak için giriş yapabilirsiniz.':
+            draftGranted?'Bu şirkette mağaza başvuru taslağı hazırlayıp düzenleyebilirsiniz; başvuru gönderemezsiniz.':
+            draftRevoked?'Bu şirketin mağaza başvuru taslaklarına erişim izniniz kaldırıldı.':
             opened?
             'Şirketiniz yeniden yeni mağaza başvurusu gönderebilir. Bekleyen başvurular otomatik onaylanmaz.':
             'Şirketinizin yeni mağaza başvuruları durduruldu. Mevcut faal mağazalar etkilenmez.'
@@ -99,8 +139,38 @@ export class PersonalNotifications {
                 and m.role='owner' and m.protected_owner=true)
             and exists(select 1 from da_audit_outbox x
               where x.source_audit_event_id=a.id))
+          or
+          (a.action in ('organization.store_draft_permission_granted',
+                        'organization.store_draft_permission_revoked')
+            and a.resource='store-draft-permission'
+            and a.target_id=n.person_id
+            and (?='' or a.organization_id=?)
+            and o.status='active' and o.deleted_at is null
+            and exists(select 1 from da_organization_membership m
+              where m.person_id=n.person_id and m.organization_id=a.organization_id
+                and m.role='member' and m.status='active'
+                and m.revoked_at is null and m.deleted_at is null)
+            and exists(select 1 from da_audit_outbox x
+              where x.source_audit_event_id=a.id))
+        or
+        (a.action='organization.store_draft_permission_revoked'
+          and a.resource='store-draft-permission'
+          and a.role_context='owner' and a.target_id=n.person_id
+          and a.new_values->>'source'='membership_exit'
+          and (?='' or a.organization_id=?)
+          and a.previous_values->>'person_id'=n.person_id
+          and exists(select 1 from da_organization_membership old_m
+            where old_m.id=a.previous_values->>'membership_id'
+              and old_m.person_id=n.person_id
+              and old_m.organization_id=a.organization_id)
+          and exists(select 1 from da_audit_outbox x
+            where x.source_audit_event_id=a.id
+              and x.source_module='dogruadres-access'
+              and x.deleted_at is null))
         ) for update of n`,
-      [id,s.person_id,organization ?? '',organization ?? ''])
+      [id,s.person_id,organization ?? '',organization ?? '',
+        organization ?? '',organization ?? '',
+        organization ?? '',organization ?? ''])
     if (rows.length !== 1) throw new IdentityAccessDenied()
     if (rows[0].read_at === null) {
       await this.db.execute(`update da_notification_receipt set read_at=clock_timestamp() where id=?`, [id])

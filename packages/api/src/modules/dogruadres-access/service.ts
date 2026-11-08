@@ -30,7 +30,7 @@ import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedS
 import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
-import {readStoreDrafts,authorizedStoreDraftOwner,storeDraftPayload,type StoreDraftInput} from "./store-application-draft"
+import {readStoreDrafts,authorizedStoreDraftActor,verifiedStoreDraftGrant,storeDraftPayload,type StoreDraftInput} from "./store-application-draft"
 import {
   listOrganizationDrafts,
   saveOrganizationDraft,
@@ -88,6 +88,20 @@ type FoundationAuditInput = {
 type AdvisoryLockManager = Readonly<{
   execute: (query: string, parameters: string[]) => Promise<unknown>
 }>
+
+// Historical invitation contact may distinguish Members only if SQL
+// accepts it as a conservative ASCII address. The database computes the
+// single normalized value for BOTH Owner-visible contact and the cross-page
+// grant/revoke collision comparisons; never run a second JS validator over
+// the result. New invitations retain their native Medusa/Zod ingress check.
+// The C collation gives POSIX ASCII ranges stable meaning across locales.
+const acceptedInviteEmailPattern="^[A-Za-z0-9_+%-]+([.][A-Za-z0-9_+%-]+)*@[A-Za-z0-9]+([-][A-Za-z0-9]+)*([.][A-Za-z0-9]+([-][A-Za-z0-9]+)*)*[.][A-Za-z]{2,}$"
+// Only literal, source-controlled SQL table aliases are accepted.
+function acceptedInviteSqlLabel(alias:"inv"|"oinv"):string {
+  return `case when length(btrim(${alias}.recipient_email))<=254
+    and btrim(${alias}.recipient_email) collate "C" ~ '${acceptedInviteEmailPattern}'
+    then lower(btrim(${alias}.recipient_email) collate "C") else '' end`
+}
 
 const activeStatus = "active"
 const supportedActorTypes = new Set(["user", "member", "customer"])
@@ -1285,6 +1299,21 @@ export default class DogruAdresAccessModuleService extends MedusaService({
 
     const nextRole = input.role ?? target.role
     const nextStatus = input.status ?? target.status
+    const leavesOrdinaryMember=target.role==="member" &&
+      (nextStatus!=="active" || nextRole!=="member")
+    const membershipDb=securitySql(sharedContext.transactionManager)
+    if(leavesOrdinaryMember){
+      // A draft writer locks this membership FOR SHARE before acquiring its
+      // per-Person grant lock. Lock the row first here (FOR UPDATE) to keep
+      // concurrent Member-save / membership-revocation ordering acyclic.
+      const locked=await membershipDb.execute(`select id from da_organization_membership
+        where id=? and person_id=? and organization_id=? for update`,
+        [target.id,target.person_id,input.organization_id])
+      if(locked.length!==1)throw new IdentityAccessDenied()
+      await membershipDb.execute(`select pg_advisory_xact_lock(
+        hashtext('b22-store-draft-grant'),hashtext(?))`,
+        [input.organization_id+":"+target.person_id])
+    }
     const updated = await this.updateMemberships({
       id: target.id,
       role: nextRole,
@@ -1309,6 +1338,55 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const auditManager=sharedContext.transactionManager as {flush():Promise<void>}
     await auditManager.flush()
     await securitySql(sharedContext.transactionManager).execute(`insert into da_security_outbox(id,audit_event_id,created_at) values(?,?,clock_timestamp())`,['security_'+membershipAudit.id,membershipAudit.id])
+    if(leavesOrdinaryMember){
+      // Revocation/role exit is a terminal authorization event, not a
+      // temporary pause: a later invitation accepting the SAME membership ID
+      // cannot resurrect an old Store draft permission.
+      // Older authorized migration-ledger scopes may run membership changes
+      // before this B22 optional draft-permission table is installed. No row
+      // means no draft grant can exist or authorize an action. Preserve the
+      // pre-existing membership route instead of throwing undefined_table.
+      const installed=await membershipDb.execute(`select
+        to_regclass('public.da_organization_store_draft_permission') is not null
+        as present`)
+      if(installed.length!==1||typeof installed[0].present!=="boolean")
+        throw new IdentityAccessDenied()
+      if(installed[0].present){
+      const activeDraftGrant=await membershipDb.execute(`select id from da_organization_store_draft_permission
+        where person_id=? and organization_id=? and membership_id=?
+          and permission='store.application.draft.manage' and revoked_at is null
+        for update`,[target.person_id,input.organization_id,target.id])
+      if(activeDraftGrant.length>1)throw new IdentityAccessDenied()
+      if(activeDraftGrant.length===1){
+        const grantId=activeDraftGrant[0].id
+        if(typeof grantId!=="string"||!/^dasdpg_[A-Za-z0-9_-]+$/.test(grantId)||
+           !await verifiedStoreDraftGrant(
+             membershipDb,target.person_id,input.organization_id,target.id))
+          throw new IdentityAccessDenied()
+        const [grantAudit]=await this.persistAuditEventsWithOutbox_([{
+          actor_id:input.actor_id,actor_type:input.actor_type,
+          actor_person_id:input.actor_person_id,role_context:actorMembership.role,
+          organization_id:input.organization_id,
+          action:"organization.store_draft_permission_revoked",
+          module:DOGRUADRES_AUDIT_MODULE,resource:"store-draft-permission",
+          target_id:target.person_id,
+          previous_values:{grant_id:grantId,person_id:target.person_id,
+            membership_id:target.id,permission:"store.application.draft.manage"},
+          new_values:{grant_id:grantId,status:"revoked",source:"membership_exit"},
+          occurred_at:new Date()
+        }],sharedContext)
+        if(!grantAudit?.id)throw new IdentityAccessDenied()
+        await auditManager.flush()
+        const retired=await membershipDb.execute(`update da_organization_store_draft_permission
+          set revoked_at=clock_timestamp() where id=? and revoked_at is null
+          returning id`,[grantId])
+        if(retired.length!==1)throw new IdentityAccessDenied()
+        await membershipDb.execute(`insert into da_notification_receipt
+          (id,person_id,audit_event_id) values (?,?,?)`,
+          ["danot_"+randomUUID(),target.person_id,grantAudit.id])
+      }
+      }
+    }
     return updated
   }
 
@@ -1594,15 +1672,20 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalStoreApplications(token:string,org:string,@MedusaContext() context:Context={}){
     const db=securitySql(context.transactionManager)
-    const applications=await readStoreApplications(db,token,org)
+    const drafts=await readStoreDrafts(db,token,org)
+    if(!drafts)return null
+    // An explicitly authorized Member sees only unfinished Organization
+    // drafts. Official Seller applications are an Owner-only resource.
+    const applications=drafts.draft_role==="owner"?
+      await readStoreApplications(db,token,org):[]
     if(!applications)return null
     const policy=await db.execute(`select store_application_enabled from da_organization
       where id=? and status='active' and deleted_at is null`,[org])
     if(policy.length!==1||typeof policy[0].store_application_enabled!=="boolean")
       return null
-    const drafts=await readStoreDrafts(db,token,org)
     return {applications,store_application_enabled:policy[0].store_application_enabled as boolean,
-      drafts:drafts?.drafts??[],has_more_drafts:drafts?.has_more_drafts??false}
+      draft_role:drafts.draft_role,drafts:drafts.drafts,
+      has_more_drafts:drafts.has_more_drafts}
   }
 
   /** A save is only Organization-private input. No native Seller, irreversible
@@ -1613,7 +1696,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const parsed=storeDraftPayload.safeParse(input)
     if(!parsed.success)throw new IdentityAccessDenied()
     const value=parsed.data,db=securitySql(context.transactionManager)
-    const actor=await authorizedStoreDraftOwner(db,token,value.organization_id)
+    const actor=await authorizedStoreDraftActor(db,token,value.organization_id)
     if(!actor)return null
     await db.execute(`select pg_advisory_xact_lock(hashtext('b22-store-draft'),hashtext(?))`,
       [value.draft_id])
@@ -1644,7 +1727,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // name/email or free-text Store contact details to the Audit Index.
     const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
-      role_context:"owner",organization_id:value.organization_id,
+      role_context:actor.role_context,organization_id:value.organization_id,
       action:"organization.store_application_draft_saved",
       module:DOGRUADRES_AUDIT_MODULE,resource:"store-application-draft",
       target_id:value.draft_id,
@@ -1655,6 +1738,344 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!audit?.id)throw new IdentityAccessDenied()
     return {conflict:false as const,draft_id:value.draft_id,status:"draft" as const,
       version:beforeVersion+1}
+  }
+
+  /** Page through currently eligible Members without a company-size cap.
+   * Grants are returned only for this exact page, never another Organization
+   * or another Member. Native Seller/Member roles grant no draft authority.
+   */
+  @InjectTransactionManager()
+  async personalListStoreDraftPermissions(token:string,org:string,after:string|null=null,
+    @MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org)||
+       (after!==null&&!/^[A-Za-z0-9_-]{1,128}$/.test(after)))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const actor=await sessions.organizations(token,org,false)
+    if(!actor||actor.organizations.length!==1||actor.organizations[0].role!=="owner"||
+       !organizationActionAllowed("owner","membership.list",
+         await isCurrentProtectedOwner(db,actor.person_id,org),false))return null
+    const cursor=after??""
+    // Keyset pagination avoids an offset proportional to total company size.
+    // Read one extra row for has_more, never refuse a larger organization.
+    const rows=await db.execute(`select m.id as membership_id,m.person_id,
+        p.display_name as member_name,${acceptedInviteSqlLabel("inv")} as invitation_email,
+        case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone else null end as mobile_phone,
+        not exists (
+          select 1 from da_organization_membership other
+          join da_person op on op.id=other.person_id
+            and op.disabled_at is null and op.deleted_at is null
+          left join lateral (
+            select oi.recipient_email from da_organization_invitation oi
+            where oi.organization_id=other.organization_id
+              and oi.accepted_by_person_id=other.person_id
+              and oi.status='accepted' and oi.role='member'
+              and oi.deleted_at is null
+            order by oi.accepted_at desc nulls last,oi.id desc limit 1
+          ) oinv on true
+          where other.organization_id=m.organization_id and other.id<>m.id
+            and other.role='member' and other.protected_owner=false
+            and other.status='active' and other.revoked_at is null
+            and other.deleted_at is null
+            and lower(btrim(coalesce(op.display_name,'')))=
+                lower(btrim(coalesce(p.display_name,'')))
+            and ${acceptedInviteSqlLabel("oinv")}=
+                ${acceptedInviteSqlLabel("inv")}
+            and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then op.mobile_phone end,'')=
+                coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone end,'')
+        ) as label_unique_in_organization,
+        exists (
+          select 1 from da_organization_store_draft_permission other_grant
+          join da_organization_membership other
+            on other.id=other_grant.membership_id
+            and other.person_id=other_grant.person_id
+            and other.organization_id=other_grant.organization_id
+          join da_person op on op.id=other.person_id
+            and op.disabled_at is null and op.deleted_at is null
+          left join lateral (
+            select oi.recipient_email from da_organization_invitation oi
+            where oi.organization_id=other.organization_id
+              and oi.accepted_by_person_id=other.person_id
+              and oi.status='accepted' and oi.role='member'
+              and oi.deleted_at is null
+            order by oi.accepted_at desc nulls last,oi.id desc limit 1
+          ) oinv on true
+          where other.organization_id=m.organization_id and other.id<>m.id
+            and other.role='member' and other.protected_owner=false
+            and other.status='active' and other.revoked_at is null
+            and other.deleted_at is null
+            and other_grant.permission='store.application.draft.manage'
+            and other_grant.revoked_at is null
+            and lower(btrim(coalesce(op.display_name,'')))=
+                lower(btrim(coalesce(p.display_name,'')))
+            and ${acceptedInviteSqlLabel("oinv")}=
+                ${acceptedInviteSqlLabel("inv")}
+            and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then op.mobile_phone end,'')=
+                coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone end,'')
+        ) as other_active_grant_same_label
+      from da_organization_membership m
+      join da_person p on p.id=m.person_id and p.disabled_at is null and p.deleted_at is null
+      left join lateral (
+        select i.recipient_email from da_organization_invitation i
+        where i.organization_id=m.organization_id
+          and i.accepted_by_person_id=m.person_id
+          and i.status='accepted' and i.role='member'
+          and i.deleted_at is null
+        order by i.accepted_at desc nulls last,i.id desc limit 1
+      ) inv on true
+      where m.organization_id=? and m.role='member' and m.protected_owner=false
+        and m.status='active' and m.revoked_at is null and m.deleted_at is null
+        and (?='' or m.id>?)
+      order by m.id limit 31`,[org,cursor,cursor])
+    if(rows.length>31||rows.some(m=>typeof m.membership_id!=="string"||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(m.membership_id)||
+       typeof m.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)||
+       typeof m.label_unique_in_organization!=="boolean"||
+       typeof m.other_active_grant_same_label!=="boolean"))
+      throw new IdentityAccessDenied()
+    const has_more=rows.length>30
+    // Only current Organization Members are visible to their protected Owner.
+    // Use canonical phone and accepted company invitation email to distinguish
+    // employees. Neither contact alone authenticates a Person, and no foreign
+    // Organization or unlinked native actor contact may be disclosed.
+    const members=rows.slice(0,30).map(m=>({
+      membership_id:m.membership_id as string,person_id:m.person_id as string,
+      // Derived solely from current eligible Members in the requested
+      // Organization, including those on other pages. No Person ID is shown.
+      label_unique_in_organization:m.label_unique_in_organization as boolean,
+      // This flag is checked across every active member, not only this page.
+      // A second indistinguishable active grant must never permit a
+      // misleading person-specific revoke.
+      other_active_grant_same_label:m.other_active_grant_same_label as boolean,
+      member_name:typeof m.member_name==="string"&&m.member_name.trim().length>0&&
+        m.member_name.trim().length<=160?m.member_name.trim():null,
+      mobile_phone:typeof m.mobile_phone==="string"&&
+        /^\+?[0-9]{6,20}$/.test(m.mobile_phone)?m.mobile_phone:null,
+      invitation_email:typeof m.invitation_email==="string"&&
+        m.invitation_email.length>0?m.invitation_email:null
+    }))
+    if(new Set(members.map(m=>m.membership_id)).size!==members.length||
+       new Set(members.map(m=>m.person_id)).size!==members.length)
+      throw new IdentityAccessDenied()
+    const next_cursor=has_more?members[members.length-1].membership_id:null
+    if(!members.length)return {members,grants:[],has_more:false,next_cursor:null}
+    const ids=members.map(m=>m.membership_id)
+    const grants=await db.execute(`select g.id,g.person_id,g.membership_id
+      from da_organization_store_draft_permission g
+      join da_audit_event e on e.id=g.source_audit_event_id and e.deleted_at is null
+        and e.module='dogruadres-access' and e.actor_person_id=g.issued_by_person_id
+        and e.organization_id=g.organization_id and e.target_id=g.person_id
+        and e.action='organization.store_draft_permission_granted'
+        and e.resource='store-draft-permission'
+        and e.new_values->>'grant_id'=g.id
+        and e.new_values->>'person_id'=g.person_id
+        and e.new_values->>'membership_id'=g.membership_id
+        and e.new_values->>'permission'=g.permission
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+        and x.source_module='dogruadres-access' and x.deleted_at is null
+      where g.organization_id=? and g.permission='store.application.draft.manage'
+        and g.revoked_at is null and g.membership_id in (${ids.map(()=>"?").join(",")})
+      order by g.id limit 31`,[org,...ids])
+    if(grants.length>30||grants.some(g=>typeof g.id!=="string"||
+       !/^dasdpg_[A-Za-z0-9_-]+$/.test(g.id)||
+       typeof g.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(g.person_id)||
+       typeof g.membership_id!=="string"||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(g.membership_id)||
+       !members.some(m=>m.membership_id===g.membership_id&&m.person_id===g.person_id))||
+       new Set(grants.map(g=>g.person_id)).size!==grants.length)
+      throw new IdentityAccessDenied()
+    return {members,grants,has_more,next_cursor}
+  }
+
+  /** Same Foundation transaction, provenance, and Owner guard as the existing
+   * buyer permission writer. The immutable Owner group itself is unchanged.
+   */
+  @InjectTransactionManager()
+  async personalChangeStoreDraftPermission(
+    token:string,input:{action:"grant"|"revoke";organization_id:string;membership_id:string},
+    @MedusaContext() context:Context={}
+  ){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^[A-Za-z0-9_-]{1,128}$/.test(input.membership_id)||
+       !["grant","revoke"].includes(input.action))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const actor=await sessions.current(token,true,false)
+    if(!actor)return null
+    const organization=await sessions.organizations(token,input.organization_id,false)
+    if(!organization||organization.person_id!==actor.person_id||
+       organization.organizations.length!==1||organization.organizations[0].role!=="owner"||
+       !organizationActionAllowed("owner","membership.manage",
+         await isCurrentProtectedOwner(db,actor.person_id,input.organization_id),false))
+      return null
+    const target=await db.execute(`select m.person_id from da_organization_membership m
+      join da_person p on p.id=m.person_id
+      join da_organization o on o.id=m.organization_id and o.status='active' and o.deleted_at is null
+      where m.id=? and m.organization_id=? and m.role='member'
+        and m.protected_owner=false and m.revoked_at is null and m.deleted_at is null
+        ${input.action==="grant"?"and m.status='active' and p.disabled_at is null and p.deleted_at is null":""}
+      for share of m,p,o`,[input.membership_id,input.organization_id])
+    if(target.length!==1||typeof target[0].person_id!=="string"||
+       !/^daprs_[A-Za-z0-9_-]+$/.test(target[0].person_id))return null
+    // Membership identity and Owner authority are checked on the live records.
+    // Personal phone changes alone never change which Member is the target.
+    const personId=target[0].person_id as string
+    // A revoked grant cannot authorize an in-flight draft: both paths take
+    // the identical transaction-scoped lock before inspecting the grant.
+    await db.execute(`select pg_advisory_xact_lock(
+      hashtext('b22-store-draft-grant'),hashtext(?))`,
+      [input.organization_id+":"+personId])
+    const active=await db.execute(`select id,membership_id
+      from da_organization_store_draft_permission
+      where person_id=? and organization_id=?
+        and permission='store.application.draft.manage' and revoked_at is null
+      for update`,[personId,input.organization_id])
+    if(active.length>1||active.some(g=>typeof g.id!=="string"||
+        !/^dasdpg_[A-Za-z0-9_-]+$/.test(g.id)||
+        typeof g.membership_id!=="string"))throw new IdentityAccessDenied()
+    if(input.action==="grant"){
+      // A current protected Owner cannot grant to an unidentifiable legacy
+      // employee, even by a forged direct HTTP POST. Names alone are never
+      // enough: at least a valid recorded phone or accepted invitation email
+      // and a distinct visible label within this entire Organization are
+      // required. The target Person row is already locked by the transaction.
+      const readable=await db.execute(`select p.display_name,
+          p.mobile_phone,${acceptedInviteSqlLabel("inv")} as recipient_email,
+          exists(
+            select 1 from da_organization_membership other
+            join da_person op on op.id=other.person_id
+              and op.disabled_at is null and op.deleted_at is null
+            left join lateral (
+              select oi.recipient_email from da_organization_invitation oi
+              where oi.organization_id=other.organization_id
+                and oi.accepted_by_person_id=other.person_id
+                and oi.status='accepted' and oi.role='member'
+                and oi.deleted_at is null
+              order by oi.accepted_at desc nulls last,oi.id desc limit 1
+            ) oinv on true
+            where other.organization_id=m.organization_id and other.id<>m.id
+              and other.role='member' and other.protected_owner=false
+              and other.status='active' and other.revoked_at is null
+              and other.deleted_at is null
+              and lower(btrim(coalesce(op.display_name,'')))=
+                  lower(btrim(coalesce(p.display_name,'')))
+              and ${acceptedInviteSqlLabel("oinv")}=
+                  ${acceptedInviteSqlLabel("inv")}
+              and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$'
+                then op.mobile_phone end,'')=
+                  coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$'
+                    then p.mobile_phone end,'')
+          ) as ambiguous
+        from da_organization_membership m
+        join da_person p on p.id=m.person_id
+          and p.disabled_at is null and p.deleted_at is null
+        left join lateral (
+          select i.recipient_email from da_organization_invitation i
+          where i.organization_id=m.organization_id
+            and i.accepted_by_person_id=m.person_id
+            and i.status='accepted' and i.role='member'
+            and i.deleted_at is null
+          order by i.accepted_at desc nulls last,i.id desc limit 1
+        ) inv on true
+        where m.id=? and m.organization_id=? and m.person_id=?
+          and m.status='active' and m.revoked_at is null and m.deleted_at is null
+        limit 2`,[input.membership_id,input.organization_id,personId])
+      if(readable.length!==1||readable[0].ambiguous!==false||
+         !(typeof readable[0].mobile_phone==="string"&&
+           /^\+?[0-9]{6,20}$/.test(readable[0].mobile_phone))&&
+         !(typeof readable[0].recipient_email==="string"&&
+           readable[0].recipient_email.length>0))
+        throw new IdentityAccessDenied()
+      if(active.length){
+        if(active[0].membership_id!==input.membership_id||
+           !await verifiedStoreDraftGrant(db,personId,input.organization_id,input.membership_id))
+          throw new IdentityAccessDenied()
+        return {status:"active" as const,grant_id:active[0].id as string}
+      }
+      const grantId="dasdpg_"+randomUUID()
+      const [audit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
+        role_context:"owner",organization_id:input.organization_id,
+        action:"organization.store_draft_permission_granted",module:DOGRUADRES_AUDIT_MODULE,
+        resource:"store-draft-permission",target_id:personId,
+        new_values:{grant_id:grantId,person_id:personId,
+          membership_id:input.membership_id,permission:"store.application.draft.manage"},
+        occurred_at:new Date()
+      }],context)
+      if(!audit?.id)throw new IdentityAccessDenied()
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      await db.execute(`insert into da_organization_store_draft_permission
+        (id,person_id,organization_id,membership_id,permission,
+         issued_by_person_id,source_audit_event_id)
+        values (?,?,?,?,'store.application.draft.manage',?,?)`,
+        [grantId,personId,input.organization_id,input.membership_id,actor.person_id,audit.id])
+      await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
+        values (?,?,?)`,["danot_"+randomUUID(),personId,audit.id])
+      return {status:"active" as const,grant_id:grantId}
+    }
+    if(!active.length)return {status:"revoked" as const,grant_id:null}
+    // The Owner UI cannot distinguish two already-authorized people
+    // sharing name, accepted invitation email and usable mobile. Reject direct
+    // stale/forged individual revoke requests too; never pick a Person ID
+    // silently. Only same-Organization active memberships are compared.
+    const ambiguousRevocation=await db.execute(`select 1
+      from da_organization_membership m
+      join da_person p on p.id=m.person_id
+      left join lateral (
+        select i.recipient_email from da_organization_invitation i
+        where i.organization_id=m.organization_id
+          and i.accepted_by_person_id=m.person_id
+          and i.status='accepted' and i.role='member'
+          and i.deleted_at is null
+        order by i.accepted_at desc nulls last,i.id desc limit 1
+      ) inv on true
+      join da_organization_store_draft_permission other_grant
+        on other_grant.organization_id=m.organization_id
+          and other_grant.permission='store.application.draft.manage'
+          and other_grant.revoked_at is null
+      join da_organization_membership other
+        on other.id=other_grant.membership_id
+          and other.person_id=other_grant.person_id
+          and other.organization_id=other_grant.organization_id
+      join da_person op on op.id=other.person_id
+        and op.disabled_at is null and op.deleted_at is null
+      left join lateral (
+        select oi.recipient_email from da_organization_invitation oi
+        where oi.organization_id=other.organization_id
+          and oi.accepted_by_person_id=other.person_id
+          and oi.status='accepted' and oi.role='member'
+          and oi.deleted_at is null
+        order by oi.accepted_at desc nulls last,oi.id desc limit 1
+      ) oinv on true
+      where m.id=? and m.organization_id=? and m.person_id=?
+        and other.id<>m.id and other.role='member'
+        and other.protected_owner=false and other.status='active'
+        and other.revoked_at is null and other.deleted_at is null
+        and lower(btrim(coalesce(op.display_name,'')))=
+            lower(btrim(coalesce(p.display_name,'')))
+        and ${acceptedInviteSqlLabel("oinv")}=
+            ${acceptedInviteSqlLabel("inv")}
+        and coalesce(case when op.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then op.mobile_phone end,'')=
+            coalesce(case when p.mobile_phone ~ '^[+]{0,1}[0-9]{6,20}$' then p.mobile_phone end,'')
+      limit 1`,[input.membership_id,input.organization_id,personId])
+    if(ambiguousRevocation.length)throw new IdentityAccessDenied()
+    const grantId=active[0].id as string
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
+      role_context:"owner",organization_id:input.organization_id,
+      action:"organization.store_draft_permission_revoked",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-draft-permission",target_id:personId,
+      previous_values:{grant_id:grantId,person_id:personId,
+        membership_id:active[0].membership_id,permission:"store.application.draft.manage"},
+      new_values:{grant_id:grantId,status:"revoked"},occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const result=await db.execute(`update da_organization_store_draft_permission
+      set revoked_at=clock_timestamp() where id=? and revoked_at is null returning id`,[grantId])
+    if(result.length!==1)throw new IdentityAccessDenied()
+    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
+      values (?,?,?)`,["danot_"+randomUUID(),personId,audit.id])
+    return {status:"revoked" as const,grant_id:grantId}
   }
 
   // A dedicated platform task is required. Holding organization.provision or
