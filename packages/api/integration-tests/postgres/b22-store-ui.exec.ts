@@ -9576,10 +9576,15 @@ export default async function({container}:any){
         })()`)
         assert.equal(unauthorizedReview,403,
           "Applicant cannot read the platform-wide submitted queue")
+        await reviewChrome.send("Page.bringToFront")
+        await reviewChrome.wait("document.visibilityState==='visible'")
         await reviewChrome.send("Page.reload",{ignoreCache:true})
         await reviewChrome.wait("!document.getElementById('workspace').hidden")
         await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()")
-        await reviewChrome.wait("!document.getElementById('organization-review-more').hidden")
+        await reviewChrome.wait("!document.getElementById('organization-review-panel').hidden && "+
+          "!document.getElementById('organization-review-more').hidden && "+
+          "(()=>{const r=document.getElementById('organization-review-more').getBoundingClientRect();"+
+          "return r.width>0&&r.height>0})()")
         assert.equal(await reviewChrome.eval(
           "document.querySelectorAll('#organization-review-list p').length"),100)
         await reviewChrome.click("#organization-review-more")
