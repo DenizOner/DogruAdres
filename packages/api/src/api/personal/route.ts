@@ -444,7 +444,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const policyWrite=path==='platform/store-application-policy'&&options.method==='POST';
     const storeApplicationWrite=path==='store-applications'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite;
+    const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite;
     let data;
     try{
       data=await r.json();
@@ -1555,8 +1556,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             const result=await api('platform/stores',{method:'POST',
               body:JSON.stringify({application_id:entry.application_id,seller_id:entry.seller_id})});
             if(result.application_id!==entry.application_id||
-               result.seller_id!==entry.seller_id||result.status!=='open')
-              throw new Error('Onay sonucu doğrulanamadı');
+               result.seller_id!==entry.seller_id||result.status!=='open'){
+              const e=new Error('Onay sonucu doğrulanamadı; listeyi kontrol edin.');
+              e.uncertain=true;throw e;
+            }
             if(epoch!==viewEpoch||document.hidden)return;
             message.textContent='Mağaza onaylandı. Kuruluş yetkileri ayrıca denetlenir.';
             void refreshStoreApprovals(true);
@@ -1591,8 +1594,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                 application_id:entry.application_id,seller_id:entry.seller_id,
                 reason:explanation})});
             if(result.application_id!==entry.application_id||
-               result.seller_id!==entry.seller_id||result.status!=='rejected')
-              throw new Error('Ret sonucu doğrulanamadı');
+               result.seller_id!==entry.seller_id||result.status!=='rejected'){
+              const e=new Error('Ret sonucu doğrulanamadı; listeyi kontrol edin.');
+              e.uncertain=true;throw e;
+            }
             if(epoch!==viewEpoch||document.hidden)return;
             message.textContent='Mağaza başvurusu gerekçesiyle reddedildi; mevcut onaylı mağazalar etkilenmedi.';
             void refreshStoreApprovals(true);
