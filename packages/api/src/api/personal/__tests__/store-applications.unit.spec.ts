@@ -152,8 +152,8 @@ describe("B22 platform staff reasoned pending Store rejection",()=>{
       seller.status="terminated";seller.status_reason=input.reason
     })
     approveRun=jest.fn()
-    ;(terminateSellerWorkflow as jest.Mock).mockReturnValue({run:terminateRun})
-    ;(approveSellerWorkflow as jest.Mock).mockReturnValue({run:approveRun})
+    ;(terminateSellerWorkflow as unknown as jest.Mock).mockReturnValue({run:terminateRun})
+    ;(approveSellerWorkflow as unknown as jest.Mock).mockReturnValue({run:approveRun})
     ;(access as jest.Mock).mockReturnValue(svc)
     ;(enabled as jest.Mock).mockReturnValue(true)
     ;(csrf as jest.Mock).mockResolvedValue(true)
