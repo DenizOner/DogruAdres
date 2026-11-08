@@ -1745,22 +1745,46 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Keyset pagination avoids an offset proportional to total company size.
     // Read one extra row for has_more, never refuse a larger organization.
     const rows=await db.execute(`select m.id as membership_id,m.person_id,
-        p.display_name as member_name,
-        (select i.recipient_email from da_organization_invitation i
-          where i.organization_id=m.organization_id
-            and i.accepted_by_person_id=m.person_id
-            and i.status='accepted' and i.role='member'
-            and i.deleted_at is null
-          order by i.accepted_at desc nulls last,i.id desc limit 1) as invitation_email
+        p.display_name as member_name,inv.recipient_email as invitation_email,
+        not exists (
+          select 1 from da_organization_membership other
+          join da_person op on op.id=other.person_id
+            and op.disabled_at is null and op.deleted_at is null
+          left join lateral (
+            select oi.recipient_email from da_organization_invitation oi
+            where oi.organization_id=other.organization_id
+              and oi.accepted_by_person_id=other.person_id
+              and oi.status='accepted' and oi.role='member'
+              and oi.deleted_at is null
+            order by oi.accepted_at desc nulls last,oi.id desc limit 1
+          ) oinv on true
+          where other.organization_id=m.organization_id and other.id<>m.id
+            and other.role='member' and other.protected_owner=false
+            and other.status='active' and other.revoked_at is null
+            and other.deleted_at is null
+            and lower(btrim(coalesce(op.display_name,'')))=
+                lower(btrim(coalesce(p.display_name,'')))
+            and lower(btrim(coalesce(oinv.recipient_email,'')))=
+                lower(btrim(coalesce(inv.recipient_email,'')))
+        ) as label_unique_in_organization
       from da_organization_membership m
       join da_person p on p.id=m.person_id and p.disabled_at is null and p.deleted_at is null
+      left join lateral (
+        select i.recipient_email from da_organization_invitation i
+        where i.organization_id=m.organization_id
+          and i.accepted_by_person_id=m.person_id
+          and i.status='accepted' and i.role='member'
+          and i.deleted_at is null
+        order by i.accepted_at desc nulls last,i.id desc limit 1
+      ) inv on true
       where m.organization_id=? and m.role='member' and m.protected_owner=false
         and m.status='active' and m.revoked_at is null and m.deleted_at is null
         and (?='' or m.id>?)
       order by m.id limit 31`,[org,cursor,cursor])
     if(rows.length>31||rows.some(m=>typeof m.membership_id!=="string"||
        !/^[A-Za-z0-9_-]{1,128}$/.test(m.membership_id)||
-       typeof m.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)))
+       typeof m.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)||
+       typeof m.label_unique_in_organization!=="boolean"))
       throw new IdentityAccessDenied()
     const has_more=rows.length>30
     // Only current canonical Person name and that Organization's accepted
@@ -1768,6 +1792,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Neither an unrelated actor login nor a private mobile is disclosed.
     const members=rows.slice(0,30).map(m=>({
       membership_id:m.membership_id as string,person_id:m.person_id as string,
+      // Derived solely from current eligible Members in the requested
+      // Organization, including those on other pages. No Person ID is shown.
+      label_unique_in_organization:m.label_unique_in_organization as boolean,
       member_name:typeof m.member_name==="string"&&m.member_name.trim().length>0&&
         m.member_name.trim().length<=160?m.member_name.trim():null,
       invitation_email:typeof m.invitation_email==="string"&&
