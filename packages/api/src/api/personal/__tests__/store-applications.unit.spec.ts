@@ -67,6 +67,13 @@ describe("B22 protected Owner Store application gate",()=>{
       expect(svc.reserveStoreApplication).not.toHaveBeenCalled()
       expect(run).not.toHaveBeenCalled()
     })
+  it("blocks historical unverified name claims before native Seller creation",async()=>{
+    svc.reserveStoreApplication.mockResolvedValue({status:"name_unverified"})
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(svc.claimStoreApplication).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
   it("does not invoke native workflow after protected Owner revoke wins the lock",async()=>{
     svc.personalWithStoreApplicationOwnerLock.mockResolvedValue(null)
     await POST(req,res)
