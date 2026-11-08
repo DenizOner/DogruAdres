@@ -1911,9 +1911,15 @@ export default async function({container}:any){
       "Company application pause cannot suspend a previously approved Seller")
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
-    // The extra Member/Owner tab journey makes visibilitychange trigger a
-    // fresh asynchronous private-workspace reload. Wait for the platform
-    // Staff's real HTTP-scoped panel before interacting with its button.
+    // Distinguish an expired strong Staff proof from a missing UI refresh,
+    // without changing authentication or bypassing a forbidden request.
+    const approvalGate=await reviewer.callFunction("async function(){"+
+      "const session=await fetch('/personal/session');"+
+      "const review=await fetch('/personal/platform/stores?page=0');"+
+      "return {session:session.status,review:review.status}}")
+    const approvalView=await reviewer.eval("({workspace:!document.getElementById('workspace').hidden,login:!document.getElementById('login').hidden,panel:!document.getElementById('store-approval-panel').hidden})")
+    assert.deepEqual(approvalGate,{session:200,review:200},
+      "Exact Staff native authorization after tab switch, UI="+JSON.stringify(approvalView))
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
     await reviewer.click("#store-approval-refresh")
     await reviewer.wait("document.getElementById('store-approval-list').textContent.includes('inceleme bekletiliyor')")
