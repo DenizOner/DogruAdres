@@ -2745,6 +2745,12 @@ export default async function({container}:any){
     }
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
+    // The earlier independent Member/Owner acceptance uses two task-owned
+    // Chrome processes. Refresh this real authenticated document before
+    // opening the existing price-group workspace; no DOM role spoofing.
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+
+      JSON.stringify(organizations[0].name+" — owner")+")")
     await browser.select(organizations[0].name,"owner")
     await browser.wait("!document.getElementById('store-price-group-panel').hidden")
     const groupListAuditStart=Number((await q(
