@@ -736,10 +736,196 @@ async function verifyOwnerSubmittedMemberDraft(
         where organization_id=$1 and seller_id=$2 and revoked_at is null`,
         [organizations[1].id,submittedApplication.seller_id]))[0].n,1)
       process.stdout.write("PASS B22 Chrome: revoked Member's preserved Store draft submitted once by fresh-MFA protected Owner through native Mercur; duplicate/stale/CSRF/Member denied, PG16 draft/app/ownership/audit/outbox persisted, Seller pending only\n")
+      await verifyStoreDraftSubmissionNegativePaths(reviewer,organizations[1].id,ownerPersonId,q)
       await reviewer.select(organizations[0].name,"member")
 
  }
  
+
+/** Exact new Store-draft path, live same-origin HTTPS + task-owned PG16.
+ * Only disposable CI fixtures may change, and all fault injection is removed.
+ * No free-text personal data or bearer/session secrets enter the logs.
+ */
+async function verifyStoreDraftSubmissionNegativePaths(
+  reviewer:B06Chrome,organizationId:string,ownerId:string,
+  q:(sql:string,params?:unknown[])=>Promise<any[]>
+):Promise<void>{
+  assert.match(organizationId,/^daorg_[A-Za-z0-9_-]{1,80}$/)
+  const stamp=randomBytes(7).toString("hex")
+  const post=async(payload:Record<string,unknown>)=>
+    reviewer.callFunction("async function(json){"+
+      "const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-applications',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:json});return {status:r.status,body:await r.json()}}",
+      JSON.stringify(payload))
+  const createDraft=async(label:string)=>{
+    const draftId="dasdraft_"+randomBytes(16).toString("hex")
+    const name="B22 "+label+" "+stamp
+    const email="b22-"+label+"-"+stamp+"@example.invalid"
+    const saved=await post({action:"save_draft",organization_id:organizationId,
+      draft_id:draftId,expected_version:0,name,email,currency_code:"try"})
+    assert.equal(saved.status,201,"Real HTTPS draft save for "+label)
+    assert.equal(saved.body.draft_id,draftId)
+    assert.equal(saved.body.version,1)
+    return {draftId,name,email}
+  }
+  const submit=(draftId:string,version:number,applicationId:string)=>({
+    action:"submit_draft",organization_id:organizationId,
+    draft_id:draftId,expected_version:version,application_id:applicationId
+  })
+  const nativeCount=async(email:string)=>Number((await q(
+    "select count(*)::int n from seller where email=$1",[email]))[0].n)
+
+  // A real draft update wins BEFORE an old Owner form is submitted.
+  const contested=await createDraft("stale")
+  const latestName="B22 updated "+stamp
+  const update=await post({action:"save_draft",organization_id:organizationId,
+    draft_id:contested.draftId,expected_version:1,
+    name:latestName,email:contested.email,currency_code:"try"})
+  assert.equal(update.status,200)
+  assert.equal(update.body.version,2)
+  const staleApplication="daapp_"+randomBytes(16).toString("hex")
+  const stale=await post(submit(contested.draftId,1,staleApplication))
+  assert.equal(stale.status,409,"Updated draft must reject stale Owner snapshot")
+  assert.equal((await q("select count(*)::int n from da_store_application where id=$1",
+    [staleApplication]))[0].n,0)
+  assert.equal(await nativeCount(contested.email),0)
+  assert.deepEqual(await q(
+    "select name,version,status from da_store_application_draft where id=$1",
+    [contested.draftId]),[{name:latestName,version:2,status:"draft"}])
+  assert.equal((await q("select count(*)::int n from da_audit_event where action='organization.store_application_created' and new_values->>'draft_id'=$1",
+    [contested.draftId]))[0].n,0)
+
+  // Two distinct one-time application IDs are dispatched concurrently in
+  // separate native HTTPS fetch operations; the draft is not pre-claimed.
+  const appOne="daapp_"+randomBytes(16).toString("hex")
+  const appTwo="daapp_"+randomBytes(16).toString("hex")
+  const attempts=await reviewer.callFunction(
+    "async function(left,right){const s=await(await fetch('/personal/session')).json();"+
+    "const send=async body=>{const r=await fetch('/personal/store-applications',"+
+    "{method:'POST',headers:{'content-type':'application/json',"+
+    "'x-csrf-token':s.csrf_token},body});return {status:r.status,body:await r.json()}};"+
+    "return Promise.all([send(left),send(right)])}",
+    JSON.stringify(submit(contested.draftId,2,appOne)),
+    JSON.stringify(submit(contested.draftId,2,appTwo)))
+  assert.deepEqual(attempts.map((v:any)=>v.status).sort((a:number,b:number)=>a-b),
+    [201,409],"Concurrent distinct application keys must produce only one success")
+  const winner=attempts.find((v:any)=>v.status===201)
+  assert.ok(winner&&[appOne,appTwo].includes(winner.body.application_id))
+  assert.equal(winner.body.status,"pending_approval")
+  const applications=await q("select id,status,seller_id from da_store_application where id=$1 or id=$2",
+    [appOne,appTwo])
+  assert.equal(applications.length,1)
+  assert.equal(applications[0].id,winner.body.application_id)
+  assert.equal(applications[0].status,"created")
+  assert.equal(await nativeCount(contested.email),1)
+  assert.deepEqual(await q("select status,version,submitted_application_id from da_store_application_draft where id=$1",
+    [contested.draftId]),[{
+    status:"submitted",version:2,submitted_application_id:winner.body.application_id
+  }])
+  const [seller]=await q("select status,approved_at from seller where id=$1",
+    [applications[0].seller_id])
+  assert.equal(seller.status,"pending_approval")
+  assert.equal(seller.approved_at,null)
+  assert.equal((await q("select count(*)::int n from da_organization_seller_ownership where organization_id=$1 and seller_id=$2 and revoked_at is null",
+    [organizationId,applications[0].seller_id]))[0].n,1)
+  assert.equal((await q("select count(*)::int n from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id where e.action='organization.store_application_created' and e.new_values->>'draft_id'=$1",
+    [contested.draftId]))[0].n,1)
+  process.stdout.write("PASS B22 Chrome/PG16: before-submit stale draft409/zero Seller; concurrent distinct application keys 201+409, one native pending Seller and one durable Origin/audit/outbox\n")
+
+  // Expire only this genuine Owner's second-factor proof. Restore precisely
+  // the original stored timestamp after the negative request; no fake login.
+  const expiredDraft=await createDraft("expired")
+  const deniedApp="daapp_"+randomBytes(16).toString("hex")
+  const token=await reviewer.token()
+  assert.match(token??"",/^[A-Za-z0-9_-]{43}$/)
+  const sessionId=createHash("sha256").update(token!).digest("hex")
+  const [session]=await q(
+    "select person_id,status,mfa_purpose,last_strong_auth_at from da_browser_session where id=$1",
+    [sessionId])
+  assert.ok(session)
+  assert.equal(session.person_id,ownerId)
+  assert.equal(session.status,"active")
+  assert.equal(session.mfa_purpose,"full")
+  assert.ok(session.last_strong_auth_at)
+  try{
+    await q("update da_browser_session set last_strong_auth_at=clock_timestamp()-interval '20 minutes' where id=$1",
+      [sessionId])
+    const noMfa=await post(submit(expiredDraft.draftId,1,deniedApp))
+    assert.equal(noMfa.status,403,"Owner with expired strong proof cannot send draft")
+    assert.equal((await q("select count(*)::int n from da_store_application where id=$1",
+      [deniedApp]))[0].n,0)
+    assert.equal(await nativeCount(expiredDraft.email),0)
+  }finally{
+    await q("update da_browser_session set last_strong_auth_at=$2 where id=$1",
+      [sessionId,session.last_strong_auth_at])
+  }
+  const [policy]=await q("select store_application_enabled from da_organization where id=$1",
+    [organizationId])
+  assert.equal(policy.store_application_enabled,true)
+  try{
+    await q("update da_organization set store_application_enabled=false where id=$1",
+      [organizationId])
+    const deniedPolicy=await post(submit(expiredDraft.draftId,1,deniedApp))
+    assert.equal(deniedPolicy.status,403,
+      "Company policy suspension must bar this exact saved-draft endpoint")
+  }finally{
+    await q("update da_organization set store_application_enabled=$2 where id=$1",
+      [organizationId,policy.store_application_enabled])
+  }
+  assert.equal((await q("select count(*)::int n from da_store_application where id=$1",
+    [deniedApp]))[0].n,0)
+  assert.equal(await nativeCount(expiredDraft.email),0)
+  assert.deepEqual(await q("select status,version from da_store_application_draft where id=$1",
+    [expiredDraft.draftId]),[{status:"draft",version:1}])
+  process.stdout.write("PASS B22 Chrome/PG16: genuine Owner's expired strong proof and temporarily disabled company policy deny same draft with 403, zero native Seller and unchanged private draft\n")
+
+  // Force failure AFTER the existing Mercur native Seller workflow reaches
+  // Foundation's ownership finalization. The committed 'creating' claim must
+  // survive even when native Seller rollback/commit outcome is uncertain.
+  const uncertainDraft=await createDraft("uncertain")
+  const uncertainApp="daapp_"+randomBytes(16).toString("hex")
+  const faultFunction="b22_owner_draft_finish_fault_v1"
+  let functionInstalled=false,triggerInstalled=false
+  try{
+    await q("create function "+faultFunction+
+      "() returns trigger language plpgsql as $b22$ begin "+
+      "if NEW.organization_id='"+organizationId+"' then "+
+      "raise exception 'B22 isolated native Seller finalization interruption'; "+
+      "end if; return NEW; end $b22$")
+    functionInstalled=true
+    await q("create trigger "+faultFunction+
+      " before insert on da_organization_seller_ownership for each row execute function "+
+      faultFunction+"()")
+    triggerInstalled=true
+    const interrupted=await post(submit(uncertainDraft.draftId,1,uncertainApp))
+    assert.equal(interrupted.status,503,
+      "Native Seller completion interrupted after creating claim must be uncertain")
+    assert.equal(interrupted.body.message,"Outcome uncertain; check application status")
+  }finally{
+    if(triggerInstalled)await q("drop trigger if exists "+faultFunction+
+      " on da_organization_seller_ownership")
+    if(functionInstalled)await q("drop function if exists "+faultFunction+"()")
+  }
+  assert.deepEqual(await q("select status,seller_id from da_store_application where id=$1",
+    [uncertainApp]),[{status:"creating",seller_id:null}])
+  assert.deepEqual(await q("select status,submitted_application_id from da_store_application_draft where id=$1",
+    [uncertainDraft.draftId]),[{status:"submitting",submitted_application_id:uncertainApp}])
+  const uncertainNativeCount=await nativeCount(uncertainDraft.email)
+  assert.ok(uncertainNativeCount<=1,"Interrupted native Seller has no duplicates")
+  const sameRetry=await post(submit(uncertainDraft.draftId,1,uncertainApp))
+  const alternateRetry=await post(submit(uncertainDraft.draftId,1,
+    "daapp_"+randomBytes(16).toString("hex")))
+  assert.equal(sameRetry.status,409,"Committed creating claim must block blind retry")
+  assert.equal(alternateRetry.status,409,"Uncertain draft cannot create Seller from alternate ID")
+  assert.equal(await nativeCount(uncertainDraft.email),uncertainNativeCount)
+  assert.equal((await q("select count(*)::int n from da_store_application where organization_id=$1 and id=$2",
+    [organizationId,uncertainApp]))[0].n,1)
+  assert.equal((await q("select count(*)::int n from da_audit_event where action='organization.store_application_created' and new_values->>'draft_id'=$1",
+    [uncertainDraft.draftId]))[0].n,0)
+  process.stdout.write("PASS B22 Chrome/PG16: injected native Seller finalization interruption 503, durable creating/submitting, same/different retry409, no duplicate Seller, fault trigger removed\n")
+}
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   const preparing=process.env.B22_UI_PREPARE==="true"
