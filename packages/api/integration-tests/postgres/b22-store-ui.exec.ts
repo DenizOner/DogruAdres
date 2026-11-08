@@ -2175,6 +2175,10 @@ export default async function({container}:any){
     // A's historical Beta Admin role is temporarily an ordinary Member in
     // this synthetic fixture only; restore it after the narrow acceptance.
     const betaScope=organizations[1].id
+    // Synthetic legacy Member originally lacked a human-readable Person
+    // label. The Owner may grant only to an identifiable company employee.
+    await q("update da_person set display_name=$1 where id=$2",
+      ["B22 Yetkili Test Çalışanı",A.person])
     const [legacyBeta]=await q(`select role,protected_owner from da_organization_membership
       where id=$1`,[betaAdminMembership.id])
     assert.deepEqual(legacyBeta,{role:"admin",protected_owner:false})
@@ -2325,7 +2329,10 @@ export default async function({container}:any){
       name:"B22 Member pages "+rand,status:"active"
     }])
     const syntheticPeople=await foundation.createPeople(
-      Array.from({length:101},()=>({})))
+      Array.from({length:101},(_,index)=>({
+        display_name:index===0?null:
+          "B22 Sentetik Çalışan "+String(index+1).padStart(3,"0")
+      })))
     assert.equal(syntheticPeople.length,101)
     const largeMemberships=await foundation.createMemberships([
       {organization_id:largeMemberOrg.id,person_id:A.person,role:"owner",
@@ -2341,6 +2348,10 @@ export default async function({container}:any){
         and role='member' and status='active' order by id`,[largeMemberOrg.id])
     assert.equal(orderedMembers.length,101)
     const lastMember=orderedMembers[100]
+    // Keep a checkable display label on the exact last Member even when
+    // generated membership IDs sort in a different order from creation.
+    await q("update da_person set display_name=$1 where id=$2",
+      ["B22 Son Sayfa Çalışanı",lastMember.person_id])
     await browser.send("Page.bringToFront")
     await browser.send("Page.reload",{ignoreCache:true})
     await browser.wait("Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent==="+
@@ -2374,6 +2385,12 @@ export default async function({container}:any){
       const nav=await browser.eval(
         "({next:!document.getElementById('store-draft-grants-older').hidden,"+
         "prev:!document.getElementById('store-draft-grants-newer').hidden})")
+      const visibleMembershipLabels=await browser.eval(
+        "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options,"+
+        "o=>({text:o.textContent,disabled:o.disabled}))")
+      assert.ok(visibleMembershipLabels.every((o:any)=>
+        !o.text.includes("daprs_")&&!o.text.includes("daomem_")),
+        "Owner must not see internal Person/Membership IDs as staff names")
       assert.deepEqual(nav,{next:index<3,prev:index>0},
         "Visible Owner pagination controls must reflect each real page")
       if(index<3)await browser.click("#store-draft-grants-older")
@@ -2385,6 +2402,19 @@ export default async function({container}:any){
     await browser.eval(
       "document.querySelector('#store-draft-grants-form select[name=membership_id]').value="+
       JSON.stringify(lastMember.id))
+    assert.ok(String(await browser.eval(
+      "document.querySelector('#store-draft-grants-form select[name=membership_id]').selectedOptions[0].textContent"))
+      .includes("B22 Son Sayfa Çalışanı"),
+      "Owner selects a named Member rather than an opaque internal code")
+    // The authorized POST commits, but only this browser's response body
+    // is synthetically broken. The UI must say UNCERTAIN rather than DENIED.
+    await browser.eval("(()=>{const original=window.fetch.bind(window);"+
+      "window.__b22GrantOriginalFetch=window.fetch;"+
+      "window.fetch=(resource,options)=>{const path=typeof resource==='string'?resource:resource?.url;"+
+      "if(path==='/personal/store-draft-permissions'&&options?.method==='POST')"+
+      "return original(resource,options).then(r=>r.status===200?"+
+      "new Response('{\\\"status\\\":',{status:200,headers:{'content-type':'application/json'}}):r);"+
+      "return original(resource,options)};return true})()")
     await browser.click("#store-draft-grants-form button[value=grant]")
     await until(async()=>(await q(`select count(*)::int n
       from da_organization_store_draft_permission
@@ -2392,6 +2422,15 @@ export default async function({container}:any){
         and revoked_at is null`,
       [largeMemberOrg.id,lastMember.person_id,lastMember.id]))[0].n===1,
       19000,"101st Member's real Owner draft grant persisted")
+    await browser.wait("document.getElementById('store-draft-grants-status').textContent.includes('sonucu belirsiz')")
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-draft-grants-form button[value=grant]').disabled && "+
+      "document.querySelector('#store-draft-grants-form button[value=revoke]').disabled"),true,
+      "Truncated successful POST must leave duplicate grants/revokes disabled")
+    await browser.eval("(()=>{window.fetch=window.__b22GrantOriginalFetch;delete window.__b22GrantOriginalFetch})()")
+    await browser.click("#store-draft-grants-refresh")
+    await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+      "document.getElementById('store-draft-grants-list').textContent.includes('B22 Son Sayfa Çalışanı — taslak: Yetkili')")
     await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
       "document.querySelector('#store-draft-grants-form button[value=revoke]').disabled===false")
     assert.equal(await browser.eval(
@@ -2425,7 +2464,7 @@ export default async function({container}:any){
     await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
       "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===30")
     await browser.select(organizations[0].name,"owner")
-    process.stdout.write("PASS B22 Chrome/PG16: 101 active Members navigate four protected Owner permission pages, last Member grant/revoke durable audit/outbox, foreign Person 403, forged cursor 400, zero Seller\\n")
+    process.stdout.write("PASS B22 Chrome: 101 active Members, named Owner-only 30-row pages, last Member grant/revoke and uncertain POST recovery, durable audit/outbox, foreign Person 403, invalid cursor 400, zero Seller\\n")
 
     // Distinct disposable Organization: a grant from an ended membership
     // cannot revive when the same Person rejoins; the Owner must explicitly
