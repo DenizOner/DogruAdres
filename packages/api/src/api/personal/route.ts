@@ -1791,7 +1791,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
              /^[A-Za-z0-9_-]{1,128}$/.test(data.next_cursor)))||
          data.has_more!==(data.next_cursor!==null)||
          (data.has_more&&data.next_cursor!==data.members.at(-1)?.membership_id)||
-         data.members.some(m=>!(m.member_name===null||
+         data.members.some(m=>typeof m.label_unique_in_organization!=='boolean'||
+           !(m.member_name===null||
            (typeof m.member_name==='string'&&m.member_name.trim().length>0&&m.member_name.length<=160))||
            !(m.invitation_email===null||
              (typeof m.invitation_email==='string'&&
@@ -1822,7 +1823,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       for(const m of data.members){
         const label=labelFor(m);
-        const selectable=!!label&&labelCounts.get(label)===1;
+        const selectable=!!label&&m.label_unique_in_organization===true&&
+          labelCounts.get(label)===1;
         const option=document.createElement('option');
         option.value=m.membership_id;
         option.disabled=!selectable;
