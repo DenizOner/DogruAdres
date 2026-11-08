@@ -2577,7 +2577,118 @@ export default async function({container}:any){
     await browser.click("#store-draft-grants-newer")
     await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
       "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===30")
+
+    // P2: two different Members across page 1/page 4 each get a valid grant
+    // while distinguishable, then acquire the same visible name. Neither
+    // individual revoke may be offered or accepted. No silent all-revoke.
+    const twoGrantedNamesakes=[orderedMembers[1],orderedMembers[91]]
+    assert.equal(twoGrantedNamesakes.length,2)
+    const grantBoth=await browser.callFunction(
+      "async function(org,ids){const session=await(await fetch('/personal/session')).json();"+
+      "const statuses=[];for(const id of ids){const r=await fetch('/personal/store-draft-permissions',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({action:'grant',organization_id:org,membership_id:id})});"+
+      "statuses.push(r.status)}return statuses}",largeMemberOrg.id,
+      twoGrantedNamesakes.map(m=>m.id))
+    assert.deepEqual(grantBoth,[200,200],
+      "Both distinct Members originally receive individually authorized grants")
+    await q("update da_person set display_name=$1 where id=any($2::text[])",
+      ["B22 İki Önceden Yetkili Adaş",twoGrantedNamesakes.map(m=>m.person_id)])
+    const collisionPages=await browser.callFunction(
+      "async function(org,ids){let after='',found=[],pages=[];for(let i=0;i<5;i++){"+
+      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
+      "const data=await r.json();pages.push(r.status);"+
+      "for(const m of data.members){if(ids.includes(m.membership_id))"+
+      "found.push({id:m.membership_id,flag:m.other_active_grant_same_label,"+
+      "unique:m.label_unique_in_organization,granted:data.grants.some(g=>g.membership_id===m.membership_id)});"+
+      "}if(!data.has_more)break;after=data.next_cursor;}return {found,pages}}",
+      largeMemberOrg.id,twoGrantedNamesakes.map(m=>m.id))
+    assert.deepEqual(collisionPages.pages,[200,200,200,200],
+      "Owner protected GET must read all four pages after label collision")
+    assert.deepEqual(collisionPages.found.map((m:any)=>[m.flag,m.unique,m.granted]),
+      [[true,false,true],[true,false,true]],
+      "Two active same-label grants must be marked ambiguous across all pages")
+    // Navigate page 3 -> 2 -> 1, test the first Member; page 1 -> 4
+    // for the other. Do not alter DOM option disabled status in tests.
+    for(let i=0;i<2;i++){
+      await browser.click("#store-draft-grants-newer")
+      await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+        "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===30")
+    }
+    for(let index=0;index<4;index++){
+      if(index===3){
+        await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+          "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===11")
+      }
+      if(index===0||index===3){
+        await browser.click("#store-draft-grants-refresh")
+        await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+          "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length==="+
+          (index===3?11:30))
+        const selected=index===0?twoGrantedNamesakes[0]:twoGrantedNamesakes[1]
+        const decision=await browser.eval(
+          "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options,"+
+          "o=>({value:o.value,disabled:o.disabled,text:o.textContent}))")
+        const option=decision.find((o:any)=>o.value===selected.id)
+        assert.equal(option?.disabled,true,
+          "Wrong-person individual revoke must be disabled on every page")
+        assert.ok(option.text.includes("birden fazla etkin izin"),
+          "Owner must see why conflicting grants are not individually revocable")
+        const before=browser.http.filter((h:any)=>
+          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length
+        await browser.eval("(()=>{const select=document.querySelector("+
+          "'#store-draft-grants-form select[name=membership_id]');"+
+          "select.value="+JSON.stringify(selected.id)+";"+
+          "select.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+        assert.equal(await browser.eval(
+          "document.querySelector('#store-draft-grants-form button[value=revoke]').disabled"),
+          true,"User cannot submit ambiguous individual revoke")
+        await browser.click("#store-draft-grants-form button[value=revoke]")
+        assert.equal(browser.http.filter((h:any)=>
+          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length,before,
+          "Disabled ambiguous revoke must send zero POST requests")
+      }
+      if(index<3){
+        await browser.click("#store-draft-grants-older")
+        await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
+          "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length==="+
+          (index===2?11:30))
+      }
+    }
+    const deniedAmbiguous=await browser.callFunction(
+      "async function(org,ids){const session=await(await fetch('/personal/session')).json();"+
+      "const result=[];for(const id of ids){const r=await fetch('/personal/store-draft-permissions',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({action:'revoke',organization_id:org,membership_id:id})});"+
+      "result.push(r.status)}return result}",largeMemberOrg.id,
+      twoGrantedNamesakes.map(m=>m.id))
+    assert.deepEqual(deniedAmbiguous,[403,403],
+      "Even a direct Owner POST may not silently revoke the wrong namesake")
+    const surviving=await q(`select person_id,count(*)::int n
+      from da_organization_store_draft_permission
+      where organization_id=$1 and person_id=any($2::text[])
+        and revoked_at is null group by person_id order by person_id`,
+      [largeMemberOrg.id,twoGrantedNamesakes.map(m=>m.person_id)])
+    assert.equal(surviving.length,2)
+    assert.ok(surviving.every((m:any)=>m.n===1),
+      "Rejected ambiguous revocations must leave both original grants intact")
+    const onlyGrantAudits=await q(`select e.action,count(*)::int n
+      from da_audit_event e join da_audit_outbox x
+        on x.source_audit_event_id=e.id
+      where e.organization_id=$1 and e.target_id=any($2::text[])
+        and e.resource='store-draft-permission'
+      group by e.action order by e.action`,
+      [largeMemberOrg.id,twoGrantedNamesakes.map(m=>m.person_id)])
+    assert.deepEqual(onlyGrantAudits,[{
+      action:"organization.store_draft_permission_granted",n:2
+    }],"Two original grants but zero erroneous revoke audit/outbox")
+    assert.equal((await q(`select count(*)::int n
+      from da_store_application where organization_id=$1`,
+      [largeMemberOrg.id]))[0].n,0,
+      "Ambiguous permission handling must never create a Seller")
     await browser.select(organizations[0].name,"owner")
+    process.stdout.write("PASS B22 Chrome: two existing active grants with identical later name across page 1 and 4: no ambiguous individual revoke UI/HTTP/audit, both grants intact, zero Seller\\n")
     process.stdout.write("PASS B22 Chrome: 101 active Members; cross-page identical no-invite names disabled, zero unauthorized grants/audit/outbox, unrelated Organization ignored; last identifiable Member grant/revoke and uncertain POST recovery, audit/outbox, foreign Person 403, invalid cursor 400, zero Seller\\n")
 
     // Distinct disposable Organization: a grant from an ended membership
