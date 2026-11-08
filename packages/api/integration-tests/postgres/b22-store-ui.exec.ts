@@ -975,7 +975,7 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
       "const session=await(await fetch('/personal/session')).json();"+
       "const r=await fetch('/personal/platform/stores',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':"+
-      "(invalid==='true'?'invalid':session.csrf_token)},body:JSON.stringify(body)});"+
+      "(invalid==='true'?'invalid':session.csrf_token)},body:body});"+
       "return {status:r.status,body:await r.json()}}",
       JSON.stringify(body),invalidCsrf?"true":"false")
   const target={application_id:app,seller_id:seller.id}
