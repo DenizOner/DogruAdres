@@ -2283,19 +2283,33 @@ export default async function({container}:any){
     const firstRejoinGrant=await grantRejoin(rejoinOld.id)
     assert.equal(firstRejoinGrant.status,200)
     assert.equal(firstRejoinGrant.body.status,"active")
-    const ended=await q(`update da_organization_membership
-      set status='revoked',revoked_at=clock_timestamp(),updated_at=clock_timestamp()
-      where id=$1 and role='member' and status='active' and protected_owner=false
+    const ended=await browser.callFunction(
+      "async function(org,id){const session=await(await fetch('/personal/session')).json();"+
+      "const response=await fetch('/personal/memberships',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({organization_id:org,membership_id:id})});"+
+      "return {status:response.status,body:await response.json()}}",
+      rejoinOrg.id,rejoinOld.id)
+    assert.equal(ended.status,200,"Real Owner revokes the Member using existing membership API")
+    const endedRows=await q(`select status,revoked_at from da_organization_membership
+      where id=$1`,[rejoinOld.id])
+    assert.equal(endedRows.length,1)
+    assert.equal(endedRows[0].status,"revoked")
+    assert.ok(endedRows[0].revoked_at)
+    // Synthetic isolated reactivation mirrors the existing unique
+    // Person/Organization membership identity. The re-acceptance workflow
+    // itself is outside this focused authorization regression.
+    const restored=await q(`update da_organization_membership
+      set status='active',revoked_at=null,updated_at=clock_timestamp()
+      where id=$1 and status='revoked' and protected_owner=false
       returning id`,[rejoinOld.id])
-    assert.equal(ended.length,1)
-    const [rejoinNew]=await foundation.createMemberships([{
-      organization_id:rejoinOrg.id,person_id:B.person,role:"member",
-      status:"active",protected_owner:false
-    }])
-    assert.notEqual(rejoinNew.id,rejoinOld.id)
-    const secondRejoinGrant=await grantRejoin(rejoinNew.id)
+    assert.equal(restored.length,1)
+    assert.equal((await q(`select count(*)::int n from da_organization_store_draft_permission
+      where membership_id=$1 and revoked_at is null`,[rejoinOld.id]))[0].n,0,
+      "An invitation restoring the same membership ID cannot revive stale draft authority")
+    const secondRejoinGrant=await grantRejoin(rejoinOld.id)
     assert.equal(secondRejoinGrant.status,200,
-      "Explicit Owner grant must work for a rejoined Member, not re-enable old membership")
+      "Owner must explicitly grant a reactivated membership new Store draft permission")
     assert.equal(secondRejoinGrant.body.status,"active")
     assert.notEqual(secondRejoinGrant.body.grant_id,firstRejoinGrant.body.grant_id)
     const rejoinRows=await q(`select id,membership_id,revoked_at
@@ -2304,8 +2318,10 @@ export default async function({container}:any){
       [rejoinOrg.id,B.person])
     assert.equal(rejoinRows.length,2)
     assert.equal(rejoinRows.filter((row:any)=>row.revoked_at===null).length,1)
-    assert.equal(rejoinRows.find((row:any)=>row.membership_id===rejoinOld.id)?.revoked_at!==null,true)
-    assert.equal(rejoinRows.find((row:any)=>row.membership_id===rejoinNew.id)?.revoked_at,null)
+    assert.equal(rejoinRows.find((row:any)=>row.id===firstRejoinGrant.body.grant_id)?.revoked_at!==null,true)
+    assert.equal(rejoinRows.find((row:any)=>row.id===secondRejoinGrant.body.grant_id)?.revoked_at,null)
+    assert.ok(rejoinRows.every((row:any)=>row.membership_id===rejoinOld.id),
+      "The canonical Organization membership ID is reused; the authority grant ID is not")
     const rejoinAudits=await q(`select e.action from da_audit_event e
       join da_audit_outbox x on x.source_audit_event_id=e.id
       where e.organization_id=$1 and e.target_id=$2
@@ -2317,7 +2333,7 @@ export default async function({container}:any){
       "organization.store_draft_permission_revoked"
     ])
     await browser.select(organizations[0].name,"owner")
-    process.stdout.write("PASS B22 Chrome/PG16: rejoined Member receives no automatic draft privilege; explicit new Owner grant retires stale membership grant with canonical audit/outbox\\n")
+    process.stdout.write("PASS B22 Chrome/PG16: revoked Member loses draft grant atomically; synthetic same-membership reactivation grants no automatic right; fresh Owner grant and canonical audit/outbox verified\n")
 
     // This is the very same task-created membership whose Owner authority
     // was removed above; do not create a duplicate Person/Organization row.
