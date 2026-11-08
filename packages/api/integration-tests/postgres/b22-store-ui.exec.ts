@@ -2532,6 +2532,36 @@ export default async function({container}:any){
     // independent of the missing-contact check and of the disabled UI.
     await q("update da_person set mobile_phone=$1 where id=any($2::text[])",
       ["+905550001777",nameTwins.map(m=>m.person_id)])
+    // Two different corrupt invited addresses are *not* two visible labels.
+    // Cross-page checks and POST must normalize both to the same absent email,
+    // even though raw database strings differ. Only disposable test data.
+    for(let i=0;i<nameTwins.length;i++){
+      const invite=await foundation.createOrganizationInvitation({
+        organization_id:largeMemberOrg.id,
+        actor_person_id:A.person,actor_type:"user",actor_id:A.actor,
+        email:"b22-corrupt-label-"+rand+"-"+i+"@example.invalid",role:"member"
+      })
+      await q(`update da_organization_invitation
+        set status='accepted',accepted_by_person_id=$1,accepted_at=clock_timestamp(),
+            recipient_email=$2
+        where id=$3 and organization_id=$4`,
+        [nameTwins[i].person_id,i===0?"invalid@":"broken@",invite.id,largeMemberOrg.id])
+    }
+    const corruptLabels=await browser.callFunction(
+      "async function(org,jsonIds){const ids=JSON.parse(jsonIds);"+
+      "let after='',found=[];for(let i=0;i<5;i++){"+
+      "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
+      "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
+      "const data=await r.json();if(r.status!==200)throw Error('permissions GET denied');"+
+      "for(const m of data.members){if(ids.includes(m.membership_id))"+
+      "found.push({id:m.membership_id,email:m.invitation_email,"+
+      "phone:m.mobile_phone,unique:m.label_unique_in_organization});"+
+      "}if(!data.has_more)break;after=data.next_cursor;}return found}",
+      largeMemberOrg.id,JSON.stringify(nameTwins.map(m=>m.id)))
+    assert.equal(corruptLabels.length,2)
+    assert.ok(corruptLabels.every((m:any)=>m.email===null&&
+      m.phone==="+905550001777"&&m.unique===false),
+      "Two malformed invites must be indistinguishable in both Owner GET and server label checks")
     const ambiguousContactPost=await browser.callFunction(
       "async function(org,id){const s=await(await fetch('/personal/session')).json();"+
       "const r=await fetch('/personal/store-draft-permissions',{method:'POST',"+
