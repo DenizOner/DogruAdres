@@ -58,7 +58,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   const parsed=(rejecting?rejection:approval).safeParse(req.body)
   if(!parsed.success)return res.status(400).json({message:"Invalid input"})
   const target={application_id:parsed.data.application_id,seller_id:parsed.data.seller_id}
-  const reason=rejecting?(parsed.data as {reason:string}).reason:null
+  const reason=rejecting?(parsed.data as unknown as {reason:string}).reason:null
   const svc=access(req),token=sessionToken(req)
   try{
     const check=await svc.personalReviewableStoreApplications(token,target)
