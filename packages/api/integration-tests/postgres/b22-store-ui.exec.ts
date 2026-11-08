@@ -2348,6 +2348,23 @@ export default async function({container}:any){
         and role='member' and status='active' order by id`,[largeMemberOrg.id])
     assert.equal(orderedMembers.length,101)
     const lastMember=orderedMembers[100]
+    // P2: two active Members on DIFFERENT 30-row pages have identical
+    // names and no accepted invitation email. Neither may be grantable.
+    const nameTwins=[orderedMembers[0],orderedMembers[90]]
+    await q("update da_person set display_name=$1 where id=any($2::text[])",
+      ["B22 Aynı İsimli Çalışan",nameTwins.map(m=>m.person_id)])
+    // A matching name in an unrelated Organization MUST NOT affect this
+    // company's unambiguous last Member; synthetic data only.
+    const [unrelatedOrg]=await foundation.createOrganizations([{
+      name:"B22 Unrelated Member names "+rand,status:"active"
+    }])
+    const [unrelatedPerson]=await foundation.createPeople([{
+      display_name:"B22 Son Sayfa Çalışanı"
+    }])
+    await foundation.createMemberships([{
+      organization_id:unrelatedOrg.id,person_id:unrelatedPerson.id,
+      role:"member",status:"active",protected_owner:false
+    }])
     // Keep a checkable display label on the exact last Member even when
     // generated membership IDs sort in a different order from creation.
     await q("update da_person set display_name=$1 where id=$2",
@@ -2362,14 +2379,16 @@ export default async function({container}:any){
       "const r=await fetch('/personal/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org)+(after?'&after='+encodeURIComponent(after):''));"+
       "const d=await r.json();out.push({status:r.status,count:d.members?.length,"+
-      "grantCount:d.grants?.length,more:d.has_more,cursor:!!d.next_cursor});"+
+      "grantCount:d.grants?.length,more:d.has_more,cursor:!!d.next_cursor,"+
+      "ambiguous:d.members?.filter(m=>!m.label_unique_in_organization).length,"+
+      "lastUnique:d.members?.find(m=>m.member_name==='B22 Son Sayfa Çalışanı')?.label_unique_in_organization??null});"+
       "if(!d.has_more)break;after=d.next_cursor;}return out}",largeMemberOrg.id)
     assert.deepEqual(pages,[
-      {status:200,count:30,grantCount:0,more:true,cursor:true},
-      {status:200,count:30,grantCount:0,more:true,cursor:true},
-      {status:200,count:30,grantCount:0,more:true,cursor:true},
-      {status:200,count:11,grantCount:0,more:false,cursor:false}
-    ],"101 active Members must be fully reachable through four bounded pages")
+      {status:200,count:30,grantCount:0,more:true,cursor:true,ambiguous:1,lastUnique:null},
+      {status:200,count:30,grantCount:0,more:true,cursor:true,ambiguous:0,lastUnique:null},
+      {status:200,count:30,grantCount:0,more:true,cursor:true,ambiguous:0,lastUnique:null},
+      {status:200,count:11,grantCount:0,more:false,cursor:false,ambiguous:1,lastUnique:true}
+    ],"101 Members: cross-page name twins ambiguous, foreign Company ignored, last unique")
     assert.equal(await reviewer.callFunction(
       "async function(org){return (await fetch('/personal/store-draft-permissions?organization_id='+"+
       "encodeURIComponent(org))).status}",largeMemberOrg.id),403,
@@ -2387,10 +2406,35 @@ export default async function({container}:any){
         "prev:!document.getElementById('store-draft-grants-newer').hidden})")
       const visibleMembershipLabels=await browser.eval(
         "Array.from(document.querySelector('#store-draft-grants-form select[name=membership_id]').options,"+
-        "o=>({text:o.textContent,disabled:o.disabled}))")
+        "o=>({value:o.value,text:o.textContent,disabled:o.disabled}))")
       assert.ok(visibleMembershipLabels.every((o:any)=>
         !o.text.includes("daprs_")&&!o.text.includes("daomem_")),
         "Owner must not see internal Person/Membership IDs as staff names")
+      if(index===0||index===3){
+        const twin=index===0?nameTwins[0]:nameTwins[1]
+        const option=visibleMembershipLabels.find((o:any)=>o.value===twin.id)
+        assert.equal(option?.disabled,true,
+          "Cross-page identical Member name with no invitation must be disabled")
+        const postBefore=browser.http.filter((h:any)=>
+          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length
+        await browser.eval("document.querySelector('#store-draft-grants-form select[name=membership_id]').value="+
+          JSON.stringify(twin.id))
+        await browser.click("#store-draft-grants-form button[value=grant]")
+        assert.equal(browser.http.filter((h:any)=>
+          h.path==="/personal/store-draft-permissions"&&h.method==="POST").length,
+          postBefore,"Disabled name twin must not send any grant POST")
+        assert.equal((await q(`select count(*)::int n
+          from da_organization_store_draft_permission
+          where organization_id=$1 and person_id=$2`,
+          [largeMemberOrg.id,twin.person_id]))[0].n,0,
+          "Cross-page ambiguous identity cannot gain a Store draft grant")
+        assert.equal((await q(`select count(*)::int n from da_audit_event e
+          join da_audit_outbox x on x.source_audit_event_id=e.id
+          where e.organization_id=$1 and e.target_id=$2
+            and e.resource='store-draft-permission'`,
+          [largeMemberOrg.id,twin.person_id]))[0].n,0,
+          "No audit/outbox must be created for an ambiguous grant")
+      }
       assert.deepEqual(nav,{next:index<3,prev:index>0},
         "Visible Owner pagination controls must reflect each real page")
       if(index<3)await browser.click("#store-draft-grants-older")
@@ -2464,7 +2508,7 @@ export default async function({container}:any){
     await browser.wait("!document.getElementById('store-draft-grants-panel').hidden && "+
       "document.querySelector('#store-draft-grants-form select[name=membership_id]').options.length===30")
     await browser.select(organizations[0].name,"owner")
-    process.stdout.write("PASS B22 Chrome: 101 active Members, named Owner-only 30-row pages, last Member grant/revoke and uncertain POST recovery, durable audit/outbox, foreign Person 403, invalid cursor 400, zero Seller\\n")
+    process.stdout.write("PASS B22 Chrome: 101 active Members; cross-page identical no-invite names disabled, zero unauthorized grants/audit/outbox, unrelated Organization ignored; last identifiable Member grant/revoke and uncertain POST recovery, audit/outbox, foreign Person 403, invalid cursor 400, zero Seller\\n")
 
     // Distinct disposable Organization: a grant from an ended membership
     // cannot revive when the same Person rejoins; the Owner must explicitly
