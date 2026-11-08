@@ -49,6 +49,24 @@ describe("B22 protected Owner Store application gate",()=>{
     expect(svc.finishStoreApplication).toHaveBeenCalledWith("opaque",data,"sel_a",expect.any(Object))
     expect(res.status).toHaveBeenCalledWith(201)
   })
+  it("rejects an already reserved normalized name before any native Seller write",async()=>{
+    svc.reserveStoreApplication.mockResolvedValue({status:"name_taken"})
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(res.json).toHaveBeenCalledWith({
+      message:"Store name unavailable; choose another name"
+    })
+    expect(svc.claimStoreApplication).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
+  it.each(["ab","12345","Example.com","Alpha Ltd. Şti."])(
+    "rejects objectively invalid Store name %s before reservation",async name=>{
+      req.body.name=name
+      await POST(req,res)
+      expect(res.status).toHaveBeenCalledWith(400)
+      expect(svc.reserveStoreApplication).not.toHaveBeenCalled()
+      expect(run).not.toHaveBeenCalled()
+    })
   it("does not invoke native workflow after protected Owner revoke wins the lock",async()=>{
     svc.personalWithStoreApplicationOwnerLock.mockResolvedValue(null)
     await POST(req,res)
