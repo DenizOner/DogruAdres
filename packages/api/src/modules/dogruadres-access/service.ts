@@ -1766,7 +1766,34 @@ export default class DogruAdresAccessModuleService extends MedusaService({
                 lower(btrim(coalesce(p.display_name,'')))
             and lower(btrim(coalesce(oinv.recipient_email,'')))=
                 lower(btrim(coalesce(inv.recipient_email,'')))
-        ) as label_unique_in_organization
+        ) as label_unique_in_organization,
+        exists (
+          select 1 from da_organization_store_draft_permission other_grant
+          join da_organization_membership other
+            on other.id=other_grant.membership_id
+            and other.person_id=other_grant.person_id
+            and other.organization_id=other_grant.organization_id
+          join da_person op on op.id=other.person_id
+            and op.disabled_at is null and op.deleted_at is null
+          left join lateral (
+            select oi.recipient_email from da_organization_invitation oi
+            where oi.organization_id=other.organization_id
+              and oi.accepted_by_person_id=other.person_id
+              and oi.status='accepted' and oi.role='member'
+              and oi.deleted_at is null
+            order by oi.accepted_at desc nulls last,oi.id desc limit 1
+          ) oinv on true
+          where other.organization_id=m.organization_id and other.id<>m.id
+            and other.role='member' and other.protected_owner=false
+            and other.status='active' and other.revoked_at is null
+            and other.deleted_at is null
+            and other_grant.permission='store.application.draft.manage'
+            and other_grant.revoked_at is null
+            and lower(btrim(coalesce(op.display_name,'')))=
+                lower(btrim(coalesce(p.display_name,'')))
+            and lower(btrim(coalesce(oinv.recipient_email,'')))=
+                lower(btrim(coalesce(inv.recipient_email,'')))
+        ) as other_active_grant_same_label
       from da_organization_membership m
       join da_person p on p.id=m.person_id and p.disabled_at is null and p.deleted_at is null
       left join lateral (
@@ -1784,7 +1811,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(rows.length>31||rows.some(m=>typeof m.membership_id!=="string"||
        !/^[A-Za-z0-9_-]{1,128}$/.test(m.membership_id)||
        typeof m.person_id!=="string"||!/^daprs_[A-Za-z0-9_-]+$/.test(m.person_id)||
-       typeof m.label_unique_in_organization!=="boolean"))
+       typeof m.label_unique_in_organization!=="boolean"||
+       typeof m.other_active_grant_same_label!=="boolean"))
       throw new IdentityAccessDenied()
     const has_more=rows.length>30
     // Only current canonical Person name and that Organization's accepted
@@ -1795,6 +1823,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       // Derived solely from current eligible Members in the requested
       // Organization, including those on other pages. No Person ID is shown.
       label_unique_in_organization:m.label_unique_in_organization as boolean,
+      // This flag is checked across every active member, not only this page.
+      // A second indistinguishable active grant must never permit a
+      // misleading person-specific revoke.
+      other_active_grant_same_label:m.other_active_grant_same_label as boolean,
       member_name:typeof m.member_name==="string"&&m.member_name.trim().length>0&&
         m.member_name.trim().length<=160?m.member_name.trim():null,
       invitation_email:typeof m.invitation_email==="string"&&
@@ -1906,6 +1938,49 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       return {status:"active" as const,grant_id:grantId}
     }
     if(!active.length)return {status:"revoked" as const,grant_id:null}
+    // The Owner UI cannot distinguish two already-authorized people
+    // sharing a name and an absent/company-invitation email. Reject direct
+    // stale/forged individual revoke requests too; never pick a Person ID
+    // silently. Only same-Organization active memberships are compared.
+    const ambiguousRevocation=await db.execute(`select 1
+      from da_organization_membership m
+      join da_person p on p.id=m.person_id
+      left join lateral (
+        select i.recipient_email from da_organization_invitation i
+        where i.organization_id=m.organization_id
+          and i.accepted_by_person_id=m.person_id
+          and i.status='accepted' and i.role='member'
+          and i.deleted_at is null
+        order by i.accepted_at desc nulls last,i.id desc limit 1
+      ) inv on true
+      join da_organization_store_draft_permission other_grant
+        on other_grant.organization_id=m.organization_id
+          and other_grant.permission='store.application.draft.manage'
+          and other_grant.revoked_at is null
+      join da_organization_membership other
+        on other.id=other_grant.membership_id
+          and other.person_id=other_grant.person_id
+          and other.organization_id=other_grant.organization_id
+      join da_person op on op.id=other.person_id
+        and op.disabled_at is null and op.deleted_at is null
+      left join lateral (
+        select oi.recipient_email from da_organization_invitation oi
+        where oi.organization_id=other.organization_id
+          and oi.accepted_by_person_id=other.person_id
+          and oi.status='accepted' and oi.role='member'
+          and oi.deleted_at is null
+        order by oi.accepted_at desc nulls last,oi.id desc limit 1
+      ) oinv on true
+      where m.id=? and m.organization_id=? and m.person_id=?
+        and other.id<>m.id and other.role='member'
+        and other.protected_owner=false and other.status='active'
+        and other.revoked_at is null and other.deleted_at is null
+        and lower(btrim(coalesce(op.display_name,'')))=
+            lower(btrim(coalesce(p.display_name,'')))
+        and lower(btrim(coalesce(oinv.recipient_email,'')))=
+            lower(btrim(coalesce(inv.recipient_email,'')))
+      limit 1`,[input.membership_id,input.organization_id,personId])
+    if(ambiguousRevocation.length)throw new IdentityAccessDenied()
     const grantId=active[0].id as string
     const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:actor.person_id,actor_type:actor.actor_type,actor_id:actor.actor_id,
