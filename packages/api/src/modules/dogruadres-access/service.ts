@@ -90,23 +90,25 @@ type AdvisoryLockManager = Readonly<{
   execute: (query: string, parameters: string[]) => Promise<unknown>
 }>
 
-// Reuse the installed Medusa/Zod email contract already applied to new
-// personal registrations and Organization invitation requests. Synthetic or
-// corrupt historical invitation values do not identify an employee.
-// A corrupt invitation must not be a distinct identity in SQL but hidden
-// in the Owner UI. Zod validates emails; this shared conservative grammar
-// is applied in both SQL identity comparisons and the Owner response.
-const acceptedInviteEmailPattern="^[A-Za-z0-9_+%-]+([.][A-Za-z0-9_+%-]+)*@[A-Za-z0-9]+([A-Za-z0-9-]{0,61}[A-Za-z0-9]){0,1}([.][A-Za-z0-9]+([A-Za-z0-9-]{0,61}[A-Za-z0-9]){0,1})+$"
-const acceptedInviteEmailRegex=new RegExp(acceptedInviteEmailPattern,"i")
-const invitationContactSchema=z.string().trim().email().max(254)
+// Only an intentionally conservative ASCII subset of historical accepted
+// invitation emails can distinguish employees. The identical literal grammar
+// is used for SQL identity comparisons and the Owner response. Do not apply
+// extra Zod/UI-only filtering: a contact hidden in the UI must never be
+// treated as a distinct identity by SQL. New invitations still use the native
+// Medusa/Zod email contract at their existing ingress boundary.
+// Dot-separated components are disjoint, avoiding nested ambiguous repetition
+// and catastrophic backtracking on adversarial legacy values.
+const acceptedInviteEmailPattern="^[A-Za-z0-9_+%-]+([.][A-Za-z0-9_+%-]+)*@[A-Za-z0-9]+([-][A-Za-z0-9]+)*([.][A-Za-z0-9]+([-][A-Za-z0-9]+)*)*[.][A-Za-z]{2,}$"
+const acceptedInviteEmailRegex=new RegExp(acceptedInviteEmailPattern)
 function usableInvitationContact(value:unknown):string|null {
-  const result=invitationContactSchema.safeParse(value)
-  return result.success&&acceptedInviteEmailRegex.test(result.data)?result.data:null
+  if(typeof value!=="string")return null
+  const normalized=value.trim()
+  return normalized.length<=254&&acceptedInviteEmailRegex.test(normalized)?normalized:null
 }
 // Only literal, source-controlled SQL table aliases are accepted.
 function acceptedInviteSqlLabel(alias:"inv"|"oinv"):string {
   return `case when length(btrim(${alias}.recipient_email))<=254
-    and btrim(${alias}.recipient_email) ~* '${acceptedInviteEmailPattern}'
+    and btrim(${alias}.recipient_email) ~ '${acceptedInviteEmailPattern}'
     then lower(btrim(${alias}.recipient_email)) else '' end`
 }
 
