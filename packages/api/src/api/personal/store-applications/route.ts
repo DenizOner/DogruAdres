@@ -21,10 +21,15 @@ const validStoreName=(name:string)=>{
   const graphemes=Array.from(new segmenter("und",{
     granularity:"grapheme"
   }).segment(name)).length
+  const compact=normalized.replace(/\s/gu,"")
+  // An all-digit Store name is still invalid if spaced (including NFKC spaces).
+  // Match domain-looking words at word boundaries, not innocent substrings.
   return name.length<=120&&graphemes>=3&&graphemes<=40&&
-    !/[\x00-\x1f\x7f]/.test(name)&&!/^\p{Number}+$/u.test(normalized)&&
-    !/(?:\.|^)(?:com(?:\.tr)?|net|org(?:\.tr)?)(?:$|\s)/iu.test(name)&&
-    !/(?:^|\s)(?:ltd\.?\s*şti\.?|a\.?\s*ş\.?|limited\s+şirketi|anonim\s+şirketi)$/iu.test(name)
+    !/[\x00-\x1f\x7f]/.test(name)&&!/^\p{Number}+$/u.test(compact)&&
+    !/(?:^|\s)(?:https?:\/\/|www\.)/iu.test(normalized)&&
+    !/(?:^|\s)[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.[\p{L}]{2,24}(?:$|\s|\/)/iu.test(normalized)&&
+    !/\.(?:com(?:\.tr)?|net|org(?:\.tr)?)(?:$|\s)/iu.test(normalized)&&
+    !/(?:^|\s)(?:ltd\.?\s*şti\.?|şti\.?|a\.?\s*ş\.?|limited\s+şirketi|anonim\s+şirketi)$/iu.test(normalized)
 }
 const payload=z.object({
   organization_id:z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/),

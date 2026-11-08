@@ -59,7 +59,8 @@ describe("B22 protected Owner Store application gate",()=>{
     expect(svc.claimStoreApplication).not.toHaveBeenCalled()
     expect(run).not.toHaveBeenCalled()
   })
-  it.each(["ab","12345","Example.com","Alpha Ltd. Şti."])(
+  it.each(["ab","12345","123 456","Example.com","Example.io",
+    "https://example.io","www.example.net","Alpha Ltd. Şti.","Example Şti."])(
     "rejects objectively invalid Store name %s before reservation",async name=>{
       req.body.name=name
       await POST(req,res)
