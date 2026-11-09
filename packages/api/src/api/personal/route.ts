@@ -2384,9 +2384,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-rename-panel').hidden=true;
     el('store-rename-status').textContent='';
     el('store-rename-history').replaceChildren();
-    const form=el('store-rename-form');form.reset();
-    form.elements.namedItem('seller_id').replaceChildren();
-    form.querySelector('button[type=submit]').disabled=true;
+    const form=el('store-rename-form');
+    if(typeof form?.reset==='function')form.reset();
+    const field=form?.elements&&typeof form.elements.namedItem==='function'?
+      form.elements.namedItem('seller_id'):null;
+    if(typeof field?.replaceChildren==='function')field.replaceChildren();
+    const button=typeof form?.querySelector==='function'?
+      form.querySelector('button[type=submit]'):null;
+    if(button)button.disabled=true;
   }
   async function refreshStoreRename(org,request){
     const form=el('store-rename-form'),seller=form.elements.namedItem('seller_id').value;
@@ -2425,10 +2430,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       message.textContent='Talep geçmişi doğrulanamadı. Başvuru göndermeden önce oturumu yeniden doğrulayın.';
     }
   }
-  el('store-rename-form').elements.namedItem('seller_id').onchange=()=>{
-    el('store-rename-form').querySelector('button[type=submit]').disabled=true;
-    if(currentOrg)void refreshStoreRename(currentOrg,organizationRequest);
-  };
+  const renameForm=el('store-rename-form');
+  if(renameForm?.elements&&typeof renameForm.elements.namedItem==='function')
+    renameForm.elements.namedItem('seller_id').onchange=()=>{
+      renameForm.querySelector('button[type=submit]').disabled=true;
+      if(currentOrg)void refreshStoreRename(currentOrg,organizationRequest);
+    };
   el('store-rename-refresh').onclick=()=>{
     if(currentOrg)void refreshStoreRename(currentOrg,organizationRequest);
   };
@@ -2480,12 +2487,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         target.append(line);
       }
       message.textContent=data.stores.length?'Yetkili mağazalar güncellendi.':'Bu kuruluşta görüntülenebilir onaylı mağaza bulunmuyor.';
-      const select=el('store-rename-form').elements.namedItem('seller_id');select.replaceChildren();
-      for(const store of data.stores){
-        const opt=document.createElement('option');opt.value=store.id;opt.textContent=store.name;select.append(opt);
+      const renameForm=el('store-rename-form');
+      const select=renameForm?.elements&&typeof renameForm.elements.namedItem==='function'?
+        renameForm.elements.namedItem('seller_id'):null;
+      if(select&&typeof select.replaceChildren==='function'){
+        select.replaceChildren();
+        for(const store of data.stores){
+          const opt=document.createElement('option');opt.value=store.id;
+          opt.textContent=store.name;select.append(opt);
+        }
+        el('store-rename-panel').hidden=!selectedStoreOwner||data.stores.length===0;
+        if(!el('store-rename-panel').hidden)void refreshStoreRename(org,request);
       }
-      el('store-rename-panel').hidden=!selectedStoreOwner||data.stores.length===0;
-      if(!el('store-rename-panel').hidden)void refreshStoreRename(org,request);
     }catch(e){
       if(request!==organizationRequest||seq!==storeRequest||currentOrg!==org)return;
       target.replaceChildren();clearStoreRename();
