@@ -668,7 +668,7 @@ async function verifyOwnerStoreRenameRequest(
       "const r=await fetch('/personal/store-rename-requests',{method:'POST',"+
       "headers:{'content-type':'application/json','x-csrf-token':bad?'bad':s.csrf_token},"+
       "body:json});return {status:r.status,body:await r.json()}}",
-      JSON.stringify(payload),invalidCsrf)
+      JSON.stringify(payload),invalidCsrf?'true':'')
   // An Owner outside the selected Store's legal Organization has no scope.
   assert.equal((await post(browser,{...input,organization_id:foreignOrg})).status,403)
   assert.equal((await post(reviewer,input)).status,403)
