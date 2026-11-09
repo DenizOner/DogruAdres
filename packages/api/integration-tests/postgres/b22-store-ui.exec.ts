@@ -1264,7 +1264,7 @@ async function verifyStaffReopensSuspendedStore(
     assert.ok(notification.body.notifications.some((n:any)=>
       n.title==="Mağaza yeniden açıldı" && n.context===organizationName),
       "The native Store reactivation audit receipt must appear in the actual Owner notification UI")
-    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Staff safely unsuspends same approved Store via real UI; current name/handle/ID preserved, paused new applications allowed, forged/CSRF/Owner/name-conflict/replay denied, one durable audit/outbox and Owner readback\\n")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Staff safely unsuspends same approved Store via real UI; current name/handle/ID preserved, paused new applications allowed, forged/CSRF/Owner/name-conflict/replay denied, one durable audit/outbox and Owner readback\n")
   }finally{
     await q("update da_organization set store_application_enabled=true where id=$1",
       [organizationId])
