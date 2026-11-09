@@ -6,38 +6,13 @@ import {access,csrf,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 import {storeDraftPayload} from "../../../modules/dogruadres-access/store-application-draft"
 import type {StoreRequest} from "../../../modules/dogruadres-access/store-application"
+import {validStoreName} from "../../../modules/dogruadres-access/store-name-policy"
 
 export const AUTHENTICATE=false
 // Store display-name contract is separate from a legal Organization title.
 // Human evaluation of misleading brands/generic categories remains an Admin
 // review decision; automatic checks here cover only objective invalid forms.
-const validStoreName=(name:string)=>{
-  const normalized=name.normalize("NFKC")
-  // The running Node.js supports Segmenter, but Medusa's TS lib does not
-  // expose its typings. Narrow the runtime capability without adding a dep.
-  const segmenter=(Intl as unknown as {Segmenter:new (
-    locale:string,options:{granularity:"grapheme"}
-  )=>{segment:(value:string)=>Iterable<unknown>}}).Segmenter
-  const parts=Array.from(new segmenter("und",{
-    granularity:"grapheme"
-  }).segment(name)) as Array<{segment:string}>
-  // A zero-width space, soft hyphen or format control is not a visible
-  // character and can conceal a collision with another Store name.
-  // Preserve real emoji graphemes containing ZWJ/variation selectors.
-  const disguised=parts.some(({segment})=>
-    /\p{Default_Ignorable_Code_Point}/u.test(segment)&&
-    !/^\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?(?:\u200D\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?)*$/u.test(segment))
-  const graphemes=parts.length
-  const compact=normalized.replace(/\s/gu,"")
-  // An all-digit Store name is still invalid if spaced (including NFKC spaces).
-  // Match domain-looking words at word boundaries, not innocent substrings.
-  return name.length<=120&&!disguised&&graphemes>=3&&graphemes<=40&&
-    !/[\x00-\x1f\x7f]/.test(name)&&!/^\p{Number}+$/u.test(compact)&&
-    !/(?:^|\s)(?:https?:\/\/|www\.)/iu.test(normalized)&&
-    !/(?:^|\s)[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.[\p{L}]{2,24}(?:$|\s|\/)/iu.test(normalized)&&
-    !/\.(?:com(?:\.tr)?|net|org(?:\.tr)?)(?:$|\s)/iu.test(normalized)&&
-    !/(?:^|\s)(?:ltd\.?\s*şti\.?|şti\.?|a\.?\s*ş\.?|limited\s+şirketi|anonim\s+şirketi)$/iu.test(normalized)
-}
+
 const payload=z.object({
   organization_id:z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/),
   application_id:z.string().regex(/^daapp_[0-9a-f]{32}$/),
