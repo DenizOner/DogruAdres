@@ -1,3 +1,4 @@
+/// <reference lib="es2022.intl" />
 import { claimAuditDelivery, loadClaimedAuditEvent, acknowledgeAuditDelivery, deferAuditDelivery, quarantineAuditDelivery, type DeliveryManager } from "./audit-delivery"
 import type { OutboxClaim, DeliveryErrorCode } from "./audit-delivery-policy"
 import { hasRecentMfaProof } from "./mfa-management"
@@ -2646,9 +2647,16 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
        typeof input.reason!=="string"||input.reason.trim()!==input.reason||
-       input.reason.length<10||input.reason.length>500||
-       !/[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(input.reason.replace(/\p{Default_Ignorable_Code_Point}/gu,"")))
+       input.reason.length<10||input.reason.length>500)
       throw new IdentityAccessDenied()
+    // Validate displayable characters without silently rewriting the audit reason.
+    const readable=/[\p{L}\p{N}\p{Extended_Pictographic}]/u
+    const ignorable=/\p{Default_Ignorable_Code_Point}/gu
+    let readableCount=0
+    for(const {segment} of new Intl.Segmenter(undefined,{granularity:"grapheme"}).segment(input.reason)){
+      if(readable.test(segment.replace(ignorable,"")))readableCount++
+    }
+    if(readableCount<10)throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager)
     const sessions=new IdentitySessions(db)
     const staff=await sessions.staff(token,"store.approve","platform")
