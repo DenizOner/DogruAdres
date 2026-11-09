@@ -1152,6 +1152,104 @@ async function verifyPlatformStoreRenameApproval(
 }
 
 
+/** Real Owner HTTP/UI withdrawal of a pending change after the approved
+ * rename journey. All data is task-owned; the actual Seller is unchanged.
+ */
+async function verifyOwnerWithdrawPendingStoreRename(
+  owner:B06Chrome,reviewer:B06Chrome,org:string,storeId:string,
+  person:string,rand:string,q:(sql:string,params?:any[])=>Promise<any[]>
+):Promise<void>{
+  const before=(await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [storeId]))[0]
+  assert.equal(before.status,"open")
+  const requestId="dasrn_"+randomBytes(16).toString("hex")
+  const name="B22 Withdraw "+rand
+  const handle=("b22-withdraw-"+rand).toLowerCase().replace(/[^a-z0-9-]/g,"")
+  const pending={request_id:requestId,organization_id:org,seller_id:storeId,
+    name,handle,risk_acknowledged:true,risk_version:"store-rename-risks-v2"}
+  const withdraw={action:"withdraw",request_id:requestId,
+    organization_id:org,seller_id:storeId}
+  const post=async(actor:B06Chrome,payload:Record<string,unknown>,
+    badCsrf=false)=>actor.eval(`(async()=>{
+    const sess=await(await fetch('/personal/session')).json()
+    const r=await fetch('/personal/store-rename-requests',{
+      method:'POST',headers:{'content-type':'application/json',
+        'x-csrf-token':${badCsrf?"'wrong'":"sess.csrf_token"}},
+      body:JSON.stringify(${JSON.stringify(payload)})
+    })
+    return {status:r.status,body:await r.json()}
+  })()`)
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible' && "+
+    "!document.getElementById('store-rename-panel').hidden")
+  assert.equal((await post(owner,pending)).status,201)
+  assert.equal((await q("select status from da_store_rename_request where id=$1",
+    [requestId]))[0].status,"pending_review")
+  assert.equal((await post(owner,withdraw,true)).status,403,
+    "CSRF must block withdrawal before any write")
+  assert.equal((await post(reviewer,withdraw)).status,403,
+    "Platform Staff is not the requesting Owner")
+  assert.equal((await post(owner,{...withdraw,organization_id:"daorg_foreign"})).status,403)
+  assert.equal((await post(owner,{...withdraw,unexpected_field:true})).status,400)
+  await owner.click("#store-rename-refresh")
+  await owner.wait("Array.from(document.querySelectorAll('#store-rename-history div'))"+
+    ".some(row=>row.textContent.includes("+JSON.stringify(name)+") && "+
+    "row.querySelector('button')?.textContent.includes('Bekleyen talebi geri çek'))")
+  const clicked=await owner.eval(`(()=>{
+    const row=Array.from(document.querySelectorAll('#store-rename-history div'))
+      .find(node=>node.textContent.includes(${JSON.stringify(name)}))
+    const button=row?.querySelector('button')
+    if(!button||button.disabled)return false
+    const previous=window.confirm
+    window.confirm=()=>true
+    try{button.click()}finally{window.confirm=previous}
+    return true
+  })()`)
+  assert.equal(clicked,true,"Real visible Owner control must submit withdrawal")
+  await owner.wait("Array.from(document.querySelectorAll('#store-rename-history p'))"+
+    ".some(p=>p.textContent.includes("+JSON.stringify(name)+") && "+
+    "p.textContent.includes('Geri çekildi'))")
+  const result=await q(`select r.status,r.requested_by_person_id,
+    e.action,e.actor_person_id,x.id outbox_id
+    from da_store_rename_request r
+    join da_audit_event e on e.organization_id=r.organization_id
+      and e.resource='store-rename-request'
+      and e.target_id=r.seller_id
+      and e.action='organization.store_rename_withdrawn'
+      and e.new_values->>'request_id'=r.id
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+    where r.id=$1`,[requestId])
+  assert.equal(result.length,1,"One withdrawn status and canonical audit/outbox")
+  assert.equal(result[0].status,"withdrawn")
+  assert.equal(result[0].requested_by_person_id,person)
+  assert.equal(result[0].actor_person_id,person)
+  assert.ok(result[0].outbox_id)
+  assert.deepEqual((await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [storeId]))[0],before,"Withdrawal must not update native Seller")
+  assert.equal((await post(owner,withdraw)).status,409,"Withdrawal cannot repeat")
+  assert.equal((await post(owner,{...pending,request_id:requestId})).status,409,
+    "Old request key cannot reopen withdrawn decision")
+  await reviewer.send("Page.bringToFront")
+  const approval=await reviewer.eval(`(async()=>{
+    const sess=await(await fetch('/personal/session')).json()
+    const r=await fetch('/personal/platform/store-renames',{
+      method:'POST',headers:{'content-type':'application/json',
+        'x-csrf-token':sess.csrf_token},
+      body:JSON.stringify(${JSON.stringify({
+        action:"approve",request_id:requestId,seller_id:storeId
+      })})
+    })
+    return r.status
+  })()`)
+  assert.equal(approval,409,"A withdrawn request may never receive Staff approval")
+  assert.equal((await q(`select count(*)::int n from da_audit_event
+    where action='organization.store_rename_withdrawn'
+      and new_values->>'request_id'=$1`,[requestId]))[0].n,1)
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible'")
+  process.stdout.write("PASS B22 Chrome/PG16: requesting Owner withdraws pending Store rename via real UI; foreign/CSRF/forgery/replay and Staff approval denied, native Seller unchanged, one audit/outbox\n")
+}
+
 /** Actual Next.js 15 page and unmodified native Mercur Seller read on the
  * same disposable PG16 data after Staff approval. The PRODUCTION ingress is
  * intentionally closed to native public catalog (#217); assert that 401, then
@@ -1333,6 +1431,19 @@ async function verifyRealNextStorefrontRenameUrls(
         contentType:response.headers.get("content-type"),html}
     }
     const former=await requestPage(rename.old_handle)
+    if(former.status!==404){
+      // This is a read-only diagnostic of a disposable test process. Never
+      // publish raw Next output, HTTP bodies, paths, tokens, or environment.
+      const lines=readFileSync(logPath,"utf8")
+      const reason=/Module not found|Cannot find module/i.test(lines)?
+        "dependency-resolution":/Failed to compile|Compilation failed|Turbopack|swc/i.test(lines)?
+        "next-compilation":/ECONNREFUSED|fetch failed|ETIMEDOUT/i.test(lines)?
+        "backend-read":/TypeError|ReferenceError/i.test(lines)?
+        "runtime-error":/region|locale/i.test(lines)?
+        "region-resolution":"unclassified"
+      throw new Error("Isolated legacy Store HTTP status "+former.status+
+        " (expected 404, no redirect); diagnostic="+reason)
+    }
     assert.equal(former.location,null,"Former Store URL may not redirect")
     assert.equal(former.status,404,
       "Real Next.js HTTP must return 404, not streamed not-found HTTP 200")
@@ -6189,6 +6300,16 @@ export default async function({container}:any){
     await verifyRealNextStorefrontRenameUrls(container,
       process.env.DOGRUADRES_PRIVATE_API!,b22PublishableKey.token,
       gammaSellerId,temp,q)
+    // The new withdrawal test has its own audit/state writes. Run it only
+    // AFTER the previously accepted isolated Next HTTP proof so its fixture
+    // cannot affect the unchanged old/new Seller URL acceptance.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(sellerGamma.name,"owner")
+    await browser.wait("!document.getElementById('store-rename-panel').hidden")
+    await verifyOwnerWithdrawPendingStoreRename(
+      browser,reviewer,sellerGamma.id,gammaSellerId,A.person,rand,q)
+    await browser.select(organizations[0].name,"owner")
     const keyHeaders={"x-publishable-api-key":b22PublishableKey.token}
     assert.equal((await q(`select count(*)::int n from order_group
       where cart_id=$1`,[betaTwoSellerCart.id]))[0].n,0)
