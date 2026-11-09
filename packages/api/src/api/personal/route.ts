@@ -2585,6 +2585,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                 err.uncertain=true;throw err;
               }
               renameUncertain=false;
+              renamePending=false;
               // A fresh private GET is authoritative; no automatic second POST.
               await refreshStoreRename(org,request);
             }catch(error){
