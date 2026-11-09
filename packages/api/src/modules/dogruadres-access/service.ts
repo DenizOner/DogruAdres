@@ -2815,7 +2815,22 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        !/^[a-f0-9]{64}$/.test(hashes[0].new_hash)||
        hashes[0].new_hash===hashes[0].old_hash)
       return {status:"conflict" as const}
-    const hash=hashes[0].new_hash as string
+    const hash=hashes[0].new_hash as string,oldHash=hashes[0].old_hash as string
+    if(typeof oldHash!=="string"||!/^[a-f0-9]{64}$/.test(oldHash))
+      throw new IdentityAccessDenied()
+    // Fail BEFORE any native Seller write if a historical/legacy Store lacks
+    // a verifiable original active claim or previous approved rename.
+    const originalClaim=await db.execute(`select id from da_store_application
+      where seller_id=? and store_name_hash=? and name_claim_released_at is null
+      limit 2`,[input.seller_id,oldHash])
+    const priorClaim=await db.execute(`select id from da_store_rename_request
+      where seller_id=? and id<>? and status='approved' and
+      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(proposed_name,NFKC)),
+        '[[:space:]]+',' ','g')),'UTF8')),'hex')=?
+      limit 2`,[input.seller_id,input.request_id,oldHash])
+    if(originalClaim.length>1||priorClaim.length>1||
+       !(originalClaim.length===1||priorClaim.length===1))
+      return {status:"conflict" as const}
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-name'),hashtext(?))",
       [hash])
     const application=await db.execute(`select 1 from da_store_application
