@@ -1065,7 +1065,7 @@ async function verifyPlatformStoreRenameApproval(
   assert.equal(after.status,"open")
   assert.equal(String(after.approved_at),String(before.approved_at))
   const proof=await q(`select r.status,r.approved_at,a.name_claim_released_at,
-    extract(epoch from(a.name_claim_released_at-r.approved_at))/86400 as hold_days,
+    (a.name_claim_released_at=r.approved_at+interval '30 days') as hold_exact,
     e.action,x.id outbox_id
     from da_store_rename_request r
     join da_store_application a on a.seller_id=r.seller_id
@@ -1077,7 +1077,7 @@ async function verifyPlatformStoreRenameApproval(
   assert.equal(proof.length,1,"Exactly one canonical rename decision and audit/outbox")
   assert.equal(proof[0].status,"approved")
   assert.ok(proof[0].approved_at&&proof[0].name_claim_released_at&&proof[0].outbox_id)
-  assert.equal(Number(proof[0].hold_days),30)
+  assert.equal(proof[0].hold_exact,true,"Database-calculated 30-day boundary must be exact")
   // Future name claims must still see the original name as held before day 30.
   const blocked=await q(`select count(*)::int n from da_store_application
     where seller_id=$1 and store_name_hash is not null
