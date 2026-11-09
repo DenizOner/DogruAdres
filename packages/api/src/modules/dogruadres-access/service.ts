@@ -3374,6 +3374,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const binding=await new ActorDelegation(db).binding(token,"member")
     if(!binding||binding.binding.person_id!==identity.person_id||
        !binding.binding.actor_id)return null
+    // Staff approval and suspended Store reactivation already take this
+    // per-Seller advisory lock before accessing native Seller rows. Match
+    // their lock order to avoid a mutual wait (Owner SHARE -> Staff lock,
+    // Staff lock -> Seller UPDATE) during a concurrent suspend/rename.
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
+      [input.seller_id])
     // Lock the named Seller's row and current Member link only for our local
     // request transaction. Native direct HTTP writes remain blocked at ingress.
     const native=await db.execute(`select s.name,s.handle from seller s
@@ -3387,8 +3393,6 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const oldName=native[0].name as string,oldHandle=native[0].handle as string
     // An idempotency key is scoped to the authorized Person, Organization and
     // exact payload. Replays do not duplicate audit/outbox or new requests.
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
-      [input.seller_id])
     const prior=await db.execute(`select organization_id,seller_id,requested_by_person_id,
       proposed_name,proposed_handle,risk_version,status
       from da_store_rename_request where id=? for update`,[input.request_id])
