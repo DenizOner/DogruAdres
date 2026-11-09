@@ -34,6 +34,8 @@ export default async function({ container }: ExecArgs) {
   process.env.STOREFRONT_URL = "https://shop.example.invalid"
   let mode = "success"
   const messages: string[] = []
+  // Capture the real SMTP envelope, not just the Notification DB recipient or email body.
+  const smtpRcptTo: string[] = []
   const sockets = new Set<TLSSocket>()
   const server = createServer({ key: readFileSync(process.env.SMTP_TEST_KEY), cert: readFileSync(process.env.SMTP_TEST_CERT) }, socket => {
     sockets.add(socket)
@@ -55,7 +57,11 @@ export default async function({ container }: ExecArgs) {
         } else if (line === "AUTH LOGIN") { authStage = 1; socket.write("334 VXNlcm5hbWU6\r\n") }
         else if (authStage === 1) { authStage = 2; socket.write("334 UGFzc3dvcmQ6\r\n") }
         else if (authStage === 2) { authStage = 0; socket.write(mode === "auth" ? "535 synthetic-private-transport-detail\r\n" : "235 authenticated\r\n") }
-        else if (line.startsWith("MAIL FROM:") || line.startsWith("RCPT TO:")) socket.write("250 OK\r\n")
+        else if (line.startsWith("MAIL FROM:")) socket.write("250 OK\r\n")
+        else if (line.startsWith("RCPT TO:")) {
+          smtpRcptTo.push(line.slice("RCPT TO:".length).trim())
+          socket.write("250 OK\r\n")
+        }
         else if (line === "DATA") { inData = true; socket.write("354 continue\r\n") }
         else if (line === "QUIT") { socket.end("221 bye\r\n") }
         else socket.write("500 invalid command\r\n")
@@ -71,6 +77,8 @@ export default async function({ container }: ExecArgs) {
   const recipient = "smtp-native-" + randomBytes(8).toString("hex") + "@example.invalid"
   const code = "synthetic-" + randomBytes(16).toString("hex")
   const payload = { entity_id: recipient, entity_type: "email", code_provider: "token", auth_identity_id: "synthetic", code }
+  // The existing outer runner requires the native-logs marker; fail closed if reset proof was skipped.
+  let customerResetVerified = false
   const dispatch = () => subscriber({ event: { name: AuthWorkflowEvents.VERIFICATION_REQUESTED, data: payload }, container, pluginOptions: {} })
   const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
   async function until(check: () => Promise<boolean>) {
@@ -153,6 +161,7 @@ export default async function({ container }: ExecArgs) {
     // subscriber, Notification module, TLS SMTP, and disposable AuthIdentity.
     // No real mailbox, production account, or external SMTP server is used.
     const resetBefore = messages.length
+    const resetRcptBefore = smtpRcptTo.length
     const resetRowsBefore = Number(
       (await pg("notification").where({ to: recipient, status: "success" }).count("*").first())!.count
     )
@@ -175,7 +184,13 @@ export default async function({ container }: ExecArgs) {
       messages[resetBefore].includes("15 dakika"),
       "Native customer password reset email and one-use TTL explanation missing"
     )
+    assert.deepEqual(
+      smtpRcptTo.slice(resetRcptBefore),
+      [`<${recipient}>`],
+      "Native reset SMTP envelope must target the one intended synthetic customer exactly once"
+    )
     assert.ok(logged.every(line => !line.includes(recipient)), "Native reset notification leaked recipient into logs")
+    customerResetVerified = true
     process.stdout.write("PASS SMTP native customer reset: native token workflow -> loaded customer subscriber -> Notification -> TLS SMTP; one accepted reset link on disposable database\n")
 
     // New origin regression only: no transport call should be reached in production.
@@ -199,6 +214,7 @@ export default async function({ container }: ExecArgs) {
     }
     const privateValues = [secret, recipient, code, "synthetic-private-transport-detail"]
     assert.ok(privateValues.every(value => logged.every(line => !line.includes(value))), "Private data found in native error logs")
+    assert.ok(customerResetVerified, "Native customer password-reset evidence skipped: refusing required SMTP native logs acceptance marker")
     process.stdout.write("PASS SMTP native logs: no credential, recipient, verification code or transport reply leaked\n")
   } finally {
     logger.error = priorError
