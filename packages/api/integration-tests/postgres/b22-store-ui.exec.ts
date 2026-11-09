@@ -19,7 +19,7 @@ import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {ingressConfig} from "../../src/utils/ingress-config"
 import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
-import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
+import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
@@ -1170,6 +1170,19 @@ async function verifyRealNextStorefrontRenameUrls(
   assert.equal(original.handle,rename.proposed_handle)
   assert.equal(original.name,rename.proposed_name)
   assert.notEqual(rename.old_handle,rename.proposed_handle)
+  // The actual Storefront main layout checks country-to-Region mapping
+  // before rendering any Seller page. Create a disposable supported Medusa
+  // Region only if this isolated PG16 run does not already contain Germany.
+  const regionService=container.resolve("region")
+  const regions=await regionService.listRegions({},{relations:["countries"]})
+  if(!regions.some((r:any)=>r.countries?.some((c:any)=>c.iso_2==="de"))){
+    const {result:[testRegion]}=await createRegionsWorkflow(container).run({
+      input:{regions:[{name:"B22 task-only Next HTTP locale",
+        currency_code:"eur",countries:["de"],
+        payment_providers:["pp_system_default"]}]}
+    })
+    assert.ok(testRegion?.id)
+  }
   assert.match(rename.old_handle,/^[a-z0-9][a-z0-9-]*$/)
   assert.match(rename.proposed_handle,/^[a-z0-9][a-z0-9-]*$/)
   assert.match(backendOrigin,/^http:\/\/127\.0\.0\.1:\d+$/)
