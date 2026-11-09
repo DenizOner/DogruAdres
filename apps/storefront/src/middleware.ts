@@ -130,16 +130,11 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
-  // Recovery is a public authentication page: do not require store regions or a login cookie.
-  // Preserve the one-time token on the same origin; never redirect it to a catalog host.
+  // A real public password-recovery route exists at both URL shapes.
+  // Avoid rewriting Server Action POST requests while preserving no-referrer
+  // and no-store on the one-time bearer landing page.
   if (pathname === '/reset-password' || /^\/[a-z]{2}\/reset-password$/i.test(pathname)) {
-    const url = request.nextUrl.clone();
-    if (pathname === '/reset-password') {
-      url.pathname = '/' + DEFAULT_REGION + '/reset-password';
-    }
-    const response = pathname === '/reset-password'
-      ? NextResponse.rewrite(url)
-      : NextResponse.next();
+    const response = NextResponse.next();
     response.headers.set('Referrer-Policy', 'no-referrer');
     response.headers.set('Cache-Control', 'no-store');
     return response;
