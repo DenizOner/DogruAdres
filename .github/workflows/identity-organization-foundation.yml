@@ -20,17 +20,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The repository's existing default CodeQL configuration did not analyze
-  # JavaScript/TypeScript (CodeQL aggregate was neutral). This scoped job
-  # uses the free public-repository CodeQL Action, with no repo setting edits.
+  # The repository already uses GitHub's default CodeQL setup, which
+  # rejects separate advanced-setup SARIF uploads. Analyze the actual JS/TS
+  # sources locally (without changing repository security settings), check
+  # SARIF and retain precise findings in this job's real CI log.
   codeql-javascript-typescript:
     if: github.event_name != 'workflow_dispatch'
-    name: CodeQL — JavaScript/TypeScript
+    name: CodeQL — JavaScript/TypeScript (local SARIF)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
       contents: read
-      security-events: write
       actions: read
     steps:
       - name: Checkout exact PR merge ref
@@ -42,10 +42,50 @@ jobs:
         with:
           languages: javascript-typescript
           build-mode: none
-      - name: Analyze JavaScript and TypeScript
+      - name: Analyze JavaScript and TypeScript without conflicting SARIF upload
+        id: js_ts_scan
         uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4, 2026-11-04
         with:
           category: /language:javascript-typescript
+          upload: never
+          upload-database: false
+          output: ${{ runner.temp }}/dogruadres-codeql-js-ts
+      - name: Read actual CodeQL JavaScript/TypeScript SARIF results
+        shell: bash
+        env:
+          CODEQL_SARIF_DIR: ${{ steps.js_ts_scan.outputs.sarif-output }}
+        run: |
+          node <<'JS'
+          const fs=require('node:fs'),path=require('node:path')
+          const dir=process.env.CODEQL_SARIF_DIR
+          if(!dir||!fs.existsSync(dir))throw Error('CodeQL JS/TS results directory missing')
+          const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>
+            e.isDirectory()?walk(path.join(d,e.name)):
+              e.isFile()&&e.name.endsWith('.sarif')?[path.join(d,e.name)]:[])
+          const files=walk(dir)
+          if(files.length!==1)throw Error('Expected exactly one CodeQL JS/TS SARIF file')
+          const sarif=JSON.parse(fs.readFileSync(files[0],'utf8'))
+          if(!Array.isArray(sarif.runs)||sarif.runs.length!==1)
+            throw Error('Invalid CodeQL analysis run')
+          const run=sarif.runs[0]
+          if(!/codeql/i.test(String(run.tool?.driver?.name??'')))
+            throw Error('Unexpected SARIF analyzer')
+          const results=run.results??[]
+          if(!Array.isArray(results))throw Error('Invalid CodeQL findings')
+          const counts={error:0,warning:0,note:0,other:0}
+          for(const r of results){
+            const level=r.level??'warning'
+            counts[level in counts?level:'other']++
+          }
+          console.log('CodeQL JS/TS local SARIF analysis completed: '+JSON.stringify(counts))
+          for(const r of results.slice(0,40)){
+            const location=r.locations?.[0]?.physicalLocation
+            const file=String(location?.artifactLocation?.uri??'unknown')
+            const line=location?.region?.startLine??0
+            console.log('CodeQL finding '+String(r.level??'warning')+' '+String(r.ruleId??'unknown')+' '+file+':'+line)
+          }
+          if(counts.error>0)throw Error('CodeQL JS/TS error-level findings require review')
+          JS
 
   r1-windows-authz:
     if: github.event_name != 'workflow_dispatch'
