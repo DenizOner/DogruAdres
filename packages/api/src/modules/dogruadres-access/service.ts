@@ -3194,7 +3194,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       where id=? and organization_id=? and seller_id=?
         and status='pending_review'
       returning id`,[input.request_id,input.organization_id,
-      input.seller_id]
+      input.seller_id])
     if(updated.length!==1||updated[0].id!==input.request_id)
       throw new IdentityAccessDenied()
     const [audit]=await this.persistAuditEventsWithOutbox_([{
