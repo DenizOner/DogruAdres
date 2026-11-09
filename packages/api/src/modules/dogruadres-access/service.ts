@@ -2914,7 +2914,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!staff)return null
     const rows=await db.execute(`select r.id request_id,r.organization_id,
       d.name organization_name,r.seller_id,r.old_name,r.old_handle,
-      r.proposed_name,r.proposed_handle,r.created_at
+      r.proposed_name,r.proposed_handle,r.created_at,s.status seller_status
       from da_store_rename_request r
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
@@ -2955,6 +2955,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
          typeof row.seller_id!=="string"||
          !/^sel_[A-Za-z0-9_-]+$/.test(row.seller_id)||
          typeof row.organization_name!=="string"||
+         !["open","suspended"].includes(row.seller_status)||
          typeof row.old_name!=="string"||typeof row.old_handle!=="string"||
          typeof row.proposed_name!=="string"||
          !validStoreName(row.proposed_name)||
@@ -2978,7 +2979,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       organization_name:row.organization_name as string,seller_id:row.seller_id as string,
       old_name:row.old_name as string,old_handle:row.old_handle as string,
       proposed_name:row.proposed_name as string,proposed_handle:row.proposed_handle as string,
-      created_at:row.created_at
+      created_at:row.created_at,seller_status:row.seller_status as "open"|"suspended"
     }))}
   }
 
