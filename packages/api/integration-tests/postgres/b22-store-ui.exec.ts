@@ -10,7 +10,7 @@ import {randomBytes,createHash} from "node:crypto"
 import {createServer as tlsServer,request as tlsRequest} from "node:https"
 import {createServer as plainServer} from "node:http"
 import {dirname} from "node:path"
-import {mkdtempSync,readFileSync,rmSync,mkdirSync,writeFileSync} from "node:fs"
+import {mkdtempSync,readFileSync,rmSync,mkdirSync,writeFileSync,cpSync,copyFileSync,symlinkSync,existsSync,openSync,closeSync} from "node:fs"
 import {join} from "node:path"
 import {tmpdir} from "node:os"
 import {spawn,spawnSync} from "node:child_process"
@@ -1147,6 +1147,135 @@ async function verifyPlatformStoreRenameApproval(
   assert.equal(history.status,200)
   assert.equal(history.body.requests.find((x:any)=>x.id===request.id)?.status,"approved")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Staff approves native Seller name+handle via real UI; same Store identity, Owner private readback, original name+URL held 30 days, Owner/CSRF/repeat/conflicting reject denied, one durable audit/outbox\n")
+}
+
+
+/** Actual Next.js 15 HTTP acceptance for the real Seller identity just renamed
+ * in this disposable B22 PostgreSQL database. This is the original
+ * Storefront page, not a stub/rewritten HTML, mock seller API or status guess.
+ * Its runtime and caches live only in the task-owned temporary directory.
+ */
+async function verifyRealNextStorefrontRenameUrls(
+  container:any,backendOrigin:string,publishableKey:string,
+  storeId:string,temporaryDirectory:string,
+  q:(sql:string,params?:any[])=>Promise<any[]>
+):Promise<void>{
+  const rows=await q("select old_name,old_handle,proposed_name,proposed_handle "+
+    "from da_store_rename_request where seller_id=$1 and status='approved' "+
+    "order by approved_at desc limit 2",[storeId])
+  assert.equal(rows.length,1,"One approved B22 test rename is required")
+  const rename=rows[0]
+  const original=(await container.resolve("seller").listSellers({id:storeId}))[0]
+  assert.equal(original.id,storeId)
+  assert.equal(original.handle,rename.proposed_handle)
+  assert.equal(original.name,rename.proposed_name)
+  assert.notEqual(rename.old_handle,rename.proposed_handle)
+  assert.match(rename.old_handle,/^[a-z0-9][a-z0-9-]*$/)
+  assert.match(rename.proposed_handle,/^[a-z0-9][a-z0-9-]*$/)
+  assert.match(backendOrigin,/^http:\/\/127\.0\.0\.1:\d+$/)
+  assert.ok(publishableKey.length>20)
+
+  const nativeSeller=async(handle:string)=>{
+    const url=backendOrigin+"/store/sellers?"+new URLSearchParams({
+      handle,fields:"id,name,handle"
+    })
+    const response=await fetch(url,{redirect:"manual",
+      headers:{"x-publishable-api-key":publishableKey},
+      signal:AbortSignal.timeout(15000)})
+    assert.equal(response.status,200,"Native public Seller query must succeed")
+    const data=await response.json() as {sellers?:Array<{
+      id:string;name:string;handle:string
+    }>}
+    assert.ok(Array.isArray(data.sellers),"Native Seller list response")
+    return data.sellers!
+  }
+  assert.equal((await nativeSeller(rename.old_handle)).length,0,
+    "The former Seller.handle may not resolve to a live Seller")
+  const nativeNew=await nativeSeller(rename.proposed_handle)
+  assert.equal(nativeNew.length,1)
+  assert.equal(nativeNew[0].id,storeId)
+  assert.equal(nativeNew[0].name,rename.proposed_name)
+
+  const root=join(process.cwd(),"../../apps/storefront")
+  const snapshot=join(temporaryDirectory,"b22-real-next-storefront")
+  mkdirSync(snapshot,{recursive:false,mode:0o700})
+  cpSync(join(root,"src"),join(snapshot,"src"),{recursive:true})
+  for(const name of ["package.json","tsconfig.json","postcss.config.mjs",
+    "tailwind.config.ts","next.config.ts"])
+    copyFileSync(join(root,name),join(snapshot,name))
+  if(existsSync(join(root,"public")))
+    symlinkSync(join(root,"public"),join(snapshot,"public"),"dir")
+  const workspaceModules=join(root,"node_modules")
+  const rootModules=join(process.cwd(),"../../node_modules")
+  const installed=existsSync(workspaceModules)?workspaceModules:rootModules
+  assert.ok(existsSync(installed),"Existing frozen-lockfile Next dependencies")
+  symlinkSync(installed,join(snapshot,"node_modules"),"dir")
+
+  const port=await getFreePort()
+  const origin="http://127.0.0.1:"+port
+  const logPath=join(temporaryDirectory,"b22-next-storefront.log")
+  const fd=openSync(logPath,"wx",0o600)
+  const child=spawn("bun",["run","dev","--hostname","127.0.0.1",
+    "--port",String(port)],{
+    cwd:snapshot,
+    stdio:["ignore",fd,fd],
+    detached:process.platform!=="win32",
+    // No auth cookie, Staff credential, DB URL, application secret, or
+    // production configuration is forwarded to the public Next runtime.
+    env:{PATH:process.env.PATH??"",HOME:process.env.HOME??"",
+      NODE_ENV:"development",CI:"true",NEXT_TELEMETRY_DISABLED:"1",
+      MEDUSA_BACKEND_URL:backendOrigin,
+      NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY:publishableKey,
+      NEXT_PUBLIC_DEFAULT_REGION:"de",
+      NEXT_PUBLIC_SITE_NAME:"B22 disposable Storefront"}
+  })
+  try{
+    await waitForLoopback(async()=>{
+      if(child.exitCode!==null||child.signalCode!==null)
+        throw new Error("Real Next.js process exited before startup")
+      try{
+        const response=await fetch(origin+"/favicon.ico",{
+          redirect:"manual",signal:AbortSignal.timeout(2000)})
+        await response.arrayBuffer()
+        return response.status>=200
+      }catch{return false}
+    },90000,"B22 task-only actual Next.js startup")
+    const requestPage=async(handle:string)=>{
+      const response=await fetch(origin+"/de/sellers/"+encodeURIComponent(handle),{
+        redirect:"manual",
+        headers:{accept:"text/html",
+          "user-agent":"Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36"},
+        signal:AbortSignal.timeout(120000)
+      })
+      const html=await response.text()
+      return {status:response.status,location:response.headers.get("location"),
+        contentType:response.headers.get("content-type"),html}
+    }
+    const former=await requestPage(rename.old_handle)
+    assert.equal(former.location,null,"Former Store URL may not redirect")
+    assert.equal(former.status,404,
+      "Real Next.js HTTP must return 404, not streamed not-found HTTP 200")
+    const current=await requestPage(rename.proposed_handle)
+    assert.equal(current.location,null,"New Store URL may not redirect")
+    assert.equal(current.status,200,"New Store URL must render HTTP 200")
+    assert.match(current.contentType??"",/^text\/html/)
+    assert.ok(current.html.includes(rename.proposed_name),
+      "The currently approved Seller must render its actual name")
+    const persisted=(await container.resolve("seller").listSellers({id:storeId}))[0]
+    assert.equal(persisted.id,nativeNew[0].id)
+    assert.equal(persisted.handle,rename.proposed_handle)
+    process.stdout.write("PASS B22 real Next.js HTTP/PG16: vacated Seller handle 404 no redirect; new handle 200 same native Seller ID\n")
+  }finally{
+    if(child.pid){
+      if(process.platform!=="win32"){
+        try{process.kill(-child.pid,"SIGTERM")}catch{killProcess(child)}
+      }else killProcess(child)
+      await waitForLoopback(async()=>
+        child.exitCode!==null||child.signalCode!==null,
+        10000,"B22 isolated Next.js process shutdown")
+    }
+    closeSync(fd)
+  }
 }
 
 /** Final-head real Chrome + native Medusa + isolated PG16 acceptance of the
@@ -5971,6 +6100,9 @@ export default async function({container}:any){
     }})
     // Medusa's API Key module distinguishes the internal apk_ ID from the
     // public pk_ token used in the Store HTTP header. Never log the token.
+    await verifyRealNextStorefrontRenameUrls(container,
+      process.env.DOGRUADRES_PRIVATE_API!,b22PublishableKey.token,
+      gammaSellerId,temp,q)
     const keyHeaders={"x-publishable-api-key":b22PublishableKey.token}
     assert.equal((await q(`select count(*)::int n from order_group
       where cart_id=$1`,[betaTwoSellerCart.id]))[0].n,0)
