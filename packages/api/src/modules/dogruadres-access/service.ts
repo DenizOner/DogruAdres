@@ -2550,6 +2550,162 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   }
 
 
+
+  /** A read-only private queue for currently authorized platform Store staff.
+   * Every candidate must be traceable to the original protected Owner request,
+   * audit/outbox, verified immutable Store origin, and live approved Seller.
+   * No pending approval or native Seller update is executed here.
+   */
+  @InjectTransactionManager()
+  async personalReviewableStoreRenameRequests(token:string,page=0,
+    @MedusaContext() context:Context={}){
+    if(!Number.isSafeInteger(page)||page<0||page>1000)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
+    if(!staff)return null
+    const rows=await db.execute(`select r.id request_id,r.organization_id,
+      d.name organization_name,r.seller_id,r.old_name,r.old_handle,
+      r.proposed_name,r.proposed_handle,r.created_at
+      from da_store_rename_request r
+      join da_organization d on d.id=r.organization_id
+        and d.status='active' and d.deleted_at is null
+      join seller s on s.id=r.seller_id and s.deleted_at is null
+        and s.status='open' and s.approved_at is not null
+        and s.name=r.old_name and s.handle=r.old_handle
+      join da_organization_seller_ownership o on o.seller_id=r.seller_id
+        and o.organization_id=r.organization_id and o.revoked_at is null
+      join da_audit_event origin on origin.id=o.verification_audit_event_id
+        and origin.deleted_at is null and origin.organization_id=r.organization_id
+        and origin.target_id=r.seller_id
+        and origin.module='dogruadres-access'
+      join da_audit_event e on e.id=r.source_audit_event_id
+        and e.deleted_at is null
+        and e.module='dogruadres-access'
+        and e.action='organization.store_rename_requested'
+        and e.resource='store-rename-request'
+        and e.organization_id=r.organization_id
+        and e.target_id=r.seller_id
+        and e.new_values->>'request_id'=r.id
+        and e.new_values->>'risk_version'=r.risk_version
+        and e.actor_person_id=r.requested_by_person_id
+      where r.status='pending_review' and r.risk_version=?
+        and r.risk_acknowledged_at is not null
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id
+          and x.source_module='dogruadres-access' and x.deleted_at is null)
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=origin.id
+          and x.source_module='dogruadres-access' and x.deleted_at is null)
+      order by r.created_at desc,r.id desc
+      limit 21 offset ${page*20}`,[STORE_RENAME_RISK_VERSION])
+    if(!Array.isArray(rows)||rows.length>21||
+       rows.some(row=>typeof row.request_id!=="string"||
+         !/^dasrn_[a-f0-9]{32}$/.test(row.request_id)||
+         typeof row.organization_id!=="string"||
+         !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row.organization_id)||
+         typeof row.seller_id!=="string"||
+         !/^sel_[A-Za-z0-9_-]+$/.test(row.seller_id)||
+         typeof row.organization_name!=="string"||
+         typeof row.old_name!=="string"||typeof row.old_handle!=="string"||
+         typeof row.proposed_name!=="string"||
+         !validStoreName(row.proposed_name)||
+         typeof row.proposed_handle!=="string"||
+         !validStoreHandle(row.proposed_handle))||
+       new Set(rows.map(row=>row.request_id)).size!==rows.length)
+      throw new IdentityAccessDenied()
+    // A final grant recheck prevents a revoked/replaced staff principal from
+    // receiving even private names if the read overlapped revocation.
+    const fresh=await new IdentitySessions(db).staff(token,"store.approve","platform")
+    if(!fresh||fresh.grant_id!==staff.grant_id)return null
+    return {page,has_more:rows.length>20,pending:rows.slice(0,20).map(row=>({
+      request_id:row.request_id as string,organization_id:row.organization_id as string,
+      organization_name:row.organization_name as string,seller_id:row.seller_id as string,
+      old_name:row.old_name as string,old_handle:row.old_handle as string,
+      proposed_name:row.proposed_name as string,proposed_handle:row.proposed_handle as string,
+      created_at:row.created_at
+    }))}
+  }
+
+  /** A reasoned rejection is a complete review outcome: the current
+   * Seller remains unchanged, the Owner can read the final request status,
+   * and a canonical audit/outbox is written in the same transaction. This
+   * grants no ability to approve or actually rename a native Seller.
+   */
+  @InjectTransactionManager()
+  async personalRejectStoreRenameRequest(token:string,input:{
+    request_id:string;seller_id:string;reason:string
+  },@MedusaContext() context:Context={}){
+    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
+       input.reason.length<10||input.reason.length>500)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const sessions=new IdentitySessions(db)
+    const staff=await sessions.staff(token,"store.approve","platform")
+    if(!staff)return null
+    const grant=await db.execute(`select g.id from da_platform_staff_grant g
+      where g.id=? and g.person_id=? and g.task='store.approve'
+        and g.resource='platform' and g.revoked_at is null
+        and (g.expires_at is null or g.expires_at>clock_timestamp())
+      for share of g`,[staff.grant_id,staff.person_id])
+    if(grant.length!==1||grant[0].id!==staff.grant_id)return null
+    const fresh=await sessions.staff(token,"store.approve","platform")
+    if(!fresh||fresh.grant_id!==staff.grant_id)return null
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
+      [input.seller_id])
+    const rows=await db.execute(`select r.organization_id,r.seller_id,
+      r.status,r.old_name,r.old_handle,r.risk_version,r.source_audit_event_id
+      from da_store_rename_request r
+      join da_organization d on d.id=r.organization_id
+        and d.status='active' and d.deleted_at is null
+      join seller s on s.id=r.seller_id and s.deleted_at is null
+        and s.status='open' and s.approved_at is not null
+        and s.name=r.old_name and s.handle=r.old_handle
+      join da_audit_event e on e.id=r.source_audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.action='organization.store_rename_requested'
+        and e.resource='store-rename-request'
+        and e.organization_id=r.organization_id
+        and e.target_id=r.seller_id
+        and e.actor_person_id=r.requested_by_person_id
+        and e.new_values->>'request_id'=r.id
+      where r.id=? and r.seller_id=?
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id
+            and x.source_module='dogruadres-access' and x.deleted_at is null)
+      for update of r`,[input.request_id,input.seller_id])
+    if(rows.length!==1||rows[0].status!=="pending_review"||
+       rows[0].risk_version!==STORE_RENAME_RISK_VERSION)
+      return {status:"conflict" as const}
+    const org=rows[0].organization_id as string
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org)||
+       !(await platformApprovedSellerIds(db,org)).includes(input.seller_id))
+      return null
+    const updated=await db.execute(`update da_store_rename_request
+      set status='rejected',updated_at=clock_timestamp()
+      where id=? and seller_id=? and status='pending_review'
+      returning id`,[input.request_id,input.seller_id])
+    if(updated.length!==1||updated[0].id!==input.request_id)
+      throw new IdentityAccessDenied()
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:staff.person_id,actor_type:staff.actor_type,
+      actor_id:staff.actor_id,role_context:"platform_staff",
+      organization_id:org,
+      action:"organization.store_rename_rejected",
+      module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-rename-request",target_id:input.seller_id,
+      new_values:{request_id:input.request_id,status:"rejected",
+        reason:input.reason,staff_grant_id:staff.grant_id},
+      occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    return {status:"rejected" as const,request_id:input.request_id,
+      seller_id:input.seller_id}
+  }
+
   /** A real Owner may submit a review request, NOT mutate Seller.name/handle.
    * No name is claimed here. Staff approval must recheck every uniqueness and
    * ownership invariant immediately before a separate native update workflow.
