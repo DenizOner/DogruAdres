@@ -276,6 +276,7 @@ async function run(){
         // results so a missing scenario cannot masquerade as a PASS.
         const storeDraftNegativeMarkers=[
           "PASS B22 PG16/Chrome: global normalized Store name claim; case/NFKC/native legacy conflicts409, no second application or Seller",
+          "PASS B22 PG16/Chrome: invisible Store names HTTP400; zero application, native Seller, audit/outbox effects",
           "PASS B22 Chrome/PG16: separate legal Organization Owner cannot reuse Alpha normalized Store name; Gamma original Seller retained",
           "PASS B22 Chrome/PG16: simultaneous Alpha/Gamma normalized Store name 201+409; one native Seller, one durable application, Origin/audit/outbox, loser zero side effects",
           "PASS B22 Chrome/PG16: before-submit stale draft409/zero Seller; concurrent distinct application keys 201+409, one native pending Seller and one durable Origin/audit/outbox",

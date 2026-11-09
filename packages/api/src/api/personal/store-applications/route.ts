@@ -18,13 +18,20 @@ const validStoreName=(name:string)=>{
   const segmenter=(Intl as unknown as {Segmenter:new (
     locale:string,options:{granularity:"grapheme"}
   )=>{segment:(value:string)=>Iterable<unknown>}}).Segmenter
-  const graphemes=Array.from(new segmenter("und",{
+  const parts=Array.from(new segmenter("und",{
     granularity:"grapheme"
-  }).segment(name)).length
+  }).segment(name)) as Array<{segment:string}>
+  // A zero-width space, soft hyphen or format control is not a visible
+  // character and can conceal a collision with another Store name.
+  // Preserve real emoji graphemes containing ZWJ/variation selectors.
+  const disguised=parts.some(({segment})=>
+    /\p{Default_Ignorable_Code_Point}/u.test(segment)&&
+    !/^\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?(?:\u200D\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?)*$/u.test(segment))
+  const graphemes=parts.length
   const compact=normalized.replace(/\s/gu,"")
   // An all-digit Store name is still invalid if spaced (including NFKC spaces).
   // Match domain-looking words at word boundaries, not innocent substrings.
-  return name.length<=120&&graphemes>=3&&graphemes<=40&&
+  return name.length<=120&&!disguised&&graphemes>=3&&graphemes<=40&&
     !/[\x00-\x1f\x7f]/.test(name)&&!/^\p{Number}+$/u.test(compact)&&
     !/(?:^|\s)(?:https?:\/\/|www\.)/iu.test(normalized)&&
     !/(?:^|\s)[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.[\p{L}]{2,24}(?:$|\s|\/)/iu.test(normalized)&&

@@ -1158,6 +1158,43 @@ async function verifyConcurrentCrossOrganizationStoreNames(
 
 }
 
+/** Real authenticated HTTPS negative proof; test data is disposable PG16 only.
+ * Kept outside the long main scenario to avoid TypeScript flow-size limits.
+ */
+async function verifyInvisibleStoreNameRejection(
+  browser:B06Chrome,org:string,stamp:string,
+  q:(sql:string,params?:unknown[])=>Promise<any[]>
+):Promise<void>{
+  const invalidNames=["\u200B\u200B\u200B","\u00AD\u00AD\u00AD",
+    "B22\u200B Store "+stamp,"B22\u2060 Store "+stamp,
+    "B22\u200D Store "+stamp]
+  for(const [index,name] of invalidNames.entries()){
+    const id="daapp_"+randomBytes(16).toString("hex")
+    const email="b22-invisible-"+index+"-"+stamp+"@example.invalid"
+    const result=await browser.callFunction("async function(input){"+
+      "const session=await(await fetch('/personal/session')).json();"+
+      "const response=await fetch('/personal/store-applications',{"+
+      "method:'POST',headers:{'content-type':'application/json',"+
+      "'x-csrf-token':session.csrf_token},body:JSON.stringify(input)});"+
+      "return response.status}",{
+        organization_id:org,application_id:id,name,email,currency_code:"try"
+      })
+    assert.equal(result,400,"Invisible name must fail before reservation")
+    const rows=await q(`select
+      (select count(*)::int from da_store_application where id=$1) as applications,
+      (select count(*)::int from seller where email=$2) as sellers,
+      (select count(*)::int from da_audit_event
+        where new_values->>'application_id'=$1) as audits,
+      (select count(*)::int from da_audit_outbox x
+        join da_audit_event e on e.id=x.source_audit_event_id
+        where e.new_values->>'application_id'=$1) as outboxes`,
+      [id,email])
+    assert.deepEqual(rows,[{applications:0,sellers:0,audits:0,outboxes:0}],
+      "Rejected invisible name may not create durable side effects")
+  }
+  process.stdout.write("PASS B22 PG16/Chrome: invisible Store names HTTP400; zero application, native Seller, audit/outbox effects\n")
+}
+
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   const preparing=process.env.B22_UI_PREPARE==="true"
@@ -1834,6 +1871,7 @@ export default async function({container}:any){
       name:applicationName,email:applicationEmail,currency_code:"try"}
     const replay=await submit(data)
     assert.equal(replay.status,200);assert.equal(replay.body.seller_id,ownerStoreId)
+    await verifyInvisibleStoreNameRejection(browser,organizations[0].id,rand,q)
     // A newly submitted name must not impersonate an existing Seller:
     // same Organization, Unicode NFKC equivalent or a legacy native Seller.
     // Each 409 must happen BEFORE creating a second Foundation application.
