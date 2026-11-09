@@ -1,3 +1,4 @@
+/// <reference lib="es2022.intl" />
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { z } from "@medusajs/framework/zod"
 import { access, csrf, enabled, sessionToken } from "../../security"
@@ -8,13 +9,23 @@ import { IdentityAccessDenied } from "../../../../modules/dogruadres-access/iden
  */
 export const AUTHENTICATE = false
 const query=z.object({page:z.coerce.number().int().min(0).max(1000).optional()}).strict()
+const countReadableGraphemes=(reason:string)=>{
+  const readable=/[\p{L}\p{N}\p{Extended_Pictographic}]/u
+  const ignorable=/\p{Default_Ignorable_Code_Point}/gu
+  let count=0
+  for(const {segment} of new Intl.Segmenter(undefined,{granularity:"grapheme"}).segment(reason)){
+    if(readable.test(segment.replace(ignorable,"")))count++
+  }
+  return count
+}
+
 const rejection=z.object({
   action:z.literal("reject"),
   request_id:z.string().regex(/^dasrn_[a-f0-9]{32}$/),
   seller_id:z.string().regex(/^sel_[A-Za-z0-9_-]+$/),
   reason:z.string().trim().min(10).max(500).refine(
-    value=>/[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(value.replace(/\p{Default_Ignorable_Code_Point}/gu,"")),
-    "Reason must contain readable content")
+    value=>countReadableGraphemes(value)>=10,
+    "Reason must contain at least 10 readable characters")
 }).strict()
 
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
