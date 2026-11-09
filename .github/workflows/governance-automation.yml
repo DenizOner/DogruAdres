@@ -10,9 +10,9 @@ on:
       - 'quality/e2e/**'
       - 'apps/storefront/src/components/organisms/SellerHeading/**'
       - 'apps/storefront/src/lib/helpers/sanitize-rich-text.ts'
-      - 'apps/storefront/src/app/[locale]/(main)/page.tsx'
-      - 'apps/storefront/src/app/[locale]/(main)/categories/page.tsx'
-      - 'apps/storefront/src/app/[locale]/(main)/categories/[category]/page.tsx'
+      - 'apps/storefront/src/app/*/(main)/page.tsx'
+      - 'apps/storefront/src/app/*/(main)/categories/page.tsx'
+      - 'apps/storefront/src/app/*/(main)/categories/*/page.tsx'
       - 'apps/storefront/src/lib/helpers/serialize-json-ld.ts'
   workflow_dispatch:
   schedule:
