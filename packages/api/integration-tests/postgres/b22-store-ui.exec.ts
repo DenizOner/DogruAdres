@@ -1168,12 +1168,8 @@ async function verifySuspendedStoreRenameBeforeReopen(
     [sellerId]))[0]
   assert.equal(before.status,"open")
   assert.ok(before.approved_at)
-  const requestId="dasrn_"+randomBytes(16).toString("hex")
   const name="B22 Askıdan Sonra "+rand
   const handle=("b22-aski-"+rand).toLowerCase().replace(/[^a-z0-9-]/g,"")
-  const request={request_id:requestId,organization_id:organizationId,
-    seller_id:sellerId,name,handle,risk_acknowledged:true,
-    risk_version:"store-rename-risks-v2"}
   await suspendSellerWorkflow(container).run({input:{
     seller_id:sellerId,reason:"B22 task-only suspended name change"
   }})
@@ -1195,10 +1191,16 @@ async function verifySuspendedStoreRenameBeforeReopen(
   assert.equal(requested,true)
   await owner.wait("Array.from(document.querySelectorAll('#store-rename-history p')).some("+
     "p=>p.textContent.includes("+JSON.stringify(name)+") && p.textContent.includes('Platform incelemesinde'))")
-  const pending=await q("select id,status from da_store_rename_request where id=$1",
-    [requestId])
+  // The real Owner form generates the opaque id in the browser. Query
+  // the exact new, source-owned request rather than fabricating its id.
+  const pending=await q(`select id,status from da_store_rename_request
+    where organization_id=$1 and seller_id=$2 and proposed_name=$3
+      and proposed_handle=$4 and status='pending_review'`,
+    [organizationId,sellerId,name,handle])
   assert.equal(pending.length,1)
+  assert.match(pending[0].id,/^dasrn_[a-f0-9]{32}$/)
   assert.equal(pending[0].status,"pending_review")
+  const requestId=pending[0].id as string
   const afterRequest=(await q("select id,name,handle,status,approved_at from seller where id=$1",
     [sellerId]))[0]
   assert.equal(afterRequest.status,"suspended")
