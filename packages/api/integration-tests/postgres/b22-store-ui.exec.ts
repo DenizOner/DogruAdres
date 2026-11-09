@@ -5238,6 +5238,74 @@ export default async function({container}:any){
       [ownerStoreId],
       "Gamma must not enter Alpha; previously suspended second Alpha Store stays excluded")
     assert.equal(alphaAfterGamma.some((store:any)=>store.id===gammaSellerId),false)
+
+    // Two legitimate Owner-controlled legal Organizations race one unused name
+    // using genuinely concurrent first-party HTTPS POSTs and distinct keys.
+    const raceName="B22 crossorg name "+rand
+    const raceApplications=[
+      {organization_id:organizations[0].id,
+        application_id:"daapp_"+randomBytes(16).toString("hex"),
+        name:raceName,email:"b22-race-alpha-"+rand+"@example.invalid",
+        currency_code:"try"},
+      {organization_id:sellerGamma.id,
+        application_id:"daapp_"+randomBytes(16).toString("hex"),
+        name:raceName.toUpperCase(),email:"b22-race-gamma-"+rand+"@example.invalid",
+        currency_code:"try"}
+    ]
+    const raceOutcomes=await browser.eval(`(async()=>{
+      const session=await(await fetch('/personal/session')).json()
+      return Promise.all(${JSON.stringify(raceApplications)}.map(async input=>{
+        const response=await fetch('/personal/store-applications',{
+          method:'POST',headers:{'content-type':'application/json',
+            'x-csrf-token':session.csrf_token},
+          body:JSON.stringify(input)
+        })
+        const body=await response.json()
+        return {status:response.status,
+          seller_id:typeof body.seller_id==='string'?body.seller_id:null}
+      }))
+    })()`)
+    assert.deepEqual(raceOutcomes.map((x:any)=>x.status).sort((a:number,b:number)=>a-b),
+      [201,409],"Only one competing cross-Organization POST may win")
+    const winnerIndex=raceOutcomes.findIndex((x:any)=>x.status===201)
+    assert.ok(winnerIndex===0||winnerIndex===1)
+    const raceWinner=raceApplications[winnerIndex]
+    const raceLoser=raceApplications[1-winnerIndex]
+    const raceSellerId=raceOutcomes[winnerIndex].seller_id as string
+    assert.match(raceSellerId,/^sel_[A-Za-z0-9_-]+$/)
+    assert.equal(raceOutcomes[1-winnerIndex].seller_id,null)
+    const raceClaims=await q(`select id,organization_id,status,seller_id
+      from da_store_application where id=any($1::text[])`,
+      [raceApplications.map(x=>x.application_id)])
+    assert.equal(raceClaims.length,1,"Losing request cannot reserve a second application")
+    assert.deepEqual(raceClaims[0],{
+      id:raceWinner.application_id,organization_id:raceWinner.organization_id,
+      status:"created",seller_id:raceSellerId
+    })
+    const raceNative=await q(`select id,status from seller where email=any($1::text[])`,
+      [raceApplications.map(x=>x.email)])
+    assert.equal(raceNative.length,1,"Exactly one native Mercur Seller must exist")
+    assert.equal(raceNative[0].id,raceSellerId)
+    assert.equal(raceNative[0].status,"pending_approval")
+    const raceEvents=await q(`select e.id as audit_id,x.id as outbox_id,
+      o.organization_id,o.seller_id
+      from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      join da_organization_seller_ownership o on o.verification_audit_event_id=e.id
+      where e.action='organization.store_application_created'
+      and e.new_values->>'application_id'=any($1::text[])`,
+      [raceApplications.map(x=>x.application_id)])
+    assert.equal(raceEvents.length,1,
+      "Only the winning Organization may have an Origin, audit and outbox")
+    assert.equal(raceEvents[0].organization_id,raceWinner.organization_id)
+    assert.equal(raceEvents[0].seller_id,raceSellerId)
+    assert.ok(raceEvents[0].audit_id&&raceEvents[0].outbox_id)
+    assert.equal((await q(`select count(*)::int n from da_audit_event
+      where action='organization.store_application_created'
+      and new_values->>'application_id'=$1`,[raceLoser.application_id]))[0].n,0,
+      "Losing Organization must have zero successful Store creation audits")
+    process.stdout.write("PASS B22 Chrome/PG16: simultaneous Alpha/Gamma normalized Store name 201+409; one native Seller, one durable application, Origin/audit/outbox, loser zero side effects\n")
+
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
