@@ -2650,7 +2650,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!rows.length)return {status:"none" as const}
     const r=rows[0]
     if(typeof r.claim_audit_id!=="string"||
-       !/^daaudit_[A-Za-z0-9_-]+$/.test(r.claim_audit_id)||
+       !/^daaud_[A-Za-z0-9_-]+$/.test(r.claim_audit_id)||
        !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(r.organization_id)||
        typeof r.name!=="string"||!validStoreName(r.name)||
        typeof r.handle!=="string"||!validStoreHandle(r.handle))
@@ -2668,7 +2668,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     application_id:string;seller_id:string;organization_id:string;
     name:string;handle:string;claim_audit_id:string
   },@MedusaContext() context:Context={}){
-    if(!/^daaudit_[A-Za-z0-9_-]+$/.test(target.claim_audit_id)||
+    if(!/^daaud_[A-Za-z0-9_-]+$/.test(target.claim_audit_id)||
        !/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
        !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(target.organization_id))
