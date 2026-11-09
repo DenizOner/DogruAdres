@@ -1431,6 +1431,19 @@ async function verifyRealNextStorefrontRenameUrls(
         contentType:response.headers.get("content-type"),html}
     }
     const former=await requestPage(rename.old_handle)
+    if(former.status!==404){
+      // This is a read-only diagnostic of a disposable test process. Never
+      // publish raw Next output, HTTP bodies, paths, tokens, or environment.
+      const lines=readFileSync(logPath,"utf8")
+      const reason=/Module not found|Cannot find module/i.test(lines)?
+        "dependency-resolution":/Failed to compile|Compilation failed|Turbopack|swc/i.test(lines)?
+        "next-compilation":/ECONNREFUSED|fetch failed|ETIMEDOUT/i.test(lines)?
+        "backend-read":/TypeError|ReferenceError/i.test(lines)?
+        "runtime-error":/region|locale/i.test(lines)?
+        "region-resolution":"unclassified"
+      throw new Error("Isolated legacy Store HTTP status "+former.status+
+        " (expected 404, no redirect); diagnostic="+reason)
+    }
     assert.equal(former.location,null,"Former Store URL may not redirect")
     assert.equal(former.status,404,
       "Real Next.js HTTP must return 404, not streamed not-found HTTP 200")
