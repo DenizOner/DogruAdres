@@ -1294,7 +1294,7 @@ async function verifySuspendedStoreRenameBeforeReopen(
     "const r=await fetch('/personal/platform/stores',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:payload});return r.status}",JSON.stringify(openAction))),409)
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: suspended Store Owner requests new name, Staff approves unchanged Store ID and suspended status with one audit/outbox, explicit later Staff unsuspend succeeds; Owner/CSRF/forged/replay denied\\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: suspended Store Owner requests new name, Staff approves unchanged Store ID and suspended status with one audit/outbox, explicit later Staff unsuspend succeeds; Owner/CSRF/forged/replay denied\n")
 }
 
 /** Disposable real Staff/Owner UI + PostgreSQL: only a previously approved
@@ -6658,6 +6658,8 @@ export default async function({container}:any){
       browser,reviewer,sellerGamma.id,gammaSellerId,q)
     await verifyStaffReopensSuspendedStore(
       browser,reviewer,sellerGamma.id,sellerGamma.name,gammaSellerId,container,q)
+    await verifySuspendedStoreRenameBeforeReopen(
+      browser,reviewer,sellerGamma.id,sellerGamma.name,gammaSellerId,rand,container,q)
     await browser.select(organizations[0].name,"owner")
     const gammaSku="B22-GAMMA-BETA-"+rand
     const {result:[gammaOffer]}=await createOffersWorkflow(container).run({
