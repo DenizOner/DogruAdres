@@ -1703,8 +1703,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         reject.type='button';reject.textContent='Bu değişiklik talebini gerekçeyle reddet';
         reject.onclick=async()=>{
           const explanation=reason.value.trim();
+          // Avoid escape ambiguity between the HTML template and UI test harness.
+          const slash=String.fromCharCode(92);
+          const readable=new RegExp('['+slash+'p{L}'+slash+'p{N}'+slash+'p{Extended_Pictographic}]','u');
+          const invisible=new RegExp(slash+'p{Default_Ignorable_Code_Point}','gu');
           if(explanation.length<10||explanation.length>500||
-             !/[\\p{L}\\p{N}\\p{Extended_Pictographic}]/u.test(explanation.replace(/\\p{Default_Ignorable_Code_Point}/gu,""))){
+             !readable.test(explanation.replace(invisible,''))){
             message.textContent='Ret gerekçesi 10–500 karakter ve okunabilir metin içermelidir.';return;
           }
           reject.disabled=true;message.textContent='Ret kararı saklanıyor…';
