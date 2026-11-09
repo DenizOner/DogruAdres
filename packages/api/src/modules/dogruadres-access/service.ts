@@ -2578,11 +2578,6 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         and a.status='created' and s.name=? and s.handle=?`,
       [target.application_id,target.seller_id,target.organization_id,target.name,target.handle])
     if(valid.length!==1)return null
-    const existing=await db.execute(`select id from da_audit_event
-      where organization_id=? and target_id=?
-        and action='organization.store_reactivated' and deleted_at is null
-      limit 1`,[target.organization_id,target.seller_id])
-    if(existing.length)return {status:"conflict" as const}
     const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:staff.person_id,actor_type:staff.actor_type,
       actor_id:staff.actor_id,role_context:"platform_staff",
