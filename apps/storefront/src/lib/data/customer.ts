@@ -277,8 +277,9 @@ export const sendResetPasswordEmail = async (email: string) => {
     .then(() => {
       return { success: true, error: null };
     })
-    .catch((err: any) => {
-      return { success: false, error: err.toString() };
+    .catch(() => {
+      // The public reset request must not expose provider errors, accounts or internal detail.
+      return { success: false, error: 'Password reset is temporarily unavailable. Please try again.' };
     });
 
   return res;
