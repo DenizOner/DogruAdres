@@ -2469,8 +2469,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
    */
   @InjectTransactionManager()
   async personalCurrentSuspendedStoreName(token:string,target:{
-    application_id:string;seller_id:string
+    application_id:string;seller_id:string;expected_status?:"open"
   },@MedusaContext() context:Context={}){
+    if(target.expected_status!==undefined&&target.expected_status!=="open")
+      throw new IdentityAccessDenied()
     if(!/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id))
       throw new IdentityAccessDenied()
@@ -2494,12 +2496,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         and origin.action='organization.store_application_created'
         and origin.new_values->>'application_id'=a.id
       join seller s on s.id=a.seller_id and s.deleted_at is null
-        and s.status='suspended' and s.approved_at is not null
+        and s.status=? and s.approved_at is not null
       where a.id=? and a.seller_id=? and a.status='created'
         and exists(select 1 from da_audit_outbox x
           where x.source_audit_event_id=origin.id
             and x.source_module='dogruadres-access' and x.deleted_at is null)
-      for share of a,d,o`,[target.application_id,target.seller_id])
+      for share of a,d,o`,[target.expected_status==="open"?"open":"suspended",
+        target.application_id,target.seller_id])
     if(rows.length!==1)return {status:"conflict" as const}
     const r=rows[0]
     if(typeof r.name!=="string"||!validStoreName(r.name)||
@@ -2562,15 +2565,111 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       name:r.name as string,handle:r.handle as string}
   }
 
+
+  /** Commit this private canonical intent BEFORE a separate native Mercur
+   * workflow starts. A crash can leave a claim without completion, but never
+   * an untraceable Seller opening. Called under the existing Staff/Seller/
+   * current-name locks and a distinct first transaction.
+   */
+  @InjectTransactionManager()
+  async personalClaimStoreReactivation(token:string,input:{
+    application_id:string;seller_id:string;organization_id:string;
+    name:string;handle:string
+  },@MedusaContext() context:Context={}){
+    if(!/^daapp_[a-f0-9]{32}$/.test(input.application_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !validStoreName(input.name)||!validStoreHandle(input.handle))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
+    if(!staff)return null
+    const unresolved=await this.personalUnresolvedStoreReactivationClaim(token,{
+      application_id:input.application_id,seller_id:input.seller_id
+    },context)
+    if(!unresolved)return {status:"conflict" as const}
+    if(unresolved.status==="claimed"||unresolved.status==="ambiguous")
+      return {status:"conflict" as const}
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:staff.person_id,actor_type:staff.actor_type,
+      actor_id:staff.actor_id,role_context:"platform_staff",
+      organization_id:input.organization_id,
+      action:"organization.store_reactivation_claimed",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"store-application",
+      target_id:input.seller_id,
+      new_values:{application_id:input.application_id,status:"pending_native",
+        name:input.name,handle:input.handle,staff_grant_id:staff.grant_id},
+      occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    return {status:"claimed" as const,claim_audit_id:audit.id as string}
+  }
+
+  /** Read only the pending, source-proven claim for an authorized Staff
+   * member. A separate Staff member can reconcile a crash without calling
+   * native unsuspend again; ambiguous claims fail closed.
+   */
+  @InjectTransactionManager()
+  async personalUnresolvedStoreReactivationClaim(token:string,target:{
+    application_id:string;seller_id:string
+  },@MedusaContext() context:Context={}){
+    if(!/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
+    if(!staff)return null
+    const rows=await db.execute(`select e.id claim_audit_id,e.organization_id,
+        e.new_values->>'name' name,e.new_values->>'handle' handle
+      from da_audit_event e
+      join da_store_application a on a.id=e.new_values->>'application_id'
+        and a.seller_id=e.target_id and a.status='created'
+      join da_organization d on d.id=a.organization_id
+        and d.status='active' and d.deleted_at is null
+      join da_organization_seller_ownership o on o.organization_id=a.organization_id
+        and o.seller_id=a.seller_id and o.revoked_at is null
+      where e.action='organization.store_reactivation_claimed'
+        and e.module='dogruadres-access' and e.resource='store-application'
+        and e.role_context='platform_staff' and e.deleted_at is null
+        and e.organization_id=a.organization_id
+        and e.target_id=? and a.id=?
+        and e.new_values->>'status'='pending_native'
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+            and x.deleted_at is null)
+        and not exists(select 1 from da_audit_event complete
+          where complete.action='organization.store_reactivated'
+            and complete.module='dogruadres-access' and complete.deleted_at is null
+            and complete.organization_id=e.organization_id
+            and complete.target_id=e.target_id
+            and complete.new_values->>'claim_audit_id'=e.id)
+      order by e.occurred_at desc,e.id desc limit 2`,
+      [target.seller_id,target.application_id])
+    if(rows.length>1)return {status:"ambiguous" as const}
+    if(!rows.length)return {status:"none" as const}
+    const r=rows[0]
+    if(typeof r.claim_audit_id!=="string"||
+       !/^daaudit_[A-Za-z0-9_-]+$/.test(r.claim_audit_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(r.organization_id)||
+       typeof r.name!=="string"||!validStoreName(r.name)||
+       typeof r.handle!=="string"||!validStoreHandle(r.handle))
+      return {status:"ambiguous" as const}
+    return {status:"claimed" as const,claim_audit_id:r.claim_audit_id as string,
+      organization_id:r.organization_id as string,
+      name:r.name as string,handle:r.handle as string}
+  }
+
   /** Persist a private, single canonical completed decision after the native
    * Seller has actually reopened. An uncertain native result is never retried.
    */
   @InjectTransactionManager()
   async personalRecordStoreReactivation(token:string,target:{
     application_id:string;seller_id:string;organization_id:string;
-    name:string;handle:string
+    name:string;handle:string;claim_audit_id:string
   },@MedusaContext() context:Context={}){
-    if(!/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
+    if(!/^daaudit_[A-Za-z0-9_-]+$/.test(target.claim_audit_id)||
+       !/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
        !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(target.organization_id))
       throw new IdentityAccessDenied()
@@ -2588,6 +2687,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         and a.status='created' and s.name=? and s.handle=?`,
       [target.application_id,target.seller_id,target.organization_id,target.name,target.handle])
     if(valid.length!==1)return null
+    const claim=await this.personalUnresolvedStoreReactivationClaim(token,{
+      application_id:target.application_id,seller_id:target.seller_id
+    },context)
+    if(!claim||claim.status!=="claimed"||
+       claim.claim_audit_id!==target.claim_audit_id||
+       claim.organization_id!==target.organization_id||
+       claim.name!==target.name||claim.handle!==target.handle)
+      return {status:"conflict" as const}
     const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:staff.person_id,actor_type:staff.actor_type,
       actor_id:staff.actor_id,role_context:"platform_staff",
@@ -2596,7 +2703,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       module:DOGRUADRES_AUDIT_MODULE,resource:"store-application",
       target_id:target.seller_id,
       new_values:{application_id:target.application_id,status:"open",
-        resolution_confirmed:true,staff_grant_id:staff.grant_id},
+        claim_audit_id:target.claim_audit_id,resolution_confirmed:true,
+        staff_grant_id:staff.grant_id},
       occurred_at:new Date()
     }],context)
     if(!audit?.id)throw new IdentityAccessDenied()
