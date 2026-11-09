@@ -74,6 +74,12 @@ describe("B22 guarded platform review of Store rename requests",()=>{
     {seller_id:"another-seller"},
     {reason:"short"},
     {reason:"x".repeat(501)},
+    {reason:"R"+"\u200B".repeat(9)},
+    {reason:"R"+"\u3164".repeat(9)},
+    {reason:"R"+"\u0301".repeat(9)},
+    {reason:"R"+"\u200B".repeat(400)},
+    {reason:"R"+" ".repeat(20)+"E"},
+    {reason:"👨‍👩‍👧‍👦".repeat(3)},
     {reason:"\u200B".repeat(10)},
     {reason:"\u3164".repeat(10)},
     {reason:"\u115F\u1160".repeat(6)},
@@ -86,7 +92,8 @@ describe("B22 guarded platform review of Store rename requests",()=>{
     expect(res.status).toHaveBeenCalledWith(400)
     expect(service.personalRejectStoreRenameRequest).not.toHaveBeenCalled()
   })
-  it.each(["Gerekçe açık ve anlaşılır", "سبب الرفض واضح ومفهوم", "Karar verildi ✅"])(
+  it.each(["Gerekçe açık ve anlaşılır", "سبب الرفض واضح ومفهوم", "Karar verildi ✅",
+    "👨‍👩‍👧‍👦".repeat(10)])(
     "accepts readable multilingual explanations: %s",async reason=>{
       req.body.reason=reason
       await POST(req,res)
