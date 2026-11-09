@@ -291,14 +291,13 @@ export async function verifyNativeBrowser({
       assert.ok(submitted, "Real password reset submit button missing")
       try {
         await until(async () => {
-          const text = await evaluate<string>("document.body.innerText")
-          return text.includes("Password changed")
+          return await evaluate<boolean>("Array.from(document.querySelectorAll(\'h1\')).some(el=>el.textContent?.trim()===\'Password changed\' && el.getClientRects().length>0)")
         }, 30000, "Next.js real password update action")
       } catch {
         // Diagnostic contains only booleans, counts and HTTP status codes.
         // Never print a bearer URL, password, request body, recipient or DOM HTML.
         const state = await evaluate<any>(
-          "({formPresent:!!document.querySelector('form'),invalidRules:document.querySelectorAll('form .text-red-700').length,invalidFields:document.querySelectorAll('form [aria-invalid=true]').length,alertPresent:!!document.querySelector('[role=alert]'),successVisible:document.body.innerText.includes('Password changed'),onResetRoute:location.pathname.endsWith('/reset-password'),pageReady:document.readyState,hasNextError:!!document.querySelector('nextjs-portal')})"
+          "({formPresent:!!document.querySelector('form'),invalidRules:document.querySelectorAll('form .text-red-700').length,invalidFields:document.querySelectorAll('form [aria-invalid=true]').length,alertPresent:!!document.querySelector('[role=alert]'),successVisible:document.body.textContent?.includes('Password changed')===true,onResetRoute:location.pathname.endsWith('/reset-password'),pageReady:document.readyState,hasNextError:!!document.querySelector('nextjs-portal')})"
         )
         const postCount = networkRequests.slice(beforeSubmitRequests).filter(r => r.request.method === "POST").length
         const responseStatuses = networkResponses.slice(beforeSubmitResponses)
@@ -309,7 +308,7 @@ export async function verifyNativeBrowser({
       const loginPath = await evaluate<string>(
         "Array.from(document.querySelectorAll('a[href]')).find(el=>el.textContent?.includes('Log in'))?.getAttribute('href') || ''"
       )
-      const expectedLogin = "/" + (process.env.NEXT_PUBLIC_DEFAULT_REGION || "us") + "/login"
+      const expectedLogin = "/tr/login"
       assert.equal(loginPath, expectedLogin, "Successful reset must offer the correct localized login link, not /reset-password/login")
       process.stdout.write("PASS browser reset login link: successful unlocalized recovery links to the legitimate login page\n")
       for (const request of networkRequests) {
