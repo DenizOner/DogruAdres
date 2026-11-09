@@ -183,7 +183,7 @@ describe("Audit Index version 1 validation and redaction", () => {
       expect(()=>projectFoundationAuditEvent({...event,...change}))
         .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
-  it.each(["organization.store_reactivation_claimed","organization.store_reactivated"])(
+  it.each(["organization.store_reactivation_claimed","organization.store_reactivation_released","organization.store_reactivated"])(
     "indexes only authorized Staff reactivation events without internal name, claim, reason or grant: %s",action=>{
     const event={...source(),role_context:"platform_staff",
       action,resource:"store-application",
