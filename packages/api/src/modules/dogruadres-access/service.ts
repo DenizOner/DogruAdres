@@ -2985,11 +2985,16 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       returning approved_at`,[input.request_id,input.seller_id])
     if(approved.length!==1||!approved[0].approved_at)throw new IdentityAccessDenied()
     if(original.length){
+      // PostgreSQL retains sub-millisecond timestamp precision that a JS
+      // Date round-trip can lose. Derive the exact 30-day boundary entirely
+      // from the persisted approval timestamp in this same SQL transaction.
       const released=await db.execute(`update da_store_application
-        set name_claim_released_at=?::timestamptz + interval '30 days',
+        set name_claim_released_at=(
+          select approved_at + interval '30 days' from da_store_rename_request
+          where id=? and seller_id=? and status='approved'),
           updated_at=clock_timestamp()
         where id=? and seller_id=? and name_claim_released_at is null
-        returning id`,[approved[0].approved_at,original[0].id,input.seller_id])
+        returning id`,[input.request_id,input.seller_id,original[0].id,input.seller_id])
       if(released.length!==1)throw new IdentityAccessDenied()
     }
     const [audit]=await this.persistAuditEventsWithOutbox_([{
