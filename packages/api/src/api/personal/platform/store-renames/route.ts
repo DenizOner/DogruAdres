@@ -13,7 +13,7 @@ const rejection=z.object({
   request_id:z.string().regex(/^dasrn_[a-f0-9]{32}$/),
   seller_id:z.string().regex(/^sel_[A-Za-z0-9_-]+$/),
   reason:z.string().trim().min(10).max(500).refine(
-    value=>/[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(value),
+    value=>/[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(value.replace(/\p{Default_Ignorable_Code_Point}/gu,"")),
     "Reason must contain readable content")
 }).strict()
 
