@@ -2379,8 +2379,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
 
 
   let renameRead=0,renamePending=false,renameUncertain=false;
-  function clearStoreRename(){
-    renameRead++;selectedStoreOwner=false;renamePending=false;renameUncertain=false;
+  function clearStoreRename(preserveSelectedOwner=false){
+    // A transient Store-list failure is not an Organization role change.
+    // Only Organization switch/logout/concealment may discard that role.
+    renameRead++;if(!preserveSelectedOwner)selectedStoreOwner=false;
+    renamePending=false;renameUncertain=false;
     el('store-rename-panel').hidden=true;
     el('store-rename-status').textContent='';
     el('store-rename-history').replaceChildren();
@@ -2501,7 +2504,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
     }catch(e){
       if(request!==organizationRequest||seq!==storeRequest||currentOrg!==org)return;
-      target.replaceChildren();clearStoreRename();
+      target.replaceChildren();clearStoreRename(true);
       if(e.httpStatus===401){concealPrivateView();el('login').hidden=false;return}
       message.textContent=[403,404].includes(e.httpStatus)?'Bu kuruluşun mağazalarına erişim izniniz yok.':'Mağazalar doğrulanamadı. Yeniden deneyin.';
     }
