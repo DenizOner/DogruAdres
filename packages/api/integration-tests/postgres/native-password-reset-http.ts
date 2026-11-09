@@ -4,7 +4,7 @@
  * All identities, credentials and listeners are disposable.
  */
 import assert from "node:assert/strict"
-import { createHash, randomBytes } from "node:crypto"
+import { randomBytes } from "node:crypto"
 import { createServer } from "node:http"
 import { dirname, join } from "node:path"
 import { ApiLoader, expressLoader } from "@medusajs/framework/http"
@@ -127,15 +127,22 @@ export async function verifyNativePasswordResetHttp(container: MedusaContainer, 
     assert.ok(await validPassword(newPassword), "Replay changed the password")
     process.stdout.write("PASS password reset HTTP replay: consumed bearer rejected with committed password unchanged\n")
 
+    // Identify the one new task-owned record by its database ID. No token
+    // hashing is necessary here, and no production credential is touched.
+    const previousTokenRows = await pg("auth_password_reset_token")
+      .where({ entity_id: recipient }).select("id")
+    const previousIds = new Set(previousTokenRows.map((row: { id: string }) => row.id))
     const expiredRow = await auth.createPasswordResetToken({
       provider: "emailpass", entity_id: recipient, ttl_seconds: 900,
     })
-    // Medusa's public Auth service intentionally refuses non-positive TTLs.
-    // Match its official HTTP integration tests: age ONLY the disposable token
-    // row in the isolated PG16 database. JWT signature/expiry remains valid.
-    const tokenHash = createHash("sha256").update(expiredRow.jti).digest("hex")
+    // Medusa refuses non-positive TTLs. Age only the newly created token
+    // record on the guarded disposable PG16 database; keep the signed JWT valid.
+    const newTokenRows = (await pg("auth_password_reset_token")
+      .where({ entity_id: recipient }).whereNull("deleted_at").select("id"))
+      .filter((row: { id: string }) => !previousIds.has(row.id))
+    assert.equal(newTokenRows.length, 1, "Expected precisely one new task-owned reset token row")
     const ownedExpiry = () => pg("auth_password_reset_token").where({
-      entity_id: recipient, token_hash: tokenHash,
+      id: newTokenRows[0].id, entity_id: recipient,
     }).whereNull("deleted_at")
     assert.equal((await ownedExpiry().select("id")).length, 1, "Expected precisely one task-owned reset token row")
     await ownedExpiry().update({ expires_at: new Date(Date.now() - 60 * 1000) })
