@@ -1347,7 +1347,7 @@ async function verifyStaffReopensSuspendedStore(
     assert.equal((await q(`select count(*)::int n from da_audit_event
       where action='organization.store_reactivated'
         and organization_id=$1 and target_id=$2`,[organizationId,sellerId]))[0].n,2)
-    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: post-native reactivation audit failure preserves durable claim/outbox, Store open and HTTP503; real Staff UI reconciles with no second native opening, Owner notice persists once, replay denied\\n")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: post-native reactivation audit failure preserves durable claim/outbox, Store open and HTTP503; real Staff UI reconciles with no second native opening, Owner notice persists once, replay denied\n")
   }finally{
     await q("update da_organization set store_application_enabled=true where id=$1",
       [organizationId])
