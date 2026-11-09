@@ -1,14 +1,15 @@
 import {POST} from "../store-applications/route"
-import {POST as reviewStorePOST} from "../platform/stores/route"
+import {GET as reviewStoreGET,POST as reviewStorePOST} from "../platform/stores/route"
 import {access,csrf,enabled,sessionToken} from "../security"
-import {createSellerAccountWorkflow,terminateSellerWorkflow,approveSellerWorkflow} from "@mercurjs/core/workflows"
+import {createSellerAccountWorkflow,terminateSellerWorkflow,approveSellerWorkflow,unsuspendSellerWorkflow} from "@mercurjs/core/workflows"
 jest.mock("../security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
 }))
 jest.mock("@mercurjs/core/workflows",()=>({
   createSellerAccountWorkflow:jest.fn(),
   terminateSellerWorkflow:jest.fn(),
-  approveSellerWorkflow:jest.fn()
+  approveSellerWorkflow:jest.fn(),
+  unsuspendSellerWorkflow:jest.fn()
 }))
 describe("B22 protected Owner Store application gate",()=>{
   const data={organization_id:"daorg_a",application_id:"daapp_"+"a".repeat(32),
@@ -254,5 +255,131 @@ describe("B22 platform staff reasoned pending Store rejection",()=>{
     await reviewStorePOST(req,res)
     expect(res.status).toHaveBeenCalledWith(409)
     expect(terminateRun).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+/** New Store reactivation shares the existing private Staff/Owner-origin
+ * contract, but must not elevate a native seller or reuse a transferred name.
+ * Full Chrome/PG16 acceptance remains a separate gate.
+ */
+describe("B22 Staff reopens only a suspended Store with retained name rights",()=>{
+  const target={application_id:"daapp_"+"a".repeat(32),seller_id:"sel_suspended_a"}
+  const name="B22 Existing Store",handle="b22-existing-store"
+  let req:any,res:any,svc:any,native:any,run:any
+  let seller:{id:string;name:string;handle:string;status:string;
+    status_reason:string|null;approved_at:string|null}
+  beforeEach(()=>{
+    jest.resetAllMocks()
+    seller={id:target.seller_id,name,handle,status:"suspended",
+      approved_at:"2026-11-01T00:00:00.000Z",status_reason:"Task-only suspension"}
+    svc={
+      personalReviewableStoreApplications:jest.fn().mockResolvedValue([{
+        ...target,organization_id:"daorg_a",organization_name:"Org A",on_hold:true
+      }]),
+      personalWithStoreApprovalStaffLock:jest.fn(async(_token:string,_target:any,
+        fn:(ctx:any)=>Promise<any>)=>fn({})),
+      personalCurrentSuspendedStoreName:jest.fn().mockResolvedValue({
+        status:"eligible",organization_id:"daorg_a",name,handle
+      }),
+      personalRecordStoreReactivation:jest.fn().mockResolvedValue({status:"recorded"})
+    }
+    native={listSellers:jest.fn(async()=>[{...seller}])}
+    run=jest.fn(async()=>{
+      seller.status="open";seller.status_reason=null
+    })
+    ;(unsuspendSellerWorkflow as unknown as jest.Mock).mockReturnValue({run})
+    ;(access as jest.Mock).mockReturnValue(svc)
+    ;(enabled as jest.Mock).mockReturnValue(true)
+    ;(csrf as jest.Mock).mockResolvedValue(true)
+    ;(sessionToken as jest.Mock).mockReturnValue("opaque")
+    req={body:{...target,action:"unsuspend"},headers:{},
+      query:{page:0},scope:{resolve:jest.fn(()=>native)}}
+    res={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),
+      json:jest.fn().mockReturnThis()}
+  })
+  it("reopens one native suspended Seller without changing identity, name, handle or approval",async()=>{
+    const before={...seller}
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({...target,action:"unsuspend",status:"open"})
+    expect(svc.personalWithStoreApprovalStaffLock).toHaveBeenCalledWith(
+      "opaque",{...target,decision:"unsuspend"},expect.any(Function))
+    expect(svc.personalCurrentSuspendedStoreName).toHaveBeenCalledWith(
+      "opaque",target,expect.any(Object))
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(run).toHaveBeenCalledWith({input:{seller_id:target.seller_id}})
+    expect(svc.personalRecordStoreReactivation).toHaveBeenCalledWith(
+      "opaque",{...target,organization_id:"daorg_a",name,handle},expect.any(Object))
+    expect({...seller, status:"suspended",status_reason:before.status_reason}).toEqual(before)
+    res.status.mockClear()
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+  it("denies revoked platform Staff before a native change",async()=>{
+    svc.personalWithStoreApprovalStaffLock.mockResolvedValue(null)
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(run).not.toHaveBeenCalled()
+  })
+  it("denies a non-Staff or unlinked application before any native call",async()=>{
+    svc.personalReviewableStoreApplications.mockResolvedValue(null)
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(run).not.toHaveBeenCalled()
+  })
+  it("blocks transferred/unverified name even for formerly approved Seller",async()=>{
+    svc.personalCurrentSuspendedStoreName.mockResolvedValue({status:"conflict"})
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(run).not.toHaveBeenCalled()
+    expect(svc.personalRecordStoreReactivation).not.toHaveBeenCalled()
+  })
+  it.each(["open","terminated","pending_approval"])(
+    "refuses unsafe Seller status %s without reopening",async status=>{
+      seller.status=status
+      await reviewStorePOST(req,res)
+      expect(res.status).toHaveBeenCalledWith(409)
+      expect(run).not.toHaveBeenCalled()
+    })
+  it("requires strict action schema, CSRF and no native seller header",async()=>{
+    ;(csrf as jest.Mock).mockResolvedValueOnce(false)
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    req.headers={"x-seller-id":target.seller_id}
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    req.headers={}
+    req.body={...req.body,name:"Forged Seller Name"}
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(run).not.toHaveBeenCalled()
+  })
+  it("never reports success after a post-native Foundation audit failure",async()=>{
+    svc.personalRecordStoreReactivation.mockRejectedValue(Error("task DB rollback"))
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(503)
+    expect(res.json).toHaveBeenCalledWith({
+      message:"Outcome uncertain; check approval status"
+    })
+    expect(run).toHaveBeenCalledTimes(1)
+    res.status.mockClear()
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+  it("lists suspended and pending applications separately and privately",async()=>{
+    svc.personalReviewableStoreApplications.mockImplementation(async(_token:any,
+      _target:any,_ctx:any,page=0)=>page>0?[]:[{
+        ...target,organization_id:"daorg_a",organization_name:"Org A",on_hold:false
+      }])
+    await reviewStoreGET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({
+      pending:[],suspended:[{...target,organization_id:"daorg_a",
+        organization_name:"Org A",name,on_hold:false}],
+      page:0,has_more:false
+    })
   })
 })
