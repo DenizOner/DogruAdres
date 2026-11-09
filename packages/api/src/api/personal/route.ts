@@ -2788,10 +2788,23 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('org-stores-refresh').hidden=false;
     try{
       const data=await api('organization-stores?organization='+encodeURIComponent(org));
+      // The generic Store list stays OPEN-only. Only an authenticated
+      // protected Owner may read the separate name-management candidates,
+      // which can include an approved but suspended Store.
+      const renameData=selectedStoreOwner?
+        await api('organization-stores?organization='+encodeURIComponent(org)+
+          '&purpose=rename').catch(()=>null):null;
       if(request!==organizationRequest||seq!==storeRequest||currentOrg!==org||document.hidden)return;
       if(data.organization_id!==org||!Array.isArray(data.stores)||
           data.stores.some(s=>typeof s?.id!=='string'||!/^sel_[A-Za-z0-9_-]+$/.test(s.id)||typeof s.name!=='string')||
           new Set(data.stores.map(s=>s.id)).size!==data.stores.length)throw new Error('Mağaza yanıtı doğrulanamadı');
+      const renameStores=selectedStoreOwner&&renameData?.organization_id===org&&
+        Array.isArray(renameData.stores)&&renameData.stores.length<=50&&
+        renameData.stores.every(s=>typeof s?.id==='string'&&
+          /^sel_[A-Za-z0-9_-]+$/.test(s.id)&&typeof s?.name==='string'&&
+          ['open','suspended'].includes(s?.status))&&
+        new Set(renameData.stores.map(s=>s.id)).size===renameData.stores.length?
+        renameData.stores:[];
       for(const store of data.stores){
         const line=document.createElement('p');
         line.textContent=store.name+' — '+store.id;
@@ -2803,11 +2816,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         renameForm.elements.namedItem('seller_id'):null;
       if(select&&typeof select.replaceChildren==='function'){
         select.replaceChildren();
-        for(const store of data.stores){
+        for(const store of renameStores){
           const opt=document.createElement('option');opt.value=store.id;
-          opt.textContent=store.name;select.append(opt);
+          opt.textContent=store.name+(store.status==='suspended'?' — askıda':'');
+          select.append(opt);
         }
-        el('store-rename-panel').hidden=!selectedStoreOwner||data.stores.length===0;
+        el('store-rename-panel').hidden=!selectedStoreOwner||renameStores.length===0;
         if(!el('store-rename-panel').hidden)void refreshStoreRename(org,request);
       }
     }catch(e){
