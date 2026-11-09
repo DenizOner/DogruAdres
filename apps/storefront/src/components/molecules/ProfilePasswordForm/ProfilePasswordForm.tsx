@@ -15,7 +15,8 @@ import { ProfilePasswordFormData, profilePasswordSchema } from "./schema"
 import { useState } from "react"
 import { updateCustomerPassword } from "@/lib/data/customer"
 import { Heading, toast } from "@medusajs/ui"
-import LocalizedClientLink from "../LocalizedLink/LocalizedLink"
+import Link from "next/link"
+import { usePathname } from "next/navigation"
 import { PasswordValidator } from "@/components/cells/PasswordValidator/PasswordValidator"
 
 export const ProfilePasswordForm = ({ token }: { token?: string }) => {
@@ -42,6 +43,10 @@ const Form = ({
   token?: string
 }) => {
   const [success, setSuccess] = useState(false)
+  const resetPath = usePathname()
+  // Unlocalized /reset-password is an actual public route, not a locale.
+  const routeLocale = resetPath?.match(/^\/([a-z]{2})\/reset-password(?:\/|$)/i)?.[1]
+  const loginLocale = routeLocale || process.env.NEXT_PUBLIC_DEFAULT_REGION || 'us'
   const [confirmPasswordError, setConfirmPasswordError] = useState<
     FieldError | undefined
   >(undefined)
@@ -96,14 +101,14 @@ const Form = ({
       <p className="text-center my-8">
         Your are ready to log in with your new password
       </p>
-      <LocalizedClientLink href="/login">
+      <Link href={`/${loginLocale}/login`}>
         <Button
           className="uppercase py-3 px-6 !font-semibold w-full"
           size="large"
         >
           Log in
         </Button>
-      </LocalizedClientLink>
+      </Link>
     </div>
   ) : (
     <form

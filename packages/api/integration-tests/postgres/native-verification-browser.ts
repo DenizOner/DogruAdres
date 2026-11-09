@@ -306,6 +306,12 @@ export async function verifyNativeBrowser({
         throw Error("Reset Chrome submission did not complete: " +
           JSON.stringify({ state, postCount, responseStatuses }))
       }
+      const loginPath = await evaluate<string>(
+        "Array.from(document.querySelectorAll('a[href]')).find(el=>el.textContent?.includes('Log in'))?.getAttribute('href') || ''"
+      )
+      const expectedLogin = "/" + (process.env.NEXT_PUBLIC_DEFAULT_REGION || "us") + "/login"
+      assert.equal(loginPath, expectedLogin, "Successful reset must offer the correct localized login link, not /reset-password/login")
+      process.stdout.write("PASS browser reset login link: successful unlocalized recovery links to the legitimate login page\n")
       for (const request of networkRequests) {
         const referer = request.request.headers?.Referer || request.request.headers?.referer || ""
         assert.ok(!String(referer).includes(passwordReset.token), "Reset token leaked in Referer")
