@@ -4,6 +4,18 @@ const nextConfig: NextConfig = {
   output: "standalone",
   trailingSlash: false,
   reactStrictMode: true,
+  // Reset links carry one-time bearer tokens: do not leak URLs through referrers
+  // or cache full-token pages. Does not alter other Storefront routes.
+  async headers() {
+    const securityHeaders = [
+      { key: 'Referrer-Policy', value: 'no-referrer' },
+      { key: 'Cache-Control', value: 'no-store' },
+    ];
+    return [
+      { source: '/reset-password', headers: securityHeaders },
+      { source: '/:locale/reset-password', headers: securityHeaders },
+    ];
+  },
   logging: {
     fetches: {
       fullUrl: true

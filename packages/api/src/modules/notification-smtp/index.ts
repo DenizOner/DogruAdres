@@ -5,6 +5,7 @@ import type {
 } from "@medusajs/framework/types"
 import { sendSmtpEmail } from "../dogruadres-access/smtp-client"
 import { renderVerificationEmail } from "./verification-email"
+import { renderCustomerPasswordResetEmail } from "./password-reset-email"
 import type DogruAdresAccessModuleService from "../dogruadres-access/service"
 
 export class SmtpNotificationProviderService extends AbstractNotificationProviderService {
@@ -24,6 +25,8 @@ export class SmtpNotificationProviderService extends AbstractNotificationProvide
       // Notification failure before settings access or any transport side effect.
       const message = notification.template === "email-verification"
         ? renderVerificationEmail({ entity_id: notification.to, code: notification.data?.code as string, expires_at: notification.data?.expires_at as string | undefined })
+        : notification.template === "customer-password-reset"
+        ? renderCustomerPasswordResetEmail({ token: notification.data?.token })
         : {
             subject: (notification.data?.subject as string) || "DogruAdres Bildirimi",
             text: (notification.content?.text as string) || String(notification.data?.text || ""),
