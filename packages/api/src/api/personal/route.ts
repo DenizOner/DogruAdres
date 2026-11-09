@@ -2559,7 +2559,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       for(const x of data.requests){
         const row=document.createElement('div'),item=document.createElement('p');
         item.textContent=x.proposed_name+' / '+x.proposed_handle+' — '+
-          (x.status==='pending_review'?'Platform incelemesinde':x.status);
+          (x.status==='pending_review'?'Platform incelemesinde':
+            x.status==='withdrawn'?'Geri çekildi':x.status);
         row.append(item);
         if(x.status==='pending_review'){
           const cancel=document.createElement('button');
