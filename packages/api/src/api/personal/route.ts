@@ -246,7 +246,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   </section>
   <section id="store-rename-review-panel" hidden style="grid-column:1/-1">
     <h2>Platform mağaza ad/bağlantı değişiklik başvuruları</h2>
-    <p>Yalnız mağaza onay görevi olan platform görevlisi inceleyebilir. Bir başvurunun reddi mevcut mağaza kimliğini, adını, bağlantısını veya siparişlerini değiştirmez. Onay ve gerçek isim değiştirme işlemi henüz bu ekranda açık değildir.</p>
+    <p>Yalnız mağaza onay görevi olan platform görevlisi inceleyebilir. Ret mağazayı değiştirmez. Onay, aynı mağazanın adını ve bağlantısını birlikte değiştirir; eski bağlantı yeni adrese yönlendirilmez. Belirsiz sonuçta aynı işlemi yeniden göndermeyin.</p>
     <p id="store-rename-review-status" role="status" aria-live="polite"></p>
     <div id="store-rename-review-list"></div>
     <button id="store-rename-review-refresh" type="button">İsim değişikliği başvurularını yenile</button>
@@ -1714,7 +1714,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           if(explanation.length<10||explanation.length>500||readableCount<10){
             message.textContent='Ret gerekçesi en az 10 okunabilir karakter içermelidir (en fazla 500).';return;
           }
-          reject.disabled=true;message.textContent='Ret kararı saklanıyor…';
+          reject.disabled=true;approve.disabled=true;message.textContent='Ret kararı saklanıyor…';
           try{
             const answer=await api('platform/store-renames',{
               method:'POST',body:JSON.stringify({action:'reject',
@@ -1739,7 +1739,35 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             // from stale UI; only a fresh staff-authorized read re-enables.
           }
         };
-        line.append(summary,reason,reject);list.append(line);
+        const approve=document.createElement('button');
+        approve.type='button';approve.textContent='Yeni ad ve bağlantıyı onayla';
+        approve.setAttribute('aria-label',entry.organization_name+
+          ' mağazasının ad ve bağlantı değişikliğini onayla');
+        approve.onclick=async()=>{
+          if(!confirm('Bu onay mağazanın adını ve URL bağlantısını birlikte değiştirir. Eski bağlantı yeni adrese yönlendirilmez. Onaylıyor musunuz?'))return;
+          approve.disabled=true;reject.disabled=true;
+          message.textContent='Mağaza adı ve bağlantısı onaylanıyor…';
+          try{
+            const answer=await api('platform/store-renames',{
+              method:'POST',body:JSON.stringify({action:'approve',
+                request_id:entry.request_id,seller_id:entry.seller_id})
+            });
+            if(seq!==renameReviewRequest||epoch!==viewEpoch||document.hidden)return;
+            if(answer.status!=='approved'||answer.request_id!==entry.request_id||
+               answer.seller_id!==entry.seller_id){
+              const err=Error('Onay yanıtı doğrulanamadı');err.uncertain=true;throw err;
+            }
+            message.textContent='Mağazanın yeni adı ve bağlantısı etkinleşti. Eski bağlantıya yönlendirme yok.';
+            void refreshStoreRenameReviews(true);
+          }catch(error){
+            if(seq!==renameReviewRequest||epoch!==viewEpoch||document.hidden)return;
+            message.textContent=error.httpStatus===409?
+              'Talep veya yeni ad artık uygun değil; güncel listeyi kontrol edin.':
+              'Onay sonucu belirsiz; aynı işlemi tekrarlamayın. Yetkili listeden doğrulayın.';
+            // Never re-enable a stale approval after an uncertain native write.
+          }
+        };
+        line.append(summary,reason,reject,approve);list.append(line);
       }
     }catch(error){
       if(seq!==renameReviewRequest||epoch!==viewEpoch)return;

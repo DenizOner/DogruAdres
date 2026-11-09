@@ -7,6 +7,7 @@ import {
   MedusaContext,
   MedusaService,
   MedusaError,
+  toHandle,
 } from "@medusajs/framework/utils"
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
@@ -2302,8 +2303,25 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     await db.execute(`select pg_advisory_xact_lock(
       hashtext('b22-global-store-name'),hashtext(?))`,[nameHash])
     const reserved=await db.execute(`select id from da_store_application
-      where store_name_hash=? limit 1`,[nameHash])
+      where store_name_hash=? and
+        (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
+      limit 1`,[nameHash])
     if(reserved.length)return {status:"name_taken" as const}
+    // Mercur derives the handle from the new Seller name. Reserve BOTH the
+    // original URL and any other Store's in-flight proposed URL for 30 days.
+    const generatedHandle=toHandle(input.name)
+    const hold=await db.execute(`select 1 from da_store_rename_request r
+      where (r.status='approving' or
+        (r.status='approved' and r.approved_at>
+          clock_timestamp()-interval '30 days'))
+      and (
+        (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.old_name,NFKC)),
+          '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.old_handle=?)
+        or (r.status='approving' and
+          (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.proposed_name,NFKC)),
+            '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.proposed_handle=?))
+      ) limit 1`,[nameHash,generatedHandle,nameHash,generatedHandle])
+    if(hold.length)return {status:"name_taken" as const}
     // A legacy native Seller may predate DoğruAdres name claims. Read only
     // its name, with no cross-Organization details in the HTTP response.
     // A deleted Seller also keeps the name during the approved 30-day hold.
@@ -2722,6 +2740,280 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       seller_id:input.seller_id}
   }
 
+
+  /** Approval is a two-phase, fail-closed operation. Commit the intention
+   * BEFORE Mercur's separate workflow, so a process crash never releases the
+   * proposed name or the old URL for another Store. An uncertain operation
+   * remains 'approving' and cannot be retried automatically.
+   */
+  @InjectTransactionManager()
+  async personalClaimStoreRenameApproval(token:string,input:{
+    request_id:string;seller_id:string
+  },@MedusaContext() context:Context={}){
+    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const sessions=new IdentitySessions(db)
+    const staff=await sessions.staff(token,"store.approve","platform")
+    if(!staff)return null
+    const grant=await db.execute(`select g.id from da_platform_staff_grant g
+      where g.id=? and g.person_id=? and g.task='store.approve'
+        and g.resource='platform' and g.revoked_at is null
+        and (g.expires_at is null or g.expires_at>clock_timestamp())
+      for share of g`,[staff.grant_id,staff.person_id])
+    if(grant.length!==1||grant[0].id!==staff.grant_id)return null
+    const fresh=await sessions.staff(token,"store.approve","platform")
+    if(!fresh||fresh.grant_id!==staff.grant_id)return null
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
+      [input.seller_id])
+    const rows=await db.execute(`select r.organization_id,r.old_name,r.old_handle,
+      r.proposed_name,r.proposed_handle,r.risk_version
+      from da_store_rename_request r
+      join da_organization d on d.id=r.organization_id
+        and d.status='active' and d.deleted_at is null
+      join seller s on s.id=r.seller_id and s.deleted_at is null
+        and s.status='open' and s.approved_at is not null
+        and s.name=r.old_name and s.handle=r.old_handle
+      join da_organization_seller_ownership o on o.seller_id=r.seller_id
+        and o.organization_id=r.organization_id and o.revoked_at is null
+      join da_audit_event origin on origin.id=o.verification_audit_event_id
+        and origin.deleted_at is null and origin.organization_id=r.organization_id
+        and origin.target_id=r.seller_id and origin.module='dogruadres-access'
+      join da_audit_event e on e.id=r.source_audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.action='organization.store_rename_requested'
+        and e.resource='store-rename-request'
+        and e.organization_id=r.organization_id and e.target_id=r.seller_id
+        and e.actor_person_id=r.requested_by_person_id
+        and e.new_values->>'request_id'=r.id
+        and e.new_values->>'risk_version'=r.risk_version
+      where r.id=? and r.seller_id=? and r.status='pending_review'
+        and r.risk_acknowledged_at is not null
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id
+            and x.source_module='dogruadres-access' and x.deleted_at is null)
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=origin.id
+            and x.source_module='dogruadres-access' and x.deleted_at is null)
+      for update of r`,[input.request_id,input.seller_id])
+    if(rows.length!==1)return {status:"conflict" as const}
+    const r=rows[0]
+    if(r.risk_version!==STORE_RENAME_RISK_VERSION||
+       typeof r.proposed_name!=="string"||!validStoreName(r.proposed_name)||
+       typeof r.proposed_handle!=="string"||!validStoreHandle(r.proposed_handle)||
+       r.proposed_handle===r.old_handle||
+       !(await platformApprovedSellerIds(db,r.organization_id)).includes(input.seller_id))
+      return null
+    const hashes=await db.execute(`select
+      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
+        '[[:space:]]+',' ','g')),'UTF8')),'hex') new_hash,
+      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
+        '[[:space:]]+',' ','g')),'UTF8')),'hex') old_hash`,
+      [r.proposed_name,r.old_name])
+    if(hashes.length!==1||typeof hashes[0].new_hash!=="string"||
+       !/^[a-f0-9]{64}$/.test(hashes[0].new_hash)||
+       hashes[0].new_hash===hashes[0].old_hash)
+      return {status:"conflict" as const}
+    const hash=hashes[0].new_hash as string,oldHash=hashes[0].old_hash as string
+    if(typeof oldHash!=="string"||!/^[a-f0-9]{64}$/.test(oldHash))
+      throw new IdentityAccessDenied()
+    // Fail BEFORE any native Seller write if a historical/legacy Store lacks
+    // a verifiable original active claim or previous approved rename.
+    const originalClaim=await db.execute(`select id from da_store_application
+      where seller_id=? and store_name_hash=? and name_claim_released_at is null
+      limit 2`,[input.seller_id,oldHash])
+    const priorClaim=await db.execute(`select id from da_store_rename_request
+      where seller_id=? and id<>? and status='approved' and
+      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(proposed_name,NFKC)),
+        '[[:space:]]+',' ','g')),'UTF8')),'hex')=?
+      limit 2`,[input.seller_id,input.request_id,oldHash])
+    if(originalClaim.length>1||priorClaim.length>1||
+       !(originalClaim.length===1||priorClaim.length===1))
+      return {status:"conflict" as const}
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-name'),hashtext(?))",
+      [hash])
+    const application=await db.execute(`select 1 from da_store_application
+      where store_name_hash=?
+        and (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
+      limit 1`,[hash])
+    const native=await db.execute(`select 1 from seller where id<>?
+      and (deleted_at is null or deleted_at>clock_timestamp()-interval '30 days')
+      and (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(name,NFKC)),
+        '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or lower(handle)=?)
+      limit 1`,[input.seller_id,hash,r.proposed_handle])
+    // Approved old names/URLs hold exactly 30 calendar days. 'approving'
+    // protects BOTH old and new values without expiration after a crash.
+    const holds=await db.execute(`select 1 from da_store_rename_request h
+      where h.id<>? and
+        (h.status='approving' or
+         (h.status='approved' and h.approved_at>
+            clock_timestamp()-interval '30 days'))
+        and (
+          ((h.status='approving' or h.status='approved') and
+           (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(h.old_name,NFKC)),
+             '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or h.old_handle=?))
+          or (h.status='approving' and
+            (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(h.proposed_name,NFKC)),
+              '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or h.proposed_handle=?))
+        ) limit 1`,[input.request_id,hash,r.proposed_handle,hash,r.proposed_handle])
+    if(application.length||native.length||holds.length)
+      return {status:"unavailable" as const}
+    const already=await db.execute(`select 1 from da_store_rename_request
+      where seller_id=? and id<>? and status='approving' limit 1`,
+      [input.seller_id,input.request_id])
+    if(already.length)return {status:"conflict" as const}
+    const claimed=await db.execute(`update da_store_rename_request
+      set status='approving',updated_at=clock_timestamp()
+      where id=? and seller_id=? and status='pending_review'
+      returning id`,[input.request_id,input.seller_id])
+    if(claimed.length!==1)throw new IdentityAccessDenied()
+    return {status:"claimed" as const}
+  }
+
+  /** Hold the current Staff grant through the native Mercur workflow and
+   * final readback. This separately committed phase deliberately cannot start
+   * unless the preceding durable claim exists.
+   */
+  @InjectTransactionManager()
+  async personalWithStoreRenameApprovalStaffLock<T>(token:string,input:{
+    request_id:string;seller_id:string
+  },execute:(data:{name:string;handle:string},context:Context)=>Promise<T>,
+    @MedusaContext() context:Context={}):Promise<T|null>{
+    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       typeof execute!=="function")throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const sessions=new IdentitySessions(db)
+    const staff=await sessions.staff(token,"store.approve","platform")
+    if(!staff)return null
+    const grant=await db.execute(`select id from da_platform_staff_grant
+      where id=? and person_id=? and task='store.approve' and resource='platform'
+        and revoked_at is null
+        and (expires_at is null or expires_at>clock_timestamp())
+      for share`,[staff.grant_id,staff.person_id])
+    if(grant.length!==1||grant[0].id!==staff.grant_id)return null
+    const fresh=await sessions.staff(token,"store.approve","platform")
+    if(!fresh||fresh.grant_id!==staff.grant_id)return null
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
+      [input.seller_id])
+    const rows=await db.execute(`select r.organization_id,r.proposed_name,r.proposed_handle
+      from da_store_rename_request r
+      join da_organization d on d.id=r.organization_id
+        and d.status='active' and d.deleted_at is null
+      join seller s on s.id=r.seller_id and s.deleted_at is null
+        and s.status='open' and s.approved_at is not null
+        and s.name=r.old_name and s.handle=r.old_handle
+      where r.id=? and r.seller_id=? and r.status='approving'
+        and r.risk_version=? and r.risk_acknowledged_at is not null
+      for share of r`,[input.request_id,input.seller_id,STORE_RENAME_RISK_VERSION])
+    if(rows.length!==1||
+       !(await platformApprovedSellerIds(db,rows[0].organization_id)).includes(input.seller_id)||
+       !validStoreName(rows[0].proposed_name)||
+       !validStoreHandle(rows[0].proposed_handle))return null
+    return execute({name:rows[0].proposed_name as string,
+      handle:rows[0].proposed_handle as string},context)
+  }
+
+  /** Finalize only after the native Seller already has BOTH approved values.
+   * If finalization fails, the durable 'approving' claim remains locked rather
+   * than silently releasing the vacated name, URL or proposed new name.
+   */
+  @InjectTransactionManager()
+  async personalRecordStoreRenameApproval(token:string,input:{
+    request_id:string;seller_id:string
+  },@MedusaContext() context:Context={}){
+    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const sessions=new IdentitySessions(db)
+    const staff=await sessions.staff(token,"store.approve","platform")
+    if(!staff)return null
+    const grant=await db.execute(`select id from da_platform_staff_grant
+      where id=? and person_id=? and task='store.approve' and resource='platform'
+        and revoked_at is null and (expires_at is null or expires_at>clock_timestamp())
+      for share`,[staff.grant_id,staff.person_id])
+    if(grant.length!==1||grant[0].id!==staff.grant_id)return null
+    const rows=await db.execute(`select r.organization_id,r.old_name,r.old_handle,
+      r.proposed_name,r.proposed_handle
+      from da_store_rename_request r
+      join da_organization d on d.id=r.organization_id
+        and d.status='active' and d.deleted_at is null
+      join seller s on s.id=r.seller_id and s.deleted_at is null
+        and s.status='open' and s.approved_at is not null
+        and s.name=r.proposed_name and s.handle=r.proposed_handle
+      join da_audit_event e on e.id=r.source_audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.action='organization.store_rename_requested'
+        and e.organization_id=r.organization_id and e.target_id=r.seller_id
+        and e.actor_person_id=r.requested_by_person_id
+      where r.id=? and r.seller_id=? and r.status='approving'
+        and r.risk_version=? and r.risk_acknowledged_at is not null
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id
+            and x.source_module='dogruadres-access' and x.deleted_at is null)
+      for update of r`,[input.request_id,input.seller_id,STORE_RENAME_RISK_VERSION])
+    if(rows.length!==1)return {status:"conflict" as const}
+    const r=rows[0],org=r.organization_id as string
+    if(!(await platformApprovedSellerIds(db,org)).includes(input.seller_id))
+      return null
+    const hashes=await db.execute(`select
+      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
+        '[[:space:]]+',' ','g')),'UTF8')),'hex') as old_hash`,[r.old_name])
+    const oldHash=hashes[0]?.old_hash
+    if(hashes.length!==1||typeof oldHash!=="string"||
+       !/^[a-f0-9]{64}$/.test(oldHash))throw new IdentityAccessDenied()
+    // Do not rewrite the original application name, ID or fingerprint:
+    // only its time-bounded *claim* can expire. Subsequent renames rely
+    // on the preceding approved request as their preserved name history.
+    const original=await db.execute(`select id from da_store_application
+      where seller_id=? and store_name_hash=? and name_claim_released_at is null
+      for update`,[input.seller_id,oldHash])
+    if(original.length>1)throw new IdentityAccessDenied()
+    if(!original.length){
+      const previous=await db.execute(`select id from da_store_rename_request
+        where seller_id=? and id<>? and status='approved' and
+        encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(proposed_name,NFKC)),
+          '[[:space:]]+',' ','g')),'UTF8')),'hex')=?
+        limit 2`,[input.seller_id,input.request_id,oldHash])
+      if(previous.length!==1)return null
+    }
+    const approved=await db.execute(`update da_store_rename_request
+      set status='approved',approved_at=clock_timestamp(),updated_at=clock_timestamp()
+      where id=? and seller_id=? and status='approving'
+      returning approved_at`,[input.request_id,input.seller_id])
+    if(approved.length!==1||!approved[0].approved_at)throw new IdentityAccessDenied()
+    if(original.length){
+      // PostgreSQL retains sub-millisecond timestamp precision that a JS
+      // Date round-trip can lose. Derive the exact 30-day boundary entirely
+      // from the persisted approval timestamp in this same SQL transaction.
+      const released=await db.execute(`update da_store_application
+        set name_claim_released_at=(
+          select approved_at + interval '30 days' from da_store_rename_request
+          where id=? and seller_id=? and status='approved'),
+          updated_at=clock_timestamp()
+        where id=? and seller_id=? and name_claim_released_at is null
+        returning id`,[input.request_id,input.seller_id,original[0].id,input.seller_id])
+      if(released.length!==1)throw new IdentityAccessDenied()
+    }
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:staff.person_id,actor_type:staff.actor_type,
+      actor_id:staff.actor_id,role_context:"platform_staff",
+      organization_id:org,
+      action:"organization.store_rename_approved",
+      module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-rename-request",target_id:input.seller_id,
+      new_values:{request_id:input.request_id,status:"approved",
+        staff_grant_id:staff.grant_id},
+      occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    return {status:"approved" as const,request_id:input.request_id,
+      seller_id:input.seller_id}
+  }
+
   /** A real Owner may submit a review request, NOT mutate Seller.name/handle.
    * No name is claimed here. Staff approval must recheck every uniqueness and
    * ownership invariant immediately before a separate native update workflow.
@@ -2780,7 +3072,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       return {status:row.status as string,request_id:input.request_id,replayed:true}
     }
     const pending=await db.execute(`select id from da_store_rename_request
-      where seller_id=? and status='pending_review' limit 1`,[input.seller_id])
+      where seller_id=? and status in ('pending_review','approving') limit 1`,[input.seller_id])
     if(pending.length)return {status:"conflict" as const}
     const canonical=await db.execute(`select
       encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
@@ -2797,14 +3089,28 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Optimistic preflight only. It never reserves a name and the future staff
     // approval MUST repeat every check under its own mutually exclusive lock.
     const conflict=await db.execute(`select 1 from da_store_application
-      where store_name_hash=? and (seller_id is null or seller_id<>?) limit 1`,
+      where store_name_hash=? and
+        (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
+        and (seller_id is null or seller_id<>?) limit 1`,
       [hash,input.seller_id])
     const nativeConflict=await db.execute(`select 1 from seller where id<>?
       and (deleted_at is null or deleted_at>clock_timestamp()-interval '30 days')
       and (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(name,NFKC)),
         '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or lower(handle)=?)
       limit 1`,[input.seller_id,hash,input.handle])
-    if(conflict.length||nativeConflict.length)return {status:"unavailable" as const}
+    const held=await db.execute(`select 1 from da_store_rename_request r
+      where (r.status='approving' or
+        (r.status='approved' and r.approved_at>
+          clock_timestamp()-interval '30 days'))
+      and (
+        (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.old_name,NFKC)),
+          '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.old_handle=?)
+        or (r.status='approving' and
+          (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.proposed_name,NFKC)),
+            '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.proposed_handle=?))
+      ) limit 1`,[hash,input.handle,hash,input.handle])
+    if(conflict.length||nativeConflict.length||held.length)
+      return {status:"unavailable" as const}
     const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:identity.person_id,actor_type:identity.actor_type,actor_id:identity.actor_id,
       role_context:"owner",organization_id:input.organization_id,

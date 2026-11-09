@@ -1,5 +1,8 @@
 import {GET,POST} from "../platform/store-renames/route"
 import {access,csrf,enabled,sessionToken} from "../security"
+import {updateSellersWorkflow} from "@mercurjs/core/workflows"
+
+jest.mock("@mercurjs/core/workflows",()=>({updateSellersWorkflow:jest.fn()}))
 
 jest.mock("../security",()=>({
   access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
@@ -22,6 +25,15 @@ describe("B22 guarded platform review of Store rename requests",()=>{
       }),
       personalRejectStoreRenameRequest:jest.fn().mockResolvedValue({
         status:"rejected",request_id:item.request_id,seller_id:item.seller_id
+      }),
+      personalClaimStoreRenameApproval:jest.fn().mockResolvedValue({status:"claimed"}),
+      personalWithStoreRenameApprovalStaffLock:jest.fn().mockImplementation(
+        async (_token:any,_target:any,cb:any)=>cb({
+          name:item.proposed_name,handle:item.proposed_handle
+        },{transactionManager:{}})
+      ),
+      personalRecordStoreRenameApproval:jest.fn().mockResolvedValue({
+        status:"approved",request_id:item.request_id,seller_id:item.seller_id
       })
     }
     ;(access as jest.Mock).mockReturnValue(service)
@@ -127,4 +139,91 @@ describe("B22 guarded platform review of Store rename requests",()=>{
       message:"Outcome uncertain; reread before retrying"
     })
   })
+  const approvalInput=()=>({
+    action:"approve",request_id:item.request_id,seller_id:item.seller_id
+  })
+  const nativeSeller=(name:string,handle:string)=>({
+    id:item.seller_id,name,handle,status:"open",approved_at:new Date()
+  })
+  const setupApproval=()=>{
+    req.body=approvalInput()
+    const listSellers=jest.fn()
+      .mockResolvedValueOnce([nativeSeller(item.old_name,item.old_handle)])
+      .mockResolvedValueOnce([nativeSeller(item.proposed_name,item.proposed_handle)])
+    req.scope={resolve:jest.fn().mockReturnValue({listSellers})}
+    const run=jest.fn().mockResolvedValue({result:[{}]})
+    ;(updateSellersWorkflow as unknown as jest.Mock).mockReturnValue({run})
+    return {listSellers,run}
+  }
+  it("approves only a durably claimed change through native Mercur workflow",async()=>{
+    const {run}=setupApproval()
+    await POST(req,res)
+    expect(service.personalClaimStoreRenameApproval)
+      .toHaveBeenCalledWith("opaque-staff",{
+        request_id:item.request_id,seller_id:item.seller_id
+      })
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(run).toHaveBeenCalledWith({input:{
+      selector:{id:item.seller_id},
+      update:{name:item.proposed_name,handle:item.proposed_handle}
+    }})
+    expect(service.personalRecordStoreRenameApproval).toHaveBeenCalledTimes(1)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({
+      request_id:item.request_id,seller_id:item.seller_id,status:"approved"
+    })
+  })
+  it("rejects unclaimed or contested rename before native changes",async()=>{
+    const {run}=setupApproval()
+    for(const outcome of [null,{status:"conflict"},{status:"unavailable"}]){
+      service.personalClaimStoreRenameApproval.mockResolvedValueOnce(outcome)
+      await POST(req,res)
+    }
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(run).not.toHaveBeenCalled()
+    expect(service.personalRecordStoreRenameApproval).not.toHaveBeenCalled()
+  })
+  it("blocks approval on CSRF or forged native Seller context",async()=>{
+    const {run}=setupApproval()
+    ;(csrf as jest.Mock).mockResolvedValueOnce(false)
+    await POST(req,res)
+    req.headers["x-seller-id"]="sel_forged"
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(run).not.toHaveBeenCalled()
+  })
+  it("blocks native workflow if fresh Staff grant vanished after claim",async()=>{
+    const {run}=setupApproval()
+    service.personalWithStoreRenameApprovalStaffLock.mockResolvedValue(null)
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(503)
+    expect(run).not.toHaveBeenCalled()
+  })
+  it("never finalizes if native readback differs from approved name and URL",async()=>{
+    const {run,listSellers}=setupApproval()
+    listSellers.mockReset()
+      .mockResolvedValueOnce([nativeSeller(item.old_name,item.old_handle)])
+      .mockResolvedValueOnce([nativeSeller(item.proposed_name,item.old_handle)])
+    await POST(req,res)
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(res.status).toHaveBeenCalledWith(503)
+    expect(service.personalRecordStoreRenameApproval).not.toHaveBeenCalled()
+  })
+  it("fails closed after uncertain native update without automatic retry",async()=>{
+    const {run}=setupApproval()
+    run.mockRejectedValue(new Error("native provider failed"))
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(503)
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(service.personalRecordStoreRenameApproval).not.toHaveBeenCalled()
+  })
+  it("rejects extra fields in approval even though rejection accepts a reason",async()=>{
+    setupApproval()
+    req.body={...approvalInput(),reason:"not allowed for approval"}
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(service.personalClaimStoreRenameApproval).not.toHaveBeenCalled()
+  })
+
 })
