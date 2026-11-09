@@ -1153,6 +1153,152 @@ async function verifyPlatformStoreRenameApproval(
 
 
 
+
+/** The currently approved but suspended native Seller can receive a distinct
+ * Owner-requested, Staff-approved name without being silently activated.
+ * A separate, explicit Staff unsuspend is required; all operations use real
+ * Chrome/HTTPS/PG16 against the disposable task-owned Store.
+ */
+async function verifySuspendedStoreRenameBeforeReopen(
+  owner:B06Chrome,reviewer:B06Chrome,organizationId:string,
+  organizationName:string,sellerId:string,rand:string,
+  container:any,q:(sql:string,params?:any[])=>Promise<any[]>
+):Promise<void>{
+  const before=(await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [sellerId]))[0]
+  assert.equal(before.status,"open")
+  assert.ok(before.approved_at)
+  const name="B22 Askıdan Sonra "+rand
+  const handle=("b22-aski-"+rand).toLowerCase().replace(/[^a-z0-9-]/g,"")
+  await suspendSellerWorkflow(container).run({input:{
+    seller_id:sellerId,reason:"B22 task-only suspended name change"
+  }})
+  assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
+    "suspended")
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible'")
+  await owner.select(organizationName,"owner")
+  await owner.wait("!document.getElementById('store-rename-panel').hidden && "+
+    "Array.from(document.getElementById('store-rename-form').elements.namedItem('seller_id').options).some(o=>o.value==="+
+    JSON.stringify(sellerId)+") && !document.querySelector('#store-rename-form button[type=submit]').disabled")
+  const requested=await owner.callFunction(
+    "async function(id,name,handle){const f=document.getElementById('store-rename-form');"+
+    "f.elements.namedItem('seller_id').value=id;"+
+    "f.elements.namedItem('name').value=name;"+
+    "f.elements.namedItem('handle').value=handle;"+
+    "f.elements.namedItem('risk_acknowledged').checked=true;f.requestSubmit();return true}",
+    sellerId,name,handle)
+  assert.equal(requested,true)
+  await owner.wait("Array.from(document.querySelectorAll('#store-rename-history p')).some("+
+    "p=>p.textContent.includes("+JSON.stringify(name)+") && p.textContent.includes('Platform incelemesinde'))")
+  // The real Owner form generates the opaque id in the browser. Query
+  // the exact new, source-owned request rather than fabricating its id.
+  const pending=await q(`select id,status from da_store_rename_request
+    where organization_id=$1 and seller_id=$2 and proposed_name=$3
+      and proposed_handle=$4 and status='pending_review'`,
+    [organizationId,sellerId,name,handle])
+  assert.equal(pending.length,1)
+  assert.match(pending[0].id,/^dasrn_[a-f0-9]{32}$/)
+  assert.equal(pending[0].status,"pending_review")
+  const requestId=pending[0].id as string
+  const afterRequest=(await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [sellerId]))[0]
+  assert.equal(afterRequest.status,"suspended")
+  assert.equal(afterRequest.name,before.name)
+  assert.equal(afterRequest.handle,before.handle)
+  const decision={action:"approve",request_id:requestId,seller_id:sellerId}
+  const unauthorized=await owner.callFunction(
+    "async function(payload){const s=await(await fetch('/personal/session')).json();"+
+    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+    "body:payload});return r.status}",JSON.stringify(decision))
+  assert.equal(unauthorized,403,"An Owner cannot approve even a suspended Store rename")
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  const invalidCsrf=await reviewer.callFunction(
+    "async function(payload){const r=await fetch('/personal/platform/store-renames',"+
+    "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':'invalid'},"+
+    "body:payload});return r.status}",JSON.stringify(decision))
+  assert.equal(invalidCsrf,403)
+  const forged=await reviewer.callFunction(
+    "async function(payload){const s=await(await fetch('/personal/session')).json();"+
+    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+    "body:payload});return r.status}",JSON.stringify({...decision,organization_id:organizationId}))
+  assert.equal(forged,400,"Staff request may not fabricate Organization authority")
+  await reviewer.click("#store-rename-review-refresh")
+  await reviewer.wait("Array.from(document.querySelectorAll('#store-rename-review-list > div')).some("+
+    "e=>e.textContent.includes("+JSON.stringify(name)+") && e.textContent.includes('Askıda'))")
+  const queue=await reviewer.callFunction(
+    "async function(id){const r=await fetch('/personal/platform/store-renames?page=0');"+
+    "const b=await r.json();return {status:r.status,row:b.pending?.find(x=>x.request_id===id)}}",
+    requestId)
+  assert.equal(queue.status,200)
+  assert.equal(queue.row?.seller_status,"suspended",
+    "Private Staff queue must identify that approval cannot open the Store")
+  const clicked=await reviewer.callFunction(
+    "function(name){const row=Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
+    ".find(e=>e.textContent.includes(name));const b=Array.from(row?.querySelectorAll('button')??[])"+
+    ".find(x=>x.textContent.includes('Yeni ad ve bağlantıyı onayla'));"+
+    "if(!b||b.disabled)return false;const original=window.confirm;window.confirm=()=>true;"+
+    "try{b.click()}finally{window.confirm=original}return true}",name)
+  assert.equal(clicked,true)
+  await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('Mağaza hâlâ askıda')")
+  const changed=(await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [sellerId]))[0]
+  assert.equal(changed.id,before.id)
+  assert.equal(changed.name,name)
+  assert.equal(changed.handle,handle)
+  assert.equal(changed.status,"suspended","Approval must never silently unsuspend")
+  assert.equal(String(changed.approved_at),String(before.approved_at))
+  const proof=await q(`select r.status,r.approved_at,e.id audit_id,x.id outbox_id
+    from da_store_rename_request r
+    join da_audit_event e on e.organization_id=r.organization_id
+      and e.target_id=r.seller_id and e.action='organization.store_rename_approved'
+      and e.new_values->>'request_id'=r.id
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+    where r.id=$1`,[requestId])
+  assert.equal(proof.length,1)
+  assert.equal(proof[0].status,"approved")
+  assert.ok(proof[0].approved_at&&proof[0].audit_id&&proof[0].outbox_id)
+  assert.equal(await reviewer.callFunction(
+    "async function(payload){const s=await(await fetch('/personal/session')).json();"+
+    "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+    "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+    "body:payload});return r.status}",JSON.stringify(decision)),409,
+    "The same approval cannot be replayed")
+  const application=(await q("select id from da_store_application where seller_id=$1",[sellerId]))[0]
+  assert.ok(application?.id)
+  const openAction={action:"unsuspend",application_id:application.id,seller_id:sellerId}
+  const ownerOpen=await owner.callFunction(
+    "async function(payload){const s=await(await fetch('/personal/session')).json();"+
+    "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+    "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+    "body:payload});return r.status}",JSON.stringify(openAction))
+  assert.equal(ownerOpen,403,"Owner still cannot self-approve an open Store")
+  const staffOpened=await reviewer.callFunction(
+    "async function(payload){const s=await(await fetch('/personal/session')).json();"+
+    "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+    "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+    "body:payload});return {status:r.status,body:await r.json()}}",
+    JSON.stringify(openAction))
+  assert.equal(staffOpened.status,200,"A separate authorized Staff decision opens the Seller")
+  assert.equal(staffOpened.body?.status,"open")
+  const reopened=(await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [sellerId]))[0]
+  assert.equal(reopened.id,before.id)
+  assert.equal(reopened.name,name)
+  assert.equal(reopened.handle,handle)
+  assert.equal(reopened.status,"open")
+  assert.equal(String(reopened.approved_at),String(before.approved_at))
+  assert.equal((await reviewer.callFunction(
+    "async function(payload){const s=await(await fetch('/personal/session')).json();"+
+    "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+    "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+    "body:payload});return r.status}",JSON.stringify(openAction))),409)
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: suspended Store Owner requests new name, Staff approves unchanged Store ID and suspended status with one audit/outbox, explicit later Staff unsuspend succeeds; Owner/CSRF/forged/replay denied\n")
+}
+
 /** Disposable real Staff/Owner UI + PostgreSQL: only a previously approved
  * suspended Store retaining its verified name/handle may be reopened. */
 async function verifyStaffReopensSuspendedStore(
@@ -1574,8 +1720,13 @@ async function verifyRealNextStorefrontRenameUrls(
 ):Promise<void>{
   const rows=await q("select old_name,old_handle,proposed_name,proposed_handle "+
     "from da_store_rename_request where seller_id=$1 and status='approved' "+
-    "order by approved_at desc limit 2",[storeId])
-  assert.equal(rows.length,1,"One approved B22 test rename is required")
+    "order by approved_at desc limit 3",[storeId])
+  assert.equal(rows.length,2,
+    "One earlier approved rename and one subsequent suspended rename must remain historical")
+  assert.equal(rows[0].old_name,rows[1].proposed_name,
+    "The newer name must be connected to the immutable preceding name history")
+  assert.equal(rows[0].old_handle,rows[1].proposed_handle,
+    "The newer URL must descend from the previous approved Store URL")
   const rename=rows[0]
   const original=(await container.resolve("seller").listSellers({id:storeId}))[0]
   assert.equal(original.id,storeId)
@@ -6514,6 +6665,8 @@ export default async function({container}:any){
       browser,reviewer,sellerGamma.id,gammaSellerId,q)
     await verifyStaffReopensSuspendedStore(
       browser,reviewer,sellerGamma.id,sellerGamma.name,gammaSellerId,container,q)
+    await verifySuspendedStoreRenameBeforeReopen(
+      browser,reviewer,sellerGamma.id,sellerGamma.name,gammaSellerId,rand,container,q)
     await browser.select(organizations[0].name,"owner")
     const gammaSku="B22-GAMMA-BETA-"+rand
     const {result:[gammaOffer]}=await createOffersWorkflow(container).run({

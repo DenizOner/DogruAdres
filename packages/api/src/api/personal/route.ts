@@ -1801,6 +1801,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
            !/^sel_[A-Za-z0-9_-]+$/.test(row?.seller_id)||
            !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row?.organization_id)||
            typeof row?.organization_name!=='string'||
+           !['open','suspended'].includes(row?.seller_status)||
            typeof row?.old_name!=='string'||typeof row?.old_handle!=='string'||
            typeof row?.proposed_name!=='string'||typeof row?.proposed_handle!=='string'||
            row.old_name.length>300||row.proposed_name.length>300))
@@ -1813,7 +1814,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         'Bu sayfada inceleme bekleyen ad değişikliği yok.';
       for(const entry of data.pending){
         const line=document.createElement('div'),summary=document.createElement('p');
-        summary.textContent=entry.organization_name+' — '+entry.old_name+
+        summary.textContent=entry.organization_name+
+          (entry.seller_status==='suspended'?' — Askıda (isim onayı mağazayı açmaz)':'')+' — '+entry.old_name+
           ' / '+entry.old_handle+' → '+entry.proposed_name+
           ' / '+entry.proposed_handle;
         const reason=document.createElement('textarea');
@@ -1864,7 +1866,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         approve.setAttribute('aria-label',entry.organization_name+
           ' mağazasının ad ve bağlantı değişikliğini onayla');
         approve.onclick=async()=>{
-          if(!confirm('Bu onay mağazanın adını ve URL bağlantısını birlikte değiştirir. Eski bağlantı yeni adrese yönlendirilmez. Onaylıyor musunuz?'))return;
+          if(!confirm(entry.seller_status==='suspended'?
+            'Yalnız ad ve bağlantı değişecek. Mağaza askıda kalacak; ayrı yeniden açma kararı gerekir. Eski bağlantı yönlendirilmez. Onaylıyor musunuz?':
+            'Bu onay mağazanın adını ve URL bağlantısını birlikte değiştirir. Eski bağlantı yeni adrese yönlendirilmez. Onaylıyor musunuz?'))return;
           approve.disabled=true;reject.disabled=true;
           message.textContent='Mağaza adı ve bağlantısı onaylanıyor…';
           try{
@@ -1877,7 +1881,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                answer.seller_id!==entry.seller_id){
               const err=Error('Onay yanıtı doğrulanamadı');err.uncertain=true;throw err;
             }
-            message.textContent='Mağazanın yeni adı ve bağlantısı etkinleşti. Eski bağlantıya yönlendirme yok.';
+            message.textContent=entry.seller_status==='suspended'?
+              'Yeni ad ve bağlantı onaylandı. Mağaza hâlâ askıda; ayrıca yeniden açma kararı gerekir.':
+              'Mağazanın yeni adı ve bağlantısı etkinleşti. Eski bağlantıya yönlendirme yok.';
             void refreshStoreRenameReviews(true);
           }catch(error){
             if(seq!==renameReviewRequest||epoch!==viewEpoch||document.hidden)return;
@@ -2797,12 +2803,45 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         renameForm.elements.namedItem('seller_id'):null;
       if(select&&typeof select.replaceChildren==='function'){
         select.replaceChildren();
-        for(const store of data.stores){
-          const opt=document.createElement('option');opt.value=store.id;
-          opt.textContent=store.name;select.append(opt);
+        el('store-rename-panel').hidden=true;
+        if(selectedStoreOwner){
+          // A rename-only HTTP read may be slower than the ordinary Store
+          // list or may fail. Never block open Store rendering or re-open
+          // stale private values after a different Organization is selected.
+          void (async()=>{
+            try{
+              const renameData=await api('organization-stores?organization='+
+                encodeURIComponent(org)+'&purpose=rename');
+              if(request!==organizationRequest||seq!==storeRequest||
+                 currentOrg!==org||document.hidden||!selectedStoreOwner)return;
+              if(renameData.organization_id!==org||
+                 !Array.isArray(renameData.stores)||renameData.stores.length>50||
+                 renameData.stores.some(s=>typeof s?.id!=='string'||
+                   !/^sel_[A-Za-z0-9_-]+$/.test(s.id)||
+                   typeof s?.name!=='string'||
+                   !['open','suspended'].includes(s?.status))||
+                 new Set(renameData.stores.map(s=>s.id)).size!==renameData.stores.length)
+                throw Error('Name-management Store response invalid');
+              select.replaceChildren();
+              for(const store of renameData.stores){
+                const opt=document.createElement('option');
+                opt.value=store.id;
+                opt.textContent=store.name+
+                  (store.status==='suspended'?' — askıda':'');
+                select.append(opt);
+              }
+              el('store-rename-panel').hidden=renameData.stores.length===0;
+              if(!el('store-rename-panel').hidden)void refreshStoreRename(org,request);
+            }catch{
+              if(request!==organizationRequest||seq!==storeRequest||
+                 currentOrg!==org||document.hidden)return;
+              select.replaceChildren();
+              el('store-rename-panel').hidden=true;
+              el('store-rename-status').textContent=
+                'Mağaza adı yönetimi doğrulanamadı. Yeniden deneyin.';
+            }
+          })();
         }
-        el('store-rename-panel').hidden=!selectedStoreOwner||data.stores.length===0;
-        if(!el('store-rename-panel').hidden)void refreshStoreRename(org,request);
       }
     }catch(e){
       if(request!==organizationRequest||seq!==storeRequest||currentOrg!==org)return;
