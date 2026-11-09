@@ -10,7 +10,9 @@ on:
         options: [b02, b04, b04-ui, b05-ui, b06-ui, b07-ui, b08-ui]
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
+    # Draft PRs already run on opened; new head commits run on synchronize.
+    # A draft-to-ready transition alone must not rerun unchanged test inputs.
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
