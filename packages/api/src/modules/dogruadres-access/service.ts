@@ -3547,6 +3547,30 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       seller_id:input.seller_id}
   }
 
+  /** Private list scope for Owner Store-name management ONLY. Unlike the
+   * ordinary commercial Store picker it may include approved suspended
+   * Sellers, but never grants selling, products.edit or platform authority.
+   * Native membership and status are independently verified by the GET
+   * adapter; no native Seller IDs are inferred from a browser-selected URL.
+   */
+  @InjectTransactionManager()
+  async personalStoreRenameCandidateIds(token:string,organizationId:string,
+    @MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const session=new IdentitySessions(db)
+    const current=await session.current(token,true,false)
+    if(!current)return null
+    const scope=await session.organizations(token,organizationId,false)
+    if(!scope||scope.person_id!==current.person_id||
+       scope.organizations.length!==1||scope.organizations[0].role!=="owner"||
+       !await isCurrentProtectedOwner(db,current.person_id,organizationId))return null
+    const sellerIds=await platformApprovedSellerIds(db,organizationId)
+    return {person_id:current.person_id,organization_id:organizationId,
+      seller_ids:sellerIds}
+  }
+
   /** Private Owner readback for uncertain requests. No native rename or
    * approval outcome is inferred from a pending request.
    */
