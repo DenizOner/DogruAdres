@@ -1257,6 +1257,13 @@ async function verifyStaffReopensSuspendedStore(
     await owner.select(organizationName,"owner")
     await owner.wait("document.getElementById('org-stores').textContent.includes("+
       JSON.stringify(before.name)+")")
+    const notification=await owner.callFunction(
+      "async function(org){const r=await fetch('/personal/notifications?organization='+encodeURIComponent(org));return {status:r.status,body:await r.json()}}",
+      organizationId)
+    assert.equal(notification.status,200,"The current protected Owner may read private reactivation notice")
+    assert.ok(notification.body.notifications.some((n:any)=>
+      n.title==="Mağaza yeniden açıldı" && n.context===organizationName),
+      "The native Store reactivation audit receipt must appear in the actual Owner notification UI")
     process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Staff safely unsuspends same approved Store via real UI; current name/handle/ID preserved, paused new applications allowed, forged/CSRF/Owner/name-conflict/replay denied, one durable audit/outbox and Owner readback\\n")
   }finally{
     await q("update da_organization set store_application_enabled=true where id=$1",
