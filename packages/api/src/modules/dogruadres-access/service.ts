@@ -7,6 +7,7 @@ import {
   MedusaContext,
   MedusaService,
   MedusaError,
+  toHandle,
 } from "@medusajs/framework/utils"
 import type { Context } from "@medusajs/framework/types"
 import { canManageMembership, isOwnerDemotionAllowed, deriveInvitationToken, hashInvitationToken, invitationTokenMatches, normalizeEmail } from "./security"
@@ -2302,8 +2303,25 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     await db.execute(`select pg_advisory_xact_lock(
       hashtext('b22-global-store-name'),hashtext(?))`,[nameHash])
     const reserved=await db.execute(`select id from da_store_application
-      where store_name_hash=? limit 1`,[nameHash])
+      where store_name_hash=? and
+        (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
+      limit 1`,[nameHash])
     if(reserved.length)return {status:"name_taken" as const}
+    // Mercur derives the handle from the new Seller name. Reserve BOTH the
+    // original URL and any other Store's in-flight proposed URL for 30 days.
+    const generatedHandle=toHandle(input.name)
+    const hold=await db.execute(`select 1 from da_store_rename_request r
+      where (r.status='approving' or
+        (r.status='approved' and r.approved_at>
+          clock_timestamp()-interval '30 days'))
+      and (
+        (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.old_name,NFKC)),
+          '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.old_handle=?)
+        or (r.status='approving' and
+          (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.proposed_name,NFKC)),
+            '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.proposed_handle=?))
+      ) limit 1`,[nameHash,generatedHandle,nameHash,generatedHandle])
+    if(hold.length)return {status:"name_taken" as const}
     // A legacy native Seller may predate DoğruAdres name claims. Read only
     // its name, with no cross-Organization details in the HTTP response.
     // A deleted Seller also keeps the name during the approved 30-day hold.
@@ -3034,7 +3052,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       return {status:row.status as string,request_id:input.request_id,replayed:true}
     }
     const pending=await db.execute(`select id from da_store_rename_request
-      where seller_id=? and status='pending_review' limit 1`,[input.seller_id])
+      where seller_id=? and status in ('pending_review','approving') limit 1`,[input.seller_id])
     if(pending.length)return {status:"conflict" as const}
     const canonical=await db.execute(`select
       encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
@@ -3051,14 +3069,28 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Optimistic preflight only. It never reserves a name and the future staff
     // approval MUST repeat every check under its own mutually exclusive lock.
     const conflict=await db.execute(`select 1 from da_store_application
-      where store_name_hash=? and (seller_id is null or seller_id<>?) limit 1`,
+      where store_name_hash=? and
+        (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
+        and (seller_id is null or seller_id<>?) limit 1`,
       [hash,input.seller_id])
     const nativeConflict=await db.execute(`select 1 from seller where id<>?
       and (deleted_at is null or deleted_at>clock_timestamp()-interval '30 days')
       and (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(name,NFKC)),
         '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or lower(handle)=?)
       limit 1`,[input.seller_id,hash,input.handle])
-    if(conflict.length||nativeConflict.length)return {status:"unavailable" as const}
+    const held=await db.execute(`select 1 from da_store_rename_request r
+      where (r.status='approving' or
+        (r.status='approved' and r.approved_at>
+          clock_timestamp()-interval '30 days'))
+      and (
+        (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.old_name,NFKC)),
+          '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.old_handle=?)
+        or (r.status='approving' and
+          (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.proposed_name,NFKC)),
+            '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.proposed_handle=?))
+      ) limit 1`,[hash,input.handle,hash,input.handle])
+    if(conflict.length||nativeConflict.length||held.length)
+      return {status:"unavailable" as const}
     const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:identity.person_id,actor_type:identity.actor_type,actor_id:identity.actor_id,
       role_context:"owner",organization_id:input.organization_id,
