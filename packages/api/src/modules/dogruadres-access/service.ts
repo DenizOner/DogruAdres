@@ -2614,6 +2614,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
          !validStoreHandle(row.proposed_handle))||
        new Set(rows.map(row=>row.request_id)).size!==rows.length)
       throw new IdentityAccessDenied()
+    // Origin alone is never authority: the same canonical ownership proof
+    // (including its original application/association event and outbox)
+    // must still validate for EACH Store before returning private names.
+    for(const row of rows){
+      if(!(await platformApprovedSellerIds(db,row.organization_id)).includes(row.seller_id))
+        throw new IdentityAccessDenied()
+    }
     // A final grant recheck prevents a revoked/replaced staff principal from
     // receiving even private names if the read overlapped revocation.
     const fresh=await new IdentitySessions(db).staff(token,"store.approve","platform")
