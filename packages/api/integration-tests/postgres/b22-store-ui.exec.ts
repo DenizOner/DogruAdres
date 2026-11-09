@@ -1082,6 +1082,119 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   process.stdout.write("PASS B22 Chrome/PG16: protected platform Staff reasoned pending Seller rejection during company pause, native terminated without approval, private Owner status and redacted notice, one audit/outbox, Owner/CSRF/short reason/replay denied\n")
 }
 
+/** Separate test helper avoids TypeScript's huge-main control-flow limit.
+ * Both HTTPS requests use the existing real Owner session and isolated PG16.
+ */
+async function verifyConcurrentCrossOrganizationStoreNames(
+  browser:B06Chrome,alphaOrgId:string,gammaOrgId:string,stamp:string,
+  q:(sql:string,params?:unknown[])=>Promise<any[]>
+):Promise<void>{
+  // Two legitimate Owner-controlled legal Organizations race one unused name
+  // using genuinely concurrent first-party HTTPS POSTs and distinct keys.
+  const raceName="B22 crossorg name "+stamp
+  const raceApplications=[
+    {organization_id:alphaOrgId,
+      application_id:"daapp_"+randomBytes(16).toString("hex"),
+      name:raceName,email:"b22-race-alpha-"+stamp+"@example.invalid",
+      currency_code:"try"},
+    {organization_id:gammaOrgId,
+      application_id:"daapp_"+randomBytes(16).toString("hex"),
+      name:raceName.toUpperCase(),email:"b22-race-gamma-"+stamp+"@example.invalid",
+      currency_code:"try"}
+  ]
+  const raceOutcomes=await browser.eval(`(async()=>{
+    const session=await(await fetch('/personal/session')).json()
+    return Promise.all(${JSON.stringify(raceApplications)}.map(async input=>{
+      const response=await fetch('/personal/store-applications',{
+        method:'POST',headers:{'content-type':'application/json',
+          'x-csrf-token':session.csrf_token},
+        body:JSON.stringify(input)
+      })
+      const body=await response.json()
+      return {status:response.status,
+        seller_id:typeof body.seller_id==='string'?body.seller_id:null}
+    }))
+  })()`)
+  assert.deepEqual(raceOutcomes.map((x:any)=>x.status).sort((a:number,b:number)=>a-b),
+    [201,409],"Only one competing cross-Organization POST may win")
+  const winnerIndex=raceOutcomes.findIndex((x:any)=>x.status===201)
+  assert.ok(winnerIndex===0||winnerIndex===1)
+  const raceWinner=raceApplications[winnerIndex]
+  const raceLoser=raceApplications[1-winnerIndex]
+  const raceSellerId=raceOutcomes[winnerIndex].seller_id as string
+  assert.match(raceSellerId,/^sel_[A-Za-z0-9_-]+$/)
+  assert.equal(raceOutcomes[1-winnerIndex].seller_id,null)
+  const raceClaims=await q(`select id,organization_id,status,seller_id
+    from da_store_application where id=any($1::text[])`,
+    [raceApplications.map(x=>x.application_id)])
+  assert.equal(raceClaims.length,1,"Losing request cannot reserve a second application")
+  assert.deepEqual(raceClaims[0],{
+    id:raceWinner.application_id,organization_id:raceWinner.organization_id,
+    status:"created",seller_id:raceSellerId
+  })
+  const raceNative=await q(`select id,status from seller where email=any($1::text[])`,
+    [raceApplications.map(x=>x.email)])
+  assert.equal(raceNative.length,1,"Exactly one native Mercur Seller must exist")
+  assert.equal(raceNative[0].id,raceSellerId)
+  assert.equal(raceNative[0].status,"pending_approval")
+  const raceEvents=await q(`select e.id as audit_id,x.id as outbox_id,
+    o.organization_id,o.seller_id
+    from da_audit_event e
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+    join da_organization_seller_ownership o on o.verification_audit_event_id=e.id
+    where e.action='organization.store_application_created'
+    and e.new_values->>'application_id'=any($1::text[])`,
+    [raceApplications.map(x=>x.application_id)])
+  assert.equal(raceEvents.length,1,
+    "Only the winning Organization may have an Origin, audit and outbox")
+  assert.equal(raceEvents[0].organization_id,raceWinner.organization_id)
+  assert.equal(raceEvents[0].seller_id,raceSellerId)
+  assert.ok(raceEvents[0].audit_id&&raceEvents[0].outbox_id)
+  assert.equal((await q(`select count(*)::int n from da_audit_event
+    where action='organization.store_application_created'
+    and new_values->>'application_id'=$1`,[raceLoser.application_id]))[0].n,0,
+    "Losing Organization must have zero successful Store creation audits")
+  process.stdout.write("PASS B22 Chrome/PG16: simultaneous Alpha/Gamma normalized Store name 201+409; one native Seller, one durable application, Origin/audit/outbox, loser zero side effects\n")
+
+}
+
+/** Real authenticated HTTPS negative proof; test data is disposable PG16 only.
+ * Kept outside the long main scenario to avoid TypeScript flow-size limits.
+ */
+async function verifyInvisibleStoreNameRejection(
+  browser:B06Chrome,org:string,stamp:string,
+  q:(sql:string,params?:unknown[])=>Promise<any[]>
+):Promise<void>{
+  const invalidNames=["\u200B\u200B\u200B","\u00AD\u00AD\u00AD",
+    "B22\u200B Store "+stamp,"B22\u2060 Store "+stamp,
+    "B22\u200D Store "+stamp]
+  for(const [index,name] of invalidNames.entries()){
+    const id="daapp_"+randomBytes(16).toString("hex")
+    const email="b22-invisible-"+index+"-"+stamp+"@example.invalid"
+    const result=await browser.callFunction("async function(json){"+
+      "const session=await(await fetch('/personal/session')).json();"+
+      "const response=await fetch('/personal/store-applications',{"+
+      "method:'POST',headers:{'content-type':'application/json',"+
+      "'x-csrf-token':session.csrf_token},body:json});"+
+      "return response.status}",JSON.stringify({
+        organization_id:org,application_id:id,name,email,currency_code:"try"
+      }))
+    assert.equal(result,400,"Invisible name must fail before reservation")
+    const rows=await q(`select
+      (select count(*)::int from da_store_application where id=$1) as applications,
+      (select count(*)::int from seller where email=$2) as sellers,
+      (select count(*)::int from da_audit_event
+        where new_values->>'application_id'=$1) as audits,
+      (select count(*)::int from da_audit_outbox x
+        join da_audit_event e on e.id=x.source_audit_event_id
+        where e.new_values->>'application_id'=$1) as outboxes`,
+      [id,email])
+    assert.deepEqual(rows,[{applications:0,sellers:0,audits:0,outboxes:0}],
+      "Rejected invisible name may not create durable side effects")
+  }
+  process.stdout.write("PASS B22 PG16/Chrome: invisible Store names HTTP400; zero application, native Seller, audit/outbox effects\n")
+}
+
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   const preparing=process.env.B22_UI_PREPARE==="true"
@@ -1758,7 +1871,35 @@ export default async function({container}:any){
       name:applicationName,email:applicationEmail,currency_code:"try"}
     const replay=await submit(data)
     assert.equal(replay.status,200);assert.equal(replay.body.seller_id,ownerStoreId)
-    assert.equal((await submit({...data,name:applicationName+" changed"})).status,403)
+    await verifyInvisibleStoreNameRejection(browser,organizations[0].id,rand,q)
+    // A newly submitted name must not impersonate an existing Seller:
+    // same Organization, Unicode NFKC equivalent or a legacy native Seller.
+    // Each 409 must happen BEFORE creating a second Foundation application.
+    const newCollisionApplicationId=()=>("daapp_"+randomBytes(16).toString("hex"))
+    const collisionEmail="b22-collision-"+rand+"@example.invalid"
+    assert.equal((await submit({...data,
+      application_id:newCollisionApplicationId(),email:collisionEmail,
+      name:applicationName.toUpperCase()})).status,409)
+    assert.equal((await submit({...data,
+      application_id:newCollisionApplicationId(),email:collisionEmail,
+      name:"Ｂ２２"+applicationName.slice(3)})).status,409,
+      "NFKC-compatible fullwidth characters reserve the same Store name")
+    assert.equal((await submit({...data,
+      application_id:newCollisionApplicationId(),email:collisionEmail,
+      name:applicationName.replace("Owner application","Owner\u00a0\u00a0application")})).status,409,
+      "Unicode compatibility spaces and repeated blanks cannot bypass the reservation")
+    assert.equal((await submit({...data,
+      application_id:newCollisionApplicationId(),email:collisionEmail,
+      name:stores[0].name.toUpperCase()})).status,409,
+      "A legacy native Seller's name cannot be claimed by a new application")
+    assert.deepEqual(await q(`select count(*)::int n from da_store_application
+      where organization_id=$1`,[organizations[0].id]),[{n:1}],
+      "Every equivalent-name conflict must leave no second application or Seller claim")
+    const [nameClaim]=await q(`select store_name_hash from da_store_application
+      where id=$1`,[applicationId])
+    assert.match(nameClaim.store_name_hash,/^[a-f0-9]{64}$/)
+    process.stdout.write("PASS B22 PG16/Chrome: global normalized Store name claim; case/NFKC/native legacy conflicts409, no second application or Seller\n")
+    assert.equal((await submit({...data,name:applicationName.replace("Owner","Other")})).status,403)
     assert.equal((await submit({...data,organization_id:organizations[2].id,
       application_id:"daapp_"+randomBytes(16).toString("hex")})).status,403)
     assert.equal((await q("select count(*)::int n from da_store_application where person_id=$1",[A.person]))[0].n,1)
@@ -5141,11 +5282,24 @@ export default async function({container}:any){
     const gammaApplication={
       organization_id:sellerGamma.id,
       application_id:"daapp_"+randomBytes(16).toString("hex"),
-      name:"B22 Gamma independent Store "+rand,
+      name:"B22 Gamma Store "+rand,
       email:"b22-gamma-store-"+rand+"@example.invalid",currency_code:"try"
     }
     const gammaSubmitted=await submit(gammaApplication)
     assert.equal(gammaSubmitted.status,201)
+    // Person A is a genuine Owner of Alpha and Gamma. A second distinct
+    // Organization cannot acquire Alpha's reserved name even when its
+    // own new Store application would otherwise be authorized.
+    const crossOrgName=await submit({...gammaApplication,
+      application_id:"daapp_"+randomBytes(16).toString("hex"),
+      email:"b22-gamma-name-collision-"+rand+"@example.invalid",
+      name:applicationName.toUpperCase()})
+    assert.equal(crossOrgName.status,409,
+      "Global Store name reservation applies across legal Organizations")
+    assert.equal((await q(`select count(*)::int n from da_store_application
+      where organization_id=$1`,[sellerGamma.id]))[0].n,1,
+      "Name conflict may not create another Gamma application")
+    process.stdout.write("PASS B22 Chrome/PG16: separate legal Organization Owner cannot reuse Alpha normalized Store name; Gamma original Seller retained\n")
     const gammaSellerId=gammaSubmitted.body.seller_id as string
     assert.match(gammaSellerId,/^sel_[A-Za-z0-9_-]+$/)
     assert.notEqual(gammaSellerId,ownerStoreId)
@@ -5198,6 +5352,10 @@ export default async function({container}:any){
       [ownerStoreId],
       "Gamma must not enter Alpha; previously suspended second Alpha Store stays excluded")
     assert.equal(alphaAfterGamma.some((store:any)=>store.id===gammaSellerId),false)
+
+    await verifyConcurrentCrossOrganizationStoreNames(
+      browser,organizations[0].id,sellerGamma.id,rand,q)
+
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
@@ -7621,7 +7779,7 @@ export default async function({container}:any){
     }])
     assert.match(secondGammaOwner.id,/^[A-Za-z0-9_-]+$/)
     const ownerRaceEmail="b22-owner-revoke-race-"+rand+"@example.invalid"
-    const ownerRaceName="B22 Owner in-flight Store "+rand
+    const ownerRaceName="B22 Owner race Store "+rand
     const ownerRaceRequest={organization_id:sellerGamma.id,
       application_id:"daapp_"+randomBytes(16).toString("hex"),
       name:ownerRaceName,email:ownerRaceEmail,currency_code:"try"}

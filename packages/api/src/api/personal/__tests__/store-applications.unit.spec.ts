@@ -49,6 +49,41 @@ describe("B22 protected Owner Store application gate",()=>{
     expect(svc.finishStoreApplication).toHaveBeenCalledWith("opaque",data,"sel_a",expect.any(Object))
     expect(res.status).toHaveBeenCalledWith(201)
   })
+  it("rejects an already reserved normalized name before any native Seller write",async()=>{
+    svc.reserveStoreApplication.mockResolvedValue({status:"name_taken"})
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(res.json).toHaveBeenCalledWith({
+      message:"Store name unavailable; choose another name"
+    })
+    expect(svc.claimStoreApplication).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
+  it.each(["ab","12345","123 456","Example.com","Example.io",
+    "https://example.io","www.example.net","Alpha Ltd. Şti.","Example Şti.",
+    "\u200B\u200B\u200B","\u00AD\u00AD\u00AD","Mar\u200Dket",
+    "Market\u2060 Store","Ab\u034Fcd"])(
+    "rejects objectively invalid Store name %s before reservation",async name=>{
+      req.body.name=name
+      await POST(req,res)
+      expect(res.status).toHaveBeenCalledWith(400)
+      expect(svc.reserveStoreApplication).not.toHaveBeenCalled()
+      expect(run).not.toHaveBeenCalled()
+    })
+  it.each(["Çiçek Dükkânı","مكتبة عربية","👩‍💻 Shop","❤️ Shop"])(
+    "keeps a visible multilingual or emoji Store name valid: %s",async name=>{
+      req.body.name=name
+      await POST(req,res)
+      expect(res.status).toHaveBeenCalledWith(201)
+      expect(run).toHaveBeenCalledTimes(1)
+    })
+  it("blocks historical unverified name claims before native Seller creation",async()=>{
+    svc.reserveStoreApplication.mockResolvedValue({status:"name_unverified"})
+    await POST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(svc.claimStoreApplication).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
   it("does not invoke native workflow after protected Owner revoke wins the lock",async()=>{
     svc.personalWithStoreApplicationOwnerLock.mockResolvedValue(null)
     await POST(req,res)
