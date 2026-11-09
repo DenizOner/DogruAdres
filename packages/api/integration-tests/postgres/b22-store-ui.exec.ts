@@ -998,6 +998,118 @@ async function verifyConcurrentOwnerStoreRenameRequests(
   process.stdout.write("PASS B22 Chrome/PG16: simultaneous distinct-id Store rename requests 201+409, one pending PG row and audit/outbox, loser zero effects and native Seller unchanged\n")
 }
 
+
+/** The approved B22 rename changes the native name AND URL under the existing
+ * Seller identity, with immutable history and a 30-calendar-day former-name
+ * claim. Only disposable Chrome and PG16 resources are used.
+ */
+async function verifyPlatformStoreRenameApproval(
+  owner:B06Chrome,reviewer:B06Chrome,org:string,storeId:string,
+  q:(sql:string,params?:any[])=>Promise<any[]>
+):Promise<void>{
+  const pending=await q(`select id,old_name,old_handle,proposed_name,proposed_handle
+    from da_store_rename_request where organization_id=$1 and seller_id=$2
+      and status='pending_review'`,[org,storeId])
+  assert.equal(pending.length,1)
+  const request=pending[0]
+  const before=(await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [storeId]))[0]
+  assert.equal(before.id,storeId)
+  assert.equal(before.name,request.old_name)
+  assert.equal(before.handle,request.old_handle)
+  const proposal={action:"approve",request_id:request.id,seller_id:storeId}
+  // A business Owner never inherits platform Store approval authority.
+  const ownerDenied=await owner.eval(`(async()=>{
+    const s=await(await fetch('/personal/session')).json()
+    const r=await fetch('/personal/platform/store-renames',{
+      method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+      body:JSON.stringify(${JSON.stringify(proposal)})
+    });return r.status
+  })()`)
+  assert.equal(ownerDenied,403)
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  const csrfDenied=await reviewer.eval(`(async()=>{
+    const r=await fetch('/personal/platform/store-renames',{
+      method:'POST',headers:{'content-type':'application/json','x-csrf-token':'wrong'},
+      body:JSON.stringify(${JSON.stringify(proposal)})
+    });return r.status
+  })()`)
+  assert.equal(csrfDenied,403)
+  assert.equal((await q("select status from da_store_rename_request where id=$1",
+    [request.id]))[0].status,"pending_review")
+  await reviewer.click("#store-rename-review-refresh")
+  await reviewer.wait("!document.getElementById('store-rename-review-panel').hidden && "+
+    "Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
+    ".some(e=>e.textContent.includes("+JSON.stringify(request.proposed_name)+"))")
+  // Real Staff decision button; accept only the browser confirm prompt in the
+  // disposable test, without changing production permissions or cookie state.
+  const clicked=await reviewer.eval(`(()=>{
+    const row=Array.from(document.querySelectorAll('#store-rename-review-list > div'))
+      .find(e=>e.textContent.includes(${JSON.stringify(request.proposed_name)}))
+    const button=Array.from(row?.querySelectorAll('button')??[])
+      .find(b=>b.textContent.includes('Yeni ad ve bağlantıyı onayla'))
+    if(!button||button.disabled)return false
+    const original=window.confirm
+    window.confirm=()=>true
+    try{button.click()}finally{window.confirm=original}
+    return true
+  })()`)
+  assert.equal(clicked,true,"Visible Staff approval UI must submit once")
+  await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('etkinleşti')")
+  const after=(await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [storeId]))[0]
+  assert.equal(after.id,before.id,"Rename must not create or replace Store")
+  assert.equal(after.name,request.proposed_name)
+  assert.equal(after.handle,request.proposed_handle)
+  assert.equal(after.status,"open")
+  assert.equal(String(after.approved_at),String(before.approved_at))
+  const proof=await q(`select r.status,r.approved_at,a.name_claim_released_at,
+    extract(epoch from(a.name_claim_released_at-r.approved_at))/86400 as hold_days,
+    e.action,x.id outbox_id
+    from da_store_rename_request r
+    join da_store_application a on a.seller_id=r.seller_id
+    join da_audit_event e on e.organization_id=r.organization_id
+      and e.target_id=r.seller_id and e.action='organization.store_rename_approved'
+      and e.new_values->>'request_id'=r.id
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+    where r.id=$1`,[request.id])
+  assert.equal(proof.length,1,"Exactly one canonical rename decision and audit/outbox")
+  assert.equal(proof[0].status,"approved")
+  assert.ok(proof[0].approved_at&&proof[0].name_claim_released_at&&proof[0].outbox_id)
+  assert.equal(Number(proof[0].hold_days),30)
+  // Future name claims must still see the original name as held before day 30.
+  const blocked=await q(`select count(*)::int n from da_store_application
+    where seller_id=$1 and store_name_hash is not null
+      and name_claim_released_at>clock_timestamp()`,[storeId])
+  assert.equal(blocked[0].n,1)
+  const again=await reviewer.eval(`(async()=>{
+    const s=await(await fetch('/personal/session')).json()
+    const r=await fetch('/personal/platform/store-renames',{
+      method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+      body:JSON.stringify(${JSON.stringify(proposal)})
+    });return r.status
+  })()`)
+  assert.equal(again,409,"Second approval must not repeat native name change")
+  const ret=await reviewer.eval(`(async()=>{
+    const s=await(await fetch('/personal/session')).json()
+    const r=await fetch('/personal/platform/store-renames',{
+      method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+      body:JSON.stringify(${JSON.stringify({...proposal,action:"reject",
+        reason:"Previously approved Store cannot also be rejected"})})
+    });return r.status
+  })()`)
+  assert.equal(ret,409,"An approved rename may not be rejected")
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible'")
+  const history=await owner.callFunction(
+    "async function(org,seller){const r=await fetch('/personal/store-rename-requests?'+new URLSearchParams({organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
+    org,storeId)
+  assert.equal(history.status,200)
+  assert.equal(history.body.requests.find((x:any)=>x.id===request.id)?.status,"approved")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Staff approves native Seller name+handle via real UI; same Store identity, Owner private readback, original name+URL held 30 days, Owner/CSRF/repeat/conflicting reject denied, one durable audit/outbox\\n")
+}
+
 /** Final-head real Chrome + native Medusa + isolated PG16 acceptance of the
  * previously saved Member draft. A separate helper keeps the existing large
  * B22 program inside TypeScript's per-function control-flow analysis limit.
@@ -5722,6 +5834,8 @@ export default async function({container}:any){
       JSON.stringify(gammaSellerId)+")")
     await verifyConcurrentOwnerStoreRenameRequests(
       browser,sellerGamma.id,gammaSellerId,A.person,rand,q)
+    await verifyPlatformStoreRenameApproval(
+      browser,reviewer,sellerGamma.id,gammaSellerId,q)
     await browser.select(organizations[0].name,"owner")
     const gammaSku="B22-GAMMA-BETA-"+rand
     const {result:[gammaOffer]}=await createOffersWorkflow(container).run({
