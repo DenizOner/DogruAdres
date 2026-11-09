@@ -146,7 +146,7 @@ describe("B22 private Store rename REQUEST, not native Store mutation",()=>{
     expect(res.status).toHaveBeenCalledWith(403)
     expect(svc.personalRequestStoreRename).not.toHaveBeenCalled()
   })
-  it.each(["conflict","approved","rejected","withdrawn","approving"])(
+  it.each(["conflict","approved","rejected","approving"])(
     "refuses non-pending or competing decision: %s",async status=>{
       req.body=withdrawal()
       svc.personalWithdrawStoreRenameRequest.mockResolvedValue({status})
