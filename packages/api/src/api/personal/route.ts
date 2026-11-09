@@ -2504,7 +2504,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
     }catch(e){
       if(request!==organizationRequest||seq!==storeRequest||currentOrg!==org)return;
-      target.replaceChildren();clearStoreRename(true);
+      // Preserve the selected Owner only for a transient list failure.
+      // A definite access denial must not retain even client-side Owner UI state.
+      target.replaceChildren();clearStoreRename(![401,403,404].includes(e.httpStatus));
       if(e.httpStatus===401){concealPrivateView();el('login').hidden=false;return}
       message.textContent=[403,404].includes(e.httpStatus)?'Bu kuruluşun mağazalarına erişim izniniz yok.':'Mağazalar doğrulanamadı. Yeniden deneyin.';
     }
