@@ -3132,6 +3132,88 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {status:"pending_review" as const,request_id:input.request_id,replayed:false}
   }
 
+  /** The protected requesting Owner can withdraw a still-pending name/URL
+   * change, without modifying the approved native Seller. Reuse the same
+   * per-Seller transaction advisory lock as Staff approve/reject: once Staff
+   * claims an approval, cancellation cannot silently override that decision.
+   */
+  @InjectTransactionManager()
+  async personalWithdrawStoreRenameRequest(token:string,input:{
+    request_id:string;organization_id:string;seller_id:string
+  },@MedusaContext() context:Context={}){
+    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const identity=await sessions.current(token,true,false)
+    if(!identity)return null
+    const company=await sessions.organizations(token,input.organization_id,false)
+    if(!company||company.person_id!==identity.person_id||
+       company.organizations.length!==1||
+       company.organizations[0].role!=="owner"||
+       !await isCurrentProtectedOwner(db,identity.person_id,input.organization_id))
+      return null
+    if(!(await platformApprovedSellerIds(db,input.organization_id)).includes(input.seller_id))
+      return null
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
+      [input.seller_id])
+    const rows=await db.execute(`select r.id,r.status,r.risk_version
+      from da_store_rename_request r
+      join da_organization d on d.id=r.organization_id
+        and d.status='active' and d.deleted_at is null
+      join seller s on s.id=r.seller_id and s.deleted_at is null
+      join da_organization_seller_ownership o
+        on o.seller_id=r.seller_id and o.organization_id=r.organization_id
+        and o.revoked_at is null
+      join da_audit_event origin on origin.id=o.verification_audit_event_id
+        and origin.deleted_at is null and origin.organization_id=r.organization_id
+        and origin.target_id=r.seller_id and origin.module='dogruadres-access'
+      join da_audit_event e on e.id=r.source_audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.action='organization.store_rename_requested'
+        and e.resource='store-rename-request'
+        and e.organization_id=r.organization_id and e.target_id=r.seller_id
+        and e.actor_person_id=r.requested_by_person_id
+        and e.new_values->>'request_id'=r.id
+        and e.new_values->>'risk_version'=r.risk_version
+      where r.id=? and r.organization_id=? and r.seller_id=?
+        and r.requested_by_person_id=?
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id and x.deleted_at is null
+            and x.source_module='dogruadres-access')
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=origin.id and x.deleted_at is null
+            and x.source_module='dogruadres-access')
+      for update of r`,[input.request_id,input.organization_id,
+      input.seller_id,identity.person_id])
+    if(rows.length!==1||rows[0].risk_version!==STORE_RENAME_RISK_VERSION||
+       rows[0].status!=="pending_review")
+      return {status:"conflict" as const}
+    const updated=await db.execute(`update da_store_rename_request
+      set status='withdrawn',updated_at=clock_timestamp()
+      where id=? and organization_id=? and seller_id=?
+        and requested_by_person_id=? and status='pending_review'
+      returning id`,[input.request_id,input.organization_id,
+      input.seller_id,identity.person_id])
+    if(updated.length!==1||updated[0].id!==input.request_id)
+      throw new IdentityAccessDenied()
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:identity.person_id,actor_type:identity.actor_type,
+      actor_id:identity.actor_id,role_context:"owner",
+      organization_id:input.organization_id,
+      action:"organization.store_rename_withdrawn",
+      module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-rename-request",target_id:input.seller_id,
+      new_values:{request_id:input.request_id,status:"withdrawn"},
+      occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    return {status:"withdrawn" as const,request_id:input.request_id,
+      seller_id:input.seller_id}
+  }
+
   /** Private Owner readback for uncertain requests. No native rename or
    * approval outcome is inferred from a pending request.
    */
