@@ -1171,14 +1171,14 @@ async function verifyInvisibleStoreNameRejection(
   for(const [index,name] of invalidNames.entries()){
     const id="daapp_"+randomBytes(16).toString("hex")
     const email="b22-invisible-"+index+"-"+stamp+"@example.invalid"
-    const result=await browser.callFunction("async function(input){"+
+    const result=await browser.callFunction("async function(json){"+
       "const session=await(await fetch('/personal/session')).json();"+
       "const response=await fetch('/personal/store-applications',{"+
       "method:'POST',headers:{'content-type':'application/json',"+
-      "'x-csrf-token':session.csrf_token},body:JSON.stringify(input)});"+
-      "return response.status}",{
+      "'x-csrf-token':session.csrf_token},body:json});"+
+      "return response.status}",JSON.stringify({
         organization_id:org,application_id:id,name,email,currency_code:"try"
-      })
+      }))
     assert.equal(result,400,"Invisible name must fail before reservation")
     const rows=await q(`select
       (select count(*)::int from da_store_application where id=$1) as applications,
