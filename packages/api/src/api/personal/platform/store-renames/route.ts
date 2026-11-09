@@ -80,7 +80,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
         token,target,async(data,context)=>{
           const before=await native.listSellers({id:target.seller_id})
           if(before.length!==1||before[0].id!==target.seller_id||
-             before[0].status!=="open"||!before[0].approved_at)
+             !(["open","suspended"] as string[]).includes(before[0].status)||!before[0].approved_at)
             return "uncertain" as const
           await updateSellersWorkflow(req.scope).run({
             input:{selector:{id:target.seller_id},
@@ -88,7 +88,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
           })
           const after=await native.listSellers({id:target.seller_id})
           if(after.length!==1||after[0].id!==target.seller_id||
-             after[0].status!=="open"||!after[0].approved_at||
+             after[0].status!==before[0].status||!after[0].approved_at||
              after[0].name!==data.name||after[0].handle!==data.handle)
             return "uncertain" as const
           const recorded=await svc.personalRecordStoreRenameApproval(token,target,context)
