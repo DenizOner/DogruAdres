@@ -6201,8 +6201,6 @@ export default async function({container}:any){
       browser,sellerGamma.id,gammaSellerId,A.person,rand,q)
     await verifyPlatformStoreRenameApproval(
       browser,reviewer,sellerGamma.id,gammaSellerId,q)
-    await verifyOwnerWithdrawPendingStoreRename(
-      browser,reviewer,sellerGamma.id,gammaSellerId,A.person,rand,q)
     await browser.select(organizations[0].name,"owner")
     const gammaSku="B22-GAMMA-BETA-"+rand
     const {result:[gammaOffer]}=await createOffersWorkflow(container).run({
@@ -6302,6 +6300,16 @@ export default async function({container}:any){
     await verifyRealNextStorefrontRenameUrls(container,
       process.env.DOGRUADRES_PRIVATE_API!,b22PublishableKey.token,
       gammaSellerId,temp,q)
+    // The new withdrawal test has its own audit/state writes. Run it only
+    // AFTER the previously accepted isolated Next HTTP proof so its fixture
+    // cannot affect the unchanged old/new Seller URL acceptance.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(sellerGamma.name,"owner")
+    await browser.wait("!document.getElementById('store-rename-panel').hidden")
+    await verifyOwnerWithdrawPendingStoreRename(
+      browser,reviewer,sellerGamma.id,gammaSellerId,A.person,rand,q)
+    await browser.select(organizations[0].name,"owner")
     const keyHeaders={"x-publishable-api-key":b22PublishableKey.token}
     assert.equal((await q(`select count(*)::int n from order_group
       where cart_id=$1`,[betaTwoSellerCart.id]))[0].n,0)
