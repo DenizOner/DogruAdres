@@ -822,7 +822,8 @@ async function verifyOwnerStoreRenameRequest(
     "Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
     ".some(e=>e.textContent.includes("+JSON.stringify(name)+"))")
   process.stdout.write("PASS B22 Chrome/HTTPS: transient staff queue 503 clears private rows, visible retry and fresh authorized GET restores list\n")
-  const invalidReason=String.fromCodePoint(0x200B).repeat(10)
+  for(const codepoint of [0x200B,0x3164]){
+    const invalidReason=String.fromCodePoint(codepoint).repeat(10)
   const deniedInvisible=await reviewer.eval(`(async()=>{
     const sess=await(await fetch('/personal/session')).json();
     const r=await fetch('/personal/platform/store-renames',{method:'POST',
@@ -838,6 +839,7 @@ async function verifyOwnerStoreRenameRequest(
       and new_values->>'request_id'=$1`,[saved.id]))[0].n,0,
     "Invisible reason must leave zero decision audits")
   process.stdout.write("PASS B22 Chrome/PG16: invisible-only reason HTTP 400, pending request intact, zero rejection audit\n")
+  }
   const refusalReason="B22 disposable platform review rejected a proposed public Store name"
   const csrfDenied=await reviewer.eval(`(async()=>{
     const r=await fetch('/personal/platform/store-renames',{method:'POST',
