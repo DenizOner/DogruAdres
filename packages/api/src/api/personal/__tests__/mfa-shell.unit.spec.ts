@@ -1,5 +1,6 @@
 import {GET} from "../route"
 import {enabled} from "../security"
+import {trustedInlineScripts} from "./trusted-inline-scripts"
 jest.mock("../security",()=>({enabled:jest.fn(()=>true)}))
 describe('MFA settings shell contract (not browser acceptance)',()=>{
  it('renders accessible controls, masks TOTP and keeps secrets out of storage',async()=>{
@@ -12,16 +13,20 @@ describe('MFA settings shell contract (not browser acceptance)',()=>{
    expect(html).not.toContain('<option value="admin">Yönetici</option>')
    expect(html).toContain('const role=inviteData.get(\'role\')')
    expect(html).not.toMatch(/localStorage|sessionStorage|console\.log/)
-   const code=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1]).join('\n')
+   const code=trustedInlineScripts(html).join('\n')
    expect(()=>new Function(code)).not.toThrow()
    expect(code).not.toContain("'+(data.secret||data.otpauth_url)")
  })
+  it('rejects scripts without a nonce or a closing tag in the trusted fixture',()=>{
+    expect(()=>trustedInlineScripts('<script>alert(1)</script>')).toThrow('Unexpected script tag')
+    expect(()=>trustedInlineScripts('<script nonce="test">')).toThrow('Unterminated trusted script body')
+  })
  it('conceals the prior actor on both successful and uncertain logout',async()=>{
    const res:any={setHeader:jest.fn(),type:jest.fn().mockReturnThis(),send:jest.fn()};
    (enabled as jest.Mock).mockReturnValue(true);
    await GET({} as any,res);
    const html=res.send.mock.calls[0][0] as string;
-   const code=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1]).join('\n')
+   const code=trustedInlineScripts(html).join('\n')
    const logoutStart=code.indexOf('async function logout(all){');
    const logoutEnd=logoutStart>=0?code.indexOf('\n  }',logoutStart):-1;
    const logoutSource=logoutStart>=0&&logoutEnd>logoutStart?code.slice(logoutStart,logoutEnd+4):'';
