@@ -10,6 +10,10 @@ on:
       - 'quality/e2e/**'
       - 'apps/storefront/src/components/organisms/SellerHeading/**'
       - 'apps/storefront/src/lib/helpers/sanitize-rich-text.ts'
+      - 'apps/storefront/src/app/*/(main)/page.tsx'
+      - 'apps/storefront/src/app/*/(main)/categories/page.tsx'
+      - 'apps/storefront/src/app/*/(main)/categories/*/page.tsx'
+      - 'apps/storefront/src/lib/helpers/serialize-json-ld.ts'
   workflow_dispatch:
   schedule:
     - cron: '17 7 * * 1'
@@ -23,7 +27,7 @@ concurrency:
 
 jobs:
   tooling:
-    name: Automation tooling and SellerHeading Chromium (NOT full storefront E2E)
+    name: Automation tooling and storefront Chromium security (NOT full E2E)
     if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -54,14 +58,14 @@ jobs:
           python3 -m venv /tmp/da-playwright-venv
           /tmp/da-playwright-venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir playwright==1.56.0
           /tmp/da-playwright-venv/bin/python -m playwright install --with-deps chromium
-      - name: Chromium tooling and actual SellerHeading component checks
+      - name: Chromium tooling, SellerHeading and JSON-LD security checks
         env:
           PYTHONDONTWRITEBYTECODE: '1'
           BROWSER_TEST_BUNDLE: ${{ runner.temp }}/da-seller-heading-browser.js
         run: |
           /tmp/da-playwright-venv/bin/python -m unittest discover -s quality/e2e -p 'test_*.py' -v
-          echo '### SellerHeading: real component in Chrome (synthetic Seller), NOT full Next.js E2E' >> "$GITHUB_STEP_SUMMARY"
-          echo 'This checks the actual SellerHeading HTML rendering with mocked unrelated children. No Seller API, Next.js page hydration, HTTP, login, database or authorization journey is exercised.' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Chromium security: SellerHeading component and JSON-LD script escaping (NOT full Next.js E2E)' >> "$GITHUB_STEP_SUMMARY"
+          echo 'SellerHeading uses a synthetic Seller with mocked unrelated children; JSON-LD uses synthetic script-parser inputs. No real Seller/Medusa API, Next.js SSR/hydration, HTTP, login, database or authorization journey is exercised.' >> "$GITHUB_STEP_SUMMARY"
 
   pulse:
     name: GitHub project pulse (metadata only)

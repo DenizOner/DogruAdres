@@ -7,6 +7,7 @@ import isBot from "@/lib/helpers/isBot"
 import { headers } from "next/headers"
 import type { Metadata } from "next"
 import Script from "next/script"
+import { serializeJsonLd } from "@/lib/helpers/serialize-json-ld"
 import { listRegions } from "@/lib/data/regions"
 import { listProducts } from "@/lib/data/products"
 import {
@@ -105,7 +106,7 @@ async function AllCategories({
         id="ld-breadcrumbs-categories"
         type="application/ld+json"
         dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
+          __html: serializeJsonLd({
             "@context": "https://schema.org",
             "@type": "BreadcrumbList",
             itemListElement: [
@@ -123,7 +124,7 @@ async function AllCategories({
         id="ld-itemlist-categories"
         type="application/ld+json"
         dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
+          __html: serializeJsonLd({
             "@context": "https://schema.org",
             "@type": "ItemList",
             itemListElement: itemList,
