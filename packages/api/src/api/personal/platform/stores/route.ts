@@ -12,6 +12,7 @@ const approval=z.object({
 }).strict()
 const reactivation=approval.extend({action:z.literal("unsuspend")}).strict()
 const reconcile=approval.extend({action:z.literal("reconcile")}).strict()
+const release=approval.extend({action:z.literal("release")}).strict()
 const rejection=approval.extend({
   action:z.literal("reject"),
   reason:z.string().trim().min(10).max(500)
@@ -34,13 +35,20 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     const pending:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string;on_hold:boolean}>=[]
     const suspended:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string;on_hold:boolean}>=[]
     const reconciliation:typeof suspended=[]
+    const release_pending:typeof suspended=[]
     for(const item of candidates){
       const sellers=await native.listSellers({id:item.seller_id})
       if(sellers.length!==1||sellers[0].id!==item.seller_id)continue
       if(sellers[0].status==="pending_approval"&&!sellers[0].approved_at)
         pending.push({...item,name:String(sellers[0].name??"")})
-      if(sellers[0].status==="suspended"&&sellers[0].approved_at)
-        suspended.push({...item,name:String(sellers[0].name??"")})
+      if(sellers[0].status==="suspended"&&sellers[0].approved_at){
+        const claim=await service.personalUnresolvedStoreReactivationClaim(token,item)
+        if(claim?.status==="claimed"&&claim.organization_id===item.organization_id)
+          release_pending.push({...item,name:String(sellers[0].name??"")})
+        else if(claim?.status==="none")
+          suspended.push({...item,name:String(sellers[0].name??"")})
+        // A malformed/ambiguous source claim is never presented as actionable.
+      }
       if(sellers[0].status==="open"&&sellers[0].approved_at){
         const claim=await service.personalUnresolvedStoreReactivationClaim(token,item)
         if(claim?.status==="claimed"&&claim.organization_id===item.organization_id&&
@@ -56,7 +64,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     const next=page<1000?
       await service.personalReviewableStoreApplications(token,undefined,{},page+1):[]
     if(!next)return res.status(403).json({message:"Access denied"})
-    return res.status(200).json({pending,suspended,reconciliation,page,has_more:next.length>0})
+    return res.status(200).json({pending,suspended,reconciliation,release_pending,page,has_more:next.length>0})
   }catch{return res.status(503).json({message:"Unavailable"})}
 }
 
@@ -67,8 +75,8 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   if(!valid||req.headers["x-seller-id"]!==undefined)
     return res.status(403).json({message:"Access denied"})
   const action=(req.body as {action?:unknown}|null)?.action
-  const rejecting=action==="reject",reopening=action==="unsuspend",reconciling=action==="reconcile"
-  const parsed=(reconciling?reconcile:reopening?reactivation:rejecting?rejection:approval).safeParse(req.body)
+  const rejecting=action==="reject",reopening=action==="unsuspend",reconciling=action==="reconcile",releasing=action==="release"
+  const parsed=(releasing?release:reconciling?reconcile:reopening?reactivation:rejecting?rejection:approval).safeParse(req.body)
   if(!parsed.success)return res.status(400).json({message:"Invalid input"})
   const target={application_id:parsed.data.application_id,seller_id:parsed.data.seller_id}
   const reason=rejecting?(parsed.data as unknown as {reason:string}).reason:null
@@ -76,13 +84,14 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   try{
     const check=await svc.personalReviewableStoreApplications(token,target)
     if(!check||check.length!==1)return res.status(403).json({message:"Access denied"})
-    if(!rejecting&&!reopening&&!reconciling&&check[0].on_hold)
+    if(!rejecting&&!reopening&&!reconciling&&!releasing&&check[0].on_hold)
       return res.status(409).json({message:"Company Store applications are on hold"})
     const native=req.scope.resolve<{listSellers(filter:object):Promise<any[]>}>("seller")
     const before=await native.listSellers({id:target.seller_id})
     if(before.length!==1||before[0].id!==target.seller_id||
        (reopening?(before[0].status!=="suspended"||!before[0].approved_at):
         reconciling?(before[0].status!=="open"||!before[0].approved_at):
+        releasing?(before[0].status!=="suspended"||!before[0].approved_at):
          (before[0].status!=="pending_approval"||before[0].approved_at)))
       return res.status(409).json({message:"Store is not eligible for this action"})
     // Two committed phases: a canonical claim/outbox is durable BEFORE the
@@ -112,14 +121,16 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     const outcome=await svc.personalWithStoreApprovalStaffLock(
       token,rejecting?{...target,decision:"reject" as const}:
         reopening?{...target,decision:"unsuspend" as const}:
-        reconciling?{...target,decision:"reconcile" as const}:target,async(context:Context)=>{
+        reconciling?{...target,decision:"reconcile" as const}:
+        releasing?{...target,decision:"release" as const}:target,async(context:Context)=>{
         const fresh=await svc.personalReviewableStoreApplications(token,target,context)
         if(!fresh||fresh.length!==1)return "denied" as const
-        if(!rejecting&&!reopening&&!reconciling&&fresh[0].on_hold)return "conflict" as const
+        if(!rejecting&&!reopening&&!reconciling&&!releasing&&fresh[0].on_hold)return "conflict" as const
         const pending=await native.listSellers({id:target.seller_id})
         if(pending.length!==1||pending[0].id!==target.seller_id||
            (reopening?(pending[0].status!=="suspended"||!pending[0].approved_at):
             reconciling?(pending[0].status!=="open"||!pending[0].approved_at):
+            releasing?(pending[0].status!=="suspended"||!pending[0].approved_at):
              (pending[0].status!=="pending_approval"||pending[0].approved_at)))
           return "conflict" as const
         if(reopening){
@@ -147,6 +158,14 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
             name:current.name,handle:current.handle,claim_audit_id:claimAuditId
           },context)
           return recorded?.status==="recorded"?"reactivated" as const:"uncertain" as const
+        }
+        if(releasing){
+          // This does not retry Mercur. The shared Staff/Seller lock and
+          // native Seller row check serialize a stalled first-party opener.
+          const result=await svc.personalReleaseSuspendedStoreReactivationClaim(
+            token,target,context)
+          if(!result)return "denied" as const
+          return result.status==="released"?"released" as const:"conflict" as const
         }
         if(reconciling){
           // This path is only a source-proven audit reconciliation, never
@@ -197,6 +216,7 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
     if(outcome==="rejected")return res.status(200).json({...target,status:"rejected"})
     if(outcome==="reactivated")return res.status(200).json({...target,status:"open",action:"unsuspend"})
     if(outcome==="reconciled")return res.status(200).json({...target,status:"open",action:"reconcile"})
+    if(outcome==="released")return res.status(200).json({...target,status:"suspended",action:"release"})
     if(outcome!=="approved")return res.status(503).json({message:"Outcome uncertain; check approval status"})
     return res.status(200).json({...target,status:"open"})
   }catch(e){
