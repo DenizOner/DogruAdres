@@ -152,7 +152,7 @@ describe("B22 guarded platform review of Store rename requests",()=>{
       .mockResolvedValueOnce([nativeSeller(item.proposed_name,item.proposed_handle)])
     req.scope={resolve:jest.fn().mockReturnValue({listSellers})}
     const run=jest.fn().mockResolvedValue({result:[{}]})
-    ;(updateSellersWorkflow as jest.Mock).mockReturnValue({run})
+    ;(updateSellersWorkflow as unknown as jest.Mock).mockReturnValue({run})
     return {listSellers,run}
   }
   it("approves only a durably claimed change through native Mercur workflow",async()=>{
