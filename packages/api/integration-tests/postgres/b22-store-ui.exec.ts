@@ -1146,7 +1146,7 @@ async function verifyPlatformStoreRenameApproval(
     org,storeId)
   assert.equal(history.status,200)
   assert.equal(history.body.requests.find((x:any)=>x.id===request.id)?.status,"approved")
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Staff approves native Seller name+handle via real UI; same Store identity, Owner private readback, original name+URL held 30 days, Owner/CSRF/repeat/conflicting reject denied, one durable audit/outbox\\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Staff approves native Seller name+handle via real UI; same Store identity, Owner private readback, original name+URL held 30 days, Owner/CSRF/repeat/conflicting reject denied, one durable audit/outbox\n")
 }
 
 /** Final-head real Chrome + native Medusa + isolated PG16 acceptance of the
