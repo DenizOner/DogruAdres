@@ -717,7 +717,7 @@ async function verifyOwnerStoreRenameRequest(
     "Eski mağaza adınız ve bağlantınız ileride başka bir mağaza tarafından kullanılabilir. Bu durumda daha önce paylaştığınız eski bağlantıyı kullanan kişiler farklı bir mağazaya ulaşabilir.",
     "Bu sonuçları okudum, anladım ve mağaza adımı değiştirmeyi kabul ediyorum."
   ])assert.ok(riskText.includes(phrase),"Owner must see approved risk: "+phrase)
-  assert.ok(!/30\\s*(?:takvim\\s*)?gün/i.test(riskText),
+  assert.ok(!/30\s*(?:takvim\s*)?gün/i.test(riskText),
     "User-facing risk consent must not promise a 30-day reuse date")
   // Actual visible HTML form rather than direct framework or service writes.
   const submitted=await browser.callFunction(
