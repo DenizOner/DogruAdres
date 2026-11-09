@@ -1767,7 +1767,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             // Never re-enable a stale approval after an uncertain native write.
           }
         };
-        line.append(summary,approve,reason,reject);list.append(line);
+        line.append(summary,reason,reject,approve);list.append(line);
       }
     }catch(error){
       if(seq!==renameReviewRequest||epoch!==viewEpoch)return;
