@@ -74,6 +74,9 @@ describe("B22 guarded platform review of Store rename requests",()=>{
     {seller_id:"another-seller"},
     {reason:"short"},
     {reason:"x".repeat(501)},
+    {reason:"\u200B".repeat(10)},
+    {reason:"\u200D\u2060\u200B".repeat(5)},
+    {reason:"\u200B\u200D\u2060".repeat(4)+"  "},
     {added:"unexpected"}
   ])("rejects invalid decision payloads before service: %j",async change=>{
     req.body={...req.body,...change}
@@ -81,6 +84,13 @@ describe("B22 guarded platform review of Store rename requests",()=>{
     expect(res.status).toHaveBeenCalledWith(400)
     expect(service.personalRejectStoreRenameRequest).not.toHaveBeenCalled()
   })
+  it.each(["Gerekçe açık ve anlaşılır", "سبب الرفض واضح ومفهوم", "Karar verildi ✅"])(
+    "accepts readable multilingual explanations: %s",async reason=>{
+      req.body.reason=reason
+      await POST(req,res)
+      expect(res.status).toHaveBeenCalledWith(200)
+      expect(service.personalRejectStoreRenameRequest).toHaveBeenCalled()
+    })
   it("uses the current Staff path and returns only a verified reject decision",async()=>{
     await POST(req,res)
     expect(service.personalRejectStoreRenameRequest)
