@@ -1200,14 +1200,14 @@ async function verifyRealNextStorefrontRenameUrls(
 
   // A private, disposable read-only native API proves the genuine Mercur
   // route and Next renderer without changing the product's 401 boundary.
-  // All non-GET/non-Seller/Offer/Region routes are rejected at the socket.
+  // Only public Seller/Offer/Region/Category GET routes may reach the disposable native loader; every other method/path is denied.
   const requireFramework=createRequire(require.resolve("@medusajs/framework"))
   const express=requireFramework("express")
   const nativeApp=express()
   nativeApp.disable("x-powered-by")
   nativeApp.use((req:any,res:any,next:any)=>{
     if(req.method!=="GET"||
-       !/^\/store\/(sellers|offers|regions)(?:\/|$)/.test(req.path)){
+       !/^\/store\/(sellers|offers|regions|product-categories)(?:\/|$)/.test(req.path)){
       res.status(404).end();return
     }
     req.scope=container.createScope()
