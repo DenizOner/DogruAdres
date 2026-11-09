@@ -10,6 +10,7 @@ import {
 import { SellerDTO } from "@mercurjs/types"
 import type { Metadata } from "next"
 import { headers } from "next/headers"
+import { notFound } from "next/navigation"
 
 export async function generateMetadata({
   params,
@@ -81,8 +82,10 @@ export default async function SellerPage({
 
   const tab = "offers"
 
+  // A former Seller.handle must not return an empty successful page or
+  // reveal a replacement handle. Next.js sends 404 with no redirect.
   if (!seller) {
-    return null
+    notFound()
   }
 
   return (
