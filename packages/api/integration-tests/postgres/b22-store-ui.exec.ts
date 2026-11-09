@@ -1083,6 +1083,45 @@ async function verifyPlatformStoreRenameApproval(
     where seller_id=$1 and store_name_hash is not null
       and name_claim_released_at>clock_timestamp()`,[storeId])
   assert.equal(blocked[0].n,1)
+  // Exercise the real Owner Store application HTTP path at day 29 and after
+  // day 30. Advance only task-owned disposable rows (never a production clock).
+  const reuseId="daapp_"+randomBytes(16).toString("hex")
+  const reuse={application_id:reuseId,organization_id:org,name:request.old_name,
+    email:"b22-reuse-"+randomBytes(9).toString("hex")+"@example.invalid",
+    currency_code:"eur"}
+  const submitReuse=()=>owner.eval(`(async()=>{
+    const s=await(await fetch('/personal/session')).json()
+    const r=await fetch('/personal/store-applications',{
+      method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+      body:JSON.stringify(${JSON.stringify(reuse)})
+    });return {status:r.status,body:await r.json()}
+  })()`)
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible'")
+  assert.equal((await submitReuse()).status,409,"The vacated name is still held")
+  await q(`update da_store_rename_request set approved_at=clock_timestamp()-interval '29 days'
+    where id=$1`,[request.id])
+  await q(`update da_store_application set name_claim_released_at=
+    clock_timestamp()+interval '1 day' where seller_id=$1`,[storeId])
+  assert.equal((await submitReuse()).status,409,"Day 29 must reject a second Store")
+  assert.equal((await q("select count(*)::int n from da_store_application where id=$1",
+    [reuseId]))[0].n,0,"Denied application leaves no committed claim")
+  await q(`update da_store_rename_request set approved_at=clock_timestamp()-interval '30 days 1 second'
+    where id=$1`,[request.id])
+  await q(`update da_store_application set name_claim_released_at=
+    clock_timestamp()-interval '1 second' where seller_id=$1`,[storeId])
+  const afterExpiry=await submitReuse()
+  assert.equal(afterExpiry.status,201,
+    "After the 30-day hold the new *application* is possible, not auto-approved")
+  assert.notEqual(afterExpiry.body.seller_id,storeId,"Historical Store identity never transfers")
+  const reused=(await q("select name,handle,status,approved_at from seller where id=$1",
+    [afterExpiry.body.seller_id]))[0]
+  assert.equal(reused.name,request.old_name)
+  assert.equal(reused.handle,request.old_handle)
+  assert.equal(reused.status,"pending_approval")
+  assert.equal(reused.approved_at,null)
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
   const again=await reviewer.eval(`(async()=>{
     const s=await(await fetch('/personal/session')).json()
     const r=await fetch('/personal/platform/store-renames',{
