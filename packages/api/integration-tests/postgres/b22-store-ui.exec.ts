@@ -680,6 +680,36 @@ async function verifyOwnerStoreRenameRequest(
   await browser.wait("!document.getElementById('store-rename-panel').hidden && "+
     "Array.from(document.getElementById('store-rename-form').elements.namedItem('seller_id').options).some(o=>o.value==="+
     JSON.stringify(storeId)+") && !document.querySelector('#store-rename-form button[type=submit]').disabled")
+  // Reproduce a transient list-response failure in genuine Chrome without
+  // mutating the protected backend or network. The second click uses real HTTPS.
+  const once=await browser.eval(`(()=>{
+    const original=globalThis.fetch;let failOnce=true;
+    globalThis.fetch=function(input,options){
+      if(failOnce&&typeof input==='string'&&
+         input.startsWith('/personal/organization-stores?')){
+        failOnce=false;globalThis.fetch=original;
+        return Promise.resolve(new Response(
+          JSON.stringify({message:'Disposable browser-only Store list fault'}),
+          {status:503,headers:{'content-type':'application/json'}}));
+      }
+      return original.call(this,input,options);
+    };
+    return true;
+  })()`)
+  assert.equal(once,true)
+  await browser.click("#org-stores-refresh")
+  await browser.wait("document.getElementById('org-stores-status').textContent.includes('Mağazalar doğrulanamadı')")
+  assert.equal(await browser.eval("selectedStoreOwner"),true,
+    "A failed Store list must not erase the previously verified Owner scope")
+  assert.equal(await browser.eval("document.getElementById('store-rename-panel').hidden"),true,
+    "Failed list cannot expose stale Store details")
+  await browser.click("#org-stores-refresh")
+  await browser.wait("!document.getElementById('store-rename-panel').hidden && "+
+    "document.getElementById('org-stores-status').textContent.includes('Yetkili mağazalar güncellendi') && "+
+    "Array.from(document.getElementById('store-rename-form').elements.namedItem('seller_id').options).some(o=>o.value==="+
+    JSON.stringify(storeId)+") && !document.querySelector('#store-rename-form button[type=submit]').disabled")
+  assert.equal(await browser.eval("selectedStoreOwner"),true)
+  process.stdout.write("PASS B22 Chrome/HTTPS: temporary Store list 503 hides private rename panel, same Owner refresh restores request form from fresh real authorized GET\\n")
   const riskText=await browser.eval("document.getElementById('store-rename-panel').textContent")
   for(const phrase of ["30 takvim günü","otomatik yönlendirilmez",
     "başka bir mağazayı","geçmiş siparişler"])
@@ -736,6 +766,77 @@ async function verifyOwnerStoreRenameRequest(
     "organization_id:org,seller_id:id}));return r.status}",org,storeId)
   assert.equal(privateRead,403,"Foreign Owner cannot see proposed private name")
   process.stdout.write("PASS B22 Chrome/PG16: Owner Store name+URL change request with explicit risk acknowledgement, one private pending record and audit/outbox; foreign/CSRF/invalid/duplicate denied; native Seller unchanged\n")
+}
+
+/** Competing different-id rename requests against the SAME approved Seller.
+ * Two real HTTPS POSTs start before either result is awaited, then only the
+ * winning request may have a durable row and audit/outbox pair.
+ */
+async function verifyConcurrentOwnerStoreRenameRequests(
+  browser:B06Chrome,org:string,storeId:string,person:string,rand:string,
+  q:(sql:string,params?:any[])=>Promise<any[]>
+):Promise<void>{
+  const before=(await q("select name,handle,status,approved_at from seller where id=$1",
+    [storeId]))[0]
+  assert.equal(before.status,"open")
+  assert.ok(before.approved_at)
+  const items=["a","b"].map(letter=>({
+    request_id:"dasrn_"+randomBytes(16).toString("hex"),
+    organization_id:org,seller_id:storeId,
+    name:"B22 Rename Race "+letter.toUpperCase()+" "+rand,
+    handle:"b22-rename-race-"+letter+"-"+rand.toLowerCase().replace(/[^a-z0-9-]/g,""),
+    risk_acknowledged:true,risk_version:"store-rename-risks-v1"
+  }))
+  assert.notEqual(items[0].request_id,items[1].request_id)
+  const responses=await browser.eval(`(async()=>{
+    const session=await(await fetch('/personal/session')).json()
+    return Promise.all(${JSON.stringify(items)}.map(async item=>{
+      const r=await fetch('/personal/store-rename-requests',{
+        method:'POST',headers:{'content-type':'application/json',
+        'x-csrf-token':session.csrf_token},body:JSON.stringify(item)
+      })
+      return {status:r.status,body:await r.json()}
+    }))
+  })()`)
+  assert.deepEqual(responses.map((result:any)=>result.status).sort((a:number,b:number)=>a-b),
+    [201,409],"Only one same-Seller distinct-id request may win")
+  const winnerIndex=responses.findIndex((result:any)=>result.status===201)
+  const winner=items[winnerIndex],loser=items[1-winnerIndex]
+  assert.equal(responses[winnerIndex].body.request_id,winner.request_id)
+  const rows=await q(`select r.id,r.organization_id,r.seller_id,r.requested_by_person_id,
+    r.old_name,r.old_handle,r.proposed_name,r.proposed_handle,r.status,
+    r.source_audit_event_id,e.action,e.actor_person_id,
+    x.id outbox_id from da_store_rename_request r
+    join da_audit_event e on e.id=r.source_audit_event_id
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+    where r.seller_id=$1`,[storeId])
+  assert.equal(rows.length,1,"Only one durable pending Store rename request")
+  assert.equal(rows[0].id,winner.request_id)
+  assert.equal(rows[0].organization_id,org)
+  assert.equal(rows[0].seller_id,storeId)
+  assert.equal(rows[0].requested_by_person_id,person)
+  assert.equal(rows[0].old_name,before.name)
+  assert.equal(rows[0].old_handle,before.handle)
+  assert.equal(rows[0].proposed_name,winner.name)
+  assert.equal(rows[0].proposed_handle,winner.handle)
+  assert.equal(rows[0].status,"pending_review")
+  assert.equal(rows[0].action,"organization.store_rename_requested")
+  assert.equal(rows[0].actor_person_id,person)
+  assert.ok(rows[0].outbox_id&&rows[0].source_audit_event_id)
+  const loserEffects=await q(`select
+    (select count(*)::int from da_store_rename_request where id=$1) requests,
+    (select count(*)::int from da_audit_event
+      where action='organization.store_rename_requested'
+        and new_values->>'request_id'=$1) audits,
+    (select count(*)::int from da_audit_outbox x
+      join da_audit_event e on e.id=x.source_audit_event_id
+      where e.action='organization.store_rename_requested'
+        and e.new_values->>'request_id'=$1) outboxes`,[loser.request_id])
+  assert.deepEqual(loserEffects,[{requests:0,audits:0,outboxes:0}],
+    "Losing concurrent request cannot persist request/audit/outbox")
+  assert.deepEqual((await q("select name,handle,status,approved_at from seller where id=$1",
+    [storeId]))[0],before,"Concurrent pending requests cannot mutate native Seller")
+  process.stdout.write("PASS B22 Chrome/PG16: simultaneous distinct-id Store rename requests 201+409, one pending PG row and audit/outbox, loser zero effects and native Seller unchanged\\n")
 }
 
 /** Final-head real Chrome + native Medusa + isolated PG16 acceptance of the
@@ -5454,6 +5555,15 @@ export default async function({container}:any){
     await browser.select(organizations[0].name,"owner")
     await verifyOwnerStoreRenameRequest(
       browser,reviewer,organizations[0].id,sellerGamma.id,ownerStoreId,A.person,rand,q)
+    // Gamma is a separate already-approved task-only Seller, so this race
+    // does not overwrite Alpha's earlier UI-submitted pending request.
+    await browser.select(sellerGamma.name,"owner")
+    await browser.wait("!document.getElementById('store-rename-panel').hidden && "+
+      "Array.from(document.getElementById('store-rename-form').elements.namedItem('seller_id').options).some(o=>o.value==="+
+      JSON.stringify(gammaSellerId)+")")
+    await verifyConcurrentOwnerStoreRenameRequests(
+      browser,sellerGamma.id,gammaSellerId,A.person,rand,q)
+    await browser.select(organizations[0].name,"owner")
     const gammaSku="B22-GAMMA-BETA-"+rand
     const {result:[gammaOffer]}=await createOffersWorkflow(container).run({
       input:{offers:[{
