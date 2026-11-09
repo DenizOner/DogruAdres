@@ -84,7 +84,7 @@ jobs:
             const line=location?.region?.startLine??0
             console.log('CodeQL finding '+String(r.level??'warning')+' '+String(r.ruleId??'unknown')+' '+file+':'+line)
           }
-          if(counts.error>0)throw Error('CodeQL JS/TS error-level findings require review')
+          if(counts.error>0||counts.warning>0)throw Error('CodeQL JS/TS error/warning findings require review')
           JS
 
   r1-windows-authz:
