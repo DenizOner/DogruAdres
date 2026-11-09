@@ -1703,8 +1703,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         reject.type='button';reject.textContent='Bu değişiklik talebini gerekçeyle reddet';
         reject.onclick=async()=>{
           const explanation=reason.value.trim();
-          if(explanation.length<10||explanation.length>500){
-            message.textContent='Ret gerekçesi 10–500 karakter olmalıdır.';return;
+          if(explanation.length<10||explanation.length>500||
+             !/[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(explanation)){
+            message.textContent='Ret gerekçesi 10–500 karakter ve okunabilir metin içermelidir.';return;
           }
           reject.disabled=true;message.textContent='Ret kararı saklanıyor…';
           try{
@@ -1736,9 +1737,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }catch(error){
       if(seq!==renameReviewRequest||epoch!==viewEpoch)return;
       clearStoreRenameReviews();
-      if(![401,403].includes(error.httpStatus))
+      if(![401,403].includes(error.httpStatus)){
+        // Private rows stay erased; a fresh GET rechecks current Staff access.
+        el('store-rename-review-panel').hidden=false;
         el('store-rename-review-status').textContent=
-          'İsim değişikliği başvuruları şu anda doğrulanamıyor.';
+          'İsim değişikliği başvuruları şu anda doğrulanamıyor. Yeniden deneyin.';
+      }
     }
   }
   el('store-rename-review-refresh').onclick=()=>{
