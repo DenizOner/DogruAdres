@@ -824,22 +824,37 @@ async function verifyOwnerStoreRenameRequest(
   process.stdout.write("PASS B22 Chrome/HTTPS: transient staff queue 503 clears private rows, visible retry and fresh authorized GET restores list\n")
   for(const codepoint of [0x200B,0x3164]){
     const invalidReason=String.fromCodePoint(codepoint).repeat(10)
-  const deniedInvisible=await reviewer.eval(`(async()=>{
-    const sess=await(await fetch('/personal/session')).json();
-    const r=await fetch('/personal/platform/store-renames',{method:'POST',
-      headers:{'content-type':'application/json','x-csrf-token':sess.csrf_token},
-      body:JSON.stringify(${JSON.stringify({action:"reject",request_id:id,seller_id:storeId,reason:invalidReason})})
-    });return r.status;
-  })()`)
-  assert.equal(deniedInvisible,400,"Invisible-only ret reason must fail HTTP validation")
-  assert.equal((await q("select status from da_store_rename_request where id=$1",[saved.id]))[0].status,
-    "pending_review","Invisible reason cannot decide request")
-  assert.equal((await q(`select count(*)::int n from da_audit_event
-    where action='organization.store_rename_rejected'
-      and new_values->>'request_id'=$1`,[saved.id]))[0].n,0,
-    "Invisible reason must leave zero decision audits")
-  process.stdout.write("PASS B22 Chrome/PG16: invisible-only reason HTTP 400, pending request intact, zero rejection audit\n")
+    const deniedInvisible=await reviewer.eval(`(async()=>{
+      const sess=await(await fetch('/personal/session')).json();
+      const r=await fetch('/personal/platform/store-renames',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':sess.csrf_token},
+        body:JSON.stringify(${JSON.stringify({action:"reject",request_id:id,seller_id:storeId,reason:invalidReason})})
+      });return r.status;
+    })()`)
+    assert.equal(deniedInvisible,400,"Invisible-only ret reason must fail HTTP validation")
+    assert.equal((await q("select status from da_store_rename_request where id=$1",[saved.id]))[0].status,
+      "pending_review","Invisible reason cannot decide request")
+    assert.equal((await q(`select count(*)::int n from da_audit_event
+      where action='organization.store_rename_rejected'
+        and new_values->>'request_id'=$1`,[saved.id]))[0].n,0,
+      "Invisible reason must leave zero decision audits")
+    process.stdout.write("PASS B22 Chrome/PG16: invisible-only reason HTTP 400, pending request intact, zero rejection audit\n")
   }
+  // Real visible form must reject an invisible-only explanation before POST.
+  const clientDenied=await reviewer.eval(`(()=>{
+    const row=Array.from(document.querySelectorAll('#store-rename-review-list > div'))
+      .find(e=>e.textContent.includes(${JSON.stringify(name)}));
+    if(!row)return false;
+    const textarea=row.querySelector('textarea'),button=row.querySelector('button');
+    if(!textarea||!button||button.disabled)return false;
+    textarea.value=${JSON.stringify(String.fromCodePoint(0x3164).repeat(10))};
+    button.click();
+    return document.getElementById('store-rename-review-status').textContent.includes('okunabilir');
+  })()`)
+  assert.equal(clientDenied,true,"Real Staff UI must reject invisible-only reason")
+  assert.equal((await q("select status from da_store_rename_request where id=$1",[saved.id]))[0].status,
+    "pending_review","UI-invalid reason cannot decide pending request")
+  process.stdout.write("PASS B22 Chrome/PG16: visible Staff form rejects invisible Hangul filler reason without changing pending decision\n")
   const refusalReason="B22 disposable platform review rejected a proposed public Store name"
   const csrfDenied=await reviewer.eval(`(async()=>{
     const r=await fetch('/personal/platform/store-renames',{method:'POST',
