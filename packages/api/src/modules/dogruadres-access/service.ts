@@ -2418,12 +2418,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
    */
   @InjectTransactionManager()
   async personalWithStoreApprovalStaffLock<T>(
-    token:string,target:{application_id:string;seller_id:string;decision?:"reject"},
+    token:string,target:{application_id:string;seller_id:string;decision?:"reject"|"unsuspend"},
     execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
   ):Promise<T|null>{
     if(!/^daapp_[0-9a-f]{32}$/.test(target.application_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
-       (target.decision!==undefined&&target.decision!=="reject")||
+       (target.decision!==undefined&&!["reject","unsuspend"].includes(target.decision))||
        typeof execute!=="function")throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
     const staff=await sessions.staff(token,"store.approve","platform")
@@ -2448,7 +2448,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // An already submitted application may be REJECTED even while the
     // company's new-application policy is paused. Only new native APPROVAL
     // remains blocked. Neither choice changes existing open Stores.
-    if(target.decision!=="reject"){
+    if(target.decision===undefined){
       const policy=await db.execute(`select store_application_enabled
         from da_organization where id=? and status='active' and deleted_at is null
         for share`,[candidate[0].organization_id])
@@ -2456,8 +2456,155 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }
     const latest=await this.personalReviewableStoreApplications(token,target,context)
     if(!latest||latest.length!==1||
-       (target.decision!=="reject"&&latest[0].on_hold))return null
+       (target.decision===undefined&&latest[0].on_hold))return null
     return execute(context)
+  }
+
+
+  /** B22: Existing Mercur unsuspend may run only for the same historical
+   * approved Seller whose active normalized name/URL still belongs to it.
+   * The caller holds the actual Staff grant and the shared Seller decision
+   * lock; the global name lock serializes concurrent first-party claims.
+   * No name reassignment, unilateral Owner approval or native core patch.
+   */
+  @InjectTransactionManager()
+  async personalCurrentSuspendedStoreName(token:string,target:{
+    application_id:string;seller_id:string
+  },@MedusaContext() context:Context={}){
+    if(!/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
+    if(!staff)return null
+    const rows=await db.execute(`select a.organization_id,s.name,s.handle
+      from da_store_application a
+      join da_organization d on d.id=a.organization_id
+        and d.status='active' and d.deleted_at is null
+      join da_organization_seller_ownership o on o.organization_id=a.organization_id
+        and o.seller_id=a.seller_id and o.revoked_at is null
+      join da_audit_event origin on origin.id=o.verification_audit_event_id
+        and origin.module='dogruadres-access' and origin.deleted_at is null
+        and origin.organization_id=a.organization_id and origin.target_id=a.seller_id
+        and origin.action='organization.store_application_created'
+        and origin.new_values->>'application_id'=a.id
+      join seller s on s.id=a.seller_id and s.deleted_at is null
+        and s.status='suspended' and s.approved_at is not null
+      where a.id=? and a.seller_id=? and a.status='created'
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=origin.id
+            and x.source_module='dogruadres-access' and x.deleted_at is null)
+      for share of a,d,o`,[target.application_id,target.seller_id])
+    if(rows.length!==1)return {status:"conflict" as const}
+    const r=rows[0]
+    if(typeof r.name!=="string"||!validStoreName(r.name)||
+       typeof r.handle!=="string"||!validStoreHandle(r.handle))
+      return {status:"conflict" as const}
+    const hashes=await db.execute(`select encode(sha256(convert_to(
+      lower(regexp_replace(btrim(normalize(?,NFKC)),'[[:space:]]+',' ','g')),
+      'UTF8')),'hex') as hash`,[r.name])
+    const hash=hashes[0]?.hash
+    if(hashes.length!==1||typeof hash!=="string"||!/^[a-f0-9]{64}$/.test(hash))
+      throw new IdentityAccessDenied()
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-name'),hashtext(?))",[hash])
+    const original=await db.execute(`select id from da_store_application
+      where id=? and seller_id=? and store_name_hash=?
+        and name_claim_released_at is null limit 2`,
+      [target.application_id,target.seller_id,hash])
+    const renamed=await db.execute(`select r.id from da_store_rename_request r
+      where r.seller_id=? and r.status='approved'
+        and r.proposed_name=? and r.proposed_handle=?
+        and exists(select 1 from da_audit_event e
+          join da_audit_outbox x on x.source_audit_event_id=e.id
+            and x.source_module='dogruadres-access' and x.deleted_at is null
+          where e.organization_id=? and e.target_id=?
+            and e.action='organization.store_rename_approved'
+            and e.new_values->>'request_id'=r.id and e.deleted_at is null)
+      limit 2`,[target.seller_id,r.name,r.handle,r.organization_id,target.seller_id])
+    if((original.length!==1&&renamed.length!==1)||
+       original.length>1||renamed.length>1)
+      return {status:"conflict" as const}
+    const conflicts=await db.execute(`select 1 from da_store_application
+      where (seller_id is null or seller_id<>?) and store_name_hash=?
+        and (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
+      limit 1`,[target.seller_id,hash])
+    const native=await db.execute(`select 1 from seller where id<>? and deleted_at is null
+      and (encode(sha256(convert_to(lower(regexp_replace(
+        btrim(normalize(name,NFKC)),'[[:space:]]+',' ','g')),'UTF8')),'hex')=?
+        or lower(handle)=lower(?)) limit 1`,
+      [target.seller_id,hash,r.handle])
+    const held=await db.execute(`select 1 from da_store_rename_request h
+      where (h.seller_id<>? or h.status='approving') and
+        (h.status='approving' or
+          (h.status='approved' and h.approved_at>
+             clock_timestamp()-interval '30 days'))
+        and (encode(sha256(convert_to(lower(regexp_replace(
+              btrim(normalize(h.old_name,NFKC)),'[[:space:]]+',' ','g')),'UTF8')),'hex')=?
+          or lower(h.old_handle)=lower(?)
+          or (h.status='approving' and
+            (encode(sha256(convert_to(lower(regexp_replace(
+              btrim(normalize(h.proposed_name,NFKC)),'[[:space:]]+',' ','g')),'UTF8')),'hex')=?
+             or lower(h.proposed_handle)=lower(?))))
+      limit 1`,[target.seller_id,hash,r.handle,hash,r.handle])
+    if(conflicts.length||native.length||held.length)
+      return {status:"conflict" as const}
+    return {status:"eligible" as const,organization_id:r.organization_id as string,
+      name:r.name as string,handle:r.handle as string}
+  }
+
+  /** Persist a private, single canonical completed decision after the native
+   * Seller has actually reopened. An uncertain native result is never retried.
+   */
+  @InjectTransactionManager()
+  async personalRecordStoreReactivation(token:string,target:{
+    application_id:string;seller_id:string;organization_id:string;
+    name:string;handle:string
+  },@MedusaContext() context:Context={}){
+    if(!/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(target.organization_id))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
+    if(!staff)return null
+    const valid=await db.execute(`select a.id from da_store_application a
+      join da_organization d on d.id=a.organization_id
+        and d.status='active' and d.deleted_at is null
+      join da_organization_seller_ownership o on o.organization_id=a.organization_id
+        and o.seller_id=a.seller_id and o.revoked_at is null
+      join seller s on s.id=a.seller_id and s.deleted_at is null
+        and s.status='open' and s.approved_at is not null
+      where a.id=? and a.seller_id=? and a.organization_id=?
+        and a.status='created' and s.name=? and s.handle=?`,
+      [target.application_id,target.seller_id,target.organization_id,target.name,target.handle])
+    if(valid.length!==1)return null
+    const existing=await db.execute(`select id from da_audit_event
+      where organization_id=? and target_id=?
+        and action='organization.store_reactivated' and deleted_at is null
+      limit 1`,[target.organization_id,target.seller_id])
+    if(existing.length)return {status:"conflict" as const}
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:staff.person_id,actor_type:staff.actor_type,
+      actor_id:staff.actor_id,role_context:"platform_staff",
+      organization_id:target.organization_id,
+      action:"organization.store_reactivated",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"store-application",
+      target_id:target.seller_id,
+      new_values:{application_id:target.application_id,status:"open",
+        resolution_confirmed:true,staff_grant_id:staff.grant_id},
+      occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
+      select 'danot_'||gen_random_uuid()::text,m.person_id,?
+      from da_organization_membership m join da_person p on p.id=m.person_id
+      where m.organization_id=? and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.deleted_at is null
+        and p.disabled_at is null and p.deleted_at is null
+      on conflict(audit_event_id,person_id) do nothing`,
+      [audit.id,target.organization_id])
+    return {status:"recorded" as const}
   }
 
   /** Auditable staff decision after Mercur has actually terminated a PENDING
