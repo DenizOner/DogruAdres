@@ -3132,7 +3132,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {status:"pending_review" as const,request_id:input.request_id,replayed:false}
   }
 
-  /** The protected requesting Owner can withdraw a still-pending name/URL
+  /** A current protected Owner may withdraw the organization's pending name/URL
    * change, without modifying the approved native Seller. Reuse the same
    * per-Seller transaction advisory lock as Staff approve/reject: once Staff
    * claims an approval, cancellation cannot silently override that decision.
@@ -3178,7 +3178,6 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         and e.new_values->>'request_id'=r.id
         and e.new_values->>'risk_version'=r.risk_version
       where r.id=? and r.organization_id=? and r.seller_id=?
-        and r.requested_by_person_id=?
         and exists(select 1 from da_audit_outbox x
           where x.source_audit_event_id=e.id and x.deleted_at is null
             and x.source_module='dogruadres-access')
@@ -3186,16 +3185,16 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           where x.source_audit_event_id=origin.id and x.deleted_at is null
             and x.source_module='dogruadres-access')
       for update of r`,[input.request_id,input.organization_id,
-      input.seller_id,identity.person_id])
+      input.seller_id])
     if(rows.length!==1||rows[0].risk_version!==STORE_RENAME_RISK_VERSION||
        rows[0].status!=="pending_review")
       return {status:"conflict" as const}
     const updated=await db.execute(`update da_store_rename_request
       set status='withdrawn',updated_at=clock_timestamp()
       where id=? and organization_id=? and seller_id=?
-        and requested_by_person_id=? and status='pending_review'
+        and status='pending_review'
       returning id`,[input.request_id,input.organization_id,
-      input.seller_id,identity.person_id])
+      input.seller_id]
     if(updated.length!==1||updated[0].id!==input.request_id)
       throw new IdentityAccessDenied()
     const [audit]=await this.persistAuditEventsWithOutbox_([{
