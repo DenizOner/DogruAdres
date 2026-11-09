@@ -2418,12 +2418,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
    */
   @InjectTransactionManager()
   async personalWithStoreApprovalStaffLock<T>(
-    token:string,target:{application_id:string;seller_id:string;decision?:"reject"|"unsuspend"},
+    token:string,target:{application_id:string;seller_id:string;decision?:"reject"|"unsuspend"|"reconcile"},
     execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
   ):Promise<T|null>{
     if(!/^daapp_[0-9a-f]{32}$/.test(target.application_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
-       (target.decision!==undefined&&!["reject","unsuspend"].includes(target.decision))||
+       (target.decision!==undefined&&!["reject","unsuspend","reconcile"].includes(target.decision))||
        typeof execute!=="function")throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
     const staff=await sessions.staff(token,"store.approve","platform")
