@@ -2527,7 +2527,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             and e.module='dogruadres-access' and e.resource='store-rename-request'
             and e.new_values->>'request_id'=r.id and e.deleted_at is null)
       limit 2`,[target.seller_id,r.name,r.handle,r.organization_id,target.seller_id])
-    if((original.length!==1&&renamed.length!==1)||
+    // Initial native Seller URLs are derived from the initial Store name.
+    // A later direct handle mutation is not authorized by the original
+    // name hash alone; only a recorded Staff-approved rename can change it.
+    const originalHandleMatches=original.length===1&&toHandle(r.name)===r.handle
+    if((!originalHandleMatches&&renamed.length!==1)||
        original.length>1||renamed.length>1)
       return {status:"conflict" as const}
     const conflicts=await db.execute(`select 1 from da_store_application
