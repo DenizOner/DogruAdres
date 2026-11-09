@@ -1707,9 +1707,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           const slash=String.fromCharCode(92);
           const readable=new RegExp('['+slash+'p{L}'+slash+'p{N}'+slash+'p{Extended_Pictographic}]','u');
           const invisible=new RegExp(slash+'p{Default_Ignorable_Code_Point}','gu');
-          if(explanation.length<10||explanation.length>500||
-             !readable.test(explanation.replace(invisible,''))){
-            message.textContent='Ret gerekçesi 10–500 karakter ve okunabilir metin içermelidir.';return;
+          let readableCount=0;
+          for(const {segment} of new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(explanation)){
+            if(readable.test(segment.replace(invisible,'')))readableCount++;
+          }
+          if(explanation.length<10||explanation.length>500||readableCount<10){
+            message.textContent='Ret gerekçesi en az 10 okunabilir karakter içermelidir (en fazla 500).';return;
           }
           reject.disabled=true;message.textContent='Ret kararı saklanıyor…';
           try{
