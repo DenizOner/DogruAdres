@@ -776,14 +776,19 @@ async function verifyOwnerStoreRenameRequest(
   assert.equal(await browser.eval("(async()=>{return (await fetch('/personal/platform/store-renames')).status})()"),
     403,"Organization Owner may not inspect platform rename queue")
   await reviewer.send("Page.bringToFront")
-  await reviewer.wait("document.visibilityState==='visible'")
+  await reviewer.wait("document.visibilityState==='visible' && "+
+    "!document.getElementById('workspace').hidden")
+  // Distinguish a server-side authorization/SQL error from asynchronous
+  // visibility-driven refresh. Never treat a hidden panel as proof of 403.
+  const reviewQueue=await reviewer.eval("(async()=>{const r=await fetch('/personal/platform/store-renames?page=0');"+
+    "return {status:r.status,body:await r.json()}})()")
+  assert.equal(reviewQueue.status,200,"Current Store approver GET must succeed")
+  assert.equal(reviewQueue.body.page,0)
+  assert.equal(reviewQueue.body.has_more!==undefined,true)
+  await reviewer.click("#store-rename-review-refresh")
   await reviewer.wait("!document.getElementById('store-rename-review-panel').hidden && "+
     "Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
     ".some(e=>e.textContent.includes("+JSON.stringify(name)+"))")
-  const reviewQueue=await reviewer.eval("(async()=>{const r=await fetch('/personal/platform/store-renames?page=0');"+
-    "return {status:r.status,body:await r.json()}})()")
-  assert.equal(reviewQueue.status,200)
-  assert.equal(reviewQueue.body.page,0)
   const target=reviewQueue.body.pending.find((entry:any)=>entry.request_id===saved.id)
   assert.ok(target,"Staff sees only genuine pending Store rename request")
   assert.equal(target.organization_id,org)
