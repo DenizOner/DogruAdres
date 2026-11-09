@@ -12,7 +12,9 @@ const rejection=z.object({
   action:z.literal("reject"),
   request_id:z.string().regex(/^dasrn_[a-f0-9]{32}$/),
   seller_id:z.string().regex(/^sel_[A-Za-z0-9_-]+$/),
-  reason:z.string().trim().min(10).max(500)
+  reason:z.string().trim().min(10).max(500).refine(
+    value=>/[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(value),
+    "Reason must contain readable content")
 }).strict()
 
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
