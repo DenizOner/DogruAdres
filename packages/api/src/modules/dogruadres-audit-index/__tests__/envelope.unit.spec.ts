@@ -183,14 +183,17 @@ describe("Audit Index version 1 validation and redaction", () => {
       expect(()=>projectFoundationAuditEvent({...event,...change}))
         .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
-  it("indexes only authorized Staff reactivation without internal reason or grant",()=>{
+  it.each(["organization.store_reactivation_claimed","organization.store_reactivated"])(
+    "indexes only authorized Staff reactivation events without internal name, claim, reason or grant: %s",action=>{
     const event={...source(),role_context:"platform_staff",
-      action:"organization.store_reactivated",resource:"store-application",
+      action,resource:"store-application",
       target_id:"sel_reopened_store",
       previous_values:{private_reason:"DO-NOT-RELAY"},
-      new_values:{application_id:"daapp_secret",staff_grant_id:"DO-NOT-RELAY",status:"open"}}
+      new_values:{application_id:"daapp_secret",staff_grant_id:"DO-NOT-RELAY",
+        name:"PRIVATE-STORE-NAME",handle:"private-store-handle",
+        claim_audit_id:"daaud_private",status:"open"}}
     const projected=projectFoundationAuditEvent(event)
-    expect(projected.action).toBe("organization.store_reactivated")
+    expect(projected.action).toBe(action)
     expect(projected.resource).toBe("store-application")
     expect(projected.target_id).toBe("sel_reopened_store")
     expect(validateAuditIndexEnvelope(projected)).toEqual(projected)
