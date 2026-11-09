@@ -2477,6 +2477,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const db=securitySql(context.transactionManager)
     const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
     if(!staff)return null
+    // Serializes with an already pending native name/URL decision as well as
+    // the platform's ordinary Store approval/rejection lock.
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
+      [target.seller_id])
     const rows=await db.execute(`select a.organization_id,s.name,s.handle
       from da_store_application a
       join da_organization d on d.id=a.organization_id
