@@ -30,7 +30,11 @@ export const validStoreName=(name:string)=>{
     !/(?:^|\s)(?:ltd\.?\s*şti\.?|şti\.?|a\.?\s*ş\.?|limited\s+şirketi|anonim\s+şirketi)$/iu.test(normalized)
 }
 
-export const STORE_RENAME_RISK_VERSION="store-rename-risks-v1" as const
+/** Revision v2: on 2026-11-05 Owner approved disclosure with NO day-count promise.
+ * Keep the exact public disclosure in personal/route.ts and assert it in real Chrome.
+ * Internal 30-day reservation is a separate server-side lifecycle policy.
+ */
+export const STORE_RENAME_RISK_VERSION="store-rename-risks-v2" as const
 /** URL keys are public, stable, ASCII-only; no slashes, confusables or escapes. */
 export const validStoreHandle=(handle:string)=>
   handle.length>=3 && handle.length<=60 &&

@@ -294,13 +294,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         <label>Onaylı mağaza<select name="seller_id" required></select></label>
         <label>Önerilen yeni mağaza adı<input name="name" minlength="3" maxlength="120" required autocomplete="off"></label>
         <label>Önerilen yeni URL anahtarı<input name="handle" minlength="3" maxlength="60" pattern="[a-z0-9]+(-[a-z0-9]+)*" required autocomplete="off"></label>
-        <fieldset><legend>Başvurmadan önce değişiklik risklerini okuyun</legend>
-          <p>1. Mağaza adıyla birlikte bağlantı değişir.</p>
-          <p>2. Eski bağlantı otomatik yönlendirilmez.</p>
-          <p>3. Eski ad ve bağlantı onaylanan değişiklikten 30 takvim günü sonra başka mağazaya açılabilir.</p>
-          <p>4. Eski bağlantıyı kullanan kişi ileride başka bir mağazayı görebilir.</p>
-          <p>5. Mağaza kimliği ve geçmiş siparişler korunur.</p>
-          <label><input name="risk_acknowledged" type="checkbox" required>Bu beş riski okudum ve açıkça kabul ediyorum.</label>
+        <fieldset><legend>Mağaza adı değişikliği hakkında önemli uyarı</legend>
+          <p>Mağaza adınızı değiştirdiğinizde mağaza bağlantınız da değişecektir. Eski bağlantınız yeni bağlantınıza yönlendirilmeyecektir.</p>
+          <p>Eski mağaza adınız ve bağlantınız ileride başka bir mağaza tarafından kullanılabilir. Bu durumda daha önce paylaştığınız eski bağlantıyı kullanan kişiler farklı bir mağazaya ulaşabilir.</p>
+          <label><input name="risk_acknowledged" type="checkbox" required>Bu sonuçları okudum, anladım ve mağaza adımı değiştirmeyi kabul ediyorum.</label>
         </fieldset>
         <button type="submit" disabled>Değişiklik başvurusu gönder</button>
       </form>
@@ -2453,7 +2450,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const result=await api('store-rename-requests',{method:'POST',body:JSON.stringify({
         request_id:id,organization_id:org,seller_id:seller,
         name:form.elements.namedItem('name').value,handle:form.elements.namedItem('handle').value,
-        risk_acknowledged:true,risk_version:'store-rename-risks-v1'
+        risk_acknowledged:true,risk_version:'store-rename-risks-v2'
       })});
       if(request!==organizationRequest||epoch!==viewEpoch||org!==currentOrg)return;
       if(result.request_id!==id||result.status!=='pending_review'){

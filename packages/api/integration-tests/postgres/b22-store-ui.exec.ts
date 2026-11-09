@@ -661,7 +661,7 @@ async function verifyOwnerStoreRenameRequest(
   const handle=("b22-request-"+rand).toLowerCase().replace(/[^a-z0-9-]/g,"")
   const id="dasrn_"+randomBytes(16).toString("hex")
   const input={request_id:id,organization_id:org,seller_id:storeId,
-    name,handle,risk_acknowledged:true,risk_version:"store-rename-risks-v1"}
+    name,handle,risk_acknowledged:true,risk_version:"store-rename-risks-v2"}
   const post=async(actor:B06Chrome,payload:Record<string,unknown>,invalidCsrf=false)=>
     actor.callFunction("async function(json,bad){"+
       "const s=await(await fetch('/personal/session')).json();"+
@@ -711,9 +711,14 @@ async function verifyOwnerStoreRenameRequest(
   assert.equal(await browser.eval("selectedStoreOwner"),true)
   process.stdout.write("PASS B22 Chrome/HTTPS: temporary Store list 503 hides private rename panel, same Owner refresh restores request form from fresh real authorized GET\n")
   const riskText=await browser.eval("document.getElementById('store-rename-panel').textContent")
-  for(const phrase of ["30 takvim günü","otomatik yönlendirilmez",
-    "başka bir mağazayı","geçmiş siparişler"])
-    assert.ok(riskText.includes(phrase),"Owner must see approved risk: "+phrase)
+  for(const phrase of [
+    "Mağaza adı değişikliği hakkında önemli uyarı",
+    "Mağaza adınızı değiştirdiğinizde mağaza bağlantınız da değişecektir. Eski bağlantınız yeni bağlantınıza yönlendirilmeyecektir.",
+    "Eski mağaza adınız ve bağlantınız ileride başka bir mağaza tarafından kullanılabilir. Bu durumda daha önce paylaştığınız eski bağlantıyı kullanan kişiler farklı bir mağazaya ulaşabilir.",
+    "Bu sonuçları okudum, anladım ve mağaza adımı değiştirmeyi kabul ediyorum."
+  ])assert.ok(riskText.includes(phrase),"Owner must see approved risk: "+phrase)
+  assert.ok(!/30\\s*(?:takvim\\s*)?gün/i.test(riskText),
+    "User-facing risk consent must not promise a 30-day reuse date")
   // Actual visible HTML form rather than direct framework or service writes.
   const submitted=await browser.callFunction(
     "async function(id,label,key){const f=document.getElementById('store-rename-form');"+
@@ -743,7 +748,7 @@ async function verifyOwnerStoreRenameRequest(
   assert.equal(saved.old_handle,before.handle)
   assert.equal(saved.proposed_name,name)
   assert.equal(saved.proposed_handle,handle)
-  assert.equal(saved.risk_version,"store-rename-risks-v1")
+  assert.equal(saved.risk_version,"store-rename-risks-v2")
   assert.ok(saved.risk_acknowledged_at)
   assert.equal(saved.status,"pending_review")
   assert.equal(saved.action,"organization.store_rename_requested")
@@ -785,7 +790,7 @@ async function verifyConcurrentOwnerStoreRenameRequests(
     organization_id:org,seller_id:storeId,
     name:"B22 Rename Race "+letter.toUpperCase()+" "+rand,
     handle:"b22-rename-race-"+letter+"-"+rand.toLowerCase().replace(/[^a-z0-9-]/g,""),
-    risk_acknowledged:true,risk_version:"store-rename-risks-v1"
+    risk_acknowledged:true,risk_version:"store-rename-risks-v2"
   }))
   assert.notEqual(items[0].request_id,items[1].request_id)
   const responses=await browser.eval(`(async()=>{

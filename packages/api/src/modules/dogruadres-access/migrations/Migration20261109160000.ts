@@ -15,7 +15,7 @@ export class Migration20261109160000 extends Migration {
       old_handle text not null,
       proposed_name text not null,
       proposed_handle text not null check (proposed_handle ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
-      risk_version text not null check (risk_version = 'store-rename-risks-v1'),
+      risk_version text not null check (risk_version = 'store-rename-risks-v2'),
       risk_acknowledged_at timestamptz not null,
       source_audit_event_id text not null unique references da_audit_event(id),
       status text not null default 'pending_review'

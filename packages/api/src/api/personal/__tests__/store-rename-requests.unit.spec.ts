@@ -10,7 +10,7 @@ describe("B22 private Store rename REQUEST, not native Store mutation",()=>{
     request_id:"dasrn_"+"a".repeat(32),
     organization_id:"daorg_one",seller_id:"sel_one",
     name:"Yeni Mağaza",handle:"yeni-magaza",
-    risk_acknowledged:true,risk_version:"store-rename-risks-v1"
+    risk_acknowledged:true,risk_version:"store-rename-risks-v2"
   }
   let req:any,res:any,svc:any
   beforeEach(()=>{
@@ -56,6 +56,7 @@ describe("B22 private Store rename REQUEST, not native Store mutation",()=>{
   it.each([
     {risk_acknowledged:false},
     {risk_version:"old-risk-version"},
+    {risk_version:"store-rename-risks-v1"},
     {name:"\u200b\u200b\u200b"},
     {name:"Ma\u200drket"},
     {name:"aa"},
