@@ -3,6 +3,7 @@ import { runInNewContext, createContext, runInContext } from "node:vm"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 jest.mock("../security", () => ({ enabled: () => true }))
+import { trustedInlineScripts } from "./trusted-inline-scripts"
 async function page() {
   const res: any = { setHeader: jest.fn(), type: jest.fn().mockReturnThis(), send: jest.fn() }
   await GET({} as any, res)
@@ -12,7 +13,7 @@ describe("bearer URL privacy (executed page scripts, not backend/browser accepta
   it("sets the personal HTML policy and scrubs once before any fetch without losing the invitation", async () => {
     const { res, html } = await page()
     expect(res.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer")
-    const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1])
+    const scripts = trustedInlineScripts(html)
     expect(scripts).toHaveLength(2)
     const token = "synthetic-invitation/?secret"
     const url = new URL("https://app.example.invalid/personal?organization=synthetic&invitation_token="+encodeURIComponent(token)+"#section")
@@ -46,7 +47,7 @@ describe("bearer URL privacy (executed page scripts, not backend/browser accepta
   })
   it.each(["mismatch", "replay"])("keeps %s denials generic and never navigates with the secret", async () => {
     const { html } = await page()
-    const code = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)][1][1]
+    const code = trustedInlineScripts(html)[1]
     const accept = code.match(/el\('accept-invitation-btn'\)\.onclick=(async\(\)=>\{[\s\S]*?\n  \});/)![1]
     const nodes: Record<string, any> = {}
     const token = "synthetic-private-invitation"
