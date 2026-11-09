@@ -282,6 +282,13 @@ describe("B22 Staff reopens only a suspended Store with retained name rights",()
       personalCurrentSuspendedStoreName:jest.fn().mockResolvedValue({
         status:"eligible",organization_id:"daorg_a",name,handle
       }),
+      personalClaimStoreReactivation:jest.fn().mockResolvedValue({
+        status:"claimed",claim_audit_id:"daaud_claim_one"
+      }),
+      personalUnresolvedStoreReactivationClaim:jest.fn().mockResolvedValue({
+        status:"claimed",claim_audit_id:"daaud_claim_one",
+        organization_id:"daorg_a",name,handle
+      }),
       personalRecordStoreReactivation:jest.fn().mockResolvedValue({status:"recorded"})
     }
     native={listSellers:jest.fn(async()=>[{...seller}])}
@@ -307,10 +314,16 @@ describe("B22 Staff reopens only a suspended Store with retained name rights",()
       "opaque",{...target,decision:"unsuspend"},expect.any(Function))
     expect(svc.personalCurrentSuspendedStoreName).toHaveBeenCalledWith(
       "opaque",target,expect.any(Object))
+    expect(svc.personalClaimStoreReactivation).toHaveBeenCalledWith(
+      "opaque",{...target,organization_id:"daorg_a",name,handle},expect.any(Object))
+    expect(svc.personalUnresolvedStoreReactivationClaim).toHaveBeenCalledWith(
+      "opaque",target,expect.any(Object))
+    expect(svc.personalWithStoreApprovalStaffLock).toHaveBeenCalledTimes(2)
     expect(run).toHaveBeenCalledTimes(1)
     expect(run).toHaveBeenCalledWith({input:{seller_id:target.seller_id}})
     expect(svc.personalRecordStoreReactivation).toHaveBeenCalledWith(
-      "opaque",{...target,organization_id:"daorg_a",name,handle},expect.any(Object))
+      "opaque",{...target,organization_id:"daorg_a",name,handle,
+        claim_audit_id:"daaud_claim_one"},expect.any(Object))
     expect({...seller, status:"suspended",status_reason:before.status_reason}).toEqual(before)
     res.status.mockClear()
     await reviewStorePOST(req,res)
@@ -357,17 +370,60 @@ describe("B22 Staff reopens only a suspended Store with retained name rights",()
     expect(run).not.toHaveBeenCalled()
   })
   it("never reports success after a post-native Foundation audit failure",async()=>{
-    svc.personalRecordStoreReactivation.mockRejectedValue(Error("task DB rollback"))
+    svc.personalRecordStoreReactivation.mockRejectedValueOnce(Error("task DB rollback"))
     await reviewStorePOST(req,res)
     expect(res.status).toHaveBeenCalledWith(503)
     expect(res.json).toHaveBeenCalledWith({
       message:"Outcome uncertain; check approval status"
     })
     expect(run).toHaveBeenCalledTimes(1)
+    expect(svc.personalClaimStoreReactivation).toHaveBeenCalledTimes(1)
     res.status.mockClear()
     await reviewStorePOST(req,res)
     expect(res.status).toHaveBeenCalledWith(409)
     expect(run).toHaveBeenCalledTimes(1)
+    // The authorized Staff can only complete the durable claim; no native
+    // action is retried after a failed Foundation audit/outbox transaction.
+    req.body={...target,action:"reconcile"}
+    res.status.mockClear()
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({...target,action:"reconcile",status:"open"})
+    expect(svc.personalCurrentSuspendedStoreName).toHaveBeenCalledWith(
+      "opaque",{...target,expected_status:"open"},expect.any(Object))
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(svc.personalClaimStoreReactivation).toHaveBeenCalledTimes(1)
+    // A completed claim is no longer eligible.
+    svc.personalUnresolvedStoreReactivationClaim.mockResolvedValue({status:"none"})
+    res.status.mockClear()
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+  it("fails closed if the durable claim cannot be committed before native",async()=>{
+    svc.personalClaimStoreReactivation.mockRejectedValue(Error("pre-native outbox failure"))
+    await reviewStorePOST(req,res)
+    expect(res.status).toHaveBeenCalledWith(503)
+    expect(run).not.toHaveBeenCalled()
+    expect(svc.personalRecordStoreReactivation).not.toHaveBeenCalled()
+  })
+  it("lists only source-proven incomplete open Store claims to authorized Staff",async()=>{
+    seller.status="open"
+    svc.personalReviewableStoreApplications.mockImplementation(async(_t:any,_x:any,_c:any,page=0)=>
+      page>0?[]:[{...target,organization_id:"daorg_a",organization_name:"Org A",on_hold:false}])
+    await reviewStoreGET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({
+      pending:[],suspended:[],reconciliation:[{...target,organization_id:"daorg_a",
+        organization_name:"Org A",name,on_hold:false}],
+      page:0,has_more:false
+    })
+    svc.personalUnresolvedStoreReactivationClaim.mockResolvedValue({status:"none"})
+    res.status.mockClear()
+    await reviewStoreGET(req,res)
+    expect(res.json).toHaveBeenCalledWith({
+      pending:[],suspended:[],reconciliation:[],page:0,has_more:false
+    })
   })
   it("lists suspended and pending applications separately and privately",async()=>{
     svc.personalReviewableStoreApplications.mockImplementation(async(_token:any,
@@ -377,7 +433,7 @@ describe("B22 Staff reopens only a suspended Store with retained name rights",()
     await reviewStoreGET(req,res)
     expect(res.status).toHaveBeenCalledWith(200)
     expect(res.json).toHaveBeenCalledWith({
-      pending:[],suspended:[{...target,organization_id:"daorg_a",
+      pending:[],reconciliation:[],suspended:[{...target,organization_id:"daorg_a",
         organization_name:"Org A",name,on_hold:false}],
       page:0,has_more:false
     })
