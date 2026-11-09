@@ -19,6 +19,12 @@ const request=z.object({
   risk_version:z.literal(STORE_RENAME_RISK_VERSION)
 }).strict()
 
+const withdraw=z.object({
+  action:z.literal("withdraw"),
+  request_id:z.string().regex(/^dasrn_[a-f0-9]{32}$/),
+  organization_id,seller_id
+}).strict()
+
 export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   res.setHeader("Cache-Control","no-store")
   if(!enabled())return res.status(503).json({message:"Unavailable"})
@@ -43,6 +49,29 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
   let allowed=false;try{allowed=await csrf(req)}catch{}
   if(!allowed||req.headers["x-seller-id"]!==undefined)
     return res.status(403).json({message:"Access denied"})
+  if((req.body as {action?:unknown}|null)?.action==="withdraw"){
+    const parsed=withdraw.safeParse(req.body)
+    if(!parsed.success)return res.status(400).json({message:"Invalid request"})
+    try{
+      const result=await access(req).personalWithdrawStoreRenameRequest(
+        sessionToken(req),{
+          request_id:parsed.data.request_id,
+          organization_id:parsed.data.organization_id,
+          seller_id:parsed.data.seller_id
+        })
+      if(!result)return res.status(403).json({message:"Access denied"})
+      if(result.status!=="withdrawn")
+        return res.status(409).json({message:"Request is no longer pending"})
+      return res.status(200).json({
+        request_id:result.request_id,status:"withdrawn",
+        seller_id:result.seller_id
+      })
+    }catch(error){
+      return res.status(error instanceof IdentityAccessDenied?403:503)
+        .json({message:error instanceof IdentityAccessDenied?"Access denied":
+          "Outcome uncertain; read existing requests before any retry"})
+    }
+  }
   const parsed=request.safeParse(req.body)
   if(!parsed.success)return res.status(400).json({message:"Invalid request"})
   try{
