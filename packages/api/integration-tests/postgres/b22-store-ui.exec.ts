@@ -771,6 +771,160 @@ async function verifyOwnerStoreRenameRequest(
     "organization_id:org,seller_id:id}));return r.status}",org,storeId)
   assert.equal(privateRead,403,"Foreign Owner cannot see proposed private name")
   process.stdout.write("PASS B22 Chrome/PG16: Owner Store name+URL change request with explicit risk acknowledgement, one private pending record and audit/outbox; foreign/CSRF/invalid/duplicate denied; native Seller unchanged\n")
+  // Platform Store approver is a distinct current Person. An ordinary Owner
+  // may not even see the pending name-change queue.
+  assert.equal(await browser.eval("(async()=>{return (await fetch('/personal/platform/store-renames')).status})()"),
+    403,"Organization Owner may not inspect platform rename queue")
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible' && "+
+    "!document.getElementById('workspace').hidden")
+  // Distinguish a server-side authorization/SQL error from asynchronous
+  // visibility-driven refresh. Never treat a hidden panel as proof of 403.
+  const reviewQueue=await reviewer.eval("(async()=>{const r=await fetch('/personal/platform/store-renames?page=0');"+
+    "return {status:r.status,body:await r.json()}})()")
+  assert.equal(reviewQueue.status,200,"Current Store approver GET must succeed")
+  assert.equal(reviewQueue.body.page,0)
+  assert.equal(reviewQueue.body.has_more!==undefined,true)
+  await reviewer.click("#store-rename-review-refresh")
+  await reviewer.wait("!document.getElementById('store-rename-review-panel').hidden && "+
+    "Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
+    ".some(e=>e.textContent.includes("+JSON.stringify(name)+"))")
+  const target=reviewQueue.body.pending.find((entry:any)=>entry.request_id===saved.id)
+  assert.ok(target,"Staff sees only genuine pending Store rename request")
+  assert.equal(target.organization_id,org)
+  assert.equal(target.seller_id,storeId)
+  assert.equal(target.old_name,before.name)
+  assert.equal(target.old_handle,before.handle)
+  assert.equal(target.proposed_name,name)
+  assert.equal(target.proposed_handle,handle)
+  // Disposable browser-only 503; next refresh uses real authorized HTTPS.
+  const onceReview=await reviewer.eval(`(()=>{
+    const original=globalThis.fetch;let failOnce=true;
+    globalThis.fetch=function(input,options){
+      if(failOnce&&typeof input==='string'&&
+         input.startsWith('/personal/platform/store-renames?')){
+        failOnce=false;globalThis.fetch=original;
+        return Promise.resolve(new Response(
+          JSON.stringify({message:'Disposable staff queue fault'}),
+          {status:503,headers:{'content-type':'application/json'}}));
+      }
+      return original.call(this,input,options);
+    };return true;
+  })()`)
+  assert.equal(onceReview,true)
+  await reviewer.click("#store-rename-review-refresh")
+  await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('Yeniden deneyin')")
+  assert.equal(await reviewer.eval("document.getElementById('store-rename-review-panel').hidden"),false)
+  assert.equal(await reviewer.eval("document.querySelectorAll('#store-rename-review-list > div').length"),0,
+    "Private details must remain erased during temporary fault")
+  await reviewer.click("#store-rename-review-refresh")
+  await reviewer.wait("!document.getElementById('store-rename-review-panel').hidden && "+
+    "Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
+    ".some(e=>e.textContent.includes("+JSON.stringify(name)+"))")
+  process.stdout.write("PASS B22 Chrome/HTTPS: transient staff queue 503 clears private rows, visible retry and fresh authorized GET restores list\n")
+  for(const invalidReason of [
+    String.fromCodePoint(0x200B).repeat(10),
+    String.fromCodePoint(0x3164).repeat(10),
+    "R"+String.fromCodePoint(0x200B).repeat(9),
+    "R"+String.fromCodePoint(0x3164).repeat(9),
+    "R"+String.fromCodePoint(0x0301).repeat(9),
+    "R"+" ".repeat(20)+"E"
+  ]){
+    const deniedInvisible=await reviewer.eval(`(async()=>{
+      const sess=await(await fetch('/personal/session')).json();
+      const r=await fetch('/personal/platform/store-renames',{method:'POST',
+        headers:{'content-type':'application/json','x-csrf-token':sess.csrf_token},
+        body:JSON.stringify(${JSON.stringify({action:"reject",request_id:id,seller_id:storeId,reason:invalidReason})})
+      });return r.status;
+    })()`)
+    assert.equal(deniedInvisible,400,"Invisible/padded ret reason must fail HTTP validation")
+    assert.equal((await q("select status from da_store_rename_request where id=$1",[saved.id]))[0].status,
+      "pending_review","Invisible/padded reason cannot decide request")
+    assert.equal((await q(`select count(*)::int n from da_audit_event
+      where action='organization.store_rename_rejected'
+        and new_values->>'request_id'=$1`,[saved.id]))[0].n,0,
+      "Invisible/padded reason must leave zero decision audits")
+    process.stdout.write("PASS B22 Chrome/PG16: invisible or padded reason HTTP 400, pending request intact, zero rejection audit\n")
+  }
+  // Real visible form must reject an invisible-only explanation before POST.
+  const clientDenied=await reviewer.eval(`(()=>{
+    const row=Array.from(document.querySelectorAll('#store-rename-review-list > div'))
+      .find(e=>e.textContent.includes(${JSON.stringify(name)}));
+    if(!row)return false;
+    const textarea=row.querySelector('textarea'),button=row.querySelector('button');
+    if(!textarea||!button||button.disabled)return false;
+    textarea.value=${JSON.stringify("R"+String.fromCodePoint(0x200B).repeat(9))};
+    button.click();
+    return document.getElementById('store-rename-review-status').textContent.includes('okunabilir');
+  })()`)
+  assert.equal(clientDenied,true,"Real Staff UI must reject invisible-only reason")
+  assert.equal((await q("select status from da_store_rename_request where id=$1",[saved.id]))[0].status,
+    "pending_review","UI-invalid reason cannot decide pending request")
+  process.stdout.write("PASS B22 Chrome/PG16: visible Staff form rejects readable-letter + nine invisible padding without changing pending decision\n")
+  const refusalReason="B22 disposable platform review rejected a proposed public Store name"
+  const csrfDenied=await reviewer.eval(`(async()=>{
+    const r=await fetch('/personal/platform/store-renames',{method:'POST',
+      headers:{'content-type':'application/json','x-csrf-token':'bad'},
+      body:JSON.stringify(${JSON.stringify({
+        action:"reject",request_id:id,seller_id:storeId,
+        reason:refusalReason
+      })})
+    });return r.status
+  })()`)
+  assert.equal(csrfDenied,403)
+  const beforeDecision=(await q("select status from da_store_rename_request where id=$1",
+    [saved.id]))[0]
+  assert.equal(beforeDecision.status,"pending_review")
+  const rejectedUi=await reviewer.eval(`(()=>{
+    const row=Array.from(document.querySelectorAll('#store-rename-review-list > div'))
+      .find(e=>e.textContent.includes(${JSON.stringify(name)}))
+    if(!row)return false
+    const reason=row.querySelector('textarea'),button=row.querySelector('button')
+    if(!reason||!button||button.disabled)return false
+    reason.value=${JSON.stringify(refusalReason)}
+    button.click();return true
+  })()`)
+  assert.equal(rejectedUi,true,"Staff must submit actual visible rejection UI")
+  await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('reddedildi')")
+  const decision=await q(`select r.status,r.updated_at,
+    e.action,e.actor_person_id,e.new_values->>'reason' reason,
+    x.id outbox_id from da_store_rename_request r
+    join da_audit_event e on e.organization_id=r.organization_id
+      and e.resource='store-rename-request'
+      and e.target_id=r.seller_id
+      and e.action='organization.store_rename_rejected'
+      and e.new_values->>'request_id'=r.id
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+    where r.id=$1`,[saved.id])
+  assert.equal(decision.length,1,"Exactly one durable decision + audit/outbox")
+  assert.equal(decision[0].status,"rejected")
+  assert.equal(decision[0].action,"organization.store_rename_rejected")
+  assert.equal(decision[0].reason,refusalReason)
+  assert.ok(decision[0].updated_at&&decision[0].outbox_id)
+  const repeat=await reviewer.eval(`(async()=>{
+    const s=await(await fetch('/personal/session')).json()
+    const r=await fetch('/personal/platform/store-renames',{
+      method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+      body:JSON.stringify(${JSON.stringify({
+        action:"reject",request_id:id,seller_id:storeId,reason:refusalReason
+      })})
+    });return r.status
+  })()`)
+  assert.equal(repeat,409,"Repeated staff decision cannot write another audit")
+  assert.equal((await q(`select count(*)::int n from da_audit_event
+    where action='organization.store_rename_rejected'
+      and new_values->>'request_id'=$1`,[saved.id]))[0].n,1)
+  assert.deepEqual((await q("select name,handle,status,approved_at from seller where id=$1",
+    [storeId]))[0],before,"Platform rejection must not mutate native Mercur Seller")
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible'")
+  const ownerOutcome=await browser.callFunction(
+    "async function(org,seller){const r=await fetch('/personal/store-rename-requests?'+new URLSearchParams({"+
+      "organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
+    org,storeId)
+  assert.equal(ownerOutcome.status,200)
+  assert.equal(ownerOutcome.body.requests.find((v:any)=>v.id===saved.id)?.status,"rejected")
+  process.stdout.write("PASS B22 Chrome/PG16: authorized Store staff sees private pending name-change, rejects with reason using real UI; Owner reads final rejection; foreign Owner/CSRF/replay denied, single audit/outbox and native Seller unchanged\n")
 }
 
 /** Competing different-id rename requests against the SAME approved Seller.
