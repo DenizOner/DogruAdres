@@ -1266,8 +1266,25 @@ async function verifyRealNextStorefrontRenameUrls(
   const origin="http://127.0.0.1:"+port
   const logPath=join(temporaryDirectory,"b22-next-storefront.log")
   const fd=openSync(logPath,"wx",0o600)
-  const child=spawn("bun",["run","dev","--hostname","127.0.0.1",
-    "--port",String(port)],{
+  // Reuse B20's proven programmatic Next.js server setup rather than
+  // launching the app's Turbopack development script from a scratch tree.
+  const childScript=join(temporaryDirectory,"b22-next-server.cjs")
+  writeFileSync(childScript,[
+    "const fs=require('node:fs'),http=require('node:http'),path=require('node:path');",
+    "const {createRequire}=require('node:module');",
+    "const requireNext=createRequire(path.join(process.cwd(),'package.json'));",
+    "const next=requireNext('next');",
+    "const port=Number(process.env.B22_NEXT_PORT);",
+    "const app=next({dev:true,dir:process.cwd(),hostname:'127.0.0.1',port});",
+    "(async()=>{",
+    "await app.prepare();",
+    "const server=http.createServer(app.getRequestHandler());",
+    "server.listen(port,'127.0.0.1');",
+    "const close=async()=>{server.close();await app.close();process.exit(0)};",
+    "process.on('SIGTERM',close);",
+    "})().catch(error=>{console.error(error);process.exit(1)});"
+  ].join("\n"),{flag:"wx",mode:0o600})
+  const child=spawn("node",[childScript],{
     cwd:snapshot,
     stdio:["ignore",fd,fd],
     detached:process.platform!=="win32",
@@ -1275,22 +1292,35 @@ async function verifyRealNextStorefrontRenameUrls(
     // production configuration is forwarded to the public Next runtime.
     env:{PATH:process.env.PATH??"",HOME:process.env.HOME??"",
       NODE_ENV:"development",CI:"true",NEXT_TELEMETRY_DISABLED:"1",
+      B22_NEXT_PORT:String(port),
       MEDUSA_BACKEND_URL:backendOrigin,
       NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY:publishableKey,
       NEXT_PUBLIC_DEFAULT_REGION:"de",
       NEXT_PUBLIC_SITE_NAME:"B22 disposable Storefront"}
   })
   try{
-    await waitForLoopback(async()=>{
-      if(child.exitCode!==null||child.signalCode!==null)
-        throw new Error("Real Next.js process exited before startup")
-      try{
-        const response=await fetch(origin+"/favicon.ico",{
-          redirect:"manual",signal:AbortSignal.timeout(2000)})
-        await response.arrayBuffer()
-        return response.status>=200
-      }catch{return false}
-    },90000,"B22 task-only actual Next.js startup")
+    try{
+      await waitForLoopback(async()=>{
+        if(child.exitCode!==null||child.signalCode!==null)
+          throw new Error("Real Next.js process exited before startup")
+        try{
+          const response=await fetch(origin+"/favicon.ico",{
+            redirect:"manual",signal:AbortSignal.timeout(2000)})
+          await response.arrayBuffer()
+          return response.status>=200
+        }catch{return false}
+      },90000,"B22 task-only actual Next.js startup")
+    }catch(error){
+      // Only a fixed non-sensitive error category is allowed out of this
+      // ephemeral log. Do not expose request URLs, env, token or HTML.
+      const log=readFileSync(logPath,"utf8")
+      const cause=/Cannot find module|Module not found/i.test(log)?
+        "dependency-resolution":/EADDRINUSE/i.test(log)?
+        "port-conflict":/next\.config|config.*error/i.test(log)?
+        "next-config":/Turbopack|swc/i.test(log)?
+        "next-native-compiler":"startup-error"
+      throw new Error("Isolated Next.js startup "+cause+"; "+String(error).slice(0,160))
+    }
     const requestPage=async(handle:string)=>{
       const response=await fetch(origin+"/de/sellers/"+encodeURIComponent(handle),{
         redirect:"manual",
