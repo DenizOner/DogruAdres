@@ -244,6 +244,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="store-approval-older" type="button" hidden>Önceki başvuruları göster</button>
     <button id="store-approval-newer" type="button" hidden>Yeni başvurulara dön</button>
   </section>
+  <section id="store-rename-review-panel" hidden style="grid-column:1/-1">
+    <h2>Platform mağaza ad/bağlantı değişiklik başvuruları</h2>
+    <p>Yalnız mağaza onay görevi olan platform görevlisi inceleyebilir. Bir başvurunun reddi mevcut mağaza kimliğini, adını, bağlantısını veya siparişlerini değiştirmez. Onay ve gerçek isim değiştirme işlemi henüz bu ekranda açık değildir.</p>
+    <p id="store-rename-review-status" role="status" aria-live="polite"></p>
+    <div id="store-rename-review-list"></div>
+    <button id="store-rename-review-refresh" type="button">İsim değişikliği başvurularını yenile</button>
+    <button id="store-rename-review-older" type="button" hidden>Daha eski başvuruları göster</button>
+    <button id="store-rename-review-newer" type="button" hidden>Yeni başvurulara dön</button>
+  </section>
   <section id="store-application-panel" hidden style="grid-column:1/-1">
     <h3>Kuruluşun mağaza başvuruları</h3>
     <p>Kuruluş Owner'ı yeni mağaza başvurusu oluşturur. Mağaza doğrudan bu kuruluşa bağlanır; faaliyete geçmesi için platform yöneticisinin ayrıca mağazayı onaylaması gerekir.</p>
@@ -1645,6 +1654,101 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   };
   el('store-approval-newer').onclick=()=>{
     storeApprovalPage=0;void refreshStoreApprovals()
+  };
+  let renameReviewRequest=0,renameReviewPage=0;
+  function clearStoreRenameReviews(){
+    renameReviewRequest++;renameReviewPage=0;
+    el('store-rename-review-panel').hidden=true;
+    el('store-rename-review-list').replaceChildren();
+    el('store-rename-review-status').textContent='';
+    el('store-rename-review-older').hidden=true;
+    el('store-rename-review-newer').hidden=true;
+  }
+  async function refreshStoreRenameReviews(keepOutcome=false){
+    if(document.hidden||el('workspace').hidden)return;
+    const seq=++renameReviewRequest,epoch=viewEpoch;
+    const panel=el('store-rename-review-panel');
+    const list=el('store-rename-review-list'),message=el('store-rename-review-status');
+    if(!keepOutcome)message.textContent='İsim değişikliği başvuruları doğrulanıyor…';
+    try{
+      const data=await api('platform/store-renames?page='+renameReviewPage);
+      if(seq!==renameReviewRequest||epoch!==viewEpoch||document.hidden||
+         el('workspace').hidden)return;
+      if(data.page!==renameReviewPage||typeof data.has_more!=='boolean'||
+         !Array.isArray(data.pending)||data.pending.length>20||
+         data.pending.some(row=>
+           !/^dasrn_[a-f0-9]{32}$/.test(row?.request_id)||
+           !/^sel_[A-Za-z0-9_-]+$/.test(row?.seller_id)||
+           !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row?.organization_id)||
+           typeof row?.organization_name!=='string'||
+           typeof row?.old_name!=='string'||typeof row?.old_handle!=='string'||
+           typeof row?.proposed_name!=='string'||typeof row?.proposed_handle!=='string'||
+           row.old_name.length>300||row.proposed_name.length>300))
+        throw new Error('Başvuru listesi doğrulanamadı');
+      panel.hidden=false;list.replaceChildren();
+      el('store-rename-review-older').hidden=!data.has_more;
+      el('store-rename-review-newer').hidden=renameReviewPage===0;
+      if(!keepOutcome)message.textContent=data.pending.length?
+        'İnceleme bekleyen ad/bağlantı talepleri (sayfa '+(renameReviewPage+1)+'):':
+        'Bu sayfada inceleme bekleyen ad değişikliği yok.';
+      for(const entry of data.pending){
+        const line=document.createElement('div'),summary=document.createElement('p');
+        summary.textContent=entry.organization_name+' — '+entry.old_name+
+          ' / '+entry.old_handle+' → '+entry.proposed_name+
+          ' / '+entry.proposed_handle;
+        const reason=document.createElement('textarea');
+        reason.maxLength=500;reason.placeholder='Ret gerekçesi (10–500 karakter)';
+        reason.setAttribute('aria-label',entry.organization_name+' için değişiklik ret gerekçesi');
+        const reject=document.createElement('button');
+        reject.type='button';reject.textContent='Bu değişiklik talebini gerekçeyle reddet';
+        reject.onclick=async()=>{
+          const explanation=reason.value.trim();
+          if(explanation.length<10||explanation.length>500){
+            message.textContent='Ret gerekçesi 10–500 karakter olmalıdır.';return;
+          }
+          reject.disabled=true;message.textContent='Ret kararı saklanıyor…';
+          try{
+            const answer=await api('platform/store-renames',{
+              method:'POST',body:JSON.stringify({action:'reject',
+                request_id:entry.request_id,seller_id:entry.seller_id,
+                reason:explanation})
+            });
+            if(seq!==renameReviewRequest||epoch!==viewEpoch||document.hidden)return;
+            if(answer.status!=='rejected'||answer.request_id!==entry.request_id||
+               answer.seller_id!==entry.seller_id){
+              const err=Error('Ret yanıtı doğrulanamadı');err.uncertain=true;throw err;
+            }
+            message.textContent='Talep reddedildi; mevcut mağaza adı ve bağlantısı değişmedi.';
+            void refreshStoreRenameReviews(true);
+          }catch(error){
+            if(seq!==renameReviewRequest||epoch!==viewEpoch||document.hidden)return;
+            message.textContent=error.uncertain?
+              'Ret sonucu belirsiz; işlemi tekrarlamayın, listeyi yenileyin.':
+              error.httpStatus===409?
+                'Talep başka işlemle sonuçlandı; güncel listeyi okuyun.':
+                'Ret işlemi doğrulanamadı: '+error.message;
+            // After an uncertain outcome or security failure no retry
+            // from stale UI; only a fresh staff-authorized read re-enables.
+          }
+        };
+        line.append(summary,reason,reject);list.append(line);
+      }
+    }catch(error){
+      if(seq!==renameReviewRequest||epoch!==viewEpoch)return;
+      clearStoreRenameReviews();
+      if(![401,403].includes(error.httpStatus))
+        el('store-rename-review-status').textContent=
+          'İsim değişikliği başvuruları şu anda doğrulanamıyor.';
+    }
+  }
+  el('store-rename-review-refresh').onclick=()=>{
+    renameReviewPage=0;void refreshStoreRenameReviews();
+  };
+  el('store-rename-review-older').onclick=()=>{
+    if(renameReviewPage<1000){renameReviewPage++;void refreshStoreRenameReviews()}
+  };
+  el('store-rename-review-newer').onclick=()=>{
+    renameReviewPage=0;void refreshStoreRenameReviews();
   };
   async function storeApplications(org,request,role,keepOutcome=false){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
@@ -3314,7 +3418,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
   el('org-stores-refresh').onclick=()=>{if(currentOrg)void organizationStores(currentOrg,organizationRequest)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;clearOrganizationReviews();try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshOrganizationReviews();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;clearOrganizationReviews();try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshStoreRenameReviews();void refreshOrganizationReviews();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
@@ -3322,7 +3426,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
-    clearMemberships();clearOrganizationStores();clearStoreApprovals();for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
+    clearMemberships();clearOrganizationStores();clearStoreApprovals();clearStoreRenameReviews();for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
   async function updateMfaForm(form,body){
     const button=form.querySelector('button');button.disabled=true;
     let uncertain=false;
@@ -3685,7 +3789,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
     clearPlatformStorePolicy();
-    clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPendingInvitations();clearOrganizationReviews();
+    clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearStoreRenameReviews();clearPendingInvitations();clearOrganizationReviews();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');
