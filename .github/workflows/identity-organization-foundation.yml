@@ -20,6 +20,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The repository's existing default CodeQL configuration did not analyze
+  # JavaScript/TypeScript (CodeQL aggregate was neutral). This scoped job
+  # uses the free public-repository CodeQL Action, with no repo setting edits.
+  codeql-javascript-typescript:
+    if: github.event_name != 'workflow_dispatch'
+    name: CodeQL — JavaScript/TypeScript
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Checkout exact PR merge ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize JavaScript and TypeScript CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4, 2026-11-04
+        with:
+          languages: javascript-typescript
+          build-mode: none
+      - name: Analyze JavaScript and TypeScript
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4, 2026-11-04
+        with:
+          category: /language:javascript-typescript
+
   r1-windows-authz:
     if: github.event_name != 'workflow_dispatch'
     name: R1 Windows native Authz — synthetic token/ACL only
