@@ -255,13 +255,22 @@ export const updateCustomerPassword = async (password: string, token: string): P
       fetchOptions: { headers: { authorization: `Bearer ${token}` } }
     } as never) as unknown as Promise<unknown>)
     .then(async () => {
-      await removeAuthToken();
+      // Anonymous password recovery has no session to clear. Setting a blank
+      // session cookie unnecessarily re-renders the entire Next.js route
+      // after the credential was already updated.
+      const authHeaders = await getAuthHeaders();
+      if ('authorization' in authHeaders) {
+        await removeAuthToken();
+      }
       const customerCacheTag = await getCacheTag('customers');
-      revalidateTag(customerCacheTag);
+      if (customerCacheTag) {
+        revalidateTag(customerCacheTag);
+      }
       return { success: true, error: null };
     })
-    .catch((err: any) => {
-      return { success: false, error: err.toString() };
+    .catch(() => {
+      // A reset error must never reveal backend details or bearer values.
+      return { success: false, error: 'Password reset could not be completed. Please request a new link.' };
     });
 
   return res;
@@ -277,8 +286,9 @@ export const sendResetPasswordEmail = async (email: string) => {
     .then(() => {
       return { success: true, error: null };
     })
-    .catch((err: any) => {
-      return { success: false, error: err.toString() };
+    .catch(() => {
+      // The public reset request must not expose provider errors, accounts or internal detail.
+      return { success: false, error: 'Password reset is temporarily unavailable. Please try again.' };
     });
 
   return res;

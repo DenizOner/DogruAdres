@@ -78,6 +78,7 @@ export interface NativeBrowserParams {
   initialRow: any
   pg: any
   logs: string[]
+  passwordReset?: { token: string; newPassword: string }
 }
 
 export async function verifyNativeBrowser({
@@ -89,6 +90,7 @@ export async function verifyNativeBrowser({
   initialRow,
   pg,
   logs,
+  passwordReset,
 }: NativeBrowserParams): Promise<void> {
   const chromePath = findChromeBinary()
   const storefrontPort = providedPort ?? (await getFreePort())
@@ -229,6 +231,101 @@ export async function verifyNativeBrowser({
     await cdpSend("Page.enable")
     await cdpSend("Network.enable")
     await cdpSend("Runtime.enable")
+
+    // Separate real user journey using the existing browser, Next and CDP setup.
+    // This mode returns through the normal finally block, which destroys task-owned processes.
+    if (passwordReset) {
+      const resetUrl = "http://127.0.0.1:" + storefrontPort + "/reset-password?token=" + encodeURIComponent(passwordReset.token)
+      const localizedUrl = "http://127.0.0.1:" + storefrontPort + "/tr/reset-password?token=" + encodeURIComponent(passwordReset.token)
+      for (const url of [resetUrl, localizedUrl]) {
+        const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(20000) })
+        assert.equal(response.status, 200, "Native Next.js reset page must load without catalog regions")
+        assert.equal(response.headers.get("referrer-policy"), "no-referrer", "Reset page must use no-referrer")
+        assert.ok(/no-store/.test(response.headers.get("cache-control") || ""), "Reset page must use no-store")
+        assert.ok(!response.headers.has("location"), "Reset token must not redirect to another URL")
+      }
+      process.stdout.write("PASS browser reset HTTP headers: unlocalized/locale Next.js responses have no-referrer/no-store without redirect\n")
+
+      await cdpSend("Page.navigate", { url: resetUrl })
+      await until(async () => {
+        return await evaluate<boolean>(
+          "!!document.querySelector('input[name=\"newPassword\"]') && !!document.querySelector('input[name=\"confirmPassword\"]')"
+        )
+      }, 35000, "real Next.js password form in Chrome")
+      const resetResponse = networkResponses.find(item => item.response.url.includes("/reset-password?token="))
+      assert.ok(resetResponse, "Chrome never received the real reset response")
+
+      // SSR paints form inputs before hydration. PasswordValidator starts green,
+      // then its mounted React effect marks all five rules red for an empty value.
+      // Start typing only when real React input listeners have been attached.
+      await until(async () => {
+        return await evaluate<boolean>(
+          "(()=>{const fields=Array.from(document.querySelectorAll('form input[type=password]'));return fields.length===2 && fields.every(el=>Object.keys(el).some(k=>k.startsWith('__reactProps$'))) && document.querySelectorAll('form .text-red-700').length===5})()"
+        )
+      }, 40000, "hydrated React password validator before Chrome input")
+
+      for (const field of ["newPassword", "confirmPassword"]) {
+        await evaluate("document.querySelector(" + JSON.stringify("input[name=" + field + "]") + ")?.focus()")
+        await cdpSend("Input.insertText", { text: passwordReset.newPassword })
+      }
+      await until(async () => {
+        const values = await evaluate<any>(
+          "Array.from(document.querySelectorAll('form input[type=password]')).map(el=>el.value)"
+        )
+        return Array.isArray(values) && values.length === 2 &&
+          values.every(value => value === passwordReset.newPassword)
+      }, 10000, "password inputs received actual Chrome keystrokes")
+      // Input.insertText dispatches real browser events, but React Hook Form
+      // and the PasswordValidator effect may render asynchronously.
+      await until(async () => {
+        return await evaluate<boolean>(
+          "document.querySelectorAll('form .text-red-700').length === 0"
+        )
+      }, 10000, "validated reset password in hydrated React UI")
+      await pause(350)
+      const beforeSubmitRequests = networkRequests.length
+      const beforeSubmitResponses = networkResponses.length
+      const submitted = await evaluate<boolean>(
+        "(()=>{const button=Array.from(document.querySelectorAll('form button')).find(el=>el.textContent?.includes('Set new password'));if(!button)return false;button.click();return true})()"
+      )
+      assert.ok(submitted, "Real password reset submit button missing")
+      try {
+        await until(async () => {
+          return await evaluate<boolean>("Array.from(document.querySelectorAll(\'h1\')).some(el=>el.textContent?.trim()===\'Password changed\' && el.getClientRects().length>0)")
+        }, 30000, "Next.js real password update action")
+      } catch {
+        // Diagnostic contains only booleans, counts and HTTP status codes.
+        // Never print a bearer URL, password, request body, recipient or DOM HTML.
+        const state = await evaluate<any>(
+          "({formPresent:!!document.querySelector('form'),invalidRules:document.querySelectorAll('form .text-red-700').length,invalidFields:document.querySelectorAll('form [aria-invalid=true]').length,alertPresent:!!document.querySelector('[role=alert]'),successVisible:document.body.textContent?.includes('Password changed')===true,onResetRoute:location.pathname.endsWith('/reset-password'),pageReady:document.readyState,hasNextError:!!document.querySelector('nextjs-portal')})"
+        )
+        const postCount = networkRequests.slice(beforeSubmitRequests).filter(r => r.request.method === "POST").length
+        const responseStatuses = networkResponses.slice(beforeSubmitResponses)
+          .map(r => Number(r.response.status)).filter(status => status >= 100 && status <= 599)
+        throw Error("Reset Chrome submission did not complete: " +
+          JSON.stringify({ state, postCount, responseStatuses }))
+      }
+      const loginPath = await evaluate<string>(
+        "Array.from(document.querySelectorAll('a[href]')).find(el=>el.textContent?.includes('Log in'))?.getAttribute('href') || ''"
+      )
+      const expectedLogin = "/tr/login"
+      assert.equal(loginPath, expectedLogin, "Successful reset must offer the correct localized login link, not /reset-password/login")
+      process.stdout.write("PASS browser reset login link: successful unlocalized recovery links to the legitimate login page\n")
+      for (const request of networkRequests) {
+        const referer = request.request.headers?.Referer || request.request.headers?.referer || ""
+        assert.ok(!String(referer).includes(passwordReset.token), "Reset token leaked in Referer")
+      }
+      for (const entry of rawRequestHeaders) {
+        for (const [key, value] of Object.entries(entry.headers || {})) {
+          if (key.toLowerCase() === "referer") {
+            assert.ok(!String(value).includes(passwordReset.token), "Reset token leaked in wire Referer")
+          }
+        }
+      }
+      assert.ok(logs.every(line => !line.includes(passwordReset.token)), "Reset bearer leaked into Medusa error logs")
+      process.stdout.write("PASS browser customer reset: real hydrated Next.js form, Chrome submission, success state, no reset bearer Referer\n")
+      return
+    }
 
     // 3. Navigate Chrome to Next.js verification route with the actual token (authorized bearer landing).
     const targetUrl = `http://127.0.0.1:${storefrontPort}/auth/verify-email?token=${encodeURIComponent(token)}`

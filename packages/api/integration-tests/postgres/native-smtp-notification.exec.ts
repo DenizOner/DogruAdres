@@ -3,7 +3,7 @@
  */
 import type { ExecArgs, IAuthModuleService, INotificationModuleService } from "@medusajs/framework/types"
 import { AuthWorkflowEvents, ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
-import { requestVerificationWorkflow } from "@medusajs/core-flows"
+import { generateResetPasswordTokenWorkflow, requestVerificationWorkflow } from "@medusajs/core-flows"
 import { readFileSync } from "node:fs"
 import { createServer, TLSSocket } from "node:tls"
 import { randomBytes } from "node:crypto"
@@ -12,6 +12,7 @@ import subscriber from "../../src/subscribers/auth-verification-requested"
 import { encryptSmtpPassword } from "../../src/modules/dogruadres-access/smtp-crypto"
 import type DogruAdresAccessModuleService from "../../src/modules/dogruadres-access/service"
 import { verificationBoundarySnapshot, verifyNativeHttp } from "./native-verification-http"
+import { verifyNativePasswordResetHttp } from "./native-password-reset-http"
 
 export default async function({ container }: ExecArgs) {
   const target = new URL(process.env.DATABASE_URL || "postgres://invalid/invalid")
@@ -34,6 +35,8 @@ export default async function({ container }: ExecArgs) {
   process.env.STOREFRONT_URL = "https://shop.example.invalid"
   let mode = "success"
   const messages: string[] = []
+  // Capture the real SMTP envelope, not just the Notification DB recipient or email body.
+  const smtpRcptTo: string[] = []
   const sockets = new Set<TLSSocket>()
   const server = createServer({ key: readFileSync(process.env.SMTP_TEST_KEY), cert: readFileSync(process.env.SMTP_TEST_CERT) }, socket => {
     sockets.add(socket)
@@ -55,7 +58,11 @@ export default async function({ container }: ExecArgs) {
         } else if (line === "AUTH LOGIN") { authStage = 1; socket.write("334 VXNlcm5hbWU6\r\n") }
         else if (authStage === 1) { authStage = 2; socket.write("334 UGFzc3dvcmQ6\r\n") }
         else if (authStage === 2) { authStage = 0; socket.write(mode === "auth" ? "535 synthetic-private-transport-detail\r\n" : "235 authenticated\r\n") }
-        else if (line.startsWith("MAIL FROM:") || line.startsWith("RCPT TO:")) socket.write("250 OK\r\n")
+        else if (line.startsWith("MAIL FROM:")) socket.write("250 OK\r\n")
+        else if (line.startsWith("RCPT TO:")) {
+          smtpRcptTo.push(line.slice("RCPT TO:".length).trim())
+          socket.write("250 OK\r\n")
+        }
         else if (line === "DATA") { inData = true; socket.write("354 continue\r\n") }
         else if (line === "QUIT") { socket.end("221 bye\r\n") }
         else socket.write("500 invalid command\r\n")
@@ -71,6 +78,8 @@ export default async function({ container }: ExecArgs) {
   const recipient = "smtp-native-" + randomBytes(8).toString("hex") + "@example.invalid"
   const code = "synthetic-" + randomBytes(16).toString("hex")
   const payload = { entity_id: recipient, entity_type: "email", code_provider: "token", auth_identity_id: "synthetic", code }
+  // The existing outer runner requires the native-logs marker; fail closed if reset proof was skipped.
+  let customerResetVerified = false
   const dispatch = () => subscriber({ event: { name: AuthWorkflowEvents.VERIFICATION_REQUESTED, data: payload }, container, pluginOptions: {} })
   const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
   async function until(check: () => Promise<boolean>) {
@@ -90,7 +99,8 @@ export default async function({ container }: ExecArgs) {
     const auth: IAuthModuleService = container.resolve(Modules.AUTH)
     const domainBefore = await verificationBoundarySnapshot(pg)
     const identitiesBefore = Number((await pg("auth_identity").count("*").first())!.count)
-    const registration = await auth.register("emailpass", { body: { email: recipient, password: randomBytes(32).toString("base64url") } })
+    const originalPassword = "OldA9!" + randomBytes(24).toString("base64url")
+    const registration = await auth.register("emailpass", { body: { email: recipient, password: originalPassword } })
     assert.ok(registration.success && registration.authIdentity?.id, "Synthetic native identity registration failed")
     await requestVerificationWorkflow(container).run({ input: { auth_identity_id: registration.authIdentity!.id, entity_id: recipient, entity_type: "email", code_provider: "token" } })
     await until(async () => (await pg("notification").where({ to: recipient, status: "success" })).length === 1)
@@ -148,6 +158,44 @@ export default async function({ container }: ExecArgs) {
     await dispatch(); await dispatch()
     assert.ok(Number(messages.length) === beforeReplay + 2, "Each independent dispatch must send exactly once")
     process.stdout.write("OBSERVED SMTP duplicate semantics: repeated events are independent sends; no cross-event exactly-once guarantee\n")
+
+    // Native password recovery: same Medusa runtime, existing registered event
+    // subscriber, Notification module, TLS SMTP, and disposable AuthIdentity.
+    // No real mailbox, production account, or external SMTP server is used.
+    const resetBefore = messages.length
+    const resetRcptBefore = smtpRcptTo.length
+    const resetRowsBefore = Number(
+      (await pg("notification").where({ to: recipient, status: "success" }).count("*").first())!.count
+    )
+    await generateResetPasswordTokenWorkflow(container).run({
+      input: {
+        entityId: recipient,
+        actorType: "customer",
+        provider: "emailpass",
+        secret: randomBytes(48).toString("hex"),
+      },
+    })
+    await until(async () => {
+      const successful = Number(
+        (await pg("notification").where({ to: recipient, status: "success" }).count("*").first())!.count
+      )
+      return successful === resetRowsBefore + 1 && messages.length === resetBefore + 1
+    })
+    assert.ok(
+      messages[resetBefore].includes("/reset-password?token=") &&
+      messages[resetBefore].includes("15 dakika"),
+      "Native customer password reset email and one-use TTL explanation missing"
+    )
+    assert.deepEqual(
+      smtpRcptTo.slice(resetRcptBefore),
+      [`<${recipient}>`],
+      "Native reset SMTP envelope must target the one intended synthetic customer exactly once"
+    )
+    assert.ok(logged.every(line => !line.includes(recipient)), "Native reset notification leaked recipient into logs")
+    customerResetVerified = true
+    process.stdout.write("PASS SMTP native customer reset: native token workflow -> loaded customer subscriber -> Notification -> TLS SMTP; one accepted reset link on disposable database\n")
+    await verifyNativePasswordResetHttp(container, { recipient, originalPassword, messages, smtpRcptTo })
+
     // New origin regression only: no transport call should be reached in production.
     const oldEnv = { NODE_ENV: process.env.NODE_ENV, STOREFRONT_URL: process.env.STOREFRONT_URL, PUBLIC_ORIGIN: process.env.PUBLIC_ORIGIN, MEDUSA_STOREFRONT_URL: process.env.MEDUSA_STOREFRONT_URL }
     try {
@@ -169,6 +217,7 @@ export default async function({ container }: ExecArgs) {
     }
     const privateValues = [secret, recipient, code, "synthetic-private-transport-detail"]
     assert.ok(privateValues.every(value => logged.every(line => !line.includes(value))), "Private data found in native error logs")
+    assert.ok(customerResetVerified, "Native customer password-reset evidence skipped: refusing required SMTP native logs acceptance marker")
     process.stdout.write("PASS SMTP native logs: no credential, recipient, verification code or transport reply leaked\n")
   } finally {
     logger.error = priorError

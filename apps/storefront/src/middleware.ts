@@ -130,6 +130,16 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
+  // A real public password-recovery route exists at both URL shapes.
+  // Avoid rewriting Server Action POST requests while preserving no-referrer
+  // and no-store on the one-time bearer landing page.
+  if (pathname === '/reset-password' || /^\/[a-z]{2}\/reset-password$/i.test(pathname)) {
+    const response = NextResponse.next();
+    response.headers.set('Referrer-Policy', 'no-referrer');
+    response.headers.set('Cache-Control', 'no-store');
+    return response;
+  }
+
   const cacheIdCookie = request.cookies.get('_medusa_cache_id');
   const cacheId = cacheIdCookie?.value || crypto.randomUUID();
 
