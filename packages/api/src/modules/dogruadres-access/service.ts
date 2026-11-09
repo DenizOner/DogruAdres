@@ -29,6 +29,7 @@ import { PersonalNotifications } from "./personal-notifications"
 import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
 import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
+import { validStoreName, validStoreHandle, STORE_RENAME_RISK_VERSION } from "./store-name-policy"
 import {eligibleOwner,readStoreApplications,storeRequestFingerprint,type StoreRequest} from "./store-application"
 import {readStoreDrafts,authorizedStoreDraftActor,verifiedStoreDraftGrant,storeDraftPayload,type StoreDraftInput} from "./store-application-draft"
 import {
@@ -2546,6 +2547,142 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       organization_name:r.organization_name as string,
       on_hold:r.store_application_enabled===false
     }))
+  }
+
+
+  /** A real Owner may submit a review request, NOT mutate Seller.name/handle.
+   * No name is claimed here. Staff approval must recheck every uniqueness and
+   * ownership invariant immediately before a separate native update workflow.
+   */
+  @InjectTransactionManager()
+  async personalRequestStoreRename(token:string,input:{
+    request_id:string;organization_id:string;seller_id:string;
+    name:string;handle:string;risk_acknowledged:true;
+    risk_version:typeof STORE_RENAME_RISK_VERSION
+  },@MedusaContext() context:Context={}){
+    if(!/^dasrn_[a-f0-9]{32}$/.test(input.request_id)||
+       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       typeof input.name!=="string"||!validStoreName(input.name)||
+       typeof input.handle!=="string"||!validStoreHandle(input.handle)||
+       input.risk_acknowledged!==true||
+       input.risk_version!==STORE_RENAME_RISK_VERSION)throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const identity=await sessions.current(token,true,false)
+    if(!identity)return null
+    const company=await sessions.organizations(token,input.organization_id,false)
+    if(!company||company.person_id!==identity.person_id||
+       company.organizations.length!==1||
+       company.organizations[0].role!=="owner"||
+       !await isCurrentProtectedOwner(db,identity.person_id,input.organization_id))return null
+    const stores=await platformApprovedSellerIds(db,input.organization_id)
+    if(!stores.includes(input.seller_id))return null
+    const binding=await new ActorDelegation(db).binding(token,"member")
+    if(!binding||binding.binding.person_id!==identity.person_id||
+       !binding.binding.actor_id)return null
+    // Lock the named Seller's row and current Member link only for our local
+    // request transaction. Native direct HTTP writes remain blocked at ingress.
+    const native=await db.execute(`select s.name,s.handle from seller s
+      join seller_member sm on sm.seller_id=s.id and sm.deleted_at is null
+      join member m on m.id=sm.member_id and m.deleted_at is null and m.is_active=true
+      where s.id=? and sm.member_id=? and s.deleted_at is null
+        and s.status='open' and s.approved_at is not null
+      for share of s,sm,m`,[input.seller_id,binding.binding.actor_id])
+    if(native.length!==1||typeof native[0].name!=="string"||
+       typeof native[0].handle!=="string")return null
+    const oldName=native[0].name as string,oldHandle=native[0].handle as string
+    // An idempotency key is scoped to the authorized Person, Organization and
+    // exact payload. Replays do not duplicate audit/outbox or new requests.
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
+      [input.seller_id])
+    const prior=await db.execute(`select organization_id,seller_id,requested_by_person_id,
+      proposed_name,proposed_handle,risk_version,status
+      from da_store_rename_request where id=? for update`,[input.request_id])
+    if(prior.length>1)throw new IdentityAccessDenied()
+    if(prior.length){
+      const row=prior[0]
+      if(row.organization_id!==input.organization_id||row.seller_id!==input.seller_id||
+         row.requested_by_person_id!==identity.person_id||
+         row.proposed_name!==input.name||row.proposed_handle!==input.handle||
+         row.risk_version!==input.risk_version)throw new IdentityAccessDenied()
+      return {status:row.status as string,request_id:input.request_id,replayed:true}
+    }
+    const pending=await db.execute(`select id from da_store_rename_request
+      where seller_id=? and status='pending_review' limit 1`,[input.seller_id])
+    if(pending.length)return {status:"conflict" as const}
+    const canonical=await db.execute(`select
+      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
+        '[[:space:]]+',' ','g')),'UTF8')),'hex') as requested_hash,
+      encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(?,NFKC)),
+        '[[:space:]]+',' ','g')),'UTF8')),'hex') as existing_hash`,
+      [input.name,oldName])
+    const hash=canonical[0]?.requested_hash
+    if(canonical.length!==1||typeof hash!=="string"||
+       !/^[a-f0-9]{64}$/.test(hash))throw new IdentityAccessDenied()
+    // Name AND URL must change together; an unchanged pair is not a request.
+    if(hash===canonical[0].existing_hash||input.handle===oldHandle)
+      return {status:"invalid_change" as const}
+    // Optimistic preflight only. It never reserves a name and the future staff
+    // approval MUST repeat every check under its own mutually exclusive lock.
+    const conflict=await db.execute(`select 1 from da_store_application
+      where store_name_hash=? and (seller_id is null or seller_id<>?) limit 1`,
+      [hash,input.seller_id])
+    const nativeConflict=await db.execute(`select 1 from seller where id<>?
+      and (deleted_at is null or deleted_at>clock_timestamp()-interval '30 days')
+      and (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(name,NFKC)),
+        '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or lower(handle)=?)
+      limit 1`,[input.seller_id,hash,input.handle])
+    if(conflict.length||nativeConflict.length)return {status:"unavailable" as const}
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:identity.person_id,actor_type:identity.actor_type,actor_id:identity.actor_id,
+      role_context:"owner",organization_id:input.organization_id,
+      action:"organization.store_rename_requested",module:DOGRUADRES_AUDIT_MODULE,
+      resource:"store-rename-request",target_id:input.seller_id,
+      new_values:{request_id:input.request_id,risk_version:STORE_RENAME_RISK_VERSION,
+        status:"pending_review"},occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const rows=await db.execute(`insert into da_store_rename_request
+      (id,organization_id,seller_id,requested_by_person_id,old_name,old_handle,
+       proposed_name,proposed_handle,risk_version,risk_acknowledged_at,
+       source_audit_event_id,status)
+      values(?,?,?,?,?,?,?,?,?,clock_timestamp(),?,'pending_review')
+      returning id`,[input.request_id,input.organization_id,input.seller_id,
+       identity.person_id,oldName,oldHandle,input.name,input.handle,
+       STORE_RENAME_RISK_VERSION,audit.id])
+    if(rows.length!==1)throw new IdentityAccessDenied()
+    return {status:"pending_review" as const,request_id:input.request_id,replayed:false}
+  }
+
+  /** Private Owner readback for uncertain requests. No native rename or
+   * approval outcome is inferred from a pending request.
+   */
+  @InjectTransactionManager()
+  async personalStoreRenameRequests(token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const identity=await sessions.current(token,true,false)
+    if(!identity)return null
+    const scope=await sessions.organizations(token,organizationId,false)
+    if(!scope||scope.person_id!==identity.person_id||
+       scope.organizations.length!==1||scope.organizations[0].role!=="owner"||
+       !await isCurrentProtectedOwner(db,identity.person_id,organizationId))return null
+    if(!(await platformApprovedSellerIds(db,organizationId)).includes(sellerId))return null
+    const requests=await db.execute(`select id,status,proposed_name,proposed_handle,
+      created_at from da_store_rename_request
+      where organization_id=? and seller_id=?
+      order by created_at desc,id desc limit 10`,[organizationId,sellerId])
+    if(requests.length>10||requests.some(row=>typeof row.id!=="string"||
+       !/^dasrn_[a-f0-9]{32}$/.test(row.id)||
+       !["pending_review","approved","rejected","withdrawn"].includes(row.status)))
+      throw new IdentityAccessDenied()
+    return {organization_id:organizationId,seller_id:sellerId,
+      requests:requests.map(row=>({id:row.id as string,status:row.status as string,
+        proposed_name:row.proposed_name as string,
+        proposed_handle:row.proposed_handle as string,
+        created_at:row.created_at}))}
   }
 
   // B22: legal ownership candidates are NOT a grant, and never leave this

@@ -287,6 +287,24 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="org-stores-status" role="status" aria-live="polite"></p>
     <div id="org-stores"></div>
     <button id="org-stores-refresh" type="button" hidden>Mağazaları yenile</button>
+    <section id="store-rename-panel" hidden aria-labelledby="store-rename-heading">
+      <h3 id="store-rename-heading">Mağaza adı ve bağlantı değişikliği talebi</h3>
+      <p>Talep platform onayına kadar mevcut mağaza adını veya bağlantısını değiştirmez.</p>
+      <form id="store-rename-form">
+        <label>Onaylı mağaza<select name="seller_id" required></select></label>
+        <label>Önerilen yeni mağaza adı<input name="name" minlength="3" maxlength="120" required autocomplete="off"></label>
+        <label>Önerilen yeni URL anahtarı<input name="handle" minlength="3" maxlength="60" pattern="[a-z0-9]+(-[a-z0-9]+)*" required autocomplete="off"></label>
+        <fieldset><legend>Mağaza adı değişikliği hakkında önemli uyarı</legend>
+          <p>Mağaza adınızı değiştirdiğinizde mağaza bağlantınız da değişecektir. Eski bağlantınız yeni bağlantınıza yönlendirilmeyecektir.</p>
+          <p>Eski mağaza adınız ve bağlantınız ileride başka bir mağaza tarafından kullanılabilir. Bu durumda daha önce paylaştığınız eski bağlantıyı kullanan kişiler farklı bir mağazaya ulaşabilir.</p>
+          <label><input name="risk_acknowledged" type="checkbox" required>Bu sonuçları okudum, anladım ve mağaza adımı değiştirmeyi kabul ediyorum.</label>
+        </fieldset>
+        <button type="submit" disabled>Değişiklik başvurusu gönder</button>
+      </form>
+      <p id="store-rename-status" role="status" aria-live="polite"></p>
+      <div id="store-rename-history"></div>
+      <button id="store-rename-refresh" type="button">Talep geçmişini yenile</button>
+    </section>
     <section id="store-block-panel" hidden aria-labelledby="store-block-title">
       <h3 id="store-block-title">Mağazanın alıcı kuruluş engelleri</h3>
       <p>Bu mağazanın bağlı olduğu kuruluşun Owner'ı, belirli bir alıcı kuruluşun bu mağazadan yeni satın alma uygunluğunu engelleyebilir veya engeli kaldırabilir. Diğer mağazalar etkilenmez. Bu işlem geçmiş siparişleri değiştirmez.</p>
@@ -428,7 +446,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   <form id="link-confirm" hidden><p>İki hesap sahipliği sunucuda doğrulanır; kuruluş veya platform yetkisi verilmez.</p><label>İkincil hesap TOTP kodu<input name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code"></label><button>Hesap bağlantısını tamamla</button></form>
   <button id="logout">Bu cihazdan çık</button><button id="logout-all">Tüm cihazlardan çık</button></section>
   <script nonce="${nonce}">
-  let viewEpoch=0,loadedScope='',observing=false;
+  let viewEpoch=0,loadedScope='',observing=false,selectedStoreOwner=false;
   let csrf=''; const el=id=>document.getElementById(id); const status=t=>el('status').textContent=t;
   async function api(path,options={}){
     const epoch=viewEpoch;let r;
@@ -443,9 +461,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const followWrite=path==='store-follows'&&options.method==='POST';
     const policyWrite=path==='platform/store-application-policy'&&options.method==='POST';
     const storeApplicationWrite=path==='store-applications'&&options.method==='POST';
+    const renameWrite=path==='store-rename-requests'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite;
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite;
     let data;
     try{
       data=await r.json();
@@ -1426,6 +1445,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       currentOrg=id;el('detail').textContent=JSON.stringify(result.organizations[0],null,2);history.replaceState(null,'','/personal?organization='+encodeURIComponent(id));
       el('notification-bell').hidden=false;void notifications();
       const managerRole=result.organizations[0]?.role;
+      selectedStoreOwner=managerRole==='owner';
       if(managerRole==='owner'){
         el('memberships-refresh').hidden=false;
         el('invite-member').hidden=false;
@@ -1485,6 +1505,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   function clearOrganizationStores(){
+    clearStoreRename();
     clearStoreBlock();
     clearProductPermissions();
     clearBuyerPermissions();
@@ -2353,6 +2374,100 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   };
 
+
+  let renameRead=0,renamePending=false,renameUncertain=false;
+  function clearStoreRename(preserveSelectedOwner=false){
+    // A transient Store-list failure is not an Organization role change.
+    // Only Organization switch/logout/concealment may discard that role.
+    renameRead++;if(!preserveSelectedOwner)selectedStoreOwner=false;
+    renamePending=false;renameUncertain=false;
+    el('store-rename-panel').hidden=true;
+    el('store-rename-status').textContent='';
+    el('store-rename-history').replaceChildren();
+    const form=el('store-rename-form');
+    if(typeof form?.reset==='function')form.reset();
+    const field=form?.elements&&typeof form.elements.namedItem==='function'?
+      form.elements.namedItem('seller_id'):null;
+    if(typeof field?.replaceChildren==='function')field.replaceChildren();
+    const button=typeof form?.querySelector==='function'?
+      form.querySelector('button[type=submit]'):null;
+    if(button)button.disabled=true;
+  }
+  async function refreshStoreRename(org,request){
+    const form=el('store-rename-form'),seller=form.elements.namedItem('seller_id').value;
+    const seq=++renameRead,epoch=viewEpoch;
+    if(!selectedStoreOwner||!org||!seller||document.hidden)return;
+    const message=el('store-rename-status'),list=el('store-rename-history');
+    message.textContent='Başvurular doğrulanıyor…';
+    try{
+      const data=await api('store-rename-requests?'+new URLSearchParams({
+        organization_id:org,seller_id:seller
+      }).toString());
+      if(seq!==renameRead||epoch!==viewEpoch||request!==organizationRequest||
+         org!==currentOrg||seller!==form.elements.namedItem('seller_id').value)return;
+      if(data.organization_id!==org||data.seller_id!==seller||
+         !Array.isArray(data.requests)||data.requests.length>10||
+         data.requests.some(x=>!/^dasrn_[a-f0-9]{32}$/.test(x?.id)||
+           !['pending_review','approved','rejected','withdrawn'].includes(x?.status)||
+           typeof x?.proposed_name!=='string'||typeof x?.proposed_handle!=='string'))
+        throw Error('Talep bilgisi doğrulanamadı');
+      list.replaceChildren();
+      for(const x of data.requests){
+        const item=document.createElement('p');
+        item.textContent=x.proposed_name+' / '+x.proposed_handle+' — '+
+          (x.status==='pending_review'?'Platform incelemesinde':x.status);
+        list.append(item);
+      }
+      renameUncertain=false;
+      const pending=data.requests.some(x=>x.status==='pending_review');
+      form.querySelector('button[type=submit]').disabled=renamePending||pending;
+      message.textContent=pending?'Mevcut talep incelemede; yeni talep oluşturulamaz.':
+        'Yeni isim ve bağlantı için ayrı risk kabulüyle başvurabilirsiniz.';
+    }catch{
+      if(seq!==renameRead||request!==organizationRequest||org!==currentOrg)return;
+      renameUncertain=true;list.replaceChildren();
+      form.querySelector('button[type=submit]').disabled=true;
+      message.textContent='Talep geçmişi doğrulanamadı. Başvuru göndermeden önce oturumu yeniden doğrulayın.';
+    }
+  }
+  const renameForm=el('store-rename-form');
+  if(renameForm?.elements&&typeof renameForm.elements.namedItem==='function')
+    renameForm.elements.namedItem('seller_id').onchange=()=>{
+      renameForm.querySelector('button[type=submit]').disabled=true;
+      if(currentOrg)void refreshStoreRename(currentOrg,organizationRequest);
+    };
+  el('store-rename-refresh').onclick=()=>{
+    if(currentOrg)void refreshStoreRename(currentOrg,organizationRequest);
+  };
+  el('store-rename-form').onsubmit=async event=>{
+    event.preventDefault();const form=event.currentTarget,org=currentOrg;
+    const request=organizationRequest,epoch=viewEpoch,seller=form.elements.namedItem('seller_id').value;
+    if(!org||!selectedStoreOwner||el('store-rename-panel').hidden||document.hidden||
+       renamePending||renameUncertain||!form.elements.namedItem('risk_acknowledged').checked)return;
+    const id='dasrn_'+crypto.randomUUID().replace(/-/g,'');
+    renamePending=true;const button=form.querySelector('button[type=submit]');button.disabled=true;
+    try{
+      const result=await api('store-rename-requests',{method:'POST',body:JSON.stringify({
+        request_id:id,organization_id:org,seller_id:seller,
+        name:form.elements.namedItem('name').value,handle:form.elements.namedItem('handle').value,
+        risk_acknowledged:true,risk_version:'store-rename-risks-v2'
+      })});
+      if(request!==organizationRequest||epoch!==viewEpoch||org!==currentOrg)return;
+      if(result.request_id!==id||result.status!=='pending_review'){
+        const err=Error('Başvuru sonucu doğrulanamadı');err.uncertain=true;throw err;
+      }
+      form.elements.namedItem('risk_acknowledged').checked=false;
+      el('store-rename-status').textContent='Talep kaydedildi; mağaza adı ve bağlantısı onaylanana kadar değişmedi.';
+      void refreshStoreRename(org,request);
+    }catch(e){
+      if(request!==organizationRequest||epoch!==viewEpoch||org!==currentOrg)return;
+      renameUncertain=!!e.uncertain;
+      el('store-rename-status').textContent=e.uncertain?
+        'Sonuç belirsiz; tekrar göndermeden önce talep geçmişini yenileyin.':
+        'Başvuru reddedildi: '+e.message;
+      if(!e.uncertain)button.disabled=false;
+    }finally{renamePending=false;}
+  };
   async function organizationStores(org,request){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
     const seq=++storeRequest;
@@ -2372,9 +2487,23 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         target.append(line);
       }
       message.textContent=data.stores.length?'Yetkili mağazalar güncellendi.':'Bu kuruluşta görüntülenebilir onaylı mağaza bulunmuyor.';
+      const renameForm=el('store-rename-form');
+      const select=renameForm?.elements&&typeof renameForm.elements.namedItem==='function'?
+        renameForm.elements.namedItem('seller_id'):null;
+      if(select&&typeof select.replaceChildren==='function'){
+        select.replaceChildren();
+        for(const store of data.stores){
+          const opt=document.createElement('option');opt.value=store.id;
+          opt.textContent=store.name;select.append(opt);
+        }
+        el('store-rename-panel').hidden=!selectedStoreOwner||data.stores.length===0;
+        if(!el('store-rename-panel').hidden)void refreshStoreRename(org,request);
+      }
     }catch(e){
       if(request!==organizationRequest||seq!==storeRequest||currentOrg!==org)return;
-      target.replaceChildren();
+      // Preserve the selected Owner only for a transient list failure.
+      // A definite access denial must not retain even client-side Owner UI state.
+      target.replaceChildren();clearStoreRename(![401,403,404].includes(e.httpStatus));
       if(e.httpStatus===401){concealPrivateView();el('login').hidden=false;return}
       message.textContent=[403,404].includes(e.httpStatus)?'Bu kuruluşun mağazalarına erişim izniniz yok.':'Mağazalar doğrulanamadı. Yeniden deneyin.';
     }
