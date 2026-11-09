@@ -183,6 +183,25 @@ describe("Audit Index version 1 validation and redaction", () => {
       expect(()=>projectFoundationAuditEvent({...event,...change}))
         .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
+  it("indexes only authorized Staff reactivation without internal reason or grant",()=>{
+    const event={...source(),role_context:"platform_staff",
+      action:"organization.store_reactivated",resource:"store-application",
+      target_id:"sel_reopened_store",
+      previous_values:{private_reason:"DO-NOT-RELAY"},
+      new_values:{application_id:"daapp_secret",staff_grant_id:"DO-NOT-RELAY",status:"open"}}
+    const projected=projectFoundationAuditEvent(event)
+    expect(projected.action).toBe("organization.store_reactivated")
+    expect(projected.resource).toBe("store-application")
+    expect(projected.target_id).toBe("sel_reopened_store")
+    expect(validateAuditIndexEnvelope(projected)).toEqual(projected)
+    expect(JSON.stringify(projected)).not.toContain("DO-NOT-RELAY")
+    expect(JSON.stringify(projected)).not.toContain("daapp_secret")
+    for(const change of [{role_context:"owner"},{role_context:"member"},
+      {resource:"organization"},{target_id:"wrong_store"},
+      {organization_id:"foreign"}])
+      expect(()=>projectFoundationAuditEvent({...event,...change}))
+        .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+  })
   it.each(["root", "platform-staff", "platform_staff ", "superuser"])("still rejects unsupported role %s", role => {
     expect(() => projectFoundationAuditEvent({ ...source(), role_context: role })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
