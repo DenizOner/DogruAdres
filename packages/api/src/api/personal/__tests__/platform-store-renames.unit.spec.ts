@@ -75,6 +75,8 @@ describe("B22 guarded platform review of Store rename requests",()=>{
     {reason:"short"},
     {reason:"x".repeat(501)},
     {reason:"\u200B".repeat(10)},
+    {reason:"\u3164".repeat(10)},
+    {reason:"\u115F\u1160".repeat(6)},
     {reason:"\u200D\u2060\u200B".repeat(5)},
     {reason:"\u200B\u200D\u2060".repeat(4)+"  "},
     {added:"unexpected"}
