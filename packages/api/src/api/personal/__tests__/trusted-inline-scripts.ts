@@ -12,7 +12,16 @@ export function trustedInlineScripts(html: string): string[] {
     const openEnd = html.indexOf(">", start)
     if (openEnd === -1) throw new Error("Unterminated trusted script start tag")
     const tag = html.slice(start, openEnd + 1)
-    if (!tag.startsWith('<script nonce="') || !tag.endsWith('">')) {
+    const prefix = '<script nonce="'
+    // The source template has a literal ${nonce} placeholder; rendered pages
+    // contain base64. No attributes other than this one nonce are permitted.
+    const nonce = tag.startsWith(prefix) && tag.endsWith('">')
+      ? tag.slice(prefix.length, -2)
+      : ""
+    const validNonce = nonce === '${nonce}' ||
+      (nonce.length > 0 && [...nonce].every(ch =>
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='.includes(ch)))
+    if (!validNonce) {
       throw new Error("Unexpected script tag in trusted fixture")
     }
     const close = html.indexOf("</script>", openEnd + 1)
