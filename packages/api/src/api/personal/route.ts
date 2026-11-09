@@ -1567,7 +1567,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(data.page!==storeApprovalPage||typeof data.has_more!=='boolean'||
          !Array.isArray(data.pending)||data.pending.length>30||
          !Array.isArray(data.suspended)||data.suspended.length>30||
+         !Array.isArray(data.reconciliation)||data.reconciliation.length>30||
          data.suspended.some(row=>!/^daapp_[a-f0-9]{32}$/.test(row?.application_id)||
+           !/^sel_[A-Za-z0-9_-]+$/.test(row?.seller_id)||
+           !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row?.organization_id)||
+           typeof row?.organization_name!=='string'||typeof row?.name!=='string'||
+           typeof row?.on_hold!=='boolean')||
+         data.reconciliation.some(row=>!/^daapp_[a-f0-9]{32}$/.test(row?.application_id)||
            !/^sel_[A-Za-z0-9_-]+$/.test(row?.seller_id)||
            !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row?.organization_id)||
            typeof row?.organization_name!=='string'||typeof row?.name!=='string'||
@@ -1581,7 +1587,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       panel.hidden=false;list.replaceChildren();suspendedList.replaceChildren();
       el('store-approval-older').hidden=!data.has_more;
       el('store-approval-newer').hidden=storeApprovalPage===0;
-      if(!keepOutcome)message.textContent=(data.pending.length||data.suspended.length)?
+      if(!keepOutcome)message.textContent=(data.pending.length||data.suspended.length||data.reconciliation.length)?
         'Mağaza inceleme listesi (sayfa '+(storeApprovalPage+1)+'):':
         data.has_more?'Bu sayfada bekleyen mağaza yok; önceki başvurulara bakın.':'Bu sayfada onay bekleyen mağaza yok.';
       for(const entry of data.pending){
@@ -1677,6 +1683,38 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
             message.textContent=error.uncertain?
               'Açma sonucu belirsiz; yeniden göndermeyin, güncel listeyi kontrol edin.':
               'Mağaza açılamadı. Ad hakkı veya mağaza onayı değişmiş olabilir; yeniden inceleyin.';
+            if(!error.uncertain)button.disabled=false;
+          }
+        };
+        row.append(button);suspendedList.append(row);
+      }
+      for(const entry of data.reconciliation){
+        const row=document.createElement('p'),button=document.createElement('button');
+        row.textContent=entry.organization_name+' — '+entry.name+
+          ' — Mağaza açık; tamamlanma denetim kaydı eksik. ';
+        button.type='button';button.textContent='Açılma kararının kaydını doğrula';
+        button.onclick=async()=>{
+          if(!window.confirm('Mağazanın daha önce açıldığı ve kaynak kararının bulunduğu yeniden denetlenecek. Native açma tekrarlanmayacaktır.'))return;
+          button.disabled=true;
+          message.textContent='Önceki açılma kararı ve gerçek mağaza durumu doğrulanıyor…';
+          try{
+            const result=await api('platform/stores',{method:'POST',
+              body:JSON.stringify({action:'reconcile',
+                application_id:entry.application_id,seller_id:entry.seller_id})});
+            if(result.application_id!==entry.application_id||
+               result.seller_id!==entry.seller_id||result.status!=='open'||
+               result.action!=='reconcile'){
+              const err=new Error('Kayıt tamamlama sonucu belirsiz.');
+              err.uncertain=true;throw err;
+            }
+            if(epoch!==viewEpoch||document.hidden)return;
+            message.textContent='Açılmış mağazanın karar kaydı ve Owner bildirimi tamamlandı.';
+            void refreshStoreApprovals(true);
+          }catch(error){
+            if(epoch!==viewEpoch||document.hidden)return;
+            message.textContent=error.uncertain?
+              'Kayıt sonucu belirsiz; yeniden açma yapmayın, güncel listeyi kontrol edin.':
+              'Kayıt tamamlanamadı; mağazanın güncel durumunu yetkili görevli incelemelidir.';
             if(!error.uncertain)button.disabled=false;
           }
         };
