@@ -21,6 +21,7 @@ const resources = {
   "organization.store_application_right_enabled": "organization",
   "organization.store_application_rejected": "store-application",
   "organization.store_reactivation_claimed": "store-application",
+  "organization.store_reactivation_released": "store-application",
   "organization.store_reactivated": "store-application",
   "organization.store_application_draft_saved": "store-application-draft",
   "organization.store_draft_permission_granted": "store-draft-permission",
@@ -74,7 +75,7 @@ const schema = z.object({
      value.target_id === value.organization_id))
   // A pending Seller rejection is a platform Staff decision, never an
   // Organization Owner role or a native SellerMember implicit entitlement.
-  .refine(value => !["organization.store_application_rejected","organization.store_reactivation_claimed","organization.store_reactivated"].includes(value.action) ||
+  .refine(value => !["organization.store_application_rejected","organization.store_reactivation_claimed","organization.store_reactivation_released","organization.store_reactivated"].includes(value.action) ||
     (value.actor.role_context === "platform_staff" &&
      /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
@@ -85,6 +86,7 @@ const schema = z.object({
     value.action === "organization.owner_assigned" ||
     value.action === "organization.store_application_rejected" ||
     value.action === "organization.store_reactivation_claimed" ||
+    value.action === "organization.store_reactivation_released" ||
     value.action === "organization.store_reactivated" ||
     isCompanyPolicyAction(value.action))
 
