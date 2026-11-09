@@ -21,6 +21,17 @@ describe('MFA settings shell contract (not browser acceptance)',()=>{
     expect(()=>trustedInlineScripts('<script>alert(1)</script>')).toThrow('Unexpected script tag')
     expect(()=>trustedInlineScripts('<script nonce="test">')).toThrow('Unterminated trusted script body')
   })
+  it('rejects empty nonces, external scripts and unexpected script attributes',()=>{
+    for(const html of [
+      '<script nonce="">invalid()</script>',
+      '<script nonce="test" src="/unexpected.js">invalid()</script>',
+      '<script nonce="test" type="module">invalid()</script>',
+      '<script nonce="test" defer>invalid()</script>',
+      '<script nonce="test" onload="invalid()">invalid()</script>',
+    ])expect(()=>trustedInlineScripts(html)).toThrow('Unexpected script tag')
+    expect(trustedInlineScripts('<script nonce="YWI=">safe()</script>')).toEqual(['safe()'])
+    expect(trustedInlineScripts('<script nonce="${nonce}">source()</script>')).toEqual(['source()'])
+  })
  it('conceals the prior actor on both successful and uncertain logout',async()=>{
    const res:any={setHeader:jest.fn(),type:jest.fn().mockReturnThis(),send:jest.fn()};
    (enabled as jest.Mock).mockReturnValue(true);
