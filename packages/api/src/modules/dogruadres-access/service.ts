@@ -2418,12 +2418,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
    */
   @InjectTransactionManager()
   async personalWithStoreApprovalStaffLock<T>(
-    token:string,target:{application_id:string;seller_id:string;decision?:"reject"|"unsuspend"|"reconcile"},
+    token:string,target:{application_id:string;seller_id:string;decision?:"reject"|"unsuspend"|"reconcile"|"release"},
     execute:(context:Context)=>Promise<T>,@MedusaContext() context:Context={}
   ):Promise<T|null>{
     if(!/^daapp_[0-9a-f]{32}$/.test(target.application_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id)||
-       (target.decision!==undefined&&!["reject","unsuspend","reconcile"].includes(target.decision))||
+       (target.decision!==undefined&&!["reject","unsuspend","reconcile","release"].includes(target.decision))||
        typeof execute!=="function")throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
     const staff=await sessions.staff(token,"store.approve","platform")
@@ -2639,7 +2639,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
             and x.deleted_at is null)
         and not exists(select 1 from da_audit_event complete
-          where complete.action='organization.store_reactivated'
+          where complete.action in ('organization.store_reactivated',
+              'organization.store_reactivation_released')
             and complete.module='dogruadres-access' and complete.deleted_at is null
             and complete.organization_id=e.organization_id
             and complete.target_id=e.target_id
@@ -2658,6 +2659,74 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {status:"claimed" as const,claim_audit_id:r.claim_audit_id as string,
       organization_id:r.organization_id as string,
       name:r.name as string,handle:r.handle as string}
+  }
+
+
+  /** A committed intent may precede a process crash or a failed native
+   * workflow. Resolve the uncertain attempt only while the exact Seller is
+   * STILL suspended, under the same Staff/Seller transaction lock that the
+   * original request holds throughout its native workflow. This operation
+   * never invokes Mercur or changes a Store. If native opens, this read must
+   * fail closed; the Staff should use the OPEN-Store reconciliation instead.
+   * The first-party native opener rechecks this claim under the same lock
+   * immediately before calling unsuspend, so a released claim cannot run.
+   */
+  @InjectTransactionManager()
+  async personalReleaseSuspendedStoreReactivationClaim(token:string,target:{
+    application_id:string;seller_id:string
+  },@MedusaContext() context:Context={}){
+    if(!/^daapp_[a-f0-9]{32}$/.test(target.application_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(target.seller_id))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.approve","platform")
+    if(!staff)return null
+    // Lock the real native Seller row against a concurrent status UPDATE,
+    // and verify that this is still a currently owned/approved Store.
+    const rows=await db.execute(`select a.organization_id,s.id
+      from da_store_application a
+      join da_organization d on d.id=a.organization_id
+        and d.status='active' and d.deleted_at is null
+      join da_organization_seller_ownership o on o.organization_id=a.organization_id
+        and o.seller_id=a.seller_id and o.revoked_at is null
+      join da_audit_event origin on origin.id=o.verification_audit_event_id
+        and origin.organization_id=a.organization_id
+        and origin.target_id=a.seller_id
+        and origin.actor_person_id=a.person_id
+        and origin.action='organization.store_application_created'
+        and origin.module='dogruadres-access'
+        and origin.deleted_at is null
+        and origin.new_values->>'application_id'=a.id
+      join seller s on s.id=a.seller_id and s.deleted_at is null
+        and s.status='suspended' and s.approved_at is not null
+      where a.id=? and a.seller_id=? and a.status='created'
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=origin.id
+            and x.source_module='dogruadres-access'
+            and x.deleted_at is null)
+      for update of s`,[target.application_id,target.seller_id])
+    if(rows.length!==1)return {status:"conflict" as const}
+    const claim=await this.personalUnresolvedStoreReactivationClaim(token,target,context)
+    if(!claim||claim.status!=="claimed"||
+       claim.organization_id!==rows[0].organization_id)
+      return {status:"conflict" as const}
+    // The native Seller is unchanged. Preserve original provenance and
+    // append a terminal audit/outbox so no one silently removes the claim.
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:staff.person_id,actor_type:staff.actor_type,
+      actor_id:staff.actor_id,role_context:"platform_staff",
+      organization_id:claim.organization_id,
+      action:"organization.store_reactivation_released",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"store-application",
+      target_id:target.seller_id,
+      new_values:{application_id:target.application_id,
+        claim_audit_id:claim.claim_audit_id,status:"suspended",
+        reason:"native_open_not_confirmed",staff_grant_id:staff.grant_id},
+      occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    return {status:"released" as const,claim_audit_id:claim.claim_audit_id}
   }
 
   /** Persist a private, single canonical completed decision after the native
