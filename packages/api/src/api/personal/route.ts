@@ -2554,6 +2554,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
            !['pending_review','approved','rejected','withdrawn'].includes(x?.status)||
            typeof x?.proposed_name!=='string'||typeof x?.proposed_handle!=='string'))
         throw Error('Talep bilgisi doğrulanamadı');
+      renameUncertain=false;
       list.replaceChildren();
       for(const x of data.requests){
         const row=document.createElement('div'),item=document.createElement('p');
