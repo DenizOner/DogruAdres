@@ -2556,10 +2556,49 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         throw Error('Talep bilgisi doğrulanamadı');
       list.replaceChildren();
       for(const x of data.requests){
-        const item=document.createElement('p');
+        const row=document.createElement('div'),item=document.createElement('p');
         item.textContent=x.proposed_name+' / '+x.proposed_handle+' — '+
           (x.status==='pending_review'?'Platform incelemesinde':x.status);
-        list.append(item);
+        row.append(item);
+        if(x.status==='pending_review'){
+          const cancel=document.createElement('button');
+          cancel.type='button';cancel.textContent='Bekleyen talebi geri çek';
+          cancel.setAttribute('aria-label',x.proposed_name+' değişiklik talebini geri çek');
+          cancel.disabled=renamePending||renameUncertain;
+          cancel.onclick=async()=>{
+            if(renamePending||renameUncertain||document.hidden||!selectedStoreOwner||
+               org!==currentOrg||seller!==form.elements.namedItem('seller_id').value||
+               !confirm('Bu bekleyen mağaza adı değişikliği talebini geri çekmek istiyor musunuz?'))return;
+            renamePending=true;
+            cancel.disabled=true;form.querySelector('button[type=submit]').disabled=true;
+            message.textContent='Talep geri çekiliyor…';
+            try{
+              const result=await api('store-rename-requests',{method:'POST',
+                body:JSON.stringify({action:'withdraw',request_id:x.id,
+                  organization_id:org,seller_id:seller})});
+              if(seq!==renameRead||epoch!==viewEpoch||request!==organizationRequest||
+                 currentOrg!==org||document.hidden)return;
+              if(result.request_id!==x.id||result.seller_id!==seller||
+                 result.status!=='withdrawn'){
+                const err=Error('Geri çekme sonucu doğrulanamadı');
+                err.uncertain=true;throw err;
+              }
+              renameUncertain=false;
+              // A fresh private GET is authoritative; no automatic second POST.
+              await refreshStoreRename(org,request);
+            }catch(error){
+              if(epoch!==viewEpoch||request!==organizationRequest||currentOrg!==org||
+                 document.hidden)return;
+              renameUncertain=!!error.uncertain||error.httpStatus>=500;
+              message.textContent=error.httpStatus===409?
+                'Talep artık beklemede değil. Güncel durumu yenileyin.':
+                'Sonuç belirsiz; işlemi tekrarlamayın. Talep geçmişini yenileyin.';
+              // An uncertain write keeps the controls disabled until readback.
+            }finally{renamePending=false;}
+          };
+          row.append(cancel);
+        }
+        list.append(row);
       }
       renameUncertain=false;
       const pending=data.requests.some(x=>x.status==='pending_review');
