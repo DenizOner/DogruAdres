@@ -709,7 +709,7 @@ async function verifyOwnerStoreRenameRequest(
     "Array.from(document.getElementById('store-rename-form').elements.namedItem('seller_id').options).some(o=>o.value==="+
     JSON.stringify(storeId)+") && !document.querySelector('#store-rename-form button[type=submit]').disabled")
   assert.equal(await browser.eval("selectedStoreOwner"),true)
-  process.stdout.write("PASS B22 Chrome/HTTPS: temporary Store list 503 hides private rename panel, same Owner refresh restores request form from fresh real authorized GET\\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS: temporary Store list 503 hides private rename panel, same Owner refresh restores request form from fresh real authorized GET\n")
   const riskText=await browser.eval("document.getElementById('store-rename-panel').textContent")
   for(const phrase of ["30 takvim günü","otomatik yönlendirilmez",
     "başka bir mağazayı","geçmiş siparişler"])
@@ -836,7 +836,7 @@ async function verifyConcurrentOwnerStoreRenameRequests(
     "Losing concurrent request cannot persist request/audit/outbox")
   assert.deepEqual((await q("select name,handle,status,approved_at from seller where id=$1",
     [storeId]))[0],before,"Concurrent pending requests cannot mutate native Seller")
-  process.stdout.write("PASS B22 Chrome/PG16: simultaneous distinct-id Store rename requests 201+409, one pending PG row and audit/outbox, loser zero effects and native Seller unchanged\\n")
+  process.stdout.write("PASS B22 Chrome/PG16: simultaneous distinct-id Store rename requests 201+409, one pending PG row and audit/outbox, loser zero effects and native Seller unchanged\n")
 }
 
 /** Final-head real Chrome + native Medusa + isolated PG16 acceptance of the
