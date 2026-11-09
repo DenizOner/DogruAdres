@@ -240,6 +240,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p>Yalnız açık mağaza onay görevi ve güncel güçlü giriş ile bekleyen mağazalar onaylanabilir. Kuruluş ile mağaza bağı başvuruda kurulmuştur; ayrıca ilişki onayı yapılmaz.</p>
     <p id="store-approval-status" role="status" aria-live="polite"></p>
     <div id="store-approval-list"></div>
+    <h3>Askıdaki mağazalar</h3>
+    <p>Askı nedeni giderilmiş ve adı/bağlantısı hâlâ kendisine ait mağaza, ayrı platform kararıyla aynı kimlikle yeniden açılabilir. Devredilen adla açılamaz.</p>
+    <div id="store-reactivation-list"></div>
     <button id="store-approval-refresh" type="button">Bekleyen mağazaları yenile</button>
     <button id="store-approval-older" type="button" hidden>Önceki başvuruları göster</button>
     <button id="store-approval-newer" type="button" hidden>Yeni başvurulara dön</button>
@@ -1549,29 +1552,37 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-approval-older').hidden=true;el('store-approval-newer').hidden=true;
     el('store-approval-panel').hidden=true;
     el('store-approval-list').replaceChildren();
+    el('store-reactivation-list').replaceChildren();
     el('store-approval-status').textContent='';
   }
   async function refreshStoreApprovals(keepOutcome=false){
     if(document.hidden||el('workspace').hidden)return;
     const seq=++storeApprovalRequest,epoch=viewEpoch;
-    const panel=el('store-approval-panel'),list=el('store-approval-list'),message=el('store-approval-status');
+    const panel=el('store-approval-panel'),list=el('store-approval-list'),
+      suspendedList=el('store-reactivation-list'),message=el('store-approval-status');
     if(!keepOutcome)message.textContent='Mağazalar kontrol ediliyor…';
     try{
       const data=await api('platform/stores?page='+storeApprovalPage);
       if(seq!==storeApprovalRequest||epoch!==viewEpoch||document.hidden)return;
       if(data.page!==storeApprovalPage||typeof data.has_more!=='boolean'||
          !Array.isArray(data.pending)||data.pending.length>30||
+         !Array.isArray(data.suspended)||data.suspended.length>30||
+         data.suspended.some(row=>!/^daapp_[a-f0-9]{32}$/.test(row?.application_id)||
+           !/^sel_[A-Za-z0-9_-]+$/.test(row?.seller_id)||
+           !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row?.organization_id)||
+           typeof row?.organization_name!=='string'||typeof row?.name!=='string'||
+           typeof row?.on_hold!=='boolean')||
          data.pending.some(row=>!/^daapp_[a-f0-9]{32}$/.test(row?.application_id)||
            !/^sel_[A-Za-z0-9_-]+$/.test(row?.seller_id)||
            !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row?.organization_id)||
            typeof row?.organization_name!=='string'||typeof row?.name!=='string'||
            typeof row?.on_hold!=='boolean'))
         throw new Error('Onay listesi doğrulanamadı');
-      panel.hidden=false;list.replaceChildren();
+      panel.hidden=false;list.replaceChildren();suspendedList.replaceChildren();
       el('store-approval-older').hidden=!data.has_more;
       el('store-approval-newer').hidden=storeApprovalPage===0;
-      if(!keepOutcome)message.textContent=data.pending.length?
-        'Onay bekleyen mağazalar (sayfa '+(storeApprovalPage+1)+'):':
+      if(!keepOutcome)message.textContent=(data.pending.length||data.suspended.length)?
+        'Mağaza inceleme listesi (sayfa '+(storeApprovalPage+1)+'):':
         data.has_more?'Bu sayfada bekleyen mağaza yok; önceki başvurulara bakın.':'Bu sayfada onay bekleyen mağaza yok.';
       for(const entry of data.pending){
         const line=document.createElement('p'),button=document.createElement('button');
@@ -1641,10 +1652,40 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         };
         line.append(button,reason,reject);list.append(line);
       }
+      for(const entry of data.suspended){
+        const row=document.createElement('p'),button=document.createElement('button');
+        row.textContent=entry.organization_name+' — '+entry.name+' — '+entry.seller_id+' ';
+        button.type='button';button.textContent='Askı nedeni giderildi, mağazayı yeniden aç';
+        button.onclick=async()=>{
+          if(!window.confirm('Askı nedeni giderildi mi? Bu mağazanın ad ve bağlantı hakkı denetlenip aynı Store kimliğiyle açılacaktır.'))return;
+          button.disabled=true;message.textContent='Mağaza yeniden açma kararı gönderiliyor…';
+          try{
+            const result=await api('platform/stores',{method:'POST',
+              body:JSON.stringify({action:'unsuspend',
+                application_id:entry.application_id,seller_id:entry.seller_id})});
+            if(result.application_id!==entry.application_id||
+               result.seller_id!==entry.seller_id||result.status!=='open'||
+               result.action!=='unsuspend'){
+              const err=new Error('Açma sonucu doğrulanamadı; listeyi kontrol edin.');
+              err.uncertain=true;throw err;
+            }
+            if(epoch!==viewEpoch||document.hidden)return;
+            message.textContent='Mağaza aynı kimlikle yeniden açıldı. Şirket ve mağaza yetkileri ayrıca denetlenir.';
+            void refreshStoreApprovals(true);
+          }catch(error){
+            if(epoch!==viewEpoch||document.hidden)return;
+            message.textContent=error.uncertain?
+              'Açma sonucu belirsiz; yeniden göndermeyin, güncel listeyi kontrol edin.':
+              'Mağaza açılamadı. Ad hakkı veya mağaza onayı değişmiş olabilir; yeniden inceleyin.';
+            if(!error.uncertain)button.disabled=false;
+          }
+        };
+        row.append(button);suspendedList.append(row);
+      }
     }catch(e){
       if(seq!==storeApprovalRequest||epoch!==viewEpoch)return;
       if([401,403].includes(e.httpStatus)){clearStoreApprovals();return}
-      panel.hidden=false;list.replaceChildren();
+      panel.hidden=false;list.replaceChildren();suspendedList.replaceChildren();
       message.textContent=keepOutcome?message.textContent+' Liste yenilenemedi.':'Onay listesi güvenli biçimde okunamadı.';
     }
   }
