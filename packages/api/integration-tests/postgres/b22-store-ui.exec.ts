@@ -797,6 +797,47 @@ async function verifyOwnerStoreRenameRequest(
   assert.equal(target.old_handle,before.handle)
   assert.equal(target.proposed_name,name)
   assert.equal(target.proposed_handle,handle)
+  // Disposable browser-only 503; next refresh uses real authorized HTTPS.
+  const onceReview=await reviewer.eval(`(()=>{
+    const original=globalThis.fetch;let failOnce=true;
+    globalThis.fetch=function(input,options){
+      if(failOnce&&typeof input==='string'&&
+         input.startsWith('/personal/platform/store-renames?')){
+        failOnce=false;globalThis.fetch=original;
+        return Promise.resolve(new Response(
+          JSON.stringify({message:'Disposable staff queue fault'}),
+          {status:503,headers:{'content-type':'application/json'}}));
+      }
+      return original.call(this,input,options);
+    };return true;
+  })()`)
+  assert.equal(onceReview,true)
+  await reviewer.click("#store-rename-review-refresh")
+  await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('Yeniden deneyin')")
+  assert.equal(await reviewer.eval("document.getElementById('store-rename-review-panel').hidden"),false)
+  assert.equal(await reviewer.eval("document.querySelectorAll('#store-rename-review-list > div').length"),0,
+    "Private details must remain erased during temporary fault")
+  await reviewer.click("#store-rename-review-refresh")
+  await reviewer.wait("!document.getElementById('store-rename-review-panel').hidden && "+
+    "Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
+    ".some(e=>e.textContent.includes("+JSON.stringify(name)+"))")
+  process.stdout.write("PASS B22 Chrome/HTTPS: transient staff queue 503 clears private rows, visible retry and fresh authorized GET restores list\n")
+  const invalidReason=String.fromCodePoint(0x200B).repeat(10)
+  const deniedInvisible=await reviewer.eval(`(async()=>{
+    const sess=await(await fetch('/personal/session')).json();
+    const r=await fetch('/personal/platform/store-renames',{method:'POST',
+      headers:{'content-type':'application/json','x-csrf-token':sess.csrf_token},
+      body:JSON.stringify(${JSON.stringify({action:"reject",request_id:id,seller_id:storeId,reason:invalidReason})})
+    });return r.status;
+  })()`)
+  assert.equal(deniedInvisible,400,"Invisible-only ret reason must fail HTTP validation")
+  assert.equal((await q("select status from da_store_rename_request where id=$1",[saved.id]))[0].status,
+    "pending_review","Invisible reason cannot decide request")
+  assert.equal((await q(`select count(*)::int n from da_audit_event
+    where action='organization.store_rename_rejected'
+      and new_values->>'request_id'=$1`,[saved.id]))[0].n,0,
+    "Invisible reason must leave zero decision audits")
+  process.stdout.write("PASS B22 Chrome/PG16: invisible-only reason HTTP 400, pending request intact, zero rejection audit\n")
   const refusalReason="B22 disposable platform review rejected a proposed public Store name"
   const csrfDenied=await reviewer.eval(`(async()=>{
     const r=await fetch('/personal/platform/store-renames',{method:'POST',
