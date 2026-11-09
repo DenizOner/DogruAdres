@@ -2490,6 +2490,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_audit_event origin on origin.id=o.verification_audit_event_id
         and origin.module='dogruadres-access' and origin.deleted_at is null
         and origin.organization_id=a.organization_id and origin.target_id=a.seller_id
+        and origin.actor_person_id=a.person_id
         and origin.action='organization.store_application_created'
         and origin.new_values->>'application_id'=a.id
       join seller s on s.id=a.seller_id and s.deleted_at is null
@@ -2523,6 +2524,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             and x.source_module='dogruadres-access' and x.deleted_at is null
           where e.organization_id=? and e.target_id=?
             and e.action='organization.store_rename_approved'
+            and e.module='dogruadres-access' and e.resource='store-rename-request'
             and e.new_values->>'request_id'=r.id and e.deleted_at is null)
       limit 2`,[target.seller_id,r.name,r.handle,r.organization_id,target.seller_id])
     if((original.length!==1&&renamed.length!==1)||
