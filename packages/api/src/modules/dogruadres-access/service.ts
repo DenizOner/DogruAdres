@@ -2919,7 +2919,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
       join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
         and s.name=r.old_name and s.handle=r.old_handle
       join da_organization_seller_ownership o on o.seller_id=r.seller_id
         and o.organization_id=r.organization_id and o.revoked_at is null
@@ -3024,7 +3024,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
       join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
         and s.name=r.old_name and s.handle=r.old_handle
       join da_audit_event e on e.id=r.source_audit_event_id
         and e.deleted_at is null and e.module='dogruadres-access'
@@ -3102,7 +3102,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
       join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
         and s.name=r.old_name and s.handle=r.old_handle
       join da_organization_seller_ownership o on o.seller_id=r.seller_id
         and o.organization_id=r.organization_id and o.revoked_at is null
@@ -3231,7 +3231,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
       join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
         and s.name=r.old_name and s.handle=r.old_handle
       where r.id=? and r.seller_id=? and r.status='approving'
         and r.risk_version=? and r.risk_acknowledged_at is not null
@@ -3270,7 +3270,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
       join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
         and s.name=r.proposed_name and s.handle=r.proposed_handle
       join da_audit_event e on e.id=r.source_audit_event_id
         and e.deleted_at is null and e.module='dogruadres-access'
@@ -3379,7 +3379,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join seller_member sm on sm.seller_id=s.id and sm.deleted_at is null
       join member m on m.id=sm.member_id and m.deleted_at is null and m.is_active=true
       where s.id=? and sm.member_id=? and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
       for share of s,sm,m`,[input.seller_id,binding.binding.actor_id])
     if(native.length!==1||typeof native[0].name!=="string"||
        typeof native[0].handle!=="string")return null
