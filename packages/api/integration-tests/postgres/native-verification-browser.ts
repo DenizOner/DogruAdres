@@ -298,13 +298,13 @@ export async function verifyNativeBrowser({
         // Diagnostic contains only booleans, counts and HTTP status codes.
         // Never print a bearer URL, password, request body, recipient or DOM HTML.
         const state = await evaluate<any>(
-          "({formPresent:!!document.querySelector('form'),invalidRules:document.querySelectorAll('form .text-red-700').length,invalidFields:document.querySelectorAll('form [aria-invalid=true]').length,alertPresent:!!document.querySelector('[role=alert]'),successVisible:document.body.innerText.includes('Password changed')})"
+          "({formPresent:!!document.querySelector('form'),invalidRules:document.querySelectorAll('form .text-red-700').length,invalidFields:document.querySelectorAll('form [aria-invalid=true]').length,alertPresent:!!document.querySelector('[role=alert]'),successVisible:document.body.innerText.includes('Password changed'),onResetRoute:location.pathname.endsWith('/reset-password'),pageReady:document.readyState,hasNextError:!!document.querySelector('nextjs-portal')})"
         )
         const postCount = networkRequests.slice(beforeSubmitRequests).filter(r => r.request.method === "POST").length
-        const errorStatuses = networkResponses.slice(beforeSubmitResponses)
-          .map(r => Number(r.response.status)).filter(status => status >= 400)
+        const responseStatuses = networkResponses.slice(beforeSubmitResponses)
+          .map(r => Number(r.response.status)).filter(status => status >= 100 && status <= 599)
         throw Error("Reset Chrome submission did not complete: " +
-          JSON.stringify({ state, postCount, errorStatuses }))
+          JSON.stringify({ state, postCount, responseStatuses }))
       }
       for (const request of networkRequests) {
         const referer = request.request.headers?.Referer || request.request.headers?.referer || ""

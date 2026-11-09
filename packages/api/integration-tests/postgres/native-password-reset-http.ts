@@ -103,11 +103,21 @@ export async function verifyNativePasswordResetHttp(container: MedusaContainer, 
     const link = mime.match(/https:\/\/shop\.example\.invalid\/reset-password\?token=([A-Za-z0-9._~-]+)/)
     assert.ok(link, "Real HTTP-triggered email must contain the reset bearer URL")
     const token = link[1]
-    await verifyNativeBrowser({
-      apiOrigin: origin, storefrontPort, token, recipient,
-      identityId: "", initialRow: null, pg, logs: [],
-      passwordReset: { token, newPassword },
-    })
+    try {
+      await verifyNativeBrowser({
+        apiOrigin: origin, storefrontPort, token, recipient,
+        identityId: "", initialRow: null, pg, logs: [],
+        passwordReset: { token, newPassword },
+      })
+    } catch (error) {
+      // Only print booleans and the sanitized Chrome diagnostic. No bearer,
+      // password, email, response body, request URL or sensitive SQL rows.
+      const newCredentialWorks = await validPassword(newPassword)
+      const oldCredentialWorks = await validPassword(originalPassword)
+      const safeReason = error instanceof Error ? error.message : "unknown"
+      throw Error("Native reset browser acceptance failed: " +
+        JSON.stringify({ newCredentialWorks, oldCredentialWorks }) + "; " + safeReason)
+    }
     assert.ok(await validPassword(newPassword), "Chrome success state did not persist the new native password")
     assert.ok(!await validPassword(originalPassword), "Old password remained valid after Chrome success")
     process.stdout.write("PASS password reset HTTP success: request, delivered link, Chrome form, real Medusa update, durable credential change\n")
