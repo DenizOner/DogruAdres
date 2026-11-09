@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createContext, runInContext } from 'node:vm'
+import { trustedInlineScripts } from './trusted-inline-scripts'
 
 // Execute the shipped browser script; scheduling is controlled, not authorization.
 function harness(interactiveFollowDom=false) {
@@ -15,7 +16,7 @@ function harness(interactiveFollowDom=false) {
       setAttribute(){},append(...items:any[]){this.children.push(...items)},remove(){}}):
     ({textContent:''}),addEventListener:(n:string,f:Function)=>listeners.set(n,f)}
   const context=createContext({document,window:{addEventListener:(n:string,f:Function)=>listeners.set(n,f)},location:new URL('https://app.example.invalid/personal'),URL,history:{replaceState(){}},URLSearchParams,setInterval:(f:Function)=>listeners.set('poll',f),fetch:(path:string,options:any)=>new Promise(resolve=>pending.push({path,options,resolve}))})
-  const scripts=[...source.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1])
+  const scripts=trustedInlineScripts(source)
   // Execute the early token capture too; workspace lifetime keeps its original assertions.
   // The retired Person-only launcher no longer adds server-side URL placeholders.
   for(const script of scripts)runInContext(script,context)
