@@ -771,6 +771,91 @@ async function verifyOwnerStoreRenameRequest(
     "organization_id:org,seller_id:id}));return r.status}",org,storeId)
   assert.equal(privateRead,403,"Foreign Owner cannot see proposed private name")
   process.stdout.write("PASS B22 Chrome/PG16: Owner Store name+URL change request with explicit risk acknowledgement, one private pending record and audit/outbox; foreign/CSRF/invalid/duplicate denied; native Seller unchanged\n")
+  // Platform Store approver is a distinct current Person. An ordinary Owner
+  // may not even see the pending name-change queue.
+  assert.equal(await browser.eval("(async()=>{return (await fetch('/personal/platform/store-renames')).status})()"),
+    403,"Organization Owner may not inspect platform rename queue")
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  await reviewer.wait("!document.getElementById('store-rename-review-panel').hidden && "+
+    "Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
+    ".some(e=>e.textContent.includes("+JSON.stringify(name)+"))")
+  const reviewQueue=await reviewer.eval("(async()=>{const r=await fetch('/personal/platform/store-renames?page=0');"+
+    "return {status:r.status,body:await r.json()}})()")
+  assert.equal(reviewQueue.status,200)
+  assert.equal(reviewQueue.body.page,0)
+  const target=reviewQueue.body.pending.find((entry:any)=>entry.request_id===saved.id)
+  assert.ok(target,"Staff sees only genuine pending Store rename request")
+  assert.equal(target.organization_id,org)
+  assert.equal(target.seller_id,storeId)
+  assert.equal(target.old_name,before.name)
+  assert.equal(target.old_handle,before.handle)
+  assert.equal(target.proposed_name,name)
+  assert.equal(target.proposed_handle,handle)
+  const refusalReason="B22 disposable platform review rejected a proposed public Store name"
+  const csrfDenied=await reviewer.eval(`(async()=>{
+    const r=await fetch('/personal/platform/store-renames',{method:'POST',
+      headers:{'content-type':'application/json','x-csrf-token':'bad'},
+      body:JSON.stringify(${JSON.stringify({
+        action:"reject",request_id:id,seller_id:storeId,
+        reason:refusalReason
+      })})
+    });return r.status
+  })()`)
+  assert.equal(csrfDenied,403)
+  const beforeDecision=(await q("select status from da_store_rename_request where id=$1",
+    [saved.id]))[0]
+  assert.equal(beforeDecision.status,"pending_review")
+  const rejectedUi=await reviewer.eval(`(()=>{
+    const row=Array.from(document.querySelectorAll('#store-rename-review-list > div'))
+      .find(e=>e.textContent.includes(${JSON.stringify(name)}))
+    if(!row)return false
+    const reason=row.querySelector('textarea'),button=row.querySelector('button')
+    if(!reason||!button||button.disabled)return false
+    reason.value=${JSON.stringify(refusalReason)}
+    button.click();return true
+  })()`)
+  assert.equal(rejectedUi,true,"Staff must submit actual visible rejection UI")
+  await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('reddedildi')")
+  const decision=await q(`select r.status,r.updated_at,
+    e.action,e.actor_person_id,e.new_values->>'reason' reason,
+    x.id outbox_id from da_store_rename_request r
+    join da_audit_event e on e.organization_id=r.organization_id
+      and e.resource='store-rename-request'
+      and e.target_id=r.seller_id
+      and e.action='organization.store_rename_rejected'
+      and e.new_values->>'request_id'=r.id
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+    where r.id=$1`,[saved.id])
+  assert.equal(decision.length,1,"Exactly one durable decision + audit/outbox")
+  assert.equal(decision[0].status,"rejected")
+  assert.equal(decision[0].action,"organization.store_rename_rejected")
+  assert.equal(decision[0].reason,refusalReason)
+  assert.ok(decision[0].updated_at&&decision[0].outbox_id)
+  const repeat=await reviewer.eval(`(async()=>{
+    const s=await(await fetch('/personal/session')).json()
+    const r=await fetch('/personal/platform/store-renames',{
+      method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},
+      body:JSON.stringify(${JSON.stringify({
+        action:"reject",request_id:id,seller_id:storeId,reason:refusalReason
+      })})
+    });return r.status
+  })()`)
+  assert.equal(repeat,409,"Repeated staff decision cannot write another audit")
+  assert.equal((await q(`select count(*)::int n from da_audit_event
+    where action='organization.store_rename_rejected'
+      and new_values->>'request_id'=$1`,[saved.id]))[0].n,1)
+  assert.deepEqual((await q("select name,handle,status,approved_at from seller where id=$1",
+    [storeId]))[0],before,"Platform rejection must not mutate native Mercur Seller")
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible'")
+  const ownerOutcome=await browser.callFunction(
+    "async function(org,seller){const r=await fetch('/personal/store-rename-requests?'+new URLSearchParams({"+
+      "organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
+    org,storeId)
+  assert.equal(ownerOutcome.status,200)
+  assert.equal(ownerOutcome.body.requests.find((v:any)=>v.id===saved.id)?.status,"rejected")
+  process.stdout.write("PASS B22 Chrome/PG16: authorized Store staff sees private pending name-change, rejects with reason using real UI; Owner reads final rejection; foreign Owner/CSRF/replay denied, single audit/outbox and native Seller unchanged\n")
 }
 
 /** Competing different-id rename requests against the SAME approved Seller.
