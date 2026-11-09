@@ -62,6 +62,11 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
       if(!result)return res.status(403).json({message:"Access denied"})
       if(result.status!=="withdrawn")
         return res.status(409).json({message:"Request is no longer pending"})
+      if(result.request_id!==parsed.data.request_id||
+         result.seller_id!==parsed.data.seller_id)
+        return res.status(503).json({
+          message:"Outcome uncertain; read existing requests before any retry"
+        })
       return res.status(200).json({
         request_id:result.request_id,status:"withdrawn",
         seller_id:result.seller_id
