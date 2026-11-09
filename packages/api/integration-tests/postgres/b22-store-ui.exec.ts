@@ -735,7 +735,7 @@ async function verifyOwnerStoreRenameRequest(
     "async function(org,id){const r=await fetch('/personal/store-rename-requests?'+new URLSearchParams({"+
     "organization_id:org,seller_id:id}));return r.status}",org,storeId)
   assert.equal(privateRead,403,"Foreign Owner cannot see proposed private name")
-  process.stdout.write("PASS B22 Chrome/PG16: Owner Store name+URL change request with explicit risk acknowledgement, one private pending record and audit/outbox; foreign/CSRF/invalid/duplicate denied; native Seller unchanged\\n")
+  process.stdout.write("PASS B22 Chrome/PG16: Owner Store name+URL change request with explicit risk acknowledgement, one private pending record and audit/outbox; foreign/CSRF/invalid/duplicate denied; native Seller unchanged\n")
 }
 
 /** Final-head real Chrome + native Medusa + isolated PG16 acceptance of the
