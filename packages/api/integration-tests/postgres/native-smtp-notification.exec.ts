@@ -3,7 +3,7 @@
  */
 import type { ExecArgs, IAuthModuleService, INotificationModuleService } from "@medusajs/framework/types"
 import { AuthWorkflowEvents, ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
-import { requestVerificationWorkflow } from "@medusajs/core-flows"
+import { generateResetPasswordTokenWorkflow, requestVerificationWorkflow } from "@medusajs/core-flows"
 import { readFileSync } from "node:fs"
 import { createServer, TLSSocket } from "node:tls"
 import { randomBytes } from "node:crypto"
@@ -148,6 +148,36 @@ export default async function({ container }: ExecArgs) {
     await dispatch(); await dispatch()
     assert.ok(Number(messages.length) === beforeReplay + 2, "Each independent dispatch must send exactly once")
     process.stdout.write("OBSERVED SMTP duplicate semantics: repeated events are independent sends; no cross-event exactly-once guarantee\n")
+
+    // Native password recovery: same Medusa runtime, existing registered event
+    // subscriber, Notification module, TLS SMTP, and disposable AuthIdentity.
+    // No real mailbox, production account, or external SMTP server is used.
+    const resetBefore = messages.length
+    const resetRowsBefore = Number(
+      (await pg("notification").where({ to: recipient, status: "success" }).count("*").first())!.count
+    )
+    await generateResetPasswordTokenWorkflow(container).run({
+      input: {
+        entityId: recipient,
+        actorType: "customer",
+        provider: "emailpass",
+        secret: randomBytes(48).toString("hex"),
+      },
+    })
+    await until(async () => {
+      const successful = Number(
+        (await pg("notification").where({ to: recipient, status: "success" }).count("*").first())!.count
+      )
+      return successful === resetRowsBefore + 1 && messages.length === resetBefore + 1
+    })
+    assert.ok(
+      messages[resetBefore].includes("/reset-password?token=") &&
+      messages[resetBefore].includes("15 dakika"),
+      "Native customer password reset email and one-use TTL explanation missing"
+    )
+    assert.ok(logged.every(line => !line.includes(recipient)), "Native reset notification leaked recipient into logs")
+    process.stdout.write("PASS SMTP native customer reset: native token workflow -> loaded customer subscriber -> Notification -> TLS SMTP; one accepted reset link on disposable database\n")
+
     // New origin regression only: no transport call should be reached in production.
     const oldEnv = { NODE_ENV: process.env.NODE_ENV, STOREFRONT_URL: process.env.STOREFRONT_URL, PUBLIC_ORIGIN: process.env.PUBLIC_ORIGIN, MEDUSA_STOREFRONT_URL: process.env.MEDUSA_STOREFRONT_URL }
     try {

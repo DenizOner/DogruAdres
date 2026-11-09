@@ -685,7 +685,7 @@ async function run(){
             sanitized(String(smtp.error ?? "") + String(smtp.stderr ?? "") + String(smtp.stdout ?? "")))
           const smtpOutput = String(smtp.stdout ?? "")
           for (const marker of ["PASS SMTP native boot:", "PASS SMTP native event:", "PASS SMTP native runtime:",
-            "PASS SMTP native failures:", "PASS SMTP native TLS:", "PASS SMTP native local-event failure:", "PASS SMTP native logs:", "PASS SMTP verification origin:",
+            "PASS SMTP native failures:", "PASS SMTP native TLS:", "PASS SMTP native local-event failure:", "PASS SMTP native logs:", "PASS SMTP native customer reset:", "PASS SMTP verification origin:",
             "PASS verification CORS:",
             "PASS verification HTTP GET:", "PASS verification HTTP negatives:",
             "PASS browser Next middleware:", "PASS browser token preservation:", "PASS browser native GET inspection:", "PASS browser explicit confirmation:", "PASS browser replay denial:", "PASS browser privacy:", "PASS browser missing backend configuration:", "PASS browser Storefront origin:", "PASS browser HTTPS localhost:", "PASS browser IPv4-mapped loopback:",
