@@ -283,7 +283,7 @@ async function run(){
           "PASS B22 Chrome/HTTPS: temporary Store list 503 hides private rename panel, same Owner refresh restores request form from fresh real authorized GET",
           "PASS B22 Chrome/PG16: simultaneous distinct-id Store rename requests 201+409, one pending PG row and audit/outbox, loser zero effects and native Seller unchanged",
           "PASS B22 Chrome/HTTPS/PG16: Staff approves native Seller name+handle via real UI; same Store identity, Owner private readback, original name+URL held 30 days, Owner/CSRF/repeat/conflicting reject denied, one durable audit/outbox",
-          "PASS B22 real Next.js HTTP/PG16: vacated Seller handle 404 no redirect; new handle 200 same native Seller ID",
+          "PASS B22 isolated Next.js/native Mercur HTTP/PG16: ingress 401 preserved; old handle 404 no redirect; new handle 200 same Seller ID",
           "PASS B22 Chrome/PG16: simultaneous Alpha/Gamma normalized Store name 201+409; one native Seller, one durable application, Origin/audit/outbox, loser zero side effects",
           "PASS B22 Chrome/PG16: before-submit stale draft409/zero Seller; concurrent distinct application keys 201+409, one native pending Seller and one durable Origin/audit/outbox",
           "PASS B22 Chrome/PG16: genuine Owner's expired strong proof and temporarily disabled company policy deny same draft with 403, zero native Seller and unchanged private draft",
