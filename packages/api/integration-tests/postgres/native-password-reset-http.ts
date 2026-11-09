@@ -4,7 +4,7 @@
  * All identities, credentials and listeners are disposable.
  */
 import assert from "node:assert/strict"
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { createServer } from "node:http"
 import { dirname, join } from "node:path"
 import { ApiLoader, expressLoader } from "@medusajs/framework/http"
@@ -118,9 +118,19 @@ export async function verifyNativePasswordResetHttp(container: MedusaContainer, 
     process.stdout.write("PASS password reset HTTP replay: consumed bearer rejected with committed password unchanged\n")
 
     const expiredRow = await auth.createPasswordResetToken({
-      provider: "emailpass", entity_id: recipient, ttl_seconds: -60,
+      provider: "emailpass", entity_id: recipient, ttl_seconds: 900,
     })
-    assert.ok(new Date(expiredRow.expires_at).getTime() < Date.now(), "Synthetic expiry row must actually be expired")
+    // Medusa's public Auth service intentionally refuses non-positive TTLs.
+    // Match its official HTTP integration tests: age ONLY the disposable token
+    // row in the isolated PG16 database. JWT signature/expiry remains valid.
+    const tokenHash = createHash("sha256").update(expiredRow.jti).digest("hex")
+    const ownedExpiry = () => pg("auth_password_reset_token").where({
+      entity_id: recipient, token_hash: tokenHash,
+    }).whereNull("deleted_at")
+    assert.equal((await ownedExpiry().select("id")).length, 1, "Expected precisely one task-owned reset token row")
+    await ownedExpiry().update({ expires_at: new Date(Date.now() - 60 * 1000) })
+    const expiredDbRow = await ownedExpiry().first()
+    assert.ok(new Date(expiredDbRow.expires_at).getTime() < Date.now(), "Native reset row must truly be expired")
     const expiredBearer = generateJwtToken({
       entity_id: recipient, provider: "emailpass", actor_type: "customer", purpose: "reset",
     }, {

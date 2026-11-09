@@ -266,11 +266,37 @@ export async function verifyNativeBrowser({
         return Array.isArray(values) && values.length === 2 &&
           values.every(value => value === passwordReset.newPassword)
       }, 10000, "password inputs received actual Chrome keystrokes")
-      await evaluate("document.querySelector('form button')?.click()")
+      // Input.insertText dispatches real browser events, but React Hook Form
+      // and the PasswordValidator effect may render asynchronously.
       await until(async () => {
-        const text = await evaluate<string>("document.body.innerText")
-        return text.includes("Password changed")
-      }, 30000, "Next.js real password update action")
+        return await evaluate<boolean>(
+          "document.querySelectorAll('form .text-red-700').length === 0"
+        )
+      }, 10000, "validated reset password in hydrated React UI")
+      await pause(350)
+      const beforeSubmitRequests = networkRequests.length
+      const beforeSubmitResponses = networkResponses.length
+      const submitted = await evaluate<boolean>(
+        "(()=>{const button=Array.from(document.querySelectorAll('form button')).find(el=>el.textContent?.includes('Set new password'));if(!button)return false;button.click();return true})()"
+      )
+      assert.ok(submitted, "Real password reset submit button missing")
+      try {
+        await until(async () => {
+          const text = await evaluate<string>("document.body.innerText")
+          return text.includes("Password changed")
+        }, 30000, "Next.js real password update action")
+      } catch {
+        // Diagnostic contains only booleans, counts and HTTP status codes.
+        // Never print a bearer URL, password, request body, recipient or DOM HTML.
+        const state = await evaluate<any>(
+          "({formPresent:!!document.querySelector('form'),invalidRules:document.querySelectorAll('form .text-red-700').length,invalidFields:document.querySelectorAll('form [aria-invalid=true]').length,alertPresent:!!document.querySelector('[role=alert]'),successVisible:document.body.innerText.includes('Password changed')})"
+        )
+        const postCount = networkRequests.slice(beforeSubmitRequests).filter(r => r.request.method === "POST").length
+        const errorStatuses = networkResponses.slice(beforeSubmitResponses)
+          .map(r => Number(r.response.status)).filter(status => status >= 400)
+        throw Error("Reset Chrome submission did not complete: " +
+          JSON.stringify({ state, postCount, errorStatuses }))
+      }
       for (const request of networkRequests) {
         const referer = request.request.headers?.Referer || request.request.headers?.referer || ""
         assert.ok(!String(referer).includes(passwordReset.token), "Reset token leaked in Referer")
