@@ -1152,6 +1152,317 @@ async function verifyPlatformStoreRenameApproval(
 }
 
 
+
+/** Disposable real Staff/Owner UI + PostgreSQL: only a previously approved
+ * suspended Store retaining its verified name/handle may be reopened. */
+async function verifyStaffReopensSuspendedStore(
+  owner:B06Chrome,reviewer:B06Chrome,organizationId:string,organizationName:string,
+  sellerId:string,container:any,q:(sql:string,params?:any[])=>Promise<any[]>
+):Promise<void>{
+  const before=(await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [sellerId]))[0]
+  assert.equal(before.status,"open")
+  assert.ok(before.approved_at)
+  const original=(await q(`select id from da_store_application where seller_id=$1
+    and organization_id=$2 and status='created'`,[sellerId,organizationId]))
+  assert.equal(original.length,1)
+  const target={action:"unsuspend" as const,application_id:original[0].id,seller_id:sellerId}
+  const approvedRename=(await q(`select id,proposed_handle from da_store_rename_request
+    where seller_id=$1 and status='approved' and proposed_name=$2
+      and proposed_handle=$3`,[sellerId,before.name,before.handle]))[0]
+  assert.ok(approvedRename?.id,"The current name must have an actual approved rename origin")
+  await suspendSellerWorkflow(container).run({input:{
+    seller_id:sellerId,reason:"B22 disposable Staff reactivation acceptance"
+  }})
+  assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
+    "suspended")
+  const post=async(actor:B06Chrome,payload:Record<string,unknown>,csrfValid=true,
+    forgedHeader=false)=>actor.eval(`(async()=>{
+      const sess=await(await fetch('/personal/session')).json()
+      const r=await fetch('/personal/platform/stores',{
+        method:'POST',headers:{'content-type':'application/json',
+          'x-csrf-token':${csrfValid?"sess.csrf_token":"'forged'"},
+          ${forgedHeader?"'x-seller-id':'"+sellerId+"',":""}},
+        body:JSON.stringify(${JSON.stringify(payload)})
+      });return {status:r.status,body:await r.json()}
+    })()`)
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible'")
+  assert.equal((await post(owner,target)).status,403,"Company Owner cannot act as platform Staff")
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  assert.equal((await post(reviewer,target,false)).status,403)
+  assert.equal((await post(reviewer,target,true,true)).status,403)
+  assert.equal((await post(reviewer,{...target,organization_id:organizationId})).status,400,
+    "A forged Organization field cannot supply Staff resource authority")
+  assert.equal((await post(reviewer,{...target,application_id:"daapp_"+"f".repeat(32)})).status,403,
+    "A different application cannot reactivate this Seller")
+  // Simulate a missing historical name entitlement in this disposable DB.
+  // Do NOT write a second live Seller name that violates native uniqueness.
+  try{
+    await q("update da_store_rename_request set proposed_handle=$1 where id=$2",
+      ["b22-invalid-name-provenance",approvedRename.id])
+    assert.equal((await post(reviewer,target)).status,409,
+      "A Seller with unverified/reassigned name history must stay suspended")
+    assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
+      "suspended")
+  }finally{
+    await q("update da_store_rename_request set proposed_handle=$1 where id=$2",
+      [approvedRename.proposed_handle,approvedRename.id])
+  }
+  // Closing NEW applications must not silently close already approved Stores.
+  await q("update da_organization set store_application_enabled=false where id=$1",
+    [organizationId])
+  try{
+    await reviewer.click("#store-approval-refresh")
+    await reviewer.wait("Array.from(document.querySelectorAll('#store-reactivation-list p'))"+
+      ".some(e=>e.textContent.includes("+JSON.stringify(sellerId)+") && !!e.querySelector('button'))")
+    const clicked=await reviewer.eval(`(()=>{
+      const line=Array.from(document.querySelectorAll('#store-reactivation-list p'))
+        .find(e=>e.textContent.includes(${JSON.stringify(sellerId)}))
+      const button=line?.querySelector('button')
+      if(!button||button.disabled)return false
+      const previous=window.confirm
+      window.confirm=()=>true
+      try{button.click()}finally{window.confirm=previous}
+      return true
+    })()`)
+    assert.equal(clicked,true,"The actual visible Staff button must submit the unsuspend decision")
+    await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('aynı kimlikle yeniden açıldı')")
+    const after=(await q("select id,name,handle,status,status_reason,approved_at from seller where id=$1",
+      [sellerId]))[0]
+    assert.equal(after.id,before.id)
+    assert.equal(after.name,before.name)
+    assert.equal(after.handle,before.handle)
+    assert.equal(after.status,"open")
+    assert.equal(after.status_reason,null)
+    assert.equal(String(after.approved_at),String(before.approved_at))
+    const audited=await q(`select e.id,x.id as outbox_id,e.actor_person_id,e.new_values
+      from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.action='organization.store_reactivated'
+        and e.organization_id=$1 and e.target_id=$2`,[organizationId,sellerId])
+    assert.equal(audited.length,1,"Exactly one completed canonical audit/outbox")
+    assert.equal(audited[0].new_values.application_id,target.application_id)
+    assert.equal(audited[0].new_values.resolution_confirmed,true)
+    assert.ok(audited[0].outbox_id)
+    const notices=await q(`select count(*)::int n from da_notification_receipt n
+      where n.audit_event_id=$1`,[audited[0].id])
+    assert.ok(notices[0].n>=1,"The current Owner has a private receipt")
+    assert.equal((await post(reviewer,target)).status,409,"Replay must not open a second time")
+    assert.equal((await q(`select count(*)::int n from da_audit_event
+      where action='organization.store_reactivated' and target_id=$1`,
+      [sellerId]))[0].n,1)
+    await owner.send("Page.bringToFront")
+    await owner.wait("document.visibilityState==='visible'")
+    await owner.select(organizationName,"owner")
+    await owner.wait("document.getElementById('org-stores').textContent.includes("+
+      JSON.stringify(before.name)+")")
+    const notification=await owner.callFunction(
+      "async function(org){const r=await fetch('/personal/notifications?organization='+encodeURIComponent(org));return {status:r.status,body:await r.json()}}",
+      organizationId)
+    assert.equal(notification.status,200,"The current protected Owner may read private reactivation notice")
+    assert.ok(notification.body.notifications.some((n:any)=>
+      n.title==="Mağaza yeniden açıldı" && n.context===organizationName),
+      "The native Store reactivation audit receipt must appear in the actual Owner notification UI")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Staff safely unsuspends same approved Store via real UI; current name/handle/ID preserved, paused new applications allowed, forged/CSRF/Owner/name-conflict/replay denied, one durable audit/outbox and Owner readback\n")
+
+    // The next disposable suspension forces an audit/outbox failure AFTER
+    // the native Seller becomes open. Its durable intent must survive so a
+    // different authorized Staff may reconcile without native replay.
+    await suspendSellerWorkflow(container).run({input:{
+      seller_id:sellerId,reason:"B22 task-only post-native completion fault"
+    }})
+    assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
+      "suspended")
+    await q(`create function b22_reactivation_audit_fault() returns trigger
+      language plpgsql as $$
+      begin
+        if exists(select 1 from da_audit_event e
+          where e.id=new.source_audit_event_id
+            and e.action='organization.store_reactivated') then
+          raise exception 'B22 isolated post-native reactivation audit failure';
+        end if;
+        return new;
+      end;$$`)
+    await q(`create trigger b22_reactivation_audit_fault
+      before insert on da_audit_outbox for each row
+      execute function b22_reactivation_audit_fault()`)
+    try{
+      await reviewer.send("Page.bringToFront")
+      await reviewer.wait("document.visibilityState==='visible'")
+      assert.equal((await post(reviewer,target)).status,503)
+      assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
+        "open","Never assume a native workflow rolled back after an audit failure")
+      const claims=await q(`select e.id,x.id as outbox_id
+        from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.action='organization.store_reactivation_claimed'
+          and e.organization_id=$1 and e.target_id=$2
+        order by e.occurred_at,e.id`,[organizationId,sellerId])
+      assert.equal(claims.length,2,
+        "Both native opening cycles must have an independently committed claim")
+      assert.ok(claims[1].outbox_id)
+      const completed=await q(`select id from da_audit_event
+        where action='organization.store_reactivated'
+          and organization_id=$1 and target_id=$2`,[organizationId,sellerId])
+      assert.equal(completed.length,1,
+        "The injected second completion transaction must not partially commit")
+      assert.equal((await post(reviewer,target)).status,409,
+        "Do not unsuspend an already open native Seller again")
+    }finally{
+      await q("drop trigger if exists b22_reactivation_audit_fault on da_audit_outbox")
+      await q("drop function if exists b22_reactivation_audit_fault()")
+    }
+    await reviewer.click("#store-approval-refresh")
+    await reviewer.wait("Array.from(document.querySelectorAll('#store-reactivation-list p'))"+
+      ".some(e=>e.textContent.includes('denetim kaydı eksik') && !!e.querySelector('button'))")
+    const reconciled=await reviewer.eval(`(()=>{
+      const line=Array.from(document.querySelectorAll('#store-reactivation-list p'))
+        .find(e=>e.textContent.includes('denetim kaydı eksik'))
+      const button=line?.querySelector('button')
+      if(!button||button.disabled)return false
+      const previous=window.confirm
+      window.confirm=()=>true
+      try{button.click()}finally{window.confirm=previous}
+      return true
+    })()`)
+    assert.equal(reconciled,true,"Real Staff UI should expose reconciliation, not native replay")
+    await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('karar kaydı ve Owner bildirimi tamamlandı')")
+    const finished=await q(`select e.id,e.new_values->>'claim_audit_id' as claim_id,
+        x.id as outbox_id
+      from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.action='organization.store_reactivated'
+        and e.organization_id=$1 and e.target_id=$2
+      order by e.occurred_at,e.id`,[organizationId,sellerId])
+    assert.equal(finished.length,2,"One completed event per suspension/claim")
+    assert.notEqual(finished[0].claim_id,finished[1].claim_id)
+    assert.ok(finished.every((v:any)=>v.outbox_id))
+    const notices2=await q(`select count(*)::int n
+      from da_notification_receipt where audit_event_id in
+        (select id from da_audit_event
+          where action='organization.store_reactivated'
+            and organization_id=$1 and target_id=$2)`,[organizationId,sellerId])
+    assert.ok(notices2[0].n>=2,"Current Owner gets one private completion receipt per cycle")
+    assert.equal((await post(reviewer,{...target,action:"reconcile"})).status,409)
+    assert.equal((await post(reviewer,target)).status,409)
+    assert.equal((await q(`select count(*)::int n from da_audit_event
+      where action='organization.store_reactivated'
+        and organization_id=$1 and target_id=$2`,[organizationId,sellerId]))[0].n,2)
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: post-native reactivation audit failure preserves durable claim/outbox, Store open and HTTP503; real Staff UI reconciles with no second native opening, Owner notice persists once, replay denied\n")
+
+    // Exact pre-native crash interval: commit the source-proven intent and
+    // its outbox, but intentionally DO NOT invoke the Mercur workflow.
+    // This simulates process termination between the existing committed
+    // claim and the separate native run without a test-only production hook.
+    await suspendSellerWorkflow(container).run({input:{
+      seller_id:sellerId,reason:"B22 task-only pre-native crash recovery"
+    }})
+    assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
+      "suspended")
+    const [stuck]=await q(`insert into da_audit_event
+      (id,actor_person_id,actor_type,actor_id,organization_id,action,module,
+       resource,target_id,role_context,new_values,occurred_at)
+      select 'daaud_'||gen_random_uuid()::text,
+        e.actor_person_id,e.actor_type,e.actor_id,e.organization_id,
+        'organization.store_reactivation_claimed','dogruadres-access',
+        'store-application',e.target_id,'platform_staff',
+        jsonb_build_object('application_id',$1::text,'status','pending_native',
+          'name',$2::text,'handle',$3::text,
+          'staff_grant_id',e.new_values->>'staff_grant_id'),
+        clock_timestamp()
+      from da_audit_event e
+      where e.action='organization.store_reactivation_claimed'
+        and e.organization_id=$4 and e.target_id=$5
+      order by e.occurred_at desc,e.id desc limit 1 returning id`,
+      [target.application_id,before.name,before.handle,organizationId,sellerId])
+    assert.ok(stuck?.id,"The last committed claim can be reproduced from a real authorized Staff claim")
+    await q(`insert into da_audit_outbox
+      (id,source_audit_event_id,source_module,envelope)
+      values('daaob_'||gen_random_uuid()::text,$1,'dogruadres-access','{}'::jsonb)`,
+      [stuck.id])
+    const stuckRecord=await q(`select e.id,x.id outbox_id
+      from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.id=$1 and e.action='organization.store_reactivation_claimed'`,
+      [stuck.id])
+    assert.equal(stuckRecord.length,1,"Pre-native claim and outbox are durably committed")
+    assert.ok(stuckRecord[0].outbox_id)
+    assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
+      "suspended","No native Seller opening happened")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    assert.equal((await post(reviewer,target)).status,409,
+      "A new unsuspend cannot bypass the earlier unresolved intent")
+    assert.equal((await post(owner,{...target,action:"release"})).status,403,
+      "Organization Owner cannot cancel a platform Staff decision")
+    assert.equal((await post(reviewer,{...target,action:"release"},false)).status,403,
+      "Release requires a valid CSRF token")
+    assert.equal((await post(reviewer,{...target,action:"release",organization_id:organizationId})).status,400,
+      "Release must never accept forged Organization fields")
+    assert.equal((await post(reviewer,{...target,action:"release",
+      application_id:"daapp_"+"f".repeat(32)})).status,403,
+      "A foreign application cannot release a different Seller claim")
+    assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
+      "suspended")
+    await reviewer.click("#store-approval-refresh")
+    await reviewer.wait("Array.from(document.querySelectorAll('#store-reactivation-list p'))"+
+      ".some(e=>e.textContent.includes('önceki açılma denemesi belirsiz') && !!e.querySelector('button'))")
+    const released=await reviewer.eval(`(()=>{
+      const row=Array.from(document.querySelectorAll('#store-reactivation-list p'))
+        .find(e=>e.textContent.includes('önceki açılma denemesi belirsiz'))
+      const button=row?.querySelector('button')
+      if(!button||button.disabled)return false
+      const original=window.confirm
+      window.confirm=()=>true
+      try{button.click()}finally{window.confirm=original}
+      return true
+    })()`)
+    assert.equal(released,true,"Actual Staff UI offers the pre-native recovery action")
+    await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('deneme kayda geçirilerek kapatıldı')")
+    assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
+      "suspended","Releasing a committed intent cannot open or mutate the Seller")
+    const releasedRows=await q(`select e.id,e.new_values->>'claim_audit_id' claim_id,
+        x.id outbox_id
+      from da_audit_event e
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+      where e.action='organization.store_reactivation_released'
+        and e.organization_id=$1 and e.target_id=$2`,
+      [organizationId,sellerId])
+    assert.equal(releasedRows.length,1,"Release must preserve exactly one terminal audit/outbox")
+    assert.equal(releasedRows[0].claim_id,stuck.id)
+    assert.ok(releasedRows[0].outbox_id)
+    assert.equal((await post(reviewer,{...target,action:"release"})).status,409,
+      "A released pre-native claim cannot be released twice")
+    assert.equal((await post(reviewer,{...target,action:"reconcile"})).status,409,
+      "A Seller that remains suspended cannot be falsely reconciled as open")
+    await reviewer.click("#store-approval-refresh")
+    await reviewer.wait("Array.from(document.querySelectorAll('#store-reactivation-list p'))"+
+      ".some(e=>e.textContent.includes("+JSON.stringify(sellerId)+") && "+
+      "!!e.querySelector('button') && e.querySelector('button').textContent.includes('yeniden aç'))")
+    // A distinct, newly authorized Staff decision can now reopen the Store.
+    const newAttempt=await post(reviewer,target)
+    assert.equal(newAttempt.status,200,
+      "A different attempt can succeed after the source-proven suspended claim was released")
+    assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
+      "open")
+    assert.equal((await post(reviewer,{...target,action:"release"})).status,409,
+      "An already open Seller cannot release a prior claim")
+    const releases=await q(`select count(*)::int n from da_audit_event
+      where action='organization.store_reactivation_released'
+        and organization_id=$1 and target_id=$2`,[organizationId,sellerId])
+    assert.equal(releases[0].n,1)
+    const completions=await q(`select count(*)::int n from da_audit_event
+      where action='organization.store_reactivated'
+        and organization_id=$1 and target_id=$2`,[organizationId,sellerId])
+    assert.equal(completions[0].n,3,
+      "A released pre-native claim has no fake completion; new native opening has one")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: pre-native crash retains suspended Seller and committed claim/outbox; real Staff UI releases intent with one terminal audit, Owner/CSRF/forgery/replay denied, no blind native retry; new authorized attempt succeeds\n")
+
+  }finally{
+    await q("update da_organization set store_application_enabled=true where id=$1",
+      [organizationId])
+  }
+}
+
 /** Real Owner HTTP/UI withdrawal of a pending change after the approved
  * rename journey. All data is task-owned; the actual Seller is unchanged.
  */
@@ -6201,6 +6512,8 @@ export default async function({container}:any){
       browser,sellerGamma.id,gammaSellerId,A.person,rand,q)
     await verifyPlatformStoreRenameApproval(
       browser,reviewer,sellerGamma.id,gammaSellerId,q)
+    await verifyStaffReopensSuspendedStore(
+      browser,reviewer,sellerGamma.id,sellerGamma.name,gammaSellerId,container,q)
     await browser.select(organizations[0].name,"owner")
     const gammaSku="B22-GAMMA-BETA-"+rand
     const {result:[gammaOffer]}=await createOffersWorkflow(container).run({

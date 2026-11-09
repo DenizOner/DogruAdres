@@ -83,6 +83,6 @@ describe("B22 platform Store approval guard",()=>{
   it("lists only native pending Stores to authorized reviewer",async()=>{
     await GET(req,res)
     expect(res.status).toHaveBeenCalledWith(200)
-    expect(res.json).toHaveBeenCalledWith({pending:[{...candidate,name:"Store"}],page:0,has_more:true})
+    expect(res.json).toHaveBeenCalledWith({pending:[{...candidate,name:"Store"}],suspended:[],reconciliation:[],release_pending:[],page:0,has_more:true})
   })
 })

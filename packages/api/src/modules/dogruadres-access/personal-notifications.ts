@@ -36,11 +36,12 @@ export class PersonalNotifications {
         or
         (a.action in ('organization.store_application_right_enabled',
                       'organization.store_application_right_disabled',
-                      'organization.store_application_rejected')
-          and ((a.action='organization.store_application_rejected'
+                      'organization.store_application_rejected',
+                      'organization.store_reactivated')
+          and ((a.action in ('organization.store_application_rejected','organization.store_reactivated')
                 and a.resource='store-application'
                 and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
-            or (a.action<>'organization.store_application_rejected'
+            or (a.action not in ('organization.store_application_rejected','organization.store_reactivated')
                 and a.resource='organization' and a.target_id=a.organization_id))
           and (?='' or a.organization_id=?)
           and o.status='active' and o.deleted_at is null
@@ -100,12 +101,14 @@ export class PersonalNotifications {
         const draftGranted=n.action === 'organization.store_draft_permission_granted'
         const draftRevoked=n.action === 'organization.store_draft_permission_revoked'
         const storeRejected=n.action === 'organization.store_application_rejected'
+        const storeReactivated=n.action === 'organization.store_reactivated'
         return {
           id:n.id,created_at:n.created_at,read_at:n.read_at,
           title:locked?'Oturum kilitlendi':draftGranted?
             'Mağaza taslağı hazırlama izni verildi':draftRevoked?
             'Mağaza taslağı hazırlama izni kaldırıldı':storeRejected?
-            'Mağaza başvurusu reddedildi':opened?
+            'Mağaza başvurusu reddedildi':storeReactivated?
+            'Mağaza yeniden açıldı':opened?
             'Yeni mağaza başvuru hakkı açıldı':'Yeni mağaza başvuru hakkı durduruldu',
           context:locked?'Kişisel hesabınız':n.organization_name,
           description:locked?
@@ -113,6 +116,7 @@ export class PersonalNotifications {
             draftGranted?'Bu şirkette mağaza başvuru taslağı hazırlayıp düzenleyebilirsiniz; başvuru gönderemezsiniz.':
             draftRevoked?'Bu şirketin mağaza başvuru taslaklarına erişim izniniz kaldırıldı.':
             storeRejected?'Şirketinizin bekleyen mağaza başvurusu platform tarafından reddedildi. Ayrıntıları yalnız yetkili şirket alanından inceleyebilirsiniz.':
+            storeReactivated?'Şirketinizin onaylı mağazası platform tarafından yeniden etkinleştirildi. Güncel durumu şirket alanında kontrol edebilirsiniz.':
             opened?
             'Şirketiniz yeniden yeni mağaza başvurusu gönderebilir. Bekleyen başvurular otomatik onaylanmaz.':
             'Şirketinizin yeni mağaza başvuruları durduruldu. Mevcut faal mağazalar etkilenmez.'
@@ -138,11 +142,12 @@ export class PersonalNotifications {
           or
           (a.action in ('organization.store_application_right_enabled',
                         'organization.store_application_right_disabled',
-                        'organization.store_application_rejected')
-            and ((a.action='organization.store_application_rejected'
+                        'organization.store_application_rejected',
+                      'organization.store_reactivated')
+            and ((a.action in ('organization.store_application_rejected','organization.store_reactivated')
                   and a.resource='store-application'
                   and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
-              or (a.action<>'organization.store_application_rejected'
+              or (a.action not in ('organization.store_application_rejected','organization.store_reactivated')
                   and a.resource='organization' and a.target_id=a.organization_id))
             and (?='' or a.organization_id=?)
             and o.status='active' and o.deleted_at is null
