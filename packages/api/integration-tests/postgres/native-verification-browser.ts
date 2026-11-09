@@ -78,6 +78,7 @@ export interface NativeBrowserParams {
   initialRow: any
   pg: any
   logs: string[]
+  passwordReset?: { token: string; newPassword: string }
 }
 
 export async function verifyNativeBrowser({
@@ -89,6 +90,7 @@ export async function verifyNativeBrowser({
   initialRow,
   pg,
   logs,
+  passwordReset,
 }: NativeBrowserParams): Promise<void> {
   const chromePath = findChromeBinary()
   const storefrontPort = providedPort ?? (await getFreePort())
@@ -229,6 +231,61 @@ export async function verifyNativeBrowser({
     await cdpSend("Page.enable")
     await cdpSend("Network.enable")
     await cdpSend("Runtime.enable")
+
+    // Separate real user journey using the existing browser, Next and CDP setup.
+    // This mode returns through the normal finally block, which destroys task-owned processes.
+    if (passwordReset) {
+      const resetUrl = "http://127.0.0.1:" + storefrontPort + "/reset-password?token=" + encodeURIComponent(passwordReset.token)
+      const localizedUrl = "http://127.0.0.1:" + storefrontPort + "/tr/reset-password?token=" + encodeURIComponent(passwordReset.token)
+      for (const url of [resetUrl, localizedUrl]) {
+        const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(20000) })
+        assert.equal(response.status, 200, "Native Next.js reset page must load without catalog regions")
+        assert.equal(response.headers.get("referrer-policy"), "no-referrer", "Reset page must use no-referrer")
+        assert.ok(/no-store/.test(response.headers.get("cache-control") || ""), "Reset page must use no-store")
+        assert.ok(!response.headers.has("location"), "Reset token must not redirect to another URL")
+      }
+      process.stdout.write("PASS browser reset HTTP headers: unlocalized/locale Next.js responses have no-referrer/no-store without redirect\n")
+
+      await cdpSend("Page.navigate", { url: resetUrl })
+      await until(async () => {
+        return await evaluate<boolean>(
+          "!!document.querySelector('input[name=\"newPassword\"]') && !!document.querySelector('input[name=\"confirmPassword\"]')"
+        )
+      }, 35000, "real Next.js password form in Chrome")
+      const resetResponse = networkResponses.find(item => item.response.url.includes("/reset-password?token="))
+      assert.ok(resetResponse, "Chrome never received the real reset response")
+
+      for (const field of ["newPassword", "confirmPassword"]) {
+        await evaluate("document.querySelector(" + JSON.stringify("input[name=" + field + "]") + ")?.focus()")
+        await cdpSend("Input.insertText", { text: passwordReset.newPassword })
+      }
+      await until(async () => {
+        const values = await evaluate<any>(
+          "Array.from(document.querySelectorAll('form input[type=password]')).map(el=>el.value)"
+        )
+        return Array.isArray(values) && values.length === 2 &&
+          values.every(value => value === passwordReset.newPassword)
+      }, 10000, "password inputs received actual Chrome keystrokes")
+      await evaluate("document.querySelector('form button')?.click()")
+      await until(async () => {
+        const text = await evaluate<string>("document.body.innerText")
+        return text.includes("Password changed")
+      }, 30000, "Next.js real password update action")
+      for (const request of networkRequests) {
+        const referer = request.request.headers?.Referer || request.request.headers?.referer || ""
+        assert.ok(!String(referer).includes(passwordReset.token), "Reset token leaked in Referer")
+      }
+      for (const entry of rawRequestHeaders) {
+        for (const [key, value] of Object.entries(entry.headers || {})) {
+          if (key.toLowerCase() === "referer") {
+            assert.ok(!String(value).includes(passwordReset.token), "Reset token leaked in wire Referer")
+          }
+        }
+      }
+      assert.ok(logs.every(line => !line.includes(passwordReset.token)), "Reset bearer leaked into Medusa error logs")
+      process.stdout.write("PASS browser customer reset: real hydrated Next.js form, Chrome submission, success state, no reset bearer Referer\n")
+      return
+    }
 
     // 3. Navigate Chrome to Next.js verification route with the actual token (authorized bearer landing).
     const targetUrl = `http://127.0.0.1:${storefrontPort}/auth/verify-email?token=${encodeURIComponent(token)}`

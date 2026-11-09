@@ -12,6 +12,7 @@ import subscriber from "../../src/subscribers/auth-verification-requested"
 import { encryptSmtpPassword } from "../../src/modules/dogruadres-access/smtp-crypto"
 import type DogruAdresAccessModuleService from "../../src/modules/dogruadres-access/service"
 import { verificationBoundarySnapshot, verifyNativeHttp } from "./native-verification-http"
+import { verifyNativePasswordResetHttp } from "./native-password-reset-http"
 
 export default async function({ container }: ExecArgs) {
   const target = new URL(process.env.DATABASE_URL || "postgres://invalid/invalid")
@@ -98,7 +99,8 @@ export default async function({ container }: ExecArgs) {
     const auth: IAuthModuleService = container.resolve(Modules.AUTH)
     const domainBefore = await verificationBoundarySnapshot(pg)
     const identitiesBefore = Number((await pg("auth_identity").count("*").first())!.count)
-    const registration = await auth.register("emailpass", { body: { email: recipient, password: randomBytes(32).toString("base64url") } })
+    const originalPassword = "OldA9!" + randomBytes(24).toString("base64url")
+    const registration = await auth.register("emailpass", { body: { email: recipient, password: originalPassword } })
     assert.ok(registration.success && registration.authIdentity?.id, "Synthetic native identity registration failed")
     await requestVerificationWorkflow(container).run({ input: { auth_identity_id: registration.authIdentity!.id, entity_id: recipient, entity_type: "email", code_provider: "token" } })
     await until(async () => (await pg("notification").where({ to: recipient, status: "success" })).length === 1)
@@ -192,6 +194,7 @@ export default async function({ container }: ExecArgs) {
     assert.ok(logged.every(line => !line.includes(recipient)), "Native reset notification leaked recipient into logs")
     customerResetVerified = true
     process.stdout.write("PASS SMTP native customer reset: native token workflow -> loaded customer subscriber -> Notification -> TLS SMTP; one accepted reset link on disposable database\n")
+    await verifyNativePasswordResetHttp(container, { recipient, originalPassword, messages, smtpRcptTo })
 
     // New origin regression only: no transport call should be reached in production.
     const oldEnv = { NODE_ENV: process.env.NODE_ENV, STOREFRONT_URL: process.env.STOREFRONT_URL, PUBLIC_ORIGIN: process.env.PUBLIC_ORIGIN, MEDUSA_STOREFRONT_URL: process.env.MEDUSA_STOREFRONT_URL }

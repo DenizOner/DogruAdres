@@ -130,6 +130,21 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
+  // Recovery is a public authentication page: do not require store regions or a login cookie.
+  // Preserve the one-time token on the same origin; never redirect it to a catalog host.
+  if (pathname === '/reset-password' || /^\/[a-z]{2}\/reset-password$/i.test(pathname)) {
+    const url = request.nextUrl.clone();
+    if (pathname === '/reset-password') {
+      url.pathname = '/' + DEFAULT_REGION + '/reset-password';
+    }
+    const response = pathname === '/reset-password'
+      ? NextResponse.rewrite(url)
+      : NextResponse.next();
+    response.headers.set('Referrer-Policy', 'no-referrer');
+    response.headers.set('Cache-Control', 'no-store');
+    return response;
+  }
+
   const cacheIdCookie = request.cookies.get('_medusa_cache_id');
   const cacheId = cacheIdCookie?.value || crypto.randomUUID();
 
