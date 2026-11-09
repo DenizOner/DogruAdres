@@ -109,11 +109,32 @@ async function getCountryCode(
 }
 
 export async function middleware(request: NextRequest) {
-  if (request.nextUrl.pathname.includes('.')) {
-    return NextResponse.next();
+  const { pathname } = request.nextUrl;
+
+  // Check protected pages BEFORE public URL exceptions: a dynamic order ID can
+  // contain a dot or the words "verify-email" without becoming a public asset.
+  const urlSegment = pathname.split('/')[1];
+  const looksLikeLocale = /^[a-z]{2}$/i.test(urlSegment || '');
+  const pathnameWithoutLocale = looksLikeLocale ? pathname.replace(/^\/[^/]+/, '') : pathname;
+  const isProtectedRoute = PROTECTED_ROUTES.some(route => pathnameWithoutLocale.startsWith(route));
+
+  if (isProtectedRoute) {
+    const jwtCookie = request.cookies.get('_medusa_jwt');
+    const token = jwtCookie?.value;
+    const locale = looksLikeLocale ? urlSegment : DEFAULT_REGION;
+
+    if (!jwtCookie) {
+      return makeAuthRedirect(request, locale, 'sessionRequired');
+    }
+
+    if (token && isTokenExpired(token)) {
+      return makeAuthRedirect(request, locale, 'sessionExpired');
+    }
   }
 
-  const { pathname } = request.nextUrl;
+  if (pathname.includes('.')) {
+    return NextResponse.next();
+  }
 
   // Auth routes (like email verification) do not depend on store regions or publishable keys
   if (pathname.includes('/auth/verify-email') || pathname.includes('/verify-email')) {
@@ -142,28 +163,6 @@ export async function middleware(request: NextRequest) {
 
   const cacheIdCookie = request.cookies.get('_medusa_cache_id');
   const cacheId = cacheIdCookie?.value || crypto.randomUUID();
-
-  const urlSegment = pathname.split('/')[1];
-  const looksLikeLocale = /^[a-z]{2}$/i.test(urlSegment || '');
-
-  const pathnameWithoutLocale = looksLikeLocale ? pathname.replace(/^\/[^/]+/, '') : pathname;
-
-  const isProtectedRoute = PROTECTED_ROUTES.some(route => pathnameWithoutLocale.startsWith(route));
-
-  if (isProtectedRoute) {
-    const jwtCookie = request.cookies.get('_medusa_jwt');
-    const token = jwtCookie?.value;
-
-    const locale = looksLikeLocale ? urlSegment : DEFAULT_REGION;
-
-    if (!jwtCookie) {
-      return makeAuthRedirect(request, locale, 'sessionRequired');
-    }
-
-    if (token && isTokenExpired(token)) {
-      return makeAuthRedirect(request, locale, 'sessionExpired');
-    }
-  }
 
   if (looksLikeLocale && cacheIdCookie) {
     return NextResponse.next();

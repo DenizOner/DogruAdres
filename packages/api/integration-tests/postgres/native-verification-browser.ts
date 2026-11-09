@@ -150,6 +150,28 @@ export async function verifyNativeBrowser({
       return res.status === 200 || res.status === 307
     }, 60000, "Next.js Storefront loopback readiness")
 
+    // #244: A protected dynamic ID is not a static file or public verification
+    // route merely because its URL contains ".pdf" or "verify-email".
+    // Exercise the real Next.js middleware with no session before Chrome login.
+    if (!passwordReset) {
+      for (const protectedPath of [
+        "/tr/user/orders/fixture.pdf",
+        "/tr/user/orders/verify-email",
+      ]) {
+        const denied = await fetch(`http://127.0.0.1:${storefrontPort}${protectedPath}`, {
+          redirect: "manual",
+          signal: AbortSignal.timeout(10000),
+        })
+        assert.equal(denied.status, 307, "Protected route must redirect before public URL exceptions")
+        const location = denied.headers.get("location")
+        assert.ok(location, "Protected route must give a login destination")
+        const destination = new URL(location, `http://127.0.0.1:${storefrontPort}`)
+        assert.equal(destination.pathname, "/tr/login", "Protected route must not reach the order page")
+        assert.equal(destination.searchParams.get("sessionRequired"), "true")
+      }
+      process.stdout.write("PASS browser protected-route bypass: dotted and verify-email-like order IDs require login\\n")
+    }
+
     // 2. Launch real Chrome in headless mode with remote debugging port.
     chrome = spawn(chromePath, [
       "--headless=new",
