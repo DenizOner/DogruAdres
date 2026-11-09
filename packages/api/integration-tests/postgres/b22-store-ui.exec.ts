@@ -10,6 +10,8 @@ import {randomBytes,createHash} from "node:crypto"
 import {createServer as tlsServer,request as tlsRequest} from "node:https"
 import {createServer as plainServer} from "node:http"
 import {dirname} from "node:path"
+import {createRequire} from "node:module"
+import {ApiLoader,expressLoader} from "@medusajs/framework/http"
 import {mkdtempSync,readFileSync,rmSync,mkdirSync,writeFileSync,cpSync,copyFileSync,symlinkSync,existsSync,openSync,closeSync} from "node:fs"
 import {join} from "node:path"
 import {tmpdir} from "node:os"
@@ -1150,13 +1152,14 @@ async function verifyPlatformStoreRenameApproval(
 }
 
 
-/** Actual Next.js 15 HTTP acceptance for the real Seller identity just renamed
- * in this disposable B22 PostgreSQL database. This is the original
- * Storefront page, not a stub/rewritten HTML, mock seller API or status guess.
- * Its runtime and caches live only in the task-owned temporary directory.
+/** Actual Next.js 15 page and unmodified native Mercur Seller read on the
+ * same disposable PG16 data after Staff approval. The PRODUCTION ingress is
+ * intentionally closed to native public catalog (#217); assert that 401, then
+ * use a restricted, task-only, loopback native GET loader. This tests Next
+ * HTTP status without widening any real public API or claiming deployment.
  */
 async function verifyRealNextStorefrontRenameUrls(
-  container:any,backendOrigin:string,publishableKey:string,
+  container:any,blockedOrigin:string,publishableKey:string,
   storeId:string,temporaryDirectory:string,
   q:(sql:string,params?:any[])=>Promise<any[]>
 ):Promise<void>{
@@ -1185,10 +1188,45 @@ async function verifyRealNextStorefrontRenameUrls(
   }
   assert.match(rename.old_handle,/^[a-z0-9][a-z0-9-]*$/)
   assert.match(rename.proposed_handle,/^[a-z0-9][a-z0-9-]*$/)
-  assert.match(backendOrigin,/^http:\/\/127\.0\.0\.1:\d+$/)
+  assert.match(blockedOrigin,/^http:\/\/127\.0\.0\.1:\d+$/)
   assert.ok(publishableKey.length>20)
+  const liveIngress=await fetch(blockedOrigin+"/store/sellers?handle="+
+    encodeURIComponent(rename.proposed_handle),{
+    headers:{"x-publishable-api-key":publishableKey},
+    redirect:"manual",signal:AbortSignal.timeout(15000)
+  })
+  assert.equal(liveIngress.status,401,
+    "DoğruAdres native public Seller ingress stays denied by approved policy")
 
-  const nativeSeller=async(handle:string)=>{
+  // A private, disposable read-only native API proves the genuine Mercur
+  // route and Next renderer without changing the product's 401 boundary.
+  // All non-GET/non-Seller/Offer/Region routes are rejected at the socket.
+  const requireFramework=createRequire(require.resolve("@medusajs/framework"))
+  const express=requireFramework("express")
+  const nativeApp=express()
+  nativeApp.disable("x-powered-by")
+  nativeApp.use((req:any,res:any,next:any)=>{
+    if(req.method!=="GET"||
+       !/^\/store\/(sellers|offers|regions)(?:\/|$)/.test(req.path)){
+      res.status(404).end();return
+    }
+    req.scope=container.createScope()
+    next()
+  })
+  const nativeRuntime=await expressLoader({app:nativeApp,container})
+  const nativeServer=plainServer(nativeApp)
+  try{
+    await new ApiLoader({app:nativeApp,container,sourceDir:[
+      join(dirname(require.resolve("@medusajs/medusa")),"api"),
+      join(dirname(require.resolve("@mercurjs/core")),"api")
+    ]}).load()
+    await new Promise<void>((resolve,reject)=>{
+      nativeServer.once("error",reject)
+      nativeServer.listen(0,"127.0.0.1",resolve)
+    })
+    const backendOrigin="http://127.0.0.1:"+
+      (nativeServer.address() as {port:number}).port
+    const nativeSeller=async(handle:string)=>{
     const url=backendOrigin+"/store/sellers?"+new URLSearchParams({
       handle,fields:"id,name,handle"
     })
@@ -1277,7 +1315,7 @@ async function verifyRealNextStorefrontRenameUrls(
     const persisted=(await container.resolve("seller").listSellers({id:storeId}))[0]
     assert.equal(persisted.id,nativeNew[0].id)
     assert.equal(persisted.handle,rename.proposed_handle)
-    process.stdout.write("PASS B22 real Next.js HTTP/PG16: vacated Seller handle 404 no redirect; new handle 200 same native Seller ID\n")
+    process.stdout.write("PASS B22 isolated Next.js/native Mercur HTTP/PG16: ingress 401 preserved; old handle 404 no redirect; new handle 200 same Seller ID\n")
   }finally{
     if(child.pid){
       if(process.platform!=="win32"){
@@ -1288,6 +1326,11 @@ async function verifyRealNextStorefrontRenameUrls(
         10000,"B22 isolated Next.js process shutdown")
     }
     closeSync(fd)
+  }
+  }finally{
+    if(nativeServer.listening)
+      await new Promise<void>(resolve=>nativeServer.close(()=>resolve()))
+    await nativeRuntime.shutdown()
   }
 }
 
