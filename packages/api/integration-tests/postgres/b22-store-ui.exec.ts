@@ -1720,8 +1720,13 @@ async function verifyRealNextStorefrontRenameUrls(
 ):Promise<void>{
   const rows=await q("select old_name,old_handle,proposed_name,proposed_handle "+
     "from da_store_rename_request where seller_id=$1 and status='approved' "+
-    "order by approved_at desc limit 2",[storeId])
-  assert.equal(rows.length,1,"One approved B22 test rename is required")
+    "order by approved_at desc limit 3",[storeId])
+  assert.equal(rows.length,2,
+    "One earlier approved rename and one subsequent suspended rename must remain historical")
+  assert.equal(rows[0].old_name,rows[1].proposed_name,
+    "The newer name must be connected to the immutable preceding name history")
+  assert.equal(rows[0].old_handle,rows[1].proposed_handle,
+    "The newer URL must descend from the previous approved Store URL")
   const rename=rows[0]
   const original=(await container.resolve("seller").listSellers({id:storeId}))[0]
   assert.equal(original.id,storeId)
