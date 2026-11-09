@@ -2914,12 +2914,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!staff)return null
     const rows=await db.execute(`select r.id request_id,r.organization_id,
       d.name organization_name,r.seller_id,r.old_name,r.old_handle,
-      r.proposed_name,r.proposed_handle,r.created_at
+      r.proposed_name,r.proposed_handle,r.created_at,s.status seller_status
       from da_store_rename_request r
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
       join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
         and s.name=r.old_name and s.handle=r.old_handle
       join da_organization_seller_ownership o on o.seller_id=r.seller_id
         and o.organization_id=r.organization_id and o.revoked_at is null
@@ -2955,6 +2955,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
          typeof row.seller_id!=="string"||
          !/^sel_[A-Za-z0-9_-]+$/.test(row.seller_id)||
          typeof row.organization_name!=="string"||
+         !["open","suspended"].includes(row.seller_status)||
          typeof row.old_name!=="string"||typeof row.old_handle!=="string"||
          typeof row.proposed_name!=="string"||
          !validStoreName(row.proposed_name)||
@@ -2978,7 +2979,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       organization_name:row.organization_name as string,seller_id:row.seller_id as string,
       old_name:row.old_name as string,old_handle:row.old_handle as string,
       proposed_name:row.proposed_name as string,proposed_handle:row.proposed_handle as string,
-      created_at:row.created_at
+      created_at:row.created_at,seller_status:row.seller_status as "open"|"suspended"
     }))}
   }
 
@@ -3024,7 +3025,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
       join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
         and s.name=r.old_name and s.handle=r.old_handle
       join da_audit_event e on e.id=r.source_audit_event_id
         and e.deleted_at is null and e.module='dogruadres-access'
@@ -3102,7 +3103,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
       join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
         and s.name=r.old_name and s.handle=r.old_handle
       join da_organization_seller_ownership o on o.seller_id=r.seller_id
         and o.organization_id=r.organization_id and o.revoked_at is null
@@ -3231,7 +3232,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
       join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
         and s.name=r.old_name and s.handle=r.old_handle
       where r.id=? and r.seller_id=? and r.status='approving'
         and r.risk_version=? and r.risk_acknowledged_at is not null
@@ -3270,7 +3271,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
       join seller s on s.id=r.seller_id and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
         and s.name=r.proposed_name and s.handle=r.proposed_handle
       join da_audit_event e on e.id=r.source_audit_event_id
         and e.deleted_at is null and e.module='dogruadres-access'
@@ -3373,21 +3374,25 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const binding=await new ActorDelegation(db).binding(token,"member")
     if(!binding||binding.binding.person_id!==identity.person_id||
        !binding.binding.actor_id)return null
+    // Staff approval and suspended Store reactivation already take this
+    // per-Seller advisory lock before accessing native Seller rows. Match
+    // their lock order to avoid a mutual wait (Owner SHARE -> Staff lock,
+    // Staff lock -> Seller UPDATE) during a concurrent suspend/rename.
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
+      [input.seller_id])
     // Lock the named Seller's row and current Member link only for our local
     // request transaction. Native direct HTTP writes remain blocked at ingress.
     const native=await db.execute(`select s.name,s.handle from seller s
       join seller_member sm on sm.seller_id=s.id and sm.deleted_at is null
       join member m on m.id=sm.member_id and m.deleted_at is null and m.is_active=true
       where s.id=? and sm.member_id=? and s.deleted_at is null
-        and s.status='open' and s.approved_at is not null
+        and s.status in ('open','suspended') and s.approved_at is not null
       for share of s,sm,m`,[input.seller_id,binding.binding.actor_id])
     if(native.length!==1||typeof native[0].name!=="string"||
        typeof native[0].handle!=="string")return null
     const oldName=native[0].name as string,oldHandle=native[0].handle as string
     // An idempotency key is scoped to the authorized Person, Organization and
     // exact payload. Replays do not duplicate audit/outbox or new requests.
-    await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
-      [input.seller_id])
     const prior=await db.execute(`select organization_id,seller_id,requested_by_person_id,
       proposed_name,proposed_handle,risk_version,status
       from da_store_rename_request where id=? for update`,[input.request_id])
@@ -3540,6 +3545,30 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     await (context.transactionManager as {flush():Promise<void>}).flush()
     return {status:"withdrawn" as const,request_id:input.request_id,
       seller_id:input.seller_id}
+  }
+
+  /** Private list scope for Owner Store-name management ONLY. Unlike the
+   * ordinary commercial Store picker it may include approved suspended
+   * Sellers, but never grants selling, products.edit or platform authority.
+   * Native membership and status are independently verified by the GET
+   * adapter; no native Seller IDs are inferred from a browser-selected URL.
+   */
+  @InjectTransactionManager()
+  async personalStoreRenameCandidateIds(token:string,organizationId:string,
+    @MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const session=new IdentitySessions(db)
+    const current=await session.current(token,true,false)
+    if(!current)return null
+    const scope=await session.organizations(token,organizationId,false)
+    if(!scope||scope.person_id!==current.person_id||
+       scope.organizations.length!==1||scope.organizations[0].role!=="owner"||
+       !await isCurrentProtectedOwner(db,current.person_id,organizationId))return null
+    const sellerIds=await platformApprovedSellerIds(db,organizationId)
+    return {person_id:current.person_id,organization_id:organizationId,
+      seller_ids:sellerIds}
   }
 
   /** Private Owner readback for uncertain requests. No native rename or

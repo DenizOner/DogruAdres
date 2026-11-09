@@ -14,7 +14,7 @@ describe("B22 guarded platform review of Store rename requests",()=>{
     seller_id:"sel_store",organization_id:"daorg_company",
     organization_name:"Company",old_name:"Original Store",
     old_handle:"original-store",proposed_name:"Yeni Mağaza",
-    proposed_handle:"yeni-magaza",created_at:new Date()
+    proposed_handle:"yeni-magaza",seller_status:"open",created_at:new Date()
   }
   let req:any,res:any,service:any
   beforeEach(()=>{
@@ -142,14 +142,14 @@ describe("B22 guarded platform review of Store rename requests",()=>{
   const approvalInput=()=>({
     action:"approve",request_id:item.request_id,seller_id:item.seller_id
   })
-  const nativeSeller=(name:string,handle:string)=>({
-    id:item.seller_id,name,handle,status:"open",approved_at:new Date()
+  const nativeSeller=(name:string,handle:string,status:"open"|"suspended"="open")=>({
+    id:item.seller_id,name,handle,status,approved_at:new Date()
   })
-  const setupApproval=()=>{
+  const setupApproval=(status:"open"|"suspended"="open")=>{
     req.body=approvalInput()
     const listSellers=jest.fn()
-      .mockResolvedValueOnce([nativeSeller(item.old_name,item.old_handle)])
-      .mockResolvedValueOnce([nativeSeller(item.proposed_name,item.proposed_handle)])
+      .mockResolvedValueOnce([nativeSeller(item.old_name,item.old_handle,status)])
+      .mockResolvedValueOnce([nativeSeller(item.proposed_name,item.proposed_handle,status)])
     req.scope={resolve:jest.fn().mockReturnValue({listSellers})}
     const run=jest.fn().mockResolvedValue({result:[{}]})
     ;(updateSellersWorkflow as unknown as jest.Mock).mockReturnValue({run})
@@ -172,6 +172,26 @@ describe("B22 guarded platform review of Store rename requests",()=>{
     expect(res.json).toHaveBeenCalledWith({
       request_id:item.request_id,seller_id:item.seller_id,status:"approved"
     })
+  })
+  it("approves a suspended approved Seller name without changing Seller status",async()=>{
+    const {run}=setupApproval("suspended")
+    await POST(req,res)
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(service.personalRecordStoreRenameApproval).toHaveBeenCalledTimes(1)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith({
+      request_id:item.request_id,seller_id:item.seller_id,status:"approved"
+    })
+  })
+  it("does not finalize when Seller is unexpectedly opened during suspended rename",async()=>{
+    const {run,listSellers}=setupApproval("suspended")
+    listSellers.mockReset()
+      .mockResolvedValueOnce([nativeSeller(item.old_name,item.old_handle,"suspended")])
+      .mockResolvedValueOnce([nativeSeller(item.proposed_name,item.proposed_handle,"open")])
+    await POST(req,res)
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(res.status).toHaveBeenCalledWith(503)
+    expect(service.personalRecordStoreRenameApproval).not.toHaveBeenCalled()
   })
   it("rejects unclaimed or contested rename before native changes",async()=>{
     const {run}=setupApproval()

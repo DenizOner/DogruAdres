@@ -13,14 +13,19 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   res.setHeader("Cache-Control", "no-store")
   if (!enabled()) return res.status(503).json({ message: "Unavailable" })
   const organization = req.query.organization
-  if (Object.keys(req.query).some(k => k !== "organization") ||
+  // An explicit rename-only scope is never a commercial Store selector.
+  const renameOnly=req.query.purpose==="rename"
+  if (Object.keys(req.query).some(k => !["organization","purpose"].includes(k)) ||
+      (req.query.purpose!==undefined&&!renameOnly) ||
       typeof organization !== "string" ||
       !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organization) ||
       req.headers["x-seller-id"] !== undefined)
     return res.status(400).json({ message: "Invalid context" })
   const svc = access(req), token = sessionToken(req)
   try {
-    const decision = await svc.personalLegalSellerIds(token, organization)
+    const decision = renameOnly?
+      await svc.personalStoreRenameCandidateIds(token,organization):
+      await svc.personalLegalSellerIds(token, organization)
     if (!decision) return res.status(403).json({ message: "Access denied" })
     const binding = await svc.personalActorBinding(token, "member")
     if (!binding || binding.revoked_at || binding.person_id !== decision.person_id)
@@ -35,22 +40,30 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     }>("seller")
     const members = await native.listMembers({ id: binding.actor_id, is_active: true })
     if (members.length !== 1) return res.status(403).json({ message: "Access denied" })
-    const sellers: { id: string; name: string }[] = []
+    const sellers: { id: string; name: string; status?: "open"|"suspended" }[] = []
     for (const id of decision.seller_ids) {
       const [relations, accounts] = await Promise.all([
         native.listSellerMembers({ member_id: binding.actor_id, seller_id: id }),
         native.listSellers({ id })
       ])
-      // Both Mercur approval (approved_at) and OPEN lifecycle state are required.
-      // A current native SellerMember grants neither Store approval nor platform assignment.
+      // The generic picker MUST remain open-only. Suspended Sellers are
+      // exposed only through the protected Owner's rename-only scope.
+      // Neither result creates a Store/commerce authorization.
+      const nativeStatus=accounts[0]?.status
       if (relations.length !== 1 || accounts.length !== 1 ||
-          accounts[0].id !== id || accounts[0].status !== "open" ||
+          accounts[0].id !== id ||
+          !(renameOnly?["open","suspended"].includes(nativeStatus):
+            nativeStatus==="open") ||
           !accounts[0].approved_at) continue
-      sellers.push({ id, name: String(accounts[0].name ?? "") })
+      sellers.push(renameOnly?
+        {id,name:String(accounts[0].name??""),status:nativeStatus}:
+        {id,name:String(accounts[0].name??"")})
     }
     // Revocation, Organization switch, association reassignment and session
     // expiry between module reads must not reveal a stale scope.
-    const final = await svc.personalLegalSellerIds(token, organization)
+    const final = renameOnly?
+      await svc.personalStoreRenameCandidateIds(token,organization):
+      await svc.personalLegalSellerIds(token, organization)
     if (!final || final.person_id !== decision.person_id ||
         final.seller_ids.length !== decision.seller_ids.length ||
         final.seller_ids.some((id,i) => id !== decision.seller_ids[i]))
@@ -77,7 +90,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       if (lastRelation.length !== 1 || lastSeller.length !== 1 ||
           lastRelation[0].member_id !== binding.actor_id ||
           lastRelation[0].seller_id !== item.id ||
-          lastSeller[0].id !== item.id || lastSeller[0].status !== "open" ||
+          lastSeller[0].id !== item.id ||
+          (renameOnly?lastSeller[0].status!==item.status:
+            lastSeller[0].status!=="open") ||
           !lastSeller[0].approved_at)
         return res.status(403).json({ message: "Access denied" })
     }
