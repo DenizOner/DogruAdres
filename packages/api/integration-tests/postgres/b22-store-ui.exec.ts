@@ -1208,7 +1208,7 @@ async function verifyOwnerWithdrawPendingStoreRename(
   assert.equal(clicked,true,"Real visible Owner control must submit withdrawal")
   await owner.wait("Array.from(document.querySelectorAll('#store-rename-history p'))"+
     ".some(p=>p.textContent.includes("+JSON.stringify(name)+") && "+
-    "p.textContent.includes('withdrawn'))")
+    "p.textContent.includes('Geri çekildi'))")
   const result=await q(`select r.status,r.requested_by_person_id,
     e.action,e.actor_person_id,x.id outbox_id
     from da_store_rename_request r
