@@ -7440,7 +7440,7 @@ export default async function({container}:any){
       targetExpectedName:gammaApplication.name,
       renameAndReopen:()=>verifySuspendedStoreRenameBeforeReopen(
         browser,reviewer,organizations[0].id,organizations[0].name,
-        secondOwnerStoreId,rand+"-exceptional-right",container,q,true),
+        secondOwnerStoreId,rand+"-b",container,q,true),
       restoreFixture:async()=>suspendSellerWorkflow(container).run({input:{
         seller_id:secondOwnerStoreId,reason:"Task-only Store isolated after name recovery"
       }})
