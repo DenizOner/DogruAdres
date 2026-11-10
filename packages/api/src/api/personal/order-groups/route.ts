@@ -78,6 +78,11 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
        groupRows[0].customer_id!==customerId||
        !cartIdPattern.test(groupRows[0].cart_id))return denied()
     const cartId=groupRows[0].cart_id
+    // A crash/retry can leave more than one group for a Cart. Never select
+    // one arbitrary group when the native relationship is ambiguous.
+    const cartGroups=await seller.listOrderGroups({cart_id:cartId},{take:2})
+    if(cartGroups.length!==1||cartGroups[0]?.id!==groupId||
+       cartGroups[0].customer_id!==customerId)return denied()
 
     // Reuse Foundation's immutable audited Cart -> Buyer Organization
     // attribution plus its live Person/Customer binding proof. A native
