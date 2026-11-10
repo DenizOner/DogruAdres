@@ -4,6 +4,17 @@ import http from 'node:http'
 import {once} from 'node:events'
 import {allowedPublicRequest,startFrontdoor} from '../../scripts/personal-frontdoor.mjs'
 
+test("B22 Owner temporary pause permits only exact GET/POST first-party relay",()=>{
+  for(const method of ["GET","POST"])
+    assert.equal(allowedPublicRequest(method,"/personal/store-owner-pause"),true)
+  for(const method of ["HEAD","OPTIONS","PUT","DELETE","PATCH"])
+    assert.equal(allowedPublicRequest(method,"/personal/store-owner-pause"),false)
+  for(const path of ["/personal/store-owner-pause/","/personal/store-owner-pause/sel_any",
+    "/vendor/sellers/me","/admin/sellers/sel_test","/store/carts/cart_test/complete"])
+    for(const method of ["GET","POST"])
+      assert.equal(allowedPublicRequest(method,path),false)
+})
+
 test("B22 Store follow has exact private GET and CSRF POST ingress only",()=>{
   for(const method of ["GET","POST"])
     assert.equal(allowedPublicRequest(method,"/personal/store-follows"),true)
