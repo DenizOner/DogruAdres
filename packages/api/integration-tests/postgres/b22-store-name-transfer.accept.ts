@@ -92,9 +92,11 @@ export async function verifyB22ExceptionalNameRight(input:{
   await reviewer.wait("!document.querySelector("+JSON.stringify(
     '[data-transfer-preview="'+source.seller_id+'"]')+").disabled")
   const previewCategory=await reviewer.callFunction(
-    "function(id){const box=document.querySelector('[data-transfer-source="'+id+'"]');"+
+    "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
+    ".find(e=>e.dataset.transferSource===id);"+
     "const text=box?.querySelector('[role=status]')?.textContent??'';"+
-    "const btn=document.querySelector('[data-transfer-decide="'+id+'"]');"+
+    "const btn=Array.from(document.querySelectorAll('[data-transfer-decide]'))"+
+    ".find(e=>e.dataset.transferDecide===id);"+
     "return !btn?.disabled && text.startsWith('Kaynak:')?'ready':"+
     "text.includes('doğrulanamadı')?'denied':"+
     "text.includes('Geçerli ve farklı')?'invalid':"+
