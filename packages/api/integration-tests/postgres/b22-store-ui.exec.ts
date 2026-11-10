@@ -31,6 +31,44 @@ import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-in
 import taxCertificateInventory, {inspectTaxCertificateSnapshot} from "../../src/scripts/tax-certificate-inventory"
 
 
+/**
+ * Re-enter the first-party Owner UI after visiting the separate Buyer Chrome.
+ * A hidden tab may conceal all private controls; refresh by actual user
+ * selection, not by editing DOM.hidden or disabling authorization.
+ */
+async function restoreStorePriceGroupOwnerBrowser(input:{
+  browser:B06Chrome;organizationName:string;storeId:string;
+  groupId:string;buyerOrganizationId:string
+}):Promise<void>{
+  const {browser,organizationName,storeId,groupId,buyerOrganizationId}=input
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible'&&"+
+    "!document.getElementById('workspace').hidden")
+  await browser.select(organizationName,"owner")
+  await browser.wait("!document.getElementById('store-price-group-panel').hidden")
+  const store=await browser.eval("(()=>{"+
+    "const e=document.querySelector('#store-price-group-form select[name=seller_id]');"+
+    "if(!e||!Array.from(e.options).some(o=>o.value==="+JSON.stringify(storeId)+"))return false;"+
+    "e.value="+JSON.stringify(storeId)+";"+
+    "e.dispatchEvent(new Event('change',{bubbles:true}));"+
+    "return e.value==="+JSON.stringify(storeId)+"})()")
+  assert.equal(store,true,"Real Owner UI must offer this exact authorized Store")
+  await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+    ".some(o=>o.value==="+JSON.stringify(groupId)+")")
+  const group=await browser.eval("(()=>{"+
+    "const e=document.getElementById('store-price-group-choice');"+
+    "e.value="+JSON.stringify(groupId)+";"+
+    "e.dispatchEvent(new Event('change',{bubbles:true}));"+
+    "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value})()")
+  assert.equal(group,groupId,"Owner must select the exact native CustomerGroup")
+  await browser.eval("document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value=''")
+  await browser.input("#store-price-group-form input[name=buyer_organization_id]",
+    buyerOrganizationId)
+  assert.equal(await browser.eval(
+    "document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value"),
+    buyerOrganizationId)
+}
+
 async function verifyOwnerTemporaryPauseBrowser(input:{
   browser:B06Chrome;organizations:any[];ownerStoreId:string;
   secondOwnerStoreId:string;nativeCustomer:any;customerCart:any;
@@ -6129,7 +6167,13 @@ export default async function({container}:any){
           "})"+
         "}return original(resource,options)"+
       "};return true})()")
-    // Native status checks finish separately from the browser's picker refresh.
+    // The preceding Buyer catalogue flow uses a different Chrome window.
+    // Re-enter the real Owner page and reselect the exact Store/Group/Buyer.
+    // A stale hidden tab cannot count as an active authorization UI test.
+    await restoreStorePriceGroupOwnerBrowser({
+      browser,organizationName:organizations[0].name,storeId:ownerStoreId,
+      groupId:priceGroup.id,buyerOrganizationId:organizations[1].id
+    })
     // Wait for the previously authorized visible control; never bypass UI.
     await browser.wait("(()=>{const e=document.querySelector('#store-price-group-form button[value=\\\"revoke\\\"]');"+
       "return !!e && !!e.getClientRects().length && !e.disabled})()")
