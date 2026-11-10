@@ -5052,13 +5052,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   @InjectTransactionManager()
   async personalOwnerClosingChange(token:string,input:{
     organization_id:string;seller_id:string;action:"start"|"withdraw";
-    request_id:string;expected_version:number;consequences_acknowledged:boolean
+    request_id:string;expected_version:number;consequences_acknowledged?:boolean
   },@MedusaContext() context:Context={}){
     if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
        !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
        !/^dasc_[a-f0-9]{32}$/.test(input.request_id)||
        !["start","withdraw"].includes(input.action)||
-       input.consequences_acknowledged!==true||
+       (input.action==="start"&&input.consequences_acknowledged!==true)||
        !Number.isSafeInteger(input.expected_version)||
        input.expected_version<0||input.expected_version>2147483646)
       throw new IdentityAccessDenied()
