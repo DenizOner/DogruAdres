@@ -298,7 +298,7 @@ export async function verifyB22ExceptionalNameRight(input:{
 /** A real Owner may request the assigned name in target B only AFTER the
  * source has vacated both native name and URL. C never inherits that right.
  * All mutations run through existing Owner/Staff HTTPS endpoints. */
-async function verifyAssignedRecipientUse(input:{
+export async function verifyAssignedRecipientUse(input:{
   owner:B06Chrome;reviewer:B06Chrome;q:Rows;
   source:Store;target:Store;competitor:Pick<Store,'seller_id'|'organization_id'>;
   targetOrganizationName:string;competitorOrganizationName:string;
@@ -448,7 +448,7 @@ export async function verifyB22TransferredRecovery(input:{
   competitor:Pick<Store,'seller_id'|'organization_id'>;targetOrganizationName:string;competitorOrganizationName:string;
   renameAndReopen:()=>Promise<void>;
   restoreFixture:()=>Promise<unknown>
-}):Promise<void>{
+}):Promise<{formerName:string;formerHandle:string}>{
   const {owner,reviewer,q,source,target,targetExpectedName}=input
   const before=(await q(
     "select id,name,handle,status,approved_at from seller where id=$1",
@@ -477,7 +477,8 @@ export async function verifyB22TransferredRecovery(input:{
     [target.seller_id]))[0]
   assert.equal(recipient.name,targetExpectedName)
   assert.equal(recipient.status,"open")
-  await verifyAssignedRecipientUse({...recipientScope,sourceVacated:true})
+  // B's native adoption runs AFTER the unrelated Gamma rename regression
+  // tests, so their historical 'first rename' fixture is not invalidated.
   // Later independent Cart fixture expects the historical source suspended.
   await input.restoreFixture()
   assert.equal((await q("select status from seller where id=$1",
@@ -485,4 +486,5 @@ export async function verifyB22TransferredRecovery(input:{
   assert.equal((await q("select id from seller where id=$1",
     [source.seller_id]))[0].id,source.seller_id)
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: exceptional suspended Seller name-right assigned to approved separate Store; Owner new name and Staff reopen same ID, native/Order untouched before rename, foreign/CSRF/replay denied, audit/outbox and recipient reservation\n")
+  return assignment
 }
