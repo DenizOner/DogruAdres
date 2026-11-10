@@ -142,7 +142,7 @@ export default async function({container}:any){
     const orderDenied=await personalOrder.json()
     assert.deepEqual(orderDenied,{message:"Personal session ingress required"})
     assertNoPrivateCatalogData(orderDenied)
-    process.stdout.write("PASS #244 native order-group HTTP denied: anonymous and personal-session reads stay closed before native data\\n")
+    process.stdout.write("PASS #244 native order-group HTTP denied: anonymous and personal-session reads stay closed before native data\n")
     // Medusa may reject a malformed native Bearer at the framework boundary
     // with 400 before nativeIngress can return 401. Either is a closed result.
     // Pass a genuine publishable key so the test cannot pass simply because
