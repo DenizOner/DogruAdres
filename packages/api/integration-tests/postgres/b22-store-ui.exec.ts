@@ -13589,8 +13589,16 @@ async function restoreStorePriceGroupOwnerBrowser(input:{
 }):Promise<void>{
   const {browser,organizationName,storeId,groupId,buyerOrganizationId}=input
   await browser.send("Page.bringToFront")
-  await browser.wait("document.visibilityState==='visible'&&"+
-    "!document.getElementById('workspace').hidden")
+  await browser.wait("document.visibilityState==='visible'")
+  // The Buyer Chrome may invalidate the previously displayed private scope.
+  // Re-enter through a real reload and server-owned session validation; never
+  // toggle hidden flags or fake credentials in the DOM.
+  if(await browser.eval("document.getElementById('workspace').hidden")){
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("document.readyState==='complete' && "+
+      "document.visibilityState==='visible'")
+  }
+  await browser.wait("!document.getElementById('workspace').hidden")
   await browser.select(organizationName,"owner")
   await browser.wait("!document.getElementById('store-price-group-panel').hidden")
   const store=await browser.eval("(()=>{"+
