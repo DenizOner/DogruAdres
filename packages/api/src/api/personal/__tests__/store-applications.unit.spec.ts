@@ -490,7 +490,7 @@ describe("B22 Staff reopens only a suspended Store with retained name rights",()
     expect(res.status).toHaveBeenCalledWith(200)
     expect(res.json).toHaveBeenCalledWith({
       pending:[],reconciliation:[],release_pending:[],suspended:[{...target,organization_id:"daorg_a",
-        organization_name:"Org A",name,on_hold:false}],
+        organization_name:"Org A",name,on_hold:false,name_review_required:false}],
       page:0,has_more:false
     })
   })
