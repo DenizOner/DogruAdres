@@ -334,6 +334,47 @@ export async function verifyAssignedRecipientUse(input:{
     "Third Store C cannot claim another Store's assigned right")
   assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
     [c.request_id]))[0].n,0,"Denied C request must not persist")
+  if(sourceVacated){
+    // The transfer's permanent B-only reservation must still exclude C when
+    // A's ordinary approved old-name hold has expired. Alter only the
+    // isolated task-owned historical decision timestamp, then restore it.
+    // At this point B has NOT acquired the native name, so C's 409 cannot
+    // be explained by a collision with B's current Seller name/URL.
+    const priorHold=await q(`select id,approved_at from da_store_rename_request
+      where seller_id=$1 and old_name=$2 and old_handle=$3 and status='approved'`,
+      [source.seller_id,formerName,formerHandle])
+    assert.equal(priorHold.length,1,"One exact source old-name hold expected")
+    assert.ok(priorHold[0].approved_at)
+    const changed=await q(`update da_store_rename_request
+      set approved_at=clock_timestamp()-interval '30 days 1 second'
+      where id=$1 and status='approved' returning id`,[priorHold[0].id])
+    assert.equal(changed.length,1)
+    try{
+      const [clock]=await q(`select (approved_at<=clock_timestamp()-interval '30 days')
+        as expired from da_store_rename_request where id=$1`,[priorHold[0].id])
+      assert.equal(clock.expired,true,"Source A's 30-day hold must actually be over")
+      const cExpired=proposal(competitor)
+      assert.equal((await post(owner,cExpired)).status,409,
+        "C must not take the assigned name even after the normal 30-day hold")
+      assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
+        [cExpired.request_id]))[0].n,0)
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where action='organization.store_rename_requested'
+          and new_values->>'request_id'=$1`,[cExpired.request_id]))[0].n,0,
+        "Post-hold denied C must not create a canonical request audit")
+      assert.equal((await q(`select count(*)::int n from da_store_name_transfer
+        where status='assigned' and source_seller_id=$1 and target_seller_id=$2`,
+        [source.seller_id,target.seller_id]))[0].n,1,
+        "B-only transfer reservation remains durable past day 30")
+    }finally{
+      const restored=await q(`update da_store_rename_request set approved_at=$2
+        where id=$1 and status='approved' returning approved_at`,
+        [priorHold[0].id,priorHold[0].approved_at])
+      assert.equal(restored.length,1)
+      assert.equal(String(restored[0].approved_at),String(priorHold[0].approved_at),
+        "Isolated historical approval timestamp must be restored exactly")
+    }
+  }
   await owner.select(targetOrganizationName,"owner")
   const [before]=await q("select id,name,handle,status,approved_at from seller where id=$1",
     [target.seller_id])
@@ -437,6 +478,7 @@ export async function verifyAssignedRecipientUse(input:{
   assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
     [cAfter.request_id]))[0].n,0)
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: recipient B native name and URL adopted after source A vacates, historical 30-day hold retained, unrelated Store C HTTP409 before/after, Staff approval and audit/outbox durable\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: transferred old name remains reserved for B after source hold day 30, C HTTPS409 without request/audit, original timestamp restored, B native adoption succeeds\n")
 }
 
 /** Complete the previously assigned right with the existing real Owner-rename
