@@ -1593,6 +1593,124 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-reactivation-list').replaceChildren();
     el('store-approval-status').textContent='';
   }
+  // Exceptional transfer uses a two-stage live Staff preview. Only the
+  // verified server response supplies names; browser form values grant no right.
+  function addExceptionalNameTransfer(entry,row,message,list){
+    if(entry.name_review_required)return;
+    const reveal=document.createElement('button');
+    reveal.type='button';reveal.textContent='İstisnai ad hakkı devrini incele';
+    const box=document.createElement('div');box.hidden=true;
+    const legend=document.createElement('p');
+    legend.textContent='İstisnai ad hakkı devri: yalnız geçerli platform kararıyla. Kaynak mağaza askıda kalır; hedef mağaza eski URL’yi hemen kullanamaz.';
+    const makeField=(labelText,pattern)=>{
+      const label=document.createElement('label'),input=document.createElement('input');
+      label.textContent=labelText+' ';input.type='text';input.required=true;
+      input.setAttribute('aria-label',labelText);
+      if(pattern)input.pattern=pattern;
+      label.append(input);box.append(label);
+      return input;
+    };
+    const targetApp=makeField('Hedef mağaza başvuru kimliği','daapp_[a-f0-9]{32}');
+    const targetSeller=makeField('Hedef Store kimliği','sel_[A-Za-z0-9_-]+');
+    const reasonLabel=document.createElement('label');
+    reasonLabel.textContent='Gerekçeli istisnai devir kararı ';
+    const reason=document.createElement('textarea');
+    reason.required=true;reason.minLength=10;reason.maxLength=500;
+    reason.setAttribute('aria-label','İstisnai ad hakkı devri gerekçesi');
+    reasonLabel.append(reason);box.append(reasonLabel);
+    const previewBtn=document.createElement('button');
+    previewBtn.type='button';previewBtn.textContent='Kaynak ve hedefi doğrula';
+    const decideBtn=document.createElement('button');
+    decideBtn.type='button';decideBtn.disabled=true;
+    decideBtn.textContent='Gerekçeli ad hakkı devrini onayla';
+    const status=document.createElement('p');status.setAttribute('role','status');
+    box.prepend(legend);box.append(previewBtn,decideBtn,status);
+    let verified=null,uncertain=false,key='';
+    const reset=()=>{
+      verified=null;decideBtn.disabled=true;status.textContent='Hedefi yeniden doğrulayın.';
+    };
+    targetApp.oninput=reset;targetSeller.oninput=reset;
+    reveal.onclick=()=>{
+      box.hidden=!box.hidden;
+      if(!box.hidden)targetApp.focus();
+    };
+    previewBtn.onclick=async()=>{
+      if(!targetApp.checkValidity()||!targetSeller.checkValidity()||
+         targetSeller.value===entry.seller_id){
+        status.textContent='Geçerli ve farklı bir hedef mağaza ve başvuru kimliği girin.';
+        return;
+      }
+      verified=null;decideBtn.disabled=true;previewBtn.disabled=true;
+      const previewAt=viewEpoch;
+      try{
+        const params=new URLSearchParams({
+          source_application_id:entry.application_id,source_seller_id:entry.seller_id,
+          target_application_id:targetApp.value,target_seller_id:targetSeller.value
+        });
+        const result=await api('platform/store-name-transfers?'+params.toString());
+        if(previewAt!==viewEpoch||document.hidden)return;
+        if(result?.source?.seller_id!==entry.seller_id||
+           result?.source?.application_id!==entry.application_id||
+           result?.target?.seller_id!==targetSeller.value||
+           result?.target?.application_id!==targetApp.value||
+           result?.source?.status!=='suspended'||
+           typeof result.source.name!=='string'||
+           typeof result.source.handle!=='string'||
+           typeof result.target.organization_name!=='string'||
+           typeof result.target.name!=='string')
+          throw new Error('Hedef doğrulanamadı');
+        verified=result;uncertain=false;key='';
+        status.textContent='Kaynak: '+result.source.organization_name+' / '+result.source.name+
+          ' ('+result.source.handle+'). Hedef: '+
+          result.target.organization_name+' / '+result.target.name+
+          '. Ad ve URL hakkı dışında hiçbir veri taşınmayacak. Kaynak askıda kalacak.';
+        decideBtn.disabled=false;
+      }catch(e){
+        if([401,403].includes(e.httpStatus)){clearStoreApprovals();return}
+        status.textContent='Kaynak/hedef yetkisi veya ad hakkı doğrulanamadı; hiçbir karar oluşturulmadı.';
+      }finally{previewBtn.disabled=false}
+    };
+    decideBtn.onclick=async()=>{
+      const explanation=reason.value.trim();
+      if(!verified||uncertain||explanation.length<10||explanation.length>500||
+         [...explanation.matchAll(/[\p{L}\p{N}]/gu)].length<10){
+        status.textContent='Önce hedefi doğrulayın; 10–500 karakterlik okunabilir gerekçe girin.';
+        return;
+      }
+      if(!window.confirm('Kaynak '+verified.source.name+' mağazasının ad ve URL hakkını '+
+        verified.target.organization_name+' / '+verified.target.name+
+        ' mağazasına devredilsin mi? Kaynak mağaza askıda kalır; geçmiş veriler devredilmez.'))return;
+      decideBtn.disabled=true;previewBtn.disabled=true;
+      if(!key)key='dastr_'+crypto.randomUUID().replaceAll('-','');
+      const decisionAt=viewEpoch;
+      try{
+        const result=await api('platform/store-name-transfers',{method:'POST',body:JSON.stringify({
+          transfer_id:key,source_application_id:verified.source.application_id,
+          source_seller_id:verified.source.seller_id,
+          target_application_id:verified.target.application_id,
+          target_seller_id:verified.target.seller_id,
+          expected_name:verified.source.name,expected_handle:verified.source.handle,
+          reason:explanation
+        })});
+        if(decisionAt!==viewEpoch||document.hidden)return;
+        if(result.transfer_id!==key||result.status!=='assigned'||
+           result.native_status!=='suspended'||result.awaiting_source_rename!==true){
+          uncertain=true;throw new Error('Sonuç belirsiz');
+        }
+        status.textContent='Ad hakkı kararı kaydedildi. Eski Store askıdadır; Owner yeni ad ve URL önerip ayrı onay almalıdır.';
+        message.textContent=status.textContent;
+        void refreshStoreApprovals(true);
+      }catch(e){
+        if(decisionAt!==viewEpoch||document.hidden)return;
+        uncertain=true;
+        status.textContent='Devir sonucu belirsiz. Yeniden göndermeyin; denetim kaydını ve güncel mağaza haklarını kontrol edin.';
+      }finally{
+        previewBtn.disabled=false;
+        if(!uncertain&&verified)decideBtn.disabled=false;
+      }
+    };
+    row.append(reveal);list.append(box);
+  }
   async function refreshStoreApprovals(keepOutcome=false){
     if(document.hidden||el('workspace').hidden)return;
     const seq=++storeApprovalRequest,epoch=viewEpoch;
@@ -1738,6 +1856,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           }
         };
         row.append(button);suspendedList.append(row);
+        addExceptionalNameTransfer(entry,row,message,suspendedList);
       }
       // This is NOT a second Store opening. The native Store is still
       // suspended and a former claim is unresolved; only an authorized Staff
