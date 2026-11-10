@@ -1,4 +1,4 @@
-import {POST} from "../platform/store-name-transfers/route"
+import {GET,POST} from "../platform/store-name-transfers/route"
 import {access,csrf,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 
@@ -30,6 +30,52 @@ describe("B22 exceptional Store name-right assignment boundary",()=>{
     req={body:{...value},headers:{}}
     res={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),
       json:jest.fn().mockReturnThis()}
+  })
+  const preview={
+    source_application_id:value.source_application_id,
+    source_seller_id:value.source_seller_id,
+    target_application_id:value.target_application_id,
+    target_seller_id:value.target_seller_id
+  }
+  it("shows a verified, read-only Staff preview of the exact source/recipient",async()=>{
+    req.query={...preview}
+    service.personalReviewableStoreApplications=jest.fn()
+      .mockResolvedValueOnce([{organization_name:"Org A"}])
+      .mockResolvedValueOnce([{organization_name:"Org B"}])
+      .mockResolvedValueOnce([{organization_name:"Org A"}])
+    service.personalCurrentSuspendedStoreName=jest.fn().mockResolvedValue({
+      status:"eligible",name:value.expected_name,handle:value.expected_handle
+    })
+    req.scope={resolve:jest.fn().mockReturnValue({listSellers:jest.fn()
+      .mockResolvedValue([{id:value.target_seller_id,name:"Target Store",
+        handle:"target-store",status:"open",approved_at:new Date()}])})}
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      source:expect.objectContaining({name:value.expected_name,status:"suspended"}),
+      target:expect.objectContaining({name:"Target Store",status:"open"})
+    }))
+    expect(service.personalAssignSuspendedStoreNameRight).not.toHaveBeenCalled()
+  })
+  it("does not leak Store names if Staff grant is missing or a target is invalid",async()=>{
+    req.query={...preview}
+    service.personalReviewableStoreApplications=jest.fn().mockResolvedValue(null)
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(service.personalAssignSuspendedStoreNameRight).not.toHaveBeenCalled()
+    req.query={...preview,target_seller_id:preview.source_seller_id}
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(400)
+  })
+  it("rejects a transferred/invalid source before any preview response",async()=>{
+    req.query={...preview}
+    service.personalReviewableStoreApplications=jest.fn().mockResolvedValue([
+      {organization_name:"Org A"}])
+    service.personalCurrentSuspendedStoreName=jest.fn().mockResolvedValue({
+      status:"conflict"})
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(409)
+    expect(service.personalAssignSuspendedStoreNameRight).not.toHaveBeenCalled()
   })
   it("returns only nonprivate decision state after authenticated staff proof",async()=>{
     await POST(req,res)
