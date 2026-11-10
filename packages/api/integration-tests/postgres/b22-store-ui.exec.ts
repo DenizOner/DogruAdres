@@ -1841,11 +1841,34 @@ async function verifySuspendedStoreRenameBeforeReopen(
     "f.elements.namedItem('seller_id').value=id;"+
     "f.elements.namedItem('name').value=name;"+
     "f.elements.namedItem('handle').value=handle;"+
-    "f.elements.namedItem('risk_acknowledged').checked=true;f.requestSubmit();return true}",
+    "f.elements.namedItem('risk_acknowledged').checked=true;"+
+    "const valid=f.checkValidity();if(valid)f.requestSubmit();return valid}",
     sellerId,name,handle)
-  assert.equal(requested,true)
-  await owner.wait("Array.from(document.querySelectorAll('#store-rename-history p')).some("+
-    "p=>p.textContent.includes("+JSON.stringify(name)+") && p.textContent.includes('Platform incelemesinde'))")
+  assert.equal(requested,true,"Owner native HTML form validity must hold before submission")
+  try{
+    await owner.wait("Array.from(document.querySelectorAll('#store-rename-history p')).some("+
+      "p=>p.textContent.includes("+JSON.stringify(name)+") && p.textContent.includes('Platform incelemesinde'))")
+  }catch(error){
+    // Log bounded status categories ONLY, never Store names, request bodies,
+    // private Person details, cookies, error text or identifiers.
+    const http=owner.http.filter((x:any)=>x.path==="/personal/store-rename-requests")
+      .slice(-4).map((x:any)=>({method:x.method,status:x.status}))
+    const ui=await owner.callFunction(
+      "function(){const f=document.getElementById('store-rename-form');"+
+      "const x=document.getElementById('store-rename-status')?.textContent??'';"+
+      "return {valid:!!f?.checkValidity(),disabled:!!f?.querySelector('button[type=submit]')?.disabled,"+
+      "state:x.includes('Başvuru reddedildi')?'rejected':"+
+      "x.includes('Sonuç belirsiz')?'uncertain':"+
+      "x.includes('Talep kaydedildi')?'saved':"+
+      "x.includes('Mevcut talep incelemede')?'pending':"+
+      "x.includes('doğrulanamadı')?'unverified':'other'}}")
+    const rows=await q(`select status from da_store_rename_request
+      where organization_id=$1 and seller_id=$2 and proposed_name=$3
+        and proposed_handle=$4`,[organizationId,sellerId,name,handle])
+    throw new Error("B22 Owner transferred-Store rename did not become pending: "+
+      JSON.stringify({http,ui,durable:{count:rows.length,
+        statuses:rows.map((x:any)=>x.status)}}))
+  }
   // The real Owner form generates the opaque id in the browser. Query
   // the exact new, source-owned request rather than fabricating its id.
   const pending=await q(`select id,status from da_store_rename_request
