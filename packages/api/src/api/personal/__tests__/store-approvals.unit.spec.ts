@@ -15,6 +15,8 @@ describe("B22 platform Store approval guard",()=>{
     jest.resetAllMocks()
     service={
       personalReviewableStoreApplications:jest.fn().mockResolvedValue([candidate]),
+      personalUnresolvedStoreReactivationClaim:jest.fn().mockResolvedValue({status:"none"}),
+      personalCurrentSuspendedStoreName:jest.fn().mockResolvedValue({status:"eligible"}),
       personalWithStoreApprovalStaffLock:jest.fn(async(_token:string,_target:any,
         operation:(context:any)=>Promise<unknown>)=>operation({}))
     }
@@ -79,6 +81,38 @@ describe("B22 platform Store approval guard",()=>{
     await GET(req,res)
     expect(res.status).toHaveBeenCalledWith(400)
     expect(service.personalReviewableStoreApplications).not.toHaveBeenCalled()
+  })
+  it("marks a suspended Store whose name/URL entitlement is no longer provable as review-only",async()=>{
+    native.listSellers.mockResolvedValue([{id:candidate.seller_id,name:"Suspended Store",
+      status:"suspended",approved_at:new Date()}])
+    service.personalCurrentSuspendedStoreName.mockResolvedValue({status:"conflict"})
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(service.personalCurrentSuspendedStoreName).toHaveBeenCalledWith(
+      "opaque",{application_id:candidate.application_id,seller_id:candidate.seller_id})
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      suspended:[{...candidate,name:"Suspended Store",name_review_required:true}]
+    }))
+    expect(run).not.toHaveBeenCalled()
+  })
+  it("lists suspended Store as reopenable only after its current name and URL are verified",async()=>{
+    native.listSellers.mockResolvedValue([{id:candidate.seller_id,name:"Suspended Store",
+      status:"suspended",approved_at:new Date()}])
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      suspended:[{...candidate,name:"Suspended Store",name_review_required:false}]
+    }))
+    expect(run).not.toHaveBeenCalled()
+  })
+  it("omits suspended Store details when the staff entitlement check loses authorization",async()=>{
+    native.listSellers.mockResolvedValue([{id:candidate.seller_id,name:"Suspended Store",
+      status:"suspended",approved_at:new Date()}])
+    service.personalCurrentSuspendedStoreName.mockResolvedValue(null)
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({suspended:[]}))
+    expect(run).not.toHaveBeenCalled()
   })
   it("lists only native pending Stores to authorized reviewer",async()=>{
     await GET(req,res)
