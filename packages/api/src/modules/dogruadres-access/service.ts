@@ -106,6 +106,35 @@ function acceptedInviteSqlLabel(alias:"inv"|"oinv"):string {
     then lower(btrim(${alias}.recipient_email) collate "C") else '' end`
 }
 
+// An exceptional name RIGHT can override only its source Store's approved
+// OLD-name hold. It never waives an in-flight approval, unrelated Store hold,
+// native collision, application claim or the recipient's current authorization.
+// The source must have physically vacated BOTH native name and URL and the
+// assigned-right decision must have its intact canonical audit/outbox.
+const authorizedTransferredOldNameHoldExclusion = `
+        and not exists(select 1 from da_store_name_transfer t
+          join seller source_s on source_s.id=t.source_seller_id
+            and source_s.deleted_at is null and source_s.approved_at is not null
+            and source_s.status in ('open','suspended')
+            and encode(sha256(convert_to(lower(regexp_replace(
+              btrim(normalize(source_s.name,NFKC)),'[[:space:]]+',' ','g')),
+              'UTF8')),'hex')<>t.name_hash
+            and lower(source_s.handle)<>lower(t.old_handle)
+          join da_audit_event e on e.id=t.source_audit_event_id
+            and e.deleted_at is null and e.module='dogruadres-access'
+            and e.action='organization.store_name_right_assigned'
+            and e.organization_id=t.source_organization_id
+            and e.target_id=t.source_seller_id
+            and e.new_values->>'transfer_id'=t.id
+            and e.new_values->>'target_seller_id'=t.target_seller_id
+          join da_audit_outbox x on x.source_audit_event_id=e.id
+            and x.source_module='dogruadres-access' and x.deleted_at is null
+          where h.status='approved' and h.seller_id=t.source_seller_id
+            and h.old_name=t.old_name and h.old_handle=t.old_handle
+            and t.status='assigned' and t.target_seller_id=?
+            and t.target_organization_id=? and t.name_hash=? and t.old_handle=?)
+`
+
 const activeStatus = "active"
 const supportedActorTypes = new Set(["user", "member", "customer"])
 export const DOGRUADRES_AUDIT_MODULE: "dogruadres-access" = "dogruadres-access"
@@ -3380,7 +3409,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           or (h.status='approving' and
             (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(h.proposed_name,NFKC)),
               '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or h.proposed_handle=?))
-        ) limit 1`,[input.request_id,hash,r.proposed_handle,hash,r.proposed_handle])
+        ) ${authorizedTransferredOldNameHoldExclusion}
+        limit 1`,[input.request_id,hash,r.proposed_handle,hash,r.proposed_handle,
+          input.seller_id,r.organization_id,hash,r.proposed_handle])
     const transferReservation=await db.execute(`select 1 from da_store_name_transfer
       where status='assigned' and target_seller_id<>? and
         (name_hash=? or old_handle=?) limit 1`,
@@ -3646,7 +3677,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         or (r.status='approving' and
           (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.proposed_name,NFKC)),
             '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.proposed_handle=?))
-      ) limit 1`,[hash,input.handle,hash,input.handle])
+      ) ${authorizedTransferredOldNameHoldExclusion}
+      limit 1`,[hash,input.handle,hash,input.handle,
+        input.seller_id,input.organization_id,hash,input.handle])
     const otherTransfer=await db.execute(`select 1 from da_store_name_transfer
       where status='assigned' and target_seller_id<>? and
         (name_hash=? or old_handle=?) limit 1`,
