@@ -2307,6 +2307,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
       limit 1`,[nameHash])
     if(reserved.length)return {status:"name_taken" as const}
+    const assigned=await db.execute(`select 1 from da_store_name_transfer
+      where status='assigned' and
+        (name_hash=? or old_handle=?) limit 1`,[nameHash,toHandle(input.name)])
+    if(assigned.length)return {status:"name_taken" as const}
     // Mercur derives the handle from the new Seller name. Reserve BOTH the
     // original URL and any other Store's in-flight proposed URL for 30 days.
     const generatedHandle=toHandle(input.name)
@@ -2467,6 +2471,155 @@ export default class DogruAdresAccessModuleService extends MedusaService({
    * lock; the global name lock serializes concurrent first-party claims.
    * No name reassignment, unilateral Owner approval or native core patch.
    */
+  /**
+   * Staff-only, reasoned transfer of one suspended Store's original name
+   * RIGHT. Neither the source nor the recipient Seller is mutated or opened.
+   * The source must later rename under its real Owner/Staff approval; the
+   * recipient can only use the URL after that native rename has completed.
+   */
+  @InjectTransactionManager()
+  async personalAssignSuspendedStoreNameRight(token:string,input:{
+    transfer_id:string;source_application_id:string;source_seller_id:string;
+    target_application_id:string;target_seller_id:string;
+    expected_name:string;expected_handle:string;reason:string
+  },@MedusaContext() context:Context={}){
+    if(!/^dastr_[a-f0-9]{32}$/.test(input.transfer_id)||
+       !/^daapp_[a-f0-9]{32}$/.test(input.source_application_id)||
+       !/^daapp_[a-f0-9]{32}$/.test(input.target_application_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.source_seller_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.target_seller_id)||
+       input.source_seller_id===input.target_seller_id||
+       typeof input.expected_name!=="string"||!validStoreName(input.expected_name)||
+       typeof input.expected_handle!=="string"||!validStoreHandle(input.expected_handle)||
+       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
+       input.reason.length<10||input.reason.length>500||
+       [...input.reason.matchAll(/[\p{L}\p{N}]/gu)].length<10)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager),sessions=new IdentitySessions(db)
+    const staff=await sessions.staff(token,"store.approve","platform")
+    if(!staff)return null
+    const grant=await db.execute(`select id from da_platform_staff_grant
+      where id=? and person_id=? and task='store.approve' and resource='platform'
+        and revoked_at is null
+        and (expires_at is null or expires_at>clock_timestamp())
+      for share`,[staff.grant_id,staff.person_id])
+    if(grant.length!==1||grant[0].id!==staff.grant_id)return null
+    // Always acquire BOTH Store locks in deterministic order.
+    for(const sellerId of [input.source_seller_id,input.target_seller_id].sort())
+      await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
+        [sellerId])
+    const past=await db.execute(`select source_application_id,source_seller_id,
+      target_application_id,target_seller_id,old_name,old_handle,reason
+      from da_store_name_transfer where id=? for update`,[input.transfer_id])
+    if(past.length>1)throw new IdentityAccessDenied()
+    if(past.length){
+      const x=past[0]
+      if(x.source_application_id!==input.source_application_id||
+         x.source_seller_id!==input.source_seller_id||
+         x.target_application_id!==input.target_application_id||
+         x.target_seller_id!==input.target_seller_id||
+         x.old_name!==input.expected_name||x.old_handle!==input.expected_handle||
+         x.reason!==input.reason)throw new IdentityAccessDenied()
+      return {status:"assigned" as const,replayed:true}
+    }
+    const source=await db.execute(`select a.organization_id,s.name,s.handle,a.store_name_hash
+      from da_store_application a
+      join da_organization d on d.id=a.organization_id
+        and d.status='active' and d.deleted_at is null
+      join da_organization_seller_ownership o on o.organization_id=a.organization_id
+        and o.seller_id=a.seller_id and o.revoked_at is null
+      join seller s on s.id=a.seller_id and s.deleted_at is null
+        and s.status='suspended' and s.approved_at is not null
+      join da_audit_event e on e.id=o.verification_audit_event_id
+        and e.action='organization.store_application_created'
+        and e.resource='store-application' and e.module='dogruadres-access'
+        and e.deleted_at is null and e.organization_id=a.organization_id
+        and e.target_id=a.seller_id and e.new_values->>'application_id'=a.id
+      where a.id=? and a.seller_id=? and a.status='created'
+        and a.name_claim_released_at is null
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+            and x.deleted_at is null)
+      for share of a,d,o,s`,[input.source_application_id,input.source_seller_id])
+    if(source.length!==1||source[0].name!==input.expected_name||
+       source[0].handle!==input.expected_handle)return {status:"conflict" as const}
+    const target=await db.execute(`select a.organization_id
+      from da_store_application a
+      join da_organization d on d.id=a.organization_id
+        and d.status='active' and d.deleted_at is null
+      join da_organization_seller_ownership o on o.organization_id=a.organization_id
+        and o.seller_id=a.seller_id and o.revoked_at is null
+      join seller s on s.id=a.seller_id and s.deleted_at is null
+        and s.status in ('open','suspended') and s.approved_at is not null
+      join da_audit_event e on e.id=o.verification_audit_event_id
+        and e.action='organization.store_application_created'
+        and e.resource='store-application' and e.module='dogruadres-access'
+        and e.deleted_at is null and e.organization_id=a.organization_id
+        and e.target_id=a.seller_id and e.new_values->>'application_id'=a.id
+      where a.id=? and a.seller_id=? and a.status='created'
+        and exists(select 1 from da_audit_outbox x
+          where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
+            and x.deleted_at is null)
+      for share of a,d,o,s`,[input.target_application_id,input.target_seller_id])
+    if(target.length!==1)return {status:"conflict" as const}
+    if(!(await platformApprovedSellerIds(db,source[0].organization_id)).includes(input.source_seller_id)||
+       !(await platformApprovedSellerIds(db,target[0].organization_id)).includes(input.target_seller_id))
+      return null
+    const hashes=await db.execute(`select encode(sha256(convert_to(lower(
+      regexp_replace(btrim(normalize(?,NFKC)),'[[:space:]]+',' ','g')),
+      'UTF8')),'hex') as hash`,[input.expected_name])
+    const hash=hashes[0]?.hash
+    if(hashes.length!==1||typeof hash!=="string"||!/^[a-f0-9]{64}$/.test(hash)||
+       hash!==source[0].store_name_hash)return {status:"conflict" as const}
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-name'),hashtext(?))",
+      [hash])
+    const reserved=await db.execute(`select 1 from da_store_name_transfer
+      where status='assigned' and (name_hash=? or old_handle=?) limit 1`,
+      [hash,input.expected_handle])
+    const otherClaim=await db.execute(`select 1 from da_store_application
+      where id<>? and store_name_hash=? and
+        (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
+      limit 1`,[input.source_application_id,hash])
+    const pending=await db.execute(`select 1 from da_store_rename_request
+      where seller_id=? and status in ('pending_review','approving') limit 1`,
+      [input.source_seller_id])
+    if(reserved.length||otherClaim.length||pending.length)return {status:"conflict" as const}
+    const fresh=await sessions.staff(token,"store.approve","platform")
+    if(!fresh||fresh.grant_id!==staff.grant_id)return null
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:staff.person_id,actor_type:staff.actor_type,
+      actor_id:staff.actor_id,role_context:"platform_staff",
+      organization_id:source[0].organization_id,
+      action:"organization.store_name_right_assigned",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"store-name-transfer",
+      target_id:input.source_seller_id,
+      new_values:{transfer_id:input.transfer_id,
+        source_application_id:input.source_application_id,
+        target_application_id:input.target_application_id,
+        target_seller_id:input.target_seller_id,status:"assigned"},
+      occurred_at:new Date()
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const saved=await db.execute(`insert into da_store_name_transfer
+      (id,source_application_id,source_seller_id,source_organization_id,
+       target_application_id,target_seller_id,target_organization_id,
+       old_name,old_handle,name_hash,reason,decided_by_person_id,
+       source_audit_event_id,status)
+      values(?,?,?,?,?,?,?,?,?,?,?,?,?,'assigned') returning id`,[
+      input.transfer_id,input.source_application_id,input.source_seller_id,
+      source[0].organization_id,input.target_application_id,input.target_seller_id,
+      target[0].organization_id,input.expected_name,input.expected_handle,
+      hash,input.reason,staff.person_id,audit.id])
+    if(saved.length!==1)throw new IdentityAccessDenied()
+    const released=await db.execute(`update da_store_application
+      set name_claim_released_at=clock_timestamp(),updated_at=clock_timestamp()
+      where id=? and seller_id=? and name_claim_released_at is null
+      returning id`,[input.source_application_id,input.source_seller_id])
+    if(released.length!==1)throw new IdentityAccessDenied()
+    return {status:"assigned" as const,replayed:false}
+  }
+
   @InjectTransactionManager()
   async personalCurrentSuspendedStoreName(token:string,target:{
     application_id:string;seller_id:string;expected_status?:"open"
@@ -2537,6 +2690,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if((!originalHandleMatches&&renamed.length!==1)||
        original.length>1||renamed.length>1)
       return {status:"conflict" as const}
+    const transferred=await db.execute(`select 1 from da_store_name_transfer
+      where source_seller_id=? and status='assigned' and
+        name_hash=? and old_handle=? limit 1`,[target.seller_id,hash,r.handle])
+    if(transferred.length)return {status:"conflict" as const}
     const conflicts=await db.execute(`select 1 from da_store_application
       where (seller_id is null or seller_id<>?) and store_name_hash=?
         and (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
@@ -3158,8 +3315,18 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(proposed_name,NFKC)),
         '[[:space:]]+',' ','g')),'UTF8')),'hex')=?
       limit 2`,[input.seller_id,input.request_id,oldHash])
-    if(originalClaim.length>1||priorClaim.length>1||
-       !(originalClaim.length===1||priorClaim.length===1))
+    const transferredSource=await db.execute(`select 1 from da_store_name_transfer
+      where status='assigned' and source_seller_id=? and old_handle=?
+        and name_hash=? and source_organization_id=?
+        and exists(select 1 from da_audit_event e
+          join da_audit_outbox x on x.source_audit_event_id=e.id
+          where e.id=da_store_name_transfer.source_audit_event_id
+            and e.action='organization.store_name_right_assigned'
+            and e.module='dogruadres-access'
+            and e.deleted_at is null and x.deleted_at is null)
+      limit 2`,[input.seller_id,r.old_handle,oldHash,r.organization_id])
+    if(originalClaim.length>1||priorClaim.length>1||transferredSource.length>1||
+       !(originalClaim.length===1||priorClaim.length===1||transferredSource.length===1))
       return {status:"conflict" as const}
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-name'),hashtext(?))",
       [hash])
@@ -3187,7 +3354,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(h.proposed_name,NFKC)),
               '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or h.proposed_handle=?))
         ) limit 1`,[input.request_id,hash,r.proposed_handle,hash,r.proposed_handle])
-    if(application.length||native.length||holds.length)
+    const transferReservation=await db.execute(`select 1 from da_store_name_transfer
+      where status='assigned' and target_seller_id<>? and
+        (name_hash=? or old_handle=?) limit 1`,
+      [input.seller_id,hash,r.proposed_handle])
+    if(application.length||native.length||holds.length||transferReservation.length)
       return {status:"unavailable" as const}
     const already=await db.execute(`select 1 from da_store_rename_request
       where seller_id=? and id<>? and status='approving' limit 1`,
@@ -3307,7 +3478,13 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(proposed_name,NFKC)),
           '[[:space:]]+',' ','g')),'UTF8')),'hex')=?
         limit 2`,[input.seller_id,input.request_id,oldHash])
-      if(previous.length!==1)return null
+      if(previous.length!==1){
+        const assigned=await db.execute(`select 1 from da_store_name_transfer
+          where source_seller_id=? and source_organization_id=? and
+            old_handle=? and name_hash=? and status='assigned' limit 2`,
+          [input.seller_id,org,r.old_handle,oldHash])
+        if(assigned.length!==1)return null
+      }
     }
     const approved=await db.execute(`update da_store_rename_request
       set status='approved',approved_at=clock_timestamp(),updated_at=clock_timestamp()
@@ -3443,7 +3620,11 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.proposed_name,NFKC)),
             '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.proposed_handle=?))
       ) limit 1`,[hash,input.handle,hash,input.handle])
-    if(conflict.length||nativeConflict.length||held.length)
+    const otherTransfer=await db.execute(`select 1 from da_store_name_transfer
+      where status='assigned' and target_seller_id<>? and
+        (name_hash=? or old_handle=?) limit 1`,
+      [input.seller_id,hash,input.handle])
+    if(conflict.length||nativeConflict.length||held.length||otherTransfer.length)
       return {status:"unavailable" as const}
     const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:identity.person_id,actor_type:identity.actor_type,actor_id:identity.actor_id,
