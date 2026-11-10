@@ -207,20 +207,24 @@ jobs:
         id: install
         run: bun install --frozen-lockfile
       - name: Native SMTP HTTPS privacy negative regressions
+        id: asvs_smtp_http
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: |
           node --test integration-tests/postgres/smtp-response-privacy-guard.test.mjs
           bun test integration-tests/postgres/smtp-response-privacy-guard.test.mjs
       - name: Focused security and authorization unit tests
+        id: asvs_authz_unit
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: bun test src/modules/dogruadres-access/__tests__/security.unit.spec.ts src/utils/__tests__/organization-authorization.unit.spec.ts src/scripts/__tests__/task-mfa-bootstrap.unit.spec.ts src/scripts/__tests__/reviewer-execution-grant.unit.spec.ts src/scripts/__tests__/native-fixture-runtime.unit.spec.ts src/scripts/__tests__/r1-readiness.unit.spec.ts src/scripts/__tests__/r1-readback.unit.spec.ts src/scripts/__tests__/r1-activation.unit.spec.ts
       - name: Production HTTP secret guard regressions
+        id: asvs_secrets_unit
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: bun test src/utils/__tests__/production-secrets.unit.test.ts
       - name: Inactive session policy and DTO unit contracts
+        id: asvs_session_unit
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: bun test src/modules/dogruadres-access/__tests__/session-policy.unit.spec.ts src/api/dogruadres/__tests__/session-policy-contract.unit.spec.ts
@@ -241,6 +245,7 @@ jobs:
           grep -Fq '/dashboard/assets/' dist/index.html
           test -n "$(find dist/assets -maxdepth 1 -type f -print -quit)"
       - name: Token privacy and native SMTP notification regressions
+        id: asvs_token_privacy_unit
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         env:
@@ -260,6 +265,32 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: node --check integration-tests/http/dogruadres-foundation.native.test.mjs
+
+      # Reuse executed suites. The summary identifies evidence candidates, NOT full ASVS compliance.
+      # An unsuccessful/skipped step remains visible; this step never overrides a failed job.
+      - name: Publish ASVS 5.0 existing-test evidence index (no extra scans)
+        if: ${{ !cancelled() }}
+        env:
+          ASVS_SMTP_HTTP: ${{ steps.asvs_smtp_http.outcome }}
+          ASVS_AUTHZ_UNIT: ${{ steps.asvs_authz_unit.outcome }}
+          ASVS_SECRETS_UNIT: ${{ steps.asvs_secrets_unit.outcome }}
+          ASVS_SESSION_UNIT: ${{ steps.asvs_session_unit.outcome }}
+          ASVS_TOKEN_PRIVACY_UNIT: ${{ steps.asvs_token_privacy_unit.outcome }}
+        run: |
+          {
+            echo '### OWASP ASVS 5.0 — existing test evidence (partial, not compliance)'
+            echo '| Related ASVS area | Existing test step | Actual step outcome | Evidence limit |'
+            echo '|---|---|---|---|'
+            echo "| V8.2 / V8.3 | Focused security and authorization unit tests | ${ASVS_AUTHZ_UNIT} | Unit authorization contracts; not full tenant HTTP proof |"
+            echo "| V7 | Inactive session policy and DTO unit contracts | ${ASVS_SESSION_UNIT} | Domain/DTO contracts; not full session termination E2E |"
+            echo "| V13 | Production HTTP secret guard regressions | ${ASVS_SECRETS_UNIT} | Rejects weak secrets; does not establish secrets vault controls |"
+            echo "| V14 / V16 | Native SMTP HTTPS privacy negative regressions | ${ASVS_SMTP_HTTP} | Synthetic HTTP negative tests; not production egress verification |"
+            echo "| V14 | Token privacy and native SMTP notification regressions | ${ASVS_TOKEN_PRIVACY_UNIT} | Unit privacy contracts; not all sensitive-data flows |"
+            echo ''
+            echo 'Other pre-existing checks: CodeQL JS/TS (separate ready PR job), isolated PostgreSQL 16/Chrome (separate ready PR job), Governance Chromium (separate ready workflow). Inspect their actual runs; this summary does not infer their outcomes.'
+            echo ''
+            echo 'Step success is evidence that the named tests ran, **not** PASS for every ASVS requirement in that area. Uncovered, partial, and NOT TESTED requirements remain for risk-based manual review under AGENTS.md and the ASVS auditor skill.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   build:
     # Required checks must execute even for drafts; a skipped required check can count as success.
@@ -542,6 +573,9 @@ jobs:
           '
           echo "DOGRUADRES_CLAMD_SOCKET=$sock" >> "$GITHUB_ENV"
           echo "DOGRUADRES_B22_SAFE_REVIEW_TEST=true" >> "$GITHUB_ENV"
+      # This existing job also performs focused WCAG 2.2 axe-core A/AA and Staff
+      # keyboard checks on real authenticated Chrome UI (not full WCAG conformance).
+      # Keep heavyweight testing on ready PRs; do not add a second scanner/job.
       - name: B22 real Chrome after signed R1 activation on separate disposable database
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api

@@ -1612,7 +1612,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
            !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row?.organization_id)||
            typeof row?.organization_name!=='string'||typeof row?.name!=='string'||
            typeof row?.on_hold!=='boolean')||
-         data.suspended.some(row=>!/^daapp_[a-f0-9]{32}$/.test(row?.application_id)||
+         data.suspended.some(row=>typeof row?.name_review_required!=='boolean'||
+           !/^daapp_[a-f0-9]{32}$/.test(row?.application_id)||
            !/^sel_[A-Za-z0-9_-]+$/.test(row?.seller_id)||
            !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row?.organization_id)||
            typeof row?.organization_name!=='string'||typeof row?.name!=='string'||
@@ -1704,9 +1705,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       for(const entry of data.suspended){
         const row=document.createElement('p'),button=document.createElement('button');
-        row.textContent=entry.organization_name+' — '+entry.name+' — '+entry.seller_id+' ';
+        row.textContent=entry.organization_name+' — '+entry.name+' — '+entry.seller_id+
+          (entry.name_review_required?
+            ' — Ad/URL hakkı doğrulanamadı. İsim veya yetki incelemesi tamamlanmadan bu mağaza açılamaz. ':' ');
         button.type='button';button.textContent='Askı nedeni giderildi, mağazayı yeniden aç';
+        button.disabled=entry.name_review_required;
         button.onclick=async()=>{
+          // Display state alone never grants native authority: POST performs
+          // the current-name/Staff/Store checks again under the Seller lock.
+          if(entry.name_review_required)return;
           if(!window.confirm('Askı nedeni giderildi mi? Bu mağazanın ad ve bağlantı hakkı denetlenip aynı Store kimliğiyle açılacaktır.'))return;
           button.disabled=true;message.textContent='Mağaza yeniden açma kararı gönderiliyor…';
           try{

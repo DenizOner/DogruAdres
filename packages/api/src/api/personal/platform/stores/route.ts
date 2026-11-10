@@ -33,9 +33,9 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     if(!candidates)return res.status(403).json({message:"Access denied"})
     const native=req.scope.resolve<{listSellers(filter:object):Promise<any[]>}>("seller")
     const pending:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string;on_hold:boolean}>=[]
-    const suspended:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string;on_hold:boolean}>=[]
-    const reconciliation:typeof suspended=[]
-    const release_pending:typeof suspended=[]
+    const suspended:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;on_hold:boolean;name:string;name_review_required:boolean}>=[]
+    const reconciliation:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string;on_hold:boolean}>=[]
+    const release_pending:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string;on_hold:boolean}>=[]
     for(const item of candidates){
       const sellers=await native.listSellers({id:item.seller_id})
       if(sellers.length!==1||sellers[0].id!==item.seller_id)continue
@@ -45,8 +45,18 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
         const claim=await service.personalUnresolvedStoreReactivationClaim(token,item)
         if(claim?.status==="claimed"&&claim.organization_id===item.organization_id)
           release_pending.push({...item,name:String(sellers[0].name??"")})
-        else if(claim?.status==="none")
-          suspended.push({...item,name:String(sellers[0].name??"")})
+        else if(claim?.status==="none"){
+          // A suspended Seller can keep the same ID while an exceptional,
+          // reasoned name-right review is unresolved. Reuse the exact
+          // authoritative entitlement guard used by POST unsuspend, rather
+          // than assuming that the native Seller name grants opening rights.
+          const entitlement=await service.personalCurrentSuspendedStoreName(
+            token,{application_id:item.application_id,seller_id:item.seller_id})
+          if(!entitlement)continue
+          if(!["eligible","conflict"].includes(entitlement.status))continue
+          suspended.push({...item,name:String(sellers[0].name??""),
+            name_review_required:entitlement.status!=="eligible"})
+        }
         // A malformed/ambiguous source claim is never presented as actionable.
       }
       if(sellers[0].status==="open"&&sellers[0].approved_at){
