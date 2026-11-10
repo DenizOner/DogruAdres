@@ -23,7 +23,7 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
-import {verifyB22TransferredRecovery} from "./b22-store-name-transfer.accept"
+import {verifyB22TransferredRecovery,verifyAssignedRecipientUse} from "./b22-store-name-transfer.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {assertWcag22AxeInChrome} from "./wcag22-axe-chrome"
@@ -7456,7 +7456,7 @@ export default async function({container}:any){
       organizationName:organizations[0].name,sellerId:secondOwnerStoreId,
       rand,container,q
     })
-    await verifyB22TransferredRecovery({
+    const transferAssignment=await verifyB22TransferredRecovery({
       owner:browser,reviewer,q,
       source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
         organization_id:organizations[0].id},
@@ -7497,6 +7497,17 @@ export default async function({container}:any){
       browser,reviewer,sellerGamma.id,sellerGamma.name,gammaSellerId,container,q)
     await verifySuspendedStoreRenameBeforeReopen(
       browser,reviewer,sellerGamma.id,sellerGamma.name,gammaSellerId,rand,container,q)
+    // Preserve all earlier first-rename and concurrent request tests before
+    // B acquires the transferred native name in this same disposable DB.
+    await verifyAssignedRecipientUse({owner:browser,reviewer,q,
+      source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
+        organization_id:organizations[0].id},
+      target:{application_id:gammaApplication.application_id,seller_id:gammaSellerId,
+        organization_id:sellerGamma.id},
+      competitor:{seller_id:ownerStoreId,organization_id:organizations[0].id},
+      targetOrganizationName:sellerGamma.name,
+      competitorOrganizationName:organizations[0].name,
+      ...transferAssignment,sourceVacated:true})
     await browser.select(organizations[0].name,"owner")
     const gammaSku="B22-GAMMA-BETA-"+rand
     const {result:[gammaOffer]}=await createOffersWorkflow(container).run({
