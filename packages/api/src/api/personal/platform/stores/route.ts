@@ -34,7 +34,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     const native=req.scope.resolve<{listSellers(filter:object):Promise<any[]>}>("seller")
     const pending:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string;on_hold:boolean}>=[]
     const suspended:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;on_hold:boolean;name:string;name_review_required:boolean}>=[]
-    const reconciliation:typeof suspended=[]
+    const reconciliation:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string;on_hold:boolean}>=[]
     const release_pending:Array<{application_id:string;seller_id:string;organization_id:string;organization_name:string;name:string;on_hold:boolean}>=[]
     for(const item of candidates){
       const sellers=await native.listSellers({id:item.seller_id})
