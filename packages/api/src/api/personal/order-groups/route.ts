@@ -61,7 +61,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     // Do not accept an actor, native token or Customer ID from a browser.
     const binding=await foundation.personalActorBinding(token,"customer")
     const customerId=binding?.actor_id
-    if(binding?.person_id!==buyer.person_id||binding.revoked_at||
+    if(!binding||binding.person_id!==buyer.person_id||binding.revoked_at||
        typeof customerId!=="string"||!customerIdPattern.test(customerId))
       return denied()
     const customers=req.scope.resolve<{
