@@ -10,9 +10,9 @@ on:
         options: [b02, b04, b04-ui, b05-ui, b06-ui, b07-ui, b08-ui]
   pull_request:
     branches: [main]
-    # Draft PRs already run on opened; new head commits run on synchronize.
-    # A draft-to-ready transition alone must not rerun unchanged test inputs.
-    types: [opened, synchronize, reopened]
+    # Draft changes use targeted local checks; complete CI starts when ready.
+    # Subsequent commits to ready PRs must run all required checks again.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
   # sources locally (without changing repository security settings), check
   # SARIF and retain precise findings in this job's real CI log.
   codeql-javascript-typescript:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     name: CodeQL — JavaScript/TypeScript (local SARIF)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -90,7 +90,7 @@ jobs:
           JS
 
   r1-windows-authz:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     name: R1 Windows native Authz — synthetic token/ACL only
     runs-on: windows-2025
     timeout-minutes: 6
@@ -167,7 +167,7 @@ jobs:
           Write-Output 'PASS: real Windows Authz in-memory allow/deny, private process token and rejected substitutions; protected sandbox NOT TESTED'
 
   static:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     name: Foundation static checks
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -261,7 +261,7 @@ jobs:
         run: node --check integration-tests/http/dogruadres-foundation.native.test.mjs
 
   build:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     name: API backend build — test configuration
     needs: static
     runs-on: ubuntu-24.04
@@ -362,6 +362,8 @@ jobs:
           timeout 420s bunx medusa build
 
   mfa-postgres16:
+    # Keep explicitly requested isolated dispatch runs available for drafts.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     name: MFA migration and transaction — isolated PostgreSQL 16
     runs-on: ubuntu-24.04
     timeout-minutes: 20
