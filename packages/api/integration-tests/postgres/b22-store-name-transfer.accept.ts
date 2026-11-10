@@ -340,6 +340,31 @@ async function verifyAssignedRecipientUse(input:{
   assert.equal(before?.id,target.seller_id)
   assert.equal(before.status,"open")
   const b=proposal(target)
+  if(sourceVacated){
+    // The exception requires the original transfer decision's durable
+    // audit/outbox; corrupt only this task-owned disposable PostgreSQL row,
+    // assert no Owner request survives, then restore it even on failure.
+    const audited=await q(`select x.id from da_store_name_transfer t
+      join da_audit_outbox x on x.source_audit_event_id=t.source_audit_event_id
+        and x.source_module='dogruadres-access' and x.deleted_at is null
+      where t.source_seller_id=$1 and t.target_seller_id=$2 and t.status='assigned'`,
+      [source.seller_id,target.seller_id])
+    assert.equal(audited.length,1)
+    assert.equal((await q(`update da_audit_outbox
+      set deleted_at=clock_timestamp() where id=$1 and deleted_at is null
+      returning id`,[audited[0].id])).length,1)
+    try{
+      const tampered=proposal(target)
+      assert.equal((await post(owner,tampered)).status,409,
+        "Missing audited transfer must never waive a protected old name")
+      assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
+        [tampered.request_id]))[0].n,0)
+    }finally{
+      assert.equal((await q(`update da_audit_outbox
+        set deleted_at=null where id=$1 and deleted_at is not null
+        returning id`,[audited[0].id])).length,1)
+    }
+  }
   const result=await post(owner,b)
   if(!sourceVacated){
     assert.equal(result.status,409,
