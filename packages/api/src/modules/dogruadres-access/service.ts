@@ -5040,6 +5040,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       started_at:row?new Date(row.started_at).toISOString():null,
       due_at:row?new Date(row.due_at).toISOString():null,
       can_withdraw:row?.state==="closing"&&now.getTime()<new Date(row.due_at).getTime(),
+      // Read-only server-clock countdown; clients never control the deadline
+      // or the authorization to withdraw.
+      remaining_seconds:row?.state==="closing"?
+        Math.max(0,Math.ceil((new Date(row.due_at).getTime()-now.getTime())/1000)):0,
       store_status:scope.store_status,
       // No irreversible transition while verified mandatory delivery is absent.
       permanent_finalization_enabled:false}
