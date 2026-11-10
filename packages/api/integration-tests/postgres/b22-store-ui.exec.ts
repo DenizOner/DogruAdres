@@ -66,8 +66,8 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       "!document.querySelector('#store-owner-pause-form button[value=pause]').disabled")
     await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
     assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-pause-form button[value=pause]');b.focus();return document.activeElement===b})()"),true)
-    await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
-    await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
+    await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
+    await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
     await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
     await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('geçici arada')")
     assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-owner-pause"&&
@@ -143,8 +143,8 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       "!document.querySelector('#store-owner-pause-form button[value=resume]').disabled")
     await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
     assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-pause-form button[value=resume]');b.focus();return document.activeElement===b})()"),true)
-    await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
-    await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
+    await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
+    await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
     await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
     await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık')")
     const resumedRows=await q(
