@@ -2935,14 +2935,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-owner-closing-choice').textContent='';
     el('store-owner-closing-status').textContent='';
     const form=el('store-owner-closing-form');
-    if(form){
-      form.elements.namedItem('consequences_acknowledged').checked=false;
-      for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
+    if(form?.elements&&typeof form.elements.namedItem==='function'){
+      const ack=form.elements.namedItem('consequences_acknowledged');
+      if(ack)ack.checked=false;
     }
+    if(typeof form?.querySelectorAll==='function')
+      for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
   }
   function ownerClosingButtons(){
     const form=el('store-owner-closing-form');
-    if(!form)return;
+    if(!form?.elements||typeof form.elements.namedItem!=='function'||
+       typeof form.querySelectorAll!=='function')return;
     const agreed=form.elements.namedItem('consequences_acknowledged')?.checked===true;
     for(const b of form.querySelectorAll('button[type=submit]')){
       b.disabled=ownerClosingPending||ownerClosingUncertain||!agreed||
@@ -2999,7 +3002,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   const ownerClosingForm=el('store-owner-closing-form');
-  ownerClosingForm.elements.namedItem('consequences_acknowledged').onchange=ownerClosingButtons;
+  if(ownerClosingForm?.elements&&typeof ownerClosingForm.elements.namedItem==='function'){
+    const ack=ownerClosingForm.elements.namedItem('consequences_acknowledged');
+    if(ack)ack.onchange=ownerClosingButtons;
+  }
   el('store-owner-closing-refresh').onclick=()=>{
     if(currentOrg)void refreshOwnerClosing(currentOrg,organizationRequest);
   };
