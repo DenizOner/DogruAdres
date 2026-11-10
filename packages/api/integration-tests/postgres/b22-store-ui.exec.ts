@@ -7463,6 +7463,10 @@ export default async function({container}:any){
       target:{application_id:gammaApplication.application_id,seller_id:gammaSellerId,
         organization_id:sellerGamma.id},
       targetExpectedName:gammaApplication.name,
+      targetOrganizationName:sellerGamma.name,
+      competitorOrganizationName:organizations[0].name,
+      competitor:{application_id:"daapp_"+"0".repeat(32),seller_id:ownerStoreId,
+        organization_id:organizations[0].id},
       renameAndReopen:()=>verifySuspendedStoreRenameBeforeReopen(
         browser,reviewer,organizations[0].id,organizations[0].name,
         secondOwnerStoreId,rand+"-b",container,q,true),
