@@ -131,6 +131,19 @@ export async function verifyB22ExceptionalNameRight(input:{
     JSON.stringify('[data-transfer-source="'+source.seller_id+'"] [role=status]')+
     ").textContent.includes("+JSON.stringify(recipient.name)+")")
   assert.equal(actualPreview,true,"Staff preview must display verified recipient")
+  const readyToDecide=await reviewer.callFunction(
+    "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
+    ".find(x=>x.dataset.transferSource===id);"+
+    "const reason=box?.querySelector('textarea[name=reason]')?.value??'';"+
+    "const button=Array.from(document.querySelectorAll('[data-transfer-decide]'))"+
+    ".find(x=>x.dataset.transferDecide===id);"+
+    "return {reason_length:reason.trim().length,letters:[...reason.matchAll(/[\\p{L}\\p{N}]/gu)].length,"+
+    "ready:!!button&&!button.disabled}}",
+    source.seller_id)
+  assert.deepEqual(readyToDecide,{
+    reason_length:decisionReason.length,letters:decisionReason.replace(/[^A-Za-z0-9]/g,"").length,
+    ready:true
+  },"Real Staff reason and server-verified preview must remain in the same visible form")
   const click=await reviewer.callFunction(
     "function(id){const b=document.querySelector('[data-transfer-decide=\"'+id+'\"]');"+
     "if(!b||b.disabled)return false;const former=window.confirm;"+
@@ -140,7 +153,9 @@ export async function verifyB22ExceptionalNameRight(input:{
   try{
     await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Ad hakkı kararı kaydedildi') || "+
       "document.querySelector("+JSON.stringify('[data-transfer-source="'+source.seller_id+'"] [role=status]')+
-      ")?.textContent.includes('Devir sonucu belirsiz')")
+      ")?.textContent.includes('Devir sonucu belirsiz') || "+
+      "document.querySelector("+JSON.stringify('[data-transfer-source="'+source.seller_id+'"] [role=status]')+
+      ")?.textContent.includes('Önce hedefi doğrulayın')")
   }catch{
     const http=reviewer.http.filter((e:any)=>
       e.path==="/personal/platform/store-name-transfers")
@@ -153,6 +168,7 @@ export async function verifyB22ExceptionalNameRight(input:{
       "return {visible:!!box&&!box.hidden,global:msg.includes('Ad hakkı kararı kaydedildi')?'saved':"+
       "msg.includes('gönderiliyor')?'sending':'other',"+
       "row:status.includes('Devir sonucu belirsiz')?'uncertain':"+
+      "status.includes('Önce hedefi doğrulayın')?'guard-denied':"+
       "status.includes('Kaynak:')?'preview':'other'}}",
       source.seller_id)
     // PostgreSQL state classification ONLY: never select query, person, IDs,
@@ -171,7 +187,8 @@ export async function verifyB22ExceptionalNameRight(input:{
     "const row=box?.querySelector('[role=status]')?.textContent??'';"+
     "const global=document.getElementById('store-approval-status')?.textContent??'';"+
     "return global.includes('Ad hakkı kararı kaydedildi')?'success':"+
-    "row.includes('Devir sonucu belirsiz')?'uncertain':'other'}",
+    "row.includes('Devir sonucu belirsiz')?'uncertain':"+
+    "row.includes('Önce hedefi doğrulayın')?'guard-denied':'other'}",
     source.seller_id)
   const transferHttp=reviewer.http.filter((e:any)=>
     e.path==="/personal/platform/store-name-transfers")
