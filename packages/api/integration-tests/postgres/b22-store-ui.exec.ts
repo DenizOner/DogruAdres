@@ -121,9 +121,11 @@ async function verifyOwnerClosingBrowser(input:{
   assert.equal((await post({...same,consequences_acknowledged:false})).status,400)
   assert.equal(Number((await q("select count(*)::int n from da_audit_event "+
     "where resource='store-owner-closing' and target_id=$1",[ownerStoreId]))[0].n),1)
-  await browser.eval("(()=>{const a=document.querySelector("+
-    "'#store-owner-closing-form input[name=consequences_acknowledged]');"+
-    "a.checked=true;a.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+  // Unlike initiating irreversible closure, withdrawal needs no repeated
+  // consent checkbox; a live protected Owner and unexpired deadline remain
+  // the mandatory server-side gates.
+  assert.equal(await browser.eval("(()=>document.querySelector("+
+    "'#store-owner-closing-form input[name=consequences_acknowledged]').checked)()"),false)
   await browser.wait("!document.querySelector('#store-owner-closing-form button[value=withdraw]').disabled")
   await browser.eval("window.__b22ClosingConfirm=window.confirm;window.confirm=()=>true")
   assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-closing-form button[value=withdraw]');b.focus();return document.activeElement===b})()"),true)
