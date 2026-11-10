@@ -1610,13 +1610,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       label.append(input);box.append(label);
       return input;
     };
+    box.dataset.transferSource=entry.seller_id;
+    reveal.dataset.storeTransferSource=entry.seller_id;
     const targetApp=makeField('Hedef mağaza başvuru kimliği','daapp_[a-f0-9]{32}');
+    targetApp.name='target_application_id';
     const targetSeller=makeField('Hedef Store kimliği','sel_[A-Za-z0-9_-]+');
+    targetSeller.name='target_seller_id';
     const reasonLabel=document.createElement('label');
     reasonLabel.textContent='Gerekçeli istisnai devir kararı ';
     const reason=document.createElement('textarea');
     reason.required=true;reason.minLength=10;reason.maxLength=500;
     reason.setAttribute('aria-label','İstisnai ad hakkı devri gerekçesi');
+    reason.name='reason';
     reasonLabel.append(reason);box.append(reasonLabel);
     const previewBtn=document.createElement('button');
     previewBtn.type='button';previewBtn.textContent='Kaynak ve hedefi doğrula';
