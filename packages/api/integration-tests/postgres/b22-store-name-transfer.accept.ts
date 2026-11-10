@@ -137,3 +137,44 @@ export async function verifyB22ExceptionalNameRight(input:{
     [source.seller_id]))[0].status,"suspended")
   return {formerName:original.name,formerHandle:original.handle}
 }
+
+/** Complete the previously assigned right with the existing real Owner-rename
+ * and Staff-unsuspend journey; keep the unrelated checkout fixture isolated.
+ */
+export async function verifyB22TransferredRecovery(input:{
+  owner:B06Chrome;reviewer:B06Chrome;q:Rows;
+  source:Store;target:Store;targetExpectedName:string;
+  renameAndReopen:()=>Promise<void>;
+  restoreFixture:()=>Promise<unknown>
+}):Promise<void>{
+  const {owner,reviewer,q,source,target,targetExpectedName}=input
+  const before=(await q(
+    "select id,name,handle,status,approved_at from seller where id=$1",
+    [source.seller_id]))[0]
+  assert.equal(before?.status,"suspended")
+  const assignment=await verifyB22ExceptionalNameRight({
+    owner,reviewer,q,source,target
+  })
+  assert.equal(assignment.formerName,before.name)
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible'")
+  await input.renameAndReopen()
+  const recovered=(await q(
+    "select id,name,handle,status,approved_at from seller where id=$1",
+    [source.seller_id]))[0]
+  assert.equal(recovered.id,before.id)
+  assert.equal(recovered.status,"open")
+  assert.notEqual(recovered.name,assignment.formerName)
+  assert.equal(String(recovered.approved_at),String(before.approved_at))
+  const recipient=(await q("select name,status from seller where id=$1",
+    [target.seller_id]))[0]
+  assert.equal(recipient.name,targetExpectedName)
+  assert.equal(recipient.status,"open")
+  // Later independent Cart fixture expects the historical source suspended.
+  await input.restoreFixture()
+  assert.equal((await q("select status from seller where id=$1",
+    [source.seller_id]))[0].status,"suspended")
+  assert.equal((await q("select id from seller where id=$1",
+    [source.seller_id]))[0].id,source.seller_id)
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: exceptional suspended Seller name-right assigned to approved separate Store; Owner new name and Staff reopen same ID, native/Order untouched before rename, foreign/CSRF/replay denied, audit/outbox and recipient reservation\n")
+}
