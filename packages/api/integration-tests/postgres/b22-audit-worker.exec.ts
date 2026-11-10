@@ -250,7 +250,7 @@ export default async function({container}:any){
           "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
           [replayed.id]))[0].n),1,
           "Lost ACK retry must never create a second Index record")
-        process.stdout.write("PASS B22 real audit relay: Owner 30-day closing/withdrawal delivered to Index, private countdown redacted, durable ACK and lost-ACK retry deduplicated\\n")
+        process.stdout.write("PASS B22 real audit relay: Owner 30-day closing/withdrawal delivered to Index, private countdown redacted, durable ACK and lost-ACK retry deduplicated\n")
       }finally{
         for(const event of ownerClosingEvents)
           await q("update da_audit_outbox set created_at=$2 where id=$1",
