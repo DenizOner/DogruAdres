@@ -335,7 +335,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <p id="store-owner-closing-choice"></p>
       <p id="store-owner-closing-status" role="status" aria-live="polite"></p>
       <form id="store-owner-closing-form">
-        <label><input name="consequences_acknowledged" type="checkbox" required> 30 günlük süreyi ve geri dönülmez sonuçlarını okudum, anladım.</label>
+        <label><input name="consequences_acknowledged" type="checkbox"> Kapatma sürecini başlatmadan önce 30 günlük süreyi ve geri dönülmez sonuçlarını okudum, anladım.</label>
         <button type="submit" name="action" value="start" disabled>30 günlük kapatma sürecini başlat</button>
         <button type="submit" name="action" value="withdraw" disabled>Kapatma talebini geri çek</button>
       </form>
@@ -2948,8 +2948,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
        typeof form.querySelectorAll!=='function')return;
     const agreed=form.elements.namedItem('consequences_acknowledged')?.checked===true;
     for(const b of form.querySelectorAll('button[type=submit]')){
-      b.disabled=ownerClosingPending||ownerClosingUncertain||!agreed||
-        !ownerClosingState||
+      b.disabled=ownerClosingPending||ownerClosingUncertain||
+        (b.value==='start'&&!agreed)||!ownerClosingState||
         (b.value==='start'?
           ownerClosingState.state==='closing'||ownerClosingState.store_status!=='open':
           ownerClosingState.state!=='closing'||ownerClosingState.can_withdraw!==true);
@@ -3022,7 +3022,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const seller=choice?.value,state=ownerClosingState;
     if(!org||!selectedStoreOwner||document.hidden||ownerClosingPending||
        ownerClosingUncertain||!state||state.seller_id!==seller||
-       !ownerClosingForm.elements.namedItem('consequences_acknowledged').checked||
+       (action==='start'&&
+         !ownerClosingForm.elements.namedItem('consequences_acknowledged').checked)||
        !['start','withdraw'].includes(action)||
        (action==='start'&&(state.state==='closing'||state.store_status!=='open'))||
        (action==='withdraw'&&(state.state!=='closing'||!state.can_withdraw)))return;
@@ -3036,7 +3037,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     try{
       const result=await api('store-owner-closing',{method:'POST',body:JSON.stringify({
         action,organization_id:org,seller_id:seller,request_id:id,
-        expected_version:state.version,consequences_acknowledged:true
+        expected_version:state.version,
+        ...(action==='start'?{consequences_acknowledged:true}:{})
       })});
       if(epoch!==viewEpoch||request!==organizationRequest||
          org!==currentOrg||choice.value!==seller||document.hidden)return;
