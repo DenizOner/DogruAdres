@@ -7,6 +7,18 @@ describe("personal ingress (unit contract only)",()=>{
   async function probe(path:string,method="GET",authorization?:string,bound=false){const next=jest.fn();const res:any={status:jest.fn().mockReturnThis(),json:jest.fn()};await nativeIngress({originalUrl:path,method,headers:{authorization},...(authorization?.startsWith('Basic ')?{auth_context:{actor_type:'api-key',actor_id:'key'}}:{}),scope:{resolve:()=>({personalNativeCredential:async()=>bound?{}:null,personalMachineGrant:async()=>true})}} as any,res,next);return {next,res}}
   it.each(["/admin/users/me","/vendor/products","/store/customers/me","/auth/token/refresh","/auth/session","/admin/workflows-executions/a/run"])("rejects unbound native actor credentials: %s",async path=>{const {next,res}=await probe(path,"GET","Bearer native-token");expect(next).not.toHaveBeenCalled();expect(res.status).toHaveBeenCalledWith(401)})
   it.each(["/store/regions","/personal","/personal/session"])("preserves allowed locale/auth surface %s",async path=>expect((await probe(path)).next).toHaveBeenCalled())
+  it("admits only exact read-only Organization-scoped order-group route, not native customer reads",async()=>{
+    expect((await probe("/personal/order-groups","GET")).next).toHaveBeenCalledTimes(1)
+    for(const [path,method] of [
+      ["/personal/order-groups","POST"],["/personal/order-groups","DELETE"],
+      ["/personal/order-groups","OPTIONS"],["/personal/order-groups/og_foreign","GET"],
+      ["/store/order-groups","GET"],["/store/order-groups/og_foreign","GET"],
+    ]){
+      const {next,res}=await probe(path,method,"Bearer current",true)
+      expect(next).not.toHaveBeenCalled()
+      expect(res.status).toHaveBeenCalledWith(401)
+    }
+  })
   it("keeps public region bootstrap available even when Medusa resolved a publishable key",async()=>{
     const next=jest.fn(),res:any={status:jest.fn().mockReturnThis(),json:jest.fn()}
     await nativeIngress({originalUrl:"/store/regions",method:"GET",

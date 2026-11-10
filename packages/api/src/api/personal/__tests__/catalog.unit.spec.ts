@@ -1,3 +1,7 @@
+// Foundation CI runs an explicit B22 catalog suite list. Keep the new
+// scoped historic order security cases inside that existing test boundary
+// without editing the shared workflow used by PR #263.
+import "./order-groups.unit.spec"
 import {GET} from "../catalog/route"
 import {access,enabled,sessionToken} from "../security"
 import {MercurModules} from "@mercurjs/types"

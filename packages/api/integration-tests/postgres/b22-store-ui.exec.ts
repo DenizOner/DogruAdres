@@ -23,6 +23,7 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
+import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
 import {otp,until} from "./b19-browser"
@@ -581,8 +582,11 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
     const ownerAX=await browser.send("Accessibility.getFullAXTree")
     assert.ok(ownerAX.nodes.some((n:any)=>n.role?.value==="status"),
       "Chrome must expose at least one live status region")
-    assert.equal(await browser.eval("(()=>{const panel=document.getElementById('store-owner-pause-panel');const status=document.getElementById('store-owner-pause-status');const select=panel.querySelector('select[name=seller_id]');return !panel.hidden&&status.getAttribute('role')==='status'&&status.getAttribute('aria-live')==='polite'&&select.closest('label')?.textContent.includes('Mağaza')&&status.textContent.includes('satışa açık')})()"),true,
-      "Visible Owner select and state must be labeled and announced")
+    // A previous real Chrome run observed the immutable Seller resume PASS
+    // before this asynchronous panel readback settled. Do not weaken any
+    // WCAG assertion; wait until *all* existing visible/label/live-state
+    // invariants hold, and still fail closed if they never become true.
+    await browser.wait("(()=>{const panel=document.getElementById('store-owner-pause-panel');const status=document.getElementById('store-owner-pause-status');const select=panel?.querySelector('select[name=seller_id]');return !!panel&&!panel.hidden&&status?.getAttribute('role')==='status'&&status.getAttribute('aria-live')==='polite'&&!!select?.closest('label')?.textContent.includes('Mağaza')&&status.textContent.includes('satışa açık')})()")
 
     // Two distinct first-party HTTPS mutations using the SAME verified
     // version compete at the real PostgreSQL per-Seller transaction lock.
@@ -6531,7 +6535,13 @@ export default async function({container}:any){
           "})"+
         "}return original(resource,options)"+
       "};return true})()")
-    // Native status checks finish separately from the browser's picker refresh.
+    // The preceding Buyer catalogue flow uses a different Chrome window.
+    // Re-enter the real Owner page and reselect the exact Store/Group/Buyer.
+    // A stale hidden tab cannot count as an active authorization UI test.
+    await restoreStorePriceGroupOwnerBrowser({
+      browser,organizationName:organizations[0].name,storeId:ownerStoreId,
+      groupId:priceGroup.id,buyerOrganizationId:organizations[1].id
+    })
     // Wait for the previously authorized visible control; never bypass UI.
     await browser.wait("(()=>{const e=document.querySelector('#store-price-group-form button[value=\\\"revoke\\\"]');"+
       "return !!e && !!e.getClientRects().length && !e.disabled})()")
@@ -7785,6 +7795,14 @@ export default async function({container}:any){
     assert.equal(zeroAttribution[0].customer_id,nativeCustomer.id)
     process.stdout.write("PASS B22 Chrome: authorized zero-value native Mercur split-order persisted one OrderGroup/Order and completed Cart with immutable Beta attribution; no payment or visitor checkout\\n")
 
+    // Reuse this one already completed, attributed zero-amount OrderGroup.
+    // New historical-reader acceptance performs only HTTPS GET and real
+    // Chrome keyboard navigation; no second checkout, capture or SQL write.
+    await verifyB22OwnedHistoricalOrder({
+      buyer:reviewer,buyerOrg:{id:organizations[1].id,name:organizations[1].name},
+      orderGroupId:zeroOrderGroupId as string,cartId:zeroOrderCart.id,
+      nativeCustomerId:nativeCustomer.id,q
+    })
     // Native Medusa system provider is an in-memory simulator. All writes
     // are in this preauthorized random disposable CI database; no external
     // payment, HTTP checkout route, provider configuration or payout.
@@ -11307,6 +11325,15 @@ export default async function({container}:any){
     assert.equal(primaryCustomerSessions[0].actor_id,registered[0].actor_id)
     assert.equal(primaryCustomerSessions[0].mfa_purpose,"full")
     assert.ok(primaryCustomerSessions[0].last_strong_auth_at)
+    // This second Person has a separate, real PRIMARY Medusa Customer,
+    // native password + TOTP session, and NO Buyer Beta membership.
+    // It must not read the earlier completed Beta history by guessing its ID.
+    await verifyB22ForeignHistoricalOrder({
+      other:signupChrome,buyerOrgId:organizations[1].id,
+      orderGroupId:zeroOrderGroupId as string,
+      otherCustomerId:registered[0].actor_id,
+      ownerCustomerId:nativeCustomer.id,q
+    })
     const primaryPolicyUrl="/personal/platform/store-application-policy?organization_id="+
       encodeURIComponent(organizations[0].id)
     const customerReadPolicy=()=>signupChrome.callFunction(
@@ -12795,6 +12822,12 @@ export default async function({container}:any){
       for(const id of [approvedOrgId,individualOrg])
         assert.ok(applicantTwoOrganizations.body.organizations.some((o:any)=>o.id===id&&o.role==="owner"),
           "One Person must see both independently approved businesses")
+      await verifyB22AuthorizedForeignHistoricalOrder({other:signupChrome,
+        otherOrgId:approvedOrgId,ownerOrgId:organizations[1].id,
+        orderGroupId:zeroOrderGroupId as string,
+        otherCustomerId:registered[0].actor_id,
+        ownerCustomerId:nativeCustomer.id,personId:signupPerson,
+        buyerToken:primaryCustomerToken!,foundation,q})
       const foreignSecondOrganization=await foreignDraftChrome.eval(
         "(async()=>{const r=await fetch('/personal/organizations');return {status:r.status,body:await r.json()}})()")
       assert.equal(foreignSecondOrganization.status,200)
@@ -13407,4 +13440,42 @@ export default async function({container}:any){
     else try {smtpGuard?.assertNoLeaks()}
       catch {process.stderr.write("SECONDARY SMTP privacy failure during cleanup; primary error preserved\n")}
   }
+}
+
+/**
+ * Re-enter the first-party Owner UI after visiting the separate Buyer Chrome.
+ * A hidden tab may conceal all private controls; refresh by actual user
+ * selection, not by editing DOM.hidden or disabling authorization.
+ */
+async function restoreStorePriceGroupOwnerBrowser(input:{
+  browser:B06Chrome;organizationName:string;storeId:string;
+  groupId:string;buyerOrganizationId:string
+}):Promise<void>{
+  const {browser,organizationName,storeId,groupId,buyerOrganizationId}=input
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible'&&"+
+    "!document.getElementById('workspace').hidden")
+  await browser.select(organizationName,"owner")
+  await browser.wait("!document.getElementById('store-price-group-panel').hidden")
+  const store=await browser.eval("(()=>{"+
+    "const e=document.querySelector('#store-price-group-form select[name=seller_id]');"+
+    "if(!e||!Array.from(e.options).some(o=>o.value==="+JSON.stringify(storeId)+"))return false;"+
+    "e.value="+JSON.stringify(storeId)+";"+
+    "e.dispatchEvent(new Event('change',{bubbles:true}));"+
+    "return e.value==="+JSON.stringify(storeId)+"})()")
+  assert.equal(store,true,"Real Owner UI must offer this exact authorized Store")
+  await browser.wait("Array.from(document.querySelectorAll('#store-price-group-choice option'))"+
+    ".some(o=>o.value==="+JSON.stringify(groupId)+")")
+  const group=await browser.eval("(()=>{"+
+    "const e=document.getElementById('store-price-group-choice');"+
+    "e.value="+JSON.stringify(groupId)+";"+
+    "e.dispatchEvent(new Event('change',{bubbles:true}));"+
+    "return document.querySelector('#store-price-group-form input[name=customer_group_id]').value})()")
+  assert.equal(group,groupId,"Owner must select the exact native CustomerGroup")
+  await browser.eval("document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value=''")
+  await browser.input("#store-price-group-form input[name=buyer_organization_id]",
+    buyerOrganizationId)
+  assert.equal(await browser.eval(
+    "document.querySelector('#store-price-group-form input[name=buyer_organization_id]').value"),
+    buyerOrganizationId)
 }

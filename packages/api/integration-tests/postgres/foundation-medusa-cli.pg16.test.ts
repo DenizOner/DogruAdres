@@ -373,6 +373,14 @@ async function run(){
           assert.ok(result.includes("PASS B22 Chrome: native Admin SMTP same-origin MFA/grant GET200"))
           return
         }
+        // Both new B22 historical-reader negatives must be visible as full
+        // redacted proof lines. Child success alone is not their evidence.
+        for(const marker of [
+          "PASS B22 Chrome: historical OrderGroup revoked Buyer cookie HTTP403 generic response, audit/outbox unchanged; isolated session restored and own order HTTP200",
+          "PASS B22 Chrome: historical OrderGroup authorized own-Org Customer denies foreign completed OrderGroup HTTP403 with no private fields or audit/outbox writes"
+        ])
+          assert.ok(result.split("\n").includes(marker),
+            "Missing required real Chrome/HTTPS/PG16 historical OrderGroup negative: "+marker)
         assert.ok(result.split("\n").includes(ownerPauseConcurrentMarker),
           "Missing real concurrent Owner mutation and revoked/expired HTTP no-write proof")
         assert.ok(result.split("\n").includes(ownerPauseAcceptanceMarker),
