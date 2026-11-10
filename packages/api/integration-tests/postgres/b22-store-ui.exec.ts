@@ -137,7 +137,7 @@ async function verifyOwnerClosingBrowser(input:{
     [ownerStoreId]))[0],nativeBefore)
   assert.equal(Number((await q("select count(*)::int n from da_audit_event "+
     "where resource='store-owner-closing' and target_id=$1",[ownerStoreId]))[0].n),2)
-  process.stdout.write("PASS B22 real Owner 30-day closing intent/withdraw: Chrome/HTTPS/PG16, exact server deadline, protected Owner notices, whole-Cart L deny then restore, CSRF/foreign/replay denied; native Seller unchanged; irreversible finalization disabled\\n")
+  process.stdout.write("PASS B22 real Owner 30-day closing intent/withdraw: Chrome/HTTPS/PG16, exact server deadline, protected Owner notices, whole-Cart L deny then restore, CSRF/foreign/replay denied; native Seller unchanged; irreversible finalization disabled\n")
 }
 
 async function verifyOwnerTemporaryPauseBrowser(input:{
