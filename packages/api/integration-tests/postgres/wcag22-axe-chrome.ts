@@ -5,10 +5,8 @@
  */
 import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
-import {createRequire} from "node:module"
 import type {B06Chrome} from "./b06-ui-browser"
 
-const require=createRequire(import.meta.url)
 const AXE_VERSION="4.14.0"
 type AuditedScope="#login"|"#person-mobile-form"|"#store-approval-panel"
 
