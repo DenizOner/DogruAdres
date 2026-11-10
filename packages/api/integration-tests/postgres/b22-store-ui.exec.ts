@@ -2002,6 +2002,21 @@ async function verifyStaffReopensSuspendedStore(
       ["b22-invalid-name-provenance",approvedRename.id])
     assert.equal((await post(reviewer,target)).status,409,
       "A Seller with unverified/reassigned name history must stay suspended")
+    // Existing Chrome/HTTPS/PG16 negative, NOT a real name-right transfer:
+    // the deliberately corrupted source audit must mark the Staff UI as
+    // review-only; a button which could trigger native reopen is forbidden.
+    await reviewer.click("#store-approval-refresh")
+    await reviewer.wait("Array.from(document.querySelectorAll('#store-reactivation-list p'))"+
+      ".some(e=>e.textContent.includes("+JSON.stringify(sellerId)+") && "+
+      "e.textContent.includes('Ad/URL hakkı doğrulanamadı') && "+
+      "e.querySelector('button')?.disabled===true)")
+    const preflight=await reviewer.callFunction(
+      "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
+      "return {status:r.status,body:await r.json(),id}}",sellerId)
+    assert.equal(preflight.status,200)
+    assert.equal(preflight.body.suspended.find((s:any)=>s.seller_id===sellerId)
+      ?.name_review_required,true,
+      "A suspended Store with unverified name-right proof must be review-only")
     assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
       "suspended")
   }finally{
