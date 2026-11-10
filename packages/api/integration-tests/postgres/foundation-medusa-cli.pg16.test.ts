@@ -277,6 +277,8 @@ async function run(){
         const ownerPauseConcurrentMarker="PASS B22 real Owner pause concurrency/authorization: two HTTPS requests 200+409, one durable pause; revoked Owner and stale strong session denied without writes; resume restores unchanged Seller"
         const ownerClosingIndexMarker="PASS B22 real audit relay: Owner 30-day closing/withdrawal delivered to Index, private countdown redacted, durable ACK and lost-ACK retry deduplicated"
         const ownerPauseIndexMarker="PASS B22 real audit relay: Owner temporary pause/resume events delivered to Index with redacted envelopes, durable ACKs and single row on retry"
+        const exceptionalStoreTransferMarker="PASS B22 Chrome/HTTPS/PG16: exceptional suspended Seller name-right assigned to approved separate Store; Owner new name and Staff reopen same ID, native/Order untouched before rename, foreign/CSRF/replay denied, audit/outbox and recipient reservation"
+        const exceptionalRecipientMarker="PASS B22 Chrome/HTTPS/PG16: recipient B native name and URL adopted after source A vacates, historical 30-day hold retained, unrelated Store C HTTP409 before/after, Staff approval and audit/outbox durable"
         const ownerClosingNegativeMarker="PASS B22 real closing security: concurrent HTTP 200+409 one commit; revoked Owner/stale session HTTP403 no writes; expired 30-day withdraw HTTP409 no writes; both active Owners read private notices, two receipts each; native Seller unchanged"
         const ownerClosingMarker="PASS B22 real Owner 30-day closing intent/withdraw: Chrome/HTTPS/PG16, exact server deadline, protected Owner notices, whole-Cart L deny then restore, CSRF/foreign/replay denied; native Seller unchanged; irreversible finalization disabled"
         const ownerPauseAcceptanceMarker="PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed"
@@ -321,7 +323,8 @@ async function run(){
               x==="PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner" ||
               storeDraftNegativeMarkers.includes(x as (typeof storeDraftNegativeMarkers)[number]) ||
               x===ownerPauseAcceptanceMarker || x===ownerPauseConcurrentMarker ||
-              x===ownerPauseIndexMarker || x===ownerClosingNegativeMarker).join("\n")
+              x===ownerPauseIndexMarker || x===ownerClosingNegativeMarker ||
+              x===exceptionalStoreTransferMarker || x===exceptionalRecipientMarker).join("\n")
           if(child.error||child.status!==0){
             // The long B22 child can legitimately fail at the still-blocked
             // tax-document approval. Do not bury *completed* earlier native
@@ -373,6 +376,10 @@ async function run(){
           assert.ok(result.includes("PASS B22 Chrome: native Admin SMTP same-origin MFA/grant GET200"))
           return
         }
+        assert.ok(result.split("\n").includes(exceptionalStoreTransferMarker),
+          "Missing exact Chrome/HTTPS/PG16 exceptional Store name-right assignment and same-ID Owner recovery acceptance evidence")
+        assert.ok(result.split("\n").includes(exceptionalRecipientMarker),
+          "Missing real HTTPS/PG16 B native adoption, source vacate and C denied acceptance evidence")
         // Both new B22 historical-reader negatives must be visible as full
         // redacted proof lines. Child success alone is not their evidence.
         for(const marker of [

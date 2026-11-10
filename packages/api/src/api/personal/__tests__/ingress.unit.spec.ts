@@ -76,6 +76,24 @@ describe("personal ingress (unit contract only)",()=>{
       expect(res.status).toHaveBeenCalledWith(401)
     }
   })
+  it("allows only the exact Staff name-transfer personal route, not native or nested bypasses",async()=>{
+    for(const method of ["GET","POST"]){
+      const allowed=await probe("/personal/platform/store-name-transfers",method)
+      expect(allowed.next).toHaveBeenCalledTimes(1)
+    }
+    for(const [path,method] of [
+      ["/personal/platform/store-name-transfers","DELETE"],
+      ["/personal/platform/store-name-transfers","PATCH"],
+      ["/personal/platform/store-name-transfers","OPTIONS"],
+      ["/personal/platform/store-name-transfers/sel_foreign","GET"],
+      ["/vendor/sellers/sel_foreign","POST"],
+      ["/admin/sellers/sel_foreign","PATCH"]
+    ]){
+      const denied=await probe(path,method,"Bearer forged-native")
+      expect(denied.next).not.toHaveBeenCalled()
+      expect(denied.res.status).toHaveBeenCalledWith(401)
+    }
+  })
   it("allows only exact MFA settings GET/POST, never native or nested variants",async()=>{
     for(const method of ["GET","POST"])expect((await probe("/personal/mfa",method)).next).toHaveBeenCalled()
     for(const [path,method] of [["/personal/mfa","OPTIONS"],["/personal/mfa","DELETE"],["/personal/mfa/admin","POST"]]){

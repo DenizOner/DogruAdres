@@ -23,6 +23,7 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
+import {verifyB22TransferredRecovery,verifyAssignedRecipientUse} from "./b22-store-name-transfer.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {assertWcag22AxeInChrome} from "./wcag22-axe-chrome"
@@ -1807,6 +1808,26 @@ async function verifyPlatformStoreRenameApproval(
 
 
 
+/** B22 task-only fixture: a real approved native rename precedes the
+ * exceptional name-right assignment. Kept outside the main acceptance body
+ * so the oversized full-platform script stays within TypeScript CFA limits.
+ */
+async function preparePreviouslyRenamedStoreForTransfer(input:{
+  owner:B06Chrome;reviewer:B06Chrome;organizationId:string;
+  organizationName:string;sellerId:string;rand:string;container:any;
+  q:(sql:string,params?:any[])=>Promise<any[]>
+}):Promise<void>{
+  const {owner,reviewer,organizationId,organizationName,sellerId,rand,container,q}=input
+  await verifySuspendedStoreRenameBeforeReopen(
+    owner,reviewer,organizationId,organizationName,sellerId,
+    rand+"-prior",container,q,true)
+  await suspendSellerWorkflow(container).run({input:{
+    seller_id:sellerId,reason:"B22 disposable previously-renamed transfer proof"
+  }})
+  assert.equal((await q("select status from seller where id=$1",
+    [sellerId]))[0].status,"suspended")
+}
+
 /** The currently approved but suspended native Seller can receive a distinct
  * Owner-requested, Staff-approved name without being silently activated.
  * A separate, explicit Staff unsuspend is required; all operations use real
@@ -1815,15 +1836,16 @@ async function verifyPlatformStoreRenameApproval(
 async function verifySuspendedStoreRenameBeforeReopen(
   owner:B06Chrome,reviewer:B06Chrome,organizationId:string,
   organizationName:string,sellerId:string,rand:string,
-  container:any,q:(sql:string,params?:any[])=>Promise<any[]>
+  container:any,q:(sql:string,params?:any[])=>Promise<any[]>,
+  alreadySuspended=false
 ):Promise<void>{
   const before=(await q("select id,name,handle,status,approved_at from seller where id=$1",
     [sellerId]))[0]
-  assert.equal(before.status,"open")
+  assert.equal(before.status,alreadySuspended?"suspended":"open")
   assert.ok(before.approved_at)
   const name="B22 Askıdan Sonra "+rand
   const handle=("b22-aski-"+rand).toLowerCase().replace(/[^a-z0-9-]/g,"")
-  await suspendSellerWorkflow(container).run({input:{
+  if(!alreadySuspended)await suspendSellerWorkflow(container).run({input:{
     seller_id:sellerId,reason:"B22 task-only suspended name change"
   }})
   assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
@@ -1839,11 +1861,65 @@ async function verifySuspendedStoreRenameBeforeReopen(
     "f.elements.namedItem('seller_id').value=id;"+
     "f.elements.namedItem('name').value=name;"+
     "f.elements.namedItem('handle').value=handle;"+
-    "f.elements.namedItem('risk_acknowledged').checked=true;f.requestSubmit();return true}",
+    "f.elements.namedItem('risk_acknowledged').checked=true;"+
+    "const valid=f.checkValidity();if(valid)f.requestSubmit();return valid}",
     sellerId,name,handle)
-  assert.equal(requested,true)
-  await owner.wait("Array.from(document.querySelectorAll('#store-rename-history p')).some("+
-    "p=>p.textContent.includes("+JSON.stringify(name)+") && p.textContent.includes('Platform incelemesinde'))")
+  assert.equal(requested,true,"Owner native HTML form validity must hold before submission")
+  try{
+    await owner.wait("Array.from(document.querySelectorAll('#store-rename-history p')).some("+
+      "p=>p.textContent.includes("+JSON.stringify(name)+") && p.textContent.includes('Platform incelemesinde'))")
+  }catch(error){
+    // Log bounded status categories ONLY, never Store names, request bodies,
+    // private Person details, cookies, error text or identifiers.
+    const http=owner.http.filter((x:any)=>x.path==="/personal/store-rename-requests")
+      .slice(-4).map((x:any)=>({method:x.method,status:x.status}))
+    const ui=await owner.callFunction(
+      "function(){const f=document.getElementById('store-rename-form');"+
+      "const x=document.getElementById('store-rename-status')?.textContent??'';"+
+      "return {valid:!!f?.checkValidity(),disabled:!!f?.querySelector('button[type=submit]')?.disabled,"+
+      "state:x.includes('Başvuru reddedildi')?'rejected':"+
+      "x.includes('Sonuç belirsiz')?'uncertain':"+
+      "x.includes('Talep kaydedildi')?'saved':"+
+      "x.includes('Mevcut talep incelemede')?'pending':"+
+      "x.includes('doğrulanamadı')?'unverified':'other'}}")
+    const rows=await q(`select status from da_store_rename_request
+      where organization_id=$1 and seller_id=$2 and proposed_name=$3
+        and proposed_handle=$4`,[organizationId,sellerId,name,handle])
+    const [candidate]=await q(`select encode(sha256(convert_to(lower(
+      regexp_replace(btrim(normalize($1,NFKC)),'[[:space:]]+',' ','g')),
+      'UTF8')),'hex') as hash`,[name])
+    const hash=candidate.hash as string
+    const n=async(sql:string,values:any[])=>Number((await q(sql,values))[0].n)
+    const conflicts={
+      pending:await n("select count(*)::int n from da_store_rename_request where seller_id=$1 and status in ('pending_review','approving')",[sellerId]),
+      application:await n(`select count(*)::int n from da_store_application
+        where store_name_hash=$1 and
+          (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
+          and (seller_id is null or seller_id<>$2)`,[hash,sellerId]),
+      native:await n(`select count(*)::int n from seller where id<>$1
+        and (deleted_at is null or deleted_at>clock_timestamp()-interval '30 days')
+        and (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(name,NFKC)),
+        '[[:space:]]+',' ','g')),'UTF8')),'hex')=$2 or lower(handle)=$3)`,
+        [sellerId,hash,handle]),
+      renameHold:await n(`select count(*)::int n from da_store_rename_request r
+        where (r.status='approving' or (r.status='approved' and
+          r.approved_at>clock_timestamp()-interval '30 days'))
+        and ((encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.old_name,NFKC)),
+          '[[:space:]]+',' ','g')),'UTF8')),'hex')=$1 or r.old_handle=$2)
+          or (r.status='approving' and
+          (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.proposed_name,NFKC)),
+          '[[:space:]]+',' ','g')),'UTF8')),'hex')=$1 or r.proposed_handle=$2)))`,
+        [hash,handle]),
+      transferReservation:await n(`select count(*)::int n from da_store_name_transfer
+        where status='assigned' and target_seller_id<>$1
+          and (name_hash=$2 or old_handle=$3)`,[sellerId,hash,handle])
+    }
+    // Only numeric conflict classes; never expose identifiers, names or
+    // reasons in a public CI log.
+    throw new Error("B22 Owner transferred-Store rename did not become pending: "+
+      JSON.stringify({http,ui,durable:{count:rows.length,
+        statuses:rows.map((x:any)=>x.status)},conflicts}))
+  }
   // The real Owner form generates the opaque id in the browser. Query
   // the exact new, source-owned request rather than fabricating its id.
   const pending=await q(`select id,status from da_store_rename_request
@@ -7281,6 +7357,25 @@ export default async function({container}:any){
     // buyer login or any automatic buyer.purchase permission.
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
+    // This part of the shared Buyer/Customer test can refresh the same
+    // personal workspace. Require a real, current Gamma membership button
+    // before clicking; a stale or wrong-Person DOM never grants authority.
+    try{
+      await browser.wait("!document.getElementById('workspace').hidden && "+
+        "Array.from(document.querySelectorAll('#organizations button')).some("+
+        "b=>b.textContent==="+JSON.stringify(sellerGamma.name+" — owner")+")")
+    }catch{
+      const state=await browser.callFunction(
+        "function(){return {workspace:!document.getElementById('workspace')?.hidden,"+
+        "login:!document.getElementById('login')?.hidden,"+
+        "challenge:!document.getElementById('challenge')?.hidden,"+
+        "organizations:document.querySelectorAll('#organizations button').length}}")
+      const recent=browser.http.filter((x:any)=>
+        x.path==="/personal/organizations"||x.path==="/personal/session")
+        .slice(-5).map((x:any)=>({path:x.path,status:x.status}))
+      throw new Error("Gamma Staff/Owner selection unavailable: "+
+        JSON.stringify({state,recent}))
+    }
     await browser.select(sellerGamma.name,"owner")
     const gammaApplication={
       organization_id:sellerGamma.id,
@@ -7355,6 +7450,30 @@ export default async function({container}:any){
       [ownerStoreId],
       "Gamma must not enter Alpha; previously suspended second Alpha Store stays excluded")
     assert.equal(alphaAfterGamma.some((store:any)=>store.id===gammaSellerId),false)
+
+    await preparePreviouslyRenamedStoreForTransfer({
+      owner:browser,reviewer,organizationId:organizations[0].id,
+      organizationName:organizations[0].name,sellerId:secondOwnerStoreId,
+      rand,container,q
+    })
+    const transferAssignment=await verifyB22TransferredRecovery({
+      owner:browser,reviewer,q,
+      source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
+        organization_id:organizations[0].id},
+      target:{application_id:gammaApplication.application_id,seller_id:gammaSellerId,
+        organization_id:sellerGamma.id},
+      targetExpectedName:gammaApplication.name,
+      targetOrganizationName:sellerGamma.name,
+      competitorOrganizationName:organizations[0].name,
+      competitor:{seller_id:ownerStoreId,
+        organization_id:organizations[0].id},
+      renameAndReopen:()=>verifySuspendedStoreRenameBeforeReopen(
+        browser,reviewer,organizations[0].id,organizations[0].name,
+        secondOwnerStoreId,rand+"-b",container,q,true),
+      restoreFixture:async()=>suspendSellerWorkflow(container).run({input:{
+        seller_id:secondOwnerStoreId,reason:"Task-only Store isolated after name recovery"
+      }})
+    })
 
     await verifyConcurrentCrossOrganizationStoreNames(
       browser,organizations[0].id,sellerGamma.id,rand,q)
@@ -7486,6 +7605,21 @@ export default async function({container}:any){
     await browser.wait("!document.getElementById('store-rename-panel').hidden")
     await verifyOwnerWithdrawPendingStoreRename(
       browser,reviewer,sellerGamma.id,gammaSellerId,A.person,rand,q)
+    // Existing Gamma first/second rename, old/new URL and withdrawal tests
+    // have now finished; only now consume B's exceptional native name right.
+    // Preserve all earlier first-rename and concurrent request tests before
+    // B acquires the transferred native name in this same disposable DB.
+    await verifyAssignedRecipientUse({owner:browser,reviewer,q,
+      source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
+        organization_id:organizations[0].id},
+      target:{application_id:gammaApplication.application_id,seller_id:gammaSellerId,
+        organization_id:sellerGamma.id},
+      competitor:{seller_id:ownerStoreId,organization_id:organizations[0].id},
+      targetOrganizationName:sellerGamma.name,
+      competitorOrganizationName:organizations[0].name,
+      ...transferAssignment,sourceVacated:true})
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
     const keyHeaders={"x-publishable-api-key":b22PublishableKey.token}
     assert.equal((await q(`select count(*)::int n from order_group
@@ -13499,8 +13633,16 @@ async function restoreStorePriceGroupOwnerBrowser(input:{
 }):Promise<void>{
   const {browser,organizationName,storeId,groupId,buyerOrganizationId}=input
   await browser.send("Page.bringToFront")
-  await browser.wait("document.visibilityState==='visible'&&"+
-    "!document.getElementById('workspace').hidden")
+  await browser.wait("document.visibilityState==='visible'")
+  // The Buyer Chrome may invalidate the previously displayed private scope.
+  // Re-enter through a real reload and server-owned session validation; never
+  // toggle hidden flags or fake credentials in the DOM.
+  if(await browser.eval("document.getElementById('workspace').hidden")){
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("document.readyState==='complete' && "+
+      "document.visibilityState==='visible'")
+  }
+  await browser.wait("!document.getElementById('workspace').hidden")
   await browser.select(organizationName,"owner")
   await browser.wait("!document.getElementById('store-price-group-panel').hidden")
   const store=await browser.eval("(()=>{"+
