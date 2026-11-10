@@ -300,14 +300,14 @@ export async function verifyB22ExceptionalNameRight(input:{
  * All mutations run through existing Owner/Staff HTTPS endpoints. */
 async function verifyAssignedRecipientUse(input:{
   owner:B06Chrome;reviewer:B06Chrome;q:Rows;
-  source:Store;target:Store;competitor:Store;
+  source:Store;target:Store;competitor:Pick<Store,'seller_id'|'organization_id'>;
   targetOrganizationName:string;competitorOrganizationName:string;
   formerName:string;formerHandle:string;sourceVacated:boolean
 }):Promise<void>{
   const {owner,reviewer,q,source,target,competitor,formerName,
     formerHandle,sourceVacated,targetOrganizationName,
     competitorOrganizationName}=input
-  const proposal=(store:Store)=>({
+  const proposal=(store:Pick<Store,'seller_id'|'organization_id'>)=>({
     request_id:"dasrn_"+randomBytes(16).toString("hex"),
     organization_id:store.organization_id,seller_id:store.seller_id,
     name:formerName,handle:formerHandle,risk_acknowledged:true,
@@ -322,6 +322,13 @@ async function verifyAssignedRecipientUse(input:{
   await owner.send("Page.bringToFront")
   await owner.wait("document.visibilityState==='visible'")
   await owner.select(competitorOrganizationName,"owner")
+  const [competitorNative]=await q("select name,handle,status from seller where id=$1",
+    [competitor.seller_id])
+  assert.equal(competitorNative?.status,"open")
+  assert.notEqual(competitorNative?.name,formerName)
+  assert.equal((await q("select count(*)::int n from da_store_rename_request where seller_id=$1 and status in ('pending_review','approving')",
+    [competitor.seller_id]))[0].n,0,
+    "Third Store must have no unrelated pending request that could mask reservation denial")
   const c=proposal(competitor)
   assert.equal((await post(owner,c)).status,409,
     "Third Store C cannot claim another Store's assigned right")
@@ -413,7 +420,7 @@ async function verifyAssignedRecipientUse(input:{
 export async function verifyB22TransferredRecovery(input:{
   owner:B06Chrome;reviewer:B06Chrome;q:Rows;
   source:Store;target:Store;targetExpectedName:string;
-  competitor:Store;targetOrganizationName:string;competitorOrganizationName:string;
+  competitor:Pick<Store,'seller_id'|'organization_id'>;targetOrganizationName:string;competitorOrganizationName:string;
   renameAndReopen:()=>Promise<void>;
   restoreFixture:()=>Promise<unknown>
 }):Promise<void>{
