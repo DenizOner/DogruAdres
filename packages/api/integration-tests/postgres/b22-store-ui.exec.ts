@@ -6595,8 +6595,8 @@ export default async function({container}:any){
       where buyer_organization_id=$1 and revoked_at is not null`,
       [organizations[0].id]))[0].n,3,
       "Both independent Store block revocation histories must persist")
-    process.stdout.write("PASS B22 two platform-approved Stores: each Store's buyer block separately denies whole multi-Store scope; unblock A cannot lift B; both unblocked restores 200, no cart writes\\n")
-    process.stdout.write("PASS B22 audited Owner Store Buyer Organization block: two-Store scope 403 if one blocked, idempotent unblock restores 200; no checkout\\n")
+    process.stdout.write("PASS B22 two platform-approved Stores: each Store's buyer block separately denies whole multi-Store scope; unblock A cannot lift B; both unblocked restores 200, no cart writes\n")
+    process.stdout.write("PASS B22 audited Owner Store Buyer Organization block: two-Store scope 403 if one blocked, idempotent unblock restores 200; no checkout\n")
 
     await verifyOwnerTemporaryPauseBrowser({browser,organizations,ownerStoreId,
       secondOwnerStoreId,nativeCustomer,customerCart,cartStoreIds,container,
