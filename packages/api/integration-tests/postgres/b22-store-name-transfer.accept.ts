@@ -60,7 +60,11 @@ export async function verifyB22ExceptionalNameRight(input:{
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible'")
   await reviewer.click("#store-approval-refresh")
-  // Search the bounded Staff pages by real navigation, never DOM fabrication.
+  // The panel can remain visible with STALE rows during a real HTTPS refresh.
+  // Await the completed response, not merely the existing panel's visibility.
+  await reviewer.wait("!document.getElementById('store-approval-panel').hidden && "+
+    "!document.getElementById('store-approval-status').textContent.includes('kontrol ediliyor')")
+  // Search only the Staff-paginated list; never fabricate a DOM approval.
   let found=false
   for(let page=0;page<6;page++){
     await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
