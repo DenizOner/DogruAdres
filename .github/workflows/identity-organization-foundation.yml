@@ -573,6 +573,9 @@ jobs:
           '
           echo "DOGRUADRES_CLAMD_SOCKET=$sock" >> "$GITHUB_ENV"
           echo "DOGRUADRES_B22_SAFE_REVIEW_TEST=true" >> "$GITHUB_ENV"
+      # This existing job also performs focused WCAG 2.2 axe-core A/AA and Staff
+      # keyboard checks on real authenticated Chrome UI (not full WCAG conformance).
+      # Keep heavyweight testing on ready PRs; do not add a second scanner/job.
       - name: B22 real Chrome after signed R1 activation on separate disposable database
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api

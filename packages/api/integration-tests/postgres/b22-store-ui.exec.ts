@@ -25,6 +25,7 @@ import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,l
 import {B06Chrome} from "./b06-ui-browser"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
+import {assertWcag22AxeInChrome} from "./wcag22-axe-chrome"
 import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
@@ -2010,6 +2011,28 @@ async function verifyStaffReopensSuspendedStore(
       ".some(e=>e.textContent.includes("+JSON.stringify(sellerId)+") && "+
       "e.textContent.includes('Ad/URL hakkı doğrulanamadı') && "+
       "e.querySelector('button')?.disabled===true)")
+    // Real accessible live panel state (invalid name-right, action disabled).
+    // Axe never reads/logs private DOM nodes outside this authenticated Chrome.
+    await assertWcag22AxeInChrome(reviewer,"#store-approval-panel",
+      "staff-reactivation-review-only")
+    const wcagKeyboardBefore=reviewer.http.filter(r=>
+      r.path==="/personal/platform/stores" && r.method==="GET").length
+    await reviewer.eval("document.getElementById('store-approval-refresh').focus()")
+    assert.equal(await reviewer.eval(
+      "document.activeElement?.id==='store-approval-refresh'"),true,
+      "Staff refresh must be keyboard-focusable")
+    await reviewer.send("Input.dispatchKeyEvent",{
+      type:"keyDown",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
+    await reviewer.send("Input.dispatchKeyEvent",{
+      type:"keyUp",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
+    await until(async()=>reviewer.http.filter(r=>
+      r.path==="/personal/platform/stores" && r.method==="GET").length>
+      wcagKeyboardBefore,12000,"real Enter refresh GET")
+    await reviewer.wait("Array.from(document.querySelectorAll('#store-reactivation-list p'))"+
+      ".some(e=>e.textContent.includes("+JSON.stringify(sellerId)+") && "+
+      "e.textContent.includes('Ad/URL hakkı doğrulanamadı') && "+
+      "e.querySelector('button')?.disabled===true)")
+    process.stdout.write("PASS WCAG 2.2 partial keyboard: live Staff refresh Enter invokes authorized GET, unsafe reopen remains disabled\\n")
     const preflight=await reviewer.callFunction(
       "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
       "return {status:r.status,body:await r.json(),id}}",sellerId)
@@ -3484,6 +3507,8 @@ export default async function({container}:any){
     // Allow one bounded 45s startup for this disposable first browser only.
     // Do not retry/disable TLS, MFA, authorization or browser proof on failure.
     await browser.start(crt,45000)
+    // Reuse the existing trusted HTTPS/real Chrome login, no separate scan job.
+    await assertWcag22AxeInChrome(browser,"#login","anonymous-login")
     await browser.login(A.email,A.password,A.person)
     if(process.env.B22_ADMIN_SMTP==="true"){
       const other=new B06Chrome(host,"B");browsers.push(other)
@@ -3495,6 +3520,7 @@ export default async function({container}:any){
     // It does not create a second Customer, Person, Owner or Organization.
     const mobileBrowser=browser
     await mobileBrowser.wait("!document.getElementById('person-mobile-form').hidden")
+    await assertWcag22AxeInChrome(mobileBrowser,"#person-mobile-form","authenticated-mobile-form")
     const firstMobile=await mobileBrowser.eval("(async()=>{"+
       "const r=await fetch('/personal/profile');"+
       "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}})()")
