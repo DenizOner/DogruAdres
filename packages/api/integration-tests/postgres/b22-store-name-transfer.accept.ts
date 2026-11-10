@@ -153,7 +153,7 @@ export async function verifyB22ExceptionalNameRight(input:{
       "return {visible:!!box&&!box.hidden,global:msg.includes('Ad hakkı kararı kaydedildi')?'saved':"+
       "msg.includes('gönderiliyor')?'sending':'other',"+
       "row:status.includes('Devir sonucu belirsiz')?'uncertain':"+
-      "status.includes('Kaynak:')?'preview':'other'}",
+      "status.includes('Kaynak:')?'preview':'other'}}",
       source.seller_id)
     // PostgreSQL state classification ONLY: never select query, person, IDs,
     // server address, passwords or table/row contents into GitHub logs.
