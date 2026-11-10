@@ -1808,6 +1808,26 @@ async function verifyPlatformStoreRenameApproval(
 
 
 
+/** B22 task-only fixture: a real approved native rename precedes the
+ * exceptional name-right assignment. Kept outside the main acceptance body
+ * so the oversized full-platform script stays within TypeScript CFA limits.
+ */
+async function preparePreviouslyRenamedStoreForTransfer(input:{
+  owner:B06Chrome;reviewer:B06Chrome;organizationId:string;
+  organizationName:string;sellerId:string;rand:string;container:any;
+  q:(sql:string,params?:any[])=>Promise<any[]>
+}):Promise<void>{
+  const {owner,reviewer,organizationId,organizationName,sellerId,rand,container,q}=input
+  await verifySuspendedStoreRenameBeforeReopen(
+    owner,reviewer,organizationId,organizationName,sellerId,
+    rand+"-prior",container,q,true)
+  await suspendSellerWorkflow(container).run({input:{
+    seller_id:sellerId,reason:"B22 disposable previously-renamed transfer proof"
+  }})
+  assert.equal((await q("select status from seller where id=$1",
+    [sellerId]))[0].status,"suspended")
+}
+
 /** The currently approved but suspended native Seller can receive a distinct
  * Owner-requested, Staff-approved name without being silently activated.
  * A separate, explicit Staff unsuspend is required; all operations use real
@@ -7431,18 +7451,11 @@ export default async function({container}:any){
       "Gamma must not enter Alpha; previously suspended second Alpha Store stays excluded")
     assert.equal(alphaAfterGamma.some((store:any)=>store.id===gammaSellerId),false)
 
-    // Prepare an actually approved historical rename using the SAME real
-    // Owner/Staff Chrome flow. The first application fingerprint stays
-    // immutable and its original 30-day name hold must survive the transfer.
-    await verifySuspendedStoreRenameBeforeReopen(
-      browser,reviewer,organizations[0].id,organizations[0].name,
-      secondOwnerStoreId,rand+"-prior",container,q,true)
-    await suspendSellerWorkflow(container).run({input:{
-      seller_id:secondOwnerStoreId,
-      reason:"B22 disposable previously-renamed transfer proof"
-    }})
-    assert.equal((await q("select status from seller where id=$1",
-      [secondOwnerStoreId]))[0].status,"suspended")
+    await preparePreviouslyRenamedStoreForTransfer({
+      owner:browser,reviewer,organizationId:organizations[0].id,
+      organizationName:organizations[0].name,sellerId:secondOwnerStoreId,
+      rand,container,q
+    })
     await verifyB22TransferredRecovery({
       owner:browser,reviewer,q,
       source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
