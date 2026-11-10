@@ -2991,9 +2991,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const deadline=new Date(data.due_at).toLocaleString('tr-TR',{timeZone:'Europe/Istanbul'});
         const left=data.remaining_seconds;
         const days=Math.floor(left/86400),hours=Math.floor((left%86400)/3600);
-        const minutes=Math.ceil((left%3600)/60);
-        st.textContent='Yeni satışlar durduruldu. Kalan süre: '+
-          days+' gün, '+hours+' saat, '+minutes+' dakika. 30 günlük sürenin bitişi: '+
+        const minutes=Math.floor((left%3600)/60),seconds=left%60;
+        st.textContent='Yeni satışlar durduruldu. Kalan süre (yenilendiğinde): '+
+          days+' gün, '+hours+' saat, '+minutes+' dakika, '+seconds+
+          ' saniye. 30 günlük sürenin bitişi: '+
           deadline+(data.can_withdraw?' — Süre dolmadan geri çekebilirsiniz.':
           ' — Geri çekme süresi bitti; geri dönüşsüz işlem henüz etkin değil.');
         el('store-owner-pause-status').textContent=
