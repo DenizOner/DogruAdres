@@ -328,6 +328,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       </form>
       <button type="button" id="store-owner-pause-refresh">Durumu yenile</button>
     </section>
+    <section id="store-owner-closing-panel" hidden aria-labelledby="store-owner-closing-title">
+      <h3 id="store-owner-closing-title">Mağazayı kalıcı kapatma isteği (30 gün)</h3>
+      <p>Başlattığınız anda yeni satışlar durur. İlk 30 takvim günü mağaza kimliği, geçmiş işlemler ve ad/URL hakkı saklanır. Süre dolmadan geri çekebilirsiniz; başka askı/finans engelleri varsa satış otomatik açılmaz. Kesinleşen kalıcı kapatma aynı mağaza kimliğiyle ve yeni adla dahi geri alınamaz.</p>
+      <p>Zorunlu bildirim ve son kontroller tamamlanmadan otomatik geri dönülmez kapatma yapılmaz.</p>
+      <p id="store-owner-closing-choice"></p>
+      <p id="store-owner-closing-status" role="status" aria-live="polite"></p>
+      <form id="store-owner-closing-form">
+        <label><input name="consequences_acknowledged" type="checkbox" required> 30 günlük süreyi ve geri dönülmez sonuçlarını okudum, anladım.</label>
+        <button type="submit" name="action" value="start" disabled>30 günlük kapatma sürecini başlat</button>
+        <button type="submit" name="action" value="withdraw" disabled>Kapatma talebini geri çek</button>
+      </form>
+      <button type="button" id="store-owner-closing-refresh">Kapatma durumunu yenile</button>
+    </section>
     <section id="store-block-panel" hidden aria-labelledby="store-block-title">
       <h3 id="store-block-title">Mağazanın alıcı kuruluş engelleri</h3>
       <p>Bu mağazanın bağlı olduğu kuruluşun Owner'ı, belirli bir alıcı kuruluşun bu mağazadan yeni satın alma uygunluğunu engelleyebilir veya engeli kaldırabilir. Diğer mağazalar etkilenmez. Bu işlem geçmiş siparişleri değiştirmez.</p>
@@ -487,7 +500,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const renameWrite=path==='store-rename-requests'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite;
+    const closingWrite=path==='store-owner-closing'&&options.method==='POST';
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite;
     let data;
     try{
       data=await r.json();
@@ -2804,6 +2818,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(select?.replaceChildren)select.replaceChildren();
     if(typeof form?.querySelectorAll==='function')
       for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
+    clearOwnerClosing();
   }
   function ownerPauseButtons(){
     const form=el('store-owner-pause-form');
@@ -2811,6 +2826,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     for(const b of form.querySelectorAll('button[type=submit]')){
       b.disabled=ownerPausePending||ownerPauseUncertain||
         !ownerPauseState||ownerPauseState.store_status!=='open'||
+        ownerClosingState?.state==='closing'||
         (b.value==='pause'?ownerPauseState.paused:!ownerPauseState.paused);
     }
   }
@@ -2837,7 +2853,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         throw Error('Mağaza durumu doğrulanamadı');
       ownerPauseVersion=data.version;ownerPauseState=data;ownerPauseUncertain=false;
       ownerPauseButtons();
-      st.textContent=data.store_status!=='open'?
+      st.textContent=ownerClosingState?.state==='closing'?
+        'Mağaza kalıcı kapatma sürecinde. Geçici ara verme işlemleri kapalı.':
+        data.store_status!=='open'?
         'Platform kaynaklı askı veya kapanış var. Owner bu ekrandan satış açamaz.':
         data.paused?'Mağaza geçici arada. Adınız korunuyor; yeni satış kabul edilmiyor.':
           'Mağaza satışa açık. Geçici ara verebilirsiniz.';
@@ -2968,7 +2986,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                 pauseChoice.append(opt);
               }
               el('store-owner-pause-panel').hidden=renameData.stores.length===0;
-              if(renameData.stores.length)void refreshOwnerPause(org,request);
+              if(renameData.stores.length){
+                 void refreshOwnerPause(org,request);
+                 void refreshOwnerClosing(org,request);
+               }
               }
 
             }catch{
