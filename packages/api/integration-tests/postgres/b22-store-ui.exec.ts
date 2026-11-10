@@ -7382,7 +7382,7 @@ export default async function({container}:any){
     // Chrome keyboard navigation; no second checkout, capture or SQL write.
     await verifyB22OwnedHistoricalOrder({
       buyer:reviewer,buyerOrg:{id:organizations[1].id,name:organizations[1].name},
-      orderGroupId:zeroOrderGroupId,cartId:zeroOrderCart.id,
+      orderGroupId:zeroOrderGroupId as string,cartId:zeroOrderCart.id,
       nativeCustomerId:nativeCustomer.id,q
     })
 
@@ -10913,7 +10913,7 @@ export default async function({container}:any){
     // It must not read the earlier completed Beta history by guessing its ID.
     await verifyB22ForeignHistoricalOrder({
       other:signupChrome,buyerOrgId:organizations[1].id,
-      orderGroupId:zeroOrderGroupId,
+      orderGroupId:zeroOrderGroupId as string,
       otherCustomerId:registered[0].actor_id,
       ownerCustomerId:nativeCustomer.id,q
     })
