@@ -2522,7 +2522,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
          x.reason!==input.reason)throw new IdentityAccessDenied()
       return {status:"assigned" as const,replayed:true}
     }
-    const source=await db.execute(`select a.organization_id,s.name,s.handle,a.store_name_hash
+    const source=await db.execute(`select a.organization_id,s.name,s.handle,a.store_name_hash,
+        a.name_claim_released_at
       from da_store_application a
       join da_organization d on d.id=a.organization_id
         and d.status='active' and d.deleted_at is null
@@ -2536,7 +2537,6 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         and e.deleted_at is null and e.organization_id=a.organization_id
         and e.target_id=a.seller_id and e.new_values->>'application_id'=a.id
       where a.id=? and a.seller_id=? and a.status='created'
-        and a.name_claim_released_at is null
         and exists(select 1 from da_audit_outbox x
           where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
             and x.deleted_at is null)
@@ -2569,8 +2569,30 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       regexp_replace(btrim(normalize(?,NFKC)),'[[:space:]]+',' ','g')),
       'UTF8')),'hex') as hash`,[input.expected_name])
     const hash=hashes[0]?.hash
-    if(hashes.length!==1||typeof hash!=="string"||!/^[a-f0-9]{64}$/.test(hash)||
-       hash!==source[0].store_name_hash)return {status:"conflict" as const}
+    if(hashes.length!==1||typeof hash!=="string"||!/^[a-f0-9]{64}$/.test(hash))
+      return {status:"conflict" as const}
+    // The application fingerprint is immutable. A subsequent native name is
+    // legitimate only with its matching Staff approval AND durable audit/outbox.
+    const originalName=hash===source[0].store_name_hash &&
+      source[0].name_claim_released_at===null &&
+      toHandle(input.expected_name)===input.expected_handle
+    const renamed=originalName?[]:await db.execute(`select r.id
+      from da_store_rename_request r
+      where r.seller_id=? and r.organization_id=? and r.status='approved'
+        and r.proposed_name=? and r.proposed_handle=?
+        and exists(select 1 from da_audit_event e
+          join da_audit_outbox x on x.source_audit_event_id=e.id
+          where e.organization_id=? and e.target_id=?
+            and e.action='organization.store_rename_approved'
+            and e.module='dogruadres-access'
+            and e.resource='store-rename-request'
+            and e.new_values->>'request_id'=r.id
+            and e.deleted_at is null and x.deleted_at is null
+            and x.source_module='dogruadres-access')
+      limit 2`,[input.source_seller_id,source[0].organization_id,
+        input.expected_name,input.expected_handle,
+        source[0].organization_id,input.source_seller_id])
+    if(!originalName&&renamed.length!==1)return {status:"conflict" as const}
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-name'),hashtext(?))",
       [hash])
     const reserved=await db.execute(`select 1 from da_store_name_transfer
