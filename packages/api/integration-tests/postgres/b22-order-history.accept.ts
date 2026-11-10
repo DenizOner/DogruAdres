@@ -122,6 +122,11 @@ export async function verifyB22OwnedHistoricalOrder(input:{
   assert.ok(!ui.text.includes(nativeCustomerId)&&!ui.text.includes(cartId))
   assert.equal(await countAudit(q,buyerOrg.id),before)
   process.stdout.write("PASS B22 Chrome: OrderGroup history HTTPS/PG16 verified Buyer reads own zero-value completed OrderGroup, keyboard Space and accessible label/status render private minimal items; no audit writes\n")
+  // Follow the already successful positive read with the same real Chrome
+  // session revoked in the isolated PostgreSQL fixture, then restored.
+  await verifyB22RevokedHistoricalOrder({
+    buyer,buyerOrgId:buyerOrg.id,orderGroupId,q
+  })
 }
 
 export async function verifyB22ForeignHistoricalOrder(input:{
@@ -160,14 +165,21 @@ const orderReadFootprint=async(q:DbRows,org:string)=>{
 /** The second real Customer has an independently authorized Buyer Organization. */
 export async function verifyB22AuthorizedForeignHistoricalOrder(input:{
   other:B06Chrome;otherOrgId:string;ownerOrgId:string;orderGroupId:string;
-  otherCustomerId:string;ownerCustomerId:string;q:DbRows
+  otherCustomerId:string;ownerCustomerId:string;q:DbRows;
+  personId:string;buyerToken:string;
+  foundation:{personalBuyerOrganization(token:string,orgId:string):Promise<unknown>}
 }):Promise<void>{
   const {other,otherOrgId,ownerOrgId,orderGroupId,
-    otherCustomerId,ownerCustomerId,q}=input
+    otherCustomerId,ownerCustomerId,q,personId,buyerToken,foundation}=input
   assert.notEqual(otherOrgId,ownerOrgId)
   assert.notEqual(otherCustomerId,ownerCustomerId)
   assert.match(otherCustomerId,/^cus_[A-Za-z0-9_-]+$/)
   assert.match(orderGroupId,/^og_[A-Za-z0-9_-]+$/)
+  // Prove this exact real browser Customer has live buyer.purchase in
+  // its own approved legal Organization BEFORE requesting the foreign group.
+  assert.equal(await other.token(),buyerToken)
+  assert.deepEqual(await foundation.personalBuyerOrganization(buyerToken,otherOrgId),
+    {person_id:personId,organization_id:otherOrgId})
   const ownBefore=await orderReadFootprint(q,otherOrgId)
   const ownerBefore=await orderReadFootprint(q,ownerOrgId)
   const result=await other.callFunction(readOnlyScript,otherOrgId,orderGroupId)

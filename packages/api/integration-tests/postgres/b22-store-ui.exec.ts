@@ -23,7 +23,7 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
-import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder,verifyB22RevokedHistoricalOrder} from "./b22-order-history.accept"
+import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
 import {otp,until} from "./b19-browser"
@@ -7388,13 +7388,6 @@ export default async function({container}:any){
       orderGroupId:zeroOrderGroupId as string,cartId:zeroOrderCart.id,
       nativeCustomerId:nativeCustomer.id,q
     })
-    // The same first-party Buyer has already read this exact own OrderGroup.
-    // Revoke its real session only inside the disposable PG16 acceptance.
-    await verifyB22RevokedHistoricalOrder({
-      buyer:reviewer,buyerOrgId:organizations[1].id,
-      orderGroupId:zeroOrderGroupId as string,q
-    })
-
     // Native Medusa system provider is an in-memory simulator. All writes
     // are in this preauthorized random disposable CI database; no external
     // payment, HTTP checkout route, provider configuration or payout.
@@ -12414,21 +12407,12 @@ export default async function({container}:any){
       for(const id of [approvedOrgId,individualOrg])
         assert.ok(applicantTwoOrganizations.body.organizations.some((o:any)=>o.id===id&&o.role==="owner"),
           "One Person must see both independently approved businesses")
-      // This second real Customer is a protected Owner of an independently
-      // approved legal-company Buyer Organization. Verify genuine scope
-      // before testing the later native OrderGroup Customer mismatch.
-      const ownBuyerScope=await foundation.personalBuyerOrganization(
-        primaryCustomerToken!,approvedOrgId)
-      assert.deepEqual(ownBuyerScope,{
-        person_id:signupPerson,organization_id:approvedOrgId
-      },"Distinct native Customer must have valid own-Organization buyer authority")
-      await verifyB22AuthorizedForeignHistoricalOrder({
-        other:signupChrome,otherOrgId:approvedOrgId,
-        ownerOrgId:organizations[1].id,
+      await verifyB22AuthorizedForeignHistoricalOrder({other:signupChrome,
+        otherOrgId:approvedOrgId,ownerOrgId:organizations[1].id,
         orderGroupId:zeroOrderGroupId as string,
         otherCustomerId:registered[0].actor_id,
-        ownerCustomerId:nativeCustomer.id,q
-      })
+        ownerCustomerId:nativeCustomer.id,personId:signupPerson,
+        buyerToken:primaryCustomerToken!,foundation,q})
       const foreignSecondOrganization=await foreignDraftChrome.eval(
         "(async()=>{const r=await fetch('/personal/organizations');return {status:r.status,body:await r.json()}})()")
       assert.equal(foreignSecondOrganization.status,200)
