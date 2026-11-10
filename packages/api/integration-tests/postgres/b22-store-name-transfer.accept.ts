@@ -137,7 +137,21 @@ export async function verifyB22ExceptionalNameRight(input:{
     "window.confirm=()=>true;try{b.click()}finally{window.confirm=former}return true}",
     source.seller_id)
   assert.equal(click,true,"Real Staff UI submits only the verified decision")
-  await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Ad hakkı kararı kaydedildi')")
+  await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Ad hakkı kararı kaydedildi') || "+
+    "document.querySelector('[data-transfer-source="'+source.seller_id+'"] [role=status]')?.textContent.includes('Devir sonucu belirsiz')")
+  const stage=await reviewer.callFunction(
+    "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
+    ".find(e=>e.dataset.transferSource===id);"+
+    "const row=box?.querySelector('[role=status]')?.textContent??'';"+
+    "const global=document.getElementById('store-approval-status')?.textContent??'';"+
+    "return global.includes('Ad hakkı kararı kaydedildi')?'success':"+
+    "row.includes('Devir sonucu belirsiz')?'uncertain':'other'}",
+    source.seller_id)
+  const transferHttp=reviewer.http.filter((e:any)=>
+    e.path==="/personal/platform/store-name-transfers")
+    .slice(-4).map((e:any)=>({method:e.method,status:e.status}))
+  assert.equal(stage,"success","Real transfer POST outcome="+stage+
+    "; HTTP metadata="+JSON.stringify(transferHttp))
   const decisions=await q("select id,source_seller_id,target_seller_id,old_name,old_handle,name_hash,reason,source_audit_event_id from da_store_name_transfer where source_seller_id=$1",
     [source.seller_id])
   assert.equal(decisions.length,1)
