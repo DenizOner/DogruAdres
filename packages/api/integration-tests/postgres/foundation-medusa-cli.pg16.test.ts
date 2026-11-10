@@ -275,6 +275,7 @@ async function run(){
         // arbitrary child output. Require these real negative acceptance
         // results so a missing scenario cannot masquerade as a PASS.
         const ownerPauseConcurrentMarker="PASS B22 real Owner pause concurrency/authorization: two HTTPS requests 200+409, one durable pause; revoked Owner and stale strong session denied without writes; resume restores unchanged Seller"
+        const ownerClosingIndexMarker="PASS B22 real audit relay: Owner 30-day closing/withdrawal delivered to Index, private countdown redacted, durable ACK and lost-ACK retry deduplicated"
         const ownerPauseIndexMarker="PASS B22 real audit relay: Owner temporary pause/resume events delivered to Index with redacted envelopes, durable ACKs and single row on retry"
         const ownerClosingMarker="PASS B22 real Owner 30-day closing intent/withdraw: Chrome/HTTPS/PG16, exact server deadline, protected Owner notices, whole-Cart L deny then restore, CSRF/foreign/replay denied; native Seller unchanged; irreversible finalization disabled"
         const ownerPauseAcceptanceMarker="PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed"
@@ -532,6 +533,8 @@ async function run(){
           "Missing native worker crash/Index/ACK/replay evidence")
         assert.ok(audit.split("\n").includes(ownerPauseIndexMarker),
           "Missing real Owner pause/resume Index delivery and durable ACK replay proof")
+        assert.ok(audit.split("\n").includes(ownerClosingIndexMarker),
+          "Missing real Owner closing Index delivery, redaction and durable deduplicated ACK proof")
         assert.ok(audit.includes("PASS B22 real audit relay: native Owner Store follow/unfollow delivered by Medusa worker to Buyer-only Audit Index, two matching envelopes and durable ACKs"),
           "Missing real indexed Store-follow audit delivery and ACK")
         assert.ok(audit.includes("PASS B22 real audit relay: platform company policy disable/reopen delivered by native Medusa Access/Index, redacted envelopes, durable ACKs and scoped timeline"),
