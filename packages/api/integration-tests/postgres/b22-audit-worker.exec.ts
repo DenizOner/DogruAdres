@@ -99,6 +99,81 @@ export default async function({container}:any){
       assert.equal((await q("select count(*)::int n from da_audit_index_entry where source_event_id=$1",[staffEvents[0].id]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_audit_event where id=any($1::text[])",[staffEvents.map(e=>e.id)]))[0].n,2)
       process.stdout.write("PASS B22 audit worker: real Medusa Access/Index job delivered canonical Staff events, ACK and single Index entry on lost-ACK replay; crash recovery NOT TESTED\n")
+
+      // Reuse the installed Access/Index worker against the exact Owner
+      // pause/resume sources created by the real Chrome/HTTPS journey above.
+      // This is genuine same-disposable-DB outbox -> Index -> durable ACK.
+      const ownerPauseEvents=await q(
+        "select e.id,e.organization_id,e.target_id,e.role_context,e.action,e.resource,"+
+        " e.new_values->>'request_id' as request_id,o.id as outbox_id,"+
+        " o.created_at,o.status from da_audit_event e"+
+        " join da_audit_outbox o on o.source_audit_event_id=e.id"+
+        " where e.module='dogruadres-access' and e.resource='store-owner-pause'"+
+        " and e.role_context='owner'"+
+        " and e.action in ('organization.store_owner_paused','organization.store_owner_resumed')"+
+        " and o.status='pending' order by e.occurred_at,e.id")
+      assert.equal(ownerPauseEvents.length,4,
+        "Real Chrome pause/resume + concurrent pause/resume must create four valid sources")
+      assert.deepEqual(ownerPauseEvents.map(e=>e.action).sort(),
+        ["organization.store_owner_paused","organization.store_owner_paused",
+         "organization.store_owner_resumed","organization.store_owner_resumed"].sort())
+      assert.equal(new Set(ownerPauseEvents.map(e=>e.target_id)).size,1)
+      assert.ok(ownerPauseEvents.every(e=>e.organization_id===ownerPauseEvents[0].organization_id))
+      const ownerPauseOutboxIds=ownerPauseEvents.map(e=>e.outbox_id)
+      try{
+        const shifted=await q(
+          "update da_audit_outbox set created_at=(select min(created_at) from da_audit_outbox)-interval '7 days'"+
+          " where id=any($1::text[]) and status='pending' and lease_token is null returning id",
+          [ownerPauseOutboxIds])
+        assert.equal(shifted.length,4)
+        const delivered=await runAuditRelayBatch(container,4)
+        assert.equal(delivered.delivered,4)
+        for(const e of ownerPauseEvents){
+          const [indexed]=await q(
+            "select o.status,o.delivered_at,o.lease_token,o.attempt_count,"+
+            " i.source_event_id,i.organization_id,i.target_id,i.action,i.resource,i.envelope"+
+            " from da_audit_outbox o join da_audit_index_entry i"+
+            " on i.source_event_id=o.source_audit_event_id where o.id=$1",[e.outbox_id])
+          assert.ok(indexed&&indexed.delivered_at&&indexed.lease_token===null)
+          assert.equal(indexed.status,"delivered")
+          assert.equal(indexed.attempt_count,1)
+          assert.equal(indexed.source_event_id,e.id)
+          assert.equal(indexed.organization_id,e.organization_id)
+          assert.equal(indexed.target_id,e.target_id)
+          assert.equal(indexed.action,e.action)
+          assert.equal(indexed.resource,"store-owner-pause")
+          const envelope=typeof indexed.envelope==="string"?
+            JSON.parse(indexed.envelope):indexed.envelope
+          assert.equal(envelope.actor.role_context,"owner")
+          assert.equal(envelope.source_event_id,e.id)
+          assert.equal(envelope.source_module,"dogruadres-access")
+          assert.deepEqual(Object.keys(envelope).sort(),
+            ["action","actor","occurred_at","organization_id","resource",
+              "source_event_id","source_module","target_id","version"])
+          assert.ok(!JSON.stringify(envelope).includes(e.request_id),
+            "Owner pause request token never reaches the indexed envelope")
+          assert.equal((await q(
+            "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
+            [e.id]))[0].n,1)
+        }
+        const replayed=ownerPauseEvents[0]
+        assert.equal((await q(
+          "update da_audit_outbox set status='pending',delivered_at=null"+
+          " where id=$1 and status='delivered' and attempt_count=1 returning id",
+          [replayed.outbox_id])).length,1)
+        assert.equal((await runAuditRelayBatch(container,1)).delivered,1,
+          "Reconciliation must ACK the existing Index record, not insert another")
+        assert.equal((await q("select attempt_count from da_audit_outbox where id=$1",
+          [replayed.outbox_id]))[0].attempt_count,2)
+        assert.equal((await q(
+          "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
+          [replayed.id]))[0].n,1)
+        process.stdout.write("PASS B22 real audit relay: Owner temporary pause/resume events delivered to Index with redacted envelopes, durable ACKs and single row on retry\n")
+      }finally{
+        for(const event of ownerPauseEvents)
+          await q("update da_audit_outbox set created_at=$2 where id=$1",
+            [event.outbox_id,event.created_at])
+      }
       // Real Owner-created follow/unfollow events must reach Index as well.
       // Exercise the installed Access/Index relay on the same disposable DB.
       const followEvents=await q(

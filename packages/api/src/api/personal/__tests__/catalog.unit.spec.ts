@@ -46,6 +46,7 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
       personalBuyerOrganization:jest.fn().mockResolvedValue({
         person_id:"daprs_a",organization_id:"daorg_a"
       }),
+      storeOwnerPauseAcceptingOrders:jest.fn().mockResolvedValue(true),
       personalStoreBuyerBlockDecision:jest.fn().mockResolvedValue({
         blocked:false,ownership_verified:true
       }),
@@ -84,6 +85,29 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
     expect(svc.personalStoreBuyerBlockDecision).toHaveBeenCalledTimes(4)
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","private, no-store")
     expect(res.setHeader).toHaveBeenCalledWith("X-Robots-Tag","noindex, nofollow, noarchive")
+  })
+  it("hides an Owner-paused Store even when native Seller remains OPEN",async()=>{
+    svc.storeOwnerPauseAcceptingOrders.mockImplementation(async(ids:string[])=>ids[0]!=="sel_a")
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    const payload=res.json.mock.lastCall?.[0]
+    expect(payload.stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+    expect(offerRead).not.toHaveBeenCalledWith({seller_id:"sel_a"},expect.anything())
+  })
+  it("denies stale catalogue output if Owner pauses during response",async()=>{
+    let reads=0
+    svc.storeOwnerPauseAcceptingOrders.mockImplementation(async(ids:string[])=>{
+      if(ids[0]==="sel_a")return ++reads<2
+      return true
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+  })
+  it("respects native scheduled closures independent of Foundation pause",async()=>{
+    stores[0]={...stores[0],closed_from:new Date(Date.now()-60000).toISOString()}
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
   })
   it("renders direct TRY list amount for exact Store Offer but no final checkout price",async()=>{
     ;(nativeDirectTryListPrice as jest.Mock).mockImplementation(async(_req:any,o:any)=>

@@ -77,6 +77,26 @@ describe("Audit Index version 1 validation and redaction", () => {
       ...legitimate, actor: { ...legitimate.actor, role_context: "platform_staff" },
     })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
+  it.each(["organization.store_owner_paused","organization.store_owner_resumed"])(
+    "indexes an Owner %s with correct Store scope and no private fields",action=>{
+      const event={...source(),action,resource:"store-owner-pause",target_id:"sel_owner_store",
+        previous_values:{token:"private-pause-token"},
+        new_values:{request_id:"dasp_"+"a".repeat(32),reason:"private-pause-reason"}}
+      const envelope=projectFoundationAuditEvent(event)
+      expect(envelope.action).toBe(action)
+      expect(envelope.resource).toBe("store-owner-pause")
+      expect(envelope.target_id).toBe("sel_owner_store")
+      expect(validateAuditIndexEnvelope(envelope)).toEqual(envelope)
+      expect(JSON.stringify(envelope)).not.toContain("private-pause")
+      for(const change of [{role_context:"member"},{role_context:"platform_staff"},
+        {role_context:"admin"},{organization_id:"foreign"},
+        {target_id:"not_a_seller"},{resource:"membership"}])
+        expect(()=>projectFoundationAuditEvent({...event,...change}))
+          .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+      expect(()=>validateAuditIndexEnvelope({...envelope,
+        actor:{...envelope.actor,role_context:"platform_staff"}}))
+        .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+    })
   it.each(["organization.store_followed","organization.store_unfollowed"])(
     "projects a canonical Owner %s without private source data", action => {
       const e = projectFoundationAuditEvent({

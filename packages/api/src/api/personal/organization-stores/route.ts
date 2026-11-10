@@ -55,6 +55,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
           !(renameOnly?["open","suspended"].includes(nativeStatus):
             nativeStatus==="open") ||
           !accounts[0].approved_at) continue
+      // Only the private Owner rename scope may show an Owner-paused Store.
+      if(!renameOnly&&!await svc.storeOwnerPauseAcceptingOrders([id]))continue
       sellers.push(renameOnly?
         {id,name:String(accounts[0].name??""),status:nativeStatus}:
         {id,name:String(accounts[0].name??"")})
@@ -93,7 +95,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
           lastSeller[0].id !== item.id ||
           (renameOnly?lastSeller[0].status!==item.status:
             lastSeller[0].status!=="open") ||
-          !lastSeller[0].approved_at)
+          !lastSeller[0].approved_at ||
+        (!renameOnly&&!await svc.storeOwnerPauseAcceptingOrders([item.id])))
         return res.status(403).json({ message: "Access denied" })
     }
     return res.status(200).json({ organization_id: organization, stores: sellers })

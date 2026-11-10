@@ -16,6 +16,16 @@ const sellerId=/^sel_[A-Za-z0-9_-]+$/
 const productId=/^prod_[A-Za-z0-9_-]+$/
 const offerId=/^offer_[A-Za-z0-9_-]+$/
 
+/** Native scheduled closure and Foundation Owner pause are independent. */
+function sellerTradingNow(s:any):boolean{
+  if(s.status!=="open"||!s.approved_at)return false
+  const now=Date.now()
+  if(s.closed_from!=null && !(new Date(s.closed_from).getTime()>now))return false
+  if(s.closed_to!=null && !(new Date(s.closed_to).getTime()<now))return false
+  return true
+}
+
+
 /** B22 first positive discovery slice: no price, inventory, discount, cart or
  * global native Store route. All data is bound to a current BUYER Organization,
  * a platform-approved native Store and the Store's active buyer-block ledger.
@@ -69,8 +79,9 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     // Internal-only entitlement IDs. Never serialize group context to clients.
     const eligibleBySeller=new Map<string,string[]>()
     for(const candidate of candidates){
-      if(!candidate||!sellerId.test(candidate.id)||candidate.status!=="open"||
-         !candidate.approved_at||typeof candidate.name!=="string")continue
+      if(!candidate||!sellerId.test(candidate.id)||
+         !sellerTradingNow(candidate)||typeof candidate.name!=="string")continue
+      if(!await service.storeOwnerPauseAcceptingOrders([candidate.id]))continue
       // Foundation's current approved Org→Seller origin and explicit per-Store
       // Buyer Organization block are checked together, never via SellerMember.
       // One suspended/revoked seller must be absent, not mask other approved
@@ -142,8 +153,9 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
        live.organization_id!==organizationId)return denied()
     for(const store of stores){
       const [native]=await seller.listSellers({id:store.id},{take:2})
-      if(!native||native.id!==store.id||native.status!=="open"||
-         !native.approved_at||native.name!==store.name)return denied()
+      if(!native||native.id!==store.id||
+         !sellerTradingNow(native)||native.name!==store.name||
+         !await service.storeOwnerPauseAcceptingOrders([store.id]))return denied()
       const fresh=await service.personalStoreBuyerBlockDecision(
         token,organizationId,[store.id])
       if(fresh?.ownership_verified!==true||fresh.blocked!==false)return denied()
