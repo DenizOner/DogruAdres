@@ -5,6 +5,7 @@
  * Never creates/completes an order, initiates payment or writes permissions.
  */
 import assert from "node:assert/strict"
+import {createHash} from "node:crypto"
 import type {B06Chrome} from "./b06-ui-browser"
 
 type DbRows=(sql:string,values?:unknown[])=>Promise<any[]>
@@ -143,4 +144,81 @@ export async function verifyB22ForeignHistoricalOrder(input:{
   assert.equal(JSON.stringify(result.body).includes(ownerCustomerId),false)
   assert.equal(await countAudit(q,buyerOrgId),before)
   process.stdout.write("PASS B22 Chrome: OrderGroup history HTTPS/PG16 unrelated verified native Customer denied foreign Buyer OrderGroup 403, generic body, no audit writes\n")
+}
+
+/** Count Foundation audit and outbox rows without reading any private payload. */
+const orderReadFootprint=async(q:DbRows,org:string)=>{
+  const rows=await q(
+    "select (select count(*)::int from da_audit_event where organization_id=$1) as audit, "+
+    "(select count(*)::int from da_audit_outbox x join da_audit_event e on e.id=x.source_audit_event_id where e.organization_id=$1) as outbox, "+
+    "(select count(*)::int from da_security_outbox x join da_audit_event e on e.id=x.audit_event_id where e.organization_id=$1) as security",
+    [org])
+  assert.equal(rows.length,1)
+  return rows[0]
+}
+
+/** The second real Customer has an independently authorized Buyer Organization. */
+export async function verifyB22AuthorizedForeignHistoricalOrder(input:{
+  other:B06Chrome;otherOrgId:string;ownerOrgId:string;orderGroupId:string;
+  otherCustomerId:string;ownerCustomerId:string;q:DbRows
+}):Promise<void>{
+  const {other,otherOrgId,ownerOrgId,orderGroupId,
+    otherCustomerId,ownerCustomerId,q}=input
+  assert.notEqual(otherOrgId,ownerOrgId)
+  assert.notEqual(otherCustomerId,ownerCustomerId)
+  assert.match(otherCustomerId,/^cus_[A-Za-z0-9_-]+$/)
+  assert.match(orderGroupId,/^og_[A-Za-z0-9_-]+$/)
+  const ownBefore=await orderReadFootprint(q,otherOrgId)
+  const ownerBefore=await orderReadFootprint(q,ownerOrgId)
+  const result=await other.callFunction(readOnlyScript,otherOrgId,orderGroupId)
+  assert.equal(result.status,403,
+    "An authorized Buyer in another Organization cannot read the native Customer's OrderGroup")
+  assert.deepEqual(result.body,{message:"Access denied"})
+  assert.match(result.cache??"",/no-store/)
+  assert.equal(result.vary,"Cookie")
+  assert.equal(result.robots,"noindex, nofollow, noarchive")
+  const raw=JSON.stringify(result.body)
+  for(const id of [ownerOrgId,orderGroupId,ownerCustomerId,otherCustomerId])
+    assert.equal(raw.includes(id),false,"Foreign Buyer cannot learn private identifiers")
+  assert.deepEqual(await orderReadFootprint(q,otherOrgId),ownBefore)
+  assert.deepEqual(await orderReadFootprint(q,ownerOrgId),ownerBefore)
+  process.stdout.write("PASS B22 real historical order: authorized own-Org Customer denies foreign completed OrderGroup HTTP403 with no private fields or audit/outbox writes\n")
+}
+
+/** A task-only PG16 revocation must deny the real owner's existing Chrome cookie. */
+export async function verifyB22RevokedHistoricalOrder(input:{
+  buyer:B06Chrome;buyerOrgId:string;orderGroupId:string;q:DbRows
+}):Promise<void>{
+  const {buyer,buyerOrgId,orderGroupId,q}=input
+  const token=await buyer.token()
+  assert.match(token??"",/^[A-Za-z0-9_-]{43}$/)
+  const sessionId=createHash("sha256").update(token!).digest("hex")
+  const initial=await q("select status from da_browser_session where id=$1",[sessionId])
+  assert.deepEqual(initial,[{status:"active"}])
+  const before=await orderReadFootprint(q,buyerOrgId)
+  const changed=await q(
+    "update da_browser_session set status='revoked' where id=$1 and status='active' returning id",
+    [sessionId])
+  assert.equal(changed.length,1)
+  try{
+    const result=await buyer.callFunction(readOnlyScript,buyerOrgId,orderGroupId)
+    assert.equal(result.status,403,
+      "A revoked session cannot read its OWN previously accessible OrderGroup")
+    assert.deepEqual(result.body,{message:"Access denied"})
+    assert.match(result.cache??"",/no-store/)
+    assert.equal(result.vary,"Cookie")
+    assert.equal(result.robots,"noindex, nofollow, noarchive")
+    assert.equal(JSON.stringify(result.body).includes(orderGroupId),false)
+    assert.deepEqual(await orderReadFootprint(q,buyerOrgId),before)
+  }finally{
+    const restored=await q(
+      "update da_browser_session set status='active' where id=$1 and status='revoked' returning id",
+      [sessionId])
+    assert.equal(restored.length,1,"Restore only the disposable test session")
+  }
+  const readableAgain=await buyer.callFunction(readOnlyScript,buyerOrgId,orderGroupId)
+  assert.equal(readableAgain.status,200,
+    "The same own OrderGroup must remain readable after isolated fixture restoration")
+  assert.deepEqual(await orderReadFootprint(q,buyerOrgId),before)
+  process.stdout.write("PASS B22 real historical order: revoked Buyer cookie HTTP403 generic response, audit/outbox unchanged; isolated session restored and own order HTTP200\n")
 }
