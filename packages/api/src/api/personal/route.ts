@@ -1624,10 +1624,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     reason.name='reason';
     reasonLabel.append(reason);box.append(reasonLabel);
     const previewBtn=document.createElement('button');
-    previewBtn.type='button';previewBtn.textContent='Kaynak ve hedefi doğrula';
+    previewBtn.type='button';previewBtn.dataset.transferPreview=entry.seller_id;
+    previewBtn.textContent='Kaynak ve hedefi doğrula';
     const decideBtn=document.createElement('button');
     decideBtn.type='button';decideBtn.disabled=true;
     decideBtn.textContent='Gerekçeli ad hakkı devrini onayla';
+    decideBtn.dataset.transferDecide=entry.seller_id;
     const status=document.createElement('p');status.setAttribute('role','status');
     box.prepend(legend);box.append(previewBtn,decideBtn,status);
     let verified=null,uncertain=false,key='';
