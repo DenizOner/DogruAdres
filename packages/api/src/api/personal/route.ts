@@ -376,6 +376,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="buyer-context-refresh" type="button">Satın alma yetkimi yeniden denetle</button>
     <button id="buyer-customer-check" type="button">Doğrulanmış müşteri bağımı kontrol et</button>
     <p id="buyer-customer-status" role="status" aria-live="polite"></p>
+    <section aria-labelledby="buyer-order-title">
+      <h4 id="buyer-order-title">Önceki siparişi görüntüle</h4>
+      <p>Yalnız bu kuruluşla ilişkilendirilmiş ve tamamlanmış bir sipariş gösterilebilir. Sepet ve ödeme hâlâ kapalıdır.</p>
+      <form id="buyer-order-lookup">
+        <label>Sipariş grubu kodu
+          <input name="order_group_id" type="text" pattern="og_[A-Za-z0-9_-]{1,123}"
+            maxlength="126" placeholder="og_..." autocomplete="off" required>
+        </label>
+        <button type="submit">Siparişi görüntüle</button>
+      </form>
+      <p id="buyer-order-status" role="status" aria-live="polite"></p>
+      <ul id="buyer-order-items"></ul>
+    </section>
     <section id="buyer-catalog-panel" hidden aria-labelledby="buyer-catalog-title">
       <h4 id="buyer-catalog-title">Bu kuruluşun görebildiği ürünler</h4>
       <p>İlk onaylı mağazaların yayımlanmış ürünleri gösterilir. Doğrudan TRY liste fiyatı ve yalnız bu işletmeye mağazanın açıkça verdiği geçerli gruba ait özel TRY referans fiyatı varsa gösterilir. Bunlar nihai ödeme tutarı değildir; vergi, kur dönüşümü, sepet ve ödeme kapalıdır.</p>
@@ -3106,9 +3119,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       void buyerFollowList(currentOrg,organizationRequest,buyerFollowNext);
   };
 
-  let buyerContextRequest=0,buyerCatalogRequest=0,buyerCatalogPage=0;
+  let buyerContextRequest=0,buyerCatalogRequest=0,buyerCatalogPage=0,buyerOrderRequest=0;
   function clearBuyerContext(){
-    buyerContextRequest++;buyerCatalogRequest++;buyerCatalogPage=0;
+    buyerContextRequest++;buyerCatalogRequest++;buyerOrderRequest++;buyerCatalogPage=0;
+    const orderStatus=el('buyer-order-status'),orderItems=el('buyer-order-items');
+    if(orderStatus)orderStatus.textContent='';
+    if(orderItems)orderItems.replaceChildren();
+    const orderForm=el('buyer-order-lookup');
+    if(orderForm)orderForm.reset();
     el('buyer-catalog-prev').disabled=true;
     el('buyer-catalog-next').disabled=true;
     const catalog=el('buyer-catalog-panel');
@@ -3150,6 +3168,60 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       panel.hidden=true;
     }
   }
+  // Historical order detail requires a live, server-verified Buyer Organization
+  // on EVERY lookup. The browser supplies only a selector, never native tokens.
+  const buyerOrderForm=el('buyer-order-lookup');
+  if(buyerOrderForm)buyerOrderForm.onsubmit=async event=>{
+    event.preventDefault();
+    const org=currentOrg,epoch=organizationRequest,seq=++buyerOrderRequest;
+    const statusEl=el('buyer-order-status'),root=el('buyer-order-items');
+    root.replaceChildren();
+    statusEl.textContent='';
+    if(!org||document.hidden||el('workspace').hidden||
+       el('buyer-context-panel').hidden)return;
+    const id=buyerOrderForm.elements.order_group_id.value.trim();
+    if(!/^og_[A-Za-z0-9_-]{1,123}$/.test(id)){
+      statusEl.textContent='Geçerli bir sipariş grubu kodu girin.';return;
+    }
+    const valid=()=>seq===buyerOrderRequest&&epoch===organizationRequest&&
+      currentOrg===org&&!document.hidden&&!el('workspace').hidden&&
+      !el('buyer-context-panel').hidden;
+    statusEl.textContent='Sipariş ve kuruluş yetkisi denetleniyor…';
+    try{
+      const params=new URLSearchParams({organization_id:org,order_group_id:id});
+      const data=await api('order-groups?'+params.toString());
+      if(!valid())return;
+      const group=data?.order_group;
+      if(data.organization_id!==org||!group||group.id!==id||
+         !Number.isSafeInteger(group.display_id)||!Array.isArray(group.orders)||
+         group.orders.length<1||group.orders.length>50)
+        throw Error('Order response invalid');
+      const nodes=document.createDocumentFragment();
+      for(const order of group.orders){
+        if(!Number.isSafeInteger(order.display_id)||
+           typeof order.status!=='string'||!Array.isArray(order.items)||
+           order.items.length<1||order.items.length>100)
+          throw Error('Order scope invalid');
+        const li=document.createElement('li');
+        li.textContent='Sipariş #'+order.display_id+' — Durum: '+order.status;
+        const items=document.createElement('ul');
+        for(const item of order.items){
+          if(typeof item.title!=='string'||!Number.isSafeInteger(item.quantity))
+            throw Error('Order item invalid');
+          const line=document.createElement('li');
+          line.textContent=item.title+' — '+item.quantity+' adet';
+          items.append(line);
+        }
+        li.append(items);nodes.append(li);
+      }
+      root.replaceChildren(nodes);
+      statusEl.textContent='Bu kuruluşa ait geçmiş sipariş doğrulandı.';
+    }catch{
+      if(!valid())return;
+      root.replaceChildren();
+      statusEl.textContent='Sipariş bulunamadı veya bu kuruluştan görüntüleme yetkiniz yok.';
+    }
+  };
   async function buyerCatalog(org,request,page=buyerCatalogPage){
     if(request!==organizationRequest||currentOrg!==org||document.hidden||
        el('workspace').hidden||el('buyer-context-panel').hidden||
