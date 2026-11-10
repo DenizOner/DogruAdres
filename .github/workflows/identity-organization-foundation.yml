@@ -167,7 +167,8 @@ jobs:
           Write-Output 'PASS: real Windows Authz in-memory allow/deny, private process token and rejected substitutions; protected sandbox NOT TESTED'
 
   static:
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    # Required checks must execute even for drafts; a skipped required check can count as success.
+    if: github.event_name != 'workflow_dispatch'
     name: Foundation static checks
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -261,7 +262,8 @@ jobs:
         run: node --check integration-tests/http/dogruadres-foundation.native.test.mjs
 
   build:
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    # Required checks must execute even for drafts; a skipped required check can count as success.
+    if: github.event_name != 'workflow_dispatch'
     name: API backend build — test configuration
     needs: static
     runs-on: ubuntu-24.04
