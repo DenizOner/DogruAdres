@@ -1680,7 +1680,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     decideBtn.onclick=async()=>{
       const explanation=reason.value.trim();
       if(!verified||uncertain||explanation.length<10||explanation.length>500||
-         [...explanation.matchAll(/[\p{L}\p{N}]/gu)].length<10){
+         [...explanation.matchAll(/[\\p{L}\\p{N}]/gu)].length<10){
         status.textContent='Önce hedefi doğrulayın; 10–500 karakterlik okunabilir gerekçe girin.';
         return;
       }
