@@ -19,6 +19,8 @@ const resources = {
   "organization.store_unfollowed": "buyer-store-follow",
   "organization.store_owner_paused": "store-owner-pause",
   "organization.store_owner_resumed": "store-owner-pause",
+  "organization.store_owner_closing_started": "store-owner-closing",
+  "organization.store_owner_closing_withdrawn": "store-owner-closing",
   "organization.store_application_right_disabled": "organization",
   "organization.store_application_right_enabled": "organization",
   "organization.store_application_rejected": "store-application",
