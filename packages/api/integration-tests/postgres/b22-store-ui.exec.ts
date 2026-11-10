@@ -198,6 +198,190 @@ async function verifyOwnerClosingBrowser(input:{
     [ownerStoreId]))[0],nativeBefore)
   assert.equal(Number((await q("select count(*)::int n from da_audit_event "+
     "where resource='store-owner-closing' and target_id=$1",[ownerStoreId]))[0].n),2)
+
+  // NEW CLOSING-SPECIFIC NEGATIVE ACCEPTANCE. Previous voluntary-pause
+  // concurrency/revocation proof is NOT interchangeable with this endpoint.
+  const beforeRace=Number((await q("select count(*)::int n from da_audit_event"+
+    " where resource='store-owner-closing' and target_id=$1",
+    [ownerStoreId]))[0].n)
+  assert.equal(beforeRace,2)
+  const raceA={...same,expected_version:2,
+    request_id:"dasc_"+randomBytes(16).toString("hex")}
+  const raceB={...raceA,request_id:"dasc_"+randomBytes(16).toString("hex")}
+  const contested=await browser.callFunction(
+    "async function(a,b){const s=await(await fetch('/personal/session',"+
+    "{cache:'no-store'})).json();"+
+    "const headers={'content-type':'application/json','x-csrf-token':s.csrf_token};"+
+    "return Promise.all([a,b].map(async raw=>"+
+    "(await fetch('/personal/store-owner-closing',{method:'POST',headers,body:raw})).status))}",
+    JSON.stringify(raceA),JSON.stringify(raceB))
+  assert.deepEqual([...contested].sort((a:number,b:number)=>a-b),[200,409],
+    "Two distinct same-version real HTTPS closing requests must serialize")
+  const [raceRow]=await q(
+    "select c.state,c.version,c.started_at,c.due_at,c.source_audit_event_id,"+
+    " (select count(*)::int from da_notification_receipt n"+
+    " where n.audit_event_id=c.source_audit_event_id) as notices"+
+    " from da_store_owner_closing c where c.seller_id=$1",[ownerStoreId])
+  assert.equal(raceRow.state,"closing")
+  assert.equal(raceRow.version,3)
+  assert.equal(raceRow.notices,2)
+  const closingAuditCount=async()=>Number((await q(
+    "select count(*)::int n from da_audit_event"+
+    " where resource='store-owner-closing' and target_id=$1",[ownerStoreId]))[0].n)
+  assert.equal(await closingAuditCount(),beforeRace+1,
+    "Concurrent loser must create zero audit/outbox/notice effects")
+  const countEffects=async()=>q(
+    "select (select count(*)::int from da_audit_event e"+
+    " where e.resource='store-owner-closing' and e.target_id=$1) as events,"+
+    " (select count(*)::int from da_audit_outbox o join da_audit_event e"+
+    " on e.id=o.source_audit_event_id where e.resource='store-owner-closing'"+
+    " and e.target_id=$1) as outboxes,"+
+    " (select count(*)::int from da_notification_receipt n join da_audit_event e"+
+    " on e.id=n.audit_event_id where e.resource='store-owner-closing'"+
+    " and e.target_id=$1) as receipts",[ownerStoreId])
+  assert.deepEqual((await countEffects())[0],{events:3,outboxes:3,receipts:6})
+  const denyWithdraw={organization_id:organizations[0].id,seller_id:ownerStoreId,
+    action:"withdraw",expected_version:3,
+    request_id:"dasc_"+randomBytes(16).toString("hex")}
+  const ownerCookie=(await browser.send("Network.getCookies",
+    {urls:[browser.origin]})).cookies.find((x:any)=>x.name==="da_session")
+  assert.match(ownerCookie?.value??"",/^[A-Za-z0-9_-]{43}$/)
+  const ownerSessionHash=createHash("sha256").update(ownerCookie.value).digest("hex")
+  const [realSession]=await q(
+    "select id,last_strong_auth_at,status from da_browser_session where id=$1",
+    [ownerSessionHash])
+  assert.equal(realSession?.status,"active")
+  assert.ok(realSession.last_strong_auth_at)
+  const [protectedMembership]=await q(
+    "select id,status,revoked_at from da_organization_membership"+
+    " where organization_id=$1 and person_id=$2 and role='owner'"+
+    " and protected_owner=true and deleted_at is null",
+    [organizations[0].id,closed.actor_person_id])
+  assert.equal(protectedMembership?.status,"active")
+  assert.equal(protectedMembership.revoked_at,null)
+  const unchangedEffects=(expected:{events:number;outboxes:number;receipts:number})=>
+    countEffects().then(rows=>assert.deepEqual(rows[0],expected))
+  const snapshot={events:3,outboxes:3,receipts:6}
+  try{
+    assert.equal((await q("update da_organization_membership"+
+      " set status='revoked',revoked_at=clock_timestamp()"+
+      " where id=$1 and status='active' and revoked_at is null returning id",
+      [protectedMembership.id])).length,1)
+    assert.equal((await post(denyWithdraw)).status,403,
+      "Revoked Owner cannot withdraw closing through real first-party HTTP")
+    await unchangedEffects(snapshot)
+  }finally{
+    await q("update da_organization_membership set status=$2,revoked_at=$3"+
+      " where id=$1",[protectedMembership.id,protectedMembership.status,
+      protectedMembership.revoked_at])
+  }
+  try{
+    assert.equal((await q("update da_browser_session"+
+      " set last_strong_auth_at=clock_timestamp()-interval '2 days'"+
+      " where id=$1 and status='active' returning id",
+      [ownerSessionHash])).length,1)
+    assert.equal((await post(denyWithdraw)).status,403,
+      "Stale strong auth cannot withdraw an Owner closing intent")
+    await unchangedEffects(snapshot)
+  }finally{
+    await q("update da_browser_session set last_strong_auth_at=$2"+
+      " where id=$1",[ownerSessionHash,realSession.last_strong_auth_at])
+  }
+  assert.deepEqual((await q(
+    "select state,version,source_audit_event_id from da_store_owner_closing"+
+    " where seller_id=$1",[ownerStoreId]))[0],
+    {state:"closing",version:3,source_audit_event_id:raceRow.source_audit_event_id})
+
+  // Advance ONLY this task's synthetic canonical ledger+source audit together.
+  // This is an explicit disposable-PG16 boundary simulation: production clock,
+  // native Seller, real sessions and permanent finalizer are never modified.
+  const changeSyntheticClockBoundary=async(startIso:string,dueIso:string)=>{
+    await q("begin")
+    try{
+      const ledger=await q(
+        "update da_store_owner_closing set started_at=$2,due_at=$3"+
+        " where seller_id=$1 and state='closing' and version=3 returning seller_id",
+        [ownerStoreId,startIso,dueIso])
+      assert.equal(ledger.length,1)
+      const audit=await q(
+        "update da_audit_event set new_values=jsonb_set("+
+        "jsonb_set(new_values::jsonb,'{started_at}',to_jsonb($2::text)),"+
+        "'{due_at}',to_jsonb($3::text))"+
+        " where id=$1 and resource='store-owner-closing' returning id",
+        [raceRow.source_audit_event_id,startIso,dueIso])
+      assert.equal(audit.length,1)
+      await q("commit")
+    }catch(error){await q("rollback");throw error}
+  }
+  const realStart=new Date(raceRow.started_at).toISOString()
+  const realDue=new Date(raceRow.due_at).toISOString()
+  const [{now_at:serverNow}]=await q("select clock_timestamp() as now_at")
+  const justExpiredDue=new Date(new Date(serverNow).getTime()-100).toISOString()
+  const justExpiredStart=new Date(
+    new Date(justExpiredDue).getTime()-2592000000).toISOString()
+  await changeSyntheticClockBoundary(justExpiredStart,justExpiredDue)
+  try{
+    const expired=await browser.callFunction(
+      "async function(org,seller){const r=await fetch('/personal/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
+      organizations[0].id,ownerStoreId)
+    assert.equal(expired.status,200)
+    assert.equal(expired.body.state,"closing")
+    assert.equal(expired.body.can_withdraw,false)
+    assert.equal(expired.body.remaining_seconds,0)
+    assert.equal(expired.body.permanent_finalization_enabled,false)
+    assert.equal((await post(denyWithdraw)).status,409,
+      "At/after the real 30-day deadline an authorized Owner gets HTTP 409")
+    await unchangedEffects(snapshot)
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds),false,
+      "At expiration the Store remains closed while finalizer is disabled")
+  }finally{
+    await changeSyntheticClockBoundary(realStart,realDue)
+  }
+  const restored=await post(denyWithdraw)
+  assert.equal(restored.status,200)
+  assert.equal(restored.body.status,"withdrawn")
+  assert.equal(restored.body.version,4)
+  assert.equal(await closingAuditCount(),4)
+  const endEffects=(await countEffects())[0]
+  assert.deepEqual(endEffects,{events:4,outboxes:4,receipts:8})
+  const finalRows=await q(
+    "select e.id,e.action from da_audit_event e"+
+    " where e.resource='store-owner-closing' and e.target_id=$1"+
+    " order by e.occurred_at,e.id",[ownerStoreId])
+  assert.deepEqual(finalRows.map(x=>x.action).sort(),[
+    "organization.store_owner_closing_started",
+    "organization.store_owner_closing_started",
+    "organization.store_owner_closing_withdrawn",
+    "organization.store_owner_closing_withdrawn"
+  ])
+  for(const event of finalRows){
+    const recipients=await q(
+      "select person_id from da_notification_receipt"+
+      " where audit_event_id=$1 order by person_id",[event.id])
+    assert.deepEqual(recipients,expectedOwners,
+      "Every committed closing transition must notify both protected Owners")
+  }
+  assert.equal(await foundation.authorizeBuyerCheckout(
+    customerCart.id,nativeCustomer.id,cartStoreIds),true)
+  assert.deepEqual((await q(
+    "select id,name,handle,status,approved_at,closed_from,closed_to"+
+    " from seller where id=$1",[ownerStoreId]))[0],nativeBefore)
+  // Restore exactly the original second-Person membership for later existing
+  // Member and platform-role tests. No new Owner authority survives fixture.
+  assert.equal((await q(
+    "update da_organization_membership set role=$2,protected_owner=$3,"+
+    " revoked_at=$4,updated_at=clock_timestamp() where id=$1 returning id",
+    [coOwnerBefore.id,coOwnerBefore.role,coOwnerBefore.protected_owner,
+      coOwnerBefore.revoked_at])).length,1)
+  const [restoredCoOwner]=await q(
+    "select role,status,protected_owner,revoked_at"+
+    " from da_organization_membership where id=$1",[coOwnerBefore.id])
+  assert.deepEqual(restoredCoOwner,{
+    role:coOwnerBefore.role,status:coOwnerBefore.status,
+    protected_owner:coOwnerBefore.protected_owner,revoked_at:coOwnerBefore.revoked_at
+  })
+  process.stdout.write("PASS B22 real closing security: concurrent HTTP 200+409 one commit; revoked Owner/stale session HTTP403 no writes; expired 30-day withdraw HTTP409 no writes; both active Owners read private notices, two receipts each; native Seller unchanged\n")
   process.stdout.write("PASS B22 real Owner 30-day closing intent/withdraw: Chrome/HTTPS/PG16, exact server deadline, protected Owner notices, whole-Cart L deny then restore, CSRF/foreign/replay denied; native Seller unchanged; irreversible finalization disabled\n")
 }
 
