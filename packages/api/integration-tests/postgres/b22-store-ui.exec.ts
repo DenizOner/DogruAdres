@@ -327,12 +327,13 @@ async function verifyOwnerClosingBrowser(input:{
     const fixtureEnvelope={...realSource.envelope,
       source_audit_event_id:expiryFixtureAuditId,
       target_id:secondOwnerStoreId,occurred_at:justExpiredStart}
-    // Keep this artificial historical event off the scheduled relay queue;
-    // only four genuine Chrome-created events are exercised by the Index gate.
+    // CHECK da_audit_outbox_delivery_state permits a future retry only when
+    // attempt_count>=1. This task-only synthetic history event is deliberately
+    // excluded from today's relay; all FOUR actual Chrome events remain queued.
     assert.equal((await q(`insert into da_audit_outbox
-      (id,source_audit_event_id,source_module,envelope,next_attempt_at)
+      (id,source_audit_event_id,source_module,envelope,attempt_count,next_attempt_at)
       values('daaob_'||gen_random_uuid()::text,$1,'dogruadres-access',
-        $2::jsonb,clock_timestamp()+interval '100 years')
+        $2::jsonb,1,clock_timestamp()+interval '100 years')
       returning id`,[expiryFixtureAuditId,JSON.stringify(fixtureEnvelope)])).length,1)
     assert.equal((await q(`insert into da_store_owner_closing
       (seller_id,organization_id,state,version,request_id,
