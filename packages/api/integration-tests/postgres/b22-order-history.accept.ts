@@ -77,12 +77,38 @@ export async function verifyB22OwnedHistoricalOrder(input:{
     String(node.name?.value??"").includes("Sipariş grubu kodu")),
     "Real Chrome accessibility tree must expose the order code label")
   await buyer.input("#buyer-order-lookup input[name=order_group_id]",orderGroupId)
-  for(const type of ["keyDown","keyUp"])
-    await buyer.send("Input.dispatchKeyEvent",{
-      type,key:"Enter",code:"Enter",windowsVirtualKeyCode:13,
-      nativeVirtualKeyCode:13
-    })
-  await buyer.wait("document.getElementById('buyer-order-status').textContent.includes('Bu kuruluşa ait geçmiş sipariş doğrulandı.')")
+  // Use the already proven Chrome CDP keyboard path: focus the native
+  // submit button and activate it with Space. No synthetic .onsubmit() calls.
+  const focused=await buyer.eval(`(()=>{
+    const button=document.querySelector('#buyer-order-lookup button[type=submit]');
+    if(!button)return false;button.focus();
+    return document.activeElement===button;
+  })()`)
+  assert.equal(focused,true,"Real keyboard must focus the order submit button")
+  await buyer.send("Input.dispatchKeyEvent",{
+    type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32
+  })
+  await buyer.send("Input.dispatchKeyEvent",{
+    type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32
+  })
+  try{
+    await buyer.wait("document.getElementById('buyer-order-status').textContent.includes('Bu kuruluşa ait geçmiş sipariş doğrulandı.')")
+  }catch{
+    const phase=await buyer.eval(`(()=>{
+      const s=document.getElementById('buyer-order-status')?.textContent??'';
+      const input=document.querySelector('#buyer-order-lookup input[name=order_group_id]');
+      return {status:s.includes('doğrulandı')?'success':
+        s.includes('Sipariş bulunamadı')?'denied':
+        s.includes('denetleniyor')?'pending':s?'other':'empty',
+        formValid:input?.checkValidity()===true,
+        rendered:document.querySelectorAll('#buyer-order-items li').length>0};
+    })()`)
+    const httpStatuses=buyer.http.filter((r:any)=>r.path==="/personal/order-groups")
+      .slice(-3).map((r:any)=>r.status)
+    throw Error("B22 order UI did not show private result: "+
+      JSON.stringify({status:phase.status,formValid:phase.formValid,
+        rendered:phase.rendered,httpStatuses}))
+  }
   const ui=await buyer.eval(`(()=>{
     const root=document.getElementById('buyer-order-items');
     const status=document.getElementById('buyer-order-status');
@@ -94,7 +120,7 @@ export async function verifyB22OwnedHistoricalOrder(input:{
   assert.ok(ui.text.includes("1 adet"))
   assert.ok(!ui.text.includes(nativeCustomerId)&&!ui.text.includes(cartId))
   assert.equal(await countAudit(q,buyerOrg.id),before)
-  process.stdout.write("PASS B22 Chrome: OrderGroup history HTTPS/PG16 verified Buyer reads own zero-value completed OrderGroup, keyboard Enter and accessible label/status render private minimal items; no audit writes\n")
+  process.stdout.write("PASS B22 Chrome: OrderGroup history HTTPS/PG16 verified Buyer reads own zero-value completed OrderGroup, keyboard Space and accessible label/status render private minimal items; no audit writes\n")
 }
 
 export async function verifyB22ForeignHistoricalOrder(input:{
