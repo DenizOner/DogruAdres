@@ -6,7 +6,7 @@
 import assert from "node:assert/strict"
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { createServer } from "node:net"
-import { mkdtempSync, rmSync, existsSync } from "node:fs"
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
@@ -149,6 +149,21 @@ export async function verifyNativeBrowser({
       })
       return res.status === 200 || res.status === 307
     }, 60000, "Next.js Storefront loopback readiness")
+
+    // #244: Keep the page-level data request behind the authenticated-customer
+    // decision. This is a source-order regression guard; the HTTP checks below
+    // exercise middleware separately and do not prove cross-customer access.
+    const orderPage = readFileSync(
+      join(storefrontDir, "src/app/[locale]/(main)/user/orders/[id]/page.tsx"),
+      "utf8",
+    )
+    const customerRead = orderPage.indexOf("const user = await retrieveCustomer()")
+    const accessDecision = orderPage.indexOf('if (!user) return redirect("/login")')
+    const orderRead = orderPage.indexOf("const orderGroup = (await retrieveOrderGroup(id))")
+    assert.ok(
+      customerRead >= 0 && customerRead < accessDecision && accessDecision < orderRead,
+      "Order detail must check the customer before fetching a private order group",
+    )
 
     // #244: A protected dynamic ID is not a static file or public verification
     // route merely because its URL contains ".pdf" or "verify-email".
