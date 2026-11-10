@@ -94,7 +94,7 @@ export async function verifyB22OwnedHistoricalOrder(input:{
   assert.ok(ui.text.includes("1 adet"))
   assert.ok(!ui.text.includes(nativeCustomerId)&&!ui.text.includes(cartId))
   assert.equal(await countAudit(q,buyerOrg.id),before)
-  process.stdout.write("PASS B22 real Chrome/HTTPS/PG16: verified Buyer reads own zero-value completed OrderGroup, keyboard Enter and accessible label/status render private minimal items; no audit writes\\n")
+  process.stdout.write("PASS B22 Chrome: OrderGroup history HTTPS/PG16 verified Buyer reads own zero-value completed OrderGroup, keyboard Enter and accessible label/status render private minimal items; no audit writes\n")
 }
 
 export async function verifyB22ForeignHistoricalOrder(input:{
@@ -116,5 +116,5 @@ export async function verifyB22ForeignHistoricalOrder(input:{
   assert.equal(JSON.stringify(result.body).includes(orderGroupId),false)
   assert.equal(JSON.stringify(result.body).includes(ownerCustomerId),false)
   assert.equal(await countAudit(q,buyerOrgId),before)
-  process.stdout.write("PASS B22 real Chrome/HTTPS/PG16: unrelated verified native Customer denied foreign Buyer OrderGroup 403, generic body, no audit writes\\n")
+  process.stdout.write("PASS B22 Chrome: OrderGroup history HTTPS/PG16 unrelated verified native Customer denied foreign Buyer OrderGroup 403, generic body, no audit writes\n")
 }
