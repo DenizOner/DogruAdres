@@ -15,6 +15,14 @@ test("B22 Owner temporary pause permits only exact GET/POST first-party relay",(
       assert.equal(allowedPublicRequest(method,path),false)
 })
 
+test("B22 historic order read uses only the exact personal GET relay",()=>{
+  assert.equal(allowedPublicRequest("GET","/personal/order-groups"),true)
+  for(const method of ["POST","PUT","PATCH","DELETE","HEAD","OPTIONS"])
+    assert.equal(allowedPublicRequest(method,"/personal/order-groups"),false)
+  for(const path of ["/personal/order-groups/","/personal/order-groups/og_other",
+    "/store/order-groups","/store/order-groups/og_other","/personal/ORDER-GROUPS"])
+    assert.equal(allowedPublicRequest("GET",path),false)
+})
 test("B22 Store follow has exact private GET and CSRF POST ingress only",()=>{
   for(const method of ["GET","POST"])
     assert.equal(allowedPublicRequest(method,"/personal/store-follows"),true)
