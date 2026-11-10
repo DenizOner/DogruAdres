@@ -30,6 +30,116 @@ import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-in
 import taxCertificateInventory, {inspectTaxCertificateSnapshot} from "../../src/scripts/tax-certificate-inventory"
 
 
+
+async function verifyOwnerClosingBrowser(input:{
+  browser:B06Chrome;organizations:any[];ownerStoreId:string;secondOwnerStoreId:string;
+  nativeCustomer:any;customerCart:any;cartStoreIds:string[];foundation:any;cartService:any;
+  q:(sql:string,params?:any[])=>Promise<any[]>;
+  get:(url:string)=>Promise<any>;catalogUrl:(org:string)=>string;
+}):Promise<void>{
+  const {browser,organizations,ownerStoreId,secondOwnerStoreId,
+    nativeCustomer,customerCart,cartStoreIds,foundation,cartService,q,get,catalogUrl}=input
+  // Isolated synthetic Store. Never turn on public checkout or payments.
+  const nativeBefore=(await q(
+    "select id,name,handle,status,approved_at,closed_from,closed_to from seller where id=$1",
+    [ownerStoreId]))[0]
+  assert.equal(nativeBefore.status,"open")
+  assert.equal(Number((await q("select count(*)::int n from da_store_owner_closing where seller_id=$1",
+    [ownerStoreId]))[0].n),0)
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible'")
+  await browser.select(organizations[0].name,"owner")
+  await browser.wait("!document.getElementById('store-owner-closing-panel').hidden && "+
+    "Array.from(document.querySelectorAll('#store-owner-pause-form select option')).some(o=>o.value==="+
+    JSON.stringify(ownerStoreId)+")")
+  await browser.eval("(()=>{const choice=document.querySelector("+
+    "'#store-owner-pause-form select[name=seller_id]');choice.value="+
+    JSON.stringify(ownerStoreId)+";choice.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+  await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('Aktif 30 günlük') && "+
+    "document.querySelector('#store-owner-closing-form button[value=start]').disabled")
+  await browser.eval("(()=>{const a=document.querySelector("+
+    "'#store-owner-closing-form input[name=consequences_acknowledged]');"+
+    "a.checked=true;a.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+  await browser.wait("!document.querySelector('#store-owner-closing-form button[value=start]').disabled")
+  await browser.eval("window.__b22ClosingConfirm=window.confirm;window.confirm=()=>true")
+  assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-closing-form button[value=start]');b.focus();return document.activeElement===b})()"),true)
+  await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
+  await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
+  await browser.eval("window.confirm=window.__b22ClosingConfirm;delete window.__b22ClosingConfirm")
+  await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('Yeni satışlar durduruldu')")
+  assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-owner-closing"&&x.method==="POST"&&x.status===200))
+  const [closed]=await q(
+    "select c.organization_id,c.state,c.version,c.request_id,c.started_at,c.due_at,"+
+    "e.action,e.actor_person_id,e.new_values->>'state' as proof_state,"+
+    "(select count(*)::int from da_audit_outbox x where x.source_audit_event_id=e.id) as outbox_count,"+
+    "(select count(*)::int from da_notification_receipt n where n.audit_event_id=e.id) as notices "+
+    "from da_store_owner_closing c join da_audit_event e on e.id=c.source_audit_event_id "+
+    "where c.seller_id=$1",[ownerStoreId])
+  assert.equal(closed.state,"closing")
+  assert.equal(closed.version,1)
+  assert.equal(closed.organization_id,organizations[0].id)
+  assert.equal(closed.action,"organization.store_owner_closing_started")
+  assert.equal(closed.proof_state,"closing")
+  assert.equal(closed.outbox_count,1)
+  assert.ok(closed.notices>=1,"Protected Owner must receive in-app security notice")
+  assert.equal(new Date(closed.due_at).getTime()-new Date(closed.started_at).getTime(),2592000000)
+  assert.deepEqual((await q("select id,name,handle,status,approved_at,closed_from,closed_to from seller where id=$1",
+    [ownerStoreId]))[0],nativeBefore)
+  assert.equal(await foundation.authorizeBuyerCheckout(customerCart.id,nativeCustomer.id,cartStoreIds),false,
+    "One closing Seller blocks entire multi-Store final L")
+  const catalog=await get(catalogUrl(organizations[0].id))
+  assert.equal(catalog.status,200)
+  assert.equal(catalog.body.stores.some((x:any)=>x.id===ownerStoreId),false)
+  assert.equal(catalog.body.stores.some((x:any)=>x.id===secondOwnerStoreId),true)
+  const post=async(data:any,withCsrf=true)=>browser.callFunction(
+    "async function(raw,sendToken){const payload=JSON.parse(raw);"+
+    "const session=await(await fetch('/personal/session')).json();"+
+    "const headers={'content-type':'application/json'};"+
+    "if(sendToken==='true')headers['x-csrf-token']=session.csrf_token;"+
+    "const res=await fetch('/personal/store-owner-closing',{method:'POST',headers,"+
+    "body:JSON.stringify(payload)});return {status:res.status,body:await res.json()}}",
+    JSON.stringify(data),String(withCsrf))
+  const same={organization_id:organizations[0].id,seller_id:ownerStoreId,
+    action:"start",request_id:closed.request_id,expected_version:0,
+    consequences_acknowledged:true}
+  assert.equal((await post(same)).status,200,"Exact request replay must be idempotent")
+  assert.equal((await post({...same,request_id:"dasc_"+randomBytes(16).toString("hex")})).status,409)
+  assert.equal((await post({...same,organization_id:organizations[1].id})).status,403)
+  assert.equal((await post(same,false)).status,403)
+  assert.equal((await post({...same,consequences_acknowledged:false})).status,400)
+  assert.equal(Number((await q("select count(*)::int n from da_audit_event "+
+    "where resource='store-owner-closing' and target_id=$1",[ownerStoreId]))[0].n),1)
+  await browser.eval("(()=>{const a=document.querySelector("+
+    "'#store-owner-closing-form input[name=consequences_acknowledged]');"+
+    "a.checked=true;a.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+  await browser.wait("!document.querySelector('#store-owner-closing-form button[value=withdraw]').disabled")
+  await browser.eval("window.__b22ClosingConfirm=window.confirm;window.confirm=()=>true")
+  assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-closing-form button[value=withdraw]');b.focus();return document.activeElement===b})()"),true)
+  await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
+  await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
+  await browser.eval("window.confirm=window.__b22ClosingConfirm;delete window.__b22ClosingConfirm")
+  await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('geri çekildi')")
+  const [withdrawn]=await q(
+    "select c.state,c.version,c.started_at,c.due_at,e.action,"+
+    "(select count(*)::int from da_audit_outbox x where x.source_audit_event_id=e.id) as outbox_count,"+
+    "(select count(*)::int from da_notification_receipt n where n.audit_event_id=e.id) as notices "+
+    "from da_store_owner_closing c join da_audit_event e on e.id=c.source_audit_event_id "+
+    "where c.seller_id=$1",[ownerStoreId])
+  assert.equal(withdrawn.state,"withdrawn")
+  assert.equal(withdrawn.version,2)
+  assert.equal(withdrawn.action,"organization.store_owner_closing_withdrawn")
+  assert.equal(new Date(withdrawn.due_at).getTime(),new Date(closed.due_at).getTime())
+  assert.equal(withdrawn.outbox_count,1)
+  assert.ok(withdrawn.notices>=1)
+  assert.equal(await foundation.authorizeBuyerCheckout(customerCart.id,nativeCustomer.id,cartStoreIds),true)
+  assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]})).items?.length,2)
+  assert.deepEqual((await q("select id,name,handle,status,approved_at,closed_from,closed_to from seller where id=$1",
+    [ownerStoreId]))[0],nativeBefore)
+  assert.equal(Number((await q("select count(*)::int n from da_audit_event "+
+    "where resource='store-owner-closing' and target_id=$1",[ownerStoreId]))[0].n),2)
+  process.stdout.write("PASS B22 real Owner 30-day closing intent/withdraw: Chrome/HTTPS/PG16, exact server deadline, protected Owner notices, whole-Cart L deny then restore, CSRF/foreign/replay denied; native Seller unchanged; irreversible finalization disabled\\n")
+}
+
 async function verifyOwnerTemporaryPauseBrowser(input:{
   browser:B06Chrome;organizations:any[];ownerStoreId:string;
   secondOwnerStoreId:string;nativeCustomer:any;customerCart:any;
@@ -6704,6 +6814,9 @@ export default async function({container}:any){
 
     await verifyOwnerTemporaryPauseBrowser({browser,organizations,ownerStoreId,
       secondOwnerStoreId,nativeCustomer,customerCart,cartStoreIds,container,
+      foundation,cartService,q,get,catalogUrl})
+    await verifyOwnerClosingBrowser({browser,organizations,ownerStoreId,
+      secondOwnerStoreId,nativeCustomer,customerCart,cartStoreIds,
       foundation,cartService,q,get,catalogUrl})
     // One native Seller suspended means NO partially authorized two-Store
     // scope. The native workflow restores the task's prior approved state.
