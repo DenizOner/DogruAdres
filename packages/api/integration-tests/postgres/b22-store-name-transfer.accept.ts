@@ -138,7 +138,8 @@ export async function verifyB22ExceptionalNameRight(input:{
     source.seller_id)
   assert.equal(click,true,"Real Staff UI submits only the verified decision")
   await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Ad hakkı kararı kaydedildi') || "+
-    "document.querySelector('[data-transfer-source="'+source.seller_id+'"] [role=status]')?.textContent.includes('Devir sonucu belirsiz')")
+    "document.querySelector("+JSON.stringify('[data-transfer-source="'+source.seller_id+'"] [role=status]')+
+    ")?.textContent.includes('Devir sonucu belirsiz')")
   const stage=await reviewer.callFunction(
     "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
     ".find(e=>e.dataset.transferSource===id);"+
