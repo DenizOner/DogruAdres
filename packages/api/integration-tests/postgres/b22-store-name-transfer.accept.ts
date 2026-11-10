@@ -56,6 +56,7 @@ export async function verifyB22ExceptionalNameRight(input:{
   // the immutable initial application name. Missing durable audit/outbox
   // must reject BOTH Staff preview and transfer POST without recording a
   // decision. The disposable database is restored even on a failed assert.
+  let originalClaimExpiry:unknown
   const historical=await q(`select x.id outbox_id
     from da_store_rename_request r
     join da_audit_event e on e.organization_id=r.organization_id
@@ -75,6 +76,7 @@ export async function verifyB22ExceptionalNameRight(input:{
       [source.application_id,source.seller_id])
     assert.ok(initialClaim?.name_claim_released_at,
       "The original application claim must retain its 30-day expiry")
+    originalClaimExpiry=initialClaim.name_claim_released_at
     const [currentHash]=await q(`select encode(sha256(convert_to(lower(
       regexp_replace(btrim(normalize($1,NFKC)),'[[:space:]]+',' ','g')),
       'UTF8')),'hex') hash`,[original.name])
@@ -262,6 +264,10 @@ export async function verifyB22ExceptionalNameRight(input:{
   const claim=await q("select name_claim_released_at from da_store_application where id=$1",
     [source.application_id])
   assert.ok(claim[0]?.name_claim_released_at)
+  if(originalClaimExpiry!==undefined)
+    assert.equal(String(claim[0].name_claim_released_at),
+      String(originalClaimExpiry),
+      "Exceptional assignment must not shorten the original 30-day hold")
   assert.deepEqual((await q("select id,name,handle,status,approved_at from seller where id=$1",
     [source.seller_id]))[0],original,
     "Right assignment must NEVER mutate the suspended native Store")
