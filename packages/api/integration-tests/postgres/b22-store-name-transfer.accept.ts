@@ -1,0 +1,139 @@
+/** Task-only real HTTPS/Chrome/PG16 acceptance: no real commercial accounts. */
+import assert from "node:assert/strict"
+import {B06Chrome} from "./b06-ui-browser"
+type Rows=(sql:string,params?:any[])=>Promise<any[]>
+type Store={application_id:string;seller_id:string;organization_id:string}
+export async function verifyB22ExceptionalNameRight(input:{
+  owner:B06Chrome;reviewer:B06Chrome;
+  source:Store;target:Store;q:Rows
+}):Promise<{formerName:string;formerHandle:string}>{
+  const {owner,reviewer,source,target,q}=input
+  const [original]=await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [source.seller_id])
+  const [recipient]=await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [target.seller_id])
+  assert.equal(original?.id,source.seller_id)
+  assert.equal(original.status,"suspended")
+  assert.ok(original.approved_at)
+  assert.equal(recipient?.id,target.seller_id)
+  assert.equal(recipient.status,"open")
+  assert.ok(recipient.approved_at)
+  assert.notEqual(source.organization_id,target.organization_id)
+  assert.notEqual(source.seller_id,target.seller_id)
+  const values={source_application_id:source.application_id,
+    source_seller_id:source.seller_id,
+    target_application_id:target.application_id,
+    target_seller_id:target.seller_id}
+  const path="/personal/platform/store-name-transfers"
+  const preview=async(browser:B06Chrome)=>browser.callFunction(
+    "async function(payload){const params=new URLSearchParams(JSON.parse(payload));"+
+    "const r=await fetch('/personal/platform/store-name-transfers?'+params.toString(),"+
+    "{cache:'no-store'});return {status:r.status,body:await r.json()}}",
+    JSON.stringify(values))
+  const p=await preview(reviewer)
+  assert.equal(p.status,200)
+  assert.equal(p.body.source.seller_id,source.seller_id)
+  assert.equal(p.body.source.status,"suspended")
+  assert.equal(p.body.source.name,original.name)
+  assert.equal(p.body.source.handle,original.handle)
+  assert.equal(p.body.target.seller_id,target.seller_id)
+  assert.equal(p.body.target.name,recipient.name)
+  assert.equal(p.body.target.status,"open")
+  assert.equal((await preview(owner)).status,403,
+    "Business Owner cannot see confidential platform transfer candidates")
+  const post=async(browser:B06Chrome,payload:object,csrfValid=true)=>
+    browser.callFunction(
+      "async function(path,payload,valid){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json',"+
+      "'x-csrf-token':valid==='yes'?s.csrf_token:'invalid'},body:payload});"+
+      "return {status:r.status,body:await r.json()}}",
+      path,JSON.stringify(payload),csrfValid?"yes":"no")
+  const decisionReason="Verified exceptional platform decision for the Store name right"
+  const attempt={...values,transfer_id:"dastr_"+"e".repeat(32),
+    expected_name:original.name,expected_handle:original.handle,
+    reason:decisionReason}
+  assert.equal((await post(owner,attempt)).status,403)
+  assert.equal((await post(reviewer,attempt,false)).status,403)
+  assert.equal((await post(reviewer,{...attempt,target_seller_id:source.seller_id})).status,400)
+  assert.equal((await q("select count(*)::int n from da_store_name_transfer where source_seller_id=$1",
+    [source.seller_id]))[0].n,0)
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  await reviewer.click("#store-approval-refresh")
+  // Search the bounded Staff pages by real navigation, never DOM fabrication.
+  let found=false
+  for(let page=0;page<6;page++){
+    await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+    found=await reviewer.eval("!!document.querySelector("+JSON.stringify(
+      '[data-store-transfer-source="'+source.seller_id+'"]')+")")
+    if(found)break
+    const older=await reviewer.eval("!document.getElementById('store-approval-older').hidden")
+    if(!older)break
+    await reviewer.click("#store-approval-older")
+    await reviewer.wait("document.getElementById('store-approval-status').textContent.includes("+
+      JSON.stringify("sayfa "+(page+2))+")")
+  }
+  assert.equal(found,true,"Suspended original Seller must be in verified Staff queue")
+  const control='[data-store-transfer-source="'+source.seller_id+'"]'
+  await reviewer.click(control)
+  const fields='[data-transfer-source="'+source.seller_id+'"] '
+  await reviewer.wait("!document.querySelector("+JSON.stringify(
+    '[data-transfer-source="'+source.seller_id+'"]')+").hidden")
+  await reviewer.input(fields+'input[name=target_application_id]',target.application_id)
+  await reviewer.input(fields+'input[name=target_seller_id]',target.seller_id)
+  await reviewer.input(fields+'textarea[name=reason]',decisionReason)
+  await reviewer.click('[data-transfer-preview="'+source.seller_id+'"]')
+  await reviewer.wait("document.querySelector("+JSON.stringify(
+    '[data-transfer-source="'+source.seller_id+'"] [role=status]')+
+    ").textContent.includes("+JSON.stringify(recipient.name)+")")
+  const click=await reviewer.callFunction(
+    "function(id){const b=document.querySelector('[data-transfer-decide=\"'+id+'\"]');"+
+    "if(!b||b.disabled)return false;const former=window.confirm;"+
+    "window.confirm=()=>true;try{b.click()}finally{window.confirm=former}return true}",
+    source.seller_id)
+  assert.equal(click,true,"Real Staff UI submits only the verified decision")
+  await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Ad hakkı kararı kaydedildi')")
+  const decisions=await q("select id,source_seller_id,target_seller_id,old_name,old_handle,name_hash,reason,source_audit_event_id from da_store_name_transfer where source_seller_id=$1",
+    [source.seller_id])
+  assert.equal(decisions.length,1)
+  const d=decisions[0]
+  assert.match(d.id,/^dastr_[a-f0-9]{32}$/)
+  assert.equal(d.source_seller_id,source.seller_id)
+  assert.equal(d.target_seller_id,target.seller_id)
+  assert.equal(d.old_name,original.name)
+  assert.equal(d.old_handle,original.handle)
+  assert.equal(d.reason,decisionReason)
+  const audit=await q(
+    "select e.action,x.id outbox_id from da_audit_event e join da_audit_outbox x"+
+    " on x.source_audit_event_id=e.id where e.id=$1",
+    [d.source_audit_event_id])
+  assert.equal(audit.length,1)
+  assert.equal(audit[0].action,"organization.store_name_right_assigned")
+  assert.ok(audit[0].outbox_id)
+  const claim=await q("select name_claim_released_at from da_store_application where id=$1",
+    [source.application_id])
+  assert.ok(claim[0]?.name_claim_released_at)
+  assert.deepEqual((await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [source.seller_id]))[0],original,
+    "Right assignment must NEVER mutate the suspended native Store")
+  assert.deepEqual((await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [target.seller_id]))[0],recipient,
+    "Recipient native Store, Cart and Order history must remain independent")
+  const replay=await post(reviewer,{...attempt,transfer_id:d.id})
+  assert.equal(replay.status,200)
+  assert.equal((await post(reviewer,{...attempt,transfer_id:"dastr_"+"f".repeat(32)})).status,409)
+  assert.equal((await q("select count(*)::int n from da_store_name_transfer where source_seller_id=$1",
+    [source.seller_id]))[0].n,1)
+  // The Staff Stores endpoint (different URL) must refuse the vacated right.
+  const blocked=await reviewer.callFunction(
+    "async function(payload){const s=await(await fetch('/personal/session')).json();"+
+    "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+    "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+    "body:payload});return r.status}",
+    JSON.stringify({action:"unsuspend",application_id:source.application_id,
+      seller_id:source.seller_id}))
+  assert.equal(blocked,409,"Transferred old right never reopens the original Store")
+  assert.equal((await q("select status from seller where id=$1",
+    [source.seller_id]))[0].status,"suspended")
+  return {formerName:original.name,formerHandle:original.handle}
+}

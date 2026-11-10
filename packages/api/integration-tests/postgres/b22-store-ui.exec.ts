@@ -23,6 +23,7 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
+import {verifyB22ExceptionalNameRight} from "./b22-store-name-transfer.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {assertWcag22AxeInChrome} from "./wcag22-axe-chrome"
@@ -1309,7 +1310,7 @@ async function verifyOwnerStoreRenameRequest(
   q:(sql:string,params?:any[])=>Promise<any[]>
 ):Promise<void>{
   const before=(await q("select name,handle,status,approved_at from seller where id=$1",[storeId]))[0]
-  assert.equal(before.status,"open")
+  assert.equal(before.status,alreadySuspended?"suspended":"open")
   assert.ok(before.approved_at)
   assert.equal(typeof before.handle,"string")
   const name="B22 Request "+rand
@@ -1815,7 +1816,8 @@ async function verifyPlatformStoreRenameApproval(
 async function verifySuspendedStoreRenameBeforeReopen(
   owner:B06Chrome,reviewer:B06Chrome,organizationId:string,
   organizationName:string,sellerId:string,rand:string,
-  container:any,q:(sql:string,params?:any[])=>Promise<any[]>
+  container:any,q:(sql:string,params?:any[])=>Promise<any[]>,
+  alreadySuspended=false
 ):Promise<void>{
   const before=(await q("select id,name,handle,status,approved_at from seller where id=$1",
     [sellerId]))[0]
@@ -1823,7 +1825,7 @@ async function verifySuspendedStoreRenameBeforeReopen(
   assert.ok(before.approved_at)
   const name="B22 Askıdan Sonra "+rand
   const handle=("b22-aski-"+rand).toLowerCase().replace(/[^a-z0-9-]/g,"")
-  await suspendSellerWorkflow(container).run({input:{
+  if(!alreadySuspended)await suspendSellerWorkflow(container).run({input:{
     seller_id:sellerId,reason:"B22 task-only suspended name change"
   }})
   assert.equal((await q("select status from seller where id=$1",[sellerId]))[0].status,
@@ -7355,6 +7357,34 @@ export default async function({container}:any){
       [ownerStoreId],
       "Gamma must not enter Alpha; previously suspended second Alpha Store stays excluded")
     assert.equal(alphaAfterGamma.some((store:any)=>store.id===gammaSellerId),false)
+
+    const assignedNameRight=await verifyB22ExceptionalNameRight({
+      owner:browser,reviewer,q,
+      source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
+        organization_id:organizations[0].id},
+      target:{application_id:gammaApplication.application_id,seller_id:gammaSellerId,
+        organization_id:sellerGamma.id}
+    })
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(organizations[0].name,"owner")
+    await verifySuspendedStoreRenameBeforeReopen(
+      browser,reviewer,organizations[0].id,organizations[0].name,
+      secondOwnerStoreId,rand,container,q,true)
+    // The same disposable Seller was suspended before this exception; retain
+    // that fixture state for the later multi-Store/cart denial assertions.
+    await suspendSellerWorkflow(container).run({input:{
+      seller_id:secondOwnerStoreId,reason:"Task-only source Store reset after name-right recovery"
+    }})
+    assert.equal((await q("select status from seller where id=$1",
+      [secondOwnerStoreId]))[0].status,"suspended")
+    assert.equal((await q("select id from seller where id=$1",
+      [secondOwnerStoreId]))[0].id,secondOwnerStoreId)
+    assert.notEqual((await q("select name from seller where id=$1",
+      [secondOwnerStoreId]))[0].name,assignedNameRight.formerName)
+    assert.equal((await q("select name from seller where id=$1",
+      [gammaSellerId]))[0].name,gammaApplication.name)
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: exceptional suspended Seller name-right assigned to approved separate Store; Owner new name and Staff reopen same ID, native/Order untouched before rename, foreign/CSRF/replay denied, audit/outbox and recipient reservation\n")
 
     await verifyConcurrentCrossOrganizationStoreNames(
       browser,organizations[0].id,sellerGamma.id,rand,q)
