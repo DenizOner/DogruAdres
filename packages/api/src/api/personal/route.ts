@@ -3126,7 +3126,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(orderStatus)orderStatus.textContent='';
     if(orderItems)orderItems.replaceChildren();
     const orderForm=el('buyer-order-lookup');
-    if(orderForm)orderForm.reset();
+    if(orderForm){
+      if(typeof orderForm.reset==='function')orderForm.reset();
+      else if(orderForm.elements?.order_group_id)orderForm.elements.order_group_id.value='';
+    }
     el('buyer-catalog-prev').disabled=true;
     el('buyer-catalog-next').disabled=true;
     const catalog=el('buyer-catalog-panel');
