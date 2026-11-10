@@ -328,6 +328,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       </form>
       <button type="button" id="store-owner-pause-refresh">Durumu yenile</button>
     </section>
+    <section id="store-owner-closing-panel" hidden aria-labelledby="store-owner-closing-title">
+      <h3 id="store-owner-closing-title">Mağazayı kalıcı kapatma isteği (30 gün)</h3>
+      <p>Başlattığınız anda yeni satışlar durur. İlk 30 takvim günü mağaza kimliği, geçmiş işlemler ve ad/URL hakkı saklanır. Süre dolmadan geri çekebilirsiniz; başka askı/finans engelleri varsa satış otomatik açılmaz. Kesinleşen kalıcı kapatma aynı mağaza kimliğiyle ve yeni adla dahi geri alınamaz.</p>
+      <p>Zorunlu bildirim ve son kontroller tamamlanmadan otomatik geri dönülmez kapatma yapılmaz.</p>
+      <p id="store-owner-closing-choice"></p>
+      <p id="store-owner-closing-status" role="status" aria-live="polite"></p>
+      <form id="store-owner-closing-form">
+        <label><input name="consequences_acknowledged" type="checkbox"> Kapatma sürecini başlatmadan önce 30 günlük süreyi ve geri dönülmez sonuçlarını okudum, anladım.</label>
+        <button type="submit" name="action" value="start" disabled>30 günlük kapatma sürecini başlat</button>
+        <button type="submit" name="action" value="withdraw" disabled>Kapatma talebini geri çek</button>
+      </form>
+      <button type="button" id="store-owner-closing-refresh">Kapatma durumunu yenile</button>
+    </section>
     <section id="store-block-panel" hidden aria-labelledby="store-block-title">
       <h3 id="store-block-title">Mağazanın alıcı kuruluş engelleri</h3>
       <p>Bu mağazanın bağlı olduğu kuruluşun Owner'ı, belirli bir alıcı kuruluşun bu mağazadan yeni satın alma uygunluğunu engelleyebilir veya engeli kaldırabilir. Diğer mağazalar etkilenmez. Bu işlem geçmiş siparişleri değiştirmez.</p>
@@ -487,7 +500,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const renameWrite=path==='store-rename-requests'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite;
+    const closingWrite=path==='store-owner-closing'&&options.method==='POST';
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite;
     let data;
     try{
       data=await r.json();
@@ -2804,6 +2818,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(select?.replaceChildren)select.replaceChildren();
     if(typeof form?.querySelectorAll==='function')
       for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
+    clearOwnerClosing();
   }
   function ownerPauseButtons(){
     const form=el('store-owner-pause-form');
@@ -2811,6 +2826,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     for(const b of form.querySelectorAll('button[type=submit]')){
       b.disabled=ownerPausePending||ownerPauseUncertain||
         !ownerPauseState||ownerPauseState.store_status!=='open'||
+        ownerClosingState?.state==='closing'||
         (b.value==='pause'?ownerPauseState.paused:!ownerPauseState.paused);
     }
   }
@@ -2837,7 +2853,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         throw Error('Mağaza durumu doğrulanamadı');
       ownerPauseVersion=data.version;ownerPauseState=data;ownerPauseUncertain=false;
       ownerPauseButtons();
-      st.textContent=data.store_status!=='open'?
+      st.textContent=ownerClosingState?.state==='closing'?
+        'Mağaza kalıcı kapatma sürecinde. Geçici ara verme işlemleri kapalı.':
+        data.store_status!=='open'?
         'Platform kaynaklı askı veya kapanış var. Owner bu ekrandan satış açamaz.':
         data.paused?'Mağaza geçici arada. Adınız korunuyor; yeni satış kabul edilmiyor.':
           'Mağaza satışa açık. Geçici ara verebilirsiniz.';
@@ -2851,10 +2869,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   if(ownerPauseForm?.elements&&typeof ownerPauseForm.elements.namedItem==='function')
   ownerPauseForm.elements.namedItem('seller_id').onchange=()=>{
     ownerPauseUncertain=false;
-    if(currentOrg)void refreshOwnerPause(currentOrg,organizationRequest);
+    if(currentOrg){
+      void refreshOwnerPause(currentOrg,organizationRequest);
+      void refreshOwnerClosing(currentOrg,organizationRequest);
+    }
   };
   el('store-owner-pause-refresh').onclick=()=>{
-    if(currentOrg)void refreshOwnerPause(currentOrg,organizationRequest);
+    if(currentOrg){
+      void refreshOwnerPause(currentOrg,organizationRequest);
+      void refreshOwnerClosing(currentOrg,organizationRequest);
+    }
   };
   if(ownerPauseForm)ownerPauseForm.onsubmit=async event=>{
     event.preventDefault();
@@ -2899,6 +2923,147 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       ownerPausePending=false;ownerPauseButtons();
     }
   };
+
+  // Owner closing is independent of the temporary-pause ledger and cannot
+  // invoke native reversible Seller termination from this page.
+  let ownerClosingRead=0,ownerClosingPending=false,ownerClosingUncertain=false;
+  let ownerClosingState=null;
+  function clearOwnerClosing(){
+    ownerClosingRead++;ownerClosingPending=false;ownerClosingUncertain=false;
+    ownerClosingState=null;
+    el('store-owner-closing-panel').hidden=true;
+    el('store-owner-closing-choice').textContent='';
+    el('store-owner-closing-status').textContent='';
+    const form=el('store-owner-closing-form');
+    if(form?.elements&&typeof form.elements.namedItem==='function'){
+      const ack=form.elements.namedItem('consequences_acknowledged');
+      if(ack)ack.checked=false;
+    }
+    if(typeof form?.querySelectorAll==='function')
+      for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
+  }
+  function ownerClosingButtons(){
+    const form=el('store-owner-closing-form');
+    if(!form?.elements||typeof form.elements.namedItem!=='function'||
+       typeof form.querySelectorAll!=='function')return;
+    const agreed=form.elements.namedItem('consequences_acknowledged')?.checked===true;
+    for(const b of form.querySelectorAll('button[type=submit]')){
+      b.disabled=ownerClosingPending||ownerClosingUncertain||
+        (b.value==='start'&&!agreed)||!ownerClosingState||
+        (b.value==='start'?
+          ownerClosingState.state==='closing'||ownerClosingState.store_status!=='open':
+          ownerClosingState.state!=='closing'||ownerClosingState.can_withdraw!==true);
+    }
+  }
+  async function refreshOwnerClosing(org,request){
+    const choice=el('store-owner-pause-form')?.elements.namedItem('seller_id');
+    const seller=choice?.value;
+    if(!org||!seller||!selectedStoreOwner||document.hidden||
+       el('store-owner-pause-panel').hidden)return;
+    const seq=++ownerClosingRead,epoch=viewEpoch;
+    const st=el('store-owner-closing-status'),panel=el('store-owner-closing-panel');
+    ownerClosingState=null;panel.hidden=false;
+    el('store-owner-closing-choice').textContent='Seçili mağaza: '+
+      (choice.selectedOptions?.[0]?.textContent||seller);
+    ownerClosingButtons();ownerPauseButtons();
+    st.textContent='Kapatma durumu doğrulanıyor…';
+    try{
+      const data=await api('store-owner-closing?'+new URLSearchParams({
+        organization_id:org,seller_id:seller
+      }).toString());
+      if(seq!==ownerClosingRead||epoch!==viewEpoch||request!==organizationRequest||
+         org!==currentOrg||seller!==choice.value||document.hidden)return;
+      if(data.organization_id!==org||data.seller_id!==seller||
+         !['none','closing','withdrawn'].includes(data.state)||
+         !['open','suspended','terminated'].includes(data.store_status)||
+         !Number.isSafeInteger(data.version)||data.version<0||
+         typeof data.can_withdraw!=='boolean'||
+         !Number.isSafeInteger(data.remaining_seconds)||
+         data.remaining_seconds<0||data.remaining_seconds>2592000||
+         data.permanent_finalization_enabled!==false||
+         (data.state!=='none'&&
+           (!Number.isFinite(new Date(data.due_at).getTime())||
+            !Number.isFinite(new Date(data.started_at).getTime()))))
+        throw Error('Kapatma durumu doğrulanamadı');
+      ownerClosingState=data;ownerClosingUncertain=false;
+      ownerClosingButtons();ownerPauseButtons();
+      if(data.state==='closing'){
+        const deadline=new Date(data.due_at).toLocaleString('tr-TR',{timeZone:'Europe/Istanbul'});
+        const left=data.remaining_seconds;
+        const days=Math.floor(left/86400),hours=Math.floor((left%86400)/3600);
+        const minutes=Math.floor((left%3600)/60),seconds=left%60;
+        st.textContent='Yeni satışlar durduruldu. Kalan süre (yenilendiğinde): '+
+          days+' gün, '+hours+' saat, '+minutes+' dakika, '+seconds+
+          ' saniye. 30 günlük sürenin bitişi: '+
+          deadline+(data.can_withdraw?' — Süre dolmadan geri çekebilirsiniz.':
+          ' — Geri çekme süresi bitti; geri dönüşsüz işlem henüz etkin değil.');
+        el('store-owner-pause-status').textContent=
+          '30 günlük kalıcı kapatma süreci devam ediyor; geçici ara verme kullanılamaz.';
+      }else if(data.state==='withdrawn'){
+        st.textContent='Kapatma talebi geri çekildi. Diğer satış engelleri geçerliliğini korur.';
+      }else st.textContent='Aktif 30 günlük kapatma talebi bulunmuyor.';
+    }catch{
+      if(seq!==ownerClosingRead||request!==organizationRequest||org!==currentOrg)return;
+      ownerClosingUncertain=true;ownerClosingButtons();ownerPauseButtons();
+      st.textContent='Kapatma durumu doğrulanamadı; işlem kapatıldı. Yeniden kontrol edin.';
+    }
+  }
+  const ownerClosingForm=el('store-owner-closing-form');
+  if(ownerClosingForm?.elements&&typeof ownerClosingForm.elements.namedItem==='function'){
+    const ack=ownerClosingForm.elements.namedItem('consequences_acknowledged');
+    if(ack)ack.onchange=ownerClosingButtons;
+  }
+  el('store-owner-closing-refresh').onclick=()=>{
+    if(currentOrg)void refreshOwnerClosing(currentOrg,organizationRequest);
+  };
+  ownerClosingForm.onsubmit=async event=>{
+    event.preventDefault();
+    const action=event.submitter?.value,org=currentOrg,request=organizationRequest;
+    const epoch=viewEpoch,choice=el('store-owner-pause-form').elements.namedItem('seller_id');
+    const seller=choice?.value,state=ownerClosingState;
+    if(!org||!selectedStoreOwner||document.hidden||ownerClosingPending||
+       ownerClosingUncertain||!state||state.seller_id!==seller||
+       (action==='start'&&
+         !ownerClosingForm.elements.namedItem('consequences_acknowledged').checked)||
+       !['start','withdraw'].includes(action)||
+       (action==='start'&&(state.state==='closing'||state.store_status!=='open'))||
+       (action==='withdraw'&&(state.state!=='closing'||!state.can_withdraw)))return;
+    if(!confirm(action==='start'?
+      'Bu mağazanın yeni satışlarını hemen durdurmak ve 30 günlük kalıcı kapatma sürecini başlatmak istiyor musunuz?':
+      'Henüz kesinleşmemiş bu kapatma talebini geri çekmek istiyor musunuz?'))return;
+    ownerClosingPending=true;ownerClosingButtons();ownerPauseButtons();
+    const st=el('store-owner-closing-status');
+    st.textContent='Güncel yetki, sürüm ve süre doğrulanarak kayıt yapılıyor…';
+    const id='dasc_'+crypto.randomUUID().replace(/-/g,'');
+    try{
+      const result=await api('store-owner-closing',{method:'POST',body:JSON.stringify({
+        action,organization_id:org,seller_id:seller,request_id:id,
+        expected_version:state.version,
+        ...(action==='start'?{consequences_acknowledged:true}:{})
+      })});
+      if(epoch!==viewEpoch||request!==organizationRequest||
+         org!==currentOrg||choice.value!==seller||document.hidden)return;
+      if(result.seller_id!==seller||result.status!==(action==='start'?'closing':'withdrawn')||
+         !Number.isSafeInteger(result.version)){
+        const err=Error('İşlemin sonucu doğrulanamadı');err.uncertain=true;throw err;
+      }
+      ownerClosingUncertain=false;
+      ownerClosingForm.elements.namedItem('consequences_acknowledged').checked=false;
+      await refreshOwnerClosing(org,request);
+      if(request===organizationRequest&&org===currentOrg)
+        void organizationStores(org,request);
+    }catch(error){
+      if(epoch!==viewEpoch||request!==organizationRequest||org!==currentOrg)return;
+      ownerClosingUncertain=!!error.uncertain||error.httpStatus>=500;
+      st.textContent=ownerClosingUncertain?
+        'Sonuç belirsiz. Tekrar göndermeyin; özel durumu yeniden kontrol edin.':
+        'İşlem reddedildi. Yeniden güçlü doğrulama veya güncel mağaza kaydı gerekebilir.';
+      ownerClosingButtons();ownerPauseButtons();
+    }finally{
+      ownerClosingPending=false;ownerClosingButtons();ownerPauseButtons();
+    }
+  };
+
   async function organizationStores(org,request){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
     const seq=++storeRequest;
@@ -2968,7 +3133,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                 pauseChoice.append(opt);
               }
               el('store-owner-pause-panel').hidden=renameData.stores.length===0;
-              if(renameData.stores.length)void refreshOwnerPause(org,request);
+              if(renameData.stores.length){
+                 void refreshOwnerPause(org,request);
+                 void refreshOwnerClosing(org,request);
+               }
               }
 
             }catch{

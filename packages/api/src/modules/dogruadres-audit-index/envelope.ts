@@ -19,6 +19,8 @@ const resources = {
   "organization.store_unfollowed": "buyer-store-follow",
   "organization.store_owner_paused": "store-owner-pause",
   "organization.store_owner_resumed": "store-owner-pause",
+  "organization.store_owner_closing_started": "store-owner-closing",
+  "organization.store_owner_closing_withdrawn": "store-owner-closing",
   "organization.store_application_right_disabled": "organization",
   "organization.store_application_right_enabled": "organization",
   "organization.store_application_rejected": "store-application",
@@ -44,7 +46,7 @@ const schema = z.object({
     role_context: z.enum(["platform_administrator", "platform_staff", "owner", "admin", "member"]).nullable(),
   }).strict(),
   action: z.enum(Object.keys(resources) as [keyof typeof resources, ...(keyof typeof resources)[]]),
-  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow", "store-application", "store-application-draft", "store-draft-permission", "store-owner-pause"]),
+  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow", "store-application", "store-application-draft", "store-draft-permission", "store-owner-pause", "store-owner-closing"]),
   target_id: reference,
   occurred_at: timestamp,
 }).strict()
@@ -58,6 +60,12 @@ const schema = z.object({
   // Only the protected Organization Owner's canonical Store action crosses Index.
   // A valid envelope alone never grants source-side mutation permission.
   .refine(value => value.resource !== "store-owner-pause" ||
+    (value.actor.role_context === "owner" &&
+     /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
+  // The closing intent is exclusively a protected Organization Owner action,
+  // not a native Seller/Member capability or a platform Staff grant.
+  .refine(value => value.resource !== "store-owner-closing" ||
     (value.actor.role_context === "owner" &&
      /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))

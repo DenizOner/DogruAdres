@@ -97,6 +97,24 @@ describe("Audit Index version 1 validation and redaction", () => {
         actor:{...envelope.actor,role_context:"platform_staff"}}))
         .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
     })
+  it.each(["organization.store_owner_closing_started",
+    "organization.store_owner_closing_withdrawn"])(
+    "accepts only a protected Owner Store-closing envelope and redacts private values: %s",action=>{
+      const event={...source(),action,resource:"store-owner-closing",target_id:"sel_owner_store",
+        previous_values:{secret:"private-closing-secret"},
+        new_values:{request_id:"dasc_"+"a".repeat(32),due_at:"2026-12-10T00:00:00.000Z",
+          email:"private-closing-email"}}
+      const envelope=projectFoundationAuditEvent(event)
+      expect(envelope.action).toBe(action)
+      expect(envelope.resource).toBe("store-owner-closing")
+      expect(validateAuditIndexEnvelope(envelope)).toEqual(envelope)
+      expect(JSON.stringify(envelope)).not.toContain("private-closing")
+      for(const change of [{role_context:"member"},{role_context:"platform_staff"},
+        {role_context:"admin"},{organization_id:"foreign"},
+        {target_id:"not_a_seller"},{resource:"store-owner-pause"}])
+        expect(()=>projectFoundationAuditEvent({...event,...change}))
+          .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+    })
   it.each(["organization.store_followed","organization.store_unfollowed"])(
     "projects a canonical Owner %s without private source data", action => {
       const e = projectFoundationAuditEvent({

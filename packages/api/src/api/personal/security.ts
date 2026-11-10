@@ -96,6 +96,7 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/store-applications" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/store-rename-requests" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/store-owner-pause" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/store-owner-closing" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/store-draft-permissions" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/store-product-permissions" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/store-member-connections" && req.method==="POST") ||

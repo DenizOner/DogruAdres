@@ -174,6 +174,91 @@ export default async function({container}:any){
           await q("update da_audit_outbox set created_at=$2 where id=$1",
             [event.outbox_id,event.created_at])
       }
+      // The real Owner 30-day closing and withdrawal also produce canonical
+      // Foundation records. Verify delivery to the existing Index rather
+      // than treating in-transaction outbox creation as successful delivery.
+      const ownerClosingEvents=await q(
+        "select e.id,e.organization_id,e.target_id,e.action,e.resource,"+
+        " e.new_values->>'request_id' as request_id,"+
+        " e.new_values->>'due_at' as due_at,"+
+        " o.id as outbox_id,o.created_at,o.status"+
+        " from da_audit_event e join da_audit_outbox o on o.source_audit_event_id=e.id"+
+        " where e.module='dogruadres-access' and e.resource='store-owner-closing'"+
+        " and e.new_values->>'fixture_source' is null"+
+        " and e.role_context='owner' and e.action in"+
+        " ('organization.store_owner_closing_started','organization.store_owner_closing_withdrawn')"+
+        " and o.status='pending' and o.lease_token is null"+
+        " order by e.occurred_at,e.id")
+      assert.equal(ownerClosingEvents.length,4,
+        "Two successful closing starts/withdrawals including contested request")
+      assert.deepEqual(ownerClosingEvents.map(e=>e.action).sort(),
+        ["organization.store_owner_closing_started",
+         "organization.store_owner_closing_started",
+         "organization.store_owner_closing_withdrawn",
+         "organization.store_owner_closing_withdrawn"].sort())
+      assert.equal(new Set(ownerClosingEvents.map(e=>e.target_id)).size,1)
+      assert.equal(new Set(ownerClosingEvents.map(e=>e.organization_id)).size,1)
+      assert.ok(ownerClosingEvents.every(e=>/^dasc_[a-f0-9]{32}$/.test(e.request_id)))
+      const closingOutboxIds=ownerClosingEvents.map(e=>e.outbox_id)
+      try{
+        const shifted=await q(
+          "update da_audit_outbox set"+
+          " created_at=(select min(created_at) from da_audit_outbox)-interval '8 days'"+
+          " where id=any($1::text[]) and status='pending' and lease_token is null"+
+          " returning id",[closingOutboxIds])
+        assert.equal(shifted.length,4)
+        const delivered=await runAuditRelayBatch(container,4)
+        assert.equal(delivered.delivered,4,
+          "All 4 canonical closing events must reach the installed native Index")
+        for(const event of ownerClosingEvents){
+          const rows=await q(
+            "select o.status,o.delivered_at,o.attempt_count,o.lease_token,"+
+            " i.source_module,i.source_event_id,i.organization_id,i.target_id,"+
+            " i.action,i.resource,i.envelope"+
+            " from da_audit_outbox o join da_audit_index_entry i"+
+            " on i.source_event_id=o.source_audit_event_id"+
+            " where o.id=$1",[event.outbox_id])
+          assert.equal(rows.length,1)
+          const indexed=rows[0]
+          assert.equal(indexed.status,"delivered")
+          assert.ok(indexed.delivered_at)
+          assert.equal(indexed.attempt_count,1)
+          assert.equal(indexed.lease_token,null)
+          assert.equal(indexed.source_module,"dogruadres-access")
+          assert.equal(indexed.source_event_id,event.id)
+          assert.equal(indexed.organization_id,event.organization_id)
+          assert.equal(indexed.target_id,event.target_id)
+          assert.equal(indexed.action,event.action)
+          assert.equal(indexed.resource,"store-owner-closing")
+          const envelope=typeof indexed.envelope==="string"?
+            JSON.parse(indexed.envelope):indexed.envelope
+          assert.equal(envelope.actor.role_context,"owner")
+          assert.deepEqual(Object.keys(envelope).sort(),
+            ["action","actor","occurred_at","organization_id","resource",
+             "source_event_id","source_module","target_id","version"])
+          assert.ok(!JSON.stringify(envelope).includes(event.request_id))
+          assert.ok(!JSON.stringify(envelope).includes(event.due_at),
+            "Private countdown and request keys must not reach derived Index")
+          assert.equal(Number((await q(
+            "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
+            [event.id]))[0].n),1)
+        }
+        const replayed=ownerClosingEvents[0]
+        assert.equal((await q(
+          "update da_audit_outbox set status='pending',delivered_at=null"+
+          " where id=$1 and status='delivered' and attempt_count=1 returning id",
+          [replayed.outbox_id])).length,1)
+        assert.equal((await runAuditRelayBatch(container,1)).delivered,1)
+        assert.equal(Number((await q(
+          "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
+          [replayed.id]))[0].n),1,
+          "Lost ACK retry must never create a second Index record")
+        process.stdout.write("PASS B22 real audit relay: Owner 30-day closing/withdrawal delivered to Index, private countdown redacted, durable ACK and lost-ACK retry deduplicated\n")
+      }finally{
+        for(const event of ownerClosingEvents)
+          await q("update da_audit_outbox set created_at=$2 where id=$1",
+            [event.outbox_id,event.created_at])
+      }
       // Real Owner-created follow/unfollow events must reach Index as well.
       // Exercise the installed Access/Index relay on the same disposable DB.
       const followEvents=await q(

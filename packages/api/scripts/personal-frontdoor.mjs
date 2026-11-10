@@ -19,6 +19,7 @@ export function allowedPublicRequest(method,path){
     '/personal/catalog':['GET'], '/personal/store-follows':['GET','POST'],
     '/personal/store-applications':['GET','POST'],
     '/personal/store-owner-pause':['GET','POST'],
+    '/personal/store-owner-closing':['GET','POST'],
       '/personal/store-draft-permissions':['GET','POST'],
     '/personal/platform/stores':['GET','POST'],
     '/personal/store-buyer-blocks':['POST'],
