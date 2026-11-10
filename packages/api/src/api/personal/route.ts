@@ -2799,13 +2799,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     ownerPausePending=false;ownerPauseUncertain=false;
     const panel=el('store-owner-pause-panel'),form=el('store-owner-pause-form');
     panel.hidden=true;el('store-owner-pause-status').textContent='';
-    const select=form?.elements?.namedItem('seller_id');
+    const select=form?.elements&&typeof form.elements.namedItem==='function'?
+      form.elements.namedItem('seller_id'):null;
     if(select?.replaceChildren)select.replaceChildren();
-    if(form)for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
+    if(typeof form?.querySelectorAll==='function')
+      for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
   }
   function ownerPauseButtons(){
     const form=el('store-owner-pause-form');
-    if(!form)return;
+    if(!form||typeof form.querySelectorAll!=='function')return;
     for(const b of form.querySelectorAll('button[type=submit]')){
       b.disabled=ownerPausePending||ownerPauseUncertain||
         !ownerPauseState||ownerPauseState.store_status!=='open'||
@@ -2813,7 +2815,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   async function refreshOwnerPause(org,request){
-    const form=el('store-owner-pause-form'),seller=form?.elements?.namedItem('seller_id')?.value;
+    const form=el('store-owner-pause-form');
+    const seller=form?.elements&&typeof form.elements.namedItem==='function'?
+      form.elements.namedItem('seller_id')?.value:null;
     if(!org||!seller||!selectedStoreOwner||document.hidden||
        el('store-owner-pause-panel').hidden)return;
     const seq=++ownerPauseRead,epoch=viewEpoch,st=el('store-owner-pause-status');
@@ -2844,6 +2848,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   const ownerPauseForm=el('store-owner-pause-form');
+  if(ownerPauseForm?.elements&&typeof ownerPauseForm.elements.namedItem==='function')
   ownerPauseForm.elements.namedItem('seller_id').onchange=()=>{
     ownerPauseUncertain=false;
     if(currentOrg)void refreshOwnerPause(currentOrg,organizationRequest);
@@ -2851,7 +2856,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('store-owner-pause-refresh').onclick=()=>{
     if(currentOrg)void refreshOwnerPause(currentOrg,organizationRequest);
   };
-  ownerPauseForm.onsubmit=async event=>{
+  if(ownerPauseForm)ownerPauseForm.onsubmit=async event=>{
     event.preventDefault();
     const form=event.currentTarget,action=event.submitter?.value,org=currentOrg;
     const request=organizationRequest,epoch=viewEpoch;
@@ -2950,7 +2955,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               // Owner's pause selector is private and independent from the
               // commercial Store picker. It also lists a currently paused
               // native-OPEN Store so its Owner can safely resume.
-              const pauseChoice=el('store-owner-pause-form').elements.namedItem('seller_id');
+              const pauseForm=el('store-owner-pause-form');
+              const pauseChoice=pauseForm?.elements&&
+                typeof pauseForm.elements.namedItem==='function'?
+                pauseForm.elements.namedItem('seller_id'):null;
+              if(pauseChoice&&typeof pauseChoice.replaceChildren==='function'){
               pauseChoice.replaceChildren();
               for(const store of renameData.stores){
                 const opt=document.createElement('option');
@@ -2960,6 +2969,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               }
               el('store-owner-pause-panel').hidden=renameData.stores.length===0;
               if(renameData.stores.length)void refreshOwnerPause(org,request);
+              }
 
             }catch{
               if(request!==organizationRequest||seq!==storeRequest||
