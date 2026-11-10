@@ -3667,16 +3667,16 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       and (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(name,NFKC)),
         '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or lower(handle)=?)
       limit 1`,[input.seller_id,hash,input.handle])
-    const held=await db.execute(`select 1 from da_store_rename_request r
-      where (r.status='approving' or
-        (r.status='approved' and r.approved_at>
+    const held=await db.execute(`select 1 from da_store_rename_request h
+      where (h.status='approving' or
+        (h.status='approved' and h.approved_at>
           clock_timestamp()-interval '30 days'))
       and (
-        (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.old_name,NFKC)),
-          '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.old_handle=?)
-        or (r.status='approving' and
-          (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.proposed_name,NFKC)),
-            '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or r.proposed_handle=?))
+        (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(h.old_name,NFKC)),
+          '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or h.old_handle=?)
+        or (h.status='approving' and
+          (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(h.proposed_name,NFKC)),
+            '[[:space:]]+',' ','g')),'UTF8')),'hex')=? or h.proposed_handle=?))
       ) ${authorizedTransferredOldNameHoldExclusion}
       limit 1`,[hash,input.handle,hash,input.handle,
         input.seller_id,input.organization_id,hash,input.handle])
