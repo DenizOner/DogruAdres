@@ -184,6 +184,7 @@ export default async function({container}:any){
         " o.id as outbox_id,o.created_at,o.status"+
         " from da_audit_event e join da_audit_outbox o on o.source_audit_event_id=e.id"+
         " where e.module='dogruadres-access' and e.resource='store-owner-closing'"+
+        " and e.new_values->>'fixture_source' is null"+
         " and e.role_context='owner' and e.action in"+
         " ('organization.store_owner_closing_started','organization.store_owner_closing_withdrawn')"+
         " and o.status='pending' and o.lease_token is null"+
