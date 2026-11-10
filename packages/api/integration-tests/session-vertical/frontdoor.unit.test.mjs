@@ -183,7 +183,7 @@ test('closed B4B frontdoor rejects catalog and search before contacting native A
 
 // Verify privacy metadata at the actual public HTTP boundary, including
 // denied requests. Never trust/cache/index an upstream override.
-test('B22 scoped catalogue has fixed noindex and Cookie Vary at the frontdoor',async()=>{
+test('B22 private catalogue and historical order both have fixed noindex and Cookie Vary at the frontdoor',async()=>{
   const seen=[]
   const upstream=http.createServer((req,res)=>{
     seen.push(req.url)
@@ -205,20 +205,21 @@ test('B22 scoped catalogue has fixed noindex and Cookie Vary at the frontdoor',a
     DOGRUADRES_FRONTDOOR_HOST:'127.0.0.1',DOGRUADRES_FRONTDOOR_PORT:String(port)})
   await once(front,'listening')
   try{
-    for(const [cookie,expected] of [['da_session=synthetic',200],['',403]]){
-      const response=await fetch(origin+'/personal/catalog?organization_id=daorg_test',{
-        headers:cookie?{cookie}:{}
-      })
-      assert.equal(response.status,expected)
-      assert.match(response.headers.get('cache-control')??'',/no-store/)
-      assert.equal(response.headers.get('vary'),'Cookie')
-      assert.equal(response.headers.get('x-robots-tag'),'noindex, nofollow, noarchive')
-      await response.json()
-    }
-    assert.deepEqual(seen,[
+    const restrictedPaths=[
       '/personal/catalog?organization_id=daorg_test',
-      '/personal/catalog?organization_id=daorg_test'
-    ])
+      '/personal/order-groups?organization_id=daorg_test&order_group_id=og_test'
+    ]
+    for(const path of restrictedPaths){
+      for(const [cookie,expected] of [['da_session=synthetic',200],['',403]]){
+        const response=await fetch(origin+path,{headers:cookie?{cookie}:{}})
+        assert.equal(response.status,expected)
+        assert.match(response.headers.get('cache-control')??'',/no-store/)
+        assert.equal(response.headers.get('vary'),'Cookie')
+        assert.equal(response.headers.get('x-robots-tag'),'noindex, nofollow, noarchive')
+        await response.json()
+      }
+    }
+    assert.deepEqual(seen,restrictedPaths.flatMap(path=>[path,path]))
     // Do not expand the public relay or apply catalogue-specific policy
     // indiscriminately to unrelated purpose-bound routes.
     const other=await fetch(origin+'/personal/session')
