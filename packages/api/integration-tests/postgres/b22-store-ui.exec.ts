@@ -23,6 +23,7 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
+import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
 import {otp,until} from "./b19-browser"
@@ -7376,6 +7377,15 @@ export default async function({container}:any){
     assert.equal(zeroAttribution[0].customer_id,nativeCustomer.id)
     process.stdout.write("PASS B22 Chrome: authorized zero-value native Mercur split-order persisted one OrderGroup/Order and completed Cart with immutable Beta attribution; no payment or visitor checkout\\n")
 
+    // Reuse this one already completed, attributed zero-amount OrderGroup.
+    // New historical-reader acceptance performs only HTTPS GET and real
+    // Chrome keyboard navigation; no second checkout, capture or SQL write.
+    await verifyB22OwnedHistoricalOrder({
+      buyer:reviewer,buyerOrg:{id:organizations[1].id,name:organizations[1].name},
+      orderGroupId:zeroOrderGroupId,cartId:zeroOrderCart.id,
+      nativeCustomerId:nativeCustomer.id,q
+    })
+
     // Native Medusa system provider is an in-memory simulator. All writes
     // are in this preauthorized random disposable CI database; no external
     // payment, HTTP checkout route, provider configuration or payout.
@@ -10898,6 +10908,15 @@ export default async function({container}:any){
     assert.equal(primaryCustomerSessions[0].actor_id,registered[0].actor_id)
     assert.equal(primaryCustomerSessions[0].mfa_purpose,"full")
     assert.ok(primaryCustomerSessions[0].last_strong_auth_at)
+    // This second Person has a separate, real PRIMARY Medusa Customer,
+    // native password + TOTP session, and NO Buyer Beta membership.
+    // It must not read the earlier completed Beta history by guessing its ID.
+    await verifyB22ForeignHistoricalOrder({
+      other:signupChrome,buyerOrgId:organizations[1].id,
+      orderGroupId:zeroOrderGroupId,
+      otherCustomerId:registered[0].actor_id,
+      ownerCustomerId:nativeCustomer.id,q
+    })
     const primaryPolicyUrl="/personal/platform/store-application-policy?organization_id="+
       encodeURIComponent(organizations[0].id)
     const customerReadPolicy=()=>signupChrome.callFunction(
