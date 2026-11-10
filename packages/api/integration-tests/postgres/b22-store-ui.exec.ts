@@ -2022,17 +2022,17 @@ async function verifyStaffReopensSuspendedStore(
       "document.activeElement?.id==='store-approval-refresh'"),true,
       "Staff refresh must be keyboard-focusable")
     await reviewer.send("Input.dispatchKeyEvent",{
-      type:"keyDown",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
+      type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
     await reviewer.send("Input.dispatchKeyEvent",{
-      type:"keyUp",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
+      type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
     await until(async()=>reviewer.http.filter(r=>
       r.path==="/personal/platform/stores" && r.method==="GET").length>
-      wcagKeyboardBefore,12000,"real Enter refresh GET")
+      wcagKeyboardBefore,12000,"real Space refresh GET")
     await reviewer.wait("Array.from(document.querySelectorAll('#store-reactivation-list p'))"+
       ".some(e=>e.textContent.includes("+JSON.stringify(sellerId)+") && "+
       "e.textContent.includes('Ad/URL hakkı doğrulanamadı') && "+
       "e.querySelector('button')?.disabled===true)")
-    process.stdout.write("PASS WCAG 2.2 partial keyboard: live Staff refresh Enter invokes authorized GET, unsafe reopen remains disabled\\n")
+    process.stdout.write("PASS WCAG 2.2 partial keyboard: live Staff refresh Space invokes authorized GET, unsafe reopen remains disabled\n")
     const preflight=await reviewer.callFunction(
       "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
       "return {status:r.status,body:await r.json(),id}}",sellerId)

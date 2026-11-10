@@ -48,5 +48,5 @@ export async function assertWcag22AxeInChrome(
     `PASS WCAG 2.2 A/AA automatic axe-core ${AXE_VERSION} ${label}: `+
     `${summary.checked} evaluated rules, 0 detected violations; `+
     `${summary.incomplete} inconclusive rules require manual review; `+
-    "not full conformance\\n")
+    "not full conformance\n")
 }
