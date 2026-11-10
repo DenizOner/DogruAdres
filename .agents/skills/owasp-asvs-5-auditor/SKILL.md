@@ -30,12 +30,14 @@ Denetim hedefi, OWASP ASVS 5.0.0 gereksinimlerini *kanıtla* doğrulamaktır. Bu
 1. Yetkili hedefi, ortamı, uygulama/sürüm/HEAD/base SHA'yı, test aktörlerini, Organization ve Store sınırlarını, API/UI/iş akışını, veriyi, kullanılabilecek araçları, hedef ASVS seviyesini ve test yetkisini belirle. Gizli bilgileri raporlama.
 2. Veri akışını gerçek koda göre izle: kimlik → oturum → kaynak/eylem yetkisi → istek → workflow/DB → queue/cache/log → cevap. Medusa/Mercur'de kurulu ve resmî desteklenen kabiliyeti önce incele. Etki alanı dışında tam repo envanteri yapma.
 3. Tam denetimde 345 gereksinimin hepsini; PR risk denetiminde ilgili gereksinimleri kimlik, uygulanabilirlik, test yöntemi, kanıt, statü ve eksiklerle eşleştir. N/A için nesnel gerekçe gerekir. Görünmeyen test PASS değildir.
-4. Geçerli önceki SHA, gerçek CI, bağımsız inceleme, HTTP/DB/Chrome ve negatif test kanıtlarını değerlendir. Belirleyici en küçük eksik testi yetkili ortamda çalıştır. Salt-okunur denetimde mutasyon yaratma.
-5. BOLA/IDOR, roller, tenant, revoke, session, CSRF, XSS, injection, SSRF, dosya, eşzamanlılık/replay, gizli veri/hatayı ilgili yollarda denetle. UI düğmesinin gizli olması sunucu yetkisi kanıtı değildir.
+4. Önce GitHub Actions'ın **gerçek aynı HEAD/base** çalışma sonucunu ve mevcut test kanıtlarını al. `identity-organization-foundation.yml` içindeki `Foundation static checks` işinin **ASVS 5.0 existing-test evidence** özetinde zaten çalışan güvenlik testi grupları görünür. Bu alanları skill içinde tekrar test prosedürü olarak yazma veya ikinci kez çalıştırma. CodeQL, PostgreSQL/Chrome ve Governance Chromium ayrı işlerin gerçek sonuçlarından değerlendirilir. Adımın `success` olması yalnız o test grubunun geçtiği anlamına gelir; bütün ASVS gereksinimleri için PASS değildir.
+5. Yalnız **mevcut otomatik testlerle kanıtlanmayan veya kısmen kanıtlanan** ilgili ASVS gereksinimlerinin boşluğunu saptayıp en küçük yetkili, gerçek negatif/E2E doğrulamayı seç. Örneğin unit testi oturum sonlandırmanın gerçek HTTP'de işlediğini veya statik CodeQL bir güvenlik açığı bulunmadığını evrensel olarak kanıtlamaz. Kısmi kanıtı asla tamamlanmış ASVS kontrolü gibi sunma.
 6. Her bulguda saldırgan/aktör, kaynak, önkoşul, dosya/satır/SHA, minimal gizlenmiş HTTP/DB/CI kanıtı, risk, kök neden, küçük güvenli düzeltme, negatif regresyon ve yeniden test kapsamını yaz.
 7. Tam raporda kaynak hash'i, hedef seviye, envanter/sayılar, durum dağılımı, uygulanamaz gerekçeleri, bulgular, engeller, kalan yollar; rutin PR raporunda yalnız ilgili maddeler ve kanıt linklerini kullan. Tekrar rapor/issue/CI altyapısı yaratma.
 
 ## 4. ASVS 5.0.0 bölüm kataloğu
+
+Aşağıdaki tablo **kontrol envanterinin konu başlıklarıdır; ikinci kez koşulacak test listesi değildir**. Gerçek gereksinim metinleri, seviyeler ve durumlar yalnız resmî 345 satırlık kaynak matrisi üzerinden değerlendirilir. Mevcut CI adımlarının kapsamı/sınırı ilgili işin GitHub özetinde ve test kaynağında bulunur.
 
 | Bölüm | Gereksinim | Kapsam / örnek saldırı yüzeyi |
 |---|---:|---|
@@ -113,7 +115,7 @@ Güvenilmeyen CSV metni elektronik tabloda formül olarak yorumlanabilir; dışa
 
 ASVS ID/Level; etkilenen aktör/kaynak; kesin HEAD/base ve ortam; ihlal ve risk derecesi; kanıt (kırpılmamış kaynak farkı, maskelenmiş gerçek HTTP/DB, job/run); beklenen ve görülen sonuç; kök neden; en küçük çözüm; pozitif/negatif test; reviewer; yeniden doğrulama ve durum. Yetkisiz/hatalı yolu açıkça belirt. Severity ASVS seviyesiyle karıştırılmaz. Eksik negatif, CI veya bağımsız incelemeye rağmen PASS verme.
 
-DoğruAdres için güncel aktör zincirini doğrudan kanıtla: Person → aktif Organization ve üyelik → eylem izni → Store/Seller ilişkisi → native actor/Store durumu → kaynak. İstemci kimlik beyanı, eski cache/oturum, email eşleşmesi veya UI görünümü yeterli değildir. Ancak uygulama dışı mimari veya ürün politikası uydurma.
+DoğruAdres'e özgü yetki zinciri, hata/olumsuz yol ve kanıt şartları kök `AGENTS.md` ile `security-source-review` skill'inde zaten tanımlıdır; burada ikinci bir kontrol listesi oluşturma. Mevcut otomatik testin sınırlamasını göster ve yalnız eksik kalan ASVS şartını hedefle.
 
 ## 8. Rapor disiplini
 
