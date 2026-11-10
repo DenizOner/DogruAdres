@@ -71,7 +71,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     if(customerRows.length!==1||customerRows[0]?.id!==customerId)return denied()
 
     const seller=req.scope.resolve<{
-      listOrderGroups(filter:{id:string},config?:object):Promise<NativeGroup[]>
+      listOrderGroups(filter:{id:string}|{cart_id:string},config?:object):Promise<NativeGroup[]>
     }>("seller")
     const groupRows=await seller.listOrderGroups({id:groupId},{take:2})
     if(groupRows.length!==1||groupRows[0]?.id!==groupId||
