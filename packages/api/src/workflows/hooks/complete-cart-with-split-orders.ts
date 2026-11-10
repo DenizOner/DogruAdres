@@ -25,6 +25,8 @@ type NativeSellerService = {
     id: string
     status: string
     approved_at?: Date | string | null
+    closed_from?: Date | string | null
+    closed_to?: Date | string | null
   }>>
 }
 
@@ -90,7 +92,13 @@ completeCartWithSplitOrdersWorkflow.hooks.validate(
           rows.length !== 1 ||
           rows[0].id !== sellerId ||
           rows[0].status !== "open" ||
-          !rows[0].approved_at
+          !rows[0].approved_at ||
+          // Mercur's scheduled closure blocks listing, not checkout.
+          // Evaluate both bounds using an exact server instant.
+          (rows[0].closed_from != null &&
+            !(new Date(rows[0].closed_from).getTime() > Date.now())) ||
+          (rows[0].closed_to != null &&
+            !(new Date(rows[0].closed_to).getTime() < Date.now()))
         ) {
           denyCheckout()
         }

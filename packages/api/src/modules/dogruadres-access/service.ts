@@ -4769,6 +4769,50 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           where ownership.seller_id in (${sellerSlots})
             and ownership.revoked_at is null
         )=?
+        -- One paused or unverifiable Owner pause record denies the WHOLE
+        -- multi-Seller cart. No partial order group may be written.
+        and not exists(
+          select 1 from da_store_owner_pause pause
+          where pause.seller_id in (${sellerSlots})
+            and (pause.paused=true or not exists(
+              select 1 from da_audit_event proof
+              where proof.id=pause.source_audit_event_id
+                and proof.deleted_at is null
+                and proof.module='dogruadres-access'
+                and proof.resource='store-owner-pause'
+                and proof.organization_id=pause.organization_id
+                and proof.target_id=pause.seller_id
+                and proof.action=(case when pause.paused then
+                  'organization.store_owner_paused' else
+                  'organization.store_owner_resumed' end)
+                and proof.new_values->>'request_id'=pause.request_id
+                and proof.new_values->>'version'=pause.version::text
+                and proof.new_values->>'paused'=pause.paused::text
+                and exists(select 1 from da_audit_outbox outbox
+                  where outbox.source_audit_event_id=proof.id
+                    and outbox.source_module='dogruadres-access'
+                    and outbox.deleted_at is null)))
+        )
+        and not exists(
+          select 1 from da_store_owner_closing c
+          where c.seller_id in (${sellerSlots})
+            and (c.state='closing' or not exists(
+              select 1 from da_audit_event e
+              join da_audit_outbox x on x.source_audit_event_id=e.id
+                and x.source_module='dogruadres-access' and x.deleted_at is null
+              where e.id=c.source_audit_event_id and e.deleted_at is null
+                and e.module='dogruadres-access'
+                and e.organization_id=c.organization_id and e.target_id=c.seller_id
+                and e.resource='store-owner-closing'
+                and e.action=(case when c.state='closing'
+                  then 'organization.store_owner_closing_started'
+                  else 'organization.store_owner_closing_withdrawn' end)
+                and e.new_values->>'state'=c.state
+                and e.new_values->>'version'=c.version::text
+                and e.new_values->>'request_id'=c.request_id
+                and (e.new_values->>'started_at')::timestamptz=c.started_at
+                and (e.new_values->>'due_at')::timestamptz=c.due_at))
+        )
         and not exists(
           select 1 from da_store_buyer_organization_block block
           where block.buyer_organization_id=a.organization_id
@@ -4776,9 +4820,325 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             and block.revoked_at is null
         )
       limit 2
-    `,[cartId,customerId,ownerRoleAllows("buyer.purchase"),...sellerIds,sellerIds.length,...sellerIds])
+    `,[cartId,customerId,ownerRoleAllows("buyer.purchase"),...sellerIds,sellerIds.length,...sellerIds,...sellerIds,...sellerIds])
     if(rows.length>1)throw new IdentityAccessDenied()
     return rows.length===1
+  }
+
+
+  // B22 Owner temporary break. The Foundation pause record, not a mutable
+  // native Seller closure date, is the authoritative sale-denial switch.
+  // Native Seller lifecycle remains controlled by the platform. Mercur's
+  // built-in closure fields are intentionally left untouched: they can also
+  // be written from native vendor routes and do not guard checkout.
+  private async ownerPauseRow_(db:SecuritySql,sellerId:string,lock=false){
+    const rows=await db.execute(`select p.organization_id,p.seller_id,p.paused,
+      p.version,p.request_id,
+      exists(select 1 from da_audit_event e where e.id=p.source_audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.organization_id=p.organization_id and e.target_id=p.seller_id
+        and e.resource='store-owner-pause'
+        and e.action=(case when p.paused then
+          'organization.store_owner_paused' else
+          'organization.store_owner_resumed' end)
+        and e.new_values->>'request_id'=p.request_id
+        and e.new_values->>'version'=p.version::text
+        and e.new_values->>'paused'=p.paused::text
+        and exists(select 1 from da_audit_outbox o where
+          o.source_audit_event_id=e.id and o.source_module='dogruadres-access'
+          and o.deleted_at is null)) as proof
+      from da_store_owner_pause p where p.seller_id=? ${lock?'for update':''}`,
+      [sellerId])
+    if(rows.length>1||rows.some(row=>
+      row.seller_id!==sellerId||row.proof!==true||
+      !Number.isSafeInteger(Number(row.version))||Number(row.version)<1||
+      typeof row.paused!=="boolean"||
+      typeof row.organization_id!=="string"||
+      !/^dasp_[a-f0-9]{32}$/.test(String(row.request_id))))
+      throw new IdentityAccessDenied()
+    return rows.length?rows[0]:null
+  }
+
+  private async ownerPauseScope_(db:SecuritySql,token:string,organizationId:string,sellerId:string){
+    const sessions=new IdentitySessions(db)
+    const actor=await sessions.current(token,true,false)
+    if(!actor)return null
+    const scope=await sessions.organizations(token,organizationId,false)
+    if(!scope||scope.person_id!==actor.person_id||
+       scope.organizations.length!==1||scope.organizations[0].role!=="owner"||
+       !await isCurrentProtectedOwner(db,actor.person_id,organizationId))
+      return null
+    if(!(await platformApprovedSellerIds(db,organizationId)).includes(sellerId))return null
+    const linked=await new ActorDelegation(db).binding(token,"member")
+    if(!linked||linked.binding.person_id!==actor.person_id||
+       linked.binding.revoked_at||!linked.binding.actor_id)return null
+    const rows=await db.execute(`select s.status,s.approved_at from seller s
+      join seller_member sm on sm.seller_id=s.id and sm.deleted_at is null
+      join member m on m.id=sm.member_id and m.deleted_at is null
+        and m.is_active=true
+      where s.id=? and s.deleted_at is null and sm.member_id=?
+      for share of s,sm,m`,[sellerId,linked.binding.actor_id])
+    if(rows.length!==1||!rows[0].approved_at||
+       !["open","suspended","terminated"].includes(rows[0].status))return null
+    return {actor,store_status:rows[0].status as string}
+  }
+
+  @InjectTransactionManager()
+  async personalOwnerStorePauseState(token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const authority=await this.ownerPauseScope_(db,token,organizationId,sellerId)
+    if(!authority)return null
+    const row=await this.ownerPauseRow_(db,sellerId)
+    if(row&&row.organization_id!==organizationId)throw new IdentityAccessDenied()
+    return {organization_id:organizationId,seller_id:sellerId,
+      paused:row?.paused===true,version:row?Number(row.version):0,
+      store_status:authority.store_status}
+  }
+
+  @InjectTransactionManager()
+  async personalOwnerStorePauseChange(token:string,input:{
+    organization_id:string;seller_id:string;action:"pause"|"resume";
+    request_id:string;expected_version:number
+  },@MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !/^dasp_[a-f0-9]{32}$/.test(input.request_id)||
+       !["pause","resume"].includes(input.action)||
+       !Number.isSafeInteger(input.expected_version)||
+       input.expected_version<0||input.expected_version>2147483646)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    // Same per-Seller lock serializes parallel pause, resume, read-modify-
+    // write and the live native Seller row SHARE lock with platform updates.
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
+      [input.seller_id])
+    const scope=await this.ownerPauseScope_(db,token,input.organization_id,input.seller_id)
+    if(!scope||scope.store_status!=="open")return null
+    // Closing is stronger than a voluntary pause; a resume must never
+    // appear to reopen Store sales while the Owner closing case is pending.
+    if((await this.ownerClosingRow_(db,input.seller_id))?.state==="closing")
+      return null
+    const existing=await this.ownerPauseRow_(db,input.seller_id,true)
+    if(existing&&existing.organization_id!==input.organization_id)
+      throw new IdentityAccessDenied()
+    const paused=input.action==="pause",version=existing?Number(existing.version):0
+    if(existing?.request_id===input.request_id){
+      if(version!==input.expected_version+1||existing.paused!==paused)
+        throw new IdentityAccessDenied()
+      return {status:paused?"paused" as const:"resumed" as const,
+        version,replayed:true}
+    }
+    if(version!==input.expected_version)return {status:"conflict" as const,version}
+    if((existing?.paused===true)===paused)
+      return {status:paused?"paused" as const:"resumed" as const,
+        version,replayed:true}
+    const next=version+1
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:scope.actor.person_id,actor_type:scope.actor.actor_type,
+      actor_id:scope.actor.actor_id,role_context:"owner",
+      organization_id:input.organization_id,
+      action:paused?"organization.store_owner_paused":"organization.store_owner_resumed",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"store-owner-pause",
+      target_id:input.seller_id,
+      new_values:{request_id:input.request_id,version:next,paused},
+      occurred_at:new Date()
+    }],context)
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const changed=existing?await db.execute(`update da_store_owner_pause
+      set paused=?,version=?,request_id=?,source_audit_event_id=?,
+        updated_at=clock_timestamp()
+      where seller_id=? and organization_id=? and version=?
+      returning seller_id`,[paused,next,input.request_id,audit.id,
+        input.seller_id,input.organization_id,version]):
+      await db.execute(`insert into da_store_owner_pause
+      (seller_id,organization_id,paused,version,request_id,source_audit_event_id)
+      values (?,?,?,?,?,?) returning seller_id`,
+        [input.seller_id,input.organization_id,paused,next,input.request_id,audit.id])
+    if(changed.length!==1)throw new IdentityAccessDenied()
+    return {status:paused?"paused" as const:"resumed" as const,version:next,
+      replayed:false}
+  }
+
+  /** Internal sale/read gate, never a browser authorization grant. An
+   * unknown or damaged audit lineage denies trading instead of bypassing it.
+   * The checkout's final L rechecks this in its own single SQL snapshot.
+   */
+  @InjectTransactionManager()
+  async storeOwnerPauseAcceptingOrders(sellerIds:string[],
+    @MedusaContext() context:Context={}):Promise<boolean>{
+    if(!Array.isArray(sellerIds)||sellerIds.length>50||
+       new Set(sellerIds).size!==sellerIds.length||
+       sellerIds.some(id=>typeof id!=="string"||!/^sel_[A-Za-z0-9_-]+$/.test(id)))
+      throw new IdentityAccessDenied()
+    if(!sellerIds.length)return false
+    const db=securitySql(context.transactionManager)
+    for(const id of sellerIds){
+      const row=await this.ownerPauseRow_(db,id)
+      if(row&&row.paused!==false)return false
+      const closing=await this.ownerClosingRow_(db,id)
+      if(closing&&closing.state!=="withdrawn")return false
+    }
+    return true
+  }
+
+
+  /** Private, Foundation-owned Owner closing state; never infer closure from
+   * Mercur's reversible native terminate status. Missing/broken audit linkage
+   * fails closed instead of presenting the Store as safe to trade.
+   */
+  private async ownerClosingRow_(db:SecuritySql,sellerId:string,lock=false){
+    const rows=await db.execute(`select c.organization_id,c.seller_id,c.state,
+      c.version,c.request_id,c.started_at,c.due_at,
+      exists(select 1 from da_audit_event e
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+          and x.source_module='dogruadres-access' and x.deleted_at is null
+        where e.id=c.source_audit_event_id and e.deleted_at is null
+          and e.module='dogruadres-access'
+          and e.organization_id=c.organization_id and e.target_id=c.seller_id
+          and e.resource='store-owner-closing'
+          and e.action=(case when c.state='closing'
+            then 'organization.store_owner_closing_started'
+            else 'organization.store_owner_closing_withdrawn' end)
+          and e.new_values->>'state'=c.state
+          and e.new_values->>'request_id'=c.request_id
+          and e.new_values->>'version'=c.version::text
+          and (e.new_values->>'started_at')::timestamptz=c.started_at
+          and (e.new_values->>'due_at')::timestamptz=c.due_at) as proof
+      from da_store_owner_closing c where c.seller_id=? ${lock?'for update':''}`,
+      [sellerId])
+    if(rows.length>1||rows.some(row=>
+       row.seller_id!==sellerId||row.proof!==true||
+       !["closing","withdrawn"].includes(row.state)||
+       !Number.isSafeInteger(Number(row.version))||Number(row.version)<1||
+       !/^dasc_[a-f0-9]{32}$/.test(String(row.request_id))||
+       !Number.isFinite(new Date(row.started_at).getTime())||
+       !Number.isFinite(new Date(row.due_at).getTime())||
+       new Date(row.due_at).getTime()-new Date(row.started_at).getTime()!==2592000000))
+      throw new IdentityAccessDenied()
+    return rows.length===1?rows[0]:null
+  }
+
+  @InjectTransactionManager()
+  async personalOwnerClosingState(token:string,organizationId:string,sellerId:string,
+    @MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const scope=await this.ownerPauseScope_(db,token,organizationId,sellerId)
+    if(!scope)return null
+    const row=await this.ownerClosingRow_(db,sellerId)
+    if(row&&row.organization_id!==organizationId)throw new IdentityAccessDenied()
+    const clock=await db.execute("select clock_timestamp() as now_at")
+    if(clock.length!==1)throw new IdentityAccessDenied()
+    const now=new Date(clock[0].now_at)
+    return {organization_id:organizationId,seller_id:sellerId,
+      state:row?.state??"none",version:row?Number(row.version):0,
+      started_at:row?new Date(row.started_at).toISOString():null,
+      due_at:row?new Date(row.due_at).toISOString():null,
+      can_withdraw:row?.state==="closing"&&now.getTime()<new Date(row.due_at).getTime(),
+      // Read-only server-clock countdown; clients never control the deadline
+      // or the authorization to withdraw.
+      remaining_seconds:row?.state==="closing"?
+        Math.max(0,Math.ceil((new Date(row.due_at).getTime()-now.getTime())/1000)):0,
+      store_status:scope.store_status,
+      // No irreversible transition while verified mandatory delivery is absent.
+      permanent_finalization_enabled:false}
+  }
+
+  @InjectTransactionManager()
+  async personalOwnerClosingChange(token:string,input:{
+    organization_id:string;seller_id:string;action:"start"|"withdraw";
+    request_id:string;expected_version:number;consequences_acknowledged?:boolean
+  },@MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !/^dasc_[a-f0-9]{32}$/.test(input.request_id)||
+       !["start","withdraw"].includes(input.action)||
+       (input.action==="start"&&input.consequences_acknowledged!==true)||
+       !Number.isSafeInteger(input.expected_version)||
+       input.expected_version<0||input.expected_version>2147483646)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    // Reuse the existing per-Seller lock, without changing the native Seller.
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
+      [input.seller_id])
+    const scope=await this.ownerPauseScope_(db,token,input.organization_id,input.seller_id)
+    if(!scope||scope.store_status==="terminated"||
+       (input.action==="start"&&scope.store_status!=="open"))
+      return null
+    const existing=await this.ownerClosingRow_(db,input.seller_id,true)
+    if(existing&&existing.organization_id!==input.organization_id)
+      throw new IdentityAccessDenied()
+    const version=existing?Number(existing.version):0
+    const state=input.action==="start"?"closing":"withdrawn"
+    if(existing?.request_id===input.request_id){
+      if(version!==input.expected_version+1||existing.state!==state)
+        throw new IdentityAccessDenied()
+      return {status:state,version,replayed:true,
+        due_at:new Date(existing.due_at).toISOString()}
+    }
+    if(version!==input.expected_version||
+       (input.action==="start"&&existing?.state==="closing")||
+       (input.action==="withdraw"&&existing?.state!=="closing"))
+      return {status:"conflict" as const,version}
+    const history=await db.execute(`select id from da_audit_event
+      where module='dogruadres-access' and resource='store-owner-closing'
+        and target_id=? and new_values->>'request_id'=? and deleted_at is null limit 2`,
+      [input.seller_id,input.request_id])
+    if(history.length)throw new IdentityAccessDenied()
+    const clock=await db.execute("select clock_timestamp() as now_at")
+    if(clock.length!==1)throw new IdentityAccessDenied()
+    const now=new Date(clock[0].now_at)
+    if(!Number.isFinite(now.getTime()))throw new IdentityAccessDenied()
+    const start=input.action==="start"?now:new Date(existing.started_at)
+    const due=input.action==="start"?new Date(now.getTime()+2592000000):
+      new Date(existing.due_at)
+    if(input.action==="withdraw"&&now.getTime()>=due.getTime())
+      return {status:"conflict" as const,version}
+    const next=version+1
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:scope.actor.person_id,actor_type:scope.actor.actor_type,
+      actor_id:scope.actor.actor_id,role_context:"owner",
+      organization_id:input.organization_id,
+      action:input.action==="start"?
+        "organization.store_owner_closing_started":
+        "organization.store_owner_closing_withdrawn",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"store-owner-closing",
+      target_id:input.seller_id,
+      new_values:{request_id:input.request_id,version:next,state,
+        started_at:start.toISOString(),due_at:due.toISOString()},
+      occurred_at:now
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const changed=existing?await db.execute(`update da_store_owner_closing
+      set state=?,version=?,request_id=?,source_audit_event_id=?,
+        started_at=?,due_at=?,updated_at=clock_timestamp()
+      where seller_id=? and organization_id=? and version=?
+      returning seller_id`,[state,next,input.request_id,audit.id,start.toISOString(),
+        due.toISOString(),input.seller_id,input.organization_id,version]):
+      await db.execute(`insert into da_store_owner_closing
+        (seller_id,organization_id,state,version,request_id,
+         source_audit_event_id,started_at,due_at)
+        values (?,?,?,?,?,?,?,?) returning seller_id`,
+        [input.seller_id,input.organization_id,state,next,input.request_id,
+         audit.id,start.toISOString(),due.toISOString()])
+    if(changed.length!==1)throw new IdentityAccessDenied()
+    // Personal security receipts are durable in the SAME transaction for ALL
+    // currently protected Owners. SMTP delivery is not claimed by this path.
+    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
+      select 'danot_'||gen_random_uuid()::text,m.person_id,?
+      from da_organization_membership m join da_person p on p.id=m.person_id
+      where m.organization_id=? and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.deleted_at is null
+        and p.disabled_at is null and p.deleted_at is null
+      on conflict(audit_event_id,person_id) do nothing`,
+      [audit.id,input.organization_id])
+    return {status:state,version:next,replayed:false,due_at:due.toISOString()}
   }
 
   // B22 product draft: Foundation-owned intent ledger, not another product

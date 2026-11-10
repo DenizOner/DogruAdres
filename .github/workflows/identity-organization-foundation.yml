@@ -10,9 +10,9 @@ on:
         options: [b02, b04, b04-ui, b05-ui, b06-ui, b07-ui, b08-ui]
   pull_request:
     branches: [main]
-    # Draft PRs already run on opened; new head commits run on synchronize.
-    # A draft-to-ready transition alone must not rerun unchanged test inputs.
-    types: [opened, synchronize, reopened]
+    # Draft changes use targeted local checks; complete CI starts when ready.
+    # Subsequent commits to ready PRs must run all required checks again.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
   # sources locally (without changing repository security settings), check
   # SARIF and retain precise findings in this job's real CI log.
   codeql-javascript-typescript:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     name: CodeQL — JavaScript/TypeScript (local SARIF)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -90,7 +90,7 @@ jobs:
           JS
 
   r1-windows-authz:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     name: R1 Windows native Authz — synthetic token/ACL only
     runs-on: windows-2025
     timeout-minutes: 6
@@ -167,6 +167,7 @@ jobs:
           Write-Output 'PASS: real Windows Authz in-memory allow/deny, private process token and rejected substitutions; protected sandbox NOT TESTED'
 
   static:
+    # Required checks must execute even for drafts; a skipped required check can count as success.
     if: github.event_name != 'workflow_dispatch'
     name: Foundation static checks
     runs-on: ubuntu-24.04
@@ -250,7 +251,7 @@ jobs:
         working-directory: packages/api
         env:
           TEST_TYPE: unit
-        run: bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts src/modules/dogruadres-access/__tests__/person-mobile.unit.spec.ts src/modules/dogruadres-access/__tests__/person-registration.unit.spec.ts src/modules/dogruadres-access/__tests__/legal-store-ownership.unit.spec.ts src/modules/dogruadres-access/__tests__/memberships-service.unit.spec.ts src/modules/dogruadres-access/__tests__/invitation-resend-service.unit.spec.ts src/modules/dogruadres-access/__tests__/actor-delegation.unit.spec.ts src/modules/dogruadres-access/__tests__/account-linking.unit.spec.ts src/utils/__tests__/ingress-config.unit.spec.ts src/api/personal/__tests__/ingress.unit.spec.ts src/api/personal/__tests__/profile.unit.spec.ts src/api/personal/__tests__/register.unit.spec.ts src/api/personal/__tests__/organization-applications.unit.spec.ts src/modules/dogruadres-access/__tests__/tax-certificate-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/tax-certificate-scanner.unit.spec.ts src/api/personal/__tests__/organization-selection.unit.spec.ts src/api/personal/__tests__/organization-stores.unit.spec.ts src/api/personal/__tests__/store-approvals.unit.spec.ts src/api/personal/__tests__/store-product-permissions.unit.spec.ts src/api/personal/__tests__/store-member-connections.unit.spec.ts src/api/personal/__tests__/buyer-permissions.unit.spec.ts src/api/personal/__tests__/buyer-context.unit.spec.ts src/api/personal/__tests__/catalog.unit.spec.ts src/api/personal/__tests__/native-try-list-price.unit.spec.ts src/api/personal/__tests__/native-group-try-reference.unit.spec.ts src/api/personal/__tests__/store-price-groups.unit.spec.ts src/api/personal/__tests__/product-drafts.unit.spec.ts src/api/personal/__tests__/launcher-b22.unit.spec.ts src/api/personal/__tests__/workspace-lifetime.unit.spec.ts src/api/personal/__tests__/notifications.unit.spec.ts src/api/personal/__tests__/memberships.unit.spec.ts src/api/personal/__tests__/invitations.unit.spec.ts src/api/dogruadres/__tests__/audit-timeline.unit.spec.ts src/api/personal/__tests__/audit-timeline.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-login-decision.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-persistence.unit.spec.ts src/modules/dogruadres-access/__tests__/audit-persistence.unit.spec.ts src/modules/dogruadres-audit-index/__tests__/envelope.unit.spec.ts src/workflows/dogruadres-audit-relay/__tests__/relay.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-settings-service.unit.spec.ts src/modules/dogruadres-access/__tests__/native-mfa-summary.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-enrollment-ticket.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-session-scope.unit.spec.ts src/api/personal/__tests__/mfa-settings.unit.spec.ts src/api/personal/__tests__/mfa-management.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-management.unit.spec.ts src/api/personal/__tests__/mfa-shell.unit.spec.ts src/api/personal/__tests__/mfa-enrollment.unit.spec.ts src/api/personal/__tests__/mfa-login-runtime.unit.spec.ts src/api/personal/__tests__/mfa-challenge-recovery.unit.spec.ts src/modules/dogruadres-access/__tests__/provision-personal-organization.unit.spec.ts src/api/personal/__tests__/platform.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-client.unit.spec.ts src/api/personal/__tests__/platform-smtp.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-settings.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-crypto.unit.spec.ts src/api/personal/__tests__/store-applications.unit.spec.ts src/api/personal/__tests__/store-rename-requests.unit.spec.ts src/api/personal/__tests__/platform-store-renames.unit.spec.ts
+        run: bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts src/modules/dogruadres-access/__tests__/person-mobile.unit.spec.ts src/modules/dogruadres-access/__tests__/person-registration.unit.spec.ts src/modules/dogruadres-access/__tests__/legal-store-ownership.unit.spec.ts src/modules/dogruadres-access/__tests__/memberships-service.unit.spec.ts src/modules/dogruadres-access/__tests__/invitation-resend-service.unit.spec.ts src/modules/dogruadres-access/__tests__/actor-delegation.unit.spec.ts src/modules/dogruadres-access/__tests__/account-linking.unit.spec.ts src/utils/__tests__/ingress-config.unit.spec.ts src/api/personal/__tests__/ingress.unit.spec.ts src/api/personal/__tests__/profile.unit.spec.ts src/api/personal/__tests__/register.unit.spec.ts src/api/personal/__tests__/organization-applications.unit.spec.ts src/modules/dogruadres-access/__tests__/tax-certificate-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/tax-certificate-scanner.unit.spec.ts src/api/personal/__tests__/organization-selection.unit.spec.ts src/api/personal/__tests__/organization-stores.unit.spec.ts src/api/personal/__tests__/store-owner-pause.unit.spec.ts src/api/personal/__tests__/store-owner-closing.unit.spec.ts src/api/personal/__tests__/store-approvals.unit.spec.ts src/api/personal/__tests__/store-product-permissions.unit.spec.ts src/api/personal/__tests__/store-member-connections.unit.spec.ts src/api/personal/__tests__/buyer-permissions.unit.spec.ts src/api/personal/__tests__/buyer-context.unit.spec.ts src/api/personal/__tests__/catalog.unit.spec.ts src/api/personal/__tests__/native-try-list-price.unit.spec.ts src/api/personal/__tests__/native-group-try-reference.unit.spec.ts src/api/personal/__tests__/store-price-groups.unit.spec.ts src/api/personal/__tests__/product-drafts.unit.spec.ts src/api/personal/__tests__/launcher-b22.unit.spec.ts src/api/personal/__tests__/workspace-lifetime.unit.spec.ts src/api/personal/__tests__/notifications.unit.spec.ts src/api/personal/__tests__/memberships.unit.spec.ts src/api/personal/__tests__/invitations.unit.spec.ts src/api/dogruadres/__tests__/audit-timeline.unit.spec.ts src/api/personal/__tests__/audit-timeline.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-login-decision.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-persistence.unit.spec.ts src/modules/dogruadres-access/__tests__/audit-persistence.unit.spec.ts src/modules/dogruadres-audit-index/__tests__/envelope.unit.spec.ts src/workflows/dogruadres-audit-relay/__tests__/relay.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-settings-service.unit.spec.ts src/modules/dogruadres-access/__tests__/native-mfa-summary.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-enrollment-ticket.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-session-scope.unit.spec.ts src/api/personal/__tests__/mfa-settings.unit.spec.ts src/api/personal/__tests__/mfa-management.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-management.unit.spec.ts src/api/personal/__tests__/mfa-shell.unit.spec.ts src/api/personal/__tests__/mfa-enrollment.unit.spec.ts src/api/personal/__tests__/mfa-login-runtime.unit.spec.ts src/api/personal/__tests__/mfa-challenge-recovery.unit.spec.ts src/modules/dogruadres-access/__tests__/provision-personal-organization.unit.spec.ts src/api/personal/__tests__/platform.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-client.unit.spec.ts src/api/personal/__tests__/platform-smtp.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-settings.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-crypto.unit.spec.ts src/api/personal/__tests__/store-applications.unit.spec.ts src/api/personal/__tests__/store-rename-requests.unit.spec.ts src/api/personal/__tests__/platform-store-renames.unit.spec.ts
       - name: Closed public front door unit contract
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
@@ -261,6 +262,7 @@ jobs:
         run: node --check integration-tests/http/dogruadres-foundation.native.test.mjs
 
   build:
+    # Required checks must execute even for drafts; a skipped required check can count as success.
     if: github.event_name != 'workflow_dispatch'
     name: API backend build — test configuration
     needs: static
@@ -362,6 +364,8 @@ jobs:
           timeout 420s bunx medusa build
 
   mfa-postgres16:
+    # Keep explicitly requested isolated dispatch runs available for drafts.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     name: MFA migration and transaction — isolated PostgreSQL 16
     runs-on: ubuntu-24.04
     timeout-minutes: 20

@@ -18,12 +18,15 @@ export function allowedPublicRequest(method,path){
     '/personal/organization-stores':['GET'],
     '/personal/catalog':['GET'], '/personal/store-follows':['GET','POST'],
     '/personal/store-applications':['GET','POST'],
+    '/personal/store-owner-pause':['GET','POST'],
+    '/personal/store-owner-closing':['GET','POST'],
       '/personal/store-draft-permissions':['GET','POST'],
     '/personal/platform/stores':['GET','POST'],
     '/personal/store-buyer-blocks':['POST'],
     '/personal/store-product-permissions':['GET','POST'],
     '/personal/buyer-permissions':['GET','POST'],
     '/personal/buyer-context':['GET','POST'],
+    '/personal/order-groups':['GET'],
     '/personal/product-drafts':['GET','POST'],
     '/personal/links':['GET','POST'],
     '/personal/audit-timeline':['GET'],
@@ -98,10 +101,11 @@ export function startFrontdoor(env=process.env){
         res.setHeader('Access-Control-Allow-Origin',storeOrigin)
         res.setHeader('Vary','Origin')
       }
-      // Private B4B catalogue is the only public-facing relay for this data.
-      // Enforce fixed privacy metadata at the HTTPS boundary instead of
-      // forwarding arbitrary upstream Vary / X-Robots-Tag header values.
-      if(req.method==='GET'&&url.pathname==='/personal/catalog'){
+      // Both private B4B catalogue and historical order summary need
+      // their own fixed privacy metadata at the public HTTPS boundary.
+      // Never blindly forward arbitrary upstream Vary or X-Robots-Tag.
+      if(req.method==='GET'&&
+         ['/personal/catalog','/personal/order-groups'].includes(url.pathname)){
         res.setHeader('Vary','Cookie')
         res.setHeader('X-Robots-Tag','noindex, nofollow, noarchive')
       }
