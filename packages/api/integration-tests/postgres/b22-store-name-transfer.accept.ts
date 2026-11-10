@@ -1,5 +1,6 @@
 /** Task-only real HTTPS/Chrome/PG16 acceptance: no real commercial accounts. */
 import assert from "node:assert/strict"
+import {randomBytes} from "node:crypto"
 import {B06Chrome} from "./b06-ui-browser"
 type Rows=(sql:string,params?:any[])=>Promise<any[]>
 type Store={application_id:string;seller_id:string;organization_id:string}
@@ -293,12 +294,126 @@ export async function verifyB22ExceptionalNameRight(input:{
   return {formerName:original.name,formerHandle:original.handle}
 }
 
+
+/** A real Owner may request the assigned name in target B only AFTER the
+ * source has vacated both native name and URL. C never inherits that right.
+ * All mutations run through existing Owner/Staff HTTPS endpoints. */
+async function verifyAssignedRecipientUse(input:{
+  owner:B06Chrome;reviewer:B06Chrome;q:Rows;
+  source:Store;target:Store;competitor:Store;
+  targetOrganizationName:string;competitorOrganizationName:string;
+  formerName:string;formerHandle:string;sourceVacated:boolean
+}):Promise<void>{
+  const {owner,reviewer,q,source,target,competitor,formerName,
+    formerHandle,sourceVacated,targetOrganizationName,
+    competitorOrganizationName}=input
+  const proposal=(store:Store)=>({
+    request_id:"dasrn_"+randomBytes(16).toString("hex"),
+    organization_id:store.organization_id,seller_id:store.seller_id,
+    name:formerName,handle:formerHandle,risk_acknowledged:true,
+    risk_version:"store-rename-risks-v2"
+  })
+  const post=async(browser:B06Chrome,payload:object)=>browser.callFunction(
+    "async function(json){const s=await(await fetch('/personal/session')).json();"+
+    "const r=await fetch('/personal/store-rename-requests',{method:'POST',"+
+    "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+    "body:json});return {status:r.status,body:await r.json()}}",
+    JSON.stringify(payload))
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible'")
+  await owner.select(competitorOrganizationName,"owner")
+  const c=proposal(competitor)
+  assert.equal((await post(owner,c)).status,409,
+    "Third Store C cannot claim another Store's assigned right")
+  assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
+    [c.request_id]))[0].n,0,"Denied C request must not persist")
+  await owner.select(targetOrganizationName,"owner")
+  const [before]=await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [target.seller_id])
+  assert.equal(before?.id,target.seller_id)
+  assert.equal(before.status,"open")
+  const b=proposal(target)
+  const result=await post(owner,b)
+  if(!sourceVacated){
+    assert.equal(result.status,409,
+      "B cannot take the transferred name while A still uses it")
+    assert.deepEqual((await q("select id,name,handle,status,approved_at from seller where id=$1",
+      [target.seller_id]))[0],before)
+    assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
+      [b.request_id]))[0].n,0)
+    return
+  }
+  const [oldSource]=await q("select name,handle from seller where id=$1",
+    [source.seller_id])
+  assert.notEqual(oldSource?.name,formerName)
+  assert.notEqual(oldSource?.handle,formerHandle)
+  assert.equal(result.status,201,
+    "Assigned B must request the old name via existing Owner API")
+  assert.equal(result.body?.status,"pending_review")
+  const [pending]=await q("select id,status from da_store_rename_request where id=$1",
+    [b.request_id])
+  assert.equal(pending?.status,"pending_review")
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  await reviewer.click("#store-rename-review-refresh")
+  await reviewer.wait("Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
+    ".some(e=>e.textContent.includes("+JSON.stringify(formerName)+"))")
+  const clicked=await reviewer.callFunction(
+    "function(name){const row=Array.from(document.querySelectorAll("+
+    "'#store-rename-review-list > div')).find(e=>e.textContent.includes(name));"+
+    "const btn=Array.from(row?.querySelectorAll('button')??[])"+
+    ".find(b=>b.textContent.includes('Yeni ad ve bağlantıyı onayla'));"+
+    "if(!btn||btn.disabled)return false;const previous=window.confirm;"+
+    "window.confirm=()=>true;try{btn.click()}finally{window.confirm=previous}return true}",
+    formerName)
+  assert.equal(clicked,true,"Real Staff approval button must decide B")
+  await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('etkinleşti')")
+  const [after]=await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [target.seller_id])
+  assert.equal(after.id,before.id,"B retains its native Seller ID")
+  assert.equal(after.name,formerName)
+  assert.equal(after.handle,formerHandle)
+  assert.equal(after.status,before.status)
+  assert.equal(String(after.approved_at),String(before.approved_at))
+  const proof=await q(`select r.status,e.action,x.id outbox_id
+    from da_store_rename_request r
+    join da_audit_event e on e.organization_id=r.organization_id
+      and e.target_id=r.seller_id
+      and e.action='organization.store_rename_approved'
+      and e.new_values->>'request_id'=r.id and e.deleted_at is null
+    join da_audit_outbox x on x.source_audit_event_id=e.id and x.deleted_at is null
+    where r.id=$1`,[b.request_id])
+  assert.equal(proof.length,1)
+  assert.equal(proof[0].status,"approved")
+  assert.ok(proof[0].outbox_id)
+  const [stillHeld]=await q(`select count(*)::int n from da_store_rename_request
+    where seller_id=$1 and old_name=$2 and old_handle=$3 and status='approved'
+      and approved_at>clock_timestamp()-interval '30 days'`,
+    [source.seller_id,formerName,formerHandle])
+  assert.equal(stillHeld.n,1,"A's normal 30-day hold stays active")
+  const [assignment]=await q(`select source_seller_id,target_seller_id,status
+    from da_store_name_transfer where source_seller_id=$1 and
+      target_seller_id=$2 and old_name=$3 and old_handle=$4`,
+    [source.seller_id,target.seller_id,formerName,formerHandle])
+  assert.equal(assignment?.status,"assigned")
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible'")
+  await owner.select(competitorOrganizationName,"owner")
+  const cAfter=proposal(competitor)
+  assert.equal((await post(owner,cAfter)).status,409,
+    "C cannot take the transferred name after B adopts it")
+  assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
+    [cAfter.request_id]))[0].n,0)
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: recipient B native name and URL adopted after source A vacates, historical 30-day hold retained, unrelated Store C HTTP409 before/after, Staff approval and audit/outbox durable\n")
+}
+
 /** Complete the previously assigned right with the existing real Owner-rename
  * and Staff-unsuspend journey; keep the unrelated checkout fixture isolated.
  */
 export async function verifyB22TransferredRecovery(input:{
   owner:B06Chrome;reviewer:B06Chrome;q:Rows;
   source:Store;target:Store;targetExpectedName:string;
+  competitor:Store;targetOrganizationName:string;competitorOrganizationName:string;
   renameAndReopen:()=>Promise<void>;
   restoreFixture:()=>Promise<unknown>
 }):Promise<void>{
@@ -311,6 +426,11 @@ export async function verifyB22TransferredRecovery(input:{
     owner,reviewer,q,source,target
   })
   assert.equal(assignment.formerName,before.name)
+  const recipientScope={owner,reviewer,q,source,target,competitor:input.competitor,
+    targetOrganizationName:input.targetOrganizationName,
+    competitorOrganizationName:input.competitorOrganizationName,
+    ...assignment}
+  await verifyAssignedRecipientUse({...recipientScope,sourceVacated:false})
   await owner.send("Page.bringToFront")
   await owner.wait("document.visibilityState==='visible'")
   await input.renameAndReopen()
@@ -325,6 +445,7 @@ export async function verifyB22TransferredRecovery(input:{
     [target.seller_id]))[0]
   assert.equal(recipient.name,targetExpectedName)
   assert.equal(recipient.status,"open")
+  await verifyAssignedRecipientUse({...recipientScope,sourceVacated:true})
   // Later independent Cart fixture expects the historical source suspended.
   await input.restoreFixture()
   assert.equal((await q("select status from seller where id=$1",
