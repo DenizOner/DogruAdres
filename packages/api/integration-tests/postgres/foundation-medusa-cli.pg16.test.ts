@@ -274,6 +274,7 @@ async function run(){
         // The runner only publishes fixed redacted proof lines, never
         // arbitrary child output. Require these real negative acceptance
         // results so a missing scenario cannot masquerade as a PASS.
+        const ownerPauseAcceptanceMarker="PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed"
         const storeDraftNegativeMarkers=[
           "PASS B22 PG16/Chrome: global normalized Store name claim; case/NFKC/native legacy conflicts409, no second application or Seller",
           "PASS B22 PG16/Chrome: invisible Store names HTTP400; zero application, native Seller, audit/outbox effects",
@@ -313,7 +314,8 @@ async function run(){
               x==="PASS B22 Chrome/HTTP/PG16: changed signature triggers genuine re-scan; unchanged reuse; damaged PNG regenerated" ||
               x==="PASS B22 PG16: duplicate activity direct SQL 23514; original private draft unchanged" ||
               x==="PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner" ||
-              storeDraftNegativeMarkers.includes(x as (typeof storeDraftNegativeMarkers)[number])).join("\n")
+              storeDraftNegativeMarkers.includes(x as (typeof storeDraftNegativeMarkers)[number]) ||
+              x===ownerPauseAcceptanceMarker).join("\n")
           if(child.error||child.status!==0){
             // The long B22 child can legitimately fail at the still-blocked
             // tax-document approval. Do not bury *completed* earlier native
@@ -365,6 +367,8 @@ async function run(){
           assert.ok(result.includes("PASS B22 Chrome: native Admin SMTP same-origin MFA/grant GET200"))
           return
         }
+        assert.ok(result.split("\n").includes(ownerPauseAcceptanceMarker),
+          "Missing real Owner temporary pause/resume Chrome/HTTPS/PG16 acceptance proof")
         for(const marker of storeDraftNegativeMarkers)
           assert.ok(result.split("\n").includes(marker),
             "Missing mandatory real Chrome/PG16 Store draft negative acceptance proof")
