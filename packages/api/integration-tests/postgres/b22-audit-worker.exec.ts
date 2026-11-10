@@ -188,10 +188,12 @@ export default async function({container}:any){
         " ('organization.store_owner_closing_started','organization.store_owner_closing_withdrawn')"+
         " and o.status='pending' and o.lease_token is null"+
         " order by e.occurred_at,e.id")
-      assert.equal(ownerClosingEvents.length,2,
-        "Real Chrome must produce exactly one Owner closing + one withdrawal")
+      assert.equal(ownerClosingEvents.length,4,
+        "Two successful closing starts/withdrawals including contested request")
       assert.deepEqual(ownerClosingEvents.map(e=>e.action).sort(),
         ["organization.store_owner_closing_started",
+         "organization.store_owner_closing_started",
+         "organization.store_owner_closing_withdrawn",
          "organization.store_owner_closing_withdrawn"].sort())
       assert.equal(new Set(ownerClosingEvents.map(e=>e.target_id)).size,1)
       assert.equal(new Set(ownerClosingEvents.map(e=>e.organization_id)).size,1)
@@ -203,10 +205,10 @@ export default async function({container}:any){
           " created_at=(select min(created_at) from da_audit_outbox)-interval '8 days'"+
           " where id=any($1::text[]) and status='pending' and lease_token is null"+
           " returning id",[closingOutboxIds])
-        assert.equal(shifted.length,2)
-        const delivered=await runAuditRelayBatch(container,2)
-        assert.equal(delivered.delivered,2,
-          "Both canonical closing events must reach the installed native Index")
+        assert.equal(shifted.length,4)
+        const delivered=await runAuditRelayBatch(container,4)
+        assert.equal(delivered.delivered,4,
+          "All 4 canonical closing events must reach the installed native Index")
         for(const event of ownerClosingEvents){
           const rows=await q(
             "select o.status,o.delivered_at,o.attempt_count,o.lease_token,"+
