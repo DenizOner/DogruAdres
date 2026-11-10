@@ -43,7 +43,8 @@ describe("B22 private historical OrderGroup read: canonical Buyer Organization f
       query:{organization_id:"daorg_buyer_a",order_group_id:groupId},
       headers:{},
       scope:{resolve:jest.fn((key:string)=>{
-        if(key==="seller")return {listOrderGroups:jest.fn(async()=>groups)}
+        if(key==="seller")return {listOrderGroups:jest.fn(async(filter:any)=>
+          groups.filter(row=>filter.id?row.id===filter.id:row.cart_id===filter.cart_id))}
         if(key==="customer")return {listCustomers:jest.fn(async()=>customers)}
         if(key==="cart")return {listCarts:jest.fn(async()=>carts)}
         if(key==="query")return {graph}
@@ -116,6 +117,14 @@ describe("B22 private historical OrderGroup read: canonical Buyer Organization f
       expect(res.json).toHaveBeenLastCalledWith(denied())
       svc.personalBuyerCartAttribution.mockResolvedValue(true)
     }
+  })
+
+  it("denies ambiguous duplicate OrderGroups for the same completed Cart",async()=>{
+    groups.push({id:"og_duplicate",cart_id:cartId,customer_id:customerId})
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith(denied())
+    expect(graph).not.toHaveBeenCalled()
   })
 
   it("denies a valid Customer whose cart lacks immutable audited attribution",async()=>{
