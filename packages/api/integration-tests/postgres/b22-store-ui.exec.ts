@@ -66,7 +66,7 @@ async function verifyOwnerClosingBrowser(input:{
   await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
   await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
   await browser.eval("window.confirm=window.__b22ClosingConfirm;delete window.__b22ClosingConfirm")
-  await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('Kalan süre:') && "+
+  await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('Kalan süre (yenilendiğinde):') && "+
     "document.getElementById('store-owner-closing-status').getAttribute('role')==='status'")
   assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-owner-closing"&&x.method==="POST"&&x.status===200))
   const [closed]=await q(
