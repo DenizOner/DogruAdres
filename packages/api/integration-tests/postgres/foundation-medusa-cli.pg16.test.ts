@@ -321,7 +321,7 @@ async function run(){
               x==="PASS B22 PG16/Chrome: legacy-shaped empty activity draft []/NULL, private GET and visible edit persist same id/person to v2; no Organization/Owner" ||
               storeDraftNegativeMarkers.includes(x as (typeof storeDraftNegativeMarkers)[number]) ||
               x===ownerPauseAcceptanceMarker || x===ownerPauseConcurrentMarker ||
-              x===ownerPauseIndexMarker).join("\n")
+              x===ownerPauseIndexMarker || x===ownerClosingNegativeMarker).join("\n")
           if(child.error||child.status!==0){
             // The long B22 child can legitimately fail at the still-blocked
             // tax-document approval. Do not bury *completed* earlier native
