@@ -2869,10 +2869,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   if(ownerPauseForm?.elements&&typeof ownerPauseForm.elements.namedItem==='function')
   ownerPauseForm.elements.namedItem('seller_id').onchange=()=>{
     ownerPauseUncertain=false;
-    if(currentOrg)void refreshOwnerPause(currentOrg,organizationRequest);
+    if(currentOrg){
+      void refreshOwnerPause(currentOrg,organizationRequest);
+      void refreshOwnerClosing(currentOrg,organizationRequest);
+    }
   };
   el('store-owner-pause-refresh').onclick=()=>{
-    if(currentOrg)void refreshOwnerPause(currentOrg,organizationRequest);
+    if(currentOrg){
+      void refreshOwnerPause(currentOrg,organizationRequest);
+      void refreshOwnerClosing(currentOrg,organizationRequest);
+    }
   };
   if(ownerPauseForm)ownerPauseForm.onsubmit=async event=>{
     event.preventDefault();
