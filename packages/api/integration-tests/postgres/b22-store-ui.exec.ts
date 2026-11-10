@@ -65,7 +65,9 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
     await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık') && "+
       "!document.querySelector('#store-owner-pause-form button[value=pause]').disabled")
     await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
-    await browser.click('#store-owner-pause-form button[value="pause"]')
+    assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-pause-form button[value=pause]');b.focus();return document.activeElement===b})()"),true)
+    await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
+    await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
     await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
     await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('geçici arada')")
     assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-owner-pause"&&
@@ -140,7 +142,9 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
     await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('geçici arada')&&"+
       "!document.querySelector('#store-owner-pause-form button[value=resume]').disabled")
     await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
-    await browser.click('#store-owner-pause-form button[value="resume"]')
+    assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-pause-form button[value=resume]');b.focus();return document.activeElement===b})()"),true)
+    await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
+    await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:"Enter",code:"Enter",windowsVirtualKeyCode:13})
     await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
     await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık')")
     const resumedRows=await q(
@@ -164,6 +168,106 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
     assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]}))
       .items?.length,2,"Neither pause nor resume changes preexisting cart lines")
     process.stdout.write("PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed\n")
+
+    // Bound accessibility check: real Chrome keyboard Enter activates both
+    // transitions above; status/label must be exposed to its accessibility
+    // tree. This is Chrome AX evidence, not a claim about every screen reader.
+    const ownerAX=await browser.send("Accessibility.getFullAXTree")
+    assert.ok(ownerAX.nodes.some((n:any)=>n.role?.value==="status"),
+      "Chrome must expose at least one live status region")
+    assert.equal(await browser.eval("(()=>{const panel=document.getElementById('store-owner-pause-panel');const status=document.getElementById('store-owner-pause-status');const select=panel.querySelector('select[name=seller_id]');return !panel.hidden&&status.getAttribute('role')==='status'&&status.getAttribute('aria-live')==='polite'&&select.closest('label')?.textContent.includes('Mağaza')&&status.textContent.includes('satışa açık')})()"),true,
+      "Visible Owner select and state must be labeled and announced")
+
+    // Two distinct first-party HTTPS mutations using the SAME verified
+    // version compete at the real PostgreSQL per-Seller transaction lock.
+    const newPause1={organization_id:organizations[0].id,seller_id:ownerStoreId,
+      action:"pause",expected_version:2,request_id:"dasp_"+randomBytes(16).toString("hex")}
+    const newPause2={...newPause1,request_id:"dasp_"+randomBytes(16).toString("hex")}
+    const contested=await browser.callFunction(
+      "async function(a,b){"+
+      "const session=await(await fetch('/personal/session',{cache:'no-store'})).json();"+
+      "const headers={'content-type':'application/json','x-csrf-token':session.csrf_token};"+
+      "return await Promise.all([a,b].map(async raw=>"+
+      "(await fetch('/personal/store-owner-pause',{method:'POST',headers,body:raw})).status))}",
+      JSON.stringify(newPause1),JSON.stringify(newPause2))
+    assert.deepEqual([...contested].sort((a:number,b:number)=>a-b),[200,409],
+      "Two distinct same-version Owner pause requests cannot both commit")
+    const [raceRow]=await q("select paused,version from da_store_owner_pause where seller_id=$1",
+      [ownerStoreId])
+    assert.deepEqual(raceRow,{paused:true,version:3})
+    assert.equal(Number((await q("select count(*)::int n from da_audit_event where target_id=$1 and resource='store-owner-pause'",
+      [ownerStoreId]))[0].n),pauseAuditStart+3,
+      "Concurrent loser creates no second audit")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds),false)
+    const newResume=await ownerPauseHttp({...newPause1,action:"resume",
+      request_id:"dasp_"+randomBytes(16).toString("hex"),expected_version:3})
+    assert.equal(newResume.status,200)
+    assert.equal(newResume.body.version,4)
+    assert.equal(Number((await q("select count(*)::int n from da_audit_event where target_id=$1 and resource='store-owner-pause'",
+      [ownerStoreId]))[0].n),pauseAuditStart+4)
+    assert.equal((await q("select paused from da_store_owner_pause where seller_id=$1",
+      [ownerStoreId]))[0].paused,false)
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds),true)
+
+    // The test-only session and protected Owner membership are restored
+    // exactly after each denied real HTTP request on this disposable DB.
+    const cookieResult=await browser.send("Network.getCookies",{urls:[browser.origin]})
+    const ownerCookie=cookieResult.cookies.find((c:any)=>c.name==="da_session")
+    assert.ok(ownerCookie&&/^[A-Za-z0-9_-]{43}$/.test(ownerCookie.value))
+    const sessionHash=createHash("sha256").update(ownerCookie.value).digest("hex")
+    const sessionRows=await q("select id,status,last_strong_auth_at from da_browser_session where id=$1",
+      [sessionHash])
+    assert.equal(sessionRows.length,1)
+    assert.equal(sessionRows[0].status,"active")
+    assert.ok(sessionRows[0].last_strong_auth_at)
+    const csrfRead=await browser.callFunction(
+      "async function(){return (await(await fetch('/personal/session',{cache:'no-store'})).json()).csrf_token}")
+    assert.ok(typeof csrfRead==="string"&&csrfRead.length===43)
+    const deniedMutation={...newPause1,expected_version:4,
+      request_id:"dasp_"+randomBytes(16).toString("hex")}
+    const postWithOriginalCsrf=async()=>browser.callFunction(
+      "async function(raw,token){const response=await fetch('/personal/store-owner-pause',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':token},body:raw});return response.status}",
+      JSON.stringify(deniedMutation),csrfRead)
+    const oldStrong=sessionRows[0].last_strong_auth_at
+    try{
+      assert.equal((await q("update da_browser_session set last_strong_auth_at=clock_timestamp()-interval '2 days' where id=$1 and status='active' returning id",
+        [sessionHash])).length,1)
+      assert.equal(await postWithOriginalCsrf(),403,
+        "Expired strong proof must deny Owner pause at real HTTPS endpoint")
+    }finally{
+      await q("update da_browser_session set last_strong_auth_at=$2 where id=$1",
+        [sessionHash,oldStrong])
+    }
+    const membershipRows=await q("select id,status,revoked_at from da_organization_membership where person_id=$1 and organization_id=$2 and role='owner' and protected_owner=true and deleted_at is null",
+      [pausedRows[0].actor_person_id,organizations[0].id])
+    assert.equal(membershipRows.length,1)
+    assert.equal(membershipRows[0].status,"active")
+    assert.equal(membershipRows[0].revoked_at,null)
+    try{
+      assert.equal((await q("update da_organization_membership set status='revoked',revoked_at=clock_timestamp() where id=$1 and status='active' and revoked_at is null returning id",
+        [membershipRows[0].id])).length,1)
+      assert.equal(await postWithOriginalCsrf(),403,
+        "An Owner whose protected membership is revoked in the disposable DB cannot pause")
+    }finally{
+      await q("update da_organization_membership set status=$2,revoked_at=$3 where id=$1",
+        [membershipRows[0].id,membershipRows[0].status,membershipRows[0].revoked_at])
+    }
+    assert.equal(Number((await q("select count(*)::int n from da_audit_event where target_id=$1 and resource='store-owner-pause'",
+      [ownerStoreId]))[0].n),pauseAuditStart+4,
+      "Revoked or stale Owner creates no canonical audit side effect")
+    assert.deepEqual((await q("select paused,version from da_store_owner_pause where seller_id=$1",
+      [ownerStoreId]))[0],{paused:false,version:4})
+    assert.deepEqual((await q(
+      "select id,name,handle,status,approved_at,closed_from,closed_to from seller where id=$1",
+      [ownerStoreId]))[0],pauseNativeBefore)
+    assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]})).items?.length,2)
+    await browser.click('#store-owner-pause-refresh')
+    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık')")
+    process.stdout.write("PASS B22 real Owner pause concurrency/authorization: two HTTPS requests 200+409, one durable pause; revoked Owner and stale strong session denied without writes; resume restores unchanged Seller\n")
+
 
 
 }
