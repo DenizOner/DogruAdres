@@ -1865,9 +1865,40 @@ async function verifySuspendedStoreRenameBeforeReopen(
     const rows=await q(`select status from da_store_rename_request
       where organization_id=$1 and seller_id=$2 and proposed_name=$3
         and proposed_handle=$4`,[organizationId,sellerId,name,handle])
+    const [candidate]=await q(`select encode(sha256(convert_to(lower(
+      regexp_replace(btrim(normalize($1,NFKC)),'[[:space:]]+',' ','g')),
+      'UTF8')),'hex') as hash`,[name])
+    const hash=candidate.hash as string
+    const n=async(sql:string,values:any[])=>Number((await q(sql,values))[0].n)
+    const conflicts={
+      pending:await n("select count(*)::int n from da_store_rename_request where seller_id=$1 and status in ('pending_review','approving')",[sellerId]),
+      application:await n(`select count(*)::int n from da_store_application
+        where store_name_hash=$1 and
+          (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
+          and (seller_id is null or seller_id<>$2)`,[hash,sellerId]),
+      native:await n(`select count(*)::int n from seller where id<>$1
+        and (deleted_at is null or deleted_at>clock_timestamp()-interval '30 days')
+        and (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(name,NFKC)),
+        '[[:space:]]+',' ','g')),'UTF8')),'hex')=$2 or lower(handle)=$3)`,
+        [sellerId,hash,handle]),
+      renameHold:await n(`select count(*)::int n from da_store_rename_request r
+        where (r.status='approving' or (r.status='approved' and
+          r.approved_at>clock_timestamp()-interval '30 days'))
+        and ((encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.old_name,NFKC)),
+          '[[:space:]]+',' ','g')),'UTF8')),'hex')=$1 or r.old_handle=$2)
+          or (r.status='approving' and
+          (encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(r.proposed_name,NFKC)),
+          '[[:space:]]+',' ','g')),'UTF8')),'hex')=$1 or r.proposed_handle=$2)))`,
+        [hash,handle]),
+      transferReservation:await n(`select count(*)::int n from da_store_name_transfer
+        where status='assigned' and target_seller_id<>$1
+          and (name_hash=$2 or old_handle=$3)`,[sellerId,hash,handle])
+    }
+    // Only numeric conflict classes; never expose identifiers, names or
+    // reasons in a public CI log.
     throw new Error("B22 Owner transferred-Store rename did not become pending: "+
       JSON.stringify({http,ui,durable:{count:rows.length,
-        statuses:rows.map((x:any)=>x.status)}}))
+        statuses:rows.map((x:any)=>x.status)},conflicts}))
   }
   // The real Owner form generates the opaque id in the browser. Query
   // the exact new, source-owned request rather than fabricating its id.
