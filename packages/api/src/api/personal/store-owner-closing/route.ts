@@ -12,8 +12,9 @@ const change=z.object({
   action:z.enum(["start","withdraw"]),
   request_id:z.string().regex(/^dasc_[a-f0-9]{32}$/),
   expected_version:z.number().int().min(0).max(2147483646),
-  consequences_acknowledged:z.literal(true)
-}).strict()
+  consequences_acknowledged:z.boolean().optional()
+}).strict().refine(value=>
+  value.action!=="start"||value.consequences_acknowledged===true)
 
 /** Strict first-party private ingress. Never delegate to a caller-controlled
  * Seller actor or accept a browser-supplied Organization authorization claim.
