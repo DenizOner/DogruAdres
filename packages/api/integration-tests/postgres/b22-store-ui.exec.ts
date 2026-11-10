@@ -7497,17 +7497,6 @@ export default async function({container}:any){
       browser,reviewer,sellerGamma.id,sellerGamma.name,gammaSellerId,container,q)
     await verifySuspendedStoreRenameBeforeReopen(
       browser,reviewer,sellerGamma.id,sellerGamma.name,gammaSellerId,rand,container,q)
-    // Preserve all earlier first-rename and concurrent request tests before
-    // B acquires the transferred native name in this same disposable DB.
-    await verifyAssignedRecipientUse({owner:browser,reviewer,q,
-      source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
-        organization_id:organizations[0].id},
-      target:{application_id:gammaApplication.application_id,seller_id:gammaSellerId,
-        organization_id:sellerGamma.id},
-      competitor:{seller_id:ownerStoreId,organization_id:organizations[0].id},
-      targetOrganizationName:sellerGamma.name,
-      competitorOrganizationName:organizations[0].name,
-      ...transferAssignment,sourceVacated:true})
     await browser.select(organizations[0].name,"owner")
     const gammaSku="B22-GAMMA-BETA-"+rand
     const {result:[gammaOffer]}=await createOffersWorkflow(container).run({
@@ -7616,6 +7605,21 @@ export default async function({container}:any){
     await browser.wait("!document.getElementById('store-rename-panel').hidden")
     await verifyOwnerWithdrawPendingStoreRename(
       browser,reviewer,sellerGamma.id,gammaSellerId,A.person,rand,q)
+    // Existing Gamma first/second rename, old/new URL and withdrawal tests
+    // have now finished; only now consume B's exceptional native name right.
+    // Preserve all earlier first-rename and concurrent request tests before
+    // B acquires the transferred native name in this same disposable DB.
+    await verifyAssignedRecipientUse({owner:browser,reviewer,q,
+      source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
+        organization_id:organizations[0].id},
+      target:{application_id:gammaApplication.application_id,seller_id:gammaSellerId,
+        organization_id:sellerGamma.id},
+      competitor:{seller_id:ownerStoreId,organization_id:organizations[0].id},
+      targetOrganizationName:sellerGamma.name,
+      competitorOrganizationName:organizations[0].name,
+      ...transferAssignment,sourceVacated:true})
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
     const keyHeaders={"x-publishable-api-key":b22PublishableKey.token}
     assert.equal((await q(`select count(*)::int n from order_group
