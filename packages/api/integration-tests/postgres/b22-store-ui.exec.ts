@@ -176,8 +176,11 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
     const ownerAX=await browser.send("Accessibility.getFullAXTree")
     assert.ok(ownerAX.nodes.some((n:any)=>n.role?.value==="status"),
       "Chrome must expose at least one live status region")
-    assert.equal(await browser.eval("(()=>{const panel=document.getElementById('store-owner-pause-panel');const status=document.getElementById('store-owner-pause-status');const select=panel.querySelector('select[name=seller_id]');return !panel.hidden&&status.getAttribute('role')==='status'&&status.getAttribute('aria-live')==='polite'&&select.closest('label')?.textContent.includes('Mağaza')&&status.textContent.includes('satışa açık')})()"),true,
-      "Visible Owner select and state must be labeled and announced")
+    // A previous real Chrome run observed the immutable Seller resume PASS
+    // before this asynchronous panel readback settled. Do not weaken any
+    // WCAG assertion; wait until *all* existing visible/label/live-state
+    // invariants hold, and still fail closed if they never become true.
+    await browser.wait("(()=>{const panel=document.getElementById('store-owner-pause-panel');const status=document.getElementById('store-owner-pause-status');const select=panel?.querySelector('select[name=seller_id]');return !!panel&&!panel.hidden&&status?.getAttribute('role')==='status'&&status.getAttribute('aria-live')==='polite'&&!!select?.closest('label')?.textContent.includes('Mağaza')&&status.textContent.includes('satışa açık')})()")
 
     // Two distinct first-party HTTPS mutations using the SAME verified
     // version compete at the real PostgreSQL per-Seller transaction lock.
