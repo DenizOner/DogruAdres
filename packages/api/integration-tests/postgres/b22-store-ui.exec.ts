@@ -2051,8 +2051,13 @@ async function verifyStaffReopensSuspendedStore(
     [organizationId])
   try{
     await reviewer.click("#store-approval-refresh")
+    // A prior invalid-name response still has a visible *disabled* button.
+    // A mere button-exists check can race the fresh GET and use that stale row.
+    // Wait for the verified eligible state before the actual native opening.
     await reviewer.wait("Array.from(document.querySelectorAll('#store-reactivation-list p'))"+
-      ".some(e=>e.textContent.includes("+JSON.stringify(sellerId)+") && !!e.querySelector('button'))")
+      ".some(e=>e.textContent.includes("+JSON.stringify(sellerId)+") && "+
+      "!e.textContent.includes('Ad/URL hakkı doğrulanamadı') && "+
+      "e.querySelector('button')?.disabled===false)")
     const clicked=await reviewer.eval(`(()=>{
       const line=Array.from(document.querySelectorAll('#store-reactivation-list p'))
         .find(e=>e.textContent.includes(${JSON.stringify(sellerId)}))
