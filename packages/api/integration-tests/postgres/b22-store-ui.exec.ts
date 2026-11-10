@@ -6520,13 +6520,14 @@ export default async function({container}:any){
     assert.equal(pausedCatalogue.body.stores.some((s:any)=>s.id===secondOwnerStoreId),true,
       "A separate open Store remains available")
     const ownerPauseHttp=async(data:any,includeCsrf=true)=>browser.callFunction(
-      "async function(payload,includeCsrf){"+
+      "async function(raw,flag){"+
+      "const payload=JSON.parse(raw);"+
       "const s=await(await fetch('/personal/session')).json();"+
       "const headers={'content-type':'application/json'};"+
-      "if(includeCsrf)headers['x-csrf-token']=s.csrf_token;"+
+      "if(flag==='true')headers['x-csrf-token']=s.csrf_token;"+
       "const r=await fetch('/personal/store-owner-pause',{method:'POST',headers,"+
       "body:JSON.stringify(payload)});return {status:r.status,body:await r.json()}}",
-      data,includeCsrf)
+      JSON.stringify(data),String(includeCsrf))
     const pausePayload={organization_id:organizations[0].id,seller_id:ownerStoreId,
       action:"pause",request_id:pausedRows[0].request_id,expected_version:0}
     assert.equal((await ownerPauseHttp(pausePayload)).status,200,
