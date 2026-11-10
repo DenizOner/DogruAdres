@@ -30,6 +30,144 @@ import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-in
 import taxCertificateInventory, {inspectTaxCertificateSnapshot} from "../../src/scripts/tax-certificate-inventory"
 
 
+async function verifyOwnerTemporaryPauseBrowser(input:{
+  browser:B06Chrome;organizations:any[];ownerStoreId:string;
+  secondOwnerStoreId:string;nativeCustomer:any;customerCart:any;
+  cartStoreIds:string[];container:any;foundation:any;cartService:any;
+  q:(sql:string,params?:any[])=>Promise<any[]>;
+  get:(url:string)=>Promise<any>;
+  catalogUrl:(organizationId:string)=>string;
+}):Promise<void>{
+  const {browser,organizations,ownerStoreId,secondOwnerStoreId,
+    nativeCustomer,customerCart,cartStoreIds,container,foundation,
+    cartService,q,get,catalogUrl}=input
+    // B22 Owner temporary pause: real personal UI and first-party HTTPS
+    // mutation, real canonical PostgreSQL audit/outbox, and an existing
+    // two-Store Cart's final L sale decision. Native Vendor/admin and payment
+    // remain closed; this test never enables checkout or writes a new Order.
+    const pauseNativeBefore=(await q(
+      "select id,name,handle,status,approved_at,closed_from,closed_to "+
+      "from seller where id=$1",[ownerStoreId]))[0]
+    assert.equal(pauseNativeBefore.status,"open")
+    const pauseAuditStart=Number((await q(
+      "select count(*)::int n from da_audit_event where target_id=$1 "+
+      "and resource='store-owner-pause'",[ownerStoreId]))[0].n)
+    assert.equal(pauseAuditStart,0,"Fresh Store has no previous Owner pause")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("!document.getElementById('store-owner-pause-panel').hidden && "+
+      "Array.from(document.querySelectorAll('#store-owner-pause-form select option')).some(o=>o.value==="+
+      JSON.stringify(ownerStoreId)+")")
+    await browser.eval("(()=>{const choice=document.querySelector("+
+      "'#store-owner-pause-form select[name=seller_id]');choice.value="+
+      JSON.stringify(ownerStoreId)+";choice.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık') && "+
+      "!document.querySelector('#store-owner-pause-form button[value=pause]').disabled")
+    await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
+    await browser.click('#store-owner-pause-form button[value="pause"]')
+    await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
+    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('geçici arada')")
+    assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-owner-pause"&&
+      x.method==="POST"&&x.status===200),"Visible Owner pause must send real HTTPS 200")
+    const pausedRows=await q(
+      "select p.paused,p.version,p.request_id,p.source_audit_event_id,"+
+      "e.action,e.actor_person_id,e.organization_id,"+
+      "(select count(*)::int from da_audit_outbox o "+
+      "where o.source_audit_event_id=e.id and o.source_module='dogruadres-access') as outbox_count "+
+      "from da_store_owner_pause p join da_audit_event e on e.id=p.source_audit_event_id "+
+      "where p.seller_id=$1",[ownerStoreId])
+    assert.equal(pausedRows.length,1)
+    assert.equal(pausedRows[0].paused,true)
+    assert.equal(pausedRows[0].version,1)
+    assert.match(pausedRows[0].request_id,/^dasp_[a-f0-9]{32}$/)
+    assert.equal(pausedRows[0].action,"organization.store_owner_paused")
+    assert.equal(pausedRows[0].organization_id,organizations[0].id)
+    assert.equal(pausedRows[0].outbox_count,1)
+    const pauseNativeDuring=(await q(
+      "select id,name,handle,status,approved_at,closed_from,closed_to "+
+      "from seller where id=$1",[ownerStoreId]))[0]
+    assert.deepEqual(pauseNativeDuring,pauseNativeBefore,
+      "Owner temporary pause must not change native Seller lifecycle, ID or name")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds),false,
+      "Pausing ONE of two Stores must deny the WHOLE final L checkout")
+    assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]}))
+      .items?.length,2,"Pause must preserve existing Cart")
+    const pausedCatalogue=await get(catalogUrl(organizations[0].id))
+    assert.equal(pausedCatalogue.status,200)
+    assert.equal(pausedCatalogue.body.stores.some((s:any)=>s.id===ownerStoreId),false,
+      "Paused Store must be hidden even though native status stays open")
+    assert.equal(pausedCatalogue.body.stores.some((s:any)=>s.id===secondOwnerStoreId),true,
+      "A separate open Store remains available")
+    const ownerPauseHttp=async(data:any,includeCsrf=true)=>browser.callFunction(
+      "async function(raw,flag){"+
+      "const payload=JSON.parse(raw);"+
+      "const s=await(await fetch('/personal/session')).json();"+
+      "const headers={'content-type':'application/json'};"+
+      "if(flag==='true')headers['x-csrf-token']=s.csrf_token;"+
+      "const r=await fetch('/personal/store-owner-pause',{method:'POST',headers,"+
+      "body:JSON.stringify(payload)});return {status:r.status,body:await r.json()}}",
+      JSON.stringify(data),String(includeCsrf))
+    const pausePayload={organization_id:organizations[0].id,seller_id:ownerStoreId,
+      action:"pause",request_id:pausedRows[0].request_id,expected_version:0}
+    assert.equal((await ownerPauseHttp(pausePayload)).status,200,
+      "Replaying the same exact Owner pause must be idempotent")
+    assert.equal((await ownerPauseHttp({...pausePayload,request_id:
+      "dasp_"+randomBytes(16).toString("hex")})).status,409,
+      "Different same-version request must not repeat the write")
+    assert.equal((await ownerPauseHttp({...pausePayload,organization_id:organizations[1].id})).status,403,
+      "Wrong Organization Owner must not change a foreign Store")
+    assert.equal((await ownerPauseHttp(pausePayload,false)).status,403,
+      "A browser without CSRF cannot change Owner pause")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where target_id=$1 "+
+      "and resource='store-owner-pause'",[ownerStoreId]))[0].n),pauseAuditStart+1,
+      "Denied/replayed requests cannot duplicate audit events")
+
+    // Platform suspension is a *separate* authority. Owner can never
+    // resume while the platform-suspended native status is in force.
+    await suspendSellerWorkflow(container).run({input:{
+      seller_id:ownerStoreId,reason:"B22 task-only platform suspension during Owner pause"
+    }})
+    assert.equal((await ownerPauseHttp({...pausePayload,action:"resume",
+      request_id:"dasp_"+randomBytes(16).toString("hex"),expected_version:1})).status,403,
+      "Owner resume cannot bypass an independent platform suspension")
+    assert.equal((await q("select paused from da_store_owner_pause where seller_id=$1",
+      [ownerStoreId]))[0].paused,true)
+    await unsuspendSellerWorkflow(container).run({input:{seller_id:ownerStoreId}})
+    await browser.click('#store-owner-pause-refresh')
+    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('geçici arada')&&"+
+      "!document.querySelector('#store-owner-pause-form button[value=resume]').disabled")
+    await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
+    await browser.click('#store-owner-pause-form button[value="resume"]')
+    await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
+    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık')")
+    const resumedRows=await q(
+      "select p.paused,p.version,e.action,"+
+      "(select count(*)::int from da_audit_outbox o where o.source_audit_event_id=e.id) as outbox_count "+
+      "from da_store_owner_pause p join da_audit_event e on e.id=p.source_audit_event_id "+
+      "where p.seller_id=$1",[ownerStoreId])
+    assert.deepEqual(resumedRows,[{paused:false,version:2,
+      action:"organization.store_owner_resumed",outbox_count:1}])
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where target_id=$1 "+
+      "and resource='store-owner-pause'",[ownerStoreId]))[0].n),pauseAuditStart+2)
+    const pauseNativeAfter=(await q(
+      "select id,name,handle,status,approved_at,closed_from,closed_to "+
+      "from seller where id=$1",[ownerStoreId]))[0]
+    assert.deepEqual(pauseNativeAfter,pauseNativeBefore,
+      "Owner resume preserves original Seller identity and other closure state")
+    assert.equal(await foundation.authorizeBuyerCheckout(
+      customerCart.id,nativeCustomer.id,cartStoreIds),true,
+      "After Owner resume with native platform OPEN, final L authorization is restored")
+    assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]}))
+      .items?.length,2,"Neither pause nor resume changes preexisting cart lines")
+    process.stdout.write("PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed\\n")
+
+
+}
+
 // Use the existing real CI Chrome and two native Vite dashboard apps. The only
 // external URL is a synthetic .invalid name; browser CSP blocks it BEFORE DNS.
 // This changes no application role, production setting or protected data.
@@ -6460,130 +6598,9 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 two platform-approved Stores: each Store's buyer block separately denies whole multi-Store scope; unblock A cannot lift B; both unblocked restores 200, no cart writes\\n")
     process.stdout.write("PASS B22 audited Owner Store Buyer Organization block: two-Store scope 403 if one blocked, idempotent unblock restores 200; no checkout\\n")
 
-    // B22 Owner temporary pause: real personal UI and first-party HTTPS
-    // mutation, real canonical PostgreSQL audit/outbox, and an existing
-    // two-Store Cart's final L sale decision. Native Vendor/admin and payment
-    // remain closed; this test never enables checkout or writes a new Order.
-    const pauseNativeBefore=(await q(
-      "select id,name,handle,status,approved_at,closed_from,closed_to "+
-      "from seller where id=$1",[ownerStoreId]))[0]
-    assert.equal(pauseNativeBefore.status,"open")
-    const pauseAuditStart=Number((await q(
-      "select count(*)::int n from da_audit_event where target_id=$1 "+
-      "and resource='store-owner-pause'",[ownerStoreId]))[0].n)
-    assert.equal(pauseAuditStart,0,"Fresh Store has no previous Owner pause")
-    await browser.send("Page.bringToFront")
-    await browser.wait("document.visibilityState==='visible'")
-    await browser.select(organizations[0].name,"owner")
-    await browser.wait("!document.getElementById('store-owner-pause-panel').hidden && "+
-      "Array.from(document.querySelectorAll('#store-owner-pause-form select option')).some(o=>o.value==="+
-      JSON.stringify(ownerStoreId)+")")
-    await browser.eval("(()=>{const choice=document.querySelector("+
-      "'#store-owner-pause-form select[name=seller_id]');choice.value="+
-      JSON.stringify(ownerStoreId)+";choice.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
-    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık') && "+
-      "!document.querySelector('#store-owner-pause-form button[value=pause]').disabled")
-    await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
-    await browser.click('#store-owner-pause-form button[value="pause"]')
-    await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
-    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('geçici arada')")
-    assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-owner-pause"&&
-      x.method==="POST"&&x.status===200),"Visible Owner pause must send real HTTPS 200")
-    const pausedRows=await q(
-      "select p.paused,p.version,p.request_id,p.source_audit_event_id,"+
-      "e.action,e.actor_person_id,e.organization_id,"+
-      "(select count(*)::int from da_audit_outbox o "+
-      "where o.source_audit_event_id=e.id and o.source_module='dogruadres-access') as outbox_count "+
-      "from da_store_owner_pause p join da_audit_event e on e.id=p.source_audit_event_id "+
-      "where p.seller_id=$1",[ownerStoreId])
-    assert.equal(pausedRows.length,1)
-    assert.equal(pausedRows[0].paused,true)
-    assert.equal(pausedRows[0].version,1)
-    assert.match(pausedRows[0].request_id,/^dasp_[a-f0-9]{32}$/)
-    assert.equal(pausedRows[0].action,"organization.store_owner_paused")
-    assert.equal(pausedRows[0].organization_id,organizations[0].id)
-    assert.equal(pausedRows[0].outbox_count,1)
-    const pauseNativeDuring=(await q(
-      "select id,name,handle,status,approved_at,closed_from,closed_to "+
-      "from seller where id=$1",[ownerStoreId]))[0]
-    assert.deepEqual(pauseNativeDuring,pauseNativeBefore,
-      "Owner temporary pause must not change native Seller lifecycle, ID or name")
-    assert.equal(await foundation.authorizeBuyerCheckout(
-      customerCart.id,nativeCustomer.id,cartStoreIds),false,
-      "Pausing ONE of two Stores must deny the WHOLE final L checkout")
-    assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]}))
-      .items?.length,2,"Pause must preserve existing Cart")
-    const pausedCatalogue=await get(catalogUrl(organizations[0].id))
-    assert.equal(pausedCatalogue.status,200)
-    assert.equal(pausedCatalogue.body.stores.some((s:any)=>s.id===ownerStoreId),false,
-      "Paused Store must be hidden even though native status stays open")
-    assert.equal(pausedCatalogue.body.stores.some((s:any)=>s.id===secondOwnerStoreId),true,
-      "A separate open Store remains available")
-    const ownerPauseHttp=async(data:any,includeCsrf=true)=>browser.callFunction(
-      "async function(raw,flag){"+
-      "const payload=JSON.parse(raw);"+
-      "const s=await(await fetch('/personal/session')).json();"+
-      "const headers={'content-type':'application/json'};"+
-      "if(flag==='true')headers['x-csrf-token']=s.csrf_token;"+
-      "const r=await fetch('/personal/store-owner-pause',{method:'POST',headers,"+
-      "body:JSON.stringify(payload)});return {status:r.status,body:await r.json()}}",
-      JSON.stringify(data),String(includeCsrf))
-    const pausePayload={organization_id:organizations[0].id,seller_id:ownerStoreId,
-      action:"pause",request_id:pausedRows[0].request_id,expected_version:0}
-    assert.equal((await ownerPauseHttp(pausePayload)).status,200,
-      "Replaying the same exact Owner pause must be idempotent")
-    assert.equal((await ownerPauseHttp({...pausePayload,request_id:
-      "dasp_"+randomBytes(16).toString("hex")})).status,409,
-      "Different same-version request must not repeat the write")
-    assert.equal((await ownerPauseHttp({...pausePayload,organization_id:organizations[1].id})).status,403,
-      "Wrong Organization Owner must not change a foreign Store")
-    assert.equal((await ownerPauseHttp(pausePayload,false)).status,403,
-      "A browser without CSRF cannot change Owner pause")
-    assert.equal(Number((await q(
-      "select count(*)::int n from da_audit_event where target_id=$1 "+
-      "and resource='store-owner-pause'",[ownerStoreId]))[0].n),pauseAuditStart+1,
-      "Denied/replayed requests cannot duplicate audit events")
-
-    // Platform suspension is a *separate* authority. Owner can never
-    // resume while the platform-suspended native status is in force.
-    await suspendSellerWorkflow(container).run({input:{
-      seller_id:ownerStoreId,reason:"B22 task-only platform suspension during Owner pause"
-    }})
-    assert.equal((await ownerPauseHttp({...pausePayload,action:"resume",
-      request_id:"dasp_"+randomBytes(16).toString("hex"),expected_version:1})).status,403,
-      "Owner resume cannot bypass an independent platform suspension")
-    assert.equal((await q("select paused from da_store_owner_pause where seller_id=$1",
-      [ownerStoreId]))[0].paused,true)
-    await unsuspendSellerWorkflow(container).run({input:{seller_id:ownerStoreId}})
-    await browser.click('#store-owner-pause-refresh')
-    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('geçici arada')&&"+
-      "!document.querySelector('#store-owner-pause-form button[value=resume]').disabled")
-    await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
-    await browser.click('#store-owner-pause-form button[value="resume"]')
-    await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
-    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık')")
-    const resumedRows=await q(
-      "select p.paused,p.version,e.action,"+
-      "(select count(*)::int from da_audit_outbox o where o.source_audit_event_id=e.id) as outbox_count "+
-      "from da_store_owner_pause p join da_audit_event e on e.id=p.source_audit_event_id "+
-      "where p.seller_id=$1",[ownerStoreId])
-    assert.deepEqual(resumedRows,[{paused:false,version:2,
-      action:"organization.store_owner_resumed",outbox_count:1}])
-    assert.equal(Number((await q(
-      "select count(*)::int n from da_audit_event where target_id=$1 "+
-      "and resource='store-owner-pause'",[ownerStoreId]))[0].n),pauseAuditStart+2)
-    const pauseNativeAfter=(await q(
-      "select id,name,handle,status,approved_at,closed_from,closed_to "+
-      "from seller where id=$1",[ownerStoreId]))[0]
-    assert.deepEqual(pauseNativeAfter,pauseNativeBefore,
-      "Owner resume preserves original Seller identity and other closure state")
-    assert.equal(await foundation.authorizeBuyerCheckout(
-      customerCart.id,nativeCustomer.id,cartStoreIds),true,
-      "After Owner resume with native platform OPEN, final L authorization is restored")
-    assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]}))
-      .items?.length,2,"Neither pause nor resume changes preexisting cart lines")
-    process.stdout.write("PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed\\n")
-
+    await verifyOwnerTemporaryPauseBrowser({browser,organizations,ownerStoreId,
+      secondOwnerStoreId,nativeCustomer,customerCart,cartStoreIds,container,
+      foundation,cartService,q,get,catalogUrl})
     // One native Seller suspended means NO partially authorized two-Store
     // scope. The native workflow restores the task's prior approved state.
     await suspendSellerWorkflow(container).run({input:{
