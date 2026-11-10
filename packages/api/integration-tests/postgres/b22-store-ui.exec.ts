@@ -32,12 +32,13 @@ import taxCertificateInventory, {inspectTaxCertificateSnapshot} from "../../src/
 
 
 async function verifyOwnerClosingBrowser(input:{
-  browser:B06Chrome;organizations:any[];ownerStoreId:string;secondOwnerStoreId:string;
+  browser:B06Chrome;reviewer:B06Chrome;coOwnerPersonId:string;
+  organizations:any[];ownerStoreId:string;secondOwnerStoreId:string;
   nativeCustomer:any;customerCart:any;cartStoreIds:string[];foundation:any;cartService:any;
   q:(sql:string,params?:any[])=>Promise<any[]>;
   get:(url:string)=>Promise<any>;catalogUrl:(org:string)=>string;
 }):Promise<void>{
-  const {browser,organizations,ownerStoreId,secondOwnerStoreId,
+  const {browser,reviewer,coOwnerPersonId,organizations,ownerStoreId,secondOwnerStoreId,
     nativeCustomer,customerCart,cartStoreIds,foundation,cartService,q,get,catalogUrl}=input
   // Isolated synthetic Store. Never turn on public checkout or payments.
   const nativeBefore=(await q(
@@ -46,6 +47,48 @@ async function verifyOwnerClosingBrowser(input:{
   assert.equal(nativeBefore.status,"open")
   assert.equal(Number((await q("select count(*)::int n from da_store_owner_closing where seller_id=$1",
     [ownerStoreId]))[0].n),0)
+  // The same two real, independently signed-in Persons are reused from the
+  // existing B22 organization-policy notification test. Promote the second
+  // fixture's membership only in this disposable task database and restore it
+  // after closing acceptance; this does NOT introduce an Owner-promotion API.
+  const [coOwnerBefore]=await q(`select id,role,status,protected_owner,revoked_at
+    from da_organization_membership
+    where organization_id=$1 and person_id=$2 and deleted_at is null`,
+    [organizations[0].id,coOwnerPersonId])
+  assert.ok(coOwnerBefore?.id)
+  assert.equal(coOwnerBefore.role,"member")
+  assert.equal(coOwnerBefore.protected_owner,false)
+  assert.equal(coOwnerBefore.status,"active")
+  assert.equal(coOwnerBefore.revoked_at,null)
+  assert.equal((await q(`update da_organization_membership
+    set role='owner',protected_owner=true,updated_at=clock_timestamp()
+    where id=$1 and role='member' and protected_owner=false and status='active'
+    returning id`,[coOwnerBefore.id])).length,1)
+  const expectedOwners=await q(`select m.person_id from da_organization_membership m
+    join da_person p on p.id=m.person_id
+    where m.organization_id=$1 and m.role='owner' and m.protected_owner=true
+      and m.status='active' and m.revoked_at is null and m.deleted_at is null
+      and p.disabled_at is null and p.deleted_at is null order by m.person_id`,
+    [organizations[0].id])
+  assert.equal(expectedOwners.length,2,"Two distinct, live protected Owners required")
+  assert.equal(new Set(expectedOwners.map(x=>x.person_id)).size,2)
+  const assertNotifiedOwners=async(auditId:string,title:string)=>{
+    const recipients=await q(`select person_id from da_notification_receipt
+      where audit_event_id=$1 order by person_id`,[auditId])
+    assert.deepEqual(recipients,expectedOwners,
+      "Exactly one private closing notice for EACH active protected Owner")
+    const route="/personal/notifications?organization="+encodeURIComponent(organizations[0].id)
+    const readOwner=async(b:B06Chrome)=>b.callFunction(
+      "async function(path){const r=await fetch(path,{cache:'no-store'});"+
+      "return {status:r.status,body:await r.json()}}",route)
+    for(const actor of [browser,reviewer]){
+      const result=await readOwner(actor)
+      assert.equal(result.status,200)
+      assert.equal(result.body.notifications.filter((n:any)=>
+        n.title===title&&n.context===organizations[0].name).length,1,
+        "Both independently signed-in Owners must read the private event")
+    }
+  }
   await browser.send("Page.bringToFront")
   await browser.wait("document.visibilityState==='visible'")
   await browser.select(organizations[0].name,"owner")
@@ -71,7 +114,7 @@ async function verifyOwnerClosingBrowser(input:{
   assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-owner-closing"&&x.method==="POST"&&x.status===200))
   const [closed]=await q(
     "select c.organization_id,c.state,c.version,c.request_id,c.started_at,c.due_at,"+
-    "e.action,e.actor_person_id,e.new_values->>'state' as proof_state,"+
+    "e.id as audit_event_id,e.action,e.actor_person_id,e.new_values->>'state' as proof_state,"+
     "(select count(*)::int from da_audit_outbox x where x.source_audit_event_id=e.id) as outbox_count,"+
     "(select count(*)::int from da_notification_receipt n where n.audit_event_id=e.id) as notices "+
     "from da_store_owner_closing c join da_audit_event e on e.id=c.source_audit_event_id "+
@@ -93,7 +136,9 @@ async function verifyOwnerClosingBrowser(input:{
     clockView.body.remaining_seconds>0&&clockView.body.remaining_seconds<=2592000,
     "Owner's status includes a bounded canonical server-clock countdown")
   assert.equal(closed.outbox_count,1)
-  assert.ok(closed.notices>=1,"Protected Owner must receive in-app security notice")
+  assert.equal(closed.notices,2,"Every protected Owner must receive one closing notice")
+  await assertNotifiedOwners(closed.audit_event_id,
+    "Mağaza için 30 günlük kapatma süreci başladı")
   assert.equal(new Date(closed.due_at).getTime()-new Date(closed.started_at).getTime(),2592000000)
   assert.deepEqual((await q("select id,name,handle,status,approved_at,closed_from,closed_to from seller where id=$1",
     [ownerStoreId]))[0],nativeBefore)
@@ -134,7 +179,7 @@ async function verifyOwnerClosingBrowser(input:{
   await browser.eval("window.confirm=window.__b22ClosingConfirm;delete window.__b22ClosingConfirm")
   await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('geri çekildi')")
   const [withdrawn]=await q(
-    "select c.state,c.version,c.started_at,c.due_at,e.action,"+
+    "select c.state,c.version,c.started_at,c.due_at,e.id as audit_event_id,e.action,"+
     "(select count(*)::int from da_audit_outbox x where x.source_audit_event_id=e.id) as outbox_count,"+
     "(select count(*)::int from da_notification_receipt n where n.audit_event_id=e.id) as notices "+
     "from da_store_owner_closing c join da_audit_event e on e.id=c.source_audit_event_id "+
@@ -144,7 +189,9 @@ async function verifyOwnerClosingBrowser(input:{
   assert.equal(withdrawn.action,"organization.store_owner_closing_withdrawn")
   assert.equal(new Date(withdrawn.due_at).getTime(),new Date(closed.due_at).getTime())
   assert.equal(withdrawn.outbox_count,1)
-  assert.ok(withdrawn.notices>=1)
+  assert.equal(withdrawn.notices,2)
+  await assertNotifiedOwners(withdrawn.audit_event_id,
+    "Mağaza kapatma talebi geri çekildi")
   assert.equal(await foundation.authorizeBuyerCheckout(customerCart.id,nativeCustomer.id,cartStoreIds),true)
   assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]})).items?.length,2)
   assert.deepEqual((await q("select id,name,handle,status,approved_at,closed_from,closed_to from seller where id=$1",
@@ -6829,9 +6876,9 @@ export default async function({container}:any){
     await verifyOwnerTemporaryPauseBrowser({browser,organizations,ownerStoreId,
       secondOwnerStoreId,nativeCustomer,customerCart,cartStoreIds,container,
       foundation,cartService,q,get,catalogUrl})
-    await verifyOwnerClosingBrowser({browser,organizations,ownerStoreId,
-      secondOwnerStoreId,nativeCustomer,customerCart,cartStoreIds,
-      foundation,cartService,q,get,catalogUrl})
+    await verifyOwnerClosingBrowser({browser,reviewer,coOwnerPersonId:B.person,
+      organizations,ownerStoreId,secondOwnerStoreId,nativeCustomer,
+      customerCart,cartStoreIds,foundation,cartService,q,get,catalogUrl})
     // One native Seller suspended means NO partially authorized two-Store
     // scope. The native workflow restores the task's prior approved state.
     await suspendSellerWorkflow(container).run({input:{
