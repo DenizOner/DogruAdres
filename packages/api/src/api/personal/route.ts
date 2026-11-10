@@ -317,6 +317,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <div id="store-rename-history"></div>
       <button id="store-rename-refresh" type="button">Talep geçmişini yenile</button>
     </section>
+    <section id="store-owner-pause-panel" hidden aria-labelledby="store-owner-pause-title">
+      <h3 id="store-owner-pause-title">Mağazaya geçici ara ver</h3>
+      <p>Geçici ara verme yeni satışları durdurur. Mağaza kimliği, adı, geçmiş siparişleri ve isim hakkı korunur. Bu işlem platform askısını veya başka bir kapanış nedenini kaldırmaz.</p>
+      <p id="store-owner-pause-status" role="status" aria-live="polite"></p>
+      <form id="store-owner-pause-form">
+        <label>Mağaza<select name="seller_id" required></select></label>
+        <button type="submit" name="action" value="pause" disabled>Geçici ara ver</button>
+        <button type="submit" name="action" value="resume" disabled>Satışa devam et</button>
+      </form>
+      <button type="button" id="store-owner-pause-refresh">Durumu yenile</button>
+    </section>
     <section id="store-block-panel" hidden aria-labelledby="store-block-title">
       <h3 id="store-block-title">Mağazanın alıcı kuruluş engelleri</h3>
       <p>Bu mağazanın bağlı olduğu kuruluşun Owner'ı, belirli bir alıcı kuruluşun bu mağazadan yeni satın alma uygunluğunu engelleyebilir veya engeli kaldırabilir. Diğer mağazalar etkilenmez. Bu işlem geçmiş siparişleri değiştirmez.</p>
@@ -2653,6 +2664,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-rename-panel').hidden=true;
     el('store-rename-status').textContent='';
     el('store-rename-history').replaceChildren();
+    clearOwnerPause();
     const form=el('store-rename-form');
     if(typeof form?.reset==='function')form.reset();
     const field=form?.elements&&typeof form.elements.namedItem==='function'?
@@ -2779,6 +2791,109 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(!e.uncertain)button.disabled=false;
     }finally{renamePending=false;}
   };
+
+  let ownerPauseRead=0,ownerPausePending=false,ownerPauseUncertain=false;
+  let ownerPauseVersion=null,ownerPauseState=null;
+  function clearOwnerPause(){
+    ownerPauseRead++;ownerPauseVersion=null;ownerPauseState=null;
+    ownerPausePending=false;ownerPauseUncertain=false;
+    const panel=el('store-owner-pause-panel'),form=el('store-owner-pause-form');
+    panel.hidden=true;el('store-owner-pause-status').textContent='';
+    const select=form?.elements?.namedItem('seller_id');
+    if(select?.replaceChildren)select.replaceChildren();
+    if(form)for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
+  }
+  function ownerPauseButtons(){
+    const form=el('store-owner-pause-form');
+    if(!form)return;
+    for(const b of form.querySelectorAll('button[type=submit]')){
+      b.disabled=ownerPausePending||ownerPauseUncertain||
+        !ownerPauseState||ownerPauseState.store_status!=='open'||
+        (b.value==='pause'?ownerPauseState.paused:!ownerPauseState.paused);
+    }
+  }
+  async function refreshOwnerPause(org,request){
+    const form=el('store-owner-pause-form'),seller=form?.elements?.namedItem('seller_id')?.value;
+    if(!org||!seller||!selectedStoreOwner||document.hidden||
+       el('store-owner-pause-panel').hidden)return;
+    const seq=++ownerPauseRead,epoch=viewEpoch,st=el('store-owner-pause-status');
+    ownerPauseVersion=null;ownerPauseState=null;ownerPauseButtons();
+    st.textContent='Güncel mağaza durumu doğrulanıyor…';
+    try{
+      const data=await api('store-owner-pause?'+new URLSearchParams({
+        organization_id:org,seller_id:seller
+      }).toString());
+      if(seq!==ownerPauseRead||epoch!==viewEpoch||
+         request!==organizationRequest||org!==currentOrg||
+         seller!==form.elements.namedItem('seller_id').value||document.hidden)return;
+      if(data.organization_id!==org||data.seller_id!==seller||
+         typeof data.paused!=='boolean'||
+         !Number.isSafeInteger(data.version)||data.version<0||
+         !['open','suspended','terminated'].includes(data.store_status))
+        throw Error('Mağaza durumu doğrulanamadı');
+      ownerPauseVersion=data.version;ownerPauseState=data;ownerPauseUncertain=false;
+      ownerPauseButtons();
+      st.textContent=data.store_status!=='open'?
+        'Platform kaynaklı askı veya kapanış var. Owner bu ekrandan satış açamaz.':
+        data.paused?'Mağaza geçici arada. Adınız korunuyor; yeni satış kabul edilmiyor.':
+          'Mağaza satışa açık. Geçici ara verebilirsiniz.';
+    }catch{
+      if(seq!==ownerPauseRead||request!==organizationRequest||org!==currentOrg)return;
+      ownerPauseUncertain=true;ownerPauseButtons();
+      st.textContent='Durum güvenle doğrulanamadı; değişiklik kapatıldı. Yeniden kontrol edin.';
+    }
+  }
+  const ownerPauseForm=el('store-owner-pause-form');
+  ownerPauseForm.elements.namedItem('seller_id').onchange=()=>{
+    ownerPauseUncertain=false;
+    if(currentOrg)void refreshOwnerPause(currentOrg,organizationRequest);
+  };
+  el('store-owner-pause-refresh').onclick=()=>{
+    if(currentOrg)void refreshOwnerPause(currentOrg,organizationRequest);
+  };
+  ownerPauseForm.onsubmit=async event=>{
+    event.preventDefault();
+    const form=event.currentTarget,action=event.submitter?.value,org=currentOrg;
+    const request=organizationRequest,epoch=viewEpoch;
+    const seller=form.elements.namedItem('seller_id')?.value;
+    if(!org||!selectedStoreOwner||document.hidden||ownerPausePending||
+       ownerPauseUncertain||!ownerPauseState||ownerPauseVersion===null||
+       ownerPauseState.seller_id!==seller||
+       !['pause','resume'].includes(action)||
+       ownerPauseState.store_status!=='open')return;
+    if(!confirm(action==='pause'?
+      'Bu mağazanın yeni satışlarını hemen durdurmak istiyor musunuz? Mevcut sepetler satın alınamaz.':
+      'Bu mağazadaki size ait geçici arayı kaldırmak istiyor musunuz?'))return;
+    ownerPausePending=true;ownerPauseButtons();
+    const st=el('store-owner-pause-status');
+    st.textContent='İşlem yetki ve mağaza durumuyla birlikte kaydediliyor…';
+    const id='dasp_'+crypto.randomUUID().replace(/-/g,'');
+    try{
+      const result=await api('store-owner-pause',{method:'POST',body:JSON.stringify({
+        action,organization_id:org,seller_id:seller,request_id:id,
+        expected_version:ownerPauseVersion
+      })});
+      if(request!==organizationRequest||epoch!==viewEpoch||
+         org!==currentOrg||seller!==form.elements.namedItem('seller_id').value)return;
+      if(result.seller_id!==seller||
+         result.status!==(action==='pause'?'paused':'resumed')||
+         !Number.isSafeInteger(result.version))throw Error('Sonuç doğrulanamadı');
+      ownerPauseUncertain=false;
+      // A fresh read, not a duplicate mutation, determines the displayed state.
+      await refreshOwnerPause(org,request);
+      if(request===organizationRequest&&org===currentOrg)
+        void organizationStores(org,request);
+    }catch(e){
+      if(request!==organizationRequest||epoch!==viewEpoch||org!==currentOrg)return;
+      ownerPauseUncertain=!!e.uncertain||e.httpStatus>=500;
+      st.textContent=ownerPauseUncertain?
+        'Sonuç belirsiz; tekrar işlem göndermeyin. Durumu yenileyin.':
+        'İşlem reddedildi. Güncel mağaza durumunu yeniden kontrol edin.';
+      ownerPauseButtons();
+    }finally{
+      ownerPausePending=false;ownerPauseButtons();
+    }
+  };
   async function organizationStores(org,request){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
     const seq=++storeRequest;
@@ -2832,9 +2947,24 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               }
               el('store-rename-panel').hidden=renameData.stores.length===0;
               if(!el('store-rename-panel').hidden)void refreshStoreRename(org,request);
+              // Owner's pause selector is private and independent from the
+              // commercial Store picker. It also lists a currently paused
+              // native-OPEN Store so its Owner can safely resume.
+              const pauseChoice=el('store-owner-pause-form').elements.namedItem('seller_id');
+              pauseChoice.replaceChildren();
+              for(const store of renameData.stores){
+                const opt=document.createElement('option');
+                opt.value=store.id;
+                opt.textContent=store.name+(store.status==='suspended'?' — platform askısında':'');
+                pauseChoice.append(opt);
+              }
+              el('store-owner-pause-panel').hidden=renameData.stores.length===0;
+              if(renameData.stores.length)void refreshOwnerPause(org,request);
+
             }catch{
               if(request!==organizationRequest||seq!==storeRequest||
                  currentOrg!==org||document.hidden)return;
+              clearOwnerPause();
               select.replaceChildren();
               el('store-rename-panel').hidden=true;
               el('store-rename-status').textContent=

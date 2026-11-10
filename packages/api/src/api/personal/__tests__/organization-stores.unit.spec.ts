@@ -19,6 +19,7 @@ describe("B22 platform-approved Organization Store read (route boundary, mock-on
       personalLegalSellerIds:jest.fn().mockResolvedValue(permit(["sel_A"])),
       personalStoreRenameCandidateIds:jest.fn().mockResolvedValue(permit(["sel_A"])),
       personalActorBinding:jest.fn().mockResolvedValue({person_id:person,actor_id:member,revoked_at:null}),
+      storeOwnerPauseAcceptingOrders:jest.fn().mockResolvedValue(true),
     }
     native={
       listMembers:jest.fn().mockResolvedValue([{id:member,is_active:true}]),
@@ -77,6 +78,22 @@ describe("B22 platform-approved Organization Store read (route boundary, mock-on
     expect(res.json).toHaveBeenCalledWith({organization_id:organization,stores:[]})
   })
 
+  it("excludes an Owner-paused Store from commercial scope but keeps private rename scope",async()=>{
+    svc.storeOwnerPauseAcceptingOrders.mockResolvedValue(false)
+    await GET(req,res)
+    expect(res.json).toHaveBeenLastCalledWith({organization_id:organization,stores:[]})
+    req.query={organization,purpose:"rename"}
+    await GET(req,res)
+    expect(res.json).toHaveBeenLastCalledWith({
+      organization_id:organization,
+      stores:[{id:"sel_A",name:"A Store",status:"open"}]
+    })
+  })
+  it("rechecks a pause started during Store picker response",async()=>{
+    svc.storeOwnerPauseAcceptingOrders.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+  })
   it("excludes inactive/suspended or inaccessible Stores",async()=>{
     svc.personalLegalSellerIds.mockResolvedValue(permit(["sel_A","sel_B"]))
     native.listSellerMembers.mockImplementation(async ({seller_id}:any)=>seller_id==="sel_A"?[{member_id:member,seller_id}]:[])
