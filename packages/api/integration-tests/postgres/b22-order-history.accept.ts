@@ -194,7 +194,7 @@ export async function verifyB22AuthorizedForeignHistoricalOrder(input:{
     assert.equal(raw.includes(id),false,"Foreign Buyer cannot learn private identifiers")
   assert.deepEqual(await orderReadFootprint(q,otherOrgId),ownBefore)
   assert.deepEqual(await orderReadFootprint(q,ownerOrgId),ownerBefore)
-  process.stdout.write("PASS B22 real historical order: authorized own-Org Customer denies foreign completed OrderGroup HTTP403 with no private fields or audit/outbox writes\n")
+  process.stdout.write("PASS B22 Chrome: historical OrderGroup authorized own-Org Customer denies foreign completed OrderGroup HTTP403 with no private fields or audit/outbox writes\n")
 }
 
 /** A task-only PG16 revocation must deny the real owner's existing Chrome cookie. */
@@ -232,5 +232,5 @@ export async function verifyB22RevokedHistoricalOrder(input:{
   assert.equal(readableAgain.status,200,
     "The same own OrderGroup must remain readable after isolated fixture restoration")
   assert.deepEqual(await orderReadFootprint(q,buyerOrgId),before)
-  process.stdout.write("PASS B22 real historical order: revoked Buyer cookie HTTP403 generic response, audit/outbox unchanged; isolated session restored and own order HTTP200\n")
+  process.stdout.write("PASS B22 Chrome: historical OrderGroup revoked Buyer cookie HTTP403 generic response, audit/outbox unchanged; isolated session restored and own order HTTP200\n")
 }
