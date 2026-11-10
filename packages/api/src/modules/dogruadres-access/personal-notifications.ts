@@ -37,11 +37,18 @@ export class PersonalNotifications {
         (a.action in ('organization.store_application_right_enabled',
                       'organization.store_application_right_disabled',
                       'organization.store_application_rejected',
-                      'organization.store_reactivated')
+                      'organization.store_reactivated',
+                      'organization.store_owner_closing_started',
+                      'organization.store_owner_closing_withdrawn')
           and ((a.action in ('organization.store_application_rejected','organization.store_reactivated')
                 and a.resource='store-application'
                 and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
-            or (a.action not in ('organization.store_application_rejected','organization.store_reactivated')
+            or (a.action in ('organization.store_owner_closing_started',
+                              'organization.store_owner_closing_withdrawn')
+                and a.resource='store-owner-closing'
+                and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
+            or (a.action in ('organization.store_application_right_enabled',
+                             'organization.store_application_right_disabled')
                 and a.resource='organization' and a.target_id=a.organization_id))
           and (?='' or a.organization_id=?)
           and o.status='active' and o.deleted_at is null
@@ -102,13 +109,17 @@ export class PersonalNotifications {
         const draftRevoked=n.action === 'organization.store_draft_permission_revoked'
         const storeRejected=n.action === 'organization.store_application_rejected'
         const storeReactivated=n.action === 'organization.store_reactivated'
+        const ownerClosing=n.action === 'organization.store_owner_closing_started'
+        const ownerWithdrawn=n.action === 'organization.store_owner_closing_withdrawn'
         return {
           id:n.id,created_at:n.created_at,read_at:n.read_at,
           title:locked?'Oturum kilitlendi':draftGranted?
             'Mağaza taslağı hazırlama izni verildi':draftRevoked?
             'Mağaza taslağı hazırlama izni kaldırıldı':storeRejected?
             'Mağaza başvurusu reddedildi':storeReactivated?
-            'Mağaza yeniden açıldı':opened?
+            'Mağaza yeniden açıldı':ownerClosing?
+            'Mağaza için 30 günlük kapatma süreci başladı':ownerWithdrawn?
+            'Mağaza kapatma talebi geri çekildi':opened?
             'Yeni mağaza başvuru hakkı açıldı':'Yeni mağaza başvuru hakkı durduruldu',
           context:locked?'Kişisel hesabınız':n.organization_name,
           description:locked?
@@ -117,6 +128,8 @@ export class PersonalNotifications {
             draftRevoked?'Bu şirketin mağaza başvuru taslaklarına erişim izniniz kaldırıldı.':
             storeRejected?'Şirketinizin bekleyen mağaza başvurusu platform tarafından reddedildi. Ayrıntıları yalnız yetkili şirket alanından inceleyebilirsiniz.':
             storeReactivated?'Şirketinizin onaylı mağazası platform tarafından yeniden etkinleştirildi. Güncel durumu şirket alanında kontrol edebilirsiniz.':
+            ownerClosing?'Şirketinizin bir mağazasında yeni satışlar durduruldu. Geri sayım ve gerekli işlemleri güvenli şirket alanından kontrol edin. Kalıcı kapatma henüz kesinleşmedi.':
+            ownerWithdrawn?'Şirketinizin bir mağazasının kapatma talebi geri çekildi. Diğer satış engelleri yine geçerlidir.':
             opened?
             'Şirketiniz yeniden yeni mağaza başvurusu gönderebilir. Bekleyen başvurular otomatik onaylanmaz.':
             'Şirketinizin yeni mağaza başvuruları durduruldu. Mevcut faal mağazalar etkilenmez.'
@@ -143,11 +156,18 @@ export class PersonalNotifications {
           (a.action in ('organization.store_application_right_enabled',
                         'organization.store_application_right_disabled',
                         'organization.store_application_rejected',
-                      'organization.store_reactivated')
+                      'organization.store_reactivated',
+                      'organization.store_owner_closing_started',
+                      'organization.store_owner_closing_withdrawn')
             and ((a.action in ('organization.store_application_rejected','organization.store_reactivated')
                   and a.resource='store-application'
                   and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
-              or (a.action not in ('organization.store_application_rejected','organization.store_reactivated')
+              or (a.action in ('organization.store_owner_closing_started',
+                                'organization.store_owner_closing_withdrawn')
+                  and a.resource='store-owner-closing'
+                  and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
+              or (a.action in ('organization.store_application_right_enabled',
+                               'organization.store_application_right_disabled')
                   and a.resource='organization' and a.target_id=a.organization_id))
             and (?='' or a.organization_id=?)
             and o.status='active' and o.deleted_at is null
