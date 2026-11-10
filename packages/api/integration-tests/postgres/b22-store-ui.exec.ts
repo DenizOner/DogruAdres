@@ -7306,6 +7306,25 @@ export default async function({container}:any){
     // buyer login or any automatic buyer.purchase permission.
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
+    // This part of the shared Buyer/Customer test can refresh the same
+    // personal workspace. Require a real, current Gamma membership button
+    // before clicking; a stale or wrong-Person DOM never grants authority.
+    try{
+      await browser.wait("!document.getElementById('workspace').hidden && "+
+        "Array.from(document.querySelectorAll('#organizations button')).some("+
+        "b=>b.textContent==="+JSON.stringify(sellerGamma.name+" — owner")+")")
+    }catch{
+      const state=await browser.callFunction(
+        "function(){return {workspace:!document.getElementById('workspace')?.hidden,"+
+        "login:!document.getElementById('login')?.hidden,"+
+        "challenge:!document.getElementById('challenge')?.hidden,"+
+        "organizations:document.querySelectorAll('#organizations button').length}}")
+      const recent=browser.http.filter((x:any)=>
+        x.path==="/personal/organizations"||x.path==="/personal/session")
+        .slice(-5).map((x:any)=>({path:x.path,status:x.status}))
+      throw new Error("Gamma Staff/Owner selection unavailable: "+
+        JSON.stringify({state,recent}))
+    }
     await browser.select(sellerGamma.name,"owner")
     const gammaApplication={
       organization_id:sellerGamma.id,
