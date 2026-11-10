@@ -87,9 +87,28 @@ export async function verifyB22ExceptionalNameRight(input:{
   await reviewer.input(fields+'input[name=target_seller_id]',target.seller_id)
   await reviewer.input(fields+'textarea[name=reason]',decisionReason)
   await reviewer.click('[data-transfer-preview="'+source.seller_id+'"]')
-  await reviewer.wait("document.querySelector("+JSON.stringify(
-    '[data-transfer-source="'+source.seller_id+'"] [role=status]')+
+  // Wait for completion rather than a particular message. Categorize only
+  // fixed UI states and HTTP status codes; never log Store/Person details.
+  await reviewer.wait("!document.querySelector("+JSON.stringify(
+    '[data-transfer-preview="'+source.seller_id+'"]')+").disabled")
+  const previewCategory=await reviewer.callFunction(
+    "function(id){const box=document.querySelector('[data-transfer-source="'+id+'"]');"+
+    "const text=box?.querySelector('[role=status]')?.textContent??'';"+
+    "const btn=document.querySelector('[data-transfer-decide="'+id+'"]');"+
+    "return !btn?.disabled && text.startsWith('Kaynak:')?'ready':"+
+    "text.includes('doğrulanamadı')?'denied':"+
+    "text.includes('Geçerli ve farklı')?'invalid':"+
+    "text.includes('yeniden doğrulayın')?'reset':'empty'}",
+    source.seller_id)
+  const metadata=reviewer.http.filter((x:any)=>
+    x.path==="/personal/platform/store-name-transfers").slice(-3)
+    .map((x:any)=>({method:x.method,status:x.status}))
+  assert.equal(previewCategory,"ready","Staff preview category="+
+    previewCategory+"; HTTP metadata="+JSON.stringify(metadata))
+  const actualPreview=await reviewer.eval("document.querySelector("+
+    JSON.stringify('[data-transfer-source="'+source.seller_id+'"] [role=status]')+
     ").textContent.includes("+JSON.stringify(recipient.name)+")")
+  assert.equal(actualPreview,true,"Staff preview must display verified recipient")
   const click=await reviewer.callFunction(
     "function(id){const b=document.querySelector('[data-transfer-decide=\"'+id+'\"]');"+
     "if(!b||b.disabled)return false;const former=window.confirm;"+
