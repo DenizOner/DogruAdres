@@ -66,7 +66,8 @@ async function verifyOwnerClosingBrowser(input:{
   await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
   await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
   await browser.eval("window.confirm=window.__b22ClosingConfirm;delete window.__b22ClosingConfirm")
-  await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('Yeni satışlar durduruldu')")
+  await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('Kalan süre:') && "+
+    "document.getElementById('store-owner-closing-status').getAttribute('role')==='status'")
   assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-owner-closing"&&x.method==="POST"&&x.status===200))
   const [closed]=await q(
     "select c.organization_id,c.state,c.version,c.request_id,c.started_at,c.due_at,"+
@@ -80,6 +81,17 @@ async function verifyOwnerClosingBrowser(input:{
   assert.equal(closed.organization_id,organizations[0].id)
   assert.equal(closed.action,"organization.store_owner_closing_started")
   assert.equal(closed.proof_state,"closing")
+  // The countdown is based on the authoritative server timestamp, not the
+  // browser's easily changed local clock.
+  const clockView=await browser.callFunction(
+    "async function(org,seller){const r=await fetch('/personal/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
+    organizations[0].id,ownerStoreId)
+  assert.equal(clockView.status,200)
+  assert.equal(clockView.body.state,"closing")
+  assert.equal(clockView.body.permanent_finalization_enabled,false)
+  assert.ok(Number.isSafeInteger(clockView.body.remaining_seconds)&&
+    clockView.body.remaining_seconds>0&&clockView.body.remaining_seconds<=2592000,
+    "Owner's status includes a bounded canonical server-clock countdown")
   assert.equal(closed.outbox_count,1)
   assert.ok(closed.notices>=1,"Protected Owner must receive in-app security notice")
   assert.equal(new Date(closed.due_at).getTime()-new Date(closed.started_at).getTime(),2592000000)
