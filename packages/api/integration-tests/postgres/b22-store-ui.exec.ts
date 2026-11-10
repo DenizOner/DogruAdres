@@ -292,52 +292,99 @@ async function verifyOwnerClosingBrowser(input:{
     " where seller_id=$1",[ownerStoreId]))[0],
     {state:"closing",version:3,source_audit_event_id:raceRow.source_audit_event_id})
 
-  // Advance ONLY this task's synthetic canonical ledger+source audit together.
-  // This is an explicit disposable-PG16 boundary simulation: production clock,
-  // native Seller, real sessions and permanent finalizer are never modified.
-  const changeSyntheticClockBoundary=async(startIso:string,dueIso:string)=>{
-    await q("begin")
-    try{
-      const ledger=await q(
-        "update da_store_owner_closing set started_at=$2,due_at=$3"+
-        " where seller_id=$1 and state='closing' and version=3 returning seller_id",
-        [ownerStoreId,startIso,dueIso])
-      assert.equal(ledger.length,1)
-      const audit=await q(
-        "update da_audit_event set new_values=jsonb_set("+
-        "jsonb_set(new_values::jsonb,'{started_at}',to_jsonb($2::text)),"+
-        "'{due_at}',to_jsonb($3::text))"+
-        " where id=$1 and resource='store-owner-closing' returning id",
-        [raceRow.source_audit_event_id,startIso,dueIso])
-      assert.equal(audit.length,1)
-      await q("commit")
-    }catch(error){await q("rollback");throw error}
-  }
-  const realStart=new Date(raceRow.started_at).toISOString()
-  const realDue=new Date(raceRow.due_at).toISOString()
+  // EXPIRY FIXTURE: do not mutate the append-only canonical audit.
+  // Create one entirely NEW historical closing record for a second already
+  // approved synthetic Seller using the real Foundation audit/outbox schema.
+  // The disposable task DB is destroyed by the enclosing PG16 job.
   const [{now_at:serverNow}]=await q("select clock_timestamp() as now_at")
   const justExpiredDue=new Date(new Date(serverNow).getTime()-100).toISOString()
   const justExpiredStart=new Date(
     new Date(justExpiredDue).getTime()-2592000000).toISOString()
-  await changeSyntheticClockBoundary(justExpiredStart,justExpiredDue)
+  const expiredKey="dasc_"+randomBytes(16).toString("hex")
+  let expiryFixtureAuditId=""
+  await q("begin")
+  try{
+    const [fixtureEvent]=await q(`insert into da_audit_event
+      (id,actor_person_id,actor_type,actor_id,organization_id,
+       action,module,resource,target_id,role_context,new_values,occurred_at)
+      select 'daaud_'||gen_random_uuid()::text,e.actor_person_id,
+        e.actor_type,e.actor_id,e.organization_id,
+        'organization.store_owner_closing_started','dogruadres-access',
+        'store-owner-closing',$2,'owner',
+        jsonb_build_object('state','closing','version',1,
+          'request_id',$3::text,'started_at',$4::text,'due_at',$5::text,
+          'fixture_source','b22_expiry_probe'),$4::timestamptz
+      from da_audit_event e where e.id=$1 returning id`,
+      [raceRow.source_audit_event_id,secondOwnerStoreId,expiredKey,
+        justExpiredStart,justExpiredDue])
+    assert.ok(fixtureEvent?.id)
+    expiryFixtureAuditId=fixtureEvent.id
+    const [realSource]=await q(
+      "select envelope from da_audit_outbox"+
+      " where source_audit_event_id=$1 and deleted_at is null",
+      [raceRow.source_audit_event_id])
+    assert.ok(realSource?.envelope)
+    const fixtureEnvelope={...realSource.envelope,
+      source_audit_event_id:expiryFixtureAuditId,
+      target_id:secondOwnerStoreId,occurred_at:justExpiredStart}
+    assert.equal((await q(`insert into da_audit_outbox
+      (id,source_audit_event_id,source_module,envelope)
+      values('daaob_'||gen_random_uuid()::text,$1,'dogruadres-access',$2::jsonb)
+      returning id`,[expiryFixtureAuditId,JSON.stringify(fixtureEnvelope)])).length,1)
+    assert.equal((await q(`insert into da_store_owner_closing
+      (seller_id,organization_id,state,version,request_id,
+       source_audit_event_id,started_at,due_at)
+      values($1,$2,'closing',1,$3,$4,$5,$6) returning seller_id`,
+      [secondOwnerStoreId,organizations[0].id,expiredKey,
+        expiryFixtureAuditId,justExpiredStart,justExpiredDue])).length,1)
+    await q("commit")
+  }catch(error){await q("rollback");throw error}
   try{
     const expired=await browser.callFunction(
       "async function(org,seller){const r=await fetch('/personal/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
-      organizations[0].id,ownerStoreId)
+      organizations[0].id,secondOwnerStoreId)
     assert.equal(expired.status,200)
     assert.equal(expired.body.state,"closing")
     assert.equal(expired.body.can_withdraw,false)
     assert.equal(expired.body.remaining_seconds,0)
     assert.equal(expired.body.permanent_finalization_enabled,false)
-    assert.equal((await post(denyWithdraw)).status,409,
-      "At/after the real 30-day deadline an authorized Owner gets HTTP 409")
+    const beforeExpirySideEffects=await q(
+      "select count(*)::int n from da_audit_event e"+
+      " where e.resource='store-owner-closing' and e.target_id=$1",
+      [secondOwnerStoreId])
+    assert.equal(beforeExpirySideEffects[0].n,1)
+    const denied=await post({...denyWithdraw,seller_id:secondOwnerStoreId,
+      expected_version:1,request_id:"dasc_"+randomBytes(16).toString("hex")})
+    assert.equal(denied.status,409,
+      "At/after 30 days the real HTTPS Owner withdrawal must return 409")
+    assert.deepEqual(await q(
+      "select seller_id,state,version,source_audit_event_id"+
+      " from da_store_owner_closing where seller_id=$1",[secondOwnerStoreId]),
+      [{seller_id:secondOwnerStoreId,state:"closing",version:1,
+        source_audit_event_id:expiryFixtureAuditId}])
+    assert.deepEqual(await q(
+      "select count(*)::int n from da_audit_event"+
+      " where resource='store-owner-closing' and target_id=$1",
+      [secondOwnerStoreId]),beforeExpirySideEffects,
+      "Deadline denial cannot produce any new audit event")
+    assert.equal((await q("select count(*)::int n from da_notification_receipt"+
+      " where audit_event_id=$1",[expiryFixtureAuditId]))[0].n,0,
+      "No notification is manufactured for denied withdrawal")
     await unchangedEffects(snapshot)
-    assert.equal(await foundation.authorizeBuyerCheckout(
-      customerCart.id,nativeCustomer.id,cartStoreIds),false,
-      "At expiration the Store remains closed while finalizer is disabled")
   }finally{
-    await changeSyntheticClockBoundary(realStart,realDue)
+    // The row is a test-only expired fixture, NOT a real HTTP Owner request.
+    // Remove only its ephemeral ledger; never update/delete append-only audit.
+    assert.equal((await q(
+      "delete from da_store_owner_closing"+
+      " where seller_id=$1 and source_audit_event_id=$2 returning seller_id",
+      [secondOwnerStoreId,expiryFixtureAuditId])).length,1)
   }
+  assert.deepEqual(await q(
+    "select seller_id from da_store_owner_closing where seller_id=$1",
+    [secondOwnerStoreId]),[])
+  assert.equal(await foundation.authorizeBuyerCheckout(
+    customerCart.id,nativeCustomer.id,cartStoreIds),false,
+    "Original Owner's parallel closing still blocks the two-Store cart")
   const restored=await post(denyWithdraw)
   assert.equal(restored.status,200)
   assert.equal(restored.body.status,"withdrawn")
