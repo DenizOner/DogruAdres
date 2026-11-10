@@ -137,9 +137,34 @@ export async function verifyB22ExceptionalNameRight(input:{
     "window.confirm=()=>true;try{b.click()}finally{window.confirm=former}return true}",
     source.seller_id)
   assert.equal(click,true,"Real Staff UI submits only the verified decision")
-  await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Ad hakkı kararı kaydedildi') || "+
-    "document.querySelector("+JSON.stringify('[data-transfer-source="'+source.seller_id+'"] [role=status]')+
-    ")?.textContent.includes('Devir sonucu belirsiz')")
+  try{
+    await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Ad hakkı kararı kaydedildi') || "+
+      "document.querySelector("+JSON.stringify('[data-transfer-source="'+source.seller_id+'"] [role=status]')+
+      ")?.textContent.includes('Devir sonucu belirsiz')")
+  }catch{
+    const http=reviewer.http.filter((e:any)=>
+      e.path==="/personal/platform/store-name-transfers")
+      .slice(-5).map((e:any)=>({method:e.method,status:e.status}))
+    const browserState=await reviewer.callFunction(
+      "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
+      ".find(x=>x.dataset.transferSource===id);"+
+      "const msg=document.getElementById('store-approval-status')?.textContent??'';"+
+      "const status=box?.querySelector('[role=status]')?.textContent??'';"+
+      "return {visible:!!box&&!box.hidden,global:msg.includes('Ad hakkı kararı kaydedildi')?'saved':"+
+      "msg.includes('gönderiliyor')?'sending':'other',"+
+      "row:status.includes('Devir sonucu belirsiz')?'uncertain':"+
+      "status.includes('Kaynak:')?'preview':'other'}",
+      source.seller_id)
+    // PostgreSQL state classification ONLY: never select query, person, IDs,
+    // server address, passwords or table/row contents into GitHub logs.
+    const locks=await q(`select coalesce(wait_event_type,'running') kind,
+      coalesce(wait_event,'none') event,count(*)::int n from pg_stat_activity
+      where datname=current_database() and pid<>pg_backend_pid()
+        and backend_type='client backend'
+      group by 1,2 order by 1,2`)
+    throw new Error("Staff transfer decision timed out: "+
+      JSON.stringify({http,browserState,locks}))
+  }
   const stage=await reviewer.callFunction(
     "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
     ".find(e=>e.dataset.transferSource===id);"+
