@@ -52,6 +52,53 @@ export async function verifyB22ExceptionalNameRight(input:{
   const attempt={...values,transfer_id:"dastr_"+"e".repeat(32),
     expected_name:original.name,expected_handle:original.handle,
     reason:decisionReason}
+  // A previous Staff-approved native rename is a valid CURRENT name, not
+  // the immutable initial application name. Missing durable audit/outbox
+  // must reject BOTH Staff preview and transfer POST without recording a
+  // decision. The disposable database is restored even on a failed assert.
+  const historical=await q(`select x.id outbox_id
+    from da_store_rename_request r
+    join da_audit_event e on e.organization_id=r.organization_id
+      and e.target_id=r.seller_id
+      and e.action='organization.store_rename_approved'
+      and e.module='dogruadres-access' and e.resource='store-rename-request'
+      and e.new_values->>'request_id'=r.id and e.deleted_at is null
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+      and x.source_module='dogruadres-access' and x.deleted_at is null
+    where r.seller_id=$1 and r.organization_id=$2 and r.status='approved'
+      and r.proposed_name=$3 and r.proposed_handle=$4`,
+    [source.seller_id,source.organization_id,original.name,original.handle])
+  if(historical.length){
+    assert.equal(historical.length,1,"One audit-backed preceding rename required")
+    const [initialClaim]=await q(`select store_name_hash,name_claim_released_at
+      from da_store_application where id=$1 and seller_id=$2`,
+      [source.application_id,source.seller_id])
+    assert.ok(initialClaim?.name_claim_released_at,
+      "The original application claim must retain its 30-day expiry")
+    const [currentHash]=await q(`select encode(sha256(convert_to(lower(
+      regexp_replace(btrim(normalize($1,NFKC)),'[[:space:]]+',' ','g')),
+      'UTF8')),'hex') hash`,[original.name])
+    assert.notEqual(currentHash.hash,initialClaim.store_name_hash)
+    const removed=await q(`update da_audit_outbox
+      set deleted_at=clock_timestamp() where id=$1 and deleted_at is null
+      returning id`,[historical[0].outbox_id])
+    assert.equal(removed.length,1)
+    try{
+      assert.equal((await preview(reviewer)).status,409,
+        "Missing approved-rename outbox must deny Staff preview")
+      assert.equal((await post(reviewer,attempt)).status,409,
+        "Missing approved-rename outbox must deny transfer POST")
+      assert.equal((await q(`select count(*)::int n from da_store_name_transfer
+        where source_seller_id=$1`,[source.seller_id]))[0].n,0)
+    }finally{
+      const restored=await q(`update da_audit_outbox
+        set deleted_at=null where id=$1 and deleted_at is not null
+        returning id`,[historical[0].outbox_id])
+      assert.equal(restored.length,1)
+    }
+    assert.equal((await preview(reviewer)).status,200,
+      "Restored Staff-approved rename with durable audit is transferable")
+  }
   assert.equal((await post(owner,attempt)).status,403)
   assert.equal((await post(reviewer,attempt,false)).status,403)
   assert.equal((await post(reviewer,{...attempt,target_seller_id:source.seller_id})).status,400)

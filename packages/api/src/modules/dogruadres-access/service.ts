@@ -2634,11 +2634,16 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       target[0].organization_id,input.expected_name,input.expected_handle,
       hash,input.reason,staff.person_id,audit.id])
     if(saved.length!==1)throw new IdentityAccessDenied()
-    const released=await db.execute(`update da_store_application
-      set name_claim_released_at=clock_timestamp(),updated_at=clock_timestamp()
-      where id=? and seller_id=? and name_claim_released_at is null
-      returning id`,[input.source_application_id,input.source_seller_id])
-    if(released.length!==1)throw new IdentityAccessDenied()
+    // Only an original still-active application claim is released here.
+    // A Staff-approved preceding rename already set its original 30-day
+    // expiry: preserve that history and never shorten the old-name hold.
+    if(originalName){
+      const released=await db.execute(`update da_store_application
+        set name_claim_released_at=clock_timestamp(),updated_at=clock_timestamp()
+        where id=? and seller_id=? and name_claim_released_at is null
+        returning id`,[input.source_application_id,input.source_seller_id])
+      if(released.length!==1)throw new IdentityAccessDenied()
+    }
     return {status:"assigned" as const,replayed:false}
   }
 

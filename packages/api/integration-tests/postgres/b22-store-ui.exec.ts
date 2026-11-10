@@ -7431,6 +7431,18 @@ export default async function({container}:any){
       "Gamma must not enter Alpha; previously suspended second Alpha Store stays excluded")
     assert.equal(alphaAfterGamma.some((store:any)=>store.id===gammaSellerId),false)
 
+    // Prepare an actually approved historical rename using the SAME real
+    // Owner/Staff Chrome flow. The first application fingerprint stays
+    // immutable and its original 30-day name hold must survive the transfer.
+    await verifySuspendedStoreRenameBeforeReopen(
+      browser,reviewer,organizations[0].id,organizations[0].name,
+      secondOwnerStoreId,rand+"-prior",container,q,true)
+    await suspendSellerWorkflow(container).run({input:{
+      seller_id:secondOwnerStoreId,
+      reason:"B22 disposable previously-renamed transfer proof"
+    }})
+    assert.equal((await q("select status from seller where id=$1",
+      [secondOwnerStoreId]))[0].status,"suspended")
     await verifyB22TransferredRecovery({
       owner:browser,reviewer,q,
       source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
