@@ -52,6 +52,7 @@ describe("B22 private 30-day Owner closing boundary (mock-only)",()=>{
   })
   it("can withdraw only after authoritative service authorization and deadline checks",async()=>{
     req.body={...req.body,action:"withdraw",expected_version:1}
+    delete req.body.consequences_acknowledged // Withdrawal is not irreversible closure.
     service.personalOwnerClosingChange.mockResolvedValue({
       status:"withdrawn",version:2,replayed:false,due_at:"2026-12-10T12:00:00.000Z"
     })
