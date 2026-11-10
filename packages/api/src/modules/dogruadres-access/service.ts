@@ -4809,7 +4809,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
                   else 'organization.store_owner_closing_withdrawn' end)
                 and e.new_values->>'state'=c.state
                 and e.new_values->>'version'=c.version::text
-                and e.new_values->>'request_id'=c.request_id))
+                and e.new_values->>'request_id'=c.request_id
+                and (e.new_values->>'started_at')::timestamptz=c.started_at
+                and (e.new_values->>'due_at')::timestamptz=c.due_at))
         )
         and not exists(
           select 1 from da_store_buyer_organization_block block
@@ -5002,7 +5004,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             else 'organization.store_owner_closing_withdrawn' end)
           and e.new_values->>'state'=c.state
           and e.new_values->>'request_id'=c.request_id
-          and e.new_values->>'version'=c.version::text) as proof
+          and e.new_values->>'version'=c.version::text
+          and (e.new_values->>'started_at')::timestamptz=c.started_at
+          and (e.new_values->>'due_at')::timestamptz=c.due_at) as proof
       from da_store_owner_closing c where c.seller_id=? ${lock?'for update':''}`,
       [sellerId])
     if(rows.length>1||rows.some(row=>
