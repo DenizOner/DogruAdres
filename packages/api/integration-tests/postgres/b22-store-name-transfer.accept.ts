@@ -89,8 +89,28 @@ export async function verifyB22ExceptionalNameRight(input:{
   await reviewer.click('[data-transfer-preview="'+source.seller_id+'"]')
   // Wait for completion rather than a particular message. Categorize only
   // fixed UI states and HTTP status codes; never log Store/Person details.
-  await reviewer.wait("!document.querySelector("+JSON.stringify(
-    '[data-transfer-preview="'+source.seller_id+'"]')+").disabled")
+  try{
+    await reviewer.wait("!document.querySelector("+JSON.stringify(
+      '[data-transfer-preview="'+source.seller_id+'"]')+").disabled")
+  }catch{
+    // Diagnose the actual browser/HTTPS outcome without retaining any Person,
+    // cookie, Seller name, request body or private UI text.
+    const state=await reviewer.callFunction(
+      "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
+      ".find(e=>e.dataset.transferSource===id);"+
+      "const btn=Array.from(document.querySelectorAll('[data-transfer-preview]'))"+
+      ".find(e=>e.dataset.transferPreview===id);"+
+      "const txt=box?.querySelector('[role=status]')?.textContent??'';"+
+      "return {visible:!!box&&!box.hidden,button:btn?.disabled?'busy':btn?'idle':'missing',"+
+      "status:txt.startsWith('Kaynak:')?'ready':"+
+      "txt.includes('doğrulanamadı')?'denied':"+
+      "txt.includes('Geçerli ve farklı')?'invalid':'other'}}",
+      source.seller_id)
+    const http=reviewer.http.filter((e:any)=>
+      e.path==="/personal/platform/store-name-transfers")
+      .slice(-3).map((e:any)=>({method:e.method,status:e.status}))
+    throw new Error("Transfer preview did not complete: "+JSON.stringify({state,http}))
+  }
   const previewCategory=await reviewer.callFunction(
     "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
     ".find(e=>e.dataset.transferSource===id);"+
