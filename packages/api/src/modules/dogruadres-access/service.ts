@@ -5953,13 +5953,18 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Existing accepted appeal replays are handled above. For a new first
     // appeal, the canonical 10-day window is enforced by the PG16 clock,
     // never by the browser. A pre-clock appeal remains allowed.
-    const clock=await db.execute("select clock_timestamp() as now_at")
+    // Compare native timestamptz values in PostgreSQL at microsecond
+    // precision. 240 hours matches the existing UTC 10*24h contract;
+    // converting the cutoff to JS milliseconds could shift its last instant.
+    const clock=await db.execute(`select t.now_at,
+      coalesce(t.now_at >= (?::timestamptz + interval '240 hours'),false)
+        as first_appeal_expired
+      from (select clock_timestamp() as now_at) t`,[row.deadline_started_at])
     if(clock.length!==1||
-       !Number.isFinite(new Date(clock[0].now_at).getTime()))
+       !Number.isFinite(new Date(clock[0].now_at).getTime())||
+       typeof clock[0].first_appeal_expired!=="boolean")
       throw new IdentityAccessDenied()
-    if(row.deadline_started_at!==null &&
-       new Date(clock[0].now_at).getTime() >=
-         new Date(row.deadline_started_at).getTime()+10*86400000)
+    if(clock[0].first_appeal_expired)
       return {status:"conflict" as const}
     const history=await db.execute(`select id from da_audit_event
       where module='dogruadres-access' and resource='store-platform-closing'
