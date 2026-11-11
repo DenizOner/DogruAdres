@@ -21,6 +21,8 @@ const resources = {
   "organization.store_owner_resumed": "store-owner-pause",
   "organization.store_owner_closing_started": "store-owner-closing",
   "organization.store_owner_closing_withdrawn": "store-owner-closing",
+  "organization.store_platform_closing_started": "store-platform-closing",
+  "organization.store_platform_closing_appealed": "store-platform-closing",
   "organization.store_application_right_disabled": "organization",
   "organization.store_application_right_enabled": "organization",
   "organization.store_application_rejected": "store-application",
@@ -46,7 +48,7 @@ const schema = z.object({
     role_context: z.enum(["platform_administrator", "platform_staff", "owner", "admin", "member"]).nullable(),
   }).strict(),
   action: z.enum(Object.keys(resources) as [keyof typeof resources, ...(keyof typeof resources)[]]),
-  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow", "store-application", "store-application-draft", "store-draft-permission", "store-owner-pause", "store-owner-closing"]),
+  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow", "store-application", "store-application-draft", "store-draft-permission", "store-owner-pause", "store-owner-closing", "store-platform-closing"]),
   target_id: reference,
   occurred_at: timestamp,
 }).strict()
@@ -69,6 +71,13 @@ const schema = z.object({
     (value.actor.role_context === "owner" &&
      /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
+  // Platform start and Owner appeal have distinct, independent strong grants.
+  .refine(value => value.resource !== "store-platform-closing" ||
+    (/^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^sel_[A-Za-z0-9_-]+$/.test(value.target_id) &&
+     (value.action==="organization.store_platform_closing_started"
+       ?value.actor.role_context==="platform_staff"
+       :value.actor.role_context==="owner")))
   // Owner or explicitly authorized Member may prepare private draft input.
   // The writer verifies the live membership+audited grant, not this envelope.
   .refine(value => value.action !== "organization.store_application_draft_saved" ||
