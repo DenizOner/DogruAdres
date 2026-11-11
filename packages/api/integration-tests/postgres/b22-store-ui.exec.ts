@@ -8727,7 +8727,8 @@ export default async function({container}:any){
       ownerOrgId:sellerGamma.id,ownerOrgName:sellerGamma.name,
       sellerId:gammaSellerId,buyer:reviewer,
       buyerScopePath:betaScopeUrl,buyerOrganizationId:organizations[1].id,
-      checkoutCartId:hookProbeCart.id,customerId:nativeCustomer.id,query
+      checkoutCartId:hookProbeCart.id,customerId:nativeCustomer.id,query,
+      auth,ownerEmail:A.email
     })
     // Continue the Alpha Buyer/permission tests from the real Owner workspace.
     await browser.send("Page.bringToFront")
