@@ -5,6 +5,7 @@
 import assert from "node:assert/strict"
 import {createHash,randomBytes} from "node:crypto"
 import type {B06Chrome} from "./b06-ui-browser"
+import {runPlatformClosingEmailTick} from "../../src/jobs/dogruadres-platform-closing-email"
 
 type Db=(sql:string,params?:unknown[])=>Promise<any[]>
 const read=async(browser:B06Chrome,path:string)=>browser.callFunction(
@@ -23,11 +24,12 @@ export async function verifyB22PlatformClosingAppeal(input:{
   ownerPersonId:string;staffPersonId:string;
   ownerOrgId:string;ownerOrgName:string;sellerId:string;
   buyer:B06Chrome;buyerScopePath:string;buyerOrganizationId:string;
-  checkoutCartId:string;customerId:string;query:any;auth:any;ownerEmail:string
+  checkoutCartId:string;customerId:string;query:any;auth:any;ownerEmail:string;
+  container:any
 }):Promise<string>{
   const {browser,staff,q,foundation,ownerPersonId,staffPersonId,
     ownerOrgId,ownerOrgName,sellerId,buyer,buyerScopePath,
-    buyerOrganizationId,checkoutCartId,customerId,query,auth,ownerEmail}=input
+    buyerOrganizationId,checkoutCartId,customerId,query,auth,ownerEmail,container}=input
   const path="/personal/platform/store-closings"
   const privatePath="/personal/store-platform-closing"
   const mailPath="/personal/platform/store-closing-email-readiness?"+
@@ -332,8 +334,36 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const newlyProtected=await read(staff,mailPath)
   assert.equal(newlyProtected.status,200)
   assert.equal(newlyProtected.body?.protected_owner_count,2)
-  assert.ok([1,2].includes(newlyProtected.body?.private_receipt_count),
-    "Promoted protected Owner must never receive a forged original receipt; scheduled reconciliation may add a legitimate one")
+  assert.equal(newlyProtected.body?.private_receipt_count,1,
+    "Only the initial Owner may hold the original closure audit receipt")
+  await runPlatformClosingEmailTick(container)
+  const originalRecipients=await q(`select n.person_id
+    from da_notification_receipt n
+    join da_store_platform_closing c on c.source_audit_event_id=n.audit_event_id
+    where c.seller_id=$1 order by n.person_id`,[sellerId])
+  assert.deepEqual(originalRecipients,[{person_id:ownerPersonId}],
+    "Late Owner must NEVER be inserted into the original Staff decision recipient history")
+  const currentOwnerNotices=await read(staff,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))
+  assert.equal(currentOwnerNotices.status,200)
+  const lateNotice=currentOwnerNotices.body.notifications?.find((n:any)=>
+    n.title==="Sorumluluğunuza yeni geçen mağazada kapatma süreci var")
+  assert.ok(lateNotice,"New protected Owner must receive a separately dated current closure notice")
+  assert.equal(lateNotice.read_at,null)
+  assert.equal(new Date(lateNotice.created_at).getTime()>=
+    new Date((await q("select started_at from da_store_platform_closing where seller_id=$1",
+      [sellerId]))[0].started_at).getTime(),true)
+  assert.equal((await read(browser,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))).body.notifications.some((n:any)=>
+      n.id===lateNotice.id),false,
+    "Other Owner must not read a newly promoted person's private notice")
+  const readLate=await write(staff,"/personal/notifications",{id:lateNotice.id})
+  assert.equal(readLate.status,200)
+  const afterRead=await read(staff,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))
+  assert.ok(afterRead.body.notifications.some((n:any)=>
+    n.id===lateNotice.id&&n.read_at!==null),
+    "Late Owner's new notice has an independent persistent read state")
   assert.equal(newlyProtected.body?.mandatory_email_verified,false)
   assert.equal(newlyProtected.body?.deadline_started,false)
   const appealReason="B22 sentetik yetkili Owner kapatma kararına itiraz ediyor"
