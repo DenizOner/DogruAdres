@@ -8715,7 +8715,7 @@ export default async function({container}:any){
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Unblocking restores inherited Owner authority independently of an explicit grant")
     process.stdout.write("PASS B22 real Mercur validate: protected Owner still authorized after self-grant revoke, but Store Buyer Organization block denies native checkout with zero OrderGroup/Order/payment; unblock restores L\n")
-    process.stdout.write("NOT TESTED B22: successful order placement, authorization/capture with a real payment provider, post-L overlap orchestration, independent exact-PR acceptance\\n")
+    process.stdout.write("NOT TESTED B22: successful order placement, authorization/capture with a real payment provider, post-L overlap orchestration, independent exact-PR acceptance\n")
 
     // The final Gamma Offer/Cart acceptance just passed; Gamma's native
     // approved Seller remains open. At this point A is Gamma's protected
