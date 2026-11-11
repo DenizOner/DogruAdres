@@ -381,7 +381,7 @@ async function main(){
     await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
       "values ($1,$2,'user',$3)",["damap_b22_mail_pg",owner,syntheticActor])
     const observed={acceptedRecipient:false,secureLink:false,acceptedData:false}
-    let refuseRecipient=false
+    let refuseRecipient=false,dropAfterData=false
     const mock=createServer(socket=>{
       socket.setEncoding("utf8")
       socket.write("220 smtp.loopback.test ESMTP\r\n")
@@ -395,8 +395,13 @@ async function main(){
           if(receivingData){
             if(line==="."){
               receivingData=false
-              observed.acceptedData=true
-              socket.write("250 message queued on isolated loopback\r\n")
+              if(dropAfterData){
+                // The remote side can commit DATA and drop before its 250 ACK.
+                socket.destroy()
+              }else{
+                observed.acceptedData=true
+                socket.write("250 message queued on isolated loopback\r\n")
+              }
             }else if(line.includes("/personal#closing_notice=")){
               observed.secureLink=true
             }
@@ -464,9 +469,25 @@ async function main(){
       assert.equal(refused.message_id,null)
       assert.equal(refused.delivered_at,null)
       assert.equal((await row(rejectedSeller)).deadline_started_at,null)
+      // A connection lost AFTER DATA may still have been accepted remotely.
+      // It is neither proven delivered nor a definitive negative response.
+      refuseRecipient=false
+      dropAfterData=true
+      const unknownSeller="sel_b22_mail_pg_smtp_unknown"
+      await seed(unknownSeller)
+      await runPlatformClosingEmailTick(container)
+      const unknown=(await q("select attempts,last_result,message_id,delivered_at "+
+        "from da_store_platform_closing_email where seller_id=$1",
+        [unknownSeller]))[0]
+      assert.equal(unknown.attempts,1)
+      assert.equal(unknown.last_result,"uncertain",
+        "Lost SMTP DATA ACK must never be reported as a definite rejection")
+      assert.equal(unknown.message_id,null)
+      assert.equal(unknown.delivered_at,null)
+      assert.equal((await row(unknownSeller)).deadline_started_at,null)
       process.stdout.write(
-        "PASS B22 PG16+loopback SMTP: real job 250 accepted with synthetic link "+
-        "but NO mailbox delivery or premature deadline; 550 failure durable\n")
+        "PASS B22 PG16+loopback SMTP: 250 accepted, 550 refused, post-DATA "+
+        "disconnect uncertain; none grants mailbox delivery or premature clock\n")
     }finally{
       testSmtp=null
       if(previousNodeEnv===undefined)delete process.env.NODE_ENV
