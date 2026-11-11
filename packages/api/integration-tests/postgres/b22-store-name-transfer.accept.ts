@@ -2,9 +2,89 @@
 import assert from "node:assert/strict"
 import {randomBytes} from "node:crypto"
 import {B06Chrome} from "./b06-ui-browser"
+import {createProductsWorkflow,createOffersWorkflow,completeCartWithSplitOrdersWorkflow} from "@mercurjs/core/workflows"
+import {addToCartWorkflow} from "@medusajs/medusa/core-flows"
 type Rows=(sql:string,params?:any[])=>Promise<any[]>
 type Store={application_id:string;seller_id:string;organization_id:string}
 type CartHistory={query:any;cartId:string;customerId:string;snapshot:unknown}
+/** Pre-existing native source Order generated once with the *installed*
+ * Medusa/Mercur workflow in task-owned PG16. Never enables public checkout.
+ * A successful no-payment Order is required before A's name is transferred.
+ */
+export async function createB22CompletedSourceOrderFixture(input:{
+  container:any;rand:string;sourceSellerId:string;productCreatorSellerId:string;
+  memberId:string;shippingProfileId:string;customerId:string;
+  regionId:string;salesChannelId:string;buyerOrgId:string;
+  q:Rows;query:any;
+  claim:(cartId:string)=>Promise<{status:number;body:any}>;
+  authorize:(cartId:string)=>Promise<boolean>;
+}):Promise<CompletedOrderHistory>{
+  const {container,rand,sourceSellerId,productCreatorSellerId,
+    memberId,shippingProfileId,customerId,regionId,salesChannelId,buyerOrgId,
+    q,query,claim,authorize}=input
+  assert.equal((await q("select status from seller where id=$1",
+    [sourceSellerId]))[0].status,"open")
+  const {result:[product]}=await createProductsWorkflow(container).run({
+    input:{created_by:productCreatorSellerId,products:[{
+      title:"B22 historical source order "+rand,status:"published",
+      variants:[{title:"Zero historical item",sku:"B22-ORDER-SOURCE-"+rand}]
+    }]}
+  })
+  const [variant]=await container.resolve("product")
+    .listProductVariants({product_id:product.id})
+  assert.ok(variant?.id)
+  const sku="B22-HIST-OFFER-"+rand
+  const {result:[offer]}=await createOffersWorkflow(container).run({
+    input:{offers:[{
+      seller_id:sourceSellerId,created_by:memberId,
+      sku,variant_id:variant.id,shipping_profile_id:shippingProfileId,
+      inventory_items:[{sku,stock_levels:[]}],
+      prices:[{amount:0,currency_code:"eur"}],
+      manage_inventory:false,allow_backorder:true
+    }]}
+  })
+  assert.equal(offer.seller_id,sourceSellerId)
+  const cartService=container.resolve("cart")
+  const cart=await cartService.createCarts({
+    currency_code:"eur",customer_id:customerId
+  })
+  await cartService.updateCarts(cart.id,{
+    region_id:regionId,sales_channel_id:salesChannelId
+  })
+  await addToCartWorkflow(container).run({input:{
+    cart_id:cart.id,items:[{variant_id:variant.id,offer_id:offer.id,
+      quantity:1,requires_shipping:false,metadata:{offer_id:offer.id}} as any]
+  }})
+  const {data:[before]}=await query.graph({entity:"cart",
+    fields:["id","total","customer.id","completed_at","items.offer.seller_id"],
+    filters:{id:cart.id}})
+  assert.equal(Number(before.total),0)
+  assert.equal(before.customer?.id,customerId)
+  assert.equal(before.completed_at,null)
+  assert.equal(before.items?.length,1)
+  assert.equal(before.items[0].offer?.seller_id,sourceSellerId)
+  const claimed=await claim(cart.id)
+  assert.equal(claimed.status,200)
+  assert.equal(claimed.body.organization_id,buyerOrgId)
+  assert.equal(claimed.body.checkout_ready,false,
+    "Native workflow proof never enables visitor checkout")
+  assert.equal(await authorize(cart.id),true,
+    "Live Buyer/Store authority required before zero-total native Order")
+  const result=await completeCartWithSplitOrdersWorkflow(container).run({
+    input:{cart_id:cart.id},throwOnError:false
+  })
+  assert.equal(result.errors?.length??0,0,
+    "Existing Mercur workflow must create completed zero-total source Order")
+  assert.match(result.result?.order_group_id??"",/^og_[A-Za-z0-9_-]+$/)
+  const snapshot=await snapshotB22CompletedSourceOrder({
+    q,query,cartId:cart.id,customerId,
+    organizationId:buyerOrgId,sourceSellerId
+  })
+  process.stdout.write("B22 task-only: pre-transfer source OrderGroup/Order from native zero-total workflow; no payment\n")
+  return {query,cartId:cart.id,customerId,organizationId:buyerOrgId,
+    sourceSellerId,snapshot}
+}
+
 type CompletedOrderHistory={query:any;cartId:string;customerId:string;
   organizationId:string;sourceSellerId:string;snapshot:unknown}
 /** Native completed source Order, made once before name transfer on
