@@ -13612,11 +13612,15 @@ export default async function({container}:any){
       else process.env.DOGRUADRES_PUBLIC_ORIGIN=originalPublicOrigin
     }
 
+    // The Alpha Owner Store was intentionally suspended by preceding
+    // lifecycle/security tests; never silently reopen it just for this test.
+    // Gamma's separately approved native Seller remains open and is owned
+    // by the same protected Person A. Close that real eligible Store instead.
     await verifyB22PlatformClosingAppeal({
       browser,staff:reviewer,q,foundation,
       ownerPersonId:A.person,staffPersonId:B.person,
-      ownerOrgId:organizations[0].id,ownerOrgName:organizations[0].name,
-      sellerId:ownerStoreId
+      ownerOrgId:sellerGamma.id,ownerOrgName:sellerGamma.name,
+      sellerId:gammaSellerId
     })
 
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
