@@ -95,6 +95,21 @@ export class PersonalNotifications {
               and x.source_module='dogruadres-access'
               and x.deleted_at is null))
       )
+      union all
+      select n.id,n.created_at,n.read_at,
+        'organization.store_platform_closing_mail_admin_alert' as action,
+        o.name as organization_name
+      from da_store_platform_closing_admin_notice n
+      join da_store_platform_closing c on c.seller_id=n.seller_id
+        and c.admin_alert_at is not null
+        and c.deadline_basis='admin_alert'
+      join da_organization o on o.id=c.organization_id
+        and o.status='active' and o.deleted_at is null
+      where n.person_id=? and (?='' or c.organization_id=?)
+        and exists(select 1 from da_platform_staff_grant g
+          where g.person_id=n.person_id and g.task='store.closing.manage'
+            and g.resource='platform' and g.revoked_at is null
+            and (g.expires_at is null or g.expires_at>clock_timestamp()))
     ) select (select count(*) from authorized where read_at is null) as unread_count,
       (select count(*) from authorized) as total,
       coalesce((select json_agg(page) from (
@@ -103,7 +118,8 @@ export class PersonalNotifications {
       ) page),'[]'::json) as items`,
       [s.person_id, organization ?? '', organization ?? '',
        organization ?? '', organization ?? '',
-       organization ?? '', organization ?? '', offset])
+       organization ?? '', organization ?? '',
+       s.person_id, organization ?? '', organization ?? '', offset])
     // Exactly one SQL statement determines the list, unread count and page.
     // A stored reason, actor identifier or staff grant never crosses the API.
     return {
@@ -121,6 +137,7 @@ export class PersonalNotifications {
         const ownerWithdrawn=n.action === 'organization.store_owner_closing_withdrawn'
         const platformClosing=n.action === 'organization.store_platform_closing_started'
         const platformAppeal=n.action === 'organization.store_platform_closing_appealed'
+        const adminAlert=n.action === 'organization.store_platform_closing_mail_admin_alert'
         return {
           id:n.id,created_at:n.created_at,read_at:n.read_at,
           title:locked?'Oturum kilitlendi':draftGranted?
@@ -131,7 +148,8 @@ export class PersonalNotifications {
             'Mağaza için 30 günlük kapatma süreci başladı':ownerWithdrawn?
             'Mağaza kapatma talebi geri çekildi':platformClosing?
             'Platform mağaza kapatma incelemesi başladı':platformAppeal?
-            'Mağaza kapatma itirazı kaydedildi':opened?
+            'Mağaza kapatma itirazı kaydedildi':adminAlert?
+            'Kapatma e-postaları teslim edilemedi — yönetici uyarısı':opened?
             'Yeni mağaza başvuru hakkı açıldı':'Yeni mağaza başvuru hakkı durduruldu',
           context:locked?'Kişisel hesabınız':n.organization_name,
           description:locked?
@@ -142,8 +160,9 @@ export class PersonalNotifications {
             storeReactivated?'Şirketinizin onaylı mağazası platform tarafından yeniden etkinleştirildi. Güncel durumu şirket alanında kontrol edebilirsiniz.':
             ownerClosing?'Şirketinizin bir mağazasında yeni satışlar durduruldu. Geri sayım ve gerekli işlemleri güvenli şirket alanından kontrol edin. Kalıcı kapatma henüz kesinleşmedi.':
             ownerWithdrawn?'Şirketinizin bir mağazasının kapatma talebi geri çekildi. Diğer satış engelleri yine geçerlidir.':
-            platformClosing?'Şirketinizin bir mağazasında platform kararıyla yeni satışlar durduruldu. Gerekçeyi ve itiraz seçeneğini yalnız güvenli şirket alanınızda görebilirsiniz. Zorunlu e-posta teslimi doğrulanmadığından süre henüz başlamadı.':
-            platformAppeal?'Şirketinizin mağazası için bir kapatma itirazı kaydedildi. İnceleme sürerken bu mağazada yeni satışlar kapalıdır. Zorunlu e-posta teslimi doğrulanmadığından süre henüz başlamadı.':
+            platformClosing?'Şirketinizin bir mağazasında platform kararıyla yeni satışlar durduruldu. İtiraz saatini ve gerekçeyi güvenli şirket alanınızda görebilirsiniz.':
+            platformAppeal?'Şirketinizin mağazası için itiraz kaydedildi. İnceleme sürerken yeni satışlar kapalı kalır.':adminAlert?
+            'Kapatma güvenlik e-postasının dört denemede de teslimi doğrulanamadı. İtiraz süresi otomatik başlatıldı; teslimat sorununu yetkili platform kapatma ekranından inceleyin.':
             opened?
             'Şirketiniz yeniden yeni mağaza başvurusu gönderebilir. Bekleyen başvurular otomatik onaylanmaz.':
             'Şirketinizin yeni mağaza başvuruları durduruldu. Mevcut faal mağazalar etkilenmez.'
@@ -156,7 +175,7 @@ export class PersonalNotifications {
 
   async read(token: string, id: string, organization?: string) {
     const s = await this.authorize(token, organization)
-    const rows = await this.db.execute(`select n.id,n.read_at
+    let rows = await this.db.execute(`select n.id,n.read_at
       from da_notification_receipt n
       join da_audit_event a on a.id=n.audit_event_id
       left join da_organization o on o.id=a.organization_id
@@ -231,9 +250,27 @@ export class PersonalNotifications {
       [id,s.person_id,organization ?? '',organization ?? '',
         organization ?? '',organization ?? '',
         organization ?? '',organization ?? ''])
+    let admin=false
+    if(rows.length===0){
+      rows=await this.db.execute(`select n.id,n.read_at
+        from da_store_platform_closing_admin_notice n
+        join da_store_platform_closing c on c.seller_id=n.seller_id
+          and c.deadline_basis='admin_alert' and c.admin_alert_at is not null
+        where n.id=? and n.person_id=?
+          and (?='' or c.organization_id=?)
+          and exists(select 1 from da_platform_staff_grant g
+            where g.person_id=n.person_id and g.task='store.closing.manage'
+              and g.resource='platform' and g.revoked_at is null
+              and (g.expires_at is null or g.expires_at>clock_timestamp()))
+        for update of n`,[id,s.person_id,organization??'',organization??''])
+      admin=true
+    }
     if (rows.length !== 1) throw new IdentityAccessDenied()
     if (rows[0].read_at === null) {
-      await this.db.execute(`update da_notification_receipt set read_at=clock_timestamp() where id=?`, [id])
+      if(admin)await this.db.execute(`update da_store_platform_closing_admin_notice
+        set read_at=clock_timestamp() where id=?`,[id])
+      else await this.db.execute(`update da_notification_receipt
+        set read_at=clock_timestamp() where id=?`, [id])
       const audit = `daaud_${randomUUID()}`
       await this.db.execute(`insert into da_audit_event
         (id,actor_person_id,actor_type,actor_id,action,module,resource,target_id,occurred_at,created_at,updated_at)
