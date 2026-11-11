@@ -25,12 +25,11 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     const candidates=await access(req).personalReviewablePlatformStoreClosings(
       sessionToken(req),parsed.data.page??0)
     if(!candidates)return res.status(403).json({message:"Access denied"})
-    const next=await access(req).personalReviewablePlatformStoreClosings(
-      sessionToken(req),(parsed.data.page??0)+1)
+    const page=parsed.data.page??0
+    const next=page<1000?await access(req).personalReviewablePlatformStoreClosings(
+      sessionToken(req),page+1):[]
     if(!next)return res.status(403).json({message:"Access denied"})
-    return res.status(200).json({
-      candidates,page:parsed.data.page??0,has_more:next.length>0
-    })
+    return res.status(200).json({candidates,page,has_more:next.length>0})
   }catch(error){
     return res.status(error instanceof IdentityAccessDenied?403:503).json({
       message:error instanceof IdentityAccessDenied?"Access denied":"Unavailable"
