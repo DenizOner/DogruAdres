@@ -1,7 +1,7 @@
 import { HttpTypes } from "@medusajs/types"
 
 export interface Cart extends HttpTypes.StoreCart {
-  promotions?: HttpTypes.StorePromotion[]
+  // Keep the native StoreCartPromotion[] contract; do not make it optional.
   discount_subtotal?: number
 }
 
