@@ -17,6 +17,10 @@
     "isolatedModules": true,
     "jsx": "preserve",
     "types": ["node", "react", "react-dom"],
+    "typeRoots": [
+      "../../packages/api/node_modules/@types",
+      "./node_modules/@types"
+    ],
     "experimentalDecorators": true,
     "incremental": true,
     "plugins": [
