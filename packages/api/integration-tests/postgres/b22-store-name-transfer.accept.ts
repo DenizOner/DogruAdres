@@ -35,6 +35,8 @@ export async function snapshotB22TransferredStoreCart(input:{
   })).sort((x:any,y:any)=>x.line_id.localeCompare(y.line_id))
   assert.equal(items.length,2,"Existing two-Seller native Cart required")
   assert.equal(new Set(items.map((x:any)=>x.line_id)).size,2)
+  assert.equal(new Set(items.map((x:any)=>x.seller_id)).size,2,
+    "Historical Cart must contain offers from two distinct native Sellers")
   assert.ok(items.some((x:any)=>x.seller_id===sourceSellerId),
     "Source Store must have an actual native Cart item before assignment")
   assert.ok(items.every((x:any)=>x.offer_id&&x.seller_id))
