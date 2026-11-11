@@ -43,6 +43,24 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(availableBuyer.status,200,
     "Authorized Buyer scope must be visible over HTTPS before Staff closes Gamma")
   assert.equal(availableBuyer.body?.seller_count,2)
+  // seller_scope=inspect is read-only Cart-to-Seller mapping, never an
+  // availability or checkout grant. Prove real Buyer catalogue visibility
+  // independently BEFORE closing, on the exact native Seller page.
+  const catalogBase="/personal/catalog?organization_id="+
+    encodeURIComponent(buyerOrganizationId)
+  let sellerPage=-1
+  for(let page=0;page<5;page++){
+    const candidate=await read(buyer,catalogBase+"&page="+page)
+    assert.equal(candidate.status,200)
+    assert.ok(Array.isArray(candidate.body?.stores))
+    if(candidate.body.stores.some((store:any)=>store.id===sellerId)){
+      sellerPage=page
+      break
+    }
+  }
+  assert.notEqual(sellerPage,-1,
+    "Gamma Store must be visible to the real Buyer before platform closure")
+  const catalogPage=catalogBase+"&page="+sellerPage
   assert.equal(await foundation.authorizeBuyerCheckout(
     checkoutCartId,customerId,[sellerId]),true,
     "Exact current Buyer Cart must pass the final L before platform closure")
@@ -105,13 +123,19 @@ export async function verifyB22PlatformClosingAppeal(input:{
     "Platform closure blocks Store sales even though native Seller is still open")
   assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
     [sellerId]))[0],before,"Closure must not rewrite native Seller/name/URL")
-  // Real personal HTTPS buyer read must fail even with an unchanged,
-  // attributed native Cart containing Gamma; internal Store boolean alone
-  // is not sufficient user acceptance evidence.
-  const blockedBuyer=await read(buyer,buyerScopePath)
-  assert.equal(blockedBuyer.status,403,
-    "Platform-closed Gamma must fail the same real Buyer HTTPS seller-scope read")
-  assert.deepEqual(blockedBuyer.body,{message:"Access denied"})
+  // A real HTTPS Buyer catalogue must stop advertising Gamma's existing
+  // Offer immediately. The mapped historical Cart stays readable but its
+  // read-only seller-scope is NOT permission to buy or start checkout.
+  const closedCatalog=await read(buyer,catalogPage)
+  assert.equal(closedCatalog.status,200)
+  assert.ok(Array.isArray(closedCatalog.body?.stores))
+  assert.equal(closedCatalog.body.stores.some((store:any)=>store.id===sellerId),false,
+    "Platform-closed Gamma must disappear from the real Buyer HTTPS catalogue")
+  assert.equal(closedCatalog.body?.checkout_ready,false)
+  const mappedCart=await read(buyer,buyerScopePath)
+  assert.equal(mappedCart.status,200,
+    "Read-only attribution mapping does not bypass sale/checkout restrictions")
+  assert.equal(mappedCart.body?.checkout_ready,false)
   assert.equal(await foundation.authorizeBuyerCheckout(
     checkoutCartId,customerId,[sellerId]),false,
     "Platform closure must independently deny final L for the previously authorized Cart")
@@ -239,13 +263,15 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(await count(),auditBefore+2)
   assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false,
     "Appeal does not re-enable sales or release the Store name")
-  assert.equal((await read(buyer,buyerScopePath)).status,403,
-    "Owner appeal must not re-enable previously denied Buyer HTTPS seller scope")
+  const appealedCatalog=await read(buyer,catalogPage)
+  assert.equal(appealedCatalog.status,200)
+  assert.equal(appealedCatalog.body?.stores?.some((store:any)=>store.id===sellerId),false,
+    "Owner appeal must not restore Gamma to the real Buyer HTTPS catalogue")
   assert.equal(await foundation.authorizeBuyerCheckout(
     checkoutCartId,customerId,[sellerId]),false,
     "Owner appeal must not re-enable the final Buyer L")
   assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
   assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
     [sellerId]))[0],before)
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS seller-scope 200-to-403, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified\n")
 }
