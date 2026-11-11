@@ -6,16 +6,19 @@ import { useState } from "react"
 import Image from "next/image"
 import { convertToLocale } from "@/lib/helpers/money"
 import { cn } from "@/lib/utils"
+import type { HttpTypes } from "@medusajs/types"
 
-export const OrderCancel = ({ order }: { order: any }) => {
+type OrderItem = NonNullable<HttpTypes.StoreOrder["items"]>[number]
+
+export const OrderCancel = ({ order }: { order: HttpTypes.StoreOrder }) => {
   const [open, setOpen] = useState(false)
-  const [selectedItems, setSelectedItems] = useState<any[]>([])
+  const [selectedItems, setSelectedItems] = useState<OrderItem[]>([])
 
   const handleCancel = () => {
     console.log("cancel")
   }
 
-  const handleSelectItem = (item: any) => {
+  const handleSelectItem = (item: OrderItem) => {
     if (selectedItems.includes(item)) {
       setSelectedItems(selectedItems.filter((i) => i.id !== item.id))
     } else {
@@ -23,7 +26,7 @@ export const OrderCancel = ({ order }: { order: any }) => {
     }
   }
 
-  const handleChangeQuantity = (item: any, quantity: number) => {
+  const handleChangeQuantity = (item: OrderItem, quantity: number) => {
     const itemline = selectedItems.find((i) => i.id === item.id)
     if (itemline) {
       itemline.quantity += quantity
@@ -56,7 +59,7 @@ export const OrderCancel = ({ order }: { order: any }) => {
         >
           <div>
             <ul className="px-4">
-              {order.items.map((item: any) => {
+              {(order.items ?? []).map((item: OrderItem) => {
                 const isSelected = selectedItems.includes(item)
                 const itemline = selectedItems.find((i) => i.id === item.id)
                 return (
@@ -76,7 +79,7 @@ export const OrderCancel = ({ order }: { order: any }) => {
                         {item.thumbnail ? (
                           <Image
                             src={item.thumbnail}
-                            alt={item.subtitle}
+                            alt={item.subtitle ?? 'Product'}
                             width={60}
                             height={60}
                             className="rounded-sm"
@@ -84,7 +87,7 @@ export const OrderCancel = ({ order }: { order: any }) => {
                         ) : (
                           <Image
                             src={"/images/placeholder.svg"}
-                            alt={item.subtitle}
+                            alt={item.subtitle ?? 'Product'}
                             width={60}
                             height={60}
                             className="opacity-25 scale-75"
@@ -117,7 +120,7 @@ export const OrderCancel = ({ order }: { order: any }) => {
                               <Button
                                 variant="text"
                                 className="w-8 h-8 flex items-center justify-center !bg-transparent !hover:bg-secondary"
-                                disabled={item.quantity === itemline.quantity}
+                                disabled={item.quantity === itemline?.quantity}
                                 onClick={() => handleChangeQuantity(item, 1)}
                               >
                                 +
@@ -127,10 +130,12 @@ export const OrderCancel = ({ order }: { order: any }) => {
                         </div>
                         <div className="flex items-center justify-end">
                           <p className="text-primary label-lg">
-                            {convertToLocale({
-                              amount: item.total,
-                              currency_code: order.currency_code,
-                            })}
+                            {typeof item.total === "number"
+                              ? convertToLocale({
+                                  amount: item.total,
+                                  currency_code: order.currency_code,
+                                })
+                              : "—"}
                           </p>
                         </div>
                       </div>

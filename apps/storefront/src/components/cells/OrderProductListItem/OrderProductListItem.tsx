@@ -1,4 +1,5 @@
 import { Fragment } from 'react';
+import type { HttpTypes } from '@medusajs/types';
 
 import Image from 'next/image';
 
@@ -12,7 +13,7 @@ export const OrderProductListItem = ({
   currency_code,
   withDivider
 }: {
-  item: any;
+  item: HttpTypes.StoreOrderLineItem;
   currency_code: string;
   withDivider?: boolean;
 }) => (
@@ -25,7 +26,7 @@ export const OrderProductListItem = ({
             {item.thumbnail ? (
               <Image
                 src={item.thumbnail}
-                alt={item.title}
+                alt={item.title ?? 'Product'}
                 width={66}
                 height={66}
                 className="object-cover"
@@ -33,7 +34,7 @@ export const OrderProductListItem = ({
             ) : (
               <Image
                 src={'/images/placeholder.svg'}
-                alt={item.title}
+                alt={item.title ?? 'Product'}
                 width={45}
                 height={45}
                 className="opacity-25"
