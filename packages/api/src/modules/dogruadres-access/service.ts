@@ -5426,12 +5426,25 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           and a.new_values->>'request_id'=c.appeal_request_id
           and a.new_values->>'appeal_reason_sha256'=
             encode(sha256(convert_to(c.appeal_reason,'UTF8')),'hex')
-      )) as appeal_proof
+      )) as appeal_proof,
+      (c.deadline_started_at is null or exists (
+        select 1 from da_audit_event e
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+          and x.source_module='dogruadres-access' and x.deleted_at is null
+        where e.id=c.deadline_audit_event_id and e.deleted_at is null
+          and e.module='dogruadres-access' and e.organization_id=c.organization_id
+          and e.target_id=c.seller_id and e.resource='store-platform-closing'
+          and e.action='organization.store_platform_closing_deadline_started'
+          and e.role_context=(case when c.deadline_basis='owner_delivery'
+            then 'owner' else 'platform_automation' end)
+          and e.new_values->>'basis'=c.deadline_basis
+          and (e.new_values->>'deadline_started_at')::timestamptz=c.deadline_started_at
+      )) as deadline_proof
       from da_store_platform_closing c where c.seller_id=?
       ${lock?'for update of c':''}`,[sellerId])
     if(rows.length>1||rows.some(row=>
       row.seller_id!==sellerId||row.start_proof!==true||
-      row.appeal_proof!==true||
+      row.appeal_proof!==true||row.deadline_proof!==true||
       !["notification_unverified","appealed"].includes(row.state)||
       !/^dascp_[a-f0-9]{32}$/.test(String(row.request_id))||
       !Number.isFinite(new Date(row.started_at).getTime())||
@@ -5567,6 +5580,126 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {status:"notification_unverified" as const,version:1,replayed:false}
   }
 
+
+  /**
+   * Scheduled B22 fallback. Admin notification and 10+20 clock are one
+   * atomic Foundation operation with a canonical audit/outbox. An SMTP
+   * acceptance or expired lease NEVER counts as delivery proof. The initial
+   * authorized Staff is the audit attribution; the deadline is explicitly
+   * marked as platform automation, not a new Staff decision.
+   */
+  @InjectTransactionManager()
+  async settlePlatformClosingAdminFallback(@MedusaContext() context:Context={}){
+    const db=securitySql(context.transactionManager)
+    const candidates=await db.execute(`select c.seller_id,c.organization_id,
+      c.source_audit_event_id
+      from da_store_platform_closing c
+      where c.deadline_started_at is null
+        and c.started_at<=clock_timestamp()-interval '72 hours'
+        and exists (
+          select 1 from da_organization_membership m
+          join da_person p on p.id=m.person_id and p.deleted_at is null
+            and p.disabled_at is null
+          where m.organization_id=c.organization_id and m.role='owner'
+            and m.protected_owner=true and m.status='active'
+            and m.revoked_at is null and m.deleted_at is null
+        )
+        and not exists (
+          select 1 from da_store_platform_closing_email d
+          join da_organization_membership m on m.person_id=d.person_id
+            and m.organization_id=c.organization_id and m.status='active'
+            and m.role='owner' and m.protected_owner=true
+            and m.revoked_at is null and m.deleted_at is null
+          join da_person p on p.id=m.person_id and p.deleted_at is null
+            and p.disabled_at is null
+          where d.seller_id=c.seller_id and (
+            d.attempts<4 or d.lease_until is not null
+            or d.last_result='inflight' or d.delivered_at is not null)
+        )
+        and not exists (
+          select 1 from da_organization_membership m
+          join da_person p on p.id=m.person_id
+            and p.disabled_at is null and p.deleted_at is null
+          where m.organization_id=c.organization_id and m.status='active'
+            and m.role='owner' and m.protected_owner=true
+            and m.revoked_at is null and m.deleted_at is null
+            and not exists(select 1 from da_store_platform_closing_email d
+              where d.seller_id=c.seller_id and d.person_id=m.person_id)
+        )
+      order by c.started_at,c.seller_id
+      for update of c skip locked limit 5`)
+    let started=0
+    for(const candidate of candidates){
+      const sellerId=String(candidate.seller_id)
+      const organizationId=String(candidate.organization_id)
+      const closure=await this.platformClosingRow_(db,sellerId,true)
+      if(!closure||closure.organization_id!==organizationId||
+         closure.deadline_started_at!==null||
+         closure.source_audit_event_id!==candidate.source_audit_event_id)
+        throw new IdentityAccessDenied()
+      const recipients=await db.execute(`select distinct g.person_id
+        from da_platform_staff_grant g
+        join da_person p on p.id=g.person_id and p.disabled_at is null
+          and p.deleted_at is null
+        where g.task='store.closing.manage' and g.resource='platform'
+          and g.revoked_at is null
+          and (g.expires_at is null or g.expires_at>clock_timestamp())
+        limit 101`)
+      if(!recipients.length)continue
+      if(recipients.length>100)throw new IdentityAccessDenied()
+      await db.execute(`insert into da_store_platform_closing_admin_notice
+        (id,seller_id,person_id)
+        select 'danal_'||replace(gen_random_uuid()::text,'-',''),?,g.person_id
+        from da_platform_staff_grant g
+        join da_person p on p.id=g.person_id and p.disabled_at is null
+          and p.deleted_at is null
+        where g.task='store.closing.manage' and g.resource='platform'
+          and g.revoked_at is null
+          and (g.expires_at is null or g.expires_at>clock_timestamp())
+        on conflict (seller_id,person_id) do nothing`,[sellerId])
+      const noticed=await db.execute(`select count(*)::int as n
+        from da_store_platform_closing_admin_notice n
+        join da_platform_staff_grant g on g.person_id=n.person_id
+          and g.task='store.closing.manage' and g.resource='platform'
+          and g.revoked_at is null
+          and (g.expires_at is null or g.expires_at>clock_timestamp())
+        join da_person p on p.id=g.person_id and p.disabled_at is null
+          and p.deleted_at is null where n.seller_id=?`,[sellerId])
+      if(!Number(noticed[0]?.n))throw new IdentityAccessDenied()
+      const actor=await db.execute(`select e.actor_person_id,e.actor_type,e.actor_id
+        from da_audit_event e where e.id=? and e.module='dogruadres-access'
+          and e.action='organization.store_platform_closing_started'
+          and e.resource='store-platform-closing' and e.role_context='platform_staff'
+          and e.organization_id=? and e.target_id=? and e.deleted_at is null
+        limit 2`,[closure.source_audit_event_id,organizationId,sellerId])
+      if(actor.length!==1)throw new IdentityAccessDenied()
+      const clock=await db.execute("select clock_timestamp() as at")
+      if(clock.length!==1)throw new IdentityAccessDenied()
+      const at=new Date(clock[0].at).toISOString()
+      const [deadlineAudit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:actor[0].actor_person_id,
+        actor_type:actor[0].actor_type,actor_id:actor[0].actor_id,
+        role_context:"platform_automation",organization_id:organizationId,
+        action:"organization.store_platform_closing_deadline_started",
+        module:DOGRUADRES_AUDIT_MODULE,resource:"store-platform-closing",
+        target_id:sellerId,
+        new_values:{basis:"admin_alert",deadline_started_at:at,
+          evidence:"four_scheduled_attempts_without_verified_delivery"},
+        occurred_at:new Date(at)
+      }],context)
+      if(!deadlineAudit?.id)throw new IdentityAccessDenied()
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      const updated=await db.execute(`update da_store_platform_closing
+        set deadline_started_at=?::timestamptz,deadline_basis='admin_alert',
+          admin_alert_at=?::timestamptz,deadline_audit_event_id=?,
+          updated_at=clock_timestamp()
+        where seller_id=? and organization_id=? and deadline_started_at is null
+        returning seller_id`,[at,at,deadlineAudit.id,sellerId,organizationId])
+      if(updated.length!==1)throw new IdentityAccessDenied()
+      started++
+    }
+    return started
+  }
 
   /**
    * B22 mandatory Owner mail preflight (read only).
@@ -5741,9 +5874,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       await (context.transactionManager as {flush():Promise<void>}).flush()
       const started=await db.execute(`update da_store_platform_closing
         set deadline_started_at=?::timestamptz,deadline_basis='owner_delivery',
-          updated_at=clock_timestamp()
+          deadline_audit_event_id=?,updated_at=clock_timestamp()
         where seller_id=? and organization_id=? and deadline_started_at is null
-        returning seller_id`,[at,sellerId,orgId])
+        returning seller_id`,[at,deadlineAudit.id,sellerId,orgId])
       if(started.length!==1)throw new IdentityAccessDenied()
     }
     return {viewed:true,reason:String(locks[0].reason),
