@@ -156,6 +156,24 @@ async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unveri
   })
 }
 
+/**
+ * A worker can die after claiming an email slot but before obtaining an SMTP
+ * reply. Its ten-minute lease is NOT proof that a message was sent. Preserve
+ * the attempted slot and report it as uncertain; never claim delivery, success
+ * or a transport failure from process death. Later slots retain their original
+ * 24-hour spacing, and the fourth uncertain slot may use the approved
+ * admin-alert fallback instead of locking the closure forever.
+ */
+async function reconcileExpiredClaims(db: Db) {
+  await db.transactional(async em => {
+    await em.execute(`update da_store_platform_closing_email
+      set last_result='uncertain',claim_id=null,lease_until=null,
+        updated_at=clock_timestamp()
+      where last_result='inflight' and delivered_at is null
+        and lease_until<=clock_timestamp()`)
+  })
+}
+
 async function settleExhaustion(db: Db): Promise<number> {
   return db.transactional(async em => {
     const conn=em
@@ -184,7 +202,8 @@ async function settleExhaustion(db: Db): Promise<number> {
           join da_person p on p.id=m.person_id and p.deleted_at is null
             and p.disabled_at is null
           where d.seller_id=c.seller_id and (
-            d.attempts<4 or d.lease_until>clock_timestamp()
+            d.attempts<4 or d.lease_until is not null
+            or d.last_result='inflight'
             or d.delivered_at is not null)
         )
         and not exists (
@@ -249,6 +268,7 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
   // Never send private subjects, secrets or raw errors to routine job logs.
   const db=scope(container)
   await refreshAudience(db)
+  await reconcileExpiredClaims(db)
   for(let i=0;i<MAX_PER_TICK;i++){
     const claim=await claimDue(db)
     if(!claim)break
