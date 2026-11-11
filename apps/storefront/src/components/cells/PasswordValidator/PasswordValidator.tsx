@@ -27,7 +27,13 @@ export const PasswordValidator = ({
   setError
 }: {
   password: string;
-  setError: (error: any) => void;
+  setError: (error: {
+    isValid: boolean;
+    lower: boolean;
+    upper: boolean;
+    '8chars': boolean;
+    symbolOrDigit: boolean;
+  }) => void;
 }) => {
   const [newPasswordError, setNewPasswordError] = useState({
     isValid: false,
@@ -46,8 +52,7 @@ export const PasswordValidator = ({
       lower: validation.errors.noLower,
       upper: validation.errors.noUpper,
       '8chars': validation.errors.tooShort,
-      digit: validation.errors.noDigit,
-      symbol: validation.errors.noSymbol
+      symbolOrDigit: validation.errors.noDigit || validation.errors.noSymbol
     });
     setNewPasswordError({
       isValid: validation.isValid,

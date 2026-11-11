@@ -2,8 +2,9 @@
 
 import { Button } from "@/components/atoms"
 import Link from "next/link"
+import type { HttpTypes } from "@medusajs/types"
 
-export const OrderReturn = ({ order }: { order: any }) => {
+export const OrderReturn = ({ order }: { order: Pick<HttpTypes.StoreOrder, 'id'> }) => {
   return (
     <div className="md:flex justify-between items-center">
       <div className="mb-4 md:mb-0">
