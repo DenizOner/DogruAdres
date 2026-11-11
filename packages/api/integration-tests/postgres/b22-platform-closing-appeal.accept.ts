@@ -520,6 +520,10 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(deliveryStatus.body.mailbox_delivery_verified_count,1)
   assert.equal(deliveryStatus.body.deadline_started,true)
   assert.equal(deliveryStatus.body.deadline_basis,"owner_delivery")
+  assert.equal(deliveryStatus.body.smtp_accepted_count,
+    deliveryStatus.body.email_statuses.filter((x:any)=>x.smtp_accepted===true).length,
+    "An Owner link visit must not erase an earlier SMTP acceptance or fabricate one")
+  assert.equal(deliveryStatus.body.email_statuses.some((x:any)=>x.link_visited_at),true)
   assert.equal(JSON.stringify(deliveryStatus.body).includes(emailToken),false)
   assert.equal(JSON.stringify(deliveryStatus.body).includes(reason),false)
   // A delayed fourth email-slot result must not add an admin alert or
