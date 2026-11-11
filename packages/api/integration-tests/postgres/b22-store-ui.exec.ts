@@ -10491,6 +10491,18 @@ export default async function({container}:any){
       await q("drop function b22_mfa_outbox_fault_v1()")
     }
 
+    // Run the platform closing user journey while Owner A and Staff B have
+    // genuine active strong sessions; the following B-01 MFA tests intentionally
+    // revoke BOTH actors and must remain unaffected.
+    // Gamma is an independently approved, still-open Seller; Alpha stays
+    // suspended for the existing lifecycle/security acceptance.
+    await verifyB22PlatformClosingAppeal({
+      browser,staff:reviewer,q,foundation,
+      ownerPersonId:A.person,staffPersonId:B.person,
+      ownerOrgId:sellerGamma.id,ownerOrgName:sellerGamma.name,
+      sellerId:gammaSellerId
+    })
+
     // B-01 MFA disable: use only an existing B22 CI synthetic browser and PG16.
     // Supported platform policy and recovery-code HTTP flows create a real
     // current full session; no direct synthetic epoch/version manipulation.
@@ -13618,17 +13630,6 @@ export default async function({container}:any){
       if(originalPublicOrigin===undefined)delete process.env.DOGRUADRES_PUBLIC_ORIGIN
       else process.env.DOGRUADRES_PUBLIC_ORIGIN=originalPublicOrigin
     }
-
-    // The Alpha Owner Store was intentionally suspended by preceding
-    // lifecycle/security tests; never silently reopen it just for this test.
-    // Gamma's separately approved native Seller remains open and is owned
-    // by the same protected Person A. Close that real eligible Store instead.
-    await verifyB22PlatformClosingAppeal({
-      browser,staff:reviewer,q,foundation,
-      ownerPersonId:A.person,staffPersonId:B.person,
-      ownerOrgId:sellerGamma.id,ownerOrgName:sellerGamma.name,
-      sellerId:gammaSellerId
-    })
 
     process.stdout.write("NOT TESTED B22 Chrome: actual platform document reviewer/writer, buyer checkout, independent acceptance and atomic cross-module revocation\n")
 
