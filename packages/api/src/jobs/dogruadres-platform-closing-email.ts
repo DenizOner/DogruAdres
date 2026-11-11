@@ -174,94 +174,14 @@ async function reconcileExpiredClaims(db: Db) {
   })
 }
 
-async function settleExhaustion(db: Db): Promise<number> {
-  return db.transactional(async em => {
-    const conn=em
-    // Delivery must be *proved*; neither accepted SMTP nor an untrusted
-    // tracking pixel counts. An admin receipt is durably recorded *before*
-    // the clock starts, in the same transaction.
-    const candidates=await conn.execute(`select c.seller_id,c.organization_id,
-      c.source_audit_event_id
-      from da_store_platform_closing c
-      where c.deadline_started_at is null
-        and c.started_at<=clock_timestamp()-interval '72 hours'
-        and exists (
-          select 1 from da_organization_membership m
-          join da_person p on p.id=m.person_id and p.deleted_at is null
-            and p.disabled_at is null
-          where m.organization_id=c.organization_id and m.role='owner'
-            and m.protected_owner=true and m.status='active'
-            and m.revoked_at is null and m.deleted_at is null
-        )
-        and not exists (
-          select 1 from da_store_platform_closing_email d
-          join da_organization_membership m on m.person_id=d.person_id
-            and m.organization_id=c.organization_id and m.status='active'
-            and m.role='owner' and m.protected_owner=true
-            and m.revoked_at is null and m.deleted_at is null
-          join da_person p on p.id=m.person_id and p.deleted_at is null
-            and p.disabled_at is null
-          where d.seller_id=c.seller_id and (
-            d.attempts<4 or d.lease_until is not null
-            or d.last_result='inflight'
-            or d.delivered_at is not null)
-        )
-        and not exists (
-          select 1 from da_organization_membership m
-          join da_person p on p.id=m.person_id
-            and p.disabled_at is null and p.deleted_at is null
-          where m.organization_id=c.organization_id and m.status='active'
-            and m.role='owner' and m.protected_owner=true
-            and m.revoked_at is null and m.deleted_at is null
-            and not exists(select 1 from da_store_platform_closing_email d
-              where d.seller_id=c.seller_id and d.person_id=m.person_id)
-        )
-      order by c.started_at,c.seller_id
-      for update of c skip locked limit 5`)
-    let started=0
-    for(const c of candidates){
-      const recipients=await conn.execute(`select distinct g.person_id
-        from da_platform_staff_grant g
-        join da_person p on p.id=g.person_id and p.disabled_at is null
-          and p.deleted_at is null
-        where g.task='store.closing.manage' and g.resource='platform'
-          and g.revoked_at is null
-          and (g.expires_at is null or g.expires_at>clock_timestamp())
-        limit 100`)
-      if(!recipients.length)continue // No silent "admin was notified" claim.
-      await conn.execute(`insert into da_store_platform_closing_admin_notice
-        (id,seller_id,person_id)
-        select 'danal_'||replace(gen_random_uuid()::text,'-',''),?,g.person_id
-        from da_platform_staff_grant g
-        join da_person p on p.id=g.person_id and p.disabled_at is null
-          and p.deleted_at is null
-        where g.task='store.closing.manage' and g.resource='platform'
-          and g.revoked_at is null
-          and (g.expires_at is null or g.expires_at>clock_timestamp())
-        on conflict (seller_id,person_id) do nothing`,[c.seller_id])
-      const all=await conn.execute(`select count(*)::int as n
-        from da_store_platform_closing_admin_notice n
-        join da_platform_staff_grant g on g.person_id=n.person_id
-          and g.task='store.closing.manage' and g.resource='platform'
-          and g.revoked_at is null and
-          (g.expires_at is null or g.expires_at>clock_timestamp())
-        join da_person p on p.id=g.person_id and p.disabled_at is null
-          and p.deleted_at is null
-        where n.seller_id=?`,[c.seller_id])
-      if(!Number(all[0]?.n))continue
-      // Use precisely one database timestamp for the required equality
-      // constraint: an admin notification and the deadline are atomic.
-      const changed=await conn.execute(`with ts as (select clock_timestamp() as at)
-        update da_store_platform_closing c
-        set deadline_started_at=ts.at,
-          admin_alert_at=ts.at,deadline_basis='admin_alert',
-          updated_at=ts.at
-        from ts where c.seller_id=? and c.deadline_started_at is null
-        returning c.seller_id`,[c.seller_id])
-      if(changed.length===1)started++
-    }
-    return started
-  })
+async function settleExhaustion(container: MedusaContainer): Promise<number> {
+  // The Foundation service owns the *same* physical DB transaction for
+  // admin recipients, deadline and canonical audit/outbox. Never commit a
+  // timer here with raw SQL independent of its provenance.
+  const access=container.resolve("dogruadresAccess") as {
+    settlePlatformClosingAdminFallback():Promise<number>
+  }
+  return access.settlePlatformClosingAdminFallback()
 }
 
 export async function runPlatformClosingEmailTick(container: MedusaContainer) {
@@ -320,7 +240,7 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
     }
     await settle(db,claim,result,messageId)
   }
-  await settleExhaustion(db)
+  await settleExhaustion(container)
 }
 
 export default async function platformClosingEmailJob(container:MedusaContainer){
