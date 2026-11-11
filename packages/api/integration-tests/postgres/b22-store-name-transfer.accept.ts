@@ -4,6 +4,7 @@ import {randomBytes} from "node:crypto"
 import {B06Chrome} from "./b06-ui-browser"
 type Rows=(sql:string,params?:any[])=>Promise<any[]>
 type Store={application_id:string;seller_id:string;organization_id:string}
+type CartHistory={query:any;cartId:string;customerId:string;snapshot:unknown}
 /** Exact pre-existing Medusa Cart/Offer ownership snapshot for B22 name right
  * assignment. Uses installed Mercur/Medusa native query graph, not a second
  * Cart model. A source Seller must have a real persisted offer in this Cart.
@@ -364,7 +365,8 @@ export async function verifyAssignedRecipientUse(input:{
   owner:B06Chrome;reviewer:B06Chrome;q:Rows;
   source:Store;target:Store;competitor:Pick<Store,'seller_id'|'organization_id'>;
   targetOrganizationName:string;competitorOrganizationName:string;
-  formerName:string;formerHandle:string;sourceVacated:boolean
+  formerName:string;formerHandle:string;sourceVacated:boolean;
+  cartHistory:CartHistory
 }):Promise<void>{
   const {owner,reviewer,q,source,target,competitor,formerName,
     formerHandle,sourceVacated,targetOrganizationName,
@@ -539,6 +541,14 @@ export async function verifyAssignedRecipientUse(input:{
     "C cannot take the transferred name after B adopts it")
   assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
     [cAfter.request_id]))[0].n,0)
+  const cartHistory=await snapshotB22TransferredStoreCart({
+    q,query:input.cartHistory.query,cartId:input.cartHistory.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.cartHistory.customerId
+  })
+  assert.deepEqual(cartHistory,input.cartHistory.snapshot,
+    "B's native name adoption cannot transfer original Cart/Offer/Seller attribution")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED\n")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: recipient B native name and URL adopted after source A vacates, historical 30-day hold retained, unrelated Store C HTTP409 before/after, Staff approval and audit/outbox durable\n")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: transferred old name remains reserved for B after source hold day 30, C HTTPS409 without request/audit, original timestamp restored, B native adoption succeeds\n")
 }
@@ -549,11 +559,21 @@ export async function verifyAssignedRecipientUse(input:{
 export async function verifyB22TransferredRecovery(input:{
   owner:B06Chrome;reviewer:B06Chrome;q:Rows;
   source:Store;target:Store;targetExpectedName:string;
+  query:any;cartId:string;customerId:string;
   competitor:Pick<Store,'seller_id'|'organization_id'>;targetOrganizationName:string;competitorOrganizationName:string;
   renameAndReopen:()=>Promise<void>;
   restoreFixture:()=>Promise<unknown>
-}):Promise<{formerName:string;formerHandle:string}>{
+}):Promise<{formerName:string;formerHandle:string;cartHistory:CartHistory}>{
   const {owner,reviewer,q,source,target,targetExpectedName}=input
+  const initialCart=await snapshotB22TransferredStoreCart({
+    q,query:input.query,cartId:input.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.customerId
+  })
+  const cartHistory:CartHistory={
+    query:input.query,cartId:input.cartId,customerId:input.customerId,
+    snapshot:initialCart
+  }
   const before=(await q(
     "select id,name,handle,status,approved_at from seller where id=$1",
     [source.seller_id]))[0]
@@ -562,7 +582,12 @@ export async function verifyB22TransferredRecovery(input:{
     owner,reviewer,q,source,target
   })
   assert.equal(assignment.formerName,before.name)
-  const recipientScope={owner,reviewer,q,source,target,competitor:input.competitor,
+  assert.deepEqual(await snapshotB22TransferredStoreCart({
+    q,query:input.query,cartId:input.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.customerId
+  }),initialCart,"Name right decision must not reassign existing Medusa Cart links")
+  const recipientScope={owner,reviewer,q,source,target,cartHistory,competitor:input.competitor,
     targetOrganizationName:input.targetOrganizationName,
     competitorOrganizationName:input.competitorOrganizationName,
     ...assignment}
@@ -589,6 +614,11 @@ export async function verifyB22TransferredRecovery(input:{
     [source.seller_id]))[0].status,"suspended")
   assert.equal((await q("select id from seller where id=$1",
     [source.seller_id]))[0].id,source.seller_id)
+  assert.deepEqual(await snapshotB22TransferredStoreCart({
+    q,query:input.query,cartId:input.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.customerId
+  }),initialCart,"Same-ID source recovery must retain native Cart identity")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: exceptional suspended Seller name-right assigned to approved separate Store; Owner new name and Staff reopen same ID, native/Order untouched before rename, foreign/CSRF/replay denied, audit/outbox and recipient reservation\n")
-  return assignment
+  return {...assignment,cartHistory}
 }
