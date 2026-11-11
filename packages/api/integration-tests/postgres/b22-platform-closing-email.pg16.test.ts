@@ -32,6 +32,24 @@ function bind(tx:Pg,statement:string,params:unknown[]=[]){
   assert.equal(n,params.length,"Bound SQL parameters")
   return tx.unsafe(sql,params)
 }
+// Bun's typed JSON parameter inference may wrap a JSON string as a JSONB
+// scalar. Build the test-only canonical object in PostgreSQL explicitly, so
+// the actual source proof and Index contract get the object they require.
+async function insertOutbox(tx:Pg,id:string,item:any){
+  const e=item.envelope,a=e.actor
+  return bind(tx,"insert into da_audit_outbox "+
+    "(id,source_audit_event_id,source_module,envelope_version,envelope,status) "+
+    "values (?,?,?,?,"+
+    "jsonb_build_object('version',?,'source_module',?,"+
+    "'source_audit_event_id',?,'organization_id',?,"+
+    "'actor',jsonb_build_object('person_id',?,'type',?,'id',?,'role_context',?),"+
+    "'action',?,'resource',?,'target_id',?,'occurred_at',?),?) returning *",[
+    id,item.source_audit_event_id,item.source_module,item.envelope_version,
+    e.version,e.source_module,e.source_audit_event_id,e.organization_id,
+    a.person_id,a.type,a.id,a.role_context,
+    e.action,e.resource,e.target_id,e.occurred_at,item.status
+  ])
+}
 async function migrate(Ctor:new (...args:any[])=>any){
   const m=new Ctor()
   const statements:string[]=[]
@@ -57,10 +75,13 @@ function serviceFor(tx:Pg){
       const inserted=await bind(tx,"insert into da_audit_event "+
         "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
         "action,module,resource,target_id,new_values,occurred_at) "+
-        "values (?,?,?,?,?,?,?,?,?,?,?::jsonb,?) returning *",[
+        "values (?,?,?,?,?,?,?,?,?,?,"+
+        "jsonb_build_object('basis',?,'deadline_started_at',?,'evidence',?),?) "+
+        "returning *",[
         id,e.actor_person_id,e.actor_type,e.actor_id,e.role_context??null,
         e.organization_id??null,e.action,e.module,e.resource,e.target_id??null,
-        JSON.stringify(e.new_values??null),e.occurred_at
+        e.new_values.basis,e.new_values.deadline_started_at,
+        e.new_values.evidence,e.occurred_at
       ])
       rows.push(inserted[0])
     }
@@ -71,12 +92,7 @@ function serviceFor(tx:Pg){
     if(injectOutboxFailure)throw Error("INJECTED_B22_CANONICAL_OUTBOX_FAILURE")
     const rows=[]
     for(const item of items){
-      const inserted=await bind(tx,"insert into da_audit_outbox "+
-        "(id,source_audit_event_id,source_module,envelope_version,envelope,status) "+
-        "values (?,?,?,?,?::jsonb,?) returning *",[
-        "daaob_"+uuid(),item.source_audit_event_id,item.source_module,
-        item.envelope_version,JSON.stringify(item.envelope),item.status
-      ])
+      const inserted=await insertOutbox(tx,"daaob_"+uuid(),item)
       rows.push(inserted[0])
     }
     return rows
@@ -153,18 +169,20 @@ async function seed(seller:string,attempts=0,state="pending",leaseExpired=false)
   }
   await q("insert into da_audit_event (id,actor_person_id,actor_type,actor_id,"+
     "role_context,organization_id,action,module,resource,target_id,new_values,occurred_at) "+
-    "values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)",
+    "values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,"+
+    "jsonb_build_object('request_id',$11,'state',$12,'reason_sha256',$13),$14)",
     [event.id,event.actor_person_id,event.actor_type,event.actor_id,event.role_context,
       event.organization_id,event.action,event.module,event.resource,event.target_id,
-      JSON.stringify(event.new_values),event.occurred_at])
+      event.new_values.request_id,event.new_values.state,
+      event.new_values.reason_sha256,event.occurred_at])
   const envelope={version:1,source_module:"dogruadres-access",
     source_audit_event_id:eventId,organization_id:org,
     actor:{person_id:staff,type:"user",id:"user_b22_staff",role_context:"platform_staff"},
     action:event.action,resource:event.resource,target_id:seller,occurred_at:occurred}
-  await q("insert into da_audit_outbox "+
-    "(id,source_audit_event_id,source_module,envelope_version,envelope,status) "+
-    "values ($1,$2,'dogruadres-access',1,$3::jsonb,'pending')",
-    ["daaob_"+uuid(),eventId,JSON.stringify(envelope)])
+  await insertOutbox(db as Pg,"daaob_"+uuid(),{
+    source_audit_event_id:eventId,source_module:"dogruadres-access",
+    envelope_version:1,envelope,status:"pending"
+  })
   await q("insert into da_store_platform_closing "+
     "(seller_id,organization_id,source_audit_event_id,state,version,request_id,"+
     "reason,started_at) values ($1,$2,$3,'notification_unverified',1,$4,$5,$6)",
