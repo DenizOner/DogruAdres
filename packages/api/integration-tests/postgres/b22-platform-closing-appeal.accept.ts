@@ -478,11 +478,34 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(clockRows[0].admin_alert_at,null)
   assert.ok(clockRows[0].deadline_started_at)
   const originalStart=new Date(clockRows[0].deadline_started_at).toISOString()
+  const deadlineAudit=await q(`select e.id,e.new_values
+    from da_audit_event e join da_audit_outbox x
+      on x.source_audit_event_id=e.id
+      and x.source_module='dogruadres-access' and x.deleted_at is null
+    where e.organization_id=$1 and e.target_id=$2
+      and e.action='organization.store_platform_closing_deadline_started'
+      and e.resource='store-platform-closing'
+      and e.role_context='owner' and e.deleted_at is null
+      and e.new_values->>'basis'='owner_delivery'
+      and (e.new_values->>'deadline_started_at')::timestamptz=$3::timestamptz`,
+      [ownerOrgId,sellerId,originalStart])
+  assert.equal(deadlineAudit.length,1,
+    "Owner delivery clock and one canonical Foundation audit/outbox must commit together")
+  assert.equal(JSON.stringify(deadlineAudit).includes(emailToken),false,
+    "Email link secret must not be copied to Foundation audit")
+  assert.equal(JSON.stringify(deadlineAudit).includes(reason),false,
+    "Private closing reason must not be copied to Foundation audit")
   const secondVisit=await write(browser,visitPath,{token:emailToken})
   assert.equal(secondVisit.status,200,"Same authorized Owner may reread notice")
   assert.equal((await q(`select deadline_started_at from da_store_platform_closing
     where seller_id=$1`,[sellerId]))[0].deadline_started_at.toISOString(),originalStart,
     "Revisiting must not restart 10+20 appeal time")
+  const auditedReplays=await q(`select count(*)::int as n
+    from da_audit_event where organization_id=$1 and target_id=$2
+      and action='organization.store_platform_closing_deadline_started'
+      and deleted_at is null`,[ownerOrgId,sellerId])
+  assert.equal(Number(auditedReplays[0].n),1,
+    "Replaying the Owner link must not create a duplicate deadline audit")
   const during=await read(browser,readPath)
   assert.equal(during.status,200)
   assert.equal(during.body.deadline_started,true)
