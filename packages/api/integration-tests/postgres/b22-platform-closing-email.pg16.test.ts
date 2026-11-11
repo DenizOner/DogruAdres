@@ -40,10 +40,10 @@ async function insertOutbox(tx:Pg,id:string,item:any){
   return bind(tx,"insert into da_audit_outbox "+
     "(id,source_audit_event_id,source_module,envelope_version,envelope,status) "+
     "values (?,?,?,?,"+
-    "jsonb_build_object('version',?,'source_module',?,"+
-    "'source_audit_event_id',?,'organization_id',?,"+
-    "'actor',jsonb_build_object('person_id',?,'type',?,'id',?,'role_context',?),"+
-    "'action',?,'resource',?,'target_id',?,'occurred_at',?),?) returning *",[
+    "jsonb_build_object('version',?::integer,'source_module',?::text,"+
+    "'source_audit_event_id',?::text,'organization_id',?::text,"+
+    "'actor',jsonb_build_object('person_id',?::text,'type',?::text,'id',?::text,'role_context',?::text),"+
+    "'action',?::text,'resource',?::text,'target_id',?::text,'occurred_at',?::text),?) returning *",[
     id,item.source_audit_event_id,item.source_module,item.envelope_version,
     e.version,e.source_module,e.source_audit_event_id,e.organization_id,
     a.person_id,a.type,a.id,a.role_context,
@@ -76,7 +76,7 @@ function serviceFor(tx:Pg){
         "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
         "action,module,resource,target_id,new_values,occurred_at) "+
         "values (?,?,?,?,?,?,?,?,?,?,"+
-        "jsonb_build_object('basis',?,'deadline_started_at',?,'evidence',?),?) "+
+        "jsonb_build_object('basis',?::text,'deadline_started_at',?::text,'evidence',?::text),?) "+
         "returning *",[
         id,e.actor_person_id,e.actor_type,e.actor_id,e.role_context??null,
         e.organization_id??null,e.action,e.module,e.resource,e.target_id??null,
@@ -170,7 +170,7 @@ async function seed(seller:string,attempts=0,state="pending",leaseExpired=false)
   await q("insert into da_audit_event (id,actor_person_id,actor_type,actor_id,"+
     "role_context,organization_id,action,module,resource,target_id,new_values,occurred_at) "+
     "values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,"+
-    "jsonb_build_object('request_id',$11,'state',$12,'reason_sha256',$13),$14)",
+    "jsonb_build_object('request_id',$11::text,'state',$12::text,'reason_sha256',$13::text),$14)",
     [event.id,event.actor_person_id,event.actor_type,event.actor_id,event.role_context,
       event.organization_id,event.action,event.module,event.resource,event.target_id,
       event.new_values.request_id,event.new_values.state,
