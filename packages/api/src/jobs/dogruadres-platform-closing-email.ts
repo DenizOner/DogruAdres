@@ -181,37 +181,36 @@ async function settleExhaustion(db: Db): Promise<number> {
           and (g.expires_at is null or g.expires_at>clock_timestamp())
         limit 100`)
       if(!recipients.length)continue // No silent "admin was notified" claim.
-      const notice=await conn.execute(`insert into da_notification_receipt
-        (id,person_id,audit_event_id)
-        select 'danot_'||gen_random_uuid()::text,g.person_id,?
+      await conn.execute(`insert into da_store_platform_closing_admin_notice
+        (id,seller_id,person_id)
+        select 'danal_'||replace(gen_random_uuid()::text,'-',''),?,g.person_id
         from da_platform_staff_grant g
         join da_person p on p.id=g.person_id and p.disabled_at is null
           and p.deleted_at is null
         where g.task='store.closing.manage' and g.resource='platform'
           and g.revoked_at is null
           and (g.expires_at is null or g.expires_at>clock_timestamp())
-        on conflict (audit_event_id,person_id) do nothing
-        returning person_id`,[c.source_audit_event_id])
-      // A previously-created receipt can also be valid. Re-check actual
-      // distinct eligible recipients in the same DB transaction.
+        on conflict (seller_id,person_id) do nothing`,[c.seller_id])
       const all=await conn.execute(`select count(*)::int as n
-        from da_notification_receipt n
+        from da_store_platform_closing_admin_notice n
         join da_platform_staff_grant g on g.person_id=n.person_id
           and g.task='store.closing.manage' and g.resource='platform'
           and g.revoked_at is null and
           (g.expires_at is null or g.expires_at>clock_timestamp())
         join da_person p on p.id=g.person_id and p.disabled_at is null
           and p.deleted_at is null
-        where n.audit_event_id=?`,[c.source_audit_event_id])
+        where n.seller_id=?`,[c.seller_id])
       if(!Number(all[0]?.n))continue
-      const changed=await conn.execute(`update da_store_platform_closing
-        set deadline_started_at=clock_timestamp(),
-          admin_alert_at=clock_timestamp(),deadline_basis='admin_alert',
-          updated_at=clock_timestamp()
-        where seller_id=? and deadline_started_at is null
-        returning seller_id`,[c.seller_id])
+      // Use precisely one database timestamp for the required equality
+      // constraint: an admin notification and the deadline are atomic.
+      const changed=await conn.execute(`with ts as (select clock_timestamp() as at)
+        update da_store_platform_closing c
+        set deadline_started_at=ts.at,
+          admin_alert_at=ts.at,deadline_basis='admin_alert',
+          updated_at=ts.at
+        from ts where c.seller_id=? and c.deadline_started_at is null
+        returning c.seller_id`,[c.seller_id])
       if(changed.length===1)started++
-      void notice
     }
     return started
   })
