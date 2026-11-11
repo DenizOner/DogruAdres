@@ -5623,6 +5623,54 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }))
   }
 
+  /** Scoped staff-only progress. The output is status metadata only; email,
+   * Person ID, private reason and native auth IDs stay server-side. */
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingEmailProgress(token:string,organizationId:string,
+    sellerId:string,@MedusaContext() context:Context={}){
+    const audience=await this.personalPlatformStoreClosingEmailAudience(
+      token,organizationId,sellerId,context)
+    if(!audience)return null
+    const db=securitySql(context.transactionManager)
+    const closure=await this.platformClosingRow_(db,sellerId)
+    if(!closure||closure.organization_id!==organizationId)return null
+    const rows=await db.execute(`select d.person_id,d.attempts,d.last_result,
+      d.last_attempt_at,d.next_attempt_at,d.delivered_at,
+      d.delivery_source,d.email_link_visited_at,d.account_viewed_at
+      from da_store_platform_closing_email d
+      where d.seller_id=? order by d.person_id`,[sellerId])
+    const byPerson=new Map(rows.map(row=>[row.person_id as string,row]))
+    const unique=[...new Set(audience.map(row=>row.person_id))].sort()
+    const owners=unique.map((personId,index)=>{
+      const row=byPerson.get(personId)
+      return {
+        label:`Owner ${index+1}`,attempts:row?Number(row.attempts):0,
+        status:row?.delivered_at?'delivered':row?.last_result??'pending',
+        last_attempt_at:row?.last_attempt_at?
+          new Date(row.last_attempt_at).toISOString():null,
+        next_attempt_at:row&&Number(row.attempts)<4&& !row.delivered_at?
+          new Date(row.next_attempt_at).toISOString():null,
+        delivered_at:row?.delivered_at?
+          new Date(row.delivered_at).toISOString():null,
+        link_visited_at:row?.email_link_visited_at?
+          new Date(row.email_link_visited_at).toISOString():null,
+        account_viewed_at:row?.account_viewed_at?
+          new Date(row.account_viewed_at).toISOString():null
+      }
+    })
+    const started=closure.deadline_started_at?
+      new Date(closure.deadline_started_at).toISOString():null
+    return {
+      owners,deadline_started_at:started,
+      deadline_basis:closure.deadline_basis??null,
+      admin_alert_at:closure.admin_alert_at?
+        new Date(closure.admin_alert_at).toISOString():null,
+      // No mailbox verification is inferred from SMTP acceptance.
+      delivery_verified_count:owners.filter(o=>o.delivered_at!==null).length,
+      delivered_evidence_available:owners.some(o=>o.delivered_at!==null)
+    }
+  }
+
   @InjectTransactionManager()
   async personalPlatformStoreClosingState(token:string,organizationId:string,
     sellerId:string,@MedusaContext() context:Context={}){
@@ -5639,8 +5687,17 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       reason:row?.reason??null,started_at:row?
         new Date(row.started_at).toISOString():null,
       appeal_reason:row?.appeal_reason??null,
-      // No claimed email delivery; 10/30-day clock is not authorized to start.
-      mandatory_email_verified:false,deadline_started:false,
+      // Owner sees the real server-owned 10+20 clock, never a browser clock
+      // used as authority. Sale denial was effective at initial Staff decision.
+      mandatory_email_verified:row?.deadline_basis==="owner_delivery",
+      deadline_started:!!row?.deadline_started_at,
+      deadline_started_at:row?.deadline_started_at?
+        new Date(row.deadline_started_at).toISOString():null,
+      first_appeal_until:row?.deadline_started_at?
+        new Date(new Date(row.deadline_started_at).getTime()+864000000).toISOString():null,
+      final_review_until:row?.deadline_started_at?
+        new Date(new Date(row.deadline_started_at).getTime()+2592000000).toISOString():null,
+      deadline_basis:row?.deadline_basis??null,
       permanent_finalization_enabled:false}
   }
 
