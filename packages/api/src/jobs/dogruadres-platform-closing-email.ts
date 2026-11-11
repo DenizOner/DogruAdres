@@ -142,7 +142,17 @@ async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unveri
         and last_result='inflight'
       returning seller_id`,[outcome,outcome,messageId,
         claim.seller_id,claim.person_id,claim.claim_id])
-    if(rows.length!==1)throw new Error("B22 mail result not committed")
+    if(rows.length!==1){
+      // An authenticated Owner can open a valid email link while the SMTP
+      // process is settling its acceptance. That visit already commits
+      // durable positive delivery and may clear this claim; never overwrite
+      // it with a stale worker result or throw a false transport retry.
+      const proof=await em.execute(`select delivered_at from
+        da_store_platform_closing_email where seller_id=? and person_id=?
+        limit 2`,[claim.seller_id,claim.person_id])
+      if(proof.length!==1||!proof[0].delivered_at)
+        throw new Error("B22 mail result not committed")
+    }
   })
 }
 
@@ -157,6 +167,14 @@ async function settleExhaustion(db: Db): Promise<number> {
       from da_store_platform_closing c
       where c.deadline_started_at is null
         and c.started_at<=clock_timestamp()-interval '72 hours'
+        and exists (
+          select 1 from da_organization_membership m
+          join da_person p on p.id=m.person_id and p.deleted_at is null
+            and p.disabled_at is null
+          where m.organization_id=c.organization_id and m.role='owner'
+            and m.protected_owner=true and m.status='active'
+            and m.revoked_at is null and m.deleted_at is null
+        )
         and not exists (
           select 1 from da_store_platform_closing_email d
           join da_organization_membership m on m.person_id=d.person_id
