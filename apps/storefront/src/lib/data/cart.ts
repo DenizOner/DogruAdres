@@ -18,6 +18,27 @@ import {
 } from './cookies';
 import { getRegion } from './regions';
 
+// Medusa can reject with an Error or a structured HTTP response.
+// Preserve the API message without assuming an arbitrary thrown value's shape.
+const getCartErrorMessage = (error: unknown): string | undefined => {
+  const response =
+    typeof error === 'object' && error !== null && 'response' in error
+      ? error.response
+      : null;
+  const data =
+    typeof response === 'object' && response !== null && 'data' in response
+      ? response.data
+      : null;
+  if (typeof data === 'object' && data !== null &&
+      'message' in data && typeof data.message === 'string') {
+    return data.message;
+  }
+  return typeof error === 'object' && error !== null &&
+    'message' in error && typeof error.message === 'string'
+    ? error.message
+    : undefined;
+};
+
 export async function retrieveCart(cartId?: string) {
   const id = cartId || (await getCartId());
 
@@ -299,16 +320,12 @@ export async function applyPromotions(codes: string[]) {
     })
     const cartCacheTag = await getCacheTag("carts")
     revalidateTag(cartCacheTag)
-    // @ts-ignore
-    const applied = cart.promotions?.some((promotion: any) =>
-      codes.includes(promotion.code)
+    const applied = cart.promotions?.some(
+      (promotion) => typeof promotion.code === 'string' && codes.includes(promotion.code)
     )
     return { success: true, applied }
-  } catch (error: any) {
-    const errorMessage =
-      error?.response?.data?.message ||
-      error?.message ||
-      "Failed to apply promotion code"
+  } catch (error: unknown) {
+    const errorMessage = getCartErrorMessage(error) ?? "Failed to apply promotion code"
     return { success: false, error: errorMessage }
   }
 }
@@ -391,8 +408,8 @@ export async function setAddresses(currentState: unknown, formData: FormData) {
 
     await updateCart(data);
     await revalidatePath('/cart');
-  } catch (e: any) {
-    return e.message;
+  } catch (e: unknown) {
+    return getCartErrorMessage(e) ?? 'Unable to save address';
   }
 }
 
@@ -463,7 +480,7 @@ export async function updateRegionWithValidation(
     throw new Error(`Region not found for country code: ${countryCode}`);
   }
 
-  let removedItems: string[] = [];
+  const removedItems: string[] = [];
 
   if (cartId) {
     const headers = {
@@ -472,12 +489,13 @@ export async function updateRegionWithValidation(
 
     try {
       await updateCart({ region_id: region.id });
-    } catch (error: any) {
-      if (!error?.message?.includes('do not have a price')) {
+    } catch (error: unknown) {
+      const message = getCartErrorMessage(error) ?? '';
+      if (!message.includes('do not have a price')) {
         throw error;
       }
 
-      const problematicVariantIds = parseVariantIdsFromError(error.message);
+      const problematicVariantIds = parseVariantIdsFromError(message);
 
       if (!problematicVariantIds.length) {
         throw new Error('Failed to parse variant IDs from error');
