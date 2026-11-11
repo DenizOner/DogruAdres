@@ -63,7 +63,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       verified_email_identity_count:verified,
       unresolved_identity_count:ambiguous,
       smtp_transport_enabled:transport?.enabled===true,
-      smtp_accepted_count:progress.owners.filter(o=>o.status==="accepted").length,
+      smtp_accepted_count:progress.owners.filter(o=>o.smtp_accepted).length,
       mailbox_delivery_verified_count:progress.delivery_verified_count,
       mandatory_email_verified:progress.deadline_basis==="owner_delivery",
       deadline_started:!!progress.deadline_started_at,
