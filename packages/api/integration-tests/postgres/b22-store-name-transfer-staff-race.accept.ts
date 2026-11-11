@@ -16,7 +16,7 @@ export async function verifyTwoIndependentStaffNameRightRace(input:{
 }):Promise<void>{
   const {owner,reviewer,reviewerPersonId,origin,ca,rand,organizationName,
     organizationId,target,users,auth,foundation,browsers,q,suspend}=input
-  const name="B22 independently decided Store "+rand
+  const name="B22 race Store "+rand
   const application_id="daapp_"+randomBytes(16).toString("hex")
   await owner.send("Page.bringToFront")
   await owner.wait("document.visibilityState==='visible'")
