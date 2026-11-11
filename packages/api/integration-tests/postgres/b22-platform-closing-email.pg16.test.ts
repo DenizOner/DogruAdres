@@ -222,6 +222,27 @@ async function main(){
       "(c.deadline_started_at is null) as deadline_proof "+
       "from da_store_platform_closing c where c.seller_id=$1",[a])
     assert.equal(sourceProof.length,1,"One synthetic closure fixture")
+    const auditParts=await q("select "+
+      "(e.id=c.source_audit_event_id) as audit_link,"+
+      "(e.deleted_at is null) as active_event,"+
+      "(e.module='dogruadres-access') as module_ok,"+
+      "(e.role_context='platform_staff') as role_ok,"+
+      "(e.resource='store-platform-closing') as resource_ok,"+
+      "(e.action='organization.store_platform_closing_started') as action_ok,"+
+      "(e.organization_id=c.organization_id) as org_ok,"+
+      "(e.target_id=c.seller_id) as seller_ok,"+
+      "(e.new_values->>'request_id'=c.request_id) as request_ok,"+
+      "(e.new_values->>'state'='notification_unverified') as state_ok,"+
+      "(e.new_values->>'reason_sha256'="+
+        "encode(sha256(convert_to(c.reason,'UTF8')),'hex')) as digest_ok,"+
+      "(o.source_module='dogruadres-access' and o.deleted_at is null) as outbox_ok "+
+      "from da_store_platform_closing c "+
+      "join da_audit_event e on e.id=c.source_audit_event_id "+
+      "join da_audit_outbox o on o.source_audit_event_id=e.id "+
+      "where c.seller_id=$1",[a])
+    assert.equal(auditParts.length,1,"One canonical fixture source and outbox")
+    for(const [field,ok] of Object.entries(auditParts[0]))
+      assert.equal(ok,true,"Synthetic source fixture predicate: "+field)
     assert.equal(sourceProof[0].start_proof,true,
       "Real canonical start audit and outbox must validate before the worker")
     assert.equal(sourceProof[0].appeal_proof,true)
