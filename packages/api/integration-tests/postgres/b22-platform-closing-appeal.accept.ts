@@ -167,7 +167,9 @@ export async function verifyB22PlatformClosingAppeal(input:{
   await browser.wait("!document.getElementById('notification-panel').hidden && "+
     "document.getElementById('notification-list').textContent.includes('platform kararıyla yeni satışlar durduruldu')")
   assert.equal(await browser.eval(
-    "document.getElementById('notification-list').textContent.includes('Mevcut faal mağazalar etkilenmez')"),false)
+    "Array.from(document.querySelectorAll('#notification-list li')).some("+
+    "li=>li.querySelector('h3')?.textContent==='Platform mağaza kapatma incelemesi başladı' && "+
+    "li.querySelector('p')?.textContent.includes('Mevcut faal mağazalar etkilenmez'))"),false)
   await browser.click("#notification-close")
   const selected=await browser.eval(`(()=>{
     const x=document.querySelector('#store-owner-pause-form select[name=seller_id]');
@@ -212,7 +214,9 @@ export async function verifyB22PlatformClosingAppeal(input:{
   await browser.wait("!document.getElementById('notification-panel').hidden && "+
     "document.getElementById('notification-list').textContent.includes('yeni satışlar kapalıdır')")
   assert.equal(await browser.eval(
-    "document.getElementById('notification-list').textContent.includes('Mevcut faal mağazalar etkilenmez')"),false)
+    "Array.from(document.querySelectorAll('#notification-list li')).some("+
+    "li=>li.querySelector('h3')?.textContent==='Mağaza kapatma itirazı kaydedildi' && "+
+    "li.querySelector('p')?.textContent.includes('Mevcut faal mağazalar etkilenmez'))"),false)
   await browser.click("#notification-close")
   assert.equal(await count(),auditBefore+2)
   const [ledger]=await q(`select version,request_id,appeal_request_id,
