@@ -6,6 +6,8 @@
  */
 import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
+import { createServer } from "node:net"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import AccessService from "../../src/modules/dogruadres-access/service"
 import { Migration20261111170000 } from "../../src/modules/dogruadres-access/migrations/Migration20261111170000"
 import { runPlatformClosingEmailTick } from "../../src/jobs/dogruadres-platform-closing-email"
@@ -61,6 +63,11 @@ const org="daorg_b22_email_pg16",owner="daprs_b22_mail_owner",staff="daprs_b22_m
 const sha=(s:string)=>createHash("sha256").update(s).digest("hex")
 const uuid=()=>randomUUID().replace(/-/g,"")
 let injectOutboxFailure=false
+const syntheticEmail="owner@example.invalid"
+const syntheticIdentity="auth_b22_mail_pg"
+const syntheticActor="user_b22_mail_pg"
+let testSmtp:{enabled:boolean;host:string;port:number;
+  security:"none";from_email:string}|null=null
 function serviceFor(tx:Pg){
   const service=Object.create(AccessService.prototype) as any
   const context:any={transactionManager:{
@@ -104,7 +111,21 @@ const manager={
     db.begin(async (tx:Pg)=>work({execute:(s:string,p:unknown[]=[])=>bind(tx,s,p)}))
 }
 const container:any={resolve:(name:string)=>{
+  if(name===ContainerRegistrationKeys.QUERY)return {
+    graph:async()=>({data:[{id:syntheticActor,email:syntheticEmail}]})
+  }
+  if(name===Modules.AUTH)return {
+    listAuthIdentities:async()=>[{
+      id:syntheticIdentity,
+      provider_identities:[{provider:"emailpass",entity_id:syntheticEmail}]
+    }],
+    listAuthVerifications:async()=>[{
+      entity_type:"email",entity_id:syntheticEmail,
+      verified_at:new Date(),deleted_at:null
+    }]
+  }
   if(name==="dogruadresAccess")return {
+    getActiveSmtpConfig:async()=>testSmtp,
     settlePlatformClosingAdminFallback:()=>db.begin(async(tx:Pg)=>{
       const {service,context}=serviceFor(tx)
       return service.settlePlatformClosingAdminFallback(context)
@@ -347,6 +368,115 @@ async function main(){
     await runPlatformClosingEmailTick(container)
     await assertAudit(rollback,"admin_alert")
     process.stdout.write("PASS B22 PG16: forced audit/outbox error rolls back Admin notification and clock; safe next tick recovers\n")
+    // Exercise the REAL job -> Medusa verified-email helper -> TLS SMTP
+    // transport in its explicitly permitted loopback test mode. No external
+    // provider, recipient, DNS, or production credentials are touched.
+    const mailSeller="sel_b22_mail_pg_smtp_accepted"
+    const rejectedSeller="sel_b22_mail_pg_smtp_rejected"
+    await seed(mailSeller)
+    await q("insert into da_login_binding "+
+      "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+      "values ($1,'user',$2,$3,clock_timestamp())",
+      [owner,syntheticActor,syntheticIdentity])
+    await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
+      "values ($1,$2,'user',$3)",["damap_b22_mail_pg",owner,syntheticActor])
+    const observed={acceptedRecipient:false,secureLink:false,acceptedData:false}
+    let refuseRecipient=false
+    const mock=createServer(socket=>{
+      socket.setEncoding("utf8")
+      socket.write("220 smtp.loopback.test ESMTP\r\n")
+      let pending="",receivingData=false
+      socket.on("data",(chunk:string)=>{
+        pending+=chunk
+        let end=-1
+        while((end=pending.indexOf("\r\n"))>=0){
+          const line=pending.slice(0,end)
+          pending=pending.slice(end+2)
+          if(receivingData){
+            if(line==="."){
+              receivingData=false
+              observed.acceptedData=true
+              socket.write("250 message queued on isolated loopback\r\n")
+            }else if(line.includes("/personal#closing_notice=")){
+              observed.secureLink=true
+            }
+          }else if(line.startsWith("EHLO ")){
+            socket.write("250 smtp.loopback.test\r\n")
+          }else if(line.startsWith("MAIL FROM:")){
+            socket.write("250 sender accepted\r\n")
+          }else if(line.startsWith("RCPT TO:")){
+            assert.equal(line,"RCPT TO:<"+syntheticEmail+">",
+              "Test SMTP must never send to a real recipient")
+            observed.acceptedRecipient=true
+            socket.write(refuseRecipient?"550 recipient rejected\r\n":"250 recipient accepted\r\n")
+          }else if(line==="DATA"){
+            receivingData=true
+            socket.write("354 send message data\r\n")
+          }else if(line==="QUIT"){
+            socket.write("221 goodbye\r\n")
+            socket.end()
+          }else{
+            socket.destroy()
+          }
+        }
+      })
+    })
+    const previousNodeEnv=process.env.NODE_ENV
+    const previousOrigin=process.env.DOGRUADRES_PUBLIC_ORIGIN
+    try{
+      await new Promise<void>((resolve,reject)=>{
+        mock.once("error",reject)
+        mock.listen(0,"127.0.0.1",resolve)
+      })
+      const address=mock.address()
+      assert.ok(address&&typeof address!=="string")
+      // Production transport accepts plaintext only for test loopback.
+      process.env.NODE_ENV="test"
+      process.env.DOGRUADRES_PUBLIC_ORIGIN="https://example.invalid"
+      testSmtp={enabled:true,host:"127.0.0.1",port:address.port,
+        security:"none",from_email:"security@example.invalid"}
+      await runPlatformClosingEmailTick(container)
+      const accepted=(await q("select attempts,last_result,message_id,"+
+        "delivered_at,delivery_source from da_store_platform_closing_email "+
+        "where seller_id=$1",[mailSeller]))[0]
+      assert.equal(accepted.attempts,1)
+      assert.equal(accepted.last_result,"accepted")
+      assert.ok(accepted.message_id,"SMTP 250 must persist a private Message-ID")
+      assert.equal(accepted.delivered_at,null,
+        "SMTP 250 is never mailbox-delivery proof")
+      assert.equal(accepted.delivery_source,null)
+      assert.equal((await row(mailSeller)).deadline_started_at,null,
+        "SMTP acceptance must not start the 10+20 clock")
+      assert.ok(observed.acceptedRecipient&&observed.acceptedData&&observed.secureLink,
+        "Loopback SMTP must receive synthetic recipient, DATA and safe link")
+      assert.equal(Number((await q("select count(*)::int n "+
+        "from da_store_platform_closing_email_link "+
+        "where seller_id=$1",[mailSeller]))[0].n),1)
+      // The same job must handle a real SMTP 550 without delivery or a clock.
+      refuseRecipient=true
+      await seed(rejectedSeller)
+      await runPlatformClosingEmailTick(container)
+      const refused=(await q("select attempts,last_result,message_id,delivered_at "+
+        "from da_store_platform_closing_email where seller_id=$1",
+        [rejectedSeller]))[0]
+      assert.equal(refused.attempts,1)
+      assert.equal(refused.last_result,"failed")
+      assert.equal(refused.message_id,null)
+      assert.equal(refused.delivered_at,null)
+      assert.equal((await row(rejectedSeller)).deadline_started_at,null)
+      process.stdout.write(
+        "PASS B22 PG16+loopback SMTP: real job 250 accepted with synthetic link "+
+        "but NO mailbox delivery or premature deadline; 550 failure durable\n")
+    }finally{
+      testSmtp=null
+      if(previousNodeEnv===undefined)delete process.env.NODE_ENV
+      else process.env.NODE_ENV=previousNodeEnv
+      if(previousOrigin===undefined)delete process.env.DOGRUADRES_PUBLIC_ORIGIN
+      else process.env.DOGRUADRES_PUBLIC_ORIGIN=previousOrigin
+      mock.closeAllConnections()
+      if(mock.listening)await new Promise<void>(resolve=>mock.close(()=>resolve()))
+    }
+
   }finally{
     injectOutboxFailure=false
     try{
