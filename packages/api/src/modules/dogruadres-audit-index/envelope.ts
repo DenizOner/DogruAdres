@@ -113,6 +113,7 @@ const schema = z.object({
     value.action === "organization.store_reactivation_claimed" ||
     value.action === "organization.store_reactivation_released" ||
     value.action === "organization.store_reactivated" ||
+    value.action === "organization.store_platform_closing_started" ||
     isCompanyPolicyAction(value.action))
 
 export type AuditIndexEnvelopeV1 = z.infer<typeof schema>
