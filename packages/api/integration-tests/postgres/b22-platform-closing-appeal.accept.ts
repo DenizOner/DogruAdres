@@ -46,10 +46,18 @@ export async function verifyB22PlatformClosingAppeal(input:{
     (id,person_id,task,resource,granted_by_person_id,reason)
     values ($1,$2,'store.closing.manage','platform',$2,
       'B22 disposable platform closing security fixture')`,[grantId,staffPersonId])
-  const list=await read(staff,path)
-  assert.equal(list.status,200,"Strong independently authorized platform Staff lists Stores")
-  assert.ok(list.body?.candidates?.some((x:any)=>
-    x.organization_id===ownerOrgId&&x.seller_id===sellerId))
+  // Native Store fixture has >30 earlier applications. Inspect the existing
+  // bounded Staff queue across actual server pages, not only the newest 30.
+  let found=false
+  for(let page=0;page<50;page++){
+    const list=await read(staff,path+"?page="+page)
+    assert.equal(list.status,200,"Strong independently authorized Staff lists Stores")
+    assert.ok(Array.isArray(list.body?.candidates))
+    if(list.body.candidates.some((x:any)=>
+      x.organization_id===ownerOrgId&&x.seller_id===sellerId)){found=true;break}
+    if(list.body.has_more!==true)break
+  }
+  assert.equal(found,true,"Existing approved source Store must remain accessible in Staff pagination")
   const count=async()=>Number((await q(`select count(*)::int n from da_audit_event
     where resource='store-platform-closing' and target_id=$1`,[sellerId]))[0].n)
   const auditBefore=await count()
