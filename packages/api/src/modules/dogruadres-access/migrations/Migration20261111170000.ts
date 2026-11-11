@@ -1,0 +1,60 @@
+import { Migration } from "@medusajs/framework/mikro-orm/migrations"
+
+/** B22: delivery evidence and retry state belong to the Foundation-owned
+ * platform closure, never to native Seller or a mutable browser countdown.
+ * This migration does not enable permanent termination or name release.
+ */
+export class Migration20261111170000 extends Migration {
+  override async up(): Promise<void> {
+    this.addSql(`alter table da_store_platform_closing
+      add column deadline_started_at timestamptz,
+      add column deadline_basis text check
+        (deadline_basis in ('owner_delivery','admin_alert')),
+      add column admin_alert_at timestamptz,
+      add constraint da_store_platform_closing_deadline_proof check (
+        (deadline_started_at is null and deadline_basis is null
+          and admin_alert_at is null)
+        or (deadline_started_at is not null
+          and deadline_basis='owner_delivery')
+        or (deadline_started_at is not null
+          and deadline_basis='admin_alert'
+          and admin_alert_at=deadline_started_at)
+      );`)
+    this.addSql(`create table da_store_platform_closing_email (
+      seller_id text not null references da_store_platform_closing(seller_id),
+      person_id text not null references da_person(id),
+      attempts integer not null default 0 check (attempts between 0 and 4),
+      next_attempt_at timestamptz not null,
+      last_attempt_at timestamptz,
+      last_result text not null default 'pending'
+        check (last_result in ('pending','inflight','accepted',
+          'failed','unverified_identity','uncertain','delivered')),
+      message_id text,
+      claim_id uuid,
+      lease_until timestamptz,
+      delivered_at timestamptz,
+      delivery_source text
+        check (delivery_source in ('verified_provider','authenticated_owner')),
+      email_link_visited_at timestamptz,
+      account_viewed_at timestamptz,
+      created_at timestamptz not null default clock_timestamp(),
+      updated_at timestamptz not null default clock_timestamp(),
+      primary key (seller_id,person_id),
+      constraint da_store_platform_closing_email_delivery_proof check (
+        (delivered_at is null and delivery_source is null)
+        or (delivered_at is not null and delivery_source is not null)
+      ),
+      constraint da_store_platform_closing_email_lease check (
+        (claim_id is null and lease_until is null)
+        or (claim_id is not null and lease_until is not null)
+      )
+    );`)
+    this.addSql(`create index da_store_platform_closing_email_due
+      on da_store_platform_closing_email (next_attempt_at)
+      where attempts < 4 and delivered_at is null;`)
+  }
+
+  override async down(): Promise<void> {
+    throw new Error("Closing delivery, deadline and notification evidence require preservation review")
+  }
+}
