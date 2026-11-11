@@ -4410,6 +4410,13 @@ export default async function({container}:any){
       "Company application pause cannot suspend a previously approved Seller")
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
+    // The secure workspace conceals private Staff panels in background tabs.
+    // Wait for its live, authorized re-render; if still hidden, navigate
+    // afresh through the actual session and Store Staff HTTP checks.
+    if(!await reviewer.eval("!document.getElementById('workspace').hidden && !document.getElementById('store-approval-panel').hidden")){
+      await reviewer.send("Page.reload",{ignoreCache:true})
+      await reviewer.wait("document.visibilityState==='visible' && !document.getElementById('workspace').hidden && !document.getElementById('store-approval-panel').hidden")
+    }
     await reviewer.click("#store-approval-refresh")
     await reviewer.wait("document.getElementById('store-approval-list').textContent.includes('inceleme bekletiliyor')")
     assert.equal(await reviewer.eval("document.querySelector('#store-approval-list button').disabled"),true)
