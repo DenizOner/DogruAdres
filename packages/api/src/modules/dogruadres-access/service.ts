@@ -5671,6 +5671,67 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }
   }
 
+  /** A deliberate authenticated Owner visit to a link from their mail.
+   * Link fetches and scanner GETs must NEVER mutate the clock. A SHA-256
+   * digest and exact current protected-Owner authority are both required. */
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingEmailLinkVisit(
+    token:string,linkToken:string,@MedusaContext() context:Context={}
+  ){
+    if(!/^[a-f0-9]{64}$/.test(linkToken))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const current=await new IdentitySessions(db).current(token,true,false)
+    if(!current)return null
+    const digest=createHash("sha256").update(linkToken).digest("hex")
+    const choices=await db.execute(`select l.seller_id,l.person_id,c.organization_id
+      from da_store_platform_closing_email_link l
+      join da_store_platform_closing c on c.seller_id=l.seller_id
+      where l.token_sha256=? and l.issued_at>
+        clock_timestamp()-interval '30 days'
+      limit 2`,[digest])
+    if(choices.length!==1||choices[0].person_id!==current.person_id)
+      return null
+    const {seller_id:sellerId,organization_id:orgId}=choices[0]
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
+      [sellerId])
+    const owner=await this.ownerPauseScope_(db,token,orgId,sellerId)
+    if(!owner||owner.actor.person_id!==current.person_id)return null
+    const locks=await db.execute(`select l.seller_id,l.person_id,l.issued_at,
+      d.delivered_at,c.deadline_started_at
+      from da_store_platform_closing_email_link l
+      join da_store_platform_closing_email d on d.seller_id=l.seller_id
+        and d.person_id=l.person_id
+      join da_store_platform_closing c on c.seller_id=l.seller_id
+        and c.organization_id=?
+      where l.token_sha256=? and l.person_id=?
+        and l.issued_at>clock_timestamp()-interval '30 days'
+      for update of l,d,c`,[orgId,digest,current.person_id])
+    if(locks.length!==1||locks[0].seller_id!==sellerId)return null
+    // Single server-clock event; a repeated click never resets any timestamp.
+    const tick=await db.execute("select clock_timestamp() as at")
+    if(tick.length!==1)throw new IdentityAccessDenied()
+    const at=new Date(tick[0].at).toISOString()
+    await db.execute(`update da_store_platform_closing_email_link
+      set visited_at=coalesce(visited_at,?::timestamptz)
+      where token_sha256=? and person_id=?`,[at,digest,current.person_id])
+    await db.execute(`update da_store_platform_closing_email
+      set delivered_at=coalesce(delivered_at,?::timestamptz),
+        delivery_source='authenticated_owner',
+        email_link_visited_at=coalesce(email_link_visited_at,?::timestamptz),
+        account_viewed_at=coalesce(account_viewed_at,?::timestamptz),
+        last_result='delivered',claim_id=null,lease_until=null,
+        updated_at=clock_timestamp()
+      where seller_id=? and person_id=?`,
+      [at,at,at,sellerId,current.person_id])
+    const started=await db.execute(`update da_store_platform_closing
+      set deadline_started_at=?::timestamptz,deadline_basis='owner_delivery',
+        updated_at=clock_timestamp()
+      where seller_id=? and organization_id=? and deadline_started_at is null
+      returning seller_id`,[at,sellerId,orgId])
+    return {viewed:true,deadline_started:started.length===1||
+      locks[0].deadline_started_at!==null}
+  }
+
   @InjectTransactionManager()
   async personalPlatformStoreClosingState(token:string,organizationId:string,
     sellerId:string,@MedusaContext() context:Context={}){
