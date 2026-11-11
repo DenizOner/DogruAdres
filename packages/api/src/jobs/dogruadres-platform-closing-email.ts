@@ -14,9 +14,7 @@ import { verifiedEmailForActorContext } from "../api/dogruadres/invitations/acce
  * fallback in this job is a durable, private admin notice after four attempts.
  * This job must not perform native termination or release a store name.
  */
-type Sql = { getConnection(): {
-  execute(sql: string, params?: unknown[]): Promise<Record<string, any>[]>
-}}
+type Sql = {execute(sql: string, params?: unknown[]): Promise<Record<string, any>[]>}
 type Db = { transactional<T>(work: (sql: Sql) => Promise<T>): Promise<T> }
 type Claim = {
   seller_id: string
@@ -32,7 +30,7 @@ const scope = (container: MedusaContainer) =>
 
 async function refreshAudience(db: Db) {
   await db.transactional(async em => {
-    const sql = em.getConnection()
+    const sql = em
     // Current protected Owners must not be forgotten when membership changes.
     // The Source Audit + Outbox proof prevents a forged closure row from
     // creating a notification.
@@ -72,7 +70,7 @@ async function claimDue(db: Db): Promise<Claim | null> {
     const claimId = randomUUID()
     const linkToken = randomBytes(32).toString("hex")
     const linkDigest = createHash("sha256").update(linkToken).digest("hex")
-    const rows = await em.getConnection().execute(`with due as (
+    const rows = await em.execute(`with due as (
       select d.seller_id,d.person_id from da_store_platform_closing_email d
       join da_store_platform_closing c on c.seller_id=d.seller_id
       join da_organization_membership m on m.person_id=d.person_id
@@ -100,7 +98,7 @@ async function claimDue(db: Db): Promise<Claim | null> {
       d.claim_id::text as claim_id`,[claimId])
     if(rows.length>1)throw new Error("B22 mail claim cardinality uncertain")
     if(rows.length===1){
-      await em.getConnection().execute(`insert into da_store_platform_closing_email_link
+      await em.execute(`insert into da_store_platform_closing_email_link
         (seller_id,person_id,attempt,token_sha256)
         values (?,?,?,?)`,[
           rows[0].seller_id,rows[0].person_id,Number(rows[0].attempts),linkDigest
@@ -113,7 +111,7 @@ async function claimDue(db: Db): Promise<Claim | null> {
 
 async function currentActor(db: Db, claim: Claim) {
   return db.transactional(async em => {
-    const rows = await em.getConnection().execute(`select b.actor_type,b.actor_id,
+    const rows = await em.execute(`select b.actor_type,b.actor_id,
       b.auth_identity_id
       from da_login_binding b
       join da_actor_mapping map on map.person_id=b.person_id
@@ -137,7 +135,7 @@ async function currentActor(db: Db, claim: Claim) {
 
 async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unverified_identity",messageId:string|null) {
   await db.transactional(async em => {
-    const rows = await em.getConnection().execute(`update da_store_platform_closing_email
+    const rows = await em.execute(`update da_store_platform_closing_email
       set last_result=?,message_id=case when ?='accepted' then ? else message_id end,
         claim_id=null,lease_until=null,updated_at=clock_timestamp()
       where seller_id=? and person_id=? and claim_id=?::uuid
@@ -150,7 +148,7 @@ async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unveri
 
 async function settleExhaustion(db: Db): Promise<number> {
   return db.transactional(async em => {
-    const conn=em.getConnection()
+    const conn=em
     // Delivery must be *proved*; neither accepted SMTP nor an untrusted
     // tracking pixel counts. An admin receipt is durably recorded *before*
     // the clock starts, in the same transaction.
