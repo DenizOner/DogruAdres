@@ -23,7 +23,7 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
-import {verifyB22TransferredRecovery,verifyAssignedRecipientUse} from "./b22-store-name-transfer.accept"
+import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,createB22CompletedSourceOrderFixture} from "./b22-store-name-transfer.accept"
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
@@ -7241,6 +7241,16 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 two platform-approved Stores: each Store's buyer block separately denies whole multi-Store scope; unblock A cannot lift B; both unblocked restores 200, no cart writes\n")
     process.stdout.write("PASS B22 audited Owner Store Buyer Organization block: two-Store scope 403 if one blocked, idempotent unblock restores 200; no checkout\n")
 
+    const completedOrder=await createB22CompletedSourceOrderFixture({
+      container,rand,sourceSellerId:secondOwnerStoreId,
+      productCreatorSellerId:stores[0].id,memberId:member.id,
+      shippingProfileId:b22Profile.id,customerId:nativeCustomer.id,
+      regionId:region.id,salesChannelId:market.id,buyerOrgId:organizations[0].id,
+      q,query,claim:cartId=>claimCart(organizations[0].id,cartId),
+      authorize:cartId=>foundation.authorizeBuyerCheckout(
+        cartId,nativeCustomer.id,[secondOwnerStoreId])
+    })
+
     await verifyOwnerTemporaryPauseBrowser({browser,organizations,ownerStoreId,
       secondOwnerStoreId,nativeCustomer,customerCart,cartStoreIds,container,
       foundation,cartService,q,get,catalogUrl})
@@ -7458,7 +7468,7 @@ export default async function({container}:any){
       rand,container,q
     })
     const transferAssignment=await verifyB22TransferredRecovery({
-      owner:browser,reviewer,q,query,
+      owner:browser,reviewer,q,query,completedOrder,
       cartId:customerCart.id,customerId:nativeCustomer.id,
       source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
         organization_id:organizations[0].id},
