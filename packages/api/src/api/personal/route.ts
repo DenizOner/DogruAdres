@@ -567,10 +567,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Reading the link is optional: not visiting never blocks the automatic
   // admin-alert fallback. Do not let email scanners pre-confirm anything.
   let platformMailLinkToken='';
-  const hashMatch=location.hash.match(/^#closing_notice=([a-f0-9]{64})$/);
+  const hashMatch=typeof location!=='undefined'&&typeof location.hash==='string'?
+    location.hash.match(/^#closing_notice=([a-f0-9]{64})$/):null;
   if(hashMatch){
     platformMailLinkToken=hashMatch[1];
-    history.replaceState(null,'',location.pathname+location.search);
+    if(typeof history!=='undefined'&&typeof history.replaceState==='function')
+      history.replaceState(null,'',location.pathname+location.search);
     el('platform-closing-email-link-panel').hidden=false;
   }
   el('platform-closing-email-link-open').onclick=async()=>{
@@ -4735,9 +4737,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       msg.textContent='Mağaza listesi doğrulanamadı. Yeni karar oluşturulamaz.';
     }
   }
-  el('platform-closing-form').elements.namedItem('seller_id').onchange=()=>{
-    const row=platformClosingRows.find(x=>x.seller_id===
-      el('platform-closing-form').elements.namedItem('seller_id').value);
+  const closingControls=el('platform-closing-form')?.elements;
+  const closingSelect=typeof closingControls?.namedItem==='function'?
+    closingControls.namedItem('seller_id'):null;
+  if(closingSelect)closingSelect.onchange=()=>{
+    const row=platformClosingRows.find(x=>x.seller_id===closingSelect.value);
     void refreshPlatformClosingMail(row);
   };
   el('platform-closing-refresh').onclick=()=>{
