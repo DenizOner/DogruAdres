@@ -479,8 +479,21 @@ jobs:
           # These packages are free and confined to this disposable CI runner.
           # A blocked signature download or unavailable sandbox MUST fail;
           # never downgrade the document review to header/magic-byte checks.
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+          # GitHub's Azure Ubuntu mirror failed DNS resolution twice during
+          # #309 acceptance. Preserve signed packages and every scanner gate:
+          # only this disposable runner may use Ubuntu's official archive.
+          apt_options=(-o APT::Update::Error-Mode=any -o Acquire::Retries=0
+            -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+          if ! sudo apt-get "${apt_options[@]}" update -qq; then
+            test -f /etc/apt/apt-mirrors.txt
+            grep -Fq 'azure.archive.ubuntu.com' /etc/apt/apt-mirrors.txt
+            sudo sed -i 's|azure[.]archive[.]ubuntu[.]com|archive.ubuntu.com|g' /etc/apt/apt-mirrors.txt
+            echo "Ubuntu Azure mirror unavailable; retrying official Ubuntu archive"
+            sudo apt-get "${apt_options[@]}" update -qq
+          fi
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=0 \
+            -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 \
+            install -y -qq --no-install-recommends \
             clamav-daemon clamav-freshclam bubblewrap poppler-utils imagemagick \
             apparmor-profiles apparmor-utils acl
           # Ubuntu 24.04 blocks unprivileged bwrap namespaces by default.
