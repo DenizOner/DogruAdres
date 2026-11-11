@@ -10,6 +10,7 @@ import AccessService from "../../src/modules/dogruadres-access/service"
 import { Migration20261111170000 } from "../../src/modules/dogruadres-access/migrations/Migration20261111170000"
 import { runPlatformClosingEmailTick } from "../../src/jobs/dogruadres-platform-closing-email"
 import { canonicalEventForOutbox } from "../../src/modules/dogruadres-access/audit-delivery-policy"
+import { projectFoundationAuditEvent } from "../../src/modules/dogruadres-audit-index/envelope"
 
 type Pg = { unsafe(query:string,params?:readonly unknown[]):Promise<any[]> }
 const url=new URL(process.env.PG_MFA_TEST_URL??"postgres://invalid/invalid")
@@ -194,6 +195,14 @@ async function assertAudit(seller:string,basis:string){
   assert.equal(new Date(e.new_values.deadline_started_at).toISOString(),
     actual.deadline_started_at.toISOString())
   assert.ok(canonicalEventForOutbox(e,e),"Canonical Foundation envelope must verify")
+  const indexed=projectFoundationAuditEvent(e)
+  assert.equal(indexed.action,"organization.store_platform_closing_deadline_started")
+  assert.equal(indexed.actor.role_context,"platform_automation")
+  assert.equal(indexed.resource,"store-platform-closing")
+  assert.throws(()=>projectFoundationAuditEvent({...e,role_context:"member"}),
+    /INVALID_AUDIT_INDEX_ENVELOPE/,"Ordinary Member cannot impersonate automation")
+  assert.throws(()=>projectFoundationAuditEvent({...e,action:"organization.store_platform_closing_started"}),
+    /INVALID_AUDIT_INDEX_ENVELOPE/,"Automation may not fabricate a Staff decision")
   assert.equal(JSON.stringify(e).includes("closing_notice="),false)
   assert.equal(JSON.stringify(e).includes("Sentetik B22 mağaza"),false)
   assert.equal((await q("select count(*)::int as n from da_store_platform_closing_admin_notice "+
