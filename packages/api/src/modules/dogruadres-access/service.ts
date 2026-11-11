@@ -5553,6 +5553,17 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         and p.disabled_at is null and p.deleted_at is null
       on conflict (audit_event_id,person_id) do nothing`,
       [audit.id,input.organization_id])
+    // Durable first-attempt queue is born with the sale-blocking decision.
+    // One per current protected Owner; no e-mail is sent inside the transaction.
+    await db.execute(`insert into da_store_platform_closing_email
+      (seller_id,person_id,next_attempt_at)
+      select ?,m.person_id,?
+      from da_organization_membership m join da_person p on p.id=m.person_id
+      where m.organization_id=? and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.revoked_at is null and m.deleted_at is null
+        and p.disabled_at is null and p.deleted_at is null
+      on conflict (seller_id,person_id) do nothing`,
+      [input.seller_id,new Date(clock[0].now_at).toISOString(),input.organization_id])
     return {status:"notification_unverified" as const,version:1,replayed:false}
   }
 
