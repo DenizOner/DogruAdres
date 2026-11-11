@@ -7305,7 +7305,7 @@ export default async function({container}:any){
     const completedOrder={query,cartId:historicalCart.id,
       customerId:nativeCustomer.id,organizationId:organizations[0].id,
       sourceSellerId:secondOwnerStoreId,snapshot:completedOrderSnapshot}
-    process.stdout.write("B22 task-only: existing Mercur native zero-total source Order committed before name transfer; no payment\\n")
+    process.stdout.write("B22 task-only: existing Mercur native zero-total source Order committed before name transfer; no payment\n")
 
     await verifyOwnerTemporaryPauseBrowser({browser,organizations,ownerStoreId,
       secondOwnerStoreId,nativeCustomer,customerCart,cartStoreIds,container,
