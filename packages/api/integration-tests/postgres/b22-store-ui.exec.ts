@@ -8717,6 +8717,24 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 real Mercur validate: protected Owner still authorized after self-grant revoke, but Store Buyer Organization block denies native checkout with zero OrderGroup/Order/payment; unblock restores L\n")
     process.stdout.write("NOT TESTED B22: successful order placement, authorization/capture with a real payment provider, post-L overlap orchestration, independent exact-PR acceptance\\n")
 
+    // The final Gamma Offer/Cart acceptance just passed; Gamma's native
+    // approved Seller remains open. At this point A is Gamma's protected
+    // Owner, while strong Staff B is NOT a Gamma member/Owner. Later tests
+    // intentionally grant B protected Gamma Owner and revoke BOTH A/B sessions.
+    // Exercise the true foreign-Staff denial before those state changes.
+    await verifyB22PlatformClosingAppeal({
+      browser,staff:reviewer,q,foundation,
+      ownerPersonId:A.person,staffPersonId:B.person,
+      ownerOrgId:sellerGamma.id,ownerOrgName:sellerGamma.name,
+      sellerId:gammaSellerId
+    })
+    // Continue the prior Alpha Buyer/permission tests from the real Owner
+    // workspace, not the newly selected Gamma appeal screen.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("!document.getElementById('buyer-grants-panel').hidden")
+
     const forgedBuyer=await reviewer.eval(`(async()=>{
       const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}&actor_id=cus_forged')
       return r.status
@@ -10490,18 +10508,6 @@ export default async function({container}:any){
         await q("drop trigger b22_mfa_outbox_fault_v1 on da_security_outbox")
       await q("drop function b22_mfa_outbox_fault_v1()")
     }
-
-    // Run the platform closing user journey while Owner A and Staff B have
-    // genuine active strong sessions; the following B-01 MFA tests intentionally
-    // revoke BOTH actors and must remain unaffected.
-    // Gamma is an independently approved, still-open Seller; Alpha stays
-    // suspended for the existing lifecycle/security acceptance.
-    await verifyB22PlatformClosingAppeal({
-      browser,staff:reviewer,q,foundation,
-      ownerPersonId:A.person,staffPersonId:B.person,
-      ownerOrgId:sellerGamma.id,ownerOrgName:sellerGamma.name,
-      sellerId:gammaSellerId
-    })
 
     // B-01 MFA disable: use only an existing B22 CI synthetic browser and PG16.
     // Supported platform policy and recovery-code HTTP flows create a real
