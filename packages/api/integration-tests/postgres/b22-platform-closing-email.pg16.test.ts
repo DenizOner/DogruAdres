@@ -345,34 +345,6 @@ async function main(){
       "where action='organization.store_platform_closing_deadline_started' "+
       "and target_id=$1",[a]))[0].n,1)
     process.stdout.write("PASS B22 PG16: concurrent cron one claim, late first tick preserves original +24/+48/+72h planned slots, one private Admin alert/audited 10+20 clock, replay safe; native SMTP delivery NOT TESTED\n")
-    // New protected Owners get a separately timed current-state notice.
-    // Their record must NOT backfill the original closure audit receipt.
-    const lateOwner="dap_b22_mail_pg_late"
-    await q("insert into da_person(id) values ($1)",[lateOwner])
-    await q("insert into da_organization_membership"+
-      "(id,organization_id,person_id,role,status,protected_owner)"+
-      "values ($1,$2,$3,'owner','active',true)",
-      ["daomem_b22_mail_late",org,lateOwner])
-    const originalAudit=(await row(a)).source_audit_event_id
-    const oldRecipients=await q("select person_id from da_notification_receipt "+
-      "where audit_event_id=$1",[originalAudit])
-    await runPlatformClosingEmailTick(container)
-    const late=(await q("select late_notice_id,late_notice_read_at,created_at,attempts,"+
-      "next_attempt_at from da_store_platform_closing_email "+
-      "where seller_id=$1 and person_id=$2",[a,lateOwner]))[0]
-    assert.match(late.late_notice_id,/^danot_[0-9a-f-]+$/)
-    assert.equal(late.late_notice_read_at,null)
-    assert.equal(late.attempts,1)
-    assert.equal(new Date(late.next_attempt_at).getTime()-
-      new Date(late.created_at).getTime(),24*3600000,
-      "A subsequently added Owner uses their own notification origin")
-    const recipientsAfter=await q("select person_id from da_notification_receipt "+
-      "where audit_event_id=$1",[originalAudit])
-    assert.deepEqual(recipientsAfter,oldRecipients,
-      "Later membership may never create a retroactive original-event receipt")
-    assert.equal((await q("select count(*)::int n from da_notification_receipt "+
-      "where person_id=$1 and audit_event_id=$2",[lateOwner,originalAudit]))[0].n,0)
-    process.stdout.write("PASS B22 PG16: post-closing Owner gets new dated private notice, original audit recipient history unchanged, separate +24h schedule\n")
     const crash="sel_b22_mail_pg_crash"
     await seed(crash,4,"inflight",true)
     await runPlatformClosingEmailTick(container)
@@ -521,6 +493,34 @@ async function main(){
       process.stdout.write(
         "PASS B22 PG16+loopback SMTP: 250 accepted, 550 refused, post-DATA "+
         "disconnect uncertain; none grants mailbox delivery or premature clock\n")
+    // New protected Owners get a separately timed current-state notice.
+    // Their record must NOT backfill the original closure audit receipt.
+    const lateOwner="dap_b22_mail_pg_late"
+    await q("insert into da_person(id) values ($1)",[lateOwner])
+    await q("insert into da_organization_membership"+
+      "(id,organization_id,person_id,role,status,protected_owner)"+
+      "values ($1,$2,$3,'owner','active',true)",
+      ["daomem_b22_mail_late",org,lateOwner])
+    const originalAudit=(await row(a)).source_audit_event_id
+    const oldRecipients=await q("select person_id from da_notification_receipt "+
+      "where audit_event_id=$1",[originalAudit])
+    await runPlatformClosingEmailTick(container)
+    const late=(await q("select late_notice_id,late_notice_read_at,created_at,attempts,"+
+      "next_attempt_at from da_store_platform_closing_email "+
+      "where seller_id=$1 and person_id=$2",[a,lateOwner]))[0]
+    assert.match(late.late_notice_id,/^danot_[0-9a-f-]+$/)
+    assert.equal(late.late_notice_read_at,null)
+    assert.equal(late.attempts,1)
+    assert.equal(new Date(late.next_attempt_at).getTime()-
+      new Date(late.created_at).getTime(),24*3600000,
+      "A subsequently added Owner uses their own notification origin")
+    const recipientsAfter=await q("select person_id from da_notification_receipt "+
+      "where audit_event_id=$1",[originalAudit])
+    assert.deepEqual(recipientsAfter,oldRecipients,
+      "Later membership may never create a retroactive original-event receipt")
+    assert.equal((await q("select count(*)::int n from da_notification_receipt "+
+      "where person_id=$1 and audit_event_id=$2",[lateOwner,originalAudit]))[0].n,0)
+    process.stdout.write("PASS B22 PG16: post-closing Owner gets new dated private notice, original audit recipient history unchanged, separate +24h schedule\n")
     }finally{
       testSmtp=null
       if(previousNodeEnv===undefined)delete process.env.NODE_ENV
