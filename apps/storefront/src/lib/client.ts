@@ -3,7 +3,11 @@ import type { Routes } from '@acme/api/_generated';
 
 const MEDUSA_BACKEND_URL = process.env.MEDUSA_BACKEND_URL || 'http://localhost:9000';
 
-export const sdk: InferClient<Routes> = createClient({
+// Public Storefront only uses native store/auth routes. Avoid checking
+// unrelated admin/vendor backend modules through generated declaration types.
+type StorefrontRoutes = Pick<Routes, "store" | "auth">;
+
+export const sdk: InferClient<StorefrontRoutes> = createClient({
   baseUrl: MEDUSA_BACKEND_URL,
   fetchOptions: {
     headers: {

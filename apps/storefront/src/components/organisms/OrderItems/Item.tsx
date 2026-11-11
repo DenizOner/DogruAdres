@@ -8,15 +8,17 @@ export const Item = ({
   item: HttpTypes.StoreCartLineItem | HttpTypes.StoreOrderLineItem
   currencyCode: string
 }) => {
-  const original_total = convertToLocale({
-    amount: item.original_total,
-    currency_code: currencyCode,
-  })
-
-  const total = convertToLocale({
-    amount: item.total,
-    currency_code: currencyCode,
-  })
+  // Cart and order totals can be absent. Never display an invented zero.
+  const originalAmount = item.original_total
+  const totalAmount = item.total
+  const original_total =
+    typeof originalAmount === "number" && Number.isFinite(originalAmount)
+      ? convertToLocale({ amount: originalAmount, currency_code: currencyCode })
+      : null
+  const total =
+    typeof totalAmount === "number" && Number.isFinite(totalAmount)
+      ? convertToLocale({ amount: totalAmount, currency_code: currencyCode })
+      : null
 
   return (
     <div className="border rounded-sm p-1 flex gap-2">
@@ -55,12 +57,12 @@ export const Item = ({
             </p>
           </div>
           <div className="lg:text-right flex lg:block items-center gap-2 mt-4 lg:mt-0">
-            {total !== original_total && (
+            {total !== null && original_total !== null && total !== original_total && (
               <p className="line-through text-secondary label-md">
                 {original_total}
               </p>
             )}
-            <p className="label-lg">{total}</p>
+            <p className="label-lg">{total ?? <span aria-label="Price unavailable">—</span>}</p>
           </div>
         </div>
       </div>
