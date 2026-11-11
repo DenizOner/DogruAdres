@@ -595,7 +595,9 @@ jobs:
       - name: B22 real Chrome after signed R1 activation on separate disposable database
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
-        timeout-minutes: 10
+        # The existing full B22 browser child may need 8 minutes, plus
+        # isolated migrations and signed R1 activation. Keep all checks.
+        timeout-minutes: 12
         env:
           CI: 'true'
           PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
