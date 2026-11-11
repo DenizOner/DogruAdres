@@ -215,6 +215,21 @@ describe("personal ingress (unit contract only)",()=>{
     expect(res.status).toHaveBeenCalledWith(403)
   })
 
+  it("restricts B22 private Owner email readiness to exact personal GET ingress",async()=>{
+    const path="/personal/platform/store-closing-email-readiness"
+    const allowed=await probe(path,"GET")
+    expect(allowed.next).toHaveBeenCalledTimes(1)
+    for(const [target,method] of [
+      [path,"POST"],[path,"PUT"],[path,"DELETE"],
+      [path,"PATCH"],[path,"OPTIONS"],[path+"/id","GET"],
+      ["/vendor/notifications","GET"],[path+"/","GET"],
+    ]){
+      const blocked=await probe(target,method,"Bearer forged-native")
+      expect(blocked.next).not.toHaveBeenCalled()
+      expect(blocked.res.status).toHaveBeenCalledWith(401)
+    }
+  })
+
   it("admits only private Person profile GET and CSRF-protected POST at the outer ingress",async()=>{
     expect((await probe("/personal/profile","GET")).next).toHaveBeenCalledTimes(1)
     expect((await probe("/personal/profile","POST")).next).toHaveBeenCalledTimes(1)
