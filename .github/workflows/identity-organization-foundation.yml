@@ -505,6 +505,10 @@ jobs:
           bun integration-tests/postgres/mfa-persistence.pg16.test.ts
           bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
           bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
+          # Focused B22 delivery-clock PG16 acceptance is independent of the
+          # later, still-MANDATORY ClamAV/Chrome gates. An upstream APT mirror
+          # outage must not erase the evidence for this isolated user risk.
+          bun integration-tests/postgres/b22-platform-closing-email.pg16.test.ts
       - name: Existing Chrome task CA support for B22 scoped browser acceptance
         if: github.event_name != 'workflow_dispatch'
         run: |
@@ -524,8 +528,20 @@ jobs:
           # These packages are free and confined to this disposable CI runner.
           # A blocked signature download or unavailable sandbox MUST fail;
           # never downgrade the document review to header/magic-byte checks.
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+          # Two real PR runs stalled resolving the GitHub runner's Azure mirror.
+          # Prefer the official Ubuntu archive on this throwaway runner only;
+          # keep genuine distro package signatures, FreshClam and sandbox gates.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i \
+              -e 's#http://azure.archive.ubuntu.com/ubuntu/#https://archive.ubuntu.com/ubuntu/#g' \
+              -e 's#https://azure.archive.ubuntu.com/ubuntu/#https://archive.ubuntu.com/ubuntu/#g' \
+              /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Acquire::Retries=1 -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 install -y -qq --no-install-recommends \
             clamav-daemon clamav-freshclam bubblewrap poppler-utils imagemagick \
             apparmor-profiles apparmor-utils acl
           # Ubuntu 24.04 blocks unprivileged bwrap namespaces by default.
@@ -624,7 +640,9 @@ jobs:
       - name: B22 real Chrome after signed R1 activation on separate disposable database
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
-        timeout-minutes: 10
+        # The existing full B22 browser child may need 8 minutes, plus
+        # isolated migrations and signed R1 activation. Keep all checks.
+        timeout-minutes: 12
         env:
           CI: 'true'
           PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
