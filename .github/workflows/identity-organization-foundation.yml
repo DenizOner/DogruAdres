@@ -218,6 +218,10 @@ jobs:
           set +e
           node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json > "$RUNNER_TEMP/storefront-159-types.log" 2>&1
           type_status=$?
+          # Diagnostic-only React 19 JSX namespace comparison (no config or
+          # production behavior change and never considered a typecheck PASS).
+          node ../../node_modules/typescript/bin/tsc --noEmit --incremental false --jsx react-jsx -p tsconfig.json > "$RUNNER_TEMP/storefront-159-react-jsx.log" 2>&1
+          jsx_trial_status=$?
           bun run lint > "$RUNNER_TEMP/storefront-159-lint.log" 2>&1
           lint_status=$?
           bun run build > "$RUNNER_TEMP/storefront-159-build.log" 2>&1
@@ -225,6 +229,8 @@ jobs:
           set -e
           echo "Storefront #159 type exit=$type_status"
           sed -n '1,110p' "$RUNNER_TEMP/storefront-159-types.log"
+          echo "Storefront #159 React JSX diagnostic-only trial exit=$jsx_trial_status"
+          sed -n '1,100p' "$RUNNER_TEMP/storefront-159-react-jsx.log"
           echo "Storefront #159 lint exit=$lint_status"
           sed -n '1,110p' "$RUNNER_TEMP/storefront-159-lint.log"
           echo "Storefront #159 production build exit=$build_status"
