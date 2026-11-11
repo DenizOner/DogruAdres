@@ -69,10 +69,12 @@ const StripePaymentButton = ({
       if (!res.ok) {
         setErrorMessage(res.error?.message)
       }
-    } catch (error: any) {
-      if (error?.message !== "NEXT_REDIRECT") {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : null
+      if (message !== "NEXT_REDIRECT") {
         setErrorMessage(
-          error?.message?.replace("Error setting up the request: ", "")
+          message?.replace("Error setting up the request: ", "") ??
+            "Unable to complete the order"
         )
       }
     } finally {
@@ -89,8 +91,7 @@ const StripePaymentButton = ({
   )
 
   useEffect(() => {
-    //@ts-ignore
-    setDisabled(!card?._complete)
+    setDisabled(!card || !("_complete" in card) || card._complete !== true)
   }, [card, stripe, elements, cart])
 
   const handlePayment = async () => {
@@ -177,10 +178,12 @@ const ManualTestPaymentButton = ({ notReady }: { notReady: boolean }) => {
       if (!res.ok) {
         setErrorMessage(res.error?.message)
       }
-    } catch (error: any) {
-      if (error?.message !== "NEXT_REDIRECT") {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : null
+      if (message !== "NEXT_REDIRECT") {
         setErrorMessage(
-          error?.message?.replace("Error setting up the request: ", "")
+          message?.replace("Error setting up the request: ", "") ??
+            "Unable to complete the order"
         )
       }
     } finally {
