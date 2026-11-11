@@ -536,6 +536,10 @@ async function main(){
       [expiredSeller,expiredDeadline,expiredAuditId])
     const countBefore=(await q("select count(*)::int n from da_audit_event "+
       "where target_id=$1",[expiredSeller]))[0].n
+    const outboxBefore=(await q("select count(*)::int n "+
+      "from da_audit_outbox x join da_audit_event e "+
+      "on e.id=x.source_audit_event_id where e.target_id=$1",
+      [expiredSeller]))[0].n
     const lateResult=await db.begin(async (tx:Pg)=>{
       const {service,context}=serviceFor(tx)
       ;(service as any).ownerPauseScope_=async()=>({
@@ -558,12 +562,17 @@ async function main(){
       "where target_id=$1",[expiredSeller]))[0].n,countBefore,
       "Late appeal may not write a new canonical event")
     assert.equal((await q("select count(*)::int n "+
+      "from da_audit_outbox x join da_audit_event e "+
+      "on e.id=x.source_audit_event_id where e.target_id=$1",
+      [expiredSeller]))[0].n,outboxBefore,
+      "Late appeal may not write a source outbox event")
+    assert.equal((await q("select count(*)::int n "+
       "from da_notification_receipt n join da_audit_event e "+
       "on e.id=n.audit_event_id where e.target_id=$1 and "+
       "e.action='organization.store_platform_closing_appealed'",
       [expiredSeller]))[0].n,0,
       "Late appeal may not generate private Owner notices")
-    process.stdout.write("PASS B22 PG16: expired day-11 first appeal denied with unchanged deadline, state, audit/outbox and private receipts\\n")
+    process.stdout.write("PASS B22 PG16: expired day-11 first appeal denied with unchanged deadline, state, audit/outbox and private receipts\n")
     // New protected Owners get a separately timed current-state notice.
     // Their record must NOT backfill the original closure audit receipt.
     // A newly assigned Owner at T0+71h must not restart the initial
