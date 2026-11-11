@@ -8717,21 +8717,10 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 real Mercur validate: protected Owner still authorized after self-grant revoke, but Store Buyer Organization block denies native checkout with zero OrderGroup/Order/payment; unblock restores L\n")
     process.stdout.write("NOT TESTED B22: successful order placement, authorization/capture with a real payment provider, post-L overlap orchestration, independent exact-PR acceptance\n")
 
-    // The final Gamma Offer/Cart acceptance just passed; Gamma's native
-    // approved Seller remains open. At this point A is Gamma's protected
-    // Owner, while strong Staff B is NOT a Gamma member/Owner. Later tests
-    // intentionally grant B protected Gamma Owner and revoke BOTH A/B sessions.
-    // Exercise the true foreign-Staff denial before those state changes.
-    await verifyB22PlatformClosingAppeal({
-      browser,staff:reviewer,q,foundation,
-      ownerPersonId:A.person,staffPersonId:B.person,
-      ownerOrgId:sellerGamma.id,ownerOrgName:sellerGamma.name,
-      sellerId:gammaSellerId,buyer:reviewer,
-      buyerScopePath:betaScopeUrl,buyerOrganizationId:organizations[1].id,
-      checkoutCartId:hookProbeCart.id,customerId:nativeCustomer.id,query
-    })
-    // Continue the prior Alpha Buyer/permission tests from the real Owner
-    // workspace, not the newly selected Gamma appeal screen.
+    // Keep Gamma's second protected Owner uncreated until AFTER the other
+    // foreign-Organization and Store security regression tests. The closing
+    // acceptance now runs immediately before that existing Owner fixture.
+    // Continue the Alpha Buyer/permission tests from the real Owner workspace.
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
@@ -9995,14 +9984,23 @@ export default async function({container}:any){
     }
 
 
-    // B22 protected Owner removal denial vs real native Seller creation.
-    // Gamma is a separate disposable Organization; a second Owner does not
-    // allow bypassing the #39 notice/appeal gate during an in-flight write.
-    const [secondGammaOwner]=await foundation.createMemberships([{
-      organization_id:sellerGamma.id,person_id:B.person,
-      role:"owner",status:"active",protected_owner:true
-    }])
+    // Complete the existing real Staff closing/Owner appeal acceptance
+    // only now: prior foreign-Organization negatives have finished while B
+    // was NOT Gamma Owner. The helper creates B's genuine second protected
+    // Owner membership before A submits the appeal. Reuse that exact
+    // membership in the following original protected Owner race test.
+    const secondGammaOwnerId=await verifyB22PlatformClosingAppeal({
+      browser,staff:reviewer,q,foundation,
+      ownerPersonId:A.person,staffPersonId:B.person,
+      ownerOrgId:sellerGamma.id,ownerOrgName:sellerGamma.name,
+      sellerId:gammaSellerId,buyer:reviewer,
+      buyerScopePath:betaScopeUrl,buyerOrganizationId:organizations[1].id,
+      checkoutCartId:hookProbeCart.id,customerId:nativeCustomer.id,query
+    })
+    const secondGammaOwner={id:secondGammaOwnerId}
     assert.match(secondGammaOwner.id,/^[A-Za-z0-9_-]+$/)
+    // B22 protected Owner removal denial vs real native Seller creation.
+    // The second Owner may not bypass #39 notice/appeal gate in flight.
     const ownerRaceEmail="b22-owner-revoke-race-"+rand+"@example.invalid"
     const ownerRaceName="B22 Owner race Store "+rand
     const ownerRaceRequest={organization_id:sellerGamma.id,

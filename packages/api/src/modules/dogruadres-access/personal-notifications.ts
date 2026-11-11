@@ -143,7 +143,7 @@ export class PersonalNotifications {
             ownerClosing?'Şirketinizin bir mağazasında yeni satışlar durduruldu. Geri sayım ve gerekli işlemleri güvenli şirket alanından kontrol edin. Kalıcı kapatma henüz kesinleşmedi.':
             ownerWithdrawn?'Şirketinizin bir mağazasının kapatma talebi geri çekildi. Diğer satış engelleri yine geçerlidir.':
             platformClosing?'Şirketinizin bir mağazasında platform kararıyla yeni satışlar durduruldu. Gerekçeyi ve itiraz seçeneğini yalnız güvenli şirket alanınızda görebilirsiniz. Zorunlu e-posta teslimi doğrulanmadığından süre henüz başlamadı.':
-            platformAppeal?'Mağazanın kapatılmasına ilişkin itirazınız kaydedildi. İnceleme sürerken bu mağazada yeni satışlar kapalıdır. Zorunlu e-posta teslimi doğrulanmadığından süre henüz başlamadı.':
+            platformAppeal?'Şirketinizin mağazası için bir kapatma itirazı kaydedildi. İnceleme sürerken bu mağazada yeni satışlar kapalıdır. Zorunlu e-posta teslimi doğrulanmadığından süre henüz başlamadı.':
             opened?
             'Şirketiniz yeniden yeni mağaza başvurusu gönderebilir. Bekleyen başvurular otomatik onaylanmaz.':
             'Şirketinizin yeni mağaza başvuruları durduruldu. Mevcut faal mağazalar etkilenmez.'

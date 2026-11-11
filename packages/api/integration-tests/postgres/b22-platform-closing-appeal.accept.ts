@@ -23,7 +23,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   ownerOrgId:string;ownerOrgName:string;sellerId:string;
   buyer:B06Chrome;buyerScopePath:string;buyerOrganizationId:string;
   checkoutCartId:string;customerId:string;query:any
-}):Promise<void>{
+}):Promise<string>{
   const {browser,staff,q,foundation,ownerPersonId,staffPersonId,
     ownerOrgId,ownerOrgName,sellerId,buyer,buyerScopePath,
     buyerOrganizationId,checkoutCartId,customerId,query}=input
@@ -213,6 +213,15 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(ui.status,"status")
   assert.equal(ui.live,"polite")
   assert.equal(ui.enabled,true)
+  // Add B as the genuine second protected Gamma Owner only AFTER all foreign
+  // Staff/Owner denial checks. This reuses the later fixture's same membership
+  // and never relaxes any production Owner-protection or Staff permission.
+  const [secondOwnerMembership]=await foundation.createMemberships([{
+    organization_id:ownerOrgId,person_id:staffPersonId,
+    role:"owner",status:"active",protected_owner:true
+  }])
+  assert.match(secondOwnerMembership.id,/^[A-Za-z0-9_-]+$/)
+  assert.notEqual(staffPersonId,ownerPersonId)
   const appealReason="B22 sentetik yetkili Owner kapatma kararına itiraz ediyor"
   await browser.input("#store-platform-appeal-form textarea[name=reason]",appealReason)
   await browser.click("#store-platform-appeal-form button")
@@ -229,11 +238,39 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const appealNotice=appealNotices.body.notifications?.find((x:any)=>
     x.title==="Mağaza kapatma itirazı kaydedildi")
   assert.ok(appealNotice,"Owner must receive a real private appeal receipt")
-  assert.match(appealNotice.description,/itirazınız kaydedildi/)
+  assert.match(appealNotice.description,/Şirketinizin mağazası için bir kapatma itirazı kaydedildi/)
+  assert.equal(appealNotice.description.includes("itirazınız kaydedildi"),false,
+    "The actor-neutral message must not tell a co-Owner they made the appeal")
   assert.match(appealNotice.description,/yeni satışlar kapalıdır/)
   assert.match(appealNotice.description,/süre henüz başlamadı/)
   assert.equal(appealNotice.description.includes("Mevcut faal mağazalar etkilenmez"),false)
   assert.equal(JSON.stringify(appealNotices.body).includes(appealReason),false)
+  const appealRecipients=await q(`select n.person_id,n.id
+    from da_notification_receipt n
+    join da_audit_event e on e.id=n.audit_event_id
+    where e.organization_id=$1 and e.target_id=$2
+      and e.action='organization.store_platform_closing_appealed'
+    order by n.person_id`,[ownerOrgId,sellerId])
+  assert.equal(appealRecipients.length,2,
+    "One genuine appeal must create exactly two private protected-Owner receipts")
+  assert.deepEqual(new Set(appealRecipients.map((row:any)=>row.person_id)),
+    new Set([ownerPersonId,staffPersonId]))
+  assert.equal(appealRecipients.some((row:any)=>
+    row.person_id===ownerPersonId&&row.id===appealNotice.id),true)
+  const otherOwnerNotices=await read(staff,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))
+  assert.equal(otherOwnerNotices.status,200,
+    "Second protected Owner must read their own private appeal receipt over HTTPS")
+  const otherOwnerAppeal=otherOwnerNotices.body.notifications?.find((x:any)=>
+    x.title==="Mağaza kapatma itirazı kaydedildi")
+  assert.ok(otherOwnerAppeal,"Non-appealing Owner must receive the same neutral notice")
+  assert.equal(otherOwnerAppeal.description,appealNotice.description)
+  assert.notEqual(otherOwnerAppeal.id,appealNotice.id,
+    "Owners receive separate private receipts for the same canonical event")
+  assert.equal(appealRecipients.some((row:any)=>
+    row.person_id===staffPersonId&&row.id===otherOwnerAppeal.id),true)
+  assert.equal(JSON.stringify(otherOwnerNotices.body).includes(appealReason),false)
+  assert.equal(JSON.stringify(otherOwnerNotices.body).includes(reason),false)
   await browser.click("#notification-bell")
   await browser.wait("!document.getElementById('notification-panel').hidden && "+
     "document.getElementById('notification-list').textContent.includes('yeni satışlar kapalıdır')")
@@ -242,6 +279,29 @@ export async function verifyB22PlatformClosingAppeal(input:{
     "li=>li.querySelector('h3')?.textContent==='Mağaza kapatma itirazı kaydedildi' && "+
     "li.querySelector('p')?.textContent.includes('Mevcut faal mağazalar etkilenmez'))"),false)
   await browser.click("#notification-close")
+  // A's real Chrome UI has just displayed the notice. B did not submit
+  // the appeal: their separate authenticated Chrome must display the SAME
+  // impersonal description, never a forged action attribution or reason.
+  await staff.send("Page.bringToFront")
+  await staff.send("Page.reload",{ignoreCache:true})
+  await staff.wait("document.readyState==='complete'&&!document.getElementById('workspace').hidden")
+  await staff.select(ownerOrgName,"owner")
+  await staff.click("#notification-bell")
+  await staff.wait("!document.getElementById('notification-panel').hidden && "+
+    "document.getElementById('notification-list').textContent.includes('Şirketinizin mağazası için bir kapatma itirazı kaydedildi')")
+  const secondOwnerUi=await staff.eval(`(()=>{
+    const item=Array.from(document.querySelectorAll('#notification-list li'))
+      .find(li=>li.querySelector('h3')?.textContent==='Mağaza kapatma itirazı kaydedildi');
+    return item?{text:item.textContent,description:item.querySelector('p')?.textContent}:null;
+  })()`)
+  assert.ok(secondOwnerUi)
+  assert.match(secondOwnerUi.description,/Şirketinizin mağazası için bir kapatma itirazı kaydedildi/)
+  assert.equal(secondOwnerUi.description.includes("itirazınız kaydedildi"),false)
+  assert.equal(secondOwnerUi.text.includes(appealReason),false)
+  assert.equal(secondOwnerUi.text.includes(reason),false)
+  await staff.click("#notification-close")
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible'")
   assert.equal(await count(),auditBefore+2)
   const [ledger]=await q(`select version,request_id,appeal_request_id,
     started_at,appealed_at from da_store_platform_closing where seller_id=$1`,[sellerId])
@@ -273,5 +333,6 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
   assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
     [sellerId]))[0],before)
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason\n")
+  return secondOwnerMembership.id
 }
