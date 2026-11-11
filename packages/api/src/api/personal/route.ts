@@ -2989,7 +2989,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(typeof form?.querySelectorAll==='function')
       for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
     clearOwnerClosing();
-    clearPlatformClosingOwner();
+    if(typeof clearPlatformClosingOwner==='function')clearPlatformClosingOwner();
   }
   function ownerPauseButtons(){
     const form=el('store-owner-pause-form');
@@ -4597,8 +4597,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     platformClosingBusy=false;platformClosingUncertain=false;
     el('platform-closing-panel').hidden=true;
     el('platform-closing-status').textContent='';
-    el('platform-closing-form').reset();
-    el('platform-closing-form').elements.namedItem('seller_id').replaceChildren();
+    const form=el('platform-closing-form');
+    if(typeof form?.reset==='function')form.reset();
+    const choice=typeof form?.elements?.namedItem==='function'?
+      form.elements.namedItem('seller_id'):null;
+    if(typeof choice?.replaceChildren==='function')choice.replaceChildren();
   }
   async function refreshPlatformClosings(){
     if(document.hidden||el('workspace').hidden)return;
@@ -4691,8 +4694,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-platform-appeal-panel').hidden=true;
     el('store-platform-appeal-reason').textContent='';
     el('store-platform-appeal-status').textContent='';
-    el('store-platform-appeal-form').reset();
-    el('store-platform-appeal-form').querySelector('button').disabled=true;
+    const form=el('store-platform-appeal-form');
+    if(typeof form?.reset==='function')form.reset();
+    const button=typeof form?.querySelector==='function'?form.querySelector('button'):null;
+    if(button)button.disabled=true;
   }
   async function refreshPlatformClosingOwner(org,request){
     const choice=el('store-owner-pause-form')?.elements.namedItem('seller_id');
