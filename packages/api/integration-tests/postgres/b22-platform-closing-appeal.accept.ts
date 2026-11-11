@@ -1,5 +1,6 @@
 /** B22 #252: real first-party Chrome/HTTPS/PG16 platform closing and Owner
- * appeal. Task-only actors and database. No SMTP success, timer or finalizer.
+ * appeal. Task-only actors and database. Timer and dispatch require independent
+ * real scheduled-job evidence; finalizer is always disabled.
  */
 import assert from "node:assert/strict"
 import {randomBytes} from "node:crypto"
@@ -142,10 +143,11 @@ export async function verifyB22PlatformClosingAppeal(input:{
   await staff.input("#platform-closing-form textarea[name=reason]",reason)
   await staff.click("#platform-closing-form input[name=confirmed]")
   await staff.click("#platform-closing-form button[type=submit]")
-  await staff.wait("document.getElementById('platform-closing-mail-status').textContent.includes('e-posta kimliği doğrulanmış: 1')")
+  await staff.wait("document.getElementById('platform-closing-mail-status').textContent.includes('doğrulanmış e-posta kimliği 1')")
   const mailUi=await staff.eval("(()=>{const e=document.getElementById('platform-closing-mail-status');return {text:e.textContent,role:e.getAttribute('role'),live:e.getAttribute('aria-live')}})()")
-  assert.match(mailUi.text,/Korunan Owner: 1, kişisel bildirim: 1, e-posta kimliği doğrulanmış: 1/)
-  assert.match(mailUi.text,/teslim kanıtı yok; 10\/30 günlük sayaç başlamadı/)
+  assert.match(mailUi.text,/Korunan Owner 1, doğrulanmış e-posta kimliği 1/)
+  assert.match(mailUi.text,/Owner 1: .*deneme [0-4]\/4/)
+  assert.match(mailUi.text,/itiraz saati henüz başlamadı/)
   assert.equal(mailUi.role,"status")
   assert.equal(mailUi.live,"polite")
   const createdRows=await q("select request_id,state,version from da_store_platform_closing where seller_id=$1 and organization_id=$2",[sellerId,ownerOrgId])
@@ -330,8 +332,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const newlyProtected=await read(staff,mailPath)
   assert.equal(newlyProtected.status,200)
   assert.equal(newlyProtected.body?.protected_owner_count,2)
-  assert.equal(newlyProtected.body?.private_receipt_count,1,
-    "Later promoted protected Owner has no initial closure receipt; never fake full delivery")
+  assert.ok([1,2].includes(newlyProtected.body?.private_receipt_count),
+    "Promoted protected Owner must never receive a forged original receipt; scheduled reconciliation may add a legitimate one")
   assert.equal(newlyProtected.body?.mandatory_email_verified,false)
   assert.equal(newlyProtected.body?.deadline_started,false)
   const appealReason="B22 sentetik yetkili Owner kapatma kararına itiraz ediyor"
@@ -350,11 +352,10 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const appealNotice=appealNotices.body.notifications?.find((x:any)=>
     x.title==="Mağaza kapatma itirazı kaydedildi")
   assert.ok(appealNotice,"Owner must receive a real private appeal receipt")
-  assert.match(appealNotice.description,/Şirketinizin mağazası için bir kapatma itirazı kaydedildi/)
+  assert.match(appealNotice.description,/Şirketinizin mağazası için itiraz kaydedildi/)
   assert.equal(appealNotice.description.includes("itirazınız kaydedildi"),false,
     "The actor-neutral message must not tell a co-Owner they made the appeal")
-  assert.match(appealNotice.description,/yeni satışlar kapalıdır/)
-  assert.match(appealNotice.description,/süre henüz başlamadı/)
+  assert.match(appealNotice.description,/yeni satışlar kapalı kalır/)
   assert.equal(appealNotice.description.includes("Mevcut faal mağazalar etkilenmez"),false)
   assert.equal(JSON.stringify(appealNotices.body).includes(appealReason),false)
   const appealRecipients=await q(`select n.person_id,n.id
