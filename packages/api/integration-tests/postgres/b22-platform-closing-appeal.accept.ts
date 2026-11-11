@@ -386,7 +386,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(JSON.stringify(otherOwnerNotices.body).includes(reason),false)
   await browser.click("#notification-bell")
   await browser.wait("!document.getElementById('notification-panel').hidden && "+
-    "document.getElementById('notification-list').textContent.includes('yeni satışlar kapalıdır')")
+    "document.getElementById('notification-list').textContent.includes('yeni satışlar kapalı kalır')")
   assert.equal(await browser.eval(
     "Array.from(document.querySelectorAll('#notification-list li')).some("+
     "li=>li.querySelector('h3')?.textContent==='Mağaza kapatma itirazı kaydedildi' && "+
@@ -401,14 +401,14 @@ export async function verifyB22PlatformClosingAppeal(input:{
   await staff.select(ownerOrgName,"owner")
   await staff.click("#notification-bell")
   await staff.wait("!document.getElementById('notification-panel').hidden && "+
-    "document.getElementById('notification-list').textContent.includes('Şirketinizin mağazası için bir kapatma itirazı kaydedildi')")
+    "document.getElementById('notification-list').textContent.includes('Şirketinizin mağazası için itiraz kaydedildi')")
   const secondOwnerUi=await staff.eval(`(()=>{
     const item=Array.from(document.querySelectorAll('#notification-list li'))
       .find(li=>li.querySelector('h3')?.textContent==='Mağaza kapatma itirazı kaydedildi');
     return item?{text:item.textContent,description:item.querySelector('p')?.textContent}:null;
   })()`)
   assert.ok(secondOwnerUi)
-  assert.match(secondOwnerUi.description,/Şirketinizin mağazası için bir kapatma itirazı kaydedildi/)
+  assert.match(secondOwnerUi.description,/Şirketinizin mağazası için itiraz kaydedildi/)
   assert.equal(secondOwnerUi.description.includes("itirazınız kaydedildi"),false)
   assert.equal(secondOwnerUi.text.includes(appealReason),false)
   assert.equal(secondOwnerUi.text.includes(reason),false)
@@ -446,6 +446,6 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
   assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
     [sellerId]))[0],before)
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners missing receipt, no delivery/timer, foreign denied\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/mail delivery proven at this checkpoint and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no delivery/timer at this checkpoint, foreign denied\n")
   return secondOwnerMembership.id
 }
