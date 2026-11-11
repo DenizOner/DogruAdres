@@ -52,9 +52,14 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
       return res.status(409).json({message:"Closing status changed; reread"})
     if(result.status!=="appealed")
       return res.status(503).json({message:"Outcome uncertain; reread"})
+    const current=await access(req).personalPlatformStoreClosingState(
+      sessionToken(req),parsed.data.organization_id,parsed.data.seller_id)
+    if(!current)return res.status(503).json({message:"Outcome uncertain; reread"})
     return res.status(200).json({...result,
       organization_id:parsed.data.organization_id,seller_id:parsed.data.seller_id,
-      deadline_started:false,permanent_finalization_enabled:false})
+      deadline_started:current.deadline_started,
+      deadline_started_at:current.deadline_started_at,
+      permanent_finalization_enabled:false})
   }catch(error){
     return res.status(error instanceof IdentityAccessDenied?403:503).json({
       message:error instanceof IdentityAccessDenied?"Access denied":
