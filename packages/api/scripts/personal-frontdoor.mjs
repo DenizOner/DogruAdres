@@ -20,6 +20,8 @@ export function allowedPublicRequest(method,path){
     '/personal/store-applications':['GET','POST'],
     '/personal/store-owner-pause':['GET','POST'],
     '/personal/store-owner-closing':['GET','POST'],
+    '/personal/store-platform-closing':['GET','POST'],
+    '/personal/platform/store-closings':['GET','POST'],
       '/personal/store-draft-permissions':['GET','POST'],
     '/personal/platform/stores':['GET','POST'],
     '/personal/store-buyer-blocks':['POST'],
