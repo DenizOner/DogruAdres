@@ -281,6 +281,7 @@ async function run(){
         const exceptionalRecipientMarker="PASS B22 Chrome/HTTPS/PG16: recipient B native name and URL adopted after source A vacates, historical 30-day hold retained, unrelated Store C HTTP409 before/after, Staff approval and audit/outbox durable"
         const postHoldRecipientMarker="PASS B22 Chrome/HTTPS/PG16: transferred old name remains reserved for B after source hold day 30, C HTTPS409 without request/audit, original timestamp restored, B native adoption succeeds"
         const independentStaffRaceMarker="PASS B22 Chrome/HTTPS/PG16: two independent strong Staff Persons race same first Store name-right transfer on observed PG advisory lock; HTTP201+409, one transfer/audit/outbox, replay200, both native Seller IDs unchanged"
+        const platformClosingAppealMarker="PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason"
         const completedSourceOrderMarker="PASS B22 Chrome/HTTPS/PG16: completed native source OrderGroup/Order IDs, Order-Cart FK, source Seller/Offer and immutable Buyer attribution unchanged across A→B transfer, A same-ID recovery and B name adoption; zero payment"
         const historicalCartMarker="PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED"
         const ownerClosingNegativeMarker="PASS B22 real closing security: concurrent HTTP 200+409 one commit; revoked Owner/stale session HTTP403 no writes; expired 30-day withdraw HTTP409 no writes; both active Owners read private notices, two receipts each; native Seller unchanged"
@@ -330,7 +331,8 @@ async function run(){
               x===ownerPauseIndexMarker || x===ownerClosingNegativeMarker ||
               x===exceptionalStoreTransferMarker || x===exceptionalRecipientMarker ||
               x===postHoldRecipientMarker || x===independentStaffRaceMarker ||
-              x===historicalCartMarker || x===completedSourceOrderMarker).join("\n")
+              x===historicalCartMarker || x===completedSourceOrderMarker ||
+              x===platformClosingAppealMarker).join("\n")
           if(child.error||child.status!==0){
             // The long B22 child can legitimately fail at the still-blocked
             // tax-document approval. Do not bury *completed* earlier native
@@ -394,6 +396,8 @@ async function run(){
           "Missing exact PG16 Cart identity/Offer/Seller/Buyer attribution comparison across A→B transfer")
         assert.ok(result.split("\n").includes(completedSourceOrderMarker),
           "Missing real pre-transfer completed OrderGroup/Order IDs, exact Cart FK, source Seller and Buyer attribution across A→B name transfer")
+        assert.ok(result.split("\n").includes(platformClosingAppealMarker),
+          "Missing real independent strong Staff and protected Owner platform closing/appeal HTTPS+PG16 proof")
         // Both new B22 historical-reader negatives must be visible as full
         // redacted proof lines. Child success alone is not their evidence.
         for(const marker of [

@@ -39,13 +39,21 @@ export class PersonalNotifications {
                       'organization.store_application_rejected',
                       'organization.store_reactivated',
                       'organization.store_owner_closing_started',
-                      'organization.store_owner_closing_withdrawn')
+                      'organization.store_owner_closing_withdrawn',
+                      'organization.store_platform_closing_started',
+                      'organization.store_platform_closing_appealed')
           and ((a.action in ('organization.store_application_rejected','organization.store_reactivated')
                 and a.resource='store-application'
                 and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
             or (a.action in ('organization.store_owner_closing_started',
-                              'organization.store_owner_closing_withdrawn')
+                              'organization.store_owner_closing_withdrawn',
+                      'organization.store_platform_closing_started',
+                      'organization.store_platform_closing_appealed')
                 and a.resource='store-owner-closing'
+                and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
+            or (a.action in ('organization.store_platform_closing_started',
+                             'organization.store_platform_closing_appealed')
+                and a.resource='store-platform-closing'
                 and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
             or (a.action in ('organization.store_application_right_enabled',
                              'organization.store_application_right_disabled')
@@ -54,7 +62,7 @@ export class PersonalNotifications {
           and o.status='active' and o.deleted_at is null
           and exists(select 1 from da_organization_membership m
             where m.person_id=n.person_id and m.organization_id=a.organization_id
-              and m.status='active' and m.deleted_at is null
+              and m.status='active' and m.revoked_at is null and m.deleted_at is null
               and m.role='owner' and m.protected_owner=true)
           and exists(select 1 from da_audit_outbox x
             where x.source_audit_event_id=a.id))
@@ -111,6 +119,8 @@ export class PersonalNotifications {
         const storeReactivated=n.action === 'organization.store_reactivated'
         const ownerClosing=n.action === 'organization.store_owner_closing_started'
         const ownerWithdrawn=n.action === 'organization.store_owner_closing_withdrawn'
+        const platformClosing=n.action === 'organization.store_platform_closing_started'
+        const platformAppeal=n.action === 'organization.store_platform_closing_appealed'
         return {
           id:n.id,created_at:n.created_at,read_at:n.read_at,
           title:locked?'Oturum kilitlendi':draftGranted?
@@ -119,7 +129,9 @@ export class PersonalNotifications {
             'Mağaza başvurusu reddedildi':storeReactivated?
             'Mağaza yeniden açıldı':ownerClosing?
             'Mağaza için 30 günlük kapatma süreci başladı':ownerWithdrawn?
-            'Mağaza kapatma talebi geri çekildi':opened?
+            'Mağaza kapatma talebi geri çekildi':platformClosing?
+            'Platform mağaza kapatma incelemesi başladı':platformAppeal?
+            'Mağaza kapatma itirazı kaydedildi':opened?
             'Yeni mağaza başvuru hakkı açıldı':'Yeni mağaza başvuru hakkı durduruldu',
           context:locked?'Kişisel hesabınız':n.organization_name,
           description:locked?
@@ -130,6 +142,8 @@ export class PersonalNotifications {
             storeReactivated?'Şirketinizin onaylı mağazası platform tarafından yeniden etkinleştirildi. Güncel durumu şirket alanında kontrol edebilirsiniz.':
             ownerClosing?'Şirketinizin bir mağazasında yeni satışlar durduruldu. Geri sayım ve gerekli işlemleri güvenli şirket alanından kontrol edin. Kalıcı kapatma henüz kesinleşmedi.':
             ownerWithdrawn?'Şirketinizin bir mağazasının kapatma talebi geri çekildi. Diğer satış engelleri yine geçerlidir.':
+            platformClosing?'Şirketinizin bir mağazasında platform kararıyla yeni satışlar durduruldu. Gerekçeyi ve itiraz seçeneğini yalnız güvenli şirket alanınızda görebilirsiniz. Zorunlu e-posta teslimi doğrulanmadığından süre henüz başlamadı.':
+            platformAppeal?'Şirketinizin mağazası için bir kapatma itirazı kaydedildi. İnceleme sürerken bu mağazada yeni satışlar kapalıdır. Zorunlu e-posta teslimi doğrulanmadığından süre henüz başlamadı.':
             opened?
             'Şirketiniz yeniden yeni mağaza başvurusu gönderebilir. Bekleyen başvurular otomatik onaylanmaz.':
             'Şirketinizin yeni mağaza başvuruları durduruldu. Mevcut faal mağazalar etkilenmez.'
@@ -158,14 +172,22 @@ export class PersonalNotifications {
                         'organization.store_application_rejected',
                       'organization.store_reactivated',
                       'organization.store_owner_closing_started',
-                      'organization.store_owner_closing_withdrawn')
+                      'organization.store_owner_closing_withdrawn',
+                      'organization.store_platform_closing_started',
+                      'organization.store_platform_closing_appealed')
             and ((a.action in ('organization.store_application_rejected','organization.store_reactivated')
                   and a.resource='store-application'
                   and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
               or (a.action in ('organization.store_owner_closing_started',
-                                'organization.store_owner_closing_withdrawn')
+                                'organization.store_owner_closing_withdrawn',
+                      'organization.store_platform_closing_started',
+                      'organization.store_platform_closing_appealed')
                   and a.resource='store-owner-closing'
                   and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
+            or (a.action in ('organization.store_platform_closing_started',
+                             'organization.store_platform_closing_appealed')
+                and a.resource='store-platform-closing'
+                and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
               or (a.action in ('organization.store_application_right_enabled',
                                'organization.store_application_right_disabled')
                   and a.resource='organization' and a.target_id=a.organization_id))
@@ -173,7 +195,7 @@ export class PersonalNotifications {
             and o.status='active' and o.deleted_at is null
             and exists(select 1 from da_organization_membership m
               where m.person_id=n.person_id and m.organization_id=a.organization_id
-                and m.status='active' and m.deleted_at is null
+                and m.status='active' and m.revoked_at is null and m.deleted_at is null
                 and m.role='owner' and m.protected_owner=true)
             and exists(select 1 from da_audit_outbox x
               where x.source_audit_event_id=a.id))

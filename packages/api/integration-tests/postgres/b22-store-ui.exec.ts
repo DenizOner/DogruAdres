@@ -24,6 +24,7 @@ import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerW
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,createB22CompletedSourceOrderFixture} from "./b22-store-name-transfer.accept"
+import {verifyB22PlatformClosingAppeal} from "./b22-platform-closing-appeal.accept"
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
@@ -4409,6 +4410,13 @@ export default async function({container}:any){
       "Company application pause cannot suspend a previously approved Seller")
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
+    // The secure workspace conceals private Staff panels in background tabs.
+    // Wait for its live, authorized re-render; if still hidden, navigate
+    // afresh through the actual session and Store Staff HTTP checks.
+    if(!await reviewer.eval("!document.getElementById('workspace').hidden && !document.getElementById('store-approval-panel').hidden")){
+      await reviewer.send("Page.reload",{ignoreCache:true})
+      await reviewer.wait("document.visibilityState==='visible' && !document.getElementById('workspace').hidden && !document.getElementById('store-approval-panel').hidden")
+    }
     await reviewer.click("#store-approval-refresh")
     await reviewer.wait("document.getElementById('store-approval-list').textContent.includes('inceleme bekletiliyor')")
     assert.equal(await reviewer.eval("document.querySelector('#store-approval-list button').disabled"),true)
@@ -8707,7 +8715,25 @@ export default async function({container}:any){
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
     ),true,"Unblocking restores inherited Owner authority independently of an explicit grant")
     process.stdout.write("PASS B22 real Mercur validate: protected Owner still authorized after self-grant revoke, but Store Buyer Organization block denies native checkout with zero OrderGroup/Order/payment; unblock restores L\n")
-    process.stdout.write("NOT TESTED B22: successful order placement, authorization/capture with a real payment provider, post-L overlap orchestration, independent exact-PR acceptance\\n")
+    process.stdout.write("NOT TESTED B22: successful order placement, authorization/capture with a real payment provider, post-L overlap orchestration, independent exact-PR acceptance\n")
+
+    // Exercise the genuine Beta Customer before the later F-02 security test
+    // intentionally revokes that Customer binding. All initial foreign Staff
+    // checks run before the helper adds B as the second protected Gamma Owner.
+    // Reuse that same Owner membership in the later native Owner race.
+    const secondGammaOwnerId=await verifyB22PlatformClosingAppeal({
+      browser,staff:reviewer,q,foundation,
+      ownerPersonId:A.person,staffPersonId:B.person,
+      ownerOrgId:sellerGamma.id,ownerOrgName:sellerGamma.name,
+      sellerId:gammaSellerId,buyer:reviewer,
+      buyerScopePath:betaScopeUrl,buyerOrganizationId:organizations[1].id,
+      checkoutCartId:hookProbeCart.id,customerId:nativeCustomer.id,query
+    })
+    // Continue the Alpha Buyer/permission tests from the real Owner workspace.
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("!document.getElementById('buyer-grants-panel').hidden")
 
     const forgedBuyer=await reviewer.eval(`(async()=>{
       const r=await fetch('/personal/buyer-context?organization_id=${encodeURIComponent(organizations[0].id)}&actor_id=cus_forged')
@@ -9501,10 +9527,13 @@ export default async function({container}:any){
       listPolicyOutboxBefore,"Denied read cannot append outbox")
     process.stdout.write("PASS B22 Owner role policy: fixed membership.list keeps Owner HTTPS GET200; Admin403; PG16 data unchanged\n")
 
+    // B is now a genuinely protected Gamma Owner for appeal notifications.
+    // Use the already-existing independent large Member Organization, where
+    // B has no membership, for the unchanged foreign read-denial condition.
     await verifyNativeOrganizationReadPolicy({
       container,ownerActor:A.actor,memberActor:B.actor,memberPersonId:B.person,
       alphaOrg:organizations[0].id,betaOrg:organizations[1].id,
-      foreignOrg:sellerGamma.id,browser,q,
+      foreignOrg:largeMemberOrg.id,browser,q,
     })
     await verifyOwnerAuditTimelinePolicy({
       organizationId:organizations[0].id,adminMembershipId:alphaMember.id,
@@ -9968,13 +9997,11 @@ export default async function({container}:any){
 
 
     // B22 protected Owner removal denial vs real native Seller creation.
-    // Gamma is a separate disposable Organization; a second Owner does not
-    // allow bypassing the #39 notice/appeal gate during an in-flight write.
-    const [secondGammaOwner]=await foundation.createMemberships([{
-      organization_id:sellerGamma.id,person_id:B.person,
-      role:"owner",status:"active",protected_owner:true
-    }])
+    // The same second Gamma Owner membership was already issued for the real
+    // two-Owner notification acceptance before Customer unlink.
+    const secondGammaOwner={id:secondGammaOwnerId}
     assert.match(secondGammaOwner.id,/^[A-Za-z0-9_-]+$/)
+    // The second Owner may not bypass #39 notice/appeal gate in flight.
     const ownerRaceEmail="b22-owner-revoke-race-"+rand+"@example.invalid"
     const ownerRaceName="B22 Owner race Store "+rand
     const ownerRaceRequest={organization_id:sellerGamma.id,

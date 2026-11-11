@@ -235,6 +235,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
 
+  <section id="platform-closing-panel" hidden style="grid-column:1/-1" aria-labelledby="platform-closing-title">
+    <h2 id="platform-closing-title">Platform mağaza kapatma süreci</h2>
+    <p>Gerekçeli platform kararı yeni satışları derhal durdurur. Korunan Owner'lar gerekçeyi okuyabilir ve itiraz edebilir. Zorunlu e-posta teslimi doğrulanmadığından 10/30 günlük sayaç başlamaz, kalıcı kapatma veya ad/URL devri yapılmaz.</p>
+    <p id="platform-closing-status" role="status" aria-live="polite"></p>
+    <form id="platform-closing-form">
+      <label>Mağaza<select name="seller_id" required></select></label>
+      <label>Gerekçe<textarea name="reason" minlength="10" maxlength="500" required rows="3"></textarea></label>
+      <label><input name="confirmed" type="checkbox" required> Satışların duracağını ve kapanışın güvenilir zorunlu bildirim olmadan kesinleşmeyeceğini anladım.</label>
+      <button type="submit">Gerekçeli kapatma sürecini başlat</button>
+    </form>
+    <button type="button" id="platform-closing-refresh">Mağazaları yenile</button>
+    <button type="button" id="platform-closing-more" hidden>Diğer mağazalar</button>
+  </section>
   <section id="store-approval-panel" hidden style="grid-column:1/-1">
     <h2>Platform mağaza onayları</h2>
     <p>Yalnız açık mağaza onay görevi ve güncel güçlü giriş ile bekleyen mağazalar onaylanabilir. Kuruluş ile mağaza bağı başvuruda kurulmuştur; ayrıca ilişki onayı yapılmaz.</p>
@@ -340,6 +353,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         <button type="submit" name="action" value="withdraw" disabled>Kapatma talebini geri çek</button>
       </form>
       <button type="button" id="store-owner-closing-refresh">Kapatma durumunu yenile</button>
+    </section>
+    <section id="store-platform-appeal-panel" hidden aria-labelledby="store-platform-appeal-title">
+      <h3 id="store-platform-appeal-title">Platform kapatma kararı ve itiraz</h3>
+      <p>Kapatma gerekçesini güvenle inceleyebilirsiniz. Zorunlu e-posta teslimi kanıtlanmadan 10/30 günlük sayaç çalışmaz ve kesin kapanış uygulanmaz.</p>
+      <p id="store-platform-appeal-reason"></p>
+      <p id="store-platform-appeal-status" role="status" aria-live="polite"></p>
+      <form id="store-platform-appeal-form">
+        <label>İtiraz gerekçesi<textarea name="reason" minlength="10" maxlength="500" rows="3" required></textarea></label>
+        <button type="submit" disabled>İtirazı gönder</button>
+      </form>
+      <button type="button" id="store-platform-appeal-refresh">Kararı yenile</button>
     </section>
     <section id="store-block-panel" hidden aria-labelledby="store-block-title">
       <h3 id="store-block-title">Mağazanın alıcı kuruluş engelleri</h3>
@@ -513,7 +537,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const renameWrite=path==='store-rename-requests'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const closingWrite=path==='store-owner-closing'&&options.method==='POST';
+    const closingWrite=['store-owner-closing','store-platform-closing','platform/store-closings'].includes(path)&&options.method==='POST';
     const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite;
     let data;
     try{
@@ -2965,6 +2989,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(typeof form?.querySelectorAll==='function')
       for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
     clearOwnerClosing();
+    if(typeof clearPlatformClosingOwner==='function')clearPlatformClosingOwner();
   }
   function ownerPauseButtons(){
     const form=el('store-owner-pause-form');
@@ -3018,12 +3043,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(currentOrg){
       void refreshOwnerPause(currentOrg,organizationRequest);
       void refreshOwnerClosing(currentOrg,organizationRequest);
+      void refreshPlatformClosingOwner(currentOrg,organizationRequest);
     }
   };
   el('store-owner-pause-refresh').onclick=()=>{
     if(currentOrg){
       void refreshOwnerPause(currentOrg,organizationRequest);
       void refreshOwnerClosing(currentOrg,organizationRequest);
+      void refreshPlatformClosingOwner(currentOrg,organizationRequest);
     }
   };
   if(ownerPauseForm)ownerPauseForm.onsubmit=async event=>{
@@ -3282,6 +3309,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               if(renameData.stores.length){
                  void refreshOwnerPause(org,request);
                  void refreshOwnerClosing(org,request);
+                 void refreshPlatformClosingOwner(org,request);
                }
               }
 
@@ -4174,7 +4202,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
   el('org-stores-refresh').onclick=()=>{if(currentOrg)void organizationStores(currentOrg,organizationRequest)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;clearOrganizationReviews();try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshStoreRenameReviews();void refreshOrganizationReviews();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;clearOrganizationReviews();try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshPlatformClosings();void refreshStoreRenameReviews();void refreshOrganizationReviews();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
@@ -4545,7 +4573,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
     clearPlatformStorePolicy();
-    clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearStoreRenameReviews();clearPendingInvitations();clearOrganizationReviews();
+    clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPlatformClosings();clearStoreRenameReviews();clearPendingInvitations();clearOrganizationReviews();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');
@@ -4559,6 +4587,199 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }catch{if(epoch===viewEpoch){concealPrivateView();el('login').hidden=false;status('Erişim yeniden doğrulanmalı')}}
     finally{observing=false}
   }
+
+  // B22 platform 10+20 first stage: separate platform closing grant and
+  // protected Owner appeal. No browser-computed deadline or implicit authority.
+  let platformClosingPage=0,platformClosingRead=0;
+  let platformClosingRows=[],platformClosingBusy=false,platformClosingUncertain=false;
+  function clearPlatformClosings(){
+    platformClosingRead++;platformClosingPage=0;platformClosingRows=[];
+    platformClosingBusy=false;platformClosingUncertain=false;
+    el('platform-closing-panel').hidden=true;
+    el('platform-closing-status').textContent='';
+    const form=el('platform-closing-form');
+    if(typeof form?.reset==='function')form.reset();
+    const choice=typeof form?.elements?.namedItem==='function'?
+      form.elements.namedItem('seller_id'):null;
+    if(typeof choice?.replaceChildren==='function')choice.replaceChildren();
+  }
+  async function refreshPlatformClosings(){
+    if(document.hidden||el('workspace').hidden)return;
+    const seq=++platformClosingRead,epoch=viewEpoch;
+    const panel=el('platform-closing-panel'),msg=el('platform-closing-status');
+    msg.textContent='Yetkili mağazalar doğrulanıyor…';
+    try{
+      const data=await api('platform/store-closings?page='+platformClosingPage);
+      if(seq!==platformClosingRead||epoch!==viewEpoch||document.hidden)return;
+      if(data.page!==platformClosingPage||!Array.isArray(data.candidates)||
+         data.candidates.length>30||typeof data.has_more!=='boolean'||
+         data.candidates.some(x=>!/^sel_[A-Za-z0-9_-]+$/.test(x?.seller_id)||
+           !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(x?.organization_id)||
+           typeof x.store_name!=='string'||typeof x.organization_name!=='string'))
+        throw Error('Geçersiz kaynak listesi');
+      platformClosingRows=data.candidates;
+      const choice=el('platform-closing-form').elements.namedItem('seller_id');
+      choice.replaceChildren();
+      for(const row of data.candidates){
+        const option=document.createElement('option');
+        option.value=row.seller_id;
+        option.textContent=row.organization_name+' / '+row.store_name+
+          ' ('+row.store_status+')';
+        choice.append(option);
+      }
+      el('platform-closing-more').hidden=!data.has_more;
+      panel.hidden=false;
+      msg.textContent=data.candidates.length?
+        'Gerekçe ile yeni satışları derhal durdurabilirsiniz. Kesin kapanış etkin değildir.':
+        'Bu sayfada işleme uygun mağaza bulunamadı.';
+    }catch(e){
+      if(seq!==platformClosingRead||epoch!==viewEpoch)return;
+      if([401,403].includes(e.httpStatus)){clearPlatformClosings();return}
+      panel.hidden=false;platformClosingRows=[];
+      el('platform-closing-form').elements.namedItem('seller_id').replaceChildren();
+      msg.textContent='Mağaza listesi doğrulanamadı. Yeni karar oluşturulamaz.';
+    }
+  }
+  el('platform-closing-refresh').onclick=()=>{
+    platformClosingUncertain=false;platformClosingPage=0;void refreshPlatformClosings()
+  };
+  el('platform-closing-more').onclick=()=>{
+    if(platformClosingPage<999){platformClosingPage++;void refreshPlatformClosings()}
+  };
+  el('platform-closing-form').onsubmit=async event=>{
+    event.preventDefault();
+    const form=event.currentTarget,epoch=viewEpoch;
+    if(platformClosingBusy||platformClosingUncertain||document.hidden||
+       el('platform-closing-panel').hidden)return;
+    const chosen=platformClosingRows.find(x=>
+      x.seller_id===form.elements.namedItem('seller_id').value);
+    const reason=form.elements.namedItem('reason').value.trim();
+    if(!chosen||reason.length<10||reason.length>500||
+       form.elements.namedItem('confirmed').checked!==true)return;
+    const button=form.querySelector('button[type=submit]');
+    button.disabled=true;platformClosingBusy=true;
+    const msg=el('platform-closing-status');
+    msg.textContent='Gerekçeli karar güvenli biçimde kaydediliyor…';
+    try{
+      const result=await api('platform/store-closings',{method:'POST',
+        body:JSON.stringify({organization_id:chosen.organization_id,
+          seller_id:chosen.seller_id,request_id:'dascp_'+crypto.randomUUID().replaceAll('-',''),
+          reason})});
+      if(epoch!==viewEpoch||document.hidden)return;
+      if(result.organization_id!==chosen.organization_id||
+         result.seller_id!==chosen.seller_id||
+         result.status!=='notification_unverified'||
+         result.mandatory_email_verified!==false||result.deadline_started!==false){
+        const e=Error('Kayıt sonucu doğrulanamadı');e.uncertain=true;throw e;
+      }
+      msg.textContent='Yeni satışlar durdu. Owner kişisel bildirimleri kaydedildi; e-posta kanıtı olmadan sayaç başlamaz.';
+      form.reset();void refreshPlatformClosings();
+    }catch(e){
+      if(epoch!==viewEpoch)return;
+      platformClosingUncertain=!!e.uncertain||e.httpStatus>=500;
+      msg.textContent=platformClosingUncertain?
+        'Sonuç belirsiz. Tekrar göndermeyin; yetkili kayıtları kontrol edin.':
+        'Yetki veya mağaza kararı değişti; işlem reddedildi.';
+    }finally{
+      platformClosingBusy=false;
+      button.disabled=platformClosingUncertain;
+    }
+  };
+
+  let platformOwnerRead=0,platformOwnerPending=false,platformOwnerUncertain=false;
+  let platformOwnerState=null;
+  function clearPlatformClosingOwner(){
+    platformOwnerRead++;platformOwnerState=null;
+    platformOwnerPending=false;platformOwnerUncertain=false;
+    el('store-platform-appeal-panel').hidden=true;
+    el('store-platform-appeal-reason').textContent='';
+    el('store-platform-appeal-status').textContent='';
+    const form=el('store-platform-appeal-form');
+    if(typeof form?.reset==='function')form.reset();
+    const button=typeof form?.querySelector==='function'?form.querySelector('button'):null;
+    if(button)button.disabled=true;
+  }
+  async function refreshPlatformClosingOwner(org,request){
+    const choice=el('store-owner-pause-form')?.elements.namedItem('seller_id');
+    const seller=choice?.value;
+    if(!org||!seller||!selectedStoreOwner||document.hidden||
+       el('store-owner-pause-panel').hidden)return;
+    const seq=++platformOwnerRead,epoch=viewEpoch;
+    platformOwnerState=null;
+    const panel=el('store-platform-appeal-panel'),msg=el('store-platform-appeal-status');
+    panel.hidden=true;
+    try{
+      const data=await api('store-platform-closing?'+new URLSearchParams({
+        organization_id:org,seller_id:seller}).toString());
+      if(seq!==platformOwnerRead||epoch!==viewEpoch||request!==organizationRequest||
+         org!==currentOrg||seller!==choice.value||document.hidden)return;
+      if(data.organization_id!==org||data.seller_id!==seller||
+         !['none','notification_unverified','appealed'].includes(data.state)||
+         !Number.isSafeInteger(data.version)||data.deadline_started!==false||
+         data.permanent_finalization_enabled!==false||
+         data.mandatory_email_verified!==false)throw Error('Geçersiz karar');
+      platformOwnerState=data;
+      panel.hidden=data.state==='none';
+      if(data.state==='none')return;
+      el('store-platform-appeal-reason').textContent=
+        'Platform karar gerekçesi: '+data.reason;
+      msg.textContent=data.state==='appealed'?
+        'İtiraz kaydedildi; kapatma incelemesi bekliyor. Satışlar kapalı.':
+        'Yeni satışlar durduruldu. İlk itirazınızı gönderebilirsiniz.';
+      el('store-platform-appeal-form').querySelector('button').disabled=
+        data.state!=='notification_unverified'||platformOwnerUncertain;
+    }catch(e){
+      if(seq!==platformOwnerRead||epoch!==viewEpoch)return;
+      clearPlatformClosingOwner();
+      if(![401,403].includes(e.httpStatus)){
+        panel.hidden=false;
+        msg.textContent='Kapatma kararı güvenle doğrulanamadı; itiraz gönderilemez.';
+      }
+    }
+  }
+  el('store-platform-appeal-refresh').onclick=()=>{
+    platformOwnerUncertain=false;
+    if(currentOrg)void refreshPlatformClosingOwner(currentOrg,organizationRequest);
+  };
+  el('store-platform-appeal-form').onsubmit=async event=>{
+    event.preventDefault();
+    const form=event.currentTarget,org=currentOrg,request=organizationRequest,epoch=viewEpoch;
+    const seller=el('store-owner-pause-form').elements.namedItem('seller_id')?.value;
+    const reason=form.elements.namedItem('reason').value.trim();
+    if(!org||!seller||!selectedStoreOwner||document.hidden||platformOwnerPending||
+       platformOwnerUncertain||platformOwnerState?.state!=='notification_unverified'||
+       platformOwnerState.seller_id!==seller||reason.length<10||reason.length>500)return;
+    const button=form.querySelector('button');
+    button.disabled=true;platformOwnerPending=true;
+    const msg=el('store-platform-appeal-status');
+    msg.textContent='İtiraz kaydediliyor…';
+    try{
+      const result=await api('store-platform-closing',{method:'POST',body:JSON.stringify({
+        organization_id:org,seller_id:seller,
+        request_id:'dapa_'+crypto.randomUUID().replaceAll('-',''),
+        expected_version:1,reason})});
+      if(epoch!==viewEpoch||request!==organizationRequest||
+         org!==currentOrg||document.hidden)return;
+      if(result.status!=='appealed'||result.version!==2||
+         result.organization_id!==org||result.seller_id!==seller||
+         result.deadline_started!==false){
+        const e=Error('İtiraz sonucu doğrulanamadı');e.uncertain=true;throw e;
+      }
+      platformOwnerUncertain=false;
+      form.reset();
+      await refreshPlatformClosingOwner(org,request);
+    }catch(e){
+      if(epoch!==viewEpoch||request!==organizationRequest)return;
+      platformOwnerUncertain=!!e.uncertain||e.httpStatus>=500;
+      msg.textContent=platformOwnerUncertain?
+        'Sonuç belirsiz; tekrar göndermeyin. Önce özel karar durumunu yenileyin.':
+        'İtiraz reddedildi. Yetki ve güncel kararı yeniden doğrulayın.';
+    }finally{
+      platformOwnerPending=false;
+      button.disabled=platformOwnerUncertain||platformOwnerState?.state!=='notification_unverified';
+    }
+  };
+
   window.addEventListener('pagehide',concealPrivateView);
   window.addEventListener('pageshow',event=>{if(event.persisted){concealPrivateView();load()}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)concealPrivateView();else load()});
