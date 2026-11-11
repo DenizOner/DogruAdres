@@ -577,5 +577,97 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: synthetic hashed email link strong Owner POST, foreign/forged CSRF/scanner GET denied, 10+20 server clock starts once, no finalizer or sales reopening\n")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/mail delivery proven at this checkpoint and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no delivery/timer at this checkpoint, foreign denied\n")
+  // Suspended Organization must NOT hide a durable platform-staff alert
+  // after the real Foundation fallback commits its canonical clock/audit.
+  // Every row below is a synthetic, disposable CI-only fixture.
+  const suspendedSeller="sel_b22_suspended_mail_"+randomBytes(10).toString("hex")
+  const suspendedRequest="dascp_"+randomBytes(16).toString("hex")
+  const suspendedAudit="daaud_"+randomBytes(16).toString("hex")
+  const suspendedOutbox="daaob_"+randomBytes(16).toString("hex")
+  const suspendedReason="Sentetik askıya alınmış şirket güvenlik bildirim testi"
+  const suspendedStart=new Date(Date.now()-73*3600000).toISOString()
+  const sourceRows=await q(`select e.actor_person_id,e.actor_type,e.actor_id
+    from da_store_platform_closing c
+    join da_audit_event e on e.id=c.source_audit_event_id
+    where c.seller_id=$1`,[sellerId])
+  assert.equal(sourceRows.length,1)
+  const source=sourceRows[0]
+  assert.equal(source.actor_person_id,staffPersonId)
+  await q(`insert into da_audit_event
+    (id,actor_person_id,actor_type,actor_id,role_context,organization_id,
+     action,module,resource,target_id,new_values,occurred_at)
+    values ($1,$2,$3,$4,'platform_staff',$5,
+      'organization.store_platform_closing_started','dogruadres-access',
+      'store-platform-closing',$6,
+      jsonb_build_object('request_id',$7::text,'state','notification_unverified',
+        'reason_sha256',$8::text),$9::timestamptz)`,[
+    suspendedAudit,source.actor_person_id,source.actor_type,source.actor_id,
+    ownerOrgId,suspendedSeller,suspendedRequest,
+    createHash("sha256").update(suspendedReason).digest("hex"),suspendedStart
+  ])
+  const sourceEnvelope={
+    version:1,source_module:"dogruadres-access",
+    source_audit_event_id:suspendedAudit,organization_id:ownerOrgId,
+    actor:{person_id:source.actor_person_id,type:source.actor_type,
+      id:source.actor_id,role_context:"platform_staff"},
+    action:"organization.store_platform_closing_started",
+    resource:"store-platform-closing",target_id:suspendedSeller,
+    occurred_at:suspendedStart
+  }
+  await q(`insert into da_audit_outbox
+    (id,source_audit_event_id,source_module,envelope_version,envelope,status)
+    values ($1,$2,'dogruadres-access',1,$3::jsonb,'pending')`,
+    [suspendedOutbox,suspendedAudit,JSON.stringify(sourceEnvelope)])
+  await q(`insert into da_store_platform_closing
+    (seller_id,organization_id,state,version,request_id,reason,
+     source_audit_event_id,started_at)
+    values ($1,$2,'notification_unverified',1,$3,$4,$5,$6::timestamptz)`,
+    [suspendedSeller,ownerOrgId,suspendedRequest,suspendedReason,
+      suspendedAudit,suspendedStart])
+  for(const person of [ownerPersonId,staffPersonId]){
+    await q(`insert into da_store_platform_closing_email
+      (seller_id,person_id,next_attempt_at,attempts,last_result)
+      values ($1,$2,$3::timestamptz,4,'unverified_identity')`,
+      [suspendedSeller,person,suspendedStart])
+  }
+  const oldOrg=await q("select status from da_organization where id=$1",[ownerOrgId])
+  assert.deepEqual(oldOrg,[{status:"active"}])
+  await q("update da_organization set status='suspended' where id=$1",[ownerOrgId])
+  try{
+    assert.equal(await foundation.settlePlatformClosingAdminFallback(),1,
+      "Real fallback must start the 10+20 clock even for suspended Organization")
+    const nowClosed=await q(`select deadline_basis,deadline_started_at,
+      admin_alert_at,deadline_audit_event_id from da_store_platform_closing
+      where seller_id=$1`,[suspendedSeller])
+    assert.equal(nowClosed.length,1)
+    assert.equal(nowClosed[0].deadline_basis,"admin_alert")
+    assert.ok(nowClosed[0].deadline_started_at&&nowClosed[0].deadline_audit_event_id)
+    const visible=await q(`select id,read_at from
+      da_store_platform_closing_admin_notice where seller_id=$1
+      and person_id=$2`,[suspendedSeller,staffPersonId])
+    assert.equal(visible.length,1)
+    const adminRead=await read(staff,"/personal/notifications")
+    assert.equal(adminRead.status,200)
+    assert.ok(adminRead.body.notifications.some((n:any)=>
+      n.id===visible[0].id &&
+      n.title==="Kapatma e-postaları teslim edilemedi — yönetici uyarısı"),
+      "Staff's personal bell must show the alert despite suspended Organization")
+    const foreignRead=await read(browser,"/personal/notifications")
+    assert.equal(foreignRead.status,200)
+    assert.equal(foreignRead.body.notifications.some((n:any)=>
+      n.id===visible[0].id),false,
+      "An Owner without a platform closing grant must never see Staff alert")
+    assert.equal((await write(browser,"/personal/notifications",
+      {id:visible[0].id})).status,403,
+      "Foreign Owner must not mark Staff alert as read")
+    assert.equal((await write(staff,"/personal/notifications",
+      {id:visible[0].id})).status,200)
+    assert.ok((await q(`select read_at from
+      da_store_platform_closing_admin_notice where id=$1`,
+      [visible[0].id]))[0].read_at)
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: suspended Organization real Admin fallback starts one audited 10+20 clock and visible private Staff notification; Owner list/read denied\n")
+  }finally{
+    await q("update da_organization set status='active' where id=$1",[ownerOrgId])
+  }
   return secondOwnerMembership.id
 }
