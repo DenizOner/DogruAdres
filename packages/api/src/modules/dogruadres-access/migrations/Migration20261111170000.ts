@@ -52,6 +52,23 @@ export class Migration20261111170000 extends Migration {
     this.addSql(`create index da_store_platform_closing_email_due
       on da_store_platform_closing_email (next_attempt_at)
       where attempts < 4 and delivered_at is null;`)
+    this.addSql(`create table da_store_platform_closing_admin_notice (
+      id text primary key check (id ~ '^danal_[a-f0-9]{32}
+  }
+
+  override async down(): Promise<void> {
+    throw new Error("Closing delivery, deadline and notification evidence require preservation review")
+  }
+}
+),
+      seller_id text not null references da_store_platform_closing(seller_id),
+      person_id text not null references da_person(id),
+      created_at timestamptz not null default clock_timestamp(),
+      read_at timestamptz,
+      unique (seller_id,person_id)
+    );`)
+    this.addSql(`create index da_store_platform_closing_admin_notice_person
+      on da_store_platform_closing_admin_notice (person_id,created_at desc);`)
   }
 
   override async down(): Promise<void> {
