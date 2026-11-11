@@ -215,6 +215,11 @@ jobs:
         working-directory: apps/storefront
         shell: bash
         run: |
+          set -euo pipefail
+          # Use the existing official Mercur CLI route codegen, never a
+          # synthetic hand-written route map or unconditional unsafe cast.
+          (cd ../../packages/api && bun run codegen)
+          test -s ../../packages/api/.mercur/routes.d.ts
           set +e
           node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json > "$RUNNER_TEMP/storefront-159-types.log" 2>&1
           type_status=$?
