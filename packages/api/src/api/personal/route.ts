@@ -4681,10 +4681,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          typeof data.deadline_started!=='boolean'||
          data.email_statuses.some(x=>!/^Owner [0-9]+$/.test(x?.label)||
            !Number.isSafeInteger(x?.attempts)||x.attempts<0||x.attempts>4||
+           typeof x?.smtp_accepted!=='boolean'||
            !Object.hasOwn(closingMailLabel,x?.status)))
         throw Error('Bildirim kanıtı doğrulanamadı');
       const rows=data.email_statuses.map(row=>row.label+': '+
-        closingMailLabel[row.status]+', deneme '+row.attempts+'/4');
+        closingMailLabel[row.status]+
+        ', SMTP: '+(row.smtp_accepted?'gönderildi':'gönderim kabulü doğrulanmadı')+
+        ', deneme '+row.attempts+'/4'+
+        (row.link_visited_at?', güvenli bağlantı açıldı':'')+
+        (row.account_viewed_at?', hesapta görüntülendi':''));
       target.textContent='Korunan Owner '+data.protected_owner_count+
         ', doğrulanmış e-posta kimliği '+data.verified_email_identity_count+
         '. '+rows.join('; ')+'. '+
