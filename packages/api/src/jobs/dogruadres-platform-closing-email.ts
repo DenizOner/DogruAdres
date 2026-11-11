@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
-import { sendSmtpEmail } from "../modules/dogruadres-access/smtp-client"
+import { sendSmtpEmail, SmtpAcceptanceUncertainError } from "../modules/dogruadres-access/smtp-client"
 import { verifiedEmailForActorContext } from "../api/dogruadres/invitations/accept/route"
 
 /**
@@ -133,7 +133,7 @@ async function currentActor(db: Db, claim: Claim) {
   })
 }
 
-async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unverified_identity",messageId:string|null) {
+async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unverified_identity"|"uncertain",messageId:string|null) {
   await db.transactional(async em => {
     const rows = await em.execute(`update da_store_platform_closing_email
       set last_result=?,message_id=case when ?='accepted' then ? else message_id end,
@@ -192,7 +192,7 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
   for(let i=0;i<MAX_PER_TICK;i++){
     const claim=await claimDue(db)
     if(!claim)break
-    let result: "accepted"|"failed"|"unverified_identity"="unverified_identity"
+    let result: "accepted"|"failed"|"unverified_identity"|"uncertain"="unverified_identity"
     let messageId:string|null=null
     try{
       const actor=await currentActor(db,claim)
@@ -235,8 +235,8 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
           result="accepted" // still NOT delivered
         }
       }
-    }catch{
-      result="failed"
+    }catch(error){
+      result=error instanceof SmtpAcceptanceUncertainError?"uncertain":"failed"
     }
     await settle(db,claim,result,messageId)
   }
