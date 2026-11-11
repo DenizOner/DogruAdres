@@ -5723,14 +5723,31 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         updated_at=clock_timestamp()
       where seller_id=? and person_id=?`,
       [at,at,at,sellerId,current.person_id])
-    const started=await db.execute(`update da_store_platform_closing
-      set deadline_started_at=?::timestamptz,deadline_basis='owner_delivery',
-        updated_at=clock_timestamp()
-      where seller_id=? and organization_id=? and deadline_started_at is null
-      returning seller_id`,[at,sellerId,orgId])
+    // Audit and clock share the same physical Foundation transaction. A
+    // repeated Owner visit must not create a second deadline audit/outbox.
+    if(locks[0].deadline_started_at===null){
+      const [deadlineAudit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:owner.actor.person_id,
+        actor_type:owner.actor.actor_type,actor_id:owner.actor.actor_id,
+        role_context:"owner",organization_id:orgId,
+        action:"organization.store_platform_closing_deadline_started",
+        module:DOGRUADRES_AUDIT_MODULE,
+        resource:"store-platform-closing",target_id:sellerId,
+        new_values:{basis:"owner_delivery",deadline_started_at:at,
+          evidence:"authenticated_owner_link"},
+        occurred_at:new Date(at)
+      }],context)
+      if(!deadlineAudit?.id)throw new IdentityAccessDenied()
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      const started=await db.execute(`update da_store_platform_closing
+        set deadline_started_at=?::timestamptz,deadline_basis='owner_delivery',
+          updated_at=clock_timestamp()
+        where seller_id=? and organization_id=? and deadline_started_at is null
+        returning seller_id`,[at,sellerId,orgId])
+      if(started.length!==1)throw new IdentityAccessDenied()
+    }
     return {viewed:true,reason:String(locks[0].reason),
-      deadline_started:started.length===1||
-      locks[0].deadline_started_at!==null}
+      deadline_started:true}
   }
 
   @InjectTransactionManager()
