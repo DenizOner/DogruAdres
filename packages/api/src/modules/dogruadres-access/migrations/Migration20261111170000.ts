@@ -10,12 +10,14 @@ export class Migration20261111170000 extends Migration {
       add column deadline_basis text check
         (deadline_basis in ('owner_delivery','admin_alert')),
       add column admin_alert_at timestamptz,
+      add column deadline_audit_event_id text references da_audit_event(id),
       add constraint da_store_platform_closing_deadline_proof check (
         (deadline_started_at is null and deadline_basis is null
-          and admin_alert_at is null)
-        or (deadline_started_at is not null and deadline_basis='owner_delivery'
-          and admin_alert_at is null)
-        or (deadline_started_at is not null and deadline_basis='admin_alert'
+          and admin_alert_at is null and deadline_audit_event_id is null)
+        or (deadline_started_at is not null and deadline_audit_event_id is not null
+          and deadline_basis='owner_delivery' and admin_alert_at is null)
+        or (deadline_started_at is not null and deadline_audit_event_id is not null
+          and deadline_basis='admin_alert'
           and admin_alert_at=deadline_started_at)
       );`)
     this.addSql(`create table da_store_platform_closing_email (
