@@ -206,7 +206,12 @@ async function assertAudit(seller:string,basis:string){
     "join da_audit_outbox o on o.source_audit_event_id=e.id "+
     "where c.seller_id=$1",[seller])
   assert.equal(rows.length,1,"Exactly one committed source audit and outbox")
-  const e=rows[0],actual=await row(seller)
+  const e={...rows[0],
+    new_values:typeof rows[0].new_values==="string"?
+      JSON.parse(rows[0].new_values):rows[0].new_values,
+    envelope:typeof rows[0].envelope==="string"?
+      JSON.parse(rows[0].envelope):rows[0].envelope
+  },actual=await row(seller)
   assert.equal(e.action,"organization.store_platform_closing_deadline_started")
   assert.equal(e.role_context,"platform_automation")
   assert.equal(e.new_values.basis,basis)
