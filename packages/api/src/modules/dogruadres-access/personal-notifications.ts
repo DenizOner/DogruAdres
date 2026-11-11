@@ -96,6 +96,31 @@ export class PersonalNotifications {
               and x.deleted_at is null))
       )
       union all
+      select d.late_notice_id as id,d.created_at,d.late_notice_read_at as read_at,
+        'organization.store_platform_closing_owner_added' as action,
+        o.name as organization_name
+      from da_store_platform_closing_email d
+      join da_store_platform_closing c on c.seller_id=d.seller_id
+      join da_organization o on o.id=c.organization_id
+        and o.status='active' and o.deleted_at is null
+      join da_audit_event a on a.id=c.source_audit_event_id
+        and a.action='organization.store_platform_closing_started'
+        and a.resource='store-platform-closing'
+        and a.module='dogruadres-access' and a.role_context='platform_staff'
+        and a.organization_id=c.organization_id and a.target_id=c.seller_id
+        and a.deleted_at is null
+      join da_audit_outbox x on x.source_audit_event_id=a.id
+        and x.source_module='dogruadres-access' and x.deleted_at is null
+      where d.person_id=? and d.late_notice_id is not null
+        and (?='' or c.organization_id=?)
+        and not exists(select 1 from da_notification_receipt old_n
+          where old_n.person_id=d.person_id
+            and old_n.audit_event_id=c.source_audit_event_id)
+        and exists(select 1 from da_organization_membership m
+          where m.person_id=d.person_id and m.organization_id=c.organization_id
+            and m.role='owner' and m.protected_owner=true
+            and m.status='active' and m.revoked_at is null and m.deleted_at is null)
+      union all
       select n.id,n.created_at,n.read_at,
         'organization.store_platform_closing_mail_admin_alert' as action,
         o.name as organization_name
@@ -104,7 +129,7 @@ export class PersonalNotifications {
         and c.admin_alert_at is not null
         and c.deadline_basis='admin_alert'
       join da_organization o on o.id=c.organization_id
-        and o.status='active' and o.deleted_at is null
+        and o.deleted_at is null
       where n.person_id=? and (?='' or c.organization_id=?)
         and exists(select 1 from da_platform_staff_grant g
           where g.person_id=n.person_id and g.task='store.closing.manage'
@@ -119,6 +144,7 @@ export class PersonalNotifications {
       [s.person_id, organization ?? '', organization ?? '',
        organization ?? '', organization ?? '',
        organization ?? '', organization ?? '',
+       s.person_id, organization ?? '', organization ?? '',
        s.person_id, organization ?? '', organization ?? '', offset])
     // Exactly one SQL statement determines the list, unread count and page.
     // A stored reason, actor identifier or staff grant never crosses the API.
@@ -138,6 +164,7 @@ export class PersonalNotifications {
         const platformClosing=n.action === 'organization.store_platform_closing_started'
         const platformAppeal=n.action === 'organization.store_platform_closing_appealed'
         const adminAlert=n.action === 'organization.store_platform_closing_mail_admin_alert'
+        const lateOwner=n.action === 'organization.store_platform_closing_owner_added'
         return {
           id:n.id,created_at:n.created_at,read_at:n.read_at,
           title:locked?'Oturum kilitlendi':draftGranted?
@@ -148,7 +175,8 @@ export class PersonalNotifications {
             'Mağaza için 30 günlük kapatma süreci başladı':ownerWithdrawn?
             'Mağaza kapatma talebi geri çekildi':platformClosing?
             'Platform mağaza kapatma incelemesi başladı':platformAppeal?
-            'Mağaza kapatma itirazı kaydedildi':adminAlert?
+            'Mağaza kapatma itirazı kaydedildi':lateOwner?
+            'Sorumluluğunuza yeni geçen mağazada kapatma süreci var':adminAlert?
             'Kapatma e-postaları teslim edilemedi — yönetici uyarısı':opened?
             'Yeni mağaza başvuru hakkı açıldı':'Yeni mağaza başvuru hakkı durduruldu',
           context:locked?'Kişisel hesabınız':n.organization_name,
@@ -161,7 +189,8 @@ export class PersonalNotifications {
             ownerClosing?'Şirketinizin bir mağazasında yeni satışlar durduruldu. Geri sayım ve gerekli işlemleri güvenli şirket alanından kontrol edin. Kalıcı kapatma henüz kesinleşmedi.':
             ownerWithdrawn?'Şirketinizin bir mağazasının kapatma talebi geri çekildi. Diğer satış engelleri yine geçerlidir.':
             platformClosing?'Şirketinizin bir mağazasında platform kararıyla yeni satışlar durduruldu. İtiraz saatini ve gerekçeyi güvenli şirket alanınızda görebilirsiniz.':
-            platformAppeal?'Şirketinizin mağazası için itiraz kaydedildi. İnceleme sürerken yeni satışlar kapalı kalır.':adminAlert?
+            platformAppeal?'Şirketinizin mağazası için itiraz kaydedildi. İnceleme sürerken yeni satışlar kapalı kalır.':lateOwner?
+            'Artık Owner olduğunuz mağazada daha önce başlatılmış platform kapatma süreci sürüyor. Yeni satışlar durduruldu; ayrıntı ve itiraz durumunu güvenli şirket alanınızdan kontrol edin.':adminAlert?
             'Kapatma güvenlik e-postasının dört denemede de teslimi doğrulanamadı. İtiraz süresi otomatik başlatıldı; teslimat sorununu yetkili platform kapatma ekranından inceleyin.':
             opened?
             'Şirketiniz yeniden yeni mağaza başvurusu gönderebilir. Bekleyen başvurular otomatik onaylanmaz.':
@@ -251,6 +280,7 @@ export class PersonalNotifications {
         organization ?? '',organization ?? '',
         organization ?? '',organization ?? ''])
     let admin=false
+    let late=false
     if(rows.length===0){
       rows=await this.db.execute(`select n.id,n.read_at
         from da_store_platform_closing_admin_notice n
@@ -263,12 +293,40 @@ export class PersonalNotifications {
               and g.resource='platform' and g.revoked_at is null
               and (g.expires_at is null or g.expires_at>clock_timestamp()))
         for update of n`,[id,s.person_id,organization??'',organization??''])
-      admin=true
+      admin=rows.length===1
+    }
+    if(rows.length===0){
+      rows=await this.db.execute(`select d.late_notice_id as id,d.late_notice_read_at as read_at
+        from da_store_platform_closing_email d
+        join da_store_platform_closing c on c.seller_id=d.seller_id
+        join da_organization o on o.id=c.organization_id
+          and o.status='active' and o.deleted_at is null
+        join da_audit_event a on a.id=c.source_audit_event_id
+          and a.action='organization.store_platform_closing_started'
+          and a.resource='store-platform-closing'
+          and a.module='dogruadres-access' and a.role_context='platform_staff'
+          and a.organization_id=c.organization_id and a.target_id=c.seller_id
+          and a.deleted_at is null
+        join da_audit_outbox x on x.source_audit_event_id=a.id
+          and x.source_module='dogruadres-access' and x.deleted_at is null
+        where d.late_notice_id=? and d.person_id=?
+          and (?='' or c.organization_id=?)
+          and not exists(select 1 from da_notification_receipt old_n
+            where old_n.person_id=d.person_id
+              and old_n.audit_event_id=c.source_audit_event_id)
+          and exists(select 1 from da_organization_membership m
+            where m.person_id=d.person_id and m.organization_id=c.organization_id
+              and m.role='owner' and m.protected_owner=true and m.status='active'
+              and m.revoked_at is null and m.deleted_at is null)
+        for update of d`,[id,s.person_id,organization??'',organization??''])
+      late=rows.length===1
     }
     if (rows.length !== 1) throw new IdentityAccessDenied()
     if (rows[0].read_at === null) {
       if(admin)await this.db.execute(`update da_store_platform_closing_admin_notice
         set read_at=clock_timestamp() where id=?`,[id])
+      else if(late)await this.db.execute(`update da_store_platform_closing_email
+        set late_notice_read_at=clock_timestamp() where late_notice_id=?`,[id])
       else await this.db.execute(`update da_notification_receipt
         set read_at=clock_timestamp() where id=?`, [id])
       const audit = `daaud_${randomUUID()}`
