@@ -25,6 +25,9 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@acme/api/_generated": [
+        "../../packages/api/.mercur/routes.d.ts"
       ]
     }
   },
