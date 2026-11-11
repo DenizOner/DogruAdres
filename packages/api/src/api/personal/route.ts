@@ -233,6 +233,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button id="organization-review-more" type="button" hidden>Daha eski başvuruları göster</button>
     <button id="organization-review-refresh" type="button">Başvuru kuyruğunu yenile</button>
   </section>
+  <section id="platform-closing-email-link-panel" hidden aria-labelledby="platform-closing-email-link-title">
+    <h2 id="platform-closing-email-link-title">E-posta güvenlik bildirimi</h2>
+    <p>Bu bağlantı mağaza kapatma bildirimine aittir. Kendi güvenli hesabınızdan inceleyin; başka bir kişinin onayına gerek yoktur.</p>
+    <button type="button" id="platform-closing-email-link-open">Kapatma bildirimini güvenle aç</button>
+    <p id="platform-closing-email-link-status" role="status" aria-live="polite"></p>
+  </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
 
   <section id="platform-closing-panel" hidden style="grid-column:1/-1" aria-labelledby="platform-closing-title">
@@ -538,7 +544,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const renameWrite=path==='store-rename-requests'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const closingWrite=['store-owner-closing','store-platform-closing','platform/store-closings'].includes(path)&&options.method==='POST';
+    const closingWrite=['store-owner-closing','store-platform-closing','platform/store-closings','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
     const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite;
     let data;
     try{
@@ -557,6 +563,47 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
     return data;
   }
+  // Hash fragments never reach a web server or reverse-proxy access log.
+  // Reading the link is optional: not visiting never blocks the automatic
+  // admin-alert fallback. Do not let email scanners pre-confirm anything.
+  let platformMailLinkToken='';
+  const hashMatch=location.hash.match(/^#closing_notice=([a-f0-9]{64})$/);
+  if(hashMatch){
+    platformMailLinkToken=hashMatch[1];
+    history.replaceState(null,'',location.pathname+location.search);
+    el('platform-closing-email-link-panel').hidden=false;
+  }
+  el('platform-closing-email-link-open').onclick=async()=>{
+    const msg=el('platform-closing-email-link-status');
+    if(!platformMailLinkToken)return;
+    if(document.hidden||el('workspace').hidden){
+      msg.textContent='Önce güvenli kişisel hesabınızda oturum açın.';
+      return;
+    }
+    const button=el('platform-closing-email-link-open');
+    button.disabled=true;
+    msg.textContent='Mağaza bildirimi güvenli biçimde doğrulanıyor…';
+    try{
+      const result=await api('store-platform-closing-email-visit',{
+        method:'POST',
+        body:JSON.stringify({token:platformMailLinkToken})
+      });
+      if(result.viewed!==true||typeof result.reason!=='string'||
+         typeof result.deadline_started!=='boolean')
+        throw Error('Bildirimin kimliği doğrulanamadı');
+      msg.textContent='Mağaza kapatma kararının gerekçesi: '+
+        result.reason+
+        (result.deadline_started?
+         '. İtiraz süreci işlemektedir. Ayrıntıları kuruluş alanınızdan inceleyin.':
+         '. İtiraz saati henüz başlamadı.');
+      platformMailLinkToken='';
+      button.hidden=true;
+    }catch{
+      msg.textContent='Bağlantı doğrulanamadı. Güncel ve yetkili kuruluş alanınızdan kapatma bildirimini kontrol edin.';
+      button.disabled=false;
+    }
+  };
+
   let recoveryCodes=[];
   let notificationRequest=0,notificationOffset=0,notificationNext=null;
   const organizationActivityCodes=[
