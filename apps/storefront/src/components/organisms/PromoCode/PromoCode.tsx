@@ -54,8 +54,8 @@ export const PromoCode = ({ cart, defaultOpen = false }: { cart: HttpTypes.Store
     });
   };
 
-  const handleRemoveCode = (code: string) => {
-    if (isPending) return;
+  const handleRemoveCode = (code: string | undefined) => {
+    if (!code || isPending) return;
 
     startTransition(async () => {
       try {
@@ -135,7 +135,7 @@ export const PromoCode = ({ cart, defaultOpen = false }: { cart: HttpTypes.Store
                 <span>{promo.code}</span>
                 <button
                   onClick={() => handleRemoveCode(promo.code)}
-                  disabled={isPending}
+                  disabled={isPending || !promo.code}
                   className="text-primary transition-colors hover:text-red-500 disabled:opacity-50"
                 >
                   <BinIcon size={20} />
