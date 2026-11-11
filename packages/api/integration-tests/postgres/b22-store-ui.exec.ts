@@ -7629,7 +7629,7 @@ export default async function({container}:any){
       organizationId:organizations[0].id,customerId:nativeCustomer.id}),
       immutableCartBefore,
       "B adopting the assigned native name must not move A's historical Cart lines to B")
-    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED\\n")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED\n")
     await verifyTwoIndependentStaffNameRightRace({
       owner:browser,reviewer,reviewerPersonId:B.person,origin:host,ca:crt,
       rand,organizationName:sellerGamma.name,organizationId:sellerGamma.id,
