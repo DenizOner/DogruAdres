@@ -5950,13 +5950,22 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }
     if(row.state!=="notification_unverified"||Number(row.version)!==1)
       return {status:"conflict" as const}
+    // Existing accepted appeal replays are handled above. For a new first
+    // appeal, the canonical 10-day window is enforced by the PG16 clock,
+    // never by the browser. A pre-clock appeal remains allowed.
+    const clock=await db.execute("select clock_timestamp() as now_at")
+    if(clock.length!==1||
+       !Number.isFinite(new Date(clock[0].now_at).getTime()))
+      throw new IdentityAccessDenied()
+    if(row.deadline_started_at!==null &&
+       new Date(clock[0].now_at).getTime() >=
+         new Date(row.deadline_started_at).getTime()+10*86400000)
+      return {status:"conflict" as const}
     const history=await db.execute(`select id from da_audit_event
       where module='dogruadres-access' and resource='store-platform-closing'
         and target_id=? and new_values->>'request_id'=?
         and deleted_at is null limit 2`,[input.seller_id,input.request_id])
     if(history.length)throw new IdentityAccessDenied()
-    const clock=await db.execute("select clock_timestamp() as now_at")
-    if(clock.length!==1)throw new IdentityAccessDenied()
     const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:owner.actor.person_id,actor_type:owner.actor.actor_type,
       actor_id:owner.actor.actor_id,role_context:"owner",
