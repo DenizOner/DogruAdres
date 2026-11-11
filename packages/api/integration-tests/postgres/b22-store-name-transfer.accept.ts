@@ -4,6 +4,68 @@ import {randomBytes} from "node:crypto"
 import {B06Chrome} from "./b06-ui-browser"
 type Rows=(sql:string,params?:any[])=>Promise<any[]>
 type Store={application_id:string;seller_id:string;organization_id:string}
+/** Exact pre-existing Medusa Cart/Offer ownership snapshot for B22 name right
+ * assignment. Uses installed Mercur/Medusa native query graph, not a second
+ * Cart model. A source Seller must have a real persisted offer in this Cart.
+ * The fixture intentionally has NO historical Order: do not claim Order
+ * retention acceptance from an empty OrderGroup / order_cart snapshot.
+ */
+export async function snapshotB22TransferredStoreCart(input:{
+  q:Rows;query:any;cartId:string;sourceSellerId:string;
+  organizationId:string;customerId:string
+}):Promise<unknown>{
+  const {q,query,cartId,sourceSellerId,organizationId,customerId}=input
+  const [native]=await q(`select id,customer_id,completed_at
+    from cart where id=$1`,[cartId])
+  assert.equal(native?.id,cartId,"Pre-existing native Cart must exist")
+  assert.equal(native.customer_id,customerId)
+  assert.equal(native.completed_at,null,"Historical fixture remains uncompleted")
+  const {data:carts}=await query.graph({entity:"cart",fields:[
+    "id","customer.id","completed_at","items.id",
+    "items.offer.id","items.offer.seller_id"
+  ],filters:{id:cartId}})
+  assert.equal(carts.length,1)
+  assert.equal(carts[0].id,cartId)
+  assert.equal(carts[0].customer?.id,customerId)
+  const items=(carts[0].items??[]).map((line:any)=>({
+    line_id:String(line.id),
+    offer_id:String(line.offer?.id??""),
+    seller_id:String(line.offer?.seller_id??"")
+  })).sort((x:any,y:any)=>x.line_id.localeCompare(y.line_id))
+  assert.equal(items.length,2,"Existing two-Seller native Cart required")
+  assert.equal(new Set(items.map((x:any)=>x.line_id)).size,2)
+  assert.ok(items.some((x:any)=>x.seller_id===sourceSellerId),
+    "Source Store must have an actual native Cart item before assignment")
+  assert.ok(items.every((x:any)=>x.offer_id&&x.seller_id))
+  const attribution=await q(`select cart_id,organization_id,customer_id,
+    person_id,source_audit_event_id from da_buyer_cart_attribution
+    where cart_id=$1`,[cartId])
+  assert.equal(attribution.length,1)
+  assert.equal(attribution[0].organization_id,organizationId)
+  assert.equal(attribution[0].customer_id,customerId)
+  assert.ok(attribution[0].source_audit_event_id)
+  const groups=await q(`select id from order_group where cart_id=$1 order by id`,
+    [cartId])
+  const {data:orderLinks}=await query.graph({entity:"order_cart",
+    fields:["order_id"],filters:{cart_id:cartId}})
+  assert.equal(groups.length,0,"Fixture has no historical OrderGroup")
+  assert.equal(orderLinks.length,0,"Fixture has no historical native Order")
+  return {
+    cart:{id:native.id,customer_id:native.customer_id,
+      completed_at:native.completed_at},
+    items,
+    attribution:{
+      cart_id:attribution[0].cart_id,
+      organization_id:attribution[0].organization_id,
+      customer_id:attribution[0].customer_id,
+      person_id:attribution[0].person_id,
+      source_audit_event_id:attribution[0].source_audit_event_id
+    },
+    order_groups:groups.length,
+    order_links:orderLinks.length
+  }
+}
+
 export async function verifyB22ExceptionalNameRight(input:{
   owner:B06Chrome;reviewer:B06Chrome;
   source:Store;target:Store;q:Rows

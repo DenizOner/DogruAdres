@@ -23,7 +23,7 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
-import {verifyB22TransferredRecovery,verifyAssignedRecipientUse} from "./b22-store-name-transfer.accept"
+import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,snapshotB22TransferredStoreCart} from "./b22-store-name-transfer.accept"
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
@@ -7457,6 +7457,8 @@ export default async function({container}:any){
       organizationName:organizations[0].name,sellerId:secondOwnerStoreId,
       rand,container,q
     })
+    const immutableCartBefore=await snapshotB22TransferredStoreCart({q,query,cartId:customerCart.id,sourceSellerId:secondOwnerStoreId,
+      organizationId:organizations[0].id,customerId:nativeCustomer.id})
     const transferAssignment=await verifyB22TransferredRecovery({
       owner:browser,reviewer,q,
       source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
@@ -7476,6 +7478,10 @@ export default async function({container}:any){
       }})
     })
 
+    assert.deepEqual(await snapshotB22TransferredStoreCart({q,query,cartId:customerCart.id,sourceSellerId:secondOwnerStoreId,
+      organizationId:organizations[0].id,customerId:nativeCustomer.id}),
+      immutableCartBefore,
+      "A→B name right assignment and same-ID A recovery must not reparent native Cart lines or Buyer attribution")
     await verifyConcurrentCrossOrganizationStoreNames(
       browser,organizations[0].id,sellerGamma.id,rand,q)
 
@@ -7619,6 +7625,11 @@ export default async function({container}:any){
       targetOrganizationName:sellerGamma.name,
       competitorOrganizationName:organizations[0].name,
       ...transferAssignment,sourceVacated:true})
+    assert.deepEqual(await snapshotB22TransferredStoreCart({q,query,cartId:customerCart.id,sourceSellerId:secondOwnerStoreId,
+      organizationId:organizations[0].id,customerId:nativeCustomer.id}),
+      immutableCartBefore,
+      "B adopting the assigned native name must not move A's historical Cart lines to B")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED\\n")
     await verifyTwoIndependentStaffNameRightRace({
       owner:browser,reviewer,reviewerPersonId:B.person,origin:host,ca:crt,
       rand,organizationName:sellerGamma.name,organizationId:sellerGamma.id,
