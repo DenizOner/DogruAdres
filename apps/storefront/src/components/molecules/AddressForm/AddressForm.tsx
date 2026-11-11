@@ -80,7 +80,7 @@ const Form: FC<Props> = ({ regions, handleClose }) => {
       : await addCustomerAddress(formData);
 
     if (!res.success) {
-      setError(res.error);
+      setError(res.error ?? 'Unable to save address');
       return;
     }
 
