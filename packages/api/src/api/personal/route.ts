@@ -575,7 +575,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       history.replaceState(null,'',location.pathname+location.search);
     el('platform-closing-email-link-panel').hidden=false;
   }
-  el('platform-closing-email-link-open').onclick=async()=>{
+  if(typeof el==='function' && el('platform-closing-email-link-open'))
+    el('platform-closing-email-link-open').onclick=async()=>{
     const msg=el('platform-closing-email-link-status');
     if(!platformMailLinkToken)return;
     if(document.hidden||el('workspace').hidden){
