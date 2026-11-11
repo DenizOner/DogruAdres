@@ -111,6 +111,12 @@ const manager={
     db.begin(async (tx:Pg)=>work({execute:(s:string,p:unknown[]=[])=>bind(tx,s,p)}))
 }
 const container:any={resolve:(name:string)=>{
+  if(name===ContainerRegistrationKeys.PG_CONNECTION)return {
+    transaction:<T>(work:(t:{raw:(s:string,p:unknown[])=>Promise<{rows:any[]}>})=>Promise<T>)=>
+      db.begin(async (tx:Pg)=>work({
+        raw:async (s:string,p:unknown[]=[])=>({rows:await bind(tx,s,p)})
+      }))
+  }
   if(name===ContainerRegistrationKeys.QUERY)return {
     graph:async()=>({data:[{id:syntheticActor,email:syntheticEmail}]})
   }
