@@ -522,6 +522,22 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(deliveryStatus.body.deadline_basis,"owner_delivery")
   assert.equal(JSON.stringify(deliveryStatus.body).includes(emailToken),false)
   assert.equal(JSON.stringify(deliveryStatus.body).includes(reason),false)
+  // A delayed fourth email-slot result must not add an admin alert or
+  // restart an already-proved Owner-delivery clock.
+  await q(`update da_store_platform_closing_email
+    set attempts=4,last_result='delivered',claim_id=null,lease_until=null,
+      next_attempt_at=clock_timestamp()-interval '1 hour'
+    where seller_id=$1 and person_id=$2 and delivered_at is not null`,
+    [sellerId,ownerPersonId])
+  assert.equal(await foundation.settlePlatformClosingAdminFallback(),0,
+    "Exhaustion must not override a previously started Owner-delivery clock")
+  const lateAdminNotices=await q(`select count(*)::int as n
+    from da_store_platform_closing_admin_notice where seller_id=$1`,[sellerId])
+  assert.equal(Number(lateAdminNotices[0].n),0,
+    "No bogus admin failure notification after verified Owner delivery")
+  assert.equal((await q(`select deadline_started_at from da_store_platform_closing
+    where seller_id=$1`,[sellerId]))[0].deadline_started_at.toISOString(),originalStart,
+    "Delayed email worker must never reset the canonical appeal clock")
   assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false)
   assert.equal(await foundation.authorizeBuyerCheckout(checkoutCartId,customerId,[sellerId]),false)
   assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
