@@ -30,6 +30,54 @@ export class Migration20261111170000 extends Migration {
         check (last_result in ('pending','inflight','accepted',
           'failed','unverified_identity','uncertain','delivered')),
       message_id text,
+      email_link_sha256 text check
+        (email_link_sha256 ~ '^[a-f0-9]{64}
+      lease_until timestamptz,
+      delivered_at timestamptz,
+      delivery_source text
+        check (delivery_source in ('verified_provider','authenticated_owner')),
+      email_link_visited_at timestamptz,
+      account_viewed_at timestamptz,
+      created_at timestamptz not null default clock_timestamp(),
+      updated_at timestamptz not null default clock_timestamp(),
+      primary key (seller_id,person_id),
+      constraint da_store_platform_closing_email_delivery_proof check (
+        (delivered_at is null and delivery_source is null)
+        or (delivered_at is not null and delivery_source is not null)
+      ),
+      constraint da_store_platform_closing_email_lease check (
+        (claim_id is null and lease_until is null)
+        or (claim_id is not null and lease_until is not null)
+      )
+    );`)
+    this.addSql(`create index da_store_platform_closing_email_due
+      on da_store_platform_closing_email (next_attempt_at)
+      where attempts < 4 and delivered_at is null;`)
+    this.addSql(`create table da_store_platform_closing_admin_notice (
+      id text primary key check (id ~ '^danal_[a-f0-9]{32}
+  }
+
+  override async down(): Promise<void> {
+    throw new Error("Closing delivery, deadline and notification evidence require preservation review")
+  }
+}
+),
+      seller_id text not null references da_store_platform_closing(seller_id),
+      person_id text not null references da_person(id),
+      created_at timestamptz not null default clock_timestamp(),
+      read_at timestamptz,
+      unique (seller_id,person_id)
+    );`)
+    this.addSql(`create index da_store_platform_closing_admin_notice_person
+      on da_store_platform_closing_admin_notice (person_id,created_at desc);`)
+  }
+
+  override async down(): Promise<void> {
+    throw new Error("Closing delivery, deadline and notification evidence require preservation review")
+  }
+}
+),
+      email_link_issued_at timestamptz,
       claim_id uuid,
       lease_until timestamptz,
       delivered_at timestamptz,
