@@ -204,6 +204,31 @@ async function main(){
     await setup()
     const a="sel_b22_mail_pg_a"
     await seed(a)
+    // The isolated fixture must satisfy the exact canonical source audit
+    // predicates before we interpret any scheduler denial as a product defect.
+    const sourceProof=await q("select c.state,c.version,c.request_id,"+
+      "exists(select 1 from da_audit_event e join da_audit_outbox x "+
+      "on x.source_audit_event_id=e.id and x.source_module='dogruadres-access' "+
+      "and x.deleted_at is null where e.id=c.source_audit_event_id "+
+      "and e.deleted_at is null and e.module='dogruadres-access' "+
+      "and e.role_context='platform_staff' and e.resource='store-platform-closing' "+
+      "and e.action='organization.store_platform_closing_started' "+
+      "and e.organization_id=c.organization_id and e.target_id=c.seller_id "+
+      "and e.new_values->>'request_id'=c.request_id "+
+      "and e.new_values->>'state'='notification_unverified' "+
+      "and e.new_values->>'reason_sha256'="+
+      "encode(sha256(convert_to(c.reason,'UTF8')),'hex')) as start_proof,"+
+      "(c.appeal_audit_event_id is null) as appeal_proof,"+
+      "(c.deadline_started_at is null) as deadline_proof "+
+      "from da_store_platform_closing c where c.seller_id=$1",[a])
+    assert.equal(sourceProof.length,1,"One synthetic closure fixture")
+    assert.equal(sourceProof[0].start_proof,true,
+      "Real canonical start audit and outbox must validate before the worker")
+    assert.equal(sourceProof[0].appeal_proof,true)
+    assert.equal(sourceProof[0].deadline_proof,true)
+    assert.match(sourceProof[0].request_id,/^dascp_[a-f0-9]{32}$/)
+    assert.equal(sourceProof[0].state,"notification_unverified")
+    assert.equal(Number(sourceProof[0].version),1)
     // Two real independent transactions must claim only one first slot.
     await Promise.all([runPlatformClosingEmailTick(container),runPlatformClosingEmailTick(container)])
     let status=(await q("select attempts,last_result,delivered_at,lease_until,"+
