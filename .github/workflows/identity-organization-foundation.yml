@@ -232,6 +232,7 @@ jobs:
           echo "Storefront #159 TS diagnostics: $(grep -cE 'error TS[0-9]+' "$RUNNER_TEMP/storefront-159-types.log" || true)"
           awk '/error TS[0-9]+/ && ++n<=180 { print }' "$RUNNER_TEMP/storefront-159-types.log"
           echo "Storefront #159 lint exit=$lint_status"
+          awk '/  error  / {e++} /  warning  / {w++} END {printf "Storefront #159 complete lint totals: errors=%d warnings=%d\\n", e, w}' "$RUNNER_TEMP/storefront-159-lint.log"
           sed -n '1,350p' "$RUNNER_TEMP/storefront-159-lint.log"
           echo "Storefront #159 production build exit=$build_status"
           sed -n '1,110p' "$RUNNER_TEMP/storefront-159-build.log"
