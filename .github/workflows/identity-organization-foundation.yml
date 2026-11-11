@@ -460,6 +460,10 @@ jobs:
           bun integration-tests/postgres/mfa-persistence.pg16.test.ts
           bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
           bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
+          # Focused B22 delivery-clock PG16 acceptance is independent of the
+          # later, still-MANDATORY ClamAV/Chrome gates. An upstream APT mirror
+          # outage must not erase the evidence for this isolated user risk.
+          bun integration-tests/postgres/b22-platform-closing-email.pg16.test.ts
       - name: Existing Chrome task CA support for B22 scoped browser acceptance
         if: github.event_name != 'workflow_dispatch'
         run: |
