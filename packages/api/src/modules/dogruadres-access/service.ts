@@ -5768,7 +5768,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const closure=await this.platformClosingRow_(db,sellerId)
     if(!closure||closure.organization_id!==organizationId)return null
     const rows=await db.execute(`select d.person_id,d.attempts,d.last_result,
-      d.last_attempt_at,d.next_attempt_at,d.delivered_at,
+      d.message_id,d.last_attempt_at,d.next_attempt_at,d.delivered_at,
       d.delivery_source,d.email_link_visited_at,d.account_viewed_at
       from da_store_platform_closing_email d
       where d.seller_id=? order by d.person_id`,[sellerId])
@@ -5778,6 +5778,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       const row=byPerson.get(personId)
       return {
         label:`Owner ${index+1}`,attempts:row?Number(row.attempts):0,
+        // A proven SMTP 250 is independent from later link delivery.
+        // The message ID itself remains private to the server.
+        smtp_accepted:typeof row?.message_id==="string"&&row.message_id.length>0,
         status:row?.delivered_at?'delivered':row?.last_result??'pending',
         last_attempt_at:row?.last_attempt_at?
           new Date(row.last_attempt_at).toISOString():null,
