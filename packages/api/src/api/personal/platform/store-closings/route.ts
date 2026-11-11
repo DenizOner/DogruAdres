@@ -54,9 +54,13 @@ export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
       return res.status(409).json({message:"Closing has already been initiated"})
     if(!["notification_unverified","appealed"].includes(result.status))
       return res.status(503).json({message:"Outcome uncertain; reread before retry"})
+    const progress=await access(req).personalPlatformStoreClosingEmailProgress(
+      sessionToken(req),parsed.data.organization_id,parsed.data.seller_id)
+    if(!progress)return res.status(503).json({message:"Outcome uncertain; reread"})
     return res.status(200).json({...result,
       organization_id:parsed.data.organization_id,seller_id:parsed.data.seller_id,
-      mandatory_email_verified:false,deadline_started:false})
+      mandatory_email_verified:progress.deadline_basis==="owner_delivery",
+      deadline_started:!!progress.deadline_started_at})
   }catch(error){
     return res.status(error instanceof IdentityAccessDenied?403:503).json({
       message:error instanceof IdentityAccessDenied?"Access denied":
