@@ -206,6 +206,44 @@ jobs:
       - name: Install locked dependencies
         id: install
         run: bun install --frozen-lockfile
+      # #159: reuse the existing required Foundation job for targeted
+      # Storefront diagnostics on this authorized repair branch only.
+      # Never skip or suppress TypeScript, ESLint or Next production failures.
+      - name: Storefront #159 type, lint and production build diagnostics
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'fix/storefront-build-eslint-types-159' && steps.install.outcome == 'success' }}
+        timeout-minutes: 8
+        working-directory: apps/storefront
+        shell: bash
+        run: |
+          set +e
+          node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json > "$RUNNER_TEMP/storefront-159-types.log" 2>&1
+          type_status=$?
+          bun run lint > "$RUNNER_TEMP/storefront-159-lint.log" 2>&1
+          lint_status=$?
+          bun run build > "$RUNNER_TEMP/storefront-159-build.log" 2>&1
+          build_status=$?
+          set -e
+          echo "Storefront #159 type exit=$type_status"
+          sed -n '1,110p' "$RUNNER_TEMP/storefront-159-types.log"
+          echo "Storefront #159 lint exit=$lint_status"
+          sed -n '1,110p' "$RUNNER_TEMP/storefront-159-lint.log"
+          echo "Storefront #159 production build exit=$build_status"
+          sed -n '1,110p' "$RUNNER_TEMP/storefront-159-build.log"
+          # Negative probe: a broken TypeScript export must be rejected.
+          probe="src/__storefront_159_bad_syntax_probe__.ts"
+          trap 'rm -f "$probe"' EXIT
+          printf 'export const = ;\n' > "$probe"
+          if node ../../node_modules/eslint/bin/eslint.js "$probe" > "$RUNNER_TEMP/storefront-159-negative.log" 2>&1; then
+            echo "FAIL: ESLint accepted invalid TypeScript syntax"
+            exit 1
+          fi
+          grep -Eiq 'parsing error|unexpected token|unexpected character' "$RUNNER_TEMP/storefront-159-negative.log" || {
+            echo "FAIL: ESLint did not report a syntax diagnostic for the negative probe"
+            sed -n '1,30p' "$RUNNER_TEMP/storefront-159-negative.log"
+            exit 1
+          }
+          echo "PASS: ESLint rejects deliberately invalid TypeScript syntax"
+          test "$type_status" -eq 0 && test "$lint_status" -eq 0 && test "$build_status" -eq 0
       - name: Native SMTP HTTPS privacy negative regressions
         id: asvs_smtp_http
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
