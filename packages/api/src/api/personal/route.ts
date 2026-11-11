@@ -237,13 +237,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
 
   <section id="platform-closing-panel" hidden style="grid-column:1/-1" aria-labelledby="platform-closing-title">
     <h2 id="platform-closing-title">Platform mağaza kapatma süreci</h2>
-    <p>Gerekçeli platform kararı yeni satışları derhal durdurur. Korunan Owner'lar gerekçeyi okuyabilir ve itiraz edebilir. Zorunlu e-posta teslimi doğrulanmadığından 10/30 günlük sayaç başlamaz, kalıcı kapatma veya ad/URL devri yapılmaz.</p>
+    <p>Gerekçeli platform kararı yeni satışları derhal durdurur. Korunan Owner'lar gerekçeyi okuyabilir ve itiraz edebilir. E-posta bütün korunan Owner'lara gönderilir. En az bir doğrulanmış teslim veya dört denemeden sonra yöneticilere kalıcı uyarı ile 10+20 günlük itiraz süresi otomatik başlar. Owner onayı beklenmez. Kalıcı kapanış ve isim hakkı devri ayrı, henüz etkin değildir.</p>
     <p id="platform-closing-status" role="status" aria-live="polite"></p>
     <p id="platform-closing-mail-status" role="status" aria-live="polite"></p>
     <form id="platform-closing-form">
       <label>Mağaza<select name="seller_id" required></select></label>
       <label>Gerekçe<textarea name="reason" minlength="10" maxlength="500" required rows="3"></textarea></label>
-      <label><input name="confirmed" type="checkbox" required> Satışların duracağını ve kapanışın güvenilir zorunlu bildirim olmadan kesinleşmeyeceğini anladım.</label>
+      <label><input name="confirmed" type="checkbox" required> Satışların hemen duracağını, e-posta denemeleri ve itiraz sayacının ayrı işleyeceğini anladım.</label>
       <button type="submit">Gerekçeli kapatma sürecini başlat</button>
     </form>
     <button type="button" id="platform-closing-refresh">Mağazaları yenile</button>
@@ -4605,6 +4605,51 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       form.elements.namedItem('seller_id'):null;
     if(typeof choice?.replaceChildren==='function')choice.replaceChildren();
   }
+  const closingMailLabel={
+    pending:'Henüz gönderilmedi',inflight:'Gönderim sürüyor',
+    accepted:'Gönderildi (SMTP kabulü, teslim belirsiz)',
+    failed:'Gönderim başarısız',
+    unverified_identity:'Doğrulanmış e-posta kimliği yok',
+    uncertain:'Gönderim sonucu belirsiz',
+    delivered:'Alıcı teslimi doğrulandı'
+  };
+  async function refreshPlatformClosingMail(chosen,epoch=viewEpoch){
+    const target=el('platform-closing-mail-status');
+    if(!chosen){target.textContent='';return}
+    target.textContent='Owner e-posta bildirimleri kontrol ediliyor…';
+    try{
+      const data=await api('platform/store-closing-email-readiness?'+
+        new URLSearchParams({organization_id:chosen.organization_id,
+          seller_id:chosen.seller_id}).toString());
+      if(epoch!==viewEpoch||document.hidden||
+         chosen.seller_id!==el('platform-closing-form').elements.namedItem('seller_id').value)return;
+      if(!Array.isArray(data.email_statuses)||
+         !Number.isSafeInteger(data.protected_owner_count)||
+         data.email_statuses.length!==data.protected_owner_count||
+         typeof data.deadline_started!=='boolean'||
+         data.email_statuses.some(x=>!/^Owner [0-9]+$/.test(x?.label)||
+           !Number.isSafeInteger(x?.attempts)||x.attempts<0||x.attempts>4||
+           !Object.hasOwn(closingMailLabel,x?.status)))
+        throw Error('Bildirim kanıtı doğrulanamadı');
+      const rows=data.email_statuses.map(row=>row.label+': '+
+        closingMailLabel[row.status]+', deneme '+row.attempts+'/4');
+      target.textContent='Korunan Owner '+data.protected_owner_count+
+        ', doğrulanmış e-posta kimliği '+data.verified_email_identity_count+
+        '. '+rows.join('; ')+'. '+
+        (data.deadline_started?
+          'İtiraz saati otomatik başladı ('+
+          (data.deadline_basis==='admin_alert'?'üç tekrar sonrası yönetici uyarısı':
+            'alıcı teslim kanıtı')+').':
+          '10+20 günlük itiraz saati henüz başlamadı.')+
+        (data.admin_alert_at?' Yöneticiye teslimat sorunu bildirildi.':'')+
+        ' Gönderildi, iletildi ve okundu birbirinden ayrı kanıtlardır.';
+    }catch(e){
+      if(epoch===viewEpoch)target.textContent=
+        e.httpStatus===403?'Bu mağaza için henüz kapatma kaydı yok.':
+        'E-posta durumları doğrulanamadı; sonuç iddia edilmiyor.';
+    }
+  }
+
   async function refreshPlatformClosings(){
     if(document.hidden||el('workspace').hidden)return;
     const seq=++platformClosingRead,epoch=viewEpoch;
@@ -4631,6 +4676,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       el('platform-closing-more').hidden=!data.has_more;
       panel.hidden=false;
+      if(data.candidates.length)void refreshPlatformClosingMail(data.candidates[0],epoch);
       msg.textContent=data.candidates.length?
         'Gerekçe ile yeni satışları derhal durdurabilirsiniz. Kesin kapanış etkin değildir.':
         'Bu sayfada işleme uygun mağaza bulunamadı.';
@@ -4642,6 +4688,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       msg.textContent='Mağaza listesi doğrulanamadı. Yeni karar oluşturulamaz.';
     }
   }
+  el('platform-closing-form').elements.namedItem('seller_id').onchange=()=>{
+    const row=platformClosingRows.find(x=>x.seller_id===
+      el('platform-closing-form').elements.namedItem('seller_id').value);
+    void refreshPlatformClosingMail(row);
+  };
   el('platform-closing-refresh').onclick=()=>{
     platformClosingUncertain=false;platformClosingPage=0;void refreshPlatformClosings()
   };
@@ -4674,29 +4725,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          result.mandatory_email_verified!==false||result.deadline_started!==false){
         const e=Error('Kayıt sonucu doğrulanamadı');e.uncertain=true;throw e;
       }
-      msg.textContent='Yeni satışlar durdu. Owner kişisel bildirimleri kaydedildi; e-posta kanıtı olmadan sayaç başlamaz.';
-      const mailStatus=el('platform-closing-mail-status');
-      mailStatus.textContent='Zorunlu Owner e-posta ön koşulları kontrol ediliyor…';
-      try{
-        const check=await api('platform/store-closing-email-readiness?'+
-          new URLSearchParams({organization_id:chosen.organization_id,
-            seller_id:chosen.seller_id}).toString());
-        if(epoch!==viewEpoch||document.hidden)return;
-        if(check.status!=='not_ready'||check.deadline_started!==false||
-           check.mandatory_email_verified!==false||
-           !Number.isSafeInteger(check.protected_owner_count)||
-           !Number.isSafeInteger(check.private_receipt_count)||
-           !Number.isSafeInteger(check.verified_email_identity_count)||
-           check.mailbox_delivery_verified_count!==0)
-          throw Error('E-posta kanıtı doğrulanamadı');
-        mailStatus.textContent='Korunan Owner: '+check.protected_owner_count+
-          ', kişisel bildirim: '+check.private_receipt_count+
-          ', e-posta kimliği doğrulanmış: '+check.verified_email_identity_count+
-          '. E-posta gönderim ve alıcıya teslim kanıtı yok; 10/30 günlük sayaç başlamadı.';
-      }catch{
-        if(epoch===viewEpoch)
-          mailStatus.textContent='E-posta ön koşulları doğrulanamadı; süre ve kalıcı kapatma başlamaz.';
-      }
+      msg.textContent='Yeni satışlar derhal durdu. Owner bildirimleri kaydedildi. E-posta denemeleri ve otomatik itiraz saati ayrı izlenir.';
+      await refreshPlatformClosingMail(chosen,epoch);
       form.reset();void refreshPlatformClosings();
     }catch(e){
       if(epoch!==viewEpoch)return;
@@ -4739,17 +4769,25 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          org!==currentOrg||seller!==choice.value||document.hidden)return;
       if(data.organization_id!==org||data.seller_id!==seller||
          !['none','notification_unverified','appealed'].includes(data.state)||
-         !Number.isSafeInteger(data.version)||data.deadline_started!==false||
+         !Number.isSafeInteger(data.version)||
+         typeof data.deadline_started!=='boolean'||
          data.permanent_finalization_enabled!==false||
-         data.mandatory_email_verified!==false)throw Error('Geçersiz karar');
+         typeof data.mandatory_email_verified!=='boolean')
+         throw Error('Geçersiz karar');
       platformOwnerState=data;
       panel.hidden=data.state==='none';
       if(data.state==='none')return;
       el('store-platform-appeal-reason').textContent=
         'Platform karar gerekçesi: '+data.reason;
-      msg.textContent=data.state==='appealed'?
-        'İtiraz kaydedildi; kapatma incelemesi bekliyor. Satışlar kapalı.':
-        'Yeni satışlar durduruldu. İlk itirazınızı gönderebilirsiniz.';
+      msg.textContent=(data.state==='appealed'?
+        'İtiraz kaydedildi; sonuç bekleniyor. Satışlar kapalı.':
+        'Satışlar yönetici kararıyla derhal durduruldu. İtiraz edebilirsiniz.')+
+        (data.deadline_started?
+          ' 10+20 günlük itiraz saati başladı; ilk aşama sonu: '+
+          new Date(data.first_appeal_until).toLocaleString('tr-TR')+
+          ', ikinci aşama sonu: '+
+          new Date(data.final_review_until).toLocaleString('tr-TR')+'.':
+          ' Bildirim ve itiraz saati henüz doğrulanıyor.');
       el('store-platform-appeal-form').querySelector('button').disabled=
         data.state!=='notification_unverified'||platformOwnerUncertain;
     }catch(e){
