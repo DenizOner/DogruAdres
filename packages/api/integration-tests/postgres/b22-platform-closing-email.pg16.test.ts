@@ -283,6 +283,6 @@ async function main(){
   }
 }
 main().catch(e=>{
-  process.stderr.write("B22 email PostgreSQL acceptance FAILED: "+String(e)+"\n")
+  process.stderr.write("B22 email PostgreSQL acceptance FAILED: "+(e instanceof Error?e.stack:String(e))+"\n")
   process.exitCode=1
 })
