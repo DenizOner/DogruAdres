@@ -5612,7 +5612,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             and m.revoked_at is null and m.deleted_at is null
           join da_person p on p.id=m.person_id and p.deleted_at is null
             and p.disabled_at is null
-          where d.seller_id=c.seller_id and (
+          where d.seller_id=c.seller_id
+            -- Only recipients of the original closure may hold its 72h
+            -- fallback clock. Later Owners keep their own separate notice.
+            and d.late_notice_id is null and (
             d.attempts<4 or d.lease_until is not null
             or d.last_result='inflight' or d.delivered_at is not null)
         )
@@ -5623,8 +5626,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           where m.organization_id=c.organization_id and m.status='active'
             and m.role='owner' and m.protected_owner=true
             and m.revoked_at is null and m.deleted_at is null
+            and exists(select 1 from da_notification_receipt n
+              where n.audit_event_id=c.source_audit_event_id
+                and n.person_id=m.person_id)
             and not exists(select 1 from da_store_platform_closing_email d
-              where d.seller_id=c.seller_id and d.person_id=m.person_id)
+              where d.seller_id=c.seller_id and d.person_id=m.person_id
+                and d.late_notice_id is null)
         )
       order by c.started_at,c.seller_id
       for update of c skip locked limit 5`)
