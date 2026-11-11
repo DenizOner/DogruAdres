@@ -473,7 +473,6 @@ async function main(){
       else process.env.NODE_ENV=previousNodeEnv
       if(previousOrigin===undefined)delete process.env.DOGRUADRES_PUBLIC_ORIGIN
       else process.env.DOGRUADRES_PUBLIC_ORIGIN=previousOrigin
-      mock.closeAllConnections()
       if(mock.listening)await new Promise<void>(resolve=>mock.close(()=>resolve()))
     }
 
