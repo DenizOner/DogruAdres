@@ -24,6 +24,7 @@ import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerW
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {verifyB22TransferredRecovery,verifyAssignedRecipientUse} from "./b22-store-name-transfer.accept"
+import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {assertWcag22AxeInChrome} from "./wcag22-axe-chrome"
@@ -7618,6 +7619,16 @@ export default async function({container}:any){
       targetOrganizationName:sellerGamma.name,
       competitorOrganizationName:organizations[0].name,
       ...transferAssignment,sourceVacated:true})
+    await verifyTwoIndependentStaffNameRightRace({
+      owner:browser,reviewer,reviewerPersonId:B.person,origin:host,ca:crt,
+      rand,organizationName:sellerGamma.name,organizationId:sellerGamma.id,
+      target:{application_id:applicationId,seller_id:ownerStoreId,
+        organization_id:organizations[0].id},
+      users,auth,foundation,browsers,q,
+      suspend:async seller_id=>{await suspendSellerWorkflow(container).run({
+        input:{seller_id,reason:"B22 isolated simultaneous Staff name-right decision"}
+      })}
+    })
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
