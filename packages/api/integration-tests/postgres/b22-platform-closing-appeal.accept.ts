@@ -277,7 +277,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
     "The real current protected Owner must read the closure security receipt")
   assert.match(closureNotice.description,/platform kararıyla yeni satışlar durduruldu/)
   assert.match(closureNotice.description,/güvenli şirket alanınızda/)
-  assert.match(closureNotice.description,/süre henüz başlamadı/)
+  assert.match(closureNotice.description,/İtiraz saatini ve gerekçeyi/)
   assert.equal(closureNotice.description.includes("Mevcut faal mağazalar etkilenmez"),false)
   assert.equal(JSON.stringify(notices.body).includes(reason),false,
     "Private closure explanation never enters a generic notification payload")
