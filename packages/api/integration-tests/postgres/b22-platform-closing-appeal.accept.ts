@@ -3,7 +3,7 @@
  * real scheduled-job evidence; finalizer is always disabled.
  */
 import assert from "node:assert/strict"
-import {randomBytes} from "node:crypto"
+import {createHash,randomBytes} from "node:crypto"
 import type {B06Chrome} from "./b06-ui-browser"
 
 type Db=(sql:string,params?:unknown[])=>Promise<any[]>
@@ -446,6 +446,63 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
   assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
     [sellerId]))[0],before)
+  // Isolated synthetic sent-link record: this proves the real Owner HTTPS
+  // callback, NOT SMTP transport or mailbox delivery. Scheduled job and
+  // four-send retry require their own actual execution evidence.
+  const emailToken=randomBytes(32).toString("hex")
+  const tokenDigest=createHash("sha256").update(emailToken).digest("hex")
+  const visitPath="/personal/store-platform-closing-email-visit"
+  const queue=await q(`select person_id,attempts from da_store_platform_closing_email
+    where seller_id=$1 and person_id=$2`,[sellerId,ownerPersonId])
+  assert.equal(queue.length,1,"Closing must create exactly one Owner mail queue row")
+  await q(`insert into da_store_platform_closing_email_link
+    (seller_id,person_id,attempt,token_sha256) values ($1,$2,4,$3)`,
+    [sellerId,ownerPersonId,tokenDigest])
+  assert.equal((await read(browser,visitPath)).status,401,
+    "GET scanner cannot activate or disclose the email link")
+  assert.equal((await write(staff,visitPath,{token:emailToken})).status,403,
+    "Another protected Owner must not use the first Owner's link")
+  assert.equal((await write(browser,visitPath,{token:emailToken},true)).status,403,
+    "Forged CSRF cannot confirm notification")
+  assert.equal((await write(browser,visitPath,{token:randomBytes(32).toString("hex")})).status,403,
+    "Unrecognized random link must reveal no closure")
+  const proof=await write(browser,visitPath,{token:emailToken})
+  assert.equal(proof.status,200)
+  assert.equal(proof.body?.viewed,true)
+  assert.equal(proof.body?.reason,reason)
+  assert.equal(proof.body?.deadline_started,true)
+  const clockRows=await q(`select deadline_started_at,deadline_basis,
+    admin_alert_at from da_store_platform_closing where seller_id=$1`,[sellerId])
+  assert.equal(clockRows.length,1)
+  assert.equal(clockRows[0].deadline_basis,"owner_delivery")
+  assert.equal(clockRows[0].admin_alert_at,null)
+  assert.ok(clockRows[0].deadline_started_at)
+  const originalStart=new Date(clockRows[0].deadline_started_at).toISOString()
+  const secondVisit=await write(browser,visitPath,{token:emailToken})
+  assert.equal(secondVisit.status,200,"Same authorized Owner may reread notice")
+  assert.equal((await q(`select deadline_started_at from da_store_platform_closing
+    where seller_id=$1`,[sellerId]))[0].deadline_started_at.toISOString(),originalStart,
+    "Revisiting must not restart 10+20 appeal time")
+  const during=await read(browser,readPath)
+  assert.equal(during.status,200)
+  assert.equal(during.body.deadline_started,true)
+  assert.equal(during.body.deadline_basis,"owner_delivery")
+  assert.equal(new Date(during.body.first_appeal_until).getTime()-
+    new Date(during.body.deadline_started_at).getTime(),10*86400000)
+  assert.equal(new Date(during.body.final_review_until).getTime()-
+    new Date(during.body.deadline_started_at).getTime(),30*86400000)
+  assert.equal(during.body.permanent_finalization_enabled,false)
+  const deliveryStatus=await read(staff,mailPath)
+  assert.equal(deliveryStatus.status,200)
+  assert.equal(deliveryStatus.body.mailbox_delivery_verified_count,1)
+  assert.equal(deliveryStatus.body.deadline_started,true)
+  assert.equal(deliveryStatus.body.deadline_basis,"owner_delivery")
+  assert.equal(JSON.stringify(deliveryStatus.body).includes(emailToken),false)
+  assert.equal(JSON.stringify(deliveryStatus.body).includes(reason),false)
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false)
+  assert.equal(await foundation.authorizeBuyerCheckout(checkoutCartId,customerId,[sellerId]),false)
+  assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: synthetic hashed email link strong Owner POST, foreign/forged CSRF/scanner GET denied, 10+20 server clock starts once, no finalizer or sales reopening\\n")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/mail delivery proven at this checkpoint and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no delivery/timer at this checkpoint, foreign denied\n")
   return secondOwnerMembership.id
 }
