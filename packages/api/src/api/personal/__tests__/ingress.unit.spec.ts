@@ -222,7 +222,9 @@ describe("personal ingress (unit contract only)",()=>{
     for(const [target,method] of [
       [path,"POST"],[path,"PUT"],[path,"DELETE"],
       [path,"PATCH"],[path,"OPTIONS"],[path+"/id","GET"],
-      ["/vendor/notifications","GET"],[path+"/","GET"],
+      ["/vendor/notifications","GET"],
+      // Native ingress intentionally normalizes trailing slashes. The public
+      // frontdoor independently rejects path+"/" (covered by its own test).
     ]){
       const blocked=await probe(target,method,"Bearer forged-native")
       expect(blocked.next).not.toHaveBeenCalled()
