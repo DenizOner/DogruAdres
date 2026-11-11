@@ -29,6 +29,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
     buyerOrganizationId,checkoutCartId,customerId,query}=input
   const path="/personal/platform/store-closings"
   const privatePath="/personal/store-platform-closing"
+  const mailPath="/personal/platform/store-closing-email-readiness?"+
+    new URLSearchParams({organization_id:ownerOrgId,seller_id:sellerId}).toString()
   const readPath=privatePath+"?"+new URLSearchParams({
     organization_id:ownerOrgId,seller_id:sellerId}).toString()
   const before=(await q("select id,status,name,handle from seller where id=$1",[sellerId]))[0]
@@ -69,6 +71,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const orderBefore=Number((await q('select count(*)::int n from "order"'))[0].n)
   // Having store.approve or a native member does NOT authorize platform closure.
   assert.equal((await read(staff,path)).status,403)
+  assert.equal((await read(staff,mailPath)).status,403,
+    "Foreign Staff cannot enumerate protected Owner email readiness")
   const requestId="dascp_"+randomBytes(16).toString("hex")
   const reason="B22 sentetik mağaza için gerekçeli platform kapatma denetimi"
   assert.equal((await write(browser,path,{
@@ -90,6 +94,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
     if(list.body.has_more!==true)break
   }
   assert.equal(found,true,"Existing approved source Store must remain accessible in Staff pagination")
+  assert.equal((await read(staff,mailPath)).status,403,
+    "Staff cannot inspect email readiness before the verified closure exists")
   const count=async()=>Number((await q(`select count(*)::int n from da_audit_event
     where resource='store-platform-closing' and target_id=$1`,[sellerId]))[0].n)
   const auditBefore=await count()
@@ -103,6 +109,21 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(created.body?.status,"notification_unverified")
   assert.equal(created.body?.deadline_started,false)
   assert.equal(created.body?.mandatory_email_verified,false)
+  const mailReadiness=await read(staff,mailPath)
+  assert.equal(mailReadiness.status,200)
+  assert.equal(mailReadiness.body?.status,"not_ready")
+  assert.equal(mailReadiness.body?.protected_owner_count,1)
+  assert.equal(mailReadiness.body?.private_receipt_count,1)
+  assert.equal(mailReadiness.body?.verified_email_identity_count,0,
+    "Native email verification is separate from primary password/MFA")
+  assert.equal(mailReadiness.body?.mailbox_delivery_verified_count,0)
+  assert.equal(mailReadiness.body?.deadline_started,false)
+  assert.equal(mailReadiness.body?.permanent_finalization_enabled,false)
+  assert.equal(JSON.stringify(mailReadiness.body).includes("@example.invalid"),false)
+  assert.equal(JSON.stringify(mailReadiness.body).includes(reason),false)
+  assert.equal((await read(browser,mailPath)).status,403,
+    "Protected Owner cannot use independent platform Staff preflight")
+  assert.equal((await read(staff,mailPath+"&unknown=1")).status,400)
   const state=await read(browser,readPath)
   assert.equal(state.status,200)
   assert.equal(state.body?.reason,reason)
@@ -222,6 +243,13 @@ export async function verifyB22PlatformClosingAppeal(input:{
   }])
   assert.match(secondOwnerMembership.id,/^[A-Za-z0-9_-]+$/)
   assert.notEqual(staffPersonId,ownerPersonId)
+  const newlyProtected=await read(staff,mailPath)
+  assert.equal(newlyProtected.status,200)
+  assert.equal(newlyProtected.body?.protected_owner_count,2)
+  assert.equal(newlyProtected.body?.private_receipt_count,1,
+    "Later promoted protected Owner has no initial closure receipt; never fake full delivery")
+  assert.equal(newlyProtected.body?.mandatory_email_verified,false)
+  assert.equal(newlyProtected.body?.deadline_started,false)
   const appealReason="B22 sentetik yetkili Owner kapatma kararına itiraz ediyor"
   await browser.input("#store-platform-appeal-form textarea[name=reason]",appealReason)
   await browser.click("#store-platform-appeal-form button")
@@ -333,6 +361,6 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
   assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
     [sellerId]))[0],before)
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff HTTPS mandatory-email preflight 1-to-2 Owners, missing late-Owner original receipt, no verified email/delivery/timer, foreign denied\n")
   return secondOwnerMembership.id
 }
