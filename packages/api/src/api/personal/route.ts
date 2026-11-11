@@ -235,6 +235,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
 
+  <section id="platform-closing-panel" hidden style="grid-column:1/-1" aria-labelledby="platform-closing-title">
+    <h2 id="platform-closing-title">Platform mağaza kapatma süreci</h2>
+    <p>Gerekçeli platform kararı yeni satışları derhal durdurur. Korunan Owner'lar gerekçeyi okuyabilir ve itiraz edebilir. Zorunlu e-posta teslimi doğrulanmadığından 10/30 günlük sayaç başlamaz, kalıcı kapatma veya ad/URL devri yapılmaz.</p>
+    <p id="platform-closing-status" role="status" aria-live="polite"></p>
+    <form id="platform-closing-form">
+      <label>Mağaza<select name="seller_id" required></select></label>
+      <label>Gerekçe<textarea name="reason" minlength="10" maxlength="500" required rows="3"></textarea></label>
+      <label><input name="confirmed" type="checkbox" required> Satışların duracağını ve kapanışın güvenilir zorunlu bildirim olmadan kesinleşmeyeceğini anladım.</label>
+      <button type="submit">Gerekçeli kapatma sürecini başlat</button>
+    </form>
+    <button type="button" id="platform-closing-refresh">Mağazaları yenile</button>
+    <button type="button" id="platform-closing-more" hidden>Diğer mağazalar</button>
+  </section>
   <section id="store-approval-panel" hidden style="grid-column:1/-1">
     <h2>Platform mağaza onayları</h2>
     <p>Yalnız açık mağaza onay görevi ve güncel güçlü giriş ile bekleyen mağazalar onaylanabilir. Kuruluş ile mağaza bağı başvuruda kurulmuştur; ayrıca ilişki onayı yapılmaz.</p>
@@ -340,6 +353,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         <button type="submit" name="action" value="withdraw" disabled>Kapatma talebini geri çek</button>
       </form>
       <button type="button" id="store-owner-closing-refresh">Kapatma durumunu yenile</button>
+    </section>
+    <section id="store-platform-appeal-panel" hidden aria-labelledby="store-platform-appeal-title">
+      <h3 id="store-platform-appeal-title">Platform kapatma kararı ve itiraz</h3>
+      <p>Kapatma gerekçesini güvenle inceleyebilirsiniz. Zorunlu e-posta teslimi kanıtlanmadan 10/30 günlük sayaç çalışmaz ve kesin kapanış uygulanmaz.</p>
+      <p id="store-platform-appeal-reason"></p>
+      <p id="store-platform-appeal-status" role="status" aria-live="polite"></p>
+      <form id="store-platform-appeal-form">
+        <label>İtiraz gerekçesi<textarea name="reason" minlength="10" maxlength="500" rows="3" required></textarea></label>
+        <button type="submit" disabled>İtirazı gönder</button>
+      </form>
+      <button type="button" id="store-platform-appeal-refresh">Kararı yenile</button>
     </section>
     <section id="store-block-panel" hidden aria-labelledby="store-block-title">
       <h3 id="store-block-title">Mağazanın alıcı kuruluş engelleri</h3>
@@ -513,7 +537,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const renameWrite=path==='store-rename-requests'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const closingWrite=path==='store-owner-closing'&&options.method==='POST';
+    const closingWrite=['store-owner-closing','store-platform-closing','platform/store-closings'].includes(path)&&options.method==='POST';
     const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite;
     let data;
     try{
@@ -2965,6 +2989,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(typeof form?.querySelectorAll==='function')
       for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
     clearOwnerClosing();
+    clearPlatformClosingOwner();
   }
   function ownerPauseButtons(){
     const form=el('store-owner-pause-form');
@@ -3018,12 +3043,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(currentOrg){
       void refreshOwnerPause(currentOrg,organizationRequest);
       void refreshOwnerClosing(currentOrg,organizationRequest);
+      void refreshPlatformClosingOwner(currentOrg,organizationRequest);
     }
   };
   el('store-owner-pause-refresh').onclick=()=>{
     if(currentOrg){
       void refreshOwnerPause(currentOrg,organizationRequest);
       void refreshOwnerClosing(currentOrg,organizationRequest);
+      void refreshPlatformClosingOwner(currentOrg,organizationRequest);
     }
   };
   if(ownerPauseForm)ownerPauseForm.onsubmit=async event=>{
@@ -3282,6 +3309,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               if(renameData.stores.length){
                  void refreshOwnerPause(org,request);
                  void refreshOwnerClosing(org,request);
+                 void refreshPlatformClosingOwner(org,request);
                }
               }
 
@@ -4174,7 +4202,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
   el('org-stores-refresh').onclick=()=>{if(currentOrg)void organizationStores(currentOrg,organizationRequest)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;clearOrganizationReviews();try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshStoreRenameReviews();void refreshOrganizationReviews();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;clearOrganizationReviews();try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshPlatformClosings();void refreshStoreRenameReviews();void refreshOrganizationReviews();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
@@ -4545,7 +4573,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
     clearPlatformStorePolicy();
-    clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearStoreRenameReviews();clearPendingInvitations();clearOrganizationReviews();
+    clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPlatformClosings();clearStoreRenameReviews();clearPendingInvitations();clearOrganizationReviews();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');
