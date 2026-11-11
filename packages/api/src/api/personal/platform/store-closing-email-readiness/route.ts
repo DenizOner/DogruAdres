@@ -50,20 +50,27 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       })
       if(nativeEmail)verified++
     }
+    const progress=await access(req).personalPlatformStoreClosingEmailProgress(
+      sessionToken(req),parsed.data.organization_id,parsed.data.seller_id)
+    if(!progress)return res.status(403).json({message:"Access denied"})
     const transport=await access(req).getActiveSmtpConfig()
     return res.status(200).json({
       organization_id:parsed.data.organization_id,
       seller_id:parsed.data.seller_id,
-      status:"not_ready",
+      status:progress.deadline_started_at?"clock_started":"not_ready",
       protected_owner_count:grouped.size,
       private_receipt_count:receipt,
       verified_email_identity_count:verified,
       unresolved_identity_count:ambiguous,
       smtp_transport_enabled:transport?.enabled===true,
-      smtp_accepted_count:0,
-      mailbox_delivery_verified_count:0,
-      mandatory_email_verified:false,
-      deadline_started:false,
+      smtp_accepted_count:progress.owners.filter(o=>o.smtp_accepted).length,
+      mailbox_delivery_verified_count:progress.delivery_verified_count,
+      mandatory_email_verified:progress.deadline_basis==="owner_delivery",
+      deadline_started:!!progress.deadline_started_at,
+      deadline_started_at:progress.deadline_started_at,
+      deadline_basis:progress.deadline_basis,
+      admin_alert_at:progress.admin_alert_at,
+      email_statuses:progress.owners,
       permanent_finalization_enabled:false
     })
   }catch(error){

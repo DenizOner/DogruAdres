@@ -23,6 +23,7 @@ export function allowedPublicRequest(method,path){
     '/personal/store-platform-closing':['GET','POST'],
     '/personal/platform/store-closings':['GET','POST'],
     '/personal/platform/store-closing-email-readiness':['GET'],
+    '/personal/store-platform-closing-email-visit':['POST'],
       '/personal/store-draft-permissions':['GET','POST'],
     '/personal/platform/stores':['GET','POST'],
     '/personal/store-buyer-blocks':['POST'],

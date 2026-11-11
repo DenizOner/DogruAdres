@@ -28,6 +28,17 @@ export interface SendMailResult {
   accepted: string[]
 }
 
+/**
+ * The final SMTP DATA acknowledgement was lost after the message was handed
+ * to the socket. This is NOT the same as a definitive SMTP rejection.
+ */
+export class SmtpAcceptanceUncertainError extends Error {
+  constructor() {
+    super("SMTP DATA submission outcome uncertain")
+    this.name = "SmtpAcceptanceUncertainError"
+  }
+}
+
 const DEFAULT_TIMEOUT_MS = 15000
 
 // BlockLists for comprehensive SSRF prevention across IPv4 and IPv6 CIDR ranges
@@ -472,7 +483,14 @@ export class SmtpConnection {
       throw new Error("Socket disconnected before sending DATA body")
     }
     this.socket.write(message)
-    const dataReply = await this.readReply()
+    // If the connection disappears after DATA submission, the receiver may
+    // already have accepted the message. Never report a definitive failure.
+    let dataReply: { code: number; message: string }
+    try {
+      dataReply = await this.readReply()
+    } catch {
+      throw new SmtpAcceptanceUncertainError()
+    }
     if (dataReply.code !== 250) {
       throw new Error(`SMTP DATA submission failed: ${dataReply.code} ${dataReply.message}`)
     }

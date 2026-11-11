@@ -1,9 +1,11 @@
 /** B22 #252: real first-party Chrome/HTTPS/PG16 platform closing and Owner
- * appeal. Task-only actors and database. No SMTP success, timer or finalizer.
+ * appeal. Task-only actors and database. Timer and dispatch require independent
+ * real scheduled-job evidence; finalizer is always disabled.
  */
 import assert from "node:assert/strict"
-import {randomBytes} from "node:crypto"
+import {createHash,randomBytes} from "node:crypto"
 import type {B06Chrome} from "./b06-ui-browser"
+import {runPlatformClosingEmailTick} from "../../src/jobs/dogruadres-platform-closing-email"
 
 type Db=(sql:string,params?:unknown[])=>Promise<any[]>
 const read=async(browser:B06Chrome,path:string)=>browser.callFunction(
@@ -22,11 +24,12 @@ export async function verifyB22PlatformClosingAppeal(input:{
   ownerPersonId:string;staffPersonId:string;
   ownerOrgId:string;ownerOrgName:string;sellerId:string;
   buyer:B06Chrome;buyerScopePath:string;buyerOrganizationId:string;
-  checkoutCartId:string;customerId:string;query:any;auth:any;ownerEmail:string
+  checkoutCartId:string;customerId:string;query:any;auth:any;ownerEmail:string;
+  container:any
 }):Promise<string>{
   const {browser,staff,q,foundation,ownerPersonId,staffPersonId,
     ownerOrgId,ownerOrgName,sellerId,buyer,buyerScopePath,
-    buyerOrganizationId,checkoutCartId,customerId,query,auth,ownerEmail}=input
+    buyerOrganizationId,checkoutCartId,customerId,query,auth,ownerEmail,container}=input
   const path="/personal/platform/store-closings"
   const privatePath="/personal/store-platform-closing"
   const mailPath="/personal/platform/store-closing-email-readiness?"+
@@ -142,10 +145,11 @@ export async function verifyB22PlatformClosingAppeal(input:{
   await staff.input("#platform-closing-form textarea[name=reason]",reason)
   await staff.click("#platform-closing-form input[name=confirmed]")
   await staff.click("#platform-closing-form button[type=submit]")
-  await staff.wait("document.getElementById('platform-closing-mail-status').textContent.includes('e-posta kimliği doğrulanmış: 1')")
+  await staff.wait("document.getElementById('platform-closing-mail-status').textContent.includes('doğrulanmış e-posta kimliği 1')")
   const mailUi=await staff.eval("(()=>{const e=document.getElementById('platform-closing-mail-status');return {text:e.textContent,role:e.getAttribute('role'),live:e.getAttribute('aria-live')}})()")
-  assert.match(mailUi.text,/Korunan Owner: 1, kişisel bildirim: 1, e-posta kimliği doğrulanmış: 1/)
-  assert.match(mailUi.text,/teslim kanıtı yok; 10\/30 günlük sayaç başlamadı/)
+  assert.match(mailUi.text,/Korunan Owner 1, doğrulanmış e-posta kimliği 1/)
+  assert.match(mailUi.text,/Owner 1: .*deneme [0-4]\/4/)
+  assert.match(mailUi.text,/itiraz saati henüz başlamadı/)
   assert.equal(mailUi.role,"status")
   assert.equal(mailUi.live,"polite")
   const createdRows=await q("select request_id,state,version from da_store_platform_closing where seller_id=$1 and organization_id=$2",[sellerId,ownerOrgId])
@@ -275,7 +279,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
     "The real current protected Owner must read the closure security receipt")
   assert.match(closureNotice.description,/platform kararıyla yeni satışlar durduruldu/)
   assert.match(closureNotice.description,/güvenli şirket alanınızda/)
-  assert.match(closureNotice.description,/süre henüz başlamadı/)
+  assert.match(closureNotice.description,/İtiraz saatini ve gerekçeyi/)
   assert.equal(closureNotice.description.includes("Mevcut faal mağazalar etkilenmez"),false)
   assert.equal(JSON.stringify(notices.body).includes(reason),false,
     "Private closure explanation never enters a generic notification payload")
@@ -331,7 +335,35 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(newlyProtected.status,200)
   assert.equal(newlyProtected.body?.protected_owner_count,2)
   assert.equal(newlyProtected.body?.private_receipt_count,1,
-    "Later promoted protected Owner has no initial closure receipt; never fake full delivery")
+    "Only the initial Owner may hold the original closure audit receipt")
+  await runPlatformClosingEmailTick(container)
+  const originalRecipients=await q(`select n.person_id
+    from da_notification_receipt n
+    join da_store_platform_closing c on c.source_audit_event_id=n.audit_event_id
+    where c.seller_id=$1 order by n.person_id`,[sellerId])
+  assert.deepEqual(originalRecipients,[{person_id:ownerPersonId}],
+    "Late Owner must NEVER be inserted into the original Staff decision recipient history")
+  const currentOwnerNotices=await read(staff,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))
+  assert.equal(currentOwnerNotices.status,200)
+  const lateNotice=currentOwnerNotices.body.notifications?.find((n:any)=>
+    n.title==="Sorumluluğunuza yeni geçen mağazada kapatma süreci var")
+  assert.ok(lateNotice,"New protected Owner must receive a separately dated current closure notice")
+  assert.equal(lateNotice.read_at,null)
+  assert.equal(new Date(lateNotice.created_at).getTime()>=
+    new Date((await q("select started_at from da_store_platform_closing where seller_id=$1",
+      [sellerId]))[0].started_at).getTime(),true)
+  assert.equal((await read(browser,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))).body.notifications.some((n:any)=>
+      n.id===lateNotice.id),false,
+    "Other Owner must not read a newly promoted person's private notice")
+  const readLate=await write(staff,"/personal/notifications",{id:lateNotice.id})
+  assert.equal(readLate.status,200)
+  const afterRead=await read(staff,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))
+  assert.ok(afterRead.body.notifications.some((n:any)=>
+    n.id===lateNotice.id&&n.read_at!==null),
+    "Late Owner's new notice has an independent persistent read state")
   assert.equal(newlyProtected.body?.mandatory_email_verified,false)
   assert.equal(newlyProtected.body?.deadline_started,false)
   const appealReason="B22 sentetik yetkili Owner kapatma kararına itiraz ediyor"
@@ -350,11 +382,10 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const appealNotice=appealNotices.body.notifications?.find((x:any)=>
     x.title==="Mağaza kapatma itirazı kaydedildi")
   assert.ok(appealNotice,"Owner must receive a real private appeal receipt")
-  assert.match(appealNotice.description,/Şirketinizin mağazası için bir kapatma itirazı kaydedildi/)
+  assert.match(appealNotice.description,/Şirketinizin mağazası için itiraz kaydedildi/)
   assert.equal(appealNotice.description.includes("itirazınız kaydedildi"),false,
     "The actor-neutral message must not tell a co-Owner they made the appeal")
-  assert.match(appealNotice.description,/yeni satışlar kapalıdır/)
-  assert.match(appealNotice.description,/süre henüz başlamadı/)
+  assert.match(appealNotice.description,/yeni satışlar kapalı kalır/)
   assert.equal(appealNotice.description.includes("Mevcut faal mağazalar etkilenmez"),false)
   assert.equal(JSON.stringify(appealNotices.body).includes(appealReason),false)
   const appealRecipients=await q(`select n.person_id,n.id
@@ -385,7 +416,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(JSON.stringify(otherOwnerNotices.body).includes(reason),false)
   await browser.click("#notification-bell")
   await browser.wait("!document.getElementById('notification-panel').hidden && "+
-    "document.getElementById('notification-list').textContent.includes('yeni satışlar kapalıdır')")
+    "document.getElementById('notification-list').textContent.includes('yeni satışlar kapalı kalır')")
   assert.equal(await browser.eval(
     "Array.from(document.querySelectorAll('#notification-list li')).some("+
     "li=>li.querySelector('h3')?.textContent==='Mağaza kapatma itirazı kaydedildi' && "+
@@ -400,14 +431,14 @@ export async function verifyB22PlatformClosingAppeal(input:{
   await staff.select(ownerOrgName,"owner")
   await staff.click("#notification-bell")
   await staff.wait("!document.getElementById('notification-panel').hidden && "+
-    "document.getElementById('notification-list').textContent.includes('Şirketinizin mağazası için bir kapatma itirazı kaydedildi')")
+    "document.getElementById('notification-list').textContent.includes('Şirketinizin mağazası için itiraz kaydedildi')")
   const secondOwnerUi=await staff.eval(`(()=>{
     const item=Array.from(document.querySelectorAll('#notification-list li'))
       .find(li=>li.querySelector('h3')?.textContent==='Mağaza kapatma itirazı kaydedildi');
     return item?{text:item.textContent,description:item.querySelector('p')?.textContent}:null;
   })()`)
   assert.ok(secondOwnerUi)
-  assert.match(secondOwnerUi.description,/Şirketinizin mağazası için bir kapatma itirazı kaydedildi/)
+  assert.match(secondOwnerUi.description,/Şirketinizin mağazası için itiraz kaydedildi/)
   assert.equal(secondOwnerUi.description.includes("itirazınız kaydedildi"),false)
   assert.equal(secondOwnerUi.text.includes(appealReason),false)
   assert.equal(secondOwnerUi.text.includes(reason),false)
@@ -445,6 +476,198 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
   assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
     [sellerId]))[0],before)
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners missing receipt, no delivery/timer, foreign denied\n")
+  // Isolated synthetic sent-link record: this proves the real Owner HTTPS
+  // callback, NOT SMTP transport or mailbox delivery. Scheduled job and
+  // four-send retry require their own actual execution evidence.
+  const emailToken=randomBytes(32).toString("hex")
+  const tokenDigest=createHash("sha256").update(emailToken).digest("hex")
+  const visitPath="/personal/store-platform-closing-email-visit"
+  const queue=await q(`select person_id,attempts from da_store_platform_closing_email
+    where seller_id=$1 and person_id=$2`,[sellerId,ownerPersonId])
+  assert.equal(queue.length,1,"Closing must create exactly one Owner mail queue row")
+  await q(`insert into da_store_platform_closing_email_link
+    (seller_id,person_id,attempt,token_sha256) values ($1,$2,4,$3)`,
+    [sellerId,ownerPersonId,tokenDigest])
+  assert.equal((await read(browser,visitPath)).status,401,
+    "GET scanner cannot activate or disclose the email link")
+  assert.equal((await write(staff,visitPath,{token:emailToken})).status,403,
+    "Another protected Owner must not use the first Owner's link")
+  assert.equal((await write(browser,visitPath,{token:emailToken},true)).status,403,
+    "Forged CSRF cannot confirm notification")
+  assert.equal((await write(browser,visitPath,{token:randomBytes(32).toString("hex")})).status,403,
+    "Unrecognized random link must reveal no closure")
+  const proof=await write(browser,visitPath,{token:emailToken})
+  assert.equal(proof.status,200)
+  assert.equal(proof.body?.viewed,true)
+  assert.equal(proof.body?.reason,reason)
+  assert.equal(proof.body?.deadline_started,true)
+  const clockRows=await q(`select deadline_started_at,deadline_basis,
+    admin_alert_at from da_store_platform_closing where seller_id=$1`,[sellerId])
+  assert.equal(clockRows.length,1)
+  assert.equal(clockRows[0].deadline_basis,"owner_delivery")
+  assert.equal(clockRows[0].admin_alert_at,null)
+  assert.ok(clockRows[0].deadline_started_at)
+  const originalStart=new Date(clockRows[0].deadline_started_at).toISOString()
+  const deadlineAudit=await q(`select e.id,e.new_values
+    from da_audit_event e join da_audit_outbox x
+      on x.source_audit_event_id=e.id
+      and x.source_module='dogruadres-access' and x.deleted_at is null
+    where e.organization_id=$1 and e.target_id=$2
+      and e.action='organization.store_platform_closing_deadline_started'
+      and e.resource='store-platform-closing'
+      and e.role_context='owner' and e.deleted_at is null
+      and e.new_values->>'basis'='owner_delivery'
+      and (e.new_values->>'deadline_started_at')::timestamptz=$3::timestamptz`,
+      [ownerOrgId,sellerId,originalStart])
+  assert.equal(deadlineAudit.length,1,
+    "Owner delivery clock and one canonical Foundation audit/outbox must commit together")
+  assert.equal(JSON.stringify(deadlineAudit).includes(emailToken),false,
+    "Email link secret must not be copied to Foundation audit")
+  assert.equal(JSON.stringify(deadlineAudit).includes(reason),false,
+    "Private closing reason must not be copied to Foundation audit")
+  const secondVisit=await write(browser,visitPath,{token:emailToken})
+  assert.equal(secondVisit.status,200,"Same authorized Owner may reread notice")
+  assert.equal((await q(`select deadline_started_at from da_store_platform_closing
+    where seller_id=$1`,[sellerId]))[0].deadline_started_at.toISOString(),originalStart,
+    "Revisiting must not restart 10+20 appeal time")
+  const auditedReplays=await q(`select count(*)::int as n
+    from da_audit_event where organization_id=$1 and target_id=$2
+      and action='organization.store_platform_closing_deadline_started'
+      and deleted_at is null`,[ownerOrgId,sellerId])
+  assert.equal(Number(auditedReplays[0].n),1,
+    "Replaying the Owner link must not create a duplicate deadline audit")
+  const during=await read(browser,readPath)
+  assert.equal(during.status,200)
+  assert.equal(during.body.deadline_started,true)
+  assert.equal(during.body.deadline_basis,"owner_delivery")
+  assert.equal(new Date(during.body.first_appeal_until).getTime()-
+    new Date(during.body.deadline_started_at).getTime(),10*86400000)
+  assert.equal(new Date(during.body.final_review_until).getTime()-
+    new Date(during.body.deadline_started_at).getTime(),30*86400000)
+  assert.equal(during.body.permanent_finalization_enabled,false)
+  const deliveryStatus=await read(staff,mailPath)
+  assert.equal(deliveryStatus.status,200)
+  assert.equal(deliveryStatus.body.mailbox_delivery_verified_count,1)
+  assert.equal(deliveryStatus.body.deadline_started,true)
+  assert.equal(deliveryStatus.body.deadline_basis,"owner_delivery")
+  assert.equal(deliveryStatus.body.smtp_accepted_count,
+    deliveryStatus.body.email_statuses.filter((x:any)=>x.smtp_accepted===true).length,
+    "An Owner link visit must not erase an earlier SMTP acceptance or fabricate one")
+  assert.equal(deliveryStatus.body.email_statuses.some((x:any)=>x.link_visited_at),true)
+  assert.equal(JSON.stringify(deliveryStatus.body).includes(emailToken),false)
+  assert.equal(JSON.stringify(deliveryStatus.body).includes(reason),false)
+  // A delayed fourth email-slot result must not add an admin alert or
+  // restart an already-proved Owner-delivery clock.
+  await q(`update da_store_platform_closing_email
+    set attempts=4,last_result='delivered',claim_id=null,lease_until=null,
+      next_attempt_at=clock_timestamp()-interval '1 hour'
+    where seller_id=$1 and person_id=$2 and delivered_at is not null`,
+    [sellerId,ownerPersonId])
+  assert.equal(await foundation.settlePlatformClosingAdminFallback(),0,
+    "Exhaustion must not override a previously started Owner-delivery clock")
+  const lateAdminNotices=await q(`select count(*)::int as n
+    from da_store_platform_closing_admin_notice where seller_id=$1`,[sellerId])
+  assert.equal(Number(lateAdminNotices[0].n),0,
+    "No bogus admin failure notification after verified Owner delivery")
+  assert.equal((await q(`select deadline_started_at from da_store_platform_closing
+    where seller_id=$1`,[sellerId]))[0].deadline_started_at.toISOString(),originalStart,
+    "Delayed email worker must never reset the canonical appeal clock")
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false)
+  assert.equal(await foundation.authorizeBuyerCheckout(checkoutCartId,customerId,[sellerId]),false)
+  assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: synthetic hashed email link strong Owner POST, foreign/forged CSRF/scanner GET denied, 10+20 server clock starts once, no finalizer or sales reopening\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/mail delivery proven at this checkpoint and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no delivery/timer at this checkpoint, foreign denied\n")
+  // Suspended Organization must NOT hide a durable platform-staff alert
+  // after the real Foundation fallback commits its canonical clock/audit.
+  // Every row below is a synthetic, disposable CI-only fixture.
+  const suspendedSeller="sel_b22_suspended_mail_"+randomBytes(10).toString("hex")
+  const suspendedRequest="dascp_"+randomBytes(16).toString("hex")
+  const suspendedAudit="daaud_"+randomBytes(16).toString("hex")
+  const suspendedOutbox="daaob_"+randomBytes(16).toString("hex")
+  const suspendedReason="Sentetik askıya alınmış şirket güvenlik bildirim testi"
+  const suspendedStart=new Date(Date.now()-73*3600000).toISOString()
+  const sourceRows=await q(`select e.actor_person_id,e.actor_type,e.actor_id
+    from da_store_platform_closing c
+    join da_audit_event e on e.id=c.source_audit_event_id
+    where c.seller_id=$1`,[sellerId])
+  assert.equal(sourceRows.length,1)
+  const source=sourceRows[0]
+  assert.equal(source.actor_person_id,staffPersonId)
+  await q(`insert into da_audit_event
+    (id,actor_person_id,actor_type,actor_id,role_context,organization_id,
+     action,module,resource,target_id,new_values,occurred_at)
+    values ($1,$2,$3,$4,'platform_staff',$5,
+      'organization.store_platform_closing_started','dogruadres-access',
+      'store-platform-closing',$6,
+      jsonb_build_object('request_id',$7::text,'state','notification_unverified',
+        'reason_sha256',$8::text),$9::timestamptz)`,[
+    suspendedAudit,source.actor_person_id,source.actor_type,source.actor_id,
+    ownerOrgId,suspendedSeller,suspendedRequest,
+    createHash("sha256").update(suspendedReason).digest("hex"),suspendedStart
+  ])
+  const sourceEnvelope={
+    version:1,source_module:"dogruadres-access",
+    source_audit_event_id:suspendedAudit,organization_id:ownerOrgId,
+    actor:{person_id:source.actor_person_id,type:source.actor_type,
+      id:source.actor_id,role_context:"platform_staff"},
+    action:"organization.store_platform_closing_started",
+    resource:"store-platform-closing",target_id:suspendedSeller,
+    occurred_at:suspendedStart
+  }
+  await q(`insert into da_audit_outbox
+    (id,source_audit_event_id,source_module,envelope_version,envelope,status)
+    values ($1,$2,'dogruadres-access',1,$3::jsonb,'pending')`,
+    [suspendedOutbox,suspendedAudit,JSON.stringify(sourceEnvelope)])
+  await q(`insert into da_store_platform_closing
+    (seller_id,organization_id,state,version,request_id,reason,
+     source_audit_event_id,started_at)
+    values ($1,$2,'notification_unverified',1,$3,$4,$5,$6::timestamptz)`,
+    [suspendedSeller,ownerOrgId,suspendedRequest,suspendedReason,
+      suspendedAudit,suspendedStart])
+  for(const person of [ownerPersonId,staffPersonId]){
+    await q(`insert into da_store_platform_closing_email
+      (seller_id,person_id,next_attempt_at,attempts,last_result)
+      values ($1,$2,$3::timestamptz,4,'unverified_identity')`,
+      [suspendedSeller,person,suspendedStart])
+  }
+  const oldOrg=await q("select status from da_organization where id=$1",[ownerOrgId])
+  assert.deepEqual(oldOrg,[{status:"active"}])
+  await q("update da_organization set status='suspended' where id=$1",[ownerOrgId])
+  try{
+    assert.equal(await foundation.settlePlatformClosingAdminFallback(),1,
+      "Real fallback must start the 10+20 clock even for suspended Organization")
+    const nowClosed=await q(`select deadline_basis,deadline_started_at,
+      admin_alert_at,deadline_audit_event_id from da_store_platform_closing
+      where seller_id=$1`,[suspendedSeller])
+    assert.equal(nowClosed.length,1)
+    assert.equal(nowClosed[0].deadline_basis,"admin_alert")
+    assert.ok(nowClosed[0].deadline_started_at&&nowClosed[0].deadline_audit_event_id)
+    const visible=await q(`select id,read_at from
+      da_store_platform_closing_admin_notice where seller_id=$1
+      and person_id=$2`,[suspendedSeller,staffPersonId])
+    assert.equal(visible.length,1)
+    const adminRead=await read(staff,"/personal/notifications")
+    assert.equal(adminRead.status,200)
+    assert.ok(adminRead.body.notifications.some((n:any)=>
+      n.id===visible[0].id &&
+      n.title==="Kapatma e-postaları teslim edilemedi — yönetici uyarısı"),
+      "Staff's personal bell must show the alert despite suspended Organization")
+    const foreignRead=await read(browser,"/personal/notifications")
+    assert.equal(foreignRead.status,200)
+    assert.equal(foreignRead.body.notifications.some((n:any)=>
+      n.id===visible[0].id),false,
+      "An Owner without a platform closing grant must never see Staff alert")
+    assert.equal((await write(browser,"/personal/notifications",
+      {id:visible[0].id})).status,403,
+      "Foreign Owner must not mark Staff alert as read")
+    assert.equal((await write(staff,"/personal/notifications",
+      {id:visible[0].id})).status,200)
+    assert.ok((await q(`select read_at from
+      da_store_platform_closing_admin_notice where id=$1`,
+      [visible[0].id]))[0].read_at)
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: suspended Organization real Admin fallback starts one audited 10+20 clock and visible private Staff notification; Owner list/read denied\n")
+  }finally{
+    await q("update da_organization set status='active' where id=$1",[ownerOrgId])
+  }
   return secondOwnerMembership.id
 }
