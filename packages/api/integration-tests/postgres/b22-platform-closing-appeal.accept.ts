@@ -20,10 +20,13 @@ const write=async(browser:B06Chrome,path:string,payload:unknown,badCsrf=false)=>
 export async function verifyB22PlatformClosingAppeal(input:{
   browser:B06Chrome;staff:B06Chrome;q:Db;foundation:any;
   ownerPersonId:string;staffPersonId:string;
-  ownerOrgId:string;ownerOrgName:string;sellerId:string
+  ownerOrgId:string;ownerOrgName:string;sellerId:string;
+  buyer:B06Chrome;buyerScopePath:string;buyerOrganizationId:string;
+  checkoutCartId:string;customerId:string;query:any
 }):Promise<void>{
   const {browser,staff,q,foundation,ownerPersonId,staffPersonId,
-    ownerOrgId,ownerOrgName,sellerId}=input
+    ownerOrgId,ownerOrgName,sellerId,buyer,buyerScopePath,
+    buyerOrganizationId,checkoutCartId,customerId,query}=input
   const path="/personal/platform/store-closings"
   const privatePath="/personal/store-platform-closing"
   const readPath=privatePath+"?"+new URLSearchParams({
@@ -34,6 +37,17 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),true)
   assert.equal((await q("select count(*)::int n from da_store_platform_closing where seller_id=$1",
     [sellerId]))[0].n,0)
+  // A currently authorized real Beta Buyer can inspect an attributed
+  // Alpha/Gamma Cart and has a separate eligible native Gamma-only Cart.
+  const availableBuyer=await read(buyer,buyerScopePath)
+  assert.equal(availableBuyer.status,200,
+    "Authorized Buyer scope must be visible over HTTPS before Staff closes Gamma")
+  assert.equal(availableBuyer.body?.seller_count,2)
+  assert.equal(await foundation.authorizeBuyerCheckout(
+    checkoutCartId,customerId,[sellerId]),true,
+    "Exact current Buyer Cart must pass the final L before platform closure")
+  assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
+    [checkoutCartId]))[0].n,0)
   const orderBefore=Number((await q('select count(*)::int n from "order"'))[0].n)
   // Having store.approve or a native member does NOT authorize platform closure.
   assert.equal((await read(staff,path)).status,403)
@@ -91,6 +105,33 @@ export async function verifyB22PlatformClosingAppeal(input:{
     "Platform closure blocks Store sales even though native Seller is still open")
   assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
     [sellerId]))[0],before,"Closure must not rewrite native Seller/name/URL")
+  // Real personal HTTPS buyer read must fail even with an unchanged,
+  // attributed native Cart containing Gamma; internal Store boolean alone
+  // is not sufficient user acceptance evidence.
+  const blockedBuyer=await read(buyer,buyerScopePath)
+  assert.equal(blockedBuyer.status,403,
+    "Platform-closed Gamma must fail the same real Buyer HTTPS seller-scope read")
+  assert.deepEqual(blockedBuyer.body,{message:"Access denied"})
+  assert.equal(await foundation.authorizeBuyerCheckout(
+    checkoutCartId,customerId,[sellerId]),false,
+    "Platform closure must independently deny final L for the previously authorized Cart")
+  const [attribution]=await q(`select organization_id,customer_id
+    from da_buyer_cart_attribution where cart_id=$1`,[checkoutCartId])
+  assert.equal(attribution.organization_id,buyerOrganizationId)
+  assert.equal(attribution.customer_id,customerId)
+  assert.equal((await q("select count(*)::int n from order_group where cart_id=$1",
+    [checkoutCartId]))[0].n,0,
+    "Denied checkout may not create an OrderGroup")
+  const {data:orderLinks}=await query.graph({
+    entity:"order_cart",fields:["order_id"],filters:{cart_id:checkoutCartId}
+  })
+  assert.equal(orderLinks.length,0,"Denied Cart may not create any Order link")
+  const {data:paymentLinks}=await query.graph({
+    entity:"cart_payment_collection",fields:["payment_collection_id"],
+    filters:{cart_id:checkoutCartId}
+  })
+  assert.equal(paymentLinks.length,0,
+    "Denied Cart may not attach a native payment collection")
   const notifications=await q(`select count(*)::int n from da_notification_receipt n
     join da_audit_event e on e.id=n.audit_event_id
     where e.target_id=$1 and e.action='organization.store_platform_closing_started'
@@ -99,9 +140,14 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const notices=await read(browser,"/personal/notifications?organization="+
     encodeURIComponent(ownerOrgId))
   assert.equal(notices.status,200)
-  assert.ok(notices.body.notifications?.some((x:any)=>
-    x.title==="Platform mağaza kapatma incelemesi başladı"),
+  const closureNotice=notices.body.notifications?.find((x:any)=>
+    x.title==="Platform mağaza kapatma incelemesi başladı")
+  assert.ok(closureNotice,
     "The real current protected Owner must read the closure security receipt")
+  assert.match(closureNotice.description,/platform kararıyla yeni satışlar durduruldu/)
+  assert.match(closureNotice.description,/güvenli şirket alanınızda/)
+  assert.match(closureNotice.description,/süre henüz başlamadı/)
+  assert.equal(closureNotice.description.includes("Mevcut faal mağazalar etkilenmez"),false)
   assert.equal(JSON.stringify(notices.body).includes(reason),false,
     "Private closure explanation never enters a generic notification payload")
   const foreignNotices=await read(staff,"/personal/notifications?organization="+
@@ -117,6 +163,12 @@ export async function verifyB22PlatformClosingAppeal(input:{
   await browser.wait("document.readyState==='complete'&&!document.getElementById('workspace').hidden")
   await browser.select(ownerOrgName,"owner")
   await browser.wait("!document.getElementById('store-owner-pause-panel').hidden")
+  await browser.click("#notification-bell")
+  await browser.wait("!document.getElementById('notification-panel').hidden && "+
+    "document.getElementById('notification-list').textContent.includes('platform kararıyla yeni satışlar durduruldu')")
+  assert.equal(await browser.eval(
+    "document.getElementById('notification-list').textContent.includes('Mevcut faal mağazalar etkilenmez')"),false)
+  await browser.click("#notification-close")
   const selected=await browser.eval(`(()=>{
     const x=document.querySelector('#store-owner-pause-form select[name=seller_id]');
     if(!x||!Array.from(x.options).some(o=>o.value===${JSON.stringify(sellerId)}))return false;
@@ -145,6 +197,23 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(appealed.body?.appeal_reason,appealReason)
   assert.equal(appealed.body?.deadline_started,false)
   assert.equal(appealed.body?.permanent_finalization_enabled,false)
+  const appealNotices=await read(browser,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))
+  assert.equal(appealNotices.status,200)
+  const appealNotice=appealNotices.body.notifications?.find((x:any)=>
+    x.title==="Mağaza kapatma itirazı kaydedildi")
+  assert.ok(appealNotice,"Owner must receive a real private appeal receipt")
+  assert.match(appealNotice.description,/itirazınız kaydedildi/)
+  assert.match(appealNotice.description,/yeni satışlar kapalıdır/)
+  assert.match(appealNotice.description,/süre henüz başlamadı/)
+  assert.equal(appealNotice.description.includes("Mevcut faal mağazalar etkilenmez"),false)
+  assert.equal(JSON.stringify(appealNotices.body).includes(appealReason),false)
+  await browser.click("#notification-bell")
+  await browser.wait("!document.getElementById('notification-panel').hidden && "+
+    "document.getElementById('notification-list').textContent.includes('yeni satışlar kapalıdır')")
+  assert.equal(await browser.eval(
+    "document.getElementById('notification-list').textContent.includes('Mevcut faal mağazalar etkilenmez')"),false)
+  await browser.click("#notification-close")
   assert.equal(await count(),auditBefore+2)
   const [ledger]=await q(`select version,request_id,appeal_request_id,
     started_at,appealed_at from da_store_platform_closing where seller_id=$1`,[sellerId])
@@ -166,8 +235,13 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(await count(),auditBefore+2)
   assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false,
     "Appeal does not re-enable sales or release the Store name")
+  assert.equal((await read(buyer,buyerScopePath)).status,403,
+    "Owner appeal must not re-enable previously denied Buyer HTTPS seller scope")
+  assert.equal(await foundation.authorizeBuyerCheckout(
+    checkoutCartId,customerId,[sellerId]),false,
+    "Owner appeal must not re-enable the final Buyer L")
   assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
   assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
     [sellerId]))[0],before)
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS seller-scope 200-to-403, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified\n")
 }

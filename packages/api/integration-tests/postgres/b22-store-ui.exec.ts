@@ -8726,7 +8726,9 @@ export default async function({container}:any){
       browser,staff:reviewer,q,foundation,
       ownerPersonId:A.person,staffPersonId:B.person,
       ownerOrgId:sellerGamma.id,ownerOrgName:sellerGamma.name,
-      sellerId:gammaSellerId
+      sellerId:gammaSellerId,buyer:reviewer,
+      buyerScopePath:betaScopeUrl,buyerOrganizationId:organizations[1].id,
+      checkoutCartId:hookProbeCart.id,customerId:nativeCustomer.id,query
     })
     // Continue the prior Alpha Buyer/permission tests from the real Owner
     // workspace, not the newly selected Gamma appeal screen.
