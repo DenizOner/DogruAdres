@@ -181,7 +181,7 @@ async function row(seller:string){
   return rows[0]
 }
 async function assertAudit(seller:string,basis:string){
-  const rows=await q("select e.*,o.source_module,o.envelope_version,o.envelope "+
+  const rows=await q("select e.*,o.source_audit_event_id,o.source_module,o.envelope_version,o.envelope "+
     "from da_store_platform_closing c "+
     "join da_audit_event e on e.id=c.deadline_audit_event_id "+
     "join da_audit_outbox o on o.source_audit_event_id=e.id "+
