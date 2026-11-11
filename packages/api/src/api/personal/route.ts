@@ -4643,8 +4643,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // protected Owner appeal. No browser-computed deadline or implicit authority.
   let platformClosingPage=0,platformClosingRead=0;
   let platformClosingRows=[],platformClosingBusy=false,platformClosingUncertain=false;
+  let platformClosingFocusSeller='';
   function clearPlatformClosings(){
     platformClosingRead++;platformClosingPage=0;platformClosingRows=[];
+    platformClosingFocusSeller='';
     platformClosingBusy=false;platformClosingUncertain=false;
     el('platform-closing-panel').hidden=true;
     el('platform-closing-status').textContent='';
@@ -4726,7 +4728,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       el('platform-closing-more').hidden=!data.has_more;
       panel.hidden=false;
-      if(data.candidates.length)void refreshPlatformClosingMail(data.candidates[0],epoch);
+      const selected=data.candidates.find(x=>x.seller_id===platformClosingFocusSeller)
+        ??data.candidates[0];
+      if(selected)choice.value=selected.seller_id;
+      if(selected)void refreshPlatformClosingMail(selected,epoch);
       msg.textContent=data.candidates.length?
         'Gerekçe ile yeni satışları derhal durdurabilirsiniz. Kesin kapanış etkin değildir.':
         'Bu sayfada işleme uygun mağaza bulunamadı.';
@@ -4778,6 +4783,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const e=Error('Kayıt sonucu doğrulanamadı');e.uncertain=true;throw e;
       }
       msg.textContent='Yeni satışlar derhal durdu. Owner bildirimleri kaydedildi. E-posta denemeleri ve otomatik itiraz saati ayrı izlenir.';
+      platformClosingFocusSeller=chosen.seller_id;
       await refreshPlatformClosingMail(chosen,epoch);
       form.reset();void refreshPlatformClosings();
     }catch(e){
