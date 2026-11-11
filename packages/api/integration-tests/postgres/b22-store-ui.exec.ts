@@ -23,7 +23,7 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
-import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,snapshotB22CompletedSourceOrder} from "./b22-store-name-transfer.accept"
+import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,createB22CompletedSourceOrderFixture} from "./b22-store-name-transfer.accept"
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
@@ -7241,71 +7241,15 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 two platform-approved Stores: each Store's buyer block separately denies whole multi-Store scope; unblock A cannot lift B; both unblocked restores 200, no cart writes\n")
     process.stdout.write("PASS B22 audited Owner Store Buyer Organization block: two-Store scope 403 if one blocked, idempotent unblock restores 200; no checkout\n")
 
-    // Reuse the already accepted Mercur 2.4.1 zero-total native completion
-    // path BEFORE the source Store A is suspended and its name is transferred.
-    // Disposable PG16 only: no provider, capture, public checkout or money.
-    assert.equal((await native.listSellers({id:secondOwnerStoreId}))[0].status,"open")
-    const {result:[historicalProduct]}=await createProductsWorkflow(container).run({
-      input:{created_by:stores[0].id,products:[{
-        title:"B22 historical source order "+rand,status:"published",
-        variants:[{title:"Zero historical item",sku:"B22-ORDER-SOURCE-"+rand}]
-      }]}
+    const completedOrder=await createB22CompletedSourceOrderFixture({
+      container,rand,sourceSellerId:secondOwnerStoreId,
+      productCreatorSellerId:stores[0].id,memberId:member.id,
+      shippingProfileId:b22Profile.id,customerId:nativeCustomer.id,
+      regionId:region.id,salesChannelId:market.id,buyerOrgId:organizations[0].id,
+      q,query,claim:cartId=>claimCart(organizations[0].id,cartId),
+      authorize:cartId=>foundation.authorizeBuyerCheckout(
+        cartId,nativeCustomer.id,[secondOwnerStoreId])
     })
-    const [historicalVariant]=await container.resolve("product")
-      .listProductVariants({product_id:historicalProduct.id})
-    assert.ok(historicalVariant?.id)
-    const histSku="B22-HIST-OFFER-"+rand
-    const {result:[historicalOffer]}=await createOffersWorkflow(container).run({
-      input:{offers:[{
-        seller_id:secondOwnerStoreId,created_by:member.id,
-        sku:histSku,variant_id:historicalVariant.id,
-        shipping_profile_id:b22Profile.id,
-        inventory_items:[{sku:histSku,stock_levels:[]}],
-        prices:[{amount:0,currency_code:"eur"}],
-        manage_inventory:false,allow_backorder:true
-      }]}
-    })
-    assert.equal(historicalOffer.seller_id,secondOwnerStoreId)
-    const historicalCart=await cartService.createCarts({
-      currency_code:"eur",customer_id:nativeCustomer.id
-    })
-    await cartService.updateCarts(historicalCart.id,{
-      region_id:region.id,sales_channel_id:market.id
-    })
-    await addToCartWorkflow(container).run({input:{
-      cart_id:historicalCart.id,
-      items:[{variant_id:historicalVariant.id,offer_id:historicalOffer.id,
-        quantity:1,requires_shipping:false,
-        metadata:{offer_id:historicalOffer.id}} as any]
-    }})
-    const {data:[historicalBefore]}=await query.graph({entity:"cart",
-      fields:["id","total","customer.id","completed_at","items.offer.seller_id"],
-      filters:{id:historicalCart.id}})
-    assert.equal(Number(historicalBefore.total),0)
-    assert.equal(historicalBefore.customer?.id,nativeCustomer.id)
-    assert.equal(historicalBefore.completed_at,null)
-    assert.equal(historicalBefore.items?.length,1)
-    assert.equal(historicalBefore.items[0].offer?.seller_id,secondOwnerStoreId)
-    const historicalClaim=await claimCart(organizations[0].id,historicalCart.id)
-    assert.equal(historicalClaim.status,200)
-    assert.equal(historicalClaim.body.checkout_ready,false,
-      "No visitor checkout permission is granted")
-    assert.equal(await foundation.authorizeBuyerCheckout(
-      historicalCart.id,nativeCustomer.id,[secondOwnerStoreId]
-    ),true,"Real Alpha buyer/source Store approval required before native completion")
-    const historicalRun=await completeCartWithSplitOrdersWorkflow(container).run({
-      input:{cart_id:historicalCart.id},throwOnError:false
-    })
-    assert.equal(historicalRun.errors?.length??0,0,
-      "Existing native workflow must persist zero-total source Order")
-    const completedOrderSnapshot=await snapshotB22CompletedSourceOrder({
-      q,query,cartId:historicalCart.id,customerId:nativeCustomer.id,
-      organizationId:organizations[0].id,sourceSellerId:secondOwnerStoreId
-    })
-    const completedOrder={query,cartId:historicalCart.id,
-      customerId:nativeCustomer.id,organizationId:organizations[0].id,
-      sourceSellerId:secondOwnerStoreId,snapshot:completedOrderSnapshot}
-    process.stdout.write("B22 task-only: existing Mercur native zero-total source Order committed before name transfer; no payment\n")
 
     await verifyOwnerTemporaryPauseBrowser({browser,organizations,ownerStoreId,
       secondOwnerStoreId,nativeCustomer,customerCart,cartStoreIds,container,
