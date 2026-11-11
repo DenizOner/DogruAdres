@@ -311,8 +311,11 @@ async function run(){
         ] as const
         function invoke(file:string,env:NodeJS.ProcessEnv,direct=false){
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
+            // The complete B22 Chrome suite reached the later tax-document
+            // journey but the 300s child limit ended the last PR run. Keep
+            // every required assertion; allow the same isolated child 8 min.
             cwd:process.cwd(),env,encoding:"utf8",timeout:file.includes('b22-audit-worker.exec.ts')?360000:
-              file.includes('b22-store-ui.exec.ts')?300000:210000,
+              file.includes('b22-store-ui.exec.ts')?480000:210000,
             maxBuffer:3*1024*1024})
           if(task.B22_SMTP_CANARY)assert.ok(!String(child.stdout??"").concat(String(child.stderr??"")).includes(task.B22_SMTP_CANARY),"SMTP canary leaked to child logs")
           const valid=String(child.stdout??"").split("\n")
