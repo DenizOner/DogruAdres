@@ -62,7 +62,7 @@ export class PersonalNotifications {
           and o.status='active' and o.deleted_at is null
           and exists(select 1 from da_organization_membership m
             where m.person_id=n.person_id and m.organization_id=a.organization_id
-              and m.status='active' and m.deleted_at is null
+              and m.status='active' and m.revoked_at is null and m.deleted_at is null
               and m.role='owner' and m.protected_owner=true)
           and exists(select 1 from da_audit_outbox x
             where x.source_audit_event_id=a.id))
@@ -193,7 +193,7 @@ export class PersonalNotifications {
             and o.status='active' and o.deleted_at is null
             and exists(select 1 from da_organization_membership m
               where m.person_id=n.person_id and m.organization_id=a.organization_id
-                and m.status='active' and m.deleted_at is null
+                and m.status='active' and m.revoked_at is null and m.deleted_at is null
                 and m.role='owner' and m.protected_owner=true)
             and exists(select 1 from da_audit_outbox x
               where x.source_audit_event_id=a.id))
