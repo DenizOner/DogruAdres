@@ -5556,6 +5556,62 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {status:"notification_unverified" as const,version:1,replayed:false}
   }
 
+
+  /**
+   * B22 mandatory Owner mail preflight (read only).
+   * Resolves current protected Owner Persons against the canonical initial
+   * closure audit event and its private receipts, not a caller-supplied email.
+   * Actual SMTP dispatch and mailbox delivery are NOT authorized by this
+   * check and may never start the 10+20-day clock.
+   */
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingEmailAudience(token:string,organizationId:string,
+    sellerId:string,@MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(organizationId)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.closing.manage","platform")
+    if(!staff)return null
+    const grant=await db.execute(`select id from da_platform_staff_grant
+      where id=? and person_id=? and task='store.closing.manage'
+        and resource='platform' and revoked_at is null
+        and (expires_at is null or expires_at>clock_timestamp())
+      for share`,[staff.grant_id,staff.person_id])
+    if(grant.length!==1)return null
+    const closure=await this.platformClosingRow_(db,sellerId)
+    if(!closure||closure.organization_id!==organizationId)return null
+    const owners=await db.execute(`select m.person_id,n.id as receipt_id,
+      case when map.person_id is not null then b.auth_identity_id end as auth_identity_id,
+      case when map.person_id is not null then b.actor_type end as actor_type,
+      case when map.person_id is not null then b.actor_id end as actor_id
+      from da_organization_membership m
+      join da_person p on p.id=m.person_id and p.disabled_at is null
+        and p.deleted_at is null
+      left join da_notification_receipt n on n.person_id=m.person_id
+        and n.audit_event_id=?
+      left join da_login_binding b on b.person_id=m.person_id
+        and b.revoked_at is null and b.verified_at is not null
+      left join da_actor_mapping map on map.person_id=m.person_id
+        and map.actor_type=b.actor_type and map.actor_id=b.actor_id
+        and map.deleted_at is null
+      where m.organization_id=? and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.revoked_at is null
+        and m.deleted_at is null order by m.person_id`,
+      [closure.source_audit_event_id,organizationId])
+    if(!Array.isArray(owners)||owners.length>100||
+       owners.some(row=>typeof row.person_id!=="string"||
+         (row.receipt_id!==null&&typeof row.receipt_id!=="string")))
+      throw new IdentityAccessDenied()
+    return owners.map(row=>({
+      person_id:row.person_id as string,
+      receipt_id:row.receipt_id as string|null,
+      actor_type:row.actor_type as string|null,
+      actor_id:row.actor_id as string|null,
+      auth_identity_id:row.auth_identity_id as string|null
+    }))
+  }
+
   @InjectTransactionManager()
   async personalPlatformStoreClosingState(token:string,organizationId:string,
     sellerId:string,@MedusaContext() context:Context={}){

@@ -327,3 +327,12 @@ test('real public email CORS enforces configured Storefront origin and exact JSO
     await Promise.all([new Promise(done=>front.close(done)),new Promise(done=>upstream.close(done))])
   }
 })
+
+test('B22 mandatory Owner email preflight relays only exact GET, never native or write verbs',()=>{
+  const path='/personal/platform/store-closing-email-readiness'
+  assert.equal(allowedPublicRequest('GET',path),true)
+  for(const method of ['POST','PUT','PATCH','DELETE','OPTIONS'])
+    assert.equal(allowedPublicRequest(method,path),false)
+  for(const nested of [path+'/x',path+'/',path+'/sel_foreign'])
+    assert.equal(allowedPublicRequest('GET',nested),false)
+})

@@ -22,13 +22,15 @@ export async function verifyB22PlatformClosingAppeal(input:{
   ownerPersonId:string;staffPersonId:string;
   ownerOrgId:string;ownerOrgName:string;sellerId:string;
   buyer:B06Chrome;buyerScopePath:string;buyerOrganizationId:string;
-  checkoutCartId:string;customerId:string;query:any
+  checkoutCartId:string;customerId:string;query:any;auth:any;ownerEmail:string
 }):Promise<string>{
   const {browser,staff,q,foundation,ownerPersonId,staffPersonId,
     ownerOrgId,ownerOrgName,sellerId,buyer,buyerScopePath,
-    buyerOrganizationId,checkoutCartId,customerId,query}=input
+    buyerOrganizationId,checkoutCartId,customerId,query,auth,ownerEmail}=input
   const path="/personal/platform/store-closings"
   const privatePath="/personal/store-platform-closing"
+  const mailPath="/personal/platform/store-closing-email-readiness?"+
+    new URLSearchParams({organization_id:ownerOrgId,seller_id:sellerId}).toString()
   const readPath=privatePath+"?"+new URLSearchParams({
     organization_id:ownerOrgId,seller_id:sellerId}).toString()
   const before=(await q("select id,status,name,handle from seller where id=$1",[sellerId]))[0]
@@ -69,7 +71,9 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const orderBefore=Number((await q('select count(*)::int n from "order"'))[0].n)
   // Having store.approve or a native member does NOT authorize platform closure.
   assert.equal((await read(staff,path)).status,403)
-  const requestId="dascp_"+randomBytes(16).toString("hex")
+  assert.equal((await read(staff,mailPath)).status,403,
+    "Foreign Staff cannot enumerate protected Owner email readiness")
+  let requestId="dascp_"+randomBytes(16).toString("hex")
   const reason="B22 sentetik mağaza için gerekçeli platform kapatma denetimi"
   assert.equal((await write(browser,path,{
     organization_id:ownerOrgId,seller_id:sellerId,request_id:requestId,reason})).status,403)
@@ -80,16 +84,18 @@ export async function verifyB22PlatformClosingAppeal(input:{
       'B22 disposable platform closing security fixture')`,[grantId,staffPersonId])
   // Native Store fixture has >30 earlier applications. Inspect the existing
   // bounded Staff queue across actual server pages, not only the newest 30.
-  let found=false
+  let found=false,foundPage=-1
   for(let page=0;page<50;page++){
     const list=await read(staff,path+"?page="+page)
     assert.equal(list.status,200,"Strong independently authorized Staff lists Stores")
     assert.ok(Array.isArray(list.body?.candidates))
     if(list.body.candidates.some((x:any)=>
-      x.organization_id===ownerOrgId&&x.seller_id===sellerId)){found=true;break}
+      x.organization_id===ownerOrgId&&x.seller_id===sellerId)){found=true;foundPage=page;break}
     if(list.body.has_more!==true)break
   }
   assert.equal(found,true,"Existing approved source Store must remain accessible in Staff pagination")
+  assert.equal((await read(staff,mailPath)).status,403,
+    "Staff cannot inspect email readiness before the verified closure exists")
   const count=async()=>Number((await q(`select count(*)::int n from da_audit_event
     where resource='store-platform-closing' and target_id=$1`,[sellerId]))[0].n)
   const auditBefore=await count()
@@ -97,12 +103,111 @@ export async function verifyB22PlatformClosingAppeal(input:{
     organization_id:ownerOrgId,seller_id:sellerId,request_id:requestId,reason},true)).status,403,
     "Forged CSRF must not create a closure")
   assert.equal(await count(),auditBefore)
-  const created=await write(staff,path,{
-    organization_id:ownerOrgId,seller_id:sellerId,request_id:requestId,reason})
-  assert.equal(created.status,200)
-  assert.equal(created.body?.status,"notification_unverified")
-  assert.equal(created.body?.deadline_started,false)
-  assert.equal(created.body?.mandatory_email_verified,false)
+  // Real native Medusa verification precedes the first real Staff Chrome
+  // form submit. The UI itself must show the server-derived count of ONE.
+  // Only this disposable Medusa 2.22.3 AuthVerification record is created
+  // and confirmed. No browser-claimed email and no production verification
+  // shortcuts: the native Auth module issues and consumes its own code.
+  const ownerBindings=await q("select auth_identity_id from da_login_binding where person_id=$1 and actor_type='user' and revoked_at is null and verified_at is not null",[ownerPersonId])
+  assert.equal(ownerBindings.length,1)
+  const authId=ownerBindings[0].auth_identity_id
+  const challenge=await auth.requestAuthVerification({
+    auth_identity_id:authId,entity_id:ownerEmail,entity_type:"email",code_provider:"token"
+  })
+  assert.ok(typeof challenge.code==="string"&&challenge.code.length>=16)
+  const pending=await auth.listAuthVerifications({
+    auth_identity_id:authId,entity_type:"email"
+  },{take:null})
+  assert.equal(pending.some((v:any)=>v.id===challenge.id&&!v.verified_at),true)
+  await auth.confirmAuthVerification({auth_identity_id:authId,code:challenge.code,
+    code_provider:"token"})
+  const nativeProof=await auth.listAuthVerifications({
+    auth_identity_id:authId,entity_type:"email"
+  },{take:null})
+  assert.equal(nativeProof.some((v:any)=>v.id===challenge.id&&v.verified_at),true)
+  await staff.send("Page.bringToFront")
+  await staff.send("Page.reload",{ignoreCache:true})
+  await staff.wait("document.readyState==='complete' && "+
+    "!document.getElementById('workspace').hidden && "+
+    "!document.getElementById('platform-closing-panel').hidden")
+  for(let page=0;page<foundPage;page++){
+    assert.equal(await staff.eval("!document.getElementById('platform-closing-more').hidden"),true)
+    await staff.click("#platform-closing-more")
+    await staff.wait("document.getElementById('platform-closing-status').textContent!=='Yetkili mağazalar doğrulanıyor…'")
+  }
+  const canSelect=await staff.eval("(()=>{const e=document.querySelector('#platform-closing-form select[name=seller_id]');"+
+    "if(!e||!Array.from(e.options).some(o=>o.value==="+JSON.stringify(sellerId)+"))return false;"+
+    "e.value="+JSON.stringify(sellerId)+";e.dispatchEvent(new Event('change',{bubbles:true}));return e.value==="+JSON.stringify(sellerId)+"})()")
+  assert.equal(canSelect,true,"Real Staff UI must offer the same paginated Seller")
+  await staff.input("#platform-closing-form textarea[name=reason]",reason)
+  await staff.click("#platform-closing-form input[name=confirmed]")
+  await staff.click("#platform-closing-form button[type=submit]")
+  await staff.wait("document.getElementById('platform-closing-mail-status').textContent.includes('e-posta kimliği doğrulanmış: 1')")
+  const mailUi=await staff.eval("(()=>{const e=document.getElementById('platform-closing-mail-status');return {text:e.textContent,role:e.getAttribute('role'),live:e.getAttribute('aria-live')}})()")
+  assert.match(mailUi.text,/Korunan Owner: 1, kişisel bildirim: 1, e-posta kimliği doğrulanmış: 1/)
+  assert.match(mailUi.text,/teslim kanıtı yok; 10\/30 günlük sayaç başlamadı/)
+  assert.equal(mailUi.role,"status")
+  assert.equal(mailUi.live,"polite")
+  const createdRows=await q("select request_id,state,version from da_store_platform_closing where seller_id=$1 and organization_id=$2",[sellerId,ownerOrgId])
+  assert.equal(createdRows.length,1)
+  assert.equal(createdRows[0].state,"notification_unverified")
+  assert.equal(Number(createdRows[0].version),1)
+  assert.match(createdRows[0].request_id,/^dascp_[a-f0-9]{32}$/)
+  requestId=createdRows[0].request_id
+  const mailReadiness=await read(staff,mailPath)
+  assert.equal(mailReadiness.status,200)
+  assert.equal(mailReadiness.body?.status,"not_ready")
+  assert.equal(mailReadiness.body?.protected_owner_count,1)
+  assert.equal(mailReadiness.body?.private_receipt_count,1)
+  assert.equal(mailReadiness.body?.verified_email_identity_count,1,
+    "Native-confirmed Owner email is visible to the real Staff HTTPS route")
+  assert.equal(mailReadiness.body?.mailbox_delivery_verified_count,0)
+  assert.equal(mailReadiness.body?.deadline_started,false)
+  assert.equal(mailReadiness.body?.permanent_finalization_enabled,false)
+  assert.equal(JSON.stringify(mailReadiness.body).includes("@example.invalid"),false)
+  assert.equal(JSON.stringify(mailReadiness.body).includes(reason),false)
+
+  const verifiedReadiness=await read(staff,mailPath)
+  assert.equal(verifiedReadiness.status,200)
+  assert.equal(verifiedReadiness.body?.protected_owner_count,1)
+  assert.equal(verifiedReadiness.body?.verified_email_identity_count,1,
+    "One genuinely native-confirmed protected Owner email must count as 1")
+  assert.equal(verifiedReadiness.body?.mailbox_delivery_verified_count,0)
+  assert.equal(verifiedReadiness.body?.mandatory_email_verified,false)
+  assert.equal(verifiedReadiness.body?.deadline_started,false)
+  assert.equal(JSON.stringify(verifiedReadiness.body).includes(ownerEmail),false)
+  assert.equal(JSON.stringify(verifiedReadiness.body).includes(reason),false)
+  // A real verified proof without its canonical Person→Actor mapping is
+  // ambiguous and must not be counted. The mutation is limited to the task's
+  // disposable native mapping row, restored before any Owner operation.
+  const ownerMappings=await q("select id from da_actor_mapping where person_id=$1 and actor_type='user' and deleted_at is null",[ownerPersonId])
+  assert.equal(ownerMappings.length,1)
+  await q("update da_actor_mapping set deleted_at=clock_timestamp() where id=$1",[ownerMappings[0].id])
+  try{
+    const unresolved=await read(staff,mailPath)
+    assert.equal(unresolved.status,200)
+    assert.equal(unresolved.body?.verified_email_identity_count,0)
+    assert.equal(unresolved.body?.unresolved_identity_count,1)
+    assert.equal(unresolved.body?.deadline_started,false)
+  }finally{
+    await q("update da_actor_mapping set deleted_at=null where id=$1",[ownerMappings[0].id])
+  }
+  const mappingRestored=await read(staff,mailPath)
+  assert.equal(mappingRestored.status,200)
+  assert.equal(mappingRestored.body?.verified_email_identity_count,1,
+    "Canonical mapping restoration must restore positive native proof counting")
+  // Native soft-delete simulates only this test-owned proof's revocation.
+  // The Owner's actual login, MFA and Store authorization stay untouched.
+  await q("update auth_verification set deleted_at=clock_timestamp() where id=$1 and auth_identity_id=$2",[challenge.id,authId])
+  const revokedReadiness=await read(staff,mailPath)
+  assert.equal(revokedReadiness.status,200)
+  assert.equal(revokedReadiness.body?.verified_email_identity_count,0,
+    "Soft-deleted native email proof must not be treated as verified")
+  assert.equal(revokedReadiness.body?.mandatory_email_verified,false)
+  assert.equal(revokedReadiness.body?.deadline_started,false)
+  assert.equal((await read(browser,mailPath)).status,403,
+    "Protected Owner cannot use independent platform Staff preflight")
+  assert.equal((await read(staff,mailPath+"&unknown=1")).status,400)
   const state=await read(browser,readPath)
   assert.equal(state.status,200)
   assert.equal(state.body?.reason,reason)
@@ -222,6 +327,13 @@ export async function verifyB22PlatformClosingAppeal(input:{
   }])
   assert.match(secondOwnerMembership.id,/^[A-Za-z0-9_-]+$/)
   assert.notEqual(staffPersonId,ownerPersonId)
+  const newlyProtected=await read(staff,mailPath)
+  assert.equal(newlyProtected.status,200)
+  assert.equal(newlyProtected.body?.protected_owner_count,2)
+  assert.equal(newlyProtected.body?.private_receipt_count,1,
+    "Later promoted protected Owner has no initial closure receipt; never fake full delivery")
+  assert.equal(newlyProtected.body?.mandatory_email_verified,false)
+  assert.equal(newlyProtected.body?.deadline_started,false)
   const appealReason="B22 sentetik yetkili Owner kapatma kararına itiraz ediyor"
   await browser.input("#store-platform-appeal-form textarea[name=reason]",appealReason)
   await browser.click("#store-platform-appeal-form button")
@@ -333,6 +445,6 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
   assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
     [sellerId]))[0],before)
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners missing receipt, no delivery/timer, foreign denied\n")
   return secondOwnerMembership.id
 }

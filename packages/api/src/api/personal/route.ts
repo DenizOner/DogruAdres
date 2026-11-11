@@ -239,6 +239,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <h2 id="platform-closing-title">Platform mağaza kapatma süreci</h2>
     <p>Gerekçeli platform kararı yeni satışları derhal durdurur. Korunan Owner'lar gerekçeyi okuyabilir ve itiraz edebilir. Zorunlu e-posta teslimi doğrulanmadığından 10/30 günlük sayaç başlamaz, kalıcı kapatma veya ad/URL devri yapılmaz.</p>
     <p id="platform-closing-status" role="status" aria-live="polite"></p>
+    <p id="platform-closing-mail-status" role="status" aria-live="polite"></p>
     <form id="platform-closing-form">
       <label>Mağaza<select name="seller_id" required></select></label>
       <label>Gerekçe<textarea name="reason" minlength="10" maxlength="500" required rows="3"></textarea></label>
@@ -4597,6 +4598,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     platformClosingBusy=false;platformClosingUncertain=false;
     el('platform-closing-panel').hidden=true;
     el('platform-closing-status').textContent='';
+    el('platform-closing-mail-status').textContent='';
     const form=el('platform-closing-form');
     if(typeof form?.reset==='function')form.reset();
     const choice=typeof form?.elements?.namedItem==='function'?
@@ -4673,6 +4675,28 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const e=Error('Kayıt sonucu doğrulanamadı');e.uncertain=true;throw e;
       }
       msg.textContent='Yeni satışlar durdu. Owner kişisel bildirimleri kaydedildi; e-posta kanıtı olmadan sayaç başlamaz.';
+      const mailStatus=el('platform-closing-mail-status');
+      mailStatus.textContent='Zorunlu Owner e-posta ön koşulları kontrol ediliyor…';
+      try{
+        const check=await api('platform/store-closing-email-readiness?'+
+          new URLSearchParams({organization_id:chosen.organization_id,
+            seller_id:chosen.seller_id}).toString());
+        if(epoch!==viewEpoch||document.hidden)return;
+        if(check.status!=='not_ready'||check.deadline_started!==false||
+           check.mandatory_email_verified!==false||
+           !Number.isSafeInteger(check.protected_owner_count)||
+           !Number.isSafeInteger(check.private_receipt_count)||
+           !Number.isSafeInteger(check.verified_email_identity_count)||
+           check.mailbox_delivery_verified_count!==0)
+          throw Error('E-posta kanıtı doğrulanamadı');
+        mailStatus.textContent='Korunan Owner: '+check.protected_owner_count+
+          ', kişisel bildirim: '+check.private_receipt_count+
+          ', e-posta kimliği doğrulanmış: '+check.verified_email_identity_count+
+          '. E-posta gönderim ve alıcıya teslim kanıtı yok; 10/30 günlük sayaç başlamadı.';
+      }catch{
+        if(epoch===viewEpoch)
+          mailStatus.textContent='E-posta ön koşulları doğrulanamadı; süre ve kalıcı kapatma başlamaz.';
+      }
       form.reset();void refreshPlatformClosings();
     }catch(e){
       if(epoch!==viewEpoch)return;
