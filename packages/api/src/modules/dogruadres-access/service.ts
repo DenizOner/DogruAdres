@@ -5697,7 +5697,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const owner=await this.ownerPauseScope_(db,token,orgId,sellerId)
     if(!owner||owner.actor.person_id!==current.person_id)return null
     const locks=await db.execute(`select l.seller_id,l.person_id,l.issued_at,
-      d.delivered_at,c.deadline_started_at
+      d.delivered_at,c.deadline_started_at,c.reason
       from da_store_platform_closing_email_link l
       join da_store_platform_closing_email d on d.seller_id=l.seller_id
         and d.person_id=l.person_id
@@ -5728,7 +5728,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         updated_at=clock_timestamp()
       where seller_id=? and organization_id=? and deadline_started_at is null
       returning seller_id`,[at,sellerId,orgId])
-    return {viewed:true,deadline_started:started.length===1||
+    return {viewed:true,reason:String(locks[0].reason),
+      deadline_started:started.length===1||
       locks[0].deadline_started_at!==null}
   }
 
