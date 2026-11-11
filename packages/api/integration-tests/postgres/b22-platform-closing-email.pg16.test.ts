@@ -69,7 +69,7 @@ function serviceFor(tx:Pg){
   }}
   service.createAuditEvents=async(events:any[],scope:any)=>{
     assert.equal(scope,context)
-    const rows=[]
+    const rows:any[]=[]
     for(const e of events){
       const id="daaud_"+uuid()
       const inserted=await bind(tx,"insert into da_audit_event "+
@@ -90,7 +90,7 @@ function serviceFor(tx:Pg){
   service.createAuditOutboxes=async(items:any[],scope:any)=>{
     assert.equal(scope,context)
     if(injectOutboxFailure)throw Error("INJECTED_B22_CANONICAL_OUTBOX_FAILURE")
-    const rows=[]
+    const rows:any[]=[]
     for(const item of items){
       const inserted=await insertOutbox(tx,"daaob_"+uuid(),item)
       rows.push(inserted[0])
