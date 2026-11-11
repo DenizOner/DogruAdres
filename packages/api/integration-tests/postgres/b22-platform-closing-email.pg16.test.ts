@@ -515,20 +515,46 @@ async function main(){
       "(id,organization_id,person_id,role,status,protected_owner)"+
       "values ($1,$2,$3,'owner','active',true)",
       ["daomem_b22_mail_late",org,lateOwner])
+    // Test-only clock boundary: the source closure occurred T0=73 hours ago.
+    // B acquired Owner status at T0+71h, BEFORE the +72h fallback. Its
+    // separately sourced email receipt has no original-audit ancestry.
+    // This insertion models already-committed history in disposable PG16;
+    // refreshAudience is independently exercised by seller "a" below.
+    await q("insert into da_store_platform_closing_email "+
+      "(seller_id,person_id,late_notice_id,next_attempt_at,created_at) "+
+      "select $1,$2,'danot_'||gen_random_uuid()::text,"+
+      "c.started_at+interval '71 hours',c.started_at+interval '71 hours' "+
+      "from da_store_platform_closing c where c.seller_id=$1",
+      [nearDeadlineSeller,lateOwner])
     // The original decision has already exhausted its four slots.
     // A fresh late Owner has not completed their schedule; this must NOT
     // defer the original Admin notification or clock.
-    await runPlatformClosingEmailTick(container)
+    await Promise.all([
+      runPlatformClosingEmailTick(container),
+      runPlatformClosingEmailTick(container)
+    ])
     const initialClock=await row(nearDeadlineSeller)
     assert.equal(initialClock.deadline_basis,"admin_alert",
       "A late Owner must not defer the initial 72-hour clock")
     await assertAudit(nearDeadlineSeller,"admin_alert")
-    const nearDeadlineLate=(await q("select attempts,late_notice_id,delivered_at "+
-      "from da_store_platform_closing_email where seller_id=$1 and person_id=$2",
+    const nearDeadlineLate=(await q("select attempts,late_notice_id,delivered_at,"+
+      "created_at,next_attempt_at from da_store_platform_closing_email "+
+      "where seller_id=$1 and person_id=$2",
       [nearDeadlineSeller,lateOwner]))[0]
-    assert.equal(nearDeadlineLate.attempts,1)
+    assert.equal(nearDeadlineLate.attempts,1,
+      "Late Owner's four-slot schedule must stay independent")
     assert.ok(nearDeadlineLate.late_notice_id)
     assert.equal(nearDeadlineLate.delivered_at,null)
+    assert.equal(new Date(nearDeadlineLate.created_at).getTime()-
+      new Date(initialClock.started_at).getTime(),71*3600000,
+      "Late Owner was assigned one hour before the original +72h boundary")
+    assert.equal(new Date(nearDeadlineLate.next_attempt_at).getTime()-
+      new Date(nearDeadlineLate.created_at).getTime(),24*3600000)
+    assert.equal(Number((await q("select count(*)::int n "+
+      "from da_audit_event where target_id=$1 "+
+      "and action='organization.store_platform_closing_deadline_started'",
+      [nearDeadlineSeller]))[0].n),1,
+      "Concurrent worker replay must never create a second clock event")
     const originalAudit=(await row(a)).source_audit_event_id
     const oldRecipients=await q("select person_id from da_notification_receipt "+
       "where audit_event_id=$1",[originalAudit])
@@ -548,6 +574,22 @@ async function main(){
       "Later membership may never create a retroactive original-event receipt")
     assert.equal((await q("select count(*)::int n from da_notification_receipt "+
       "where person_id=$1 and audit_event_id=$2",[lateOwner,originalAudit]))[0].n,0)
+    // Revoking the late protected Owner must halt future SMTP claims, even
+    // when the existing per-recipient next_attempt_at becomes due.
+    await q("update da_organization_membership "+
+      "set status='revoked',revoked_at=clock_timestamp() "+
+      "where organization_id=$1 and person_id=$2",[org,lateOwner])
+    await q("update da_store_platform_closing_email "+
+      "set next_attempt_at=clock_timestamp()-interval '1 second' "+
+      "where seller_id=$1 and person_id=$2",[nearDeadlineSeller,lateOwner])
+    await runPlatformClosingEmailTick(container)
+    assert.equal(Number((await q("select attempts from da_store_platform_closing_email "+
+      "where seller_id=$1 and person_id=$2",[nearDeadlineSeller,lateOwner]))[0].attempts),1,
+      "Revoked late Owner must receive no additional email attempt")
+    assert.equal((await row(nearDeadlineSeller)).deadline_started_at.toISOString(),
+      initialClock.deadline_started_at.toISOString(),
+      "Revocation and worker replay must not restart the deadline")
+    process.stdout.write("PASS B22 PG16: T0+71h late Owner cannot defer original +72h Admin clock; concurrent workers produce one source audit/outbox, four-slot notice remains separate; revocation stops future attempts\n")
     process.stdout.write("PASS B22 PG16: post-closing Owner gets new dated private notice, original audit recipient history unchanged, separate +24h schedule\n")
     }finally{
       testSmtp=null
