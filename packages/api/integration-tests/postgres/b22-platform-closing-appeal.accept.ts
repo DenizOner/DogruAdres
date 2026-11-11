@@ -96,6 +96,20 @@ export async function verifyB22PlatformClosingAppeal(input:{
     where e.target_id=$1 and e.action='organization.store_platform_closing_started'
       and n.person_id=$2`,[sellerId,ownerPersonId])
   assert.equal(notifications[0].n,1,"Every active protected Owner receives durable private receipt")
+  const notices=await read(browser,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))
+  assert.equal(notices.status,200)
+  assert.ok(notices.body.notifications?.some((x:any)=>
+    x.title==="Platform mağaza kapatma incelemesi başladı"),
+    "The real current protected Owner must read the closure security receipt")
+  assert.equal(JSON.stringify(notices.body).includes(reason),false,
+    "Private closure explanation never enters a generic notification payload")
+  const foreignNotices=await read(staff,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))
+  assert.ok(foreignNotices.status===200||foreignNotices.status===403)
+  assert.equal(JSON.stringify(foreignNotices.body).includes(
+    "Platform mağaza kapatma incelemesi başladı"),false,
+    "An unrelated Staff/Organization role must not read Owner-only receipts")
   // Real browser Owner UI: normal HTTPS reload, Organization selection and
   // CDP mouse/keyboard submit. No synthetic .onsubmit() or hidden DOM override.
   await browser.send("Page.bringToFront")
