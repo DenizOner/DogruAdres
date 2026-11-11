@@ -1,0 +1,151 @@
+/** B22 #252: real first-party Chrome/HTTPS/PG16 platform closing and Owner
+ * appeal. Task-only actors and database. No SMTP success, timer or finalizer.
+ */
+import assert from "node:assert/strict"
+import {randomBytes} from "node:crypto"
+import type {B06Chrome} from "./b06-ui-browser"
+
+type Db=(sql:string,params?:unknown[])=>Promise<any[]>
+const read=async(browser:B06Chrome,path:string)=>browser.callFunction(
+  "async function(path){const r=await fetch(path,{cache:'no-store'});return {status:r.status,body:await r.json()}}",
+  path)
+const write=async(browser:B06Chrome,path:string,payload:unknown,badCsrf=false)=>
+  browser.callFunction("async function(args){const v=JSON.parse(args);"+
+  "const s=await(await fetch('/personal/session')).json();"+
+  "const r=await fetch(v.path,{method:'POST',headers:{'content-type':'application/json',"+
+  "'x-csrf-token':v.bad?'wrong':s.csrf_token},body:JSON.stringify(v.payload)});"+
+  "return {status:r.status,body:await r.json()}}",
+  JSON.stringify({path,payload,bad:badCsrf}))
+
+export async function verifyB22PlatformClosingAppeal(input:{
+  browser:B06Chrome;staff:B06Chrome;q:Db;foundation:any;
+  ownerPersonId:string;staffPersonId:string;
+  ownerOrgId:string;ownerOrgName:string;sellerId:string
+}):Promise<void>{
+  const {browser,staff,q,foundation,ownerPersonId,staffPersonId,
+    ownerOrgId,ownerOrgName,sellerId}=input
+  const path="/personal/platform/store-closings"
+  const privatePath="/personal/store-platform-closing"
+  const readPath=privatePath+"?"+new URLSearchParams({
+    organization_id:ownerOrgId,seller_id:sellerId}).toString()
+  const before=(await q("select id,status,name,handle from seller where id=$1",[sellerId]))[0]
+  assert.equal(before?.id,sellerId)
+  assert.equal(before?.status,"open","Source Store must be trading before Staff closes")
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),true)
+  assert.equal((await q("select count(*)::int n from da_store_platform_closing where seller_id=$1",
+    [sellerId]))[0].n,0)
+  const orderBefore=Number((await q('select count(*)::int n from "order"'))[0].n)
+  // Having store.approve or a native member does NOT authorize platform closure.
+  assert.equal((await read(staff,path)).status,403)
+  const requestId="dascp_"+randomBytes(16).toString("hex")
+  const reason="B22 sentetik mağaza için gerekçeli platform kapatma denetimi"
+  assert.equal((await write(browser,path,{
+    organization_id:ownerOrgId,seller_id:sellerId,request_id:requestId,reason})).status,403)
+  const grantId="da_staff_closing_"+randomBytes(8).toString("hex")
+  await q(`insert into da_platform_staff_grant
+    (id,person_id,task,resource,granted_by_person_id,reason)
+    values ($1,$2,'store.closing.manage','platform',$2,
+      'B22 disposable platform closing security fixture')`,[grantId,staffPersonId])
+  const list=await read(staff,path)
+  assert.equal(list.status,200,"Strong independently authorized platform Staff lists Stores")
+  assert.ok(list.body?.candidates?.some((x:any)=>
+    x.organization_id===ownerOrgId&&x.seller_id===sellerId))
+  const count=async()=>Number((await q(`select count(*)::int n from da_audit_event
+    where resource='store-platform-closing' and target_id=$1`,[sellerId]))[0].n)
+  const auditBefore=await count()
+  assert.equal((await write(staff,path,{
+    organization_id:ownerOrgId,seller_id:sellerId,request_id:requestId,reason},true)).status,403,
+    "Forged CSRF must not create a closure")
+  assert.equal(await count(),auditBefore)
+  const created=await write(staff,path,{
+    organization_id:ownerOrgId,seller_id:sellerId,request_id:requestId,reason})
+  assert.equal(created.status,200)
+  assert.equal(created.body?.status,"notification_unverified")
+  assert.equal(created.body?.deadline_started,false)
+  assert.equal(created.body?.mandatory_email_verified,false)
+  const state=await read(browser,readPath)
+  assert.equal(state.status,200)
+  assert.equal(state.body?.reason,reason)
+  assert.equal(state.body?.state,"notification_unverified")
+  assert.equal(state.body?.deadline_started,false)
+  assert.equal(state.body?.permanent_finalization_enabled,false)
+  assert.equal((await read(staff,readPath)).status,403,
+    "Staff task cannot read an unrelated Owner's private reason screen")
+  const replay=await write(staff,path,{
+    organization_id:ownerOrgId,seller_id:sellerId,request_id:requestId,reason})
+  assert.equal(replay.status,200)
+  assert.equal(replay.body?.replayed,true)
+  assert.equal(await count(),auditBefore+1)
+  assert.equal((await write(staff,path,{
+    organization_id:ownerOrgId,seller_id:sellerId,
+    request_id:"dascp_"+randomBytes(16).toString("hex"),reason})).status,409)
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false,
+    "Platform closure blocks Store sales even though native Seller is still open")
+  assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
+    [sellerId]))[0],before,"Closure must not rewrite native Seller/name/URL")
+  const notifications=await q(`select count(*)::int n from da_notification_receipt n
+    join da_audit_event e on e.id=n.audit_event_id
+    where e.target_id=$1 and e.action='organization.store_platform_closing_started'
+      and n.person_id=$2`,[sellerId,ownerPersonId])
+  assert.equal(notifications[0].n,1,"Every active protected Owner receives durable private receipt")
+  // Real browser Owner UI: normal HTTPS reload, Organization selection and
+  // CDP mouse/keyboard submit. No synthetic .onsubmit() or hidden DOM override.
+  await browser.send("Page.bringToFront")
+  await browser.send("Page.reload",{ignoreCache:true})
+  await browser.wait("document.readyState==='complete'&&!document.getElementById('workspace').hidden")
+  await browser.select(ownerOrgName,"owner")
+  await browser.wait("!document.getElementById('store-owner-pause-panel').hidden")
+  const selected=await browser.eval(`(()=>{
+    const x=document.querySelector('#store-owner-pause-form select[name=seller_id]');
+    if(!x||!Array.from(x.options).some(o=>o.value===${JSON.stringify(sellerId)}))return false;
+    x.value=${JSON.stringify(sellerId)};x.dispatchEvent(new Event('change',{bubbles:true}));
+    return x.value===${JSON.stringify(sellerId)};
+  })()`)
+  assert.equal(selected,true)
+  await browser.wait("!document.getElementById('store-platform-appeal-panel').hidden")
+  const ui=await browser.eval(`({
+    reason:document.getElementById('store-platform-appeal-reason').textContent,
+    status:document.getElementById('store-platform-appeal-status').getAttribute('role'),
+    live:document.getElementById('store-platform-appeal-status').getAttribute('aria-live'),
+    enabled:!document.querySelector('#store-platform-appeal-form button').disabled
+  })`)
+  assert.equal(ui.reason,"Platform karar gerekçesi: "+reason)
+  assert.equal(ui.status,"status")
+  assert.equal(ui.live,"polite")
+  assert.equal(ui.enabled,true)
+  const appealReason="B22 sentetik yetkili Owner kapatma kararına itiraz ediyor"
+  await browser.input("#store-platform-appeal-form textarea[name=reason]",appealReason)
+  await browser.click("#store-platform-appeal-form button")
+  await browser.wait("document.getElementById('store-platform-appeal-status').textContent.includes('İtiraz kaydedildi')")
+  const appealed=await read(browser,readPath)
+  assert.equal(appealed.status,200)
+  assert.equal(appealed.body?.state,"appealed")
+  assert.equal(appealed.body?.appeal_reason,appealReason)
+  assert.equal(appealed.body?.deadline_started,false)
+  assert.equal(appealed.body?.permanent_finalization_enabled,false)
+  assert.equal(await count(),auditBefore+2)
+  const [ledger]=await q(`select version,request_id,appeal_request_id,
+    started_at,appealed_at from da_store_platform_closing where seller_id=$1`,[sellerId])
+  assert.equal(ledger.version,2)
+  assert.equal(ledger.request_id,requestId)
+  assert.match(ledger.appeal_request_id,/^dapa_[a-f0-9]{32}$/)
+  assert.ok(ledger.appealed_at&&ledger.started_at)
+  const appealReplay=await write(browser,privatePath,{
+    organization_id:ownerOrgId,seller_id:sellerId,
+    request_id:ledger.appeal_request_id,expected_version:1,reason:appealReason})
+  assert.equal(appealReplay.status,200)
+  assert.equal(appealReplay.body.replayed,true)
+  assert.equal((await write(browser,privatePath,{
+    organization_id:ownerOrgId,seller_id:sellerId,
+    request_id:"dapa_"+randomBytes(16).toString("hex"),
+    expected_version:1,reason:appealReason})).status,409)
+  assert.equal((await q("select count(*)::int n from da_store_platform_closing where seller_id=$1",
+    [sellerId]))[0].n,1)
+  assert.equal(await count(),auditBefore+2)
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false,
+    "Appeal does not re-enable sales or release the Store name")
+  assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
+  assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
+    [sellerId]))[0],before)
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/email/finalization/native Order changes\n")
+}
