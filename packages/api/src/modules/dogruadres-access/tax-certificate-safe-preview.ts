@@ -61,7 +61,7 @@ async function rasterize(content: Buffer, mime: TaxCertificateFormat["mimeType"]
       // Next's ambient ProcessEnv type requires NODE_ENV, but this sandbox
       // MUST NOT inherit or add it. The assertion affects types only:
       // the child still receives exactly PATH and HOME, nothing else.
-      env: { PATH:"/usr/bin:/bin", HOME:"/tmp" } as NodeJS.ProcessEnv,
+      env: { PATH:"/usr/bin:/bin", HOME:"/tmp" } as unknown as NodeJS.ProcessEnv,
     })
     let done = false, count = 0
     const chunks: Buffer[] = []
