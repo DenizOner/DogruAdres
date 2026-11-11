@@ -501,12 +501,34 @@ async function main(){
         "disconnect uncertain; none grants mailbox delivery or premature clock\n")
     // New protected Owners get a separately timed current-state notice.
     // Their record must NOT backfill the original closure audit receipt.
+    // A newly assigned Owner at T0+71h must not restart the initial
+    // decision's 72-hour fallback. The new Owner still gets a private
+    // notice and their own four slots, independently of the old clock.
+    const nearDeadlineSeller="sel_b22_mail_pg_late_before_deadline"
+    await seed(nearDeadlineSeller,4,"failed")
+    const nearDeadlineAudit=(await row(nearDeadlineSeller)).source_audit_event_id
+    await q("insert into da_notification_receipt(id,person_id,audit_event_id) "+
+      "values ($1,$2,$3)",["danot_b22_initial_near_deadline",owner,nearDeadlineAudit])
     const lateOwner="dap_b22_mail_pg_late"
     await q("insert into da_person(id) values ($1)",[lateOwner])
     await q("insert into da_organization_membership"+
       "(id,organization_id,person_id,role,status,protected_owner)"+
       "values ($1,$2,$3,'owner','active',true)",
       ["daomem_b22_mail_late",org,lateOwner])
+    // The original decision has already exhausted its four slots.
+    // A fresh late Owner has not completed their schedule; this must NOT
+    // defer the original Admin notification or clock.
+    await runPlatformClosingEmailTick(container)
+    const initialClock=await row(nearDeadlineSeller)
+    assert.equal(initialClock.deadline_basis,"admin_alert",
+      "A late Owner must not defer the initial 72-hour clock")
+    await assertAudit(nearDeadlineSeller,"admin_alert")
+    const nearDeadlineLate=(await q("select attempts,late_notice_id,delivered_at "+
+      "from da_store_platform_closing_email where seller_id=$1 and person_id=$2",
+      [nearDeadlineSeller,lateOwner]))[0]
+    assert.equal(nearDeadlineLate.attempts,1)
+    assert.ok(nearDeadlineLate.late_notice_id)
+    assert.equal(nearDeadlineLate.delivered_at,null)
     const originalAudit=(await row(a)).source_audit_event_id
     const oldRecipients=await q("select person_id from da_notification_receipt "+
       "where audit_event_id=$1",[originalAudit])
