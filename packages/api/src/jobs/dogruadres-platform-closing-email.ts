@@ -35,8 +35,11 @@ async function refreshAudience(db: Db) {
     // The Source Audit + Outbox proof prevents a forged closure row from
     // creating a notification.
     await sql.execute(`insert into da_store_platform_closing_email
-      (seller_id,person_id,next_attempt_at)
-      select c.seller_id,m.person_id,clock_timestamp()
+      (seller_id,person_id,next_attempt_at,late_notice_id)
+      select c.seller_id,m.person_id,clock_timestamp(),
+        case when exists(select 1 from da_notification_receipt n
+          where n.audit_event_id=c.source_audit_event_id and n.person_id=m.person_id)
+          then null else 'danot_'||gen_random_uuid()::text end
       from da_store_platform_closing c
       join da_audit_event a on a.id=c.source_audit_event_id
         and a.deleted_at is null and a.action='organization.store_platform_closing_started'
@@ -51,25 +54,15 @@ async function refreshAudience(db: Db) {
         and p.deleted_at is null
       where c.state in ('notification_unverified','appealed')
       on conflict (seller_id,person_id) do nothing`)
-    await sql.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
-      select 'danot_'||gen_random_uuid()::text,m.person_id,c.source_audit_event_id
-      from da_store_platform_closing c
-      join da_organization_membership m on m.organization_id=c.organization_id
-        and m.role='owner' and m.protected_owner=true
-        and m.status='active' and m.revoked_at is null and m.deleted_at is null
-      join da_person p on p.id=m.person_id and p.disabled_at is null
-        and p.deleted_at is null
-      join da_audit_outbox o on o.source_audit_event_id=c.source_audit_event_id
-        and o.source_module='dogruadres-access' and o.deleted_at is null
-      on conflict (audit_event_id,person_id) do nothing`)
   })
 }
 
-async function claimDue(db: Db): Promise<Claim | null> {
+async function claimDue(db: Db, seen: Array<{seller_id:string;person_id:string}>): Promise<Claim | null> {
   return db.transactional(async em => {
     const claimId = randomUUID()
     const linkToken = randomBytes(32).toString("hex")
     const linkDigest = createHash("sha256").update(linkToken).digest("hex")
+    const exclude = seen.map(()=>`and not (d.seller_id=? and d.person_id=?)`).join("\n")
     const rows = await em.execute(`with due as (
       select d.seller_id,d.person_id from da_store_platform_closing_email d
       join da_store_platform_closing c on c.seller_id=d.seller_id
@@ -82,20 +75,26 @@ async function claimDue(db: Db): Promise<Claim | null> {
       where d.attempts<4 and d.delivered_at is null
         and d.next_attempt_at<=clock_timestamp()
         and (d.lease_until is null or d.lease_until<clock_timestamp())
+        ${exclude}
       order by d.next_attempt_at,d.seller_id,d.person_id
       for update of d skip locked limit 1
     )
     update da_store_platform_closing_email d
     set attempts=d.attempts+1,claim_id=?::uuid,
       last_result='inflight',last_attempt_at=clock_timestamp(),
-      next_attempt_at=clock_timestamp()+interval '24 hours',
+      -- All original slots are tied to the immutable first Staff decision.
+      -- Subsequent Owners start their own four-slot schedule when notified.
+      next_attempt_at=(case when d.late_notice_id is null then c.started_at
+        else d.created_at end)+((d.attempts+1)*interval '24 hours'),
       lease_until=clock_timestamp()+interval '10 minutes',
       updated_at=clock_timestamp()
     from due, da_store_platform_closing c
     where d.seller_id=due.seller_id and d.person_id=due.person_id
       and c.seller_id=d.seller_id
     returning d.seller_id,d.person_id,c.organization_id,d.attempts,
-      d.claim_id::text as claim_id`,[claimId])
+      d.claim_id::text as claim_id`,[
+      ...seen.flatMap(x=>[x.seller_id,x.person_id]),claimId
+    ])
     if(rows.length>1)throw new Error("B22 mail claim cardinality uncertain")
     if(rows.length===1){
       await em.execute(`insert into da_store_platform_closing_email_link
@@ -189,9 +188,13 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
   const db=scope(container)
   await refreshAudience(db)
   await reconcileExpiredClaims(db)
+  const seen:Array<{seller_id:string;person_id:string}>=[]
   for(let i=0;i<MAX_PER_TICK;i++){
-    const claim=await claimDue(db)
+    const claim=await claimDue(db,seen)
     if(!claim)break
+    // Catch up missed original calendar slots safely, but never send a
+    // recipient multiple SMTP messages inside one scheduler invocation.
+    seen.push({seller_id:claim.seller_id,person_id:claim.person_id})
     let result: "accepted"|"failed"|"unverified_identity"|"uncertain"="unverified_identity"
     let messageId:string|null=null
     try{
