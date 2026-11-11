@@ -115,6 +115,28 @@ describe("Audit Index version 1 validation and redaction", () => {
         expect(()=>projectFoundationAuditEvent({...event,...change}))
           .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
     })
+  it.each([
+    ["organization.store_platform_closing_started","platform_staff"],
+    ["organization.store_platform_closing_appealed","owner"]
+  ])("accepts separate platform closing/Owner appeal source with private reasons omitted", (action,role)=>{
+    const event={...source(),role_context:role,action,
+      resource:"store-platform-closing",target_id:"sel_platform_stage1",
+      new_values:{reason:"confidential-reason",reason_sha256:"fingerprint-only"},
+      previous_values:{email:"private-owner-email"}}
+    const envelope=projectFoundationAuditEvent(event)
+    expect(envelope.action).toBe(action)
+    expect(envelope.actor.role_context).toBe(role)
+    expect(validateAuditIndexEnvelope(envelope)).toEqual(envelope)
+    expect(JSON.stringify(envelope)).not.toContain("confidential-reason")
+    expect(JSON.stringify(envelope)).not.toContain("private-owner-email")
+    for(const wrongRole of ["member","admin",
+      role==="owner"?"platform_staff":"owner"]){
+      expect(()=>projectFoundationAuditEvent({...event,role_context:wrongRole}))
+        .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+    }
+    expect(()=>projectFoundationAuditEvent({...event,organization_id:"foreign"}))
+      .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+  })
   it.each(["organization.store_followed","organization.store_unfollowed"])(
     "projects a canonical Owner %s without private source data", action => {
       const e = projectFoundationAuditEvent({
