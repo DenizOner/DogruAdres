@@ -25,8 +25,25 @@ type Claim = {
   link_token: string
 }
 const MAX_PER_TICK = 12
-const scope = (container: MedusaContainer) =>
-  container.resolve(ContainerRegistrationKeys.MANAGER) as unknown as Db
+// The live Medusa container exposes its registered PostgreSQL Knex pool,
+// not a generic "manager" registration. Use the installed PG_CONNECTION and
+// its official transaction/raw methods; keep every claim/lease DB-atomic.
+const scope = (container: MedusaContainer):Db => {
+  const pg=container.resolve(ContainerRegistrationKeys.PG_CONNECTION) as unknown as {
+    transaction<T>(work:(trx:{
+      raw(sql:string,params:unknown[]):Promise<{rows:Record<string,any>[]}>
+    })=>Promise<T>):Promise<T>
+  }
+  return {transactional:<T>(work:(sql:Sql)=>Promise<T>)=>
+    pg.transaction(async trx=>work({
+      execute:async (statement:string,params:unknown[]=[])=>{
+        const response=await trx.raw(statement,params)
+        if(!Array.isArray(response.rows))
+          throw new Error("B22 PostgreSQL result is not a row set")
+        return response.rows
+      }
+    }))}
+}
 
 async function refreshAudience(db: Db) {
   await db.transactional(async em => {
