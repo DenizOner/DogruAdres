@@ -5319,6 +5319,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!scope||scope.store_status==="terminated"||
        (input.action==="start"&&scope.store_status!=="open"))
       return null
+    // A platform-initiated closure is a separate, stronger active process.
+    // Owner cannot start a parallel clock or bypass its appeal/notice gate.
+    if(input.action==="start"&&await this.platformClosingRow_(db,input.seller_id))
+      return {status:"conflict" as const}
     const existing=await this.ownerClosingRow_(db,input.seller_id,true)
     if(existing&&existing.organization_id!==input.organization_id)
       throw new IdentityAccessDenied()
