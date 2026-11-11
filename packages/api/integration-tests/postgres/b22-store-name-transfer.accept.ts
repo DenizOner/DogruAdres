@@ -4,6 +4,71 @@ import {randomBytes} from "node:crypto"
 import {B06Chrome} from "./b06-ui-browser"
 type Rows=(sql:string,params?:any[])=>Promise<any[]>
 type Store={application_id:string;seller_id:string;organization_id:string}
+type CartHistory={query:any;cartId:string;customerId:string;snapshot:unknown}
+/** Exact pre-existing Medusa Cart/Offer ownership snapshot for B22 name right
+ * assignment. Uses installed Mercur/Medusa native query graph, not a second
+ * Cart model. A source Seller must have a real persisted offer in this Cart.
+ * The fixture intentionally has NO historical Order: do not claim Order
+ * retention acceptance from an empty OrderGroup / order_cart snapshot.
+ */
+export async function snapshotB22TransferredStoreCart(input:{
+  q:Rows;query:any;cartId:string;sourceSellerId:string;
+  organizationId:string;customerId:string
+}):Promise<unknown>{
+  const {q,query,cartId,sourceSellerId,organizationId,customerId}=input
+  const [native]=await q(`select id,customer_id,completed_at
+    from cart where id=$1`,[cartId])
+  assert.equal(native?.id,cartId,"Pre-existing native Cart must exist")
+  assert.equal(native.customer_id,customerId)
+  assert.equal(native.completed_at,null,"Historical fixture remains uncompleted")
+  const {data:carts}=await query.graph({entity:"cart",fields:[
+    "id","customer.id","completed_at","items.id",
+    "items.offer.id","items.offer.seller_id"
+  ],filters:{id:cartId}})
+  assert.equal(carts.length,1)
+  assert.equal(carts[0].id,cartId)
+  assert.equal(carts[0].customer?.id,customerId)
+  const items=(carts[0].items??[]).map((line:any)=>({
+    line_id:String(line.id),
+    offer_id:String(line.offer?.id??""),
+    seller_id:String(line.offer?.seller_id??"")
+  })).sort((x:any,y:any)=>x.line_id.localeCompare(y.line_id))
+  assert.equal(items.length,2,"Existing two-Seller native Cart required")
+  assert.equal(new Set(items.map((x:any)=>x.line_id)).size,2)
+  assert.equal(new Set(items.map((x:any)=>x.seller_id)).size,2,
+    "Historical Cart must contain offers from two distinct native Sellers")
+  assert.ok(items.some((x:any)=>x.seller_id===sourceSellerId),
+    "Source Store must have an actual native Cart item before assignment")
+  assert.ok(items.every((x:any)=>x.offer_id&&x.seller_id))
+  const attribution=await q(`select cart_id,organization_id,customer_id,
+    person_id,source_audit_event_id from da_buyer_cart_attribution
+    where cart_id=$1`,[cartId])
+  assert.equal(attribution.length,1)
+  assert.equal(attribution[0].organization_id,organizationId)
+  assert.equal(attribution[0].customer_id,customerId)
+  assert.ok(attribution[0].source_audit_event_id)
+  const groups=await q(`select id from order_group where cart_id=$1 order by id`,
+    [cartId])
+  const {data:orderLinks}=await query.graph({entity:"order_cart",
+    fields:["order_id"],filters:{cart_id:cartId}})
+  assert.equal(groups.length,0,"Fixture has no historical OrderGroup")
+  assert.equal(orderLinks.length,0,"Fixture has no historical native Order")
+  return {
+    cart:{id:native.id,customer_id:native.customer_id,
+      completed_at:native.completed_at},
+    items,
+    attribution:{
+      cart_id:attribution[0].cart_id,
+      organization_id:attribution[0].organization_id,
+      customer_id:attribution[0].customer_id,
+      person_id:attribution[0].person_id,
+      source_audit_event_id:attribution[0].source_audit_event_id
+    },
+    order_groups:groups.length,
+    order_links:orderLinks.length
+  }
+}
+
 export async function verifyB22ExceptionalNameRight(input:{
   owner:B06Chrome;reviewer:B06Chrome;
   source:Store;target:Store;q:Rows
@@ -302,7 +367,8 @@ export async function verifyAssignedRecipientUse(input:{
   owner:B06Chrome;reviewer:B06Chrome;q:Rows;
   source:Store;target:Store;competitor:Pick<Store,'seller_id'|'organization_id'>;
   targetOrganizationName:string;competitorOrganizationName:string;
-  formerName:string;formerHandle:string;sourceVacated:boolean
+  formerName:string;formerHandle:string;sourceVacated:boolean;
+  cartHistory:CartHistory
 }):Promise<void>{
   const {owner,reviewer,q,source,target,competitor,formerName,
     formerHandle,sourceVacated,targetOrganizationName,
@@ -477,6 +543,14 @@ export async function verifyAssignedRecipientUse(input:{
     "C cannot take the transferred name after B adopts it")
   assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
     [cAfter.request_id]))[0].n,0)
+  const cartHistory=await snapshotB22TransferredStoreCart({
+    q,query:input.cartHistory.query,cartId:input.cartHistory.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.cartHistory.customerId
+  })
+  assert.deepEqual(cartHistory,input.cartHistory.snapshot,
+    "B's native name adoption cannot transfer original Cart/Offer/Seller attribution")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED\n")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: recipient B native name and URL adopted after source A vacates, historical 30-day hold retained, unrelated Store C HTTP409 before/after, Staff approval and audit/outbox durable\n")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: transferred old name remains reserved for B after source hold day 30, C HTTPS409 without request/audit, original timestamp restored, B native adoption succeeds\n")
 }
@@ -487,11 +561,21 @@ export async function verifyAssignedRecipientUse(input:{
 export async function verifyB22TransferredRecovery(input:{
   owner:B06Chrome;reviewer:B06Chrome;q:Rows;
   source:Store;target:Store;targetExpectedName:string;
+  query:any;cartId:string;customerId:string;
   competitor:Pick<Store,'seller_id'|'organization_id'>;targetOrganizationName:string;competitorOrganizationName:string;
   renameAndReopen:()=>Promise<void>;
   restoreFixture:()=>Promise<unknown>
-}):Promise<{formerName:string;formerHandle:string}>{
+}):Promise<{formerName:string;formerHandle:string;cartHistory:CartHistory}>{
   const {owner,reviewer,q,source,target,targetExpectedName}=input
+  const initialCart=await snapshotB22TransferredStoreCart({
+    q,query:input.query,cartId:input.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.customerId
+  })
+  const cartHistory:CartHistory={
+    query:input.query,cartId:input.cartId,customerId:input.customerId,
+    snapshot:initialCart
+  }
   const before=(await q(
     "select id,name,handle,status,approved_at from seller where id=$1",
     [source.seller_id]))[0]
@@ -500,7 +584,12 @@ export async function verifyB22TransferredRecovery(input:{
     owner,reviewer,q,source,target
   })
   assert.equal(assignment.formerName,before.name)
-  const recipientScope={owner,reviewer,q,source,target,competitor:input.competitor,
+  assert.deepEqual(await snapshotB22TransferredStoreCart({
+    q,query:input.query,cartId:input.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.customerId
+  }),initialCart,"Name right decision must not reassign existing Medusa Cart links")
+  const recipientScope={owner,reviewer,q,source,target,cartHistory,competitor:input.competitor,
     targetOrganizationName:input.targetOrganizationName,
     competitorOrganizationName:input.competitorOrganizationName,
     ...assignment}
@@ -527,6 +616,11 @@ export async function verifyB22TransferredRecovery(input:{
     [source.seller_id]))[0].status,"suspended")
   assert.equal((await q("select id from seller where id=$1",
     [source.seller_id]))[0].id,source.seller_id)
+  assert.deepEqual(await snapshotB22TransferredStoreCart({
+    q,query:input.query,cartId:input.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.customerId
+  }),initialCart,"Same-ID source recovery must retain native Cart identity")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: exceptional suspended Seller name-right assigned to approved separate Store; Owner new name and Staff reopen same ID, native/Order untouched before rename, foreign/CSRF/replay denied, audit/outbox and recipient reservation\n")
-  return assignment
+  return {...assignment,cartHistory}
 }

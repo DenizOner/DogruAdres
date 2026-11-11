@@ -7458,7 +7458,8 @@ export default async function({container}:any){
       rand,container,q
     })
     const transferAssignment=await verifyB22TransferredRecovery({
-      owner:browser,reviewer,q,
+      owner:browser,reviewer,q,query,
+      cartId:customerCart.id,customerId:nativeCustomer.id,
       source:{application_id:secondApplicationId,seller_id:secondOwnerStoreId,
         organization_id:organizations[0].id},
       target:{application_id:gammaApplication.application_id,seller_id:gammaSellerId,
