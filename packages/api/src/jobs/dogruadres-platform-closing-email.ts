@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
 import type { MedusaContainer } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { sendSmtpEmail } from "../modules/dogruadres-access/smtp-client"
 import { verifiedEmailForActorContext } from "../api/dogruadres/invitations/accept/route"
 
 /**
@@ -23,6 +24,7 @@ type Claim = {
   organization_id: string
   claim_id: string
   attempts: number
+  link_token: string
 }
 const MAX_PER_TICK = 12
 const scope = (container: MedusaContainer) =>
@@ -68,6 +70,8 @@ async function refreshAudience(db: Db) {
 async function claimDue(db: Db): Promise<Claim | null> {
   return db.transactional(async em => {
     const claimId = randomUUID()
+    const linkToken = randomBytes(32).toString("hex")
+    const linkDigest = createHash("sha256").update(linkToken).digest("hex")
     const rows = await em.getConnection().execute(`with due as (
       select d.seller_id,d.person_id from da_store_platform_closing_email d
       join da_store_platform_closing c on c.seller_id=d.seller_id
@@ -95,7 +99,15 @@ async function claimDue(db: Db): Promise<Claim | null> {
     returning d.seller_id,d.person_id,c.organization_id,d.attempts,
       d.claim_id::text as claim_id`,[claimId])
     if(rows.length>1)throw new Error("B22 mail claim cardinality uncertain")
-    return rows.length?rows[0] as Claim:null
+    if(rows.length===1){
+      await em.getConnection().execute(`insert into da_store_platform_closing_email_link
+        (seller_id,person_id,attempt,token_sha256)
+        values (?,?,?,?)`,[
+          rows[0].seller_id,rows[0].person_id,Number(rows[0].attempts),linkDigest
+        ])
+      return {...rows[0],link_token:linkToken} as Claim
+    }
+    return null
   })
 }
 
@@ -123,14 +135,15 @@ async function currentActor(db: Db, claim: Claim) {
   })
 }
 
-async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unverified_identity") {
+async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unverified_identity",messageId:string|null) {
   await db.transactional(async em => {
     const rows = await em.getConnection().execute(`update da_store_platform_closing_email
-      set last_result=?,claim_id=null,lease_until=null,
-        updated_at=clock_timestamp()
+      set last_result=?,message_id=case when ?='accepted' then ? else message_id end,
+        claim_id=null,lease_until=null,updated_at=clock_timestamp()
       where seller_id=? and person_id=? and claim_id=?::uuid
         and last_result='inflight'
-      returning seller_id`,[outcome,claim.seller_id,claim.person_id,claim.claim_id])
+      returning seller_id`,[outcome,outcome,messageId,
+        claim.seller_id,claim.person_id,claim.claim_id])
     if(rows.length!==1)throw new Error("B22 mail result not committed")
   })
 }
@@ -224,6 +237,7 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
     const claim=await claimDue(db)
     if(!claim)break
     let result: "accepted"|"failed"|"unverified_identity"="unverified_identity"
+    let messageId:string|null=null
     try{
       const actor=await currentActor(db,claim)
       if(actor){
@@ -235,27 +249,40 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
           const origin=process.env.DOGRUADRES_PUBLIC_ORIGIN
           if(!origin || new URL(origin).protocol!=="https:")
             throw new Error("Missing secure first-party notification origin")
-          const notification=container.resolve(Modules.NOTIFICATION) as {
-            createNotifications(value:Record<string,unknown>):Promise<unknown>
+          // Medusa's native Notification module stores its entire data
+          // payload and exposes it to notification:read users. A per-recipient
+          // link token must NOT be persisted there. Reuse the existing
+          // configured project SMTP transport and persist only its acceptance.
+          const access=container.resolve("dogruadresAccess") as {
+            getActiveSmtpConfig():Promise<{
+              enabled:boolean;host:string;port:number;
+              security:"ssl"|"tls"|"none";username?:string|null;
+              password?:string|null;from_email:string;from_name?:string|null
+            }|null>
           }
-          // Never put the private reason or Owner/Store identifiers into the
-          // Medusa Notification 'data' property, which native Admin can read.
-          await notification.createNotifications({
-            to:email,channel:"email",template:"platform-store-closing",
-            data:{
-              subject:"DoğruAdres güvenlik bildirimi",
-              text:"Yönettiğiniz bir mağaza için kapatma incelemesi açıldı. "+
-                "Güvenli hesabınızda ilgili işletmeyi seçip ayrıntıları inceleyin: "+
-                origin+"/personal"
-            }
+          const smtp=await access.getActiveSmtpConfig()
+          if(!smtp?.enabled)throw new Error("Mandatory mail transport unavailable")
+          const transport=await sendSmtpEmail({
+            to:email,
+            subject:"DoğruAdres mağaza kapatma güvenlik bildirimi",
+            text:"Yönettiğiniz bir mağazada platform kapatma incelemesi "+
+              "başlatıldı ve yeni satışlar durduruldu. Gerekçeyi ve itiraz "+
+              "seçeneklerini yalnız güvenli DoğruAdres hesabınızdan inceleyin: "+
+              origin+"/personal#closing_notice="+claim.link_token
+          },{
+            enabled:smtp.enabled,host:smtp.host,port:smtp.port,
+            security:smtp.security,username:smtp.username??undefined,
+            password:smtp.password??undefined,
+            fromEmail:smtp.from_email,fromName:smtp.from_name??undefined
           })
+          messageId=transport.messageId
           result="accepted" // still NOT delivered
         }
       }
     }catch{
       result="failed"
     }
-    await settle(db,claim,result)
+    await settle(db,claim,result,messageId)
   }
   await settleExhaustion(db)
 }
