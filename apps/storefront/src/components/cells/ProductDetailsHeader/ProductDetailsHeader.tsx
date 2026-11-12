@@ -135,7 +135,7 @@ export const ProductDetailsHeader = ({
         quantity: 1,
         countryCode: locale,
       })
-    } catch (error) {
+    } catch {
       toast.error({
         title: "Error adding to cart",
         description: "This offer does not have the required inventory",
