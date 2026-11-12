@@ -684,3 +684,179 @@ export async function verifyB22PlatformClosingAppeal(input:{
   }
   return secondOwnerMembership.id
 }
+
+/** The ordinary first appeal is already accepted above. This second and
+ * independent disposable Seller has NOT appealed during the first ten days.
+ * Its synthetic, canonical T0+11d source/clock is historical fixture data;
+ * actual Owner/Staff authorization and the request run through real HTTPS,
+ * Chrome, Medusa service and PostgreSQL 16.
+ */
+export async function verifyB22PlatformClosingSecondStageRequest(input:{
+  browser:B06Chrome;staff:B06Chrome;q:Db;foundation:any;
+  sourceSellerId:string;reviewSellerId:string;
+  ownerPersonId:string;staffPersonId:string;
+  organizationId:string;organizationName:string
+}):Promise<void>{
+  const {browser,staff,q,foundation,sourceSellerId,reviewSellerId,
+    ownerPersonId,staffPersonId,organizationId,organizationName}=input
+  const readPath="/personal/store-platform-closing?"+
+    new URLSearchParams({organization_id:organizationId,seller_id:reviewSellerId})
+  const postPath="/personal/store-platform-closing-final-review"
+  const clockStart=new Date(Date.now()-11*86400000).toISOString()
+  const sourceStart=new Date(Date.now()-12*86400000).toISOString()
+  const reason="B22 sentetik on iki gün önceki gerekçeli platform kapatma kaydı"
+  const sourceRequest="dascp_"+randomBytes(16).toString("hex")
+  const sourceAudit="daaud_"+randomBytes(16).toString("hex")
+  const deadlineAudit="daaud_"+randomBytes(16).toString("hex")
+  const sourceActors=await q(`select e.actor_person_id,e.actor_type,e.actor_id
+    from da_store_platform_closing c
+    join da_audit_event e on e.id=c.source_audit_event_id
+    where c.seller_id=$1`,[sourceSellerId])
+  const deadlineActors=await q(`select e.actor_person_id,e.actor_type,e.actor_id
+    from da_store_platform_closing c
+    join da_audit_event e on e.id=c.deadline_audit_event_id
+    where c.seller_id=$1`,[sourceSellerId])
+  assert.equal(sourceActors.length,1)
+  assert.equal(deadlineActors.length,1)
+  const issuer=sourceActors[0],owner=deadlineActors[0]
+  assert.equal(issuer.actor_person_id,staffPersonId)
+  assert.equal(owner.actor_person_id,ownerPersonId)
+  assert.equal((await q("select count(*)::int n from da_store_platform_closing "+
+    "where seller_id=$1",[reviewSellerId]))[0].n,0,
+    "The independent Seller must not already have a closure")
+  const persistedSeller=await q("select id,status,approved_at,name,handle from seller "+
+    "where id=$1",[reviewSellerId])
+  assert.equal(persistedSeller.length,1)
+  assert.ok(persistedSeller[0].approved_at)
+  const sourceBody={request_id:sourceRequest,state:"notification_unverified",
+    reason_sha256:createHash("sha256").update(reason).digest("hex")}
+  const historical=[
+    {id:sourceAudit,role:"platform_staff",actor:issuer,
+      action:"organization.store_platform_closing_started",
+      payload:sourceBody,when:sourceStart},
+    {id:deadlineAudit,role:"owner",actor:owner,
+      action:"organization.store_platform_closing_deadline_started",
+      payload:{basis:"owner_delivery",deadline_started_at:clockStart},
+      when:clockStart}
+  ]
+  for(const event of historical){
+    await q(`insert into da_audit_event
+      (id,actor_person_id,actor_type,actor_id,role_context,organization_id,
+       action,module,resource,target_id,new_values,occurred_at)
+      values ($1,$2,$3,$4,$5,$6,$7,'dogruadres-access',
+        'store-platform-closing',$8,$9::jsonb,$10::timestamptz)`,[
+      event.id,event.actor.actor_person_id,event.actor.actor_type,
+      event.actor.actor_id,event.role,organizationId,event.action,
+      reviewSellerId,JSON.stringify(event.payload),event.when])
+    const envelope={version:1,source_module:"dogruadres-access",
+      source_audit_event_id:event.id,organization_id:organizationId,
+      actor:{person_id:event.actor.actor_person_id,type:event.actor.actor_type,
+        id:event.actor.actor_id,role_context:event.role},
+      action:event.action,resource:"store-platform-closing",
+      target_id:reviewSellerId,occurred_at:event.when}
+    await q(`insert into da_audit_outbox
+      (id,source_audit_event_id,source_module,envelope_version,envelope,status)
+      values ($1,$2,'dogruadres-access',1,$3::jsonb,'pending')`,[
+      "daaob_"+randomBytes(16).toString("hex"),event.id,JSON.stringify(envelope)])
+  }
+  await q(`insert into da_store_platform_closing
+    (seller_id,organization_id,state,version,request_id,reason,
+     source_audit_event_id,started_at,deadline_started_at,
+     deadline_basis,deadline_audit_event_id)
+    values ($1,$2,'notification_unverified',1,$3,$4,$5,$6::timestamptz,
+      $7::timestamptz,'owner_delivery',$8)`,[
+    reviewSellerId,organizationId,sourceRequest,reason,sourceAudit,
+    sourceStart,clockStart,deadlineAudit])
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible'")
+  await browser.select(organizationName,"owner")
+  const prior=await read(browser,readPath)
+  assert.equal(prior.status,200,
+    "Current protected Owner must access the independent Store's private closure")
+  assert.equal(prior.body?.first_appeal_open,false)
+  assert.equal(prior.body?.final_review_open,true)
+  assert.equal(prior.body?.final_review_requested,false)
+  assert.equal(prior.body?.deadline_started_at,clockStart)
+  const deniedStaff=await read(staff,readPath)
+  assert.equal(deniedStaff.status,403,
+    "A platform Staff grant does not grant private foreign Owner authority")
+  const requestId="dasfr_"+randomBytes(16).toString("hex")
+  const reviewReason="B22 sentetik bağımsız inceleme talebi için özel gerekçe"
+  const payload={organization_id:organizationId,seller_id:reviewSellerId,
+    request_id:requestId,expected_version:1,reason:reviewReason}
+  assert.equal((await write(browser,postPath,payload,true)).status,403,
+    "Forged CSRF cannot file an upper review request")
+  assert.equal((await write(staff,postPath,payload)).status,403,
+    "Foreign protected Owner status cannot be inferred from platform Staff")
+  // The positive journey must be a REAL Owner Chrome form submit, not
+  // a direct fetch disguised as browser acceptance. The server still owns
+  // eligibility, time and request ID; all requests use native CSRF/session.
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible' && "+
+    "!document.getElementById('store-owner-pause-panel').hidden")
+  const choice=await browser.eval("(()=>{"+
+    "const e=document.querySelector('#store-owner-pause-form select[name=seller_id]');"+
+    "if(!e||!Array.from(e.options).some(o=>o.value==="+
+    JSON.stringify(reviewSellerId)+"))return false;"+
+    "e.value="+JSON.stringify(reviewSellerId)+";"+
+    "e.dispatchEvent(new Event('change',{bubbles:true}));"+
+    "return e.value==="+JSON.stringify(reviewSellerId)+"})()")
+  assert.equal(choice,true,"Private Owner Store picker must offer the exact Store")
+  await browser.wait("!document.getElementById('store-platform-appeal-panel').hidden && "+
+    "!document.getElementById('store-platform-final-review-form').hidden && "+
+    "!document.querySelector('#store-platform-final-review-form button').disabled")
+  assert.equal(await browser.eval(
+    "document.querySelector('#store-platform-appeal-form button').disabled"),true,
+    "A new first appeal cannot be submitted during second-stage review")
+  await browser.input("#store-platform-final-review-form textarea[name=reason]",
+    reviewReason)
+  await browser.click("#store-platform-final-review-form button")
+  await browser.wait(
+    "document.getElementById('store-platform-appeal-status').textContent.includes("+
+    JSON.stringify("Bağımsız üst inceleme başvurusu kaydedildi")+") && "+
+    "document.getElementById('store-platform-final-review-form').hidden")
+  const saved=await q("select final_review_request_id from da_store_platform_closing "+
+    "where seller_id=$1",[reviewSellerId])
+  assert.equal(saved.length,1)
+  assert.match(saved[0].final_review_request_id,/^dasfr_[a-f0-9]{32}$/)
+  const actualRequestId=saved[0].final_review_request_id as string
+  const acceptedPayload={...payload,request_id:actualRequestId}
+  const after=await read(browser,readPath)
+  assert.equal(after.status,200)
+  assert.equal(after.body?.final_review_requested,true)
+  assert.equal(after.body?.final_review_open,false)
+  assert.equal(after.body?.state,"notification_unverified",
+    "Filing review never determines the outcome or reopens sales")
+  assert.equal(after.body?.deadline_started_at,clockStart)
+  assert.equal(after.body?.final_review_reason,reviewReason)
+  const replay=await write(browser,postPath,acceptedPayload)
+  assert.equal(replay.status,200)
+  assert.equal(replay.body?.replayed,true)
+  assert.equal((await write(browser,postPath,{
+    ...acceptedPayload,request_id:"dasfr_"+randomBytes(16).toString("hex")
+  })).status,409)
+  const persisted=await q(`select c.final_review_request_id,c.final_review_audit_event_id,
+    c.final_review_requested_at,c.deadline_started_at,c.state,
+    e.new_values,x.source_audit_event_id
+    from da_store_platform_closing c
+    join da_audit_event e on e.id=c.final_review_audit_event_id
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+    where c.seller_id=$1`,[reviewSellerId])
+  assert.equal(persisted.length,1)
+  assert.equal(persisted[0].final_review_request_id,actualRequestId)
+  assert.equal(persisted[0].deadline_started_at.toISOString(),clockStart)
+  assert.equal(persisted[0].state,"notification_unverified")
+  assert.equal(persisted[0].new_values.reason_sha256,
+    createHash("sha256").update(reviewReason).digest("hex"))
+  assert.equal(JSON.stringify(persisted).includes(reviewReason),false,
+    "Audit/outbox may contain only the reason digest")
+  assert.equal((await q("select count(*)::int n from da_notification_receipt "+
+    "where audit_event_id=$1",[persisted[0].final_review_audit_event_id]))[0].n>=1,true)
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([reviewSellerId]),false)
+  const notifications=await read(browser,"/personal/notifications")
+  assert.equal(notifications.status,200)
+  assert.ok(notifications.body?.notifications?.some((item:any)=>
+    item.title==="Üst inceleme başvurusu kaydedildi"),
+    "The Owner must see a private, actor-neutral review receipt")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: synthetic T0+11d second-stage Owner request, real protected Owner/foreign Staff/CSRF/replay, one durable audit/outbox and private notice; Store stays closed, original 10+20 clock unchanged; stage time fixture is synthetic, real Owner Chrome form submitted and confirmed\n")
+}

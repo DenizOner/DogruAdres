@@ -10,6 +10,7 @@ import { createServer } from "node:net"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import AccessService from "../../src/modules/dogruadres-access/service"
 import { Migration20261111170000 } from "../../src/modules/dogruadres-access/migrations/Migration20261111170000"
+import { Migration20261112100000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112100000"
 import { runPlatformClosingEmailTick } from "../../src/jobs/dogruadres-platform-closing-email"
 import { canonicalEventForOutbox } from "../../src/modules/dogruadres-access/audit-delivery-policy"
 import { projectFoundationAuditEvent } from "../../src/modules/dogruadres-audit-index/envelope"
@@ -79,16 +80,20 @@ function serviceFor(tx:Pg){
     const rows:any[]=[]
     for(const e of events){
       const id="daaud_"+uuid()
+      const finalReview=e.action==="organization.store_platform_closing_final_review_requested"
+      const values=finalReview?
+        "jsonb_build_object('request_id',?::text,'stage',?::text,'reason_sha256',?::text)":
+        "jsonb_build_object('basis',?::text,'deadline_started_at',?::text,'evidence',?::text)"
       const inserted=await bind(tx,"insert into da_audit_event "+
         "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
         "action,module,resource,target_id,new_values,occurred_at) "+
-        "values (?,?,?,?,?,?,?,?,?,?,"+
-        "jsonb_build_object('basis',?::text,'deadline_started_at',?::text,'evidence',?::text),?) "+
-        "returning *",[
+        "values (?,?,?,?,?,?,?,?,?,?,"+values+",?) returning *",[
         id,e.actor_person_id,e.actor_type,e.actor_id,e.role_context??null,
         e.organization_id??null,e.action,e.module,e.resource,e.target_id??null,
-        e.new_values.basis,e.new_values.deadline_started_at,
-        e.new_values.evidence,e.occurred_at
+        finalReview?e.new_values.request_id:e.new_values.basis,
+        finalReview?e.new_values.stage:e.new_values.deadline_started_at,
+        finalReview?e.new_values.reason_sha256:e.new_values.evidence,
+        e.occurred_at
       ])
       rows.push(inserted[0])
     }
@@ -172,6 +177,7 @@ async function setup(){
   await q("create table da_actor_mapping (id text,person_id text,actor_type text,"+
     "actor_id text,deleted_at timestamptz)")
   await migrate(Migration20261111170000)
+  await migrate(Migration20261112100000)
   await q("insert into da_person(id) values ($1),($2)",[owner,staff])
   await q("insert into da_organization_membership"+
     "(id,organization_id,person_id,role,status,protected_owner)"+
@@ -221,6 +227,34 @@ async function seed(seller:string,attempts=0,state="pending",leaseExpired=false,
     "values ($1,$2,clock_timestamp()-interval '1 second',$3,$4,$5,"+
     "case when $5::uuid is null then null else clock_timestamp()-interval '1 second' end)",
     [seller,owner,attempts,state,claim])
+}
+/** Disposable fixture only; never changes the real clock or protected data. */
+async function syntheticDeadline(seller:string,ageHours:number){
+  const when=new Date(Date.now()-ageHours*3600000).toISOString()
+  const eventId="daaud_"+uuid()
+  await q("insert into da_audit_event "+
+    "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
+    "action,module,resource,target_id,new_values,occurred_at) "+
+    "values ($1,$2,'user',$3,'owner',$4,"+
+    "'organization.store_platform_closing_deadline_started',"+
+    "'dogruadres-access','store-platform-closing',$5,"+
+    "jsonb_build_object('basis','owner_delivery',"+
+    "'deadline_started_at',$6::text),$6::timestamptz)",
+    [eventId,owner,syntheticActor,org,seller,when])
+  await insertOutbox(db as Pg,"daaob_"+uuid(),{
+    source_audit_event_id:eventId,source_module:"dogruadres-access",
+    envelope_version:1,status:"pending",envelope:{
+      version:1,source_module:"dogruadres-access",
+      source_audit_event_id:eventId,organization_id:org,
+      actor:{person_id:owner,type:"user",id:syntheticActor,role_context:"owner"},
+      action:"organization.store_platform_closing_deadline_started",
+      resource:"store-platform-closing",target_id:seller,occurred_at:when
+    }
+  })
+  await q("update da_store_platform_closing "+
+    "set deadline_started_at=$2,deadline_basis='owner_delivery',"+
+    "deadline_audit_event_id=$3 where seller_id=$1",[seller,when,eventId])
+  return when
 }
 async function row(seller:string){
   const rows=await q("select * from da_store_platform_closing where seller_id=$1",[seller])
@@ -573,6 +607,110 @@ async function main(){
       [expiredSeller]))[0].n,0,
       "Late appeal may not generate private Owner notices")
     process.stdout.write("PASS B22 PG16: expired day-11 first appeal denied with unchanged deadline, state, audit/outbox and private receipts\n")
+    // Day 11 is too late for a NEW first appeal, yet inside the approved
+    // day-10..30 independent review request window. Two real PG16 workers
+    // contend on the same Seller advisory lock and persist ONE canonical
+    // event/outbox and one Owner receipt.
+    const reviewRequestId="dasfr_"+uuid()
+    const reviewReason="Sentetik Owner kalan 20 günlük üst inceleme talebini sunuyor"
+    const requestReview=()=>db.begin(async (tx:Pg)=>{
+      const {service,context}=serviceFor(tx)
+      ;(service as any).ownerPauseScope_=async()=>({
+        actor:{person_id:owner,actor_type:"user",actor_id:syntheticActor}
+      })
+      return service.personalRequestPlatformStoreClosingFinalReview(
+        "synthetic-clock-only",{
+          organization_id:org,seller_id:expiredSeller,
+          request_id:reviewRequestId,expected_version:1,reason:reviewReason
+        },context)
+    })
+    const concurrent=await Promise.all([requestReview(),requestReview()])
+    assert.deepEqual(concurrent.map(x=>x?.status),[
+      "review_requested","review_requested"])
+    assert.deepEqual(concurrent.map(x=>x?.replayed).sort(),[false,true],
+      "Concurrent Owner submissions must persist only one review request")
+    const finalRow=await row(expiredSeller)
+    assert.equal(finalRow.state,"notification_unverified",
+      "An upper-review request must not reopen sales or decide the closure")
+    assert.equal(finalRow.version,1)
+    assert.equal(finalRow.final_review_request_id,reviewRequestId)
+    assert.equal(finalRow.final_review_reason,reviewReason)
+    assert.equal(finalRow.final_review_requested_by_person_id,owner)
+    assert.equal(finalRow.deadline_started_at.toISOString(),expiredDeadline,
+      "The canonical 10+20 clock must never restart")
+    assert.equal((await q("select count(*)::int n from da_audit_event "+
+      "where target_id=$1",[expiredSeller]))[0].n,countBefore+1)
+    assert.equal((await q("select count(*)::int n "+
+      "from da_audit_outbox x join da_audit_event e "+
+      "on e.id=x.source_audit_event_id where e.target_id=$1",
+      [expiredSeller]))[0].n,outboxBefore+1)
+    const reviewRaw=(await q("select e.*,x.envelope,x.envelope_version,"+
+      "x.source_audit_event_id,x.source_module "+
+      "from da_audit_event e join da_audit_outbox x "+
+      "on x.source_audit_event_id=e.id "+
+      "where e.id=$1",[finalRow.final_review_audit_event_id]))[0]
+    assert.ok(reviewRaw)
+    const reviewCanonical={
+      ...reviewRaw,
+      new_values:typeof reviewRaw.new_values==="string"?
+        JSON.parse(reviewRaw.new_values):reviewRaw.new_values,
+      envelope:typeof reviewRaw.envelope==="string"?
+        JSON.parse(reviewRaw.envelope):reviewRaw.envelope
+    }
+    assert.equal(reviewCanonical.action,
+      "organization.store_platform_closing_final_review_requested")
+    assert.equal(reviewCanonical.role_context,"owner")
+    assert.equal(reviewCanonical.new_values.reason_sha256,sha(reviewReason),
+      "Reason remains private, only its digest enters the audit")
+    assert.equal(JSON.stringify(reviewCanonical).includes(reviewReason),false)
+    assert.ok(canonicalEventForOutbox(reviewCanonical,reviewCanonical),
+      "The upper review has a real canonical source audit and outbox")
+    assert.equal(projectFoundationAuditEvent(reviewCanonical).action,
+      "organization.store_platform_closing_final_review_requested")
+    assert.equal((await q("select count(*)::int n from da_notification_receipt "+
+      "where audit_event_id=$1",[finalRow.final_review_audit_event_id]))[0].n,1)
+    const conflict=await db.begin(async (tx:Pg)=>{
+      const {service,context}=serviceFor(tx)
+      ;(service as any).ownerPauseScope_=async()=>({
+        actor:{person_id:owner,actor_type:"user",actor_id:syntheticActor}
+      })
+      return service.personalRequestPlatformStoreClosingFinalReview(
+        "synthetic-clock-only",{
+          organization_id:org,seller_id:expiredSeller,
+          request_id:"dasfr_"+uuid(),expected_version:1,reason:reviewReason
+        },context)
+    })
+    assert.deepEqual(conflict,{status:"conflict"},
+      "A different request may not generate another review")
+    for(const [seller,ageHours] of [
+      ["sel_b22_final_review_too_early",9*24],
+      ["sel_b22_final_review_too_late",31*24]
+    ] as const){
+      await seed(seller,4,"failed",false,
+        new Date(Date.now()-(ageHours+24)*3600000).toISOString())
+      const initialDeadline=await syntheticDeadline(seller,ageHours)
+      const before=(await q("select count(*)::int n from da_audit_event "+
+        "where target_id=$1",[seller]))[0].n
+      const denied=await db.begin(async (tx:Pg)=>{
+        const {service,context}=serviceFor(tx)
+        ;(service as any).ownerPauseScope_=async()=>({
+          actor:{person_id:owner,actor_type:"user",actor_id:syntheticActor}
+        })
+        return service.personalRequestPlatformStoreClosingFinalReview(
+          "synthetic-clock-only",{
+            organization_id:org,seller_id:seller,
+            request_id:"dasfr_"+uuid(),expected_version:1,reason:reviewReason
+          },context)
+      })
+      assert.deepEqual(denied,{status:"conflict"})
+      const unchanged=await row(seller)
+      assert.equal(unchanged.final_review_request_id,null)
+      assert.equal(unchanged.deadline_started_at.toISOString(),initialDeadline)
+      assert.equal((await q("select count(*)::int n from da_audit_event "+
+        "where target_id=$1",[seller]))[0].n,before,
+        "Denied out-of-window review cannot write audit/outbox or state")
+    }
+    process.stdout.write("PASS B22 PG16: day-11 independent review once under two workers, canonical audit/outbox and private receipt; day-9/day-31 conflict, no clock restart or finalizer\n")
     // New protected Owners get a separately timed current-state notice.
     // Their record must NOT backfill the original closure audit receipt.
     // A newly assigned Owner at T0+71h must not restart the initial

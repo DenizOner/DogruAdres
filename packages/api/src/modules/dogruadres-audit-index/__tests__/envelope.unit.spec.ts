@@ -117,7 +117,8 @@ describe("Audit Index version 1 validation and redaction", () => {
     })
   it.each([
     ["organization.store_platform_closing_started","platform_staff"],
-    ["organization.store_platform_closing_appealed","owner"]
+    ["organization.store_platform_closing_appealed","owner"],
+    ["organization.store_platform_closing_final_review_requested","owner"]
   ])("accepts separate platform closing/Owner appeal source with private reasons omitted", (action,role)=>{
     const event={...source(),role_context:role,action,
       resource:"store-platform-closing",target_id:"sel_platform_stage1",

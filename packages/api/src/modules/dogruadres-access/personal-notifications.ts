@@ -41,7 +41,8 @@ export class PersonalNotifications {
                       'organization.store_owner_closing_started',
                       'organization.store_owner_closing_withdrawn',
                       'organization.store_platform_closing_started',
-                      'organization.store_platform_closing_appealed')
+                      'organization.store_platform_closing_appealed',
+                      'organization.store_platform_closing_final_review_requested')
           and ((a.action in ('organization.store_application_rejected','organization.store_reactivated')
                 and a.resource='store-application'
                 and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
@@ -52,7 +53,8 @@ export class PersonalNotifications {
                 and a.resource='store-owner-closing'
                 and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
             or (a.action in ('organization.store_platform_closing_started',
-                             'organization.store_platform_closing_appealed')
+                             'organization.store_platform_closing_appealed',
+                      'organization.store_platform_closing_final_review_requested')
                 and a.resource='store-platform-closing'
                 and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
             or (a.action in ('organization.store_application_right_enabled',
@@ -163,6 +165,7 @@ export class PersonalNotifications {
         const ownerWithdrawn=n.action === 'organization.store_owner_closing_withdrawn'
         const platformClosing=n.action === 'organization.store_platform_closing_started'
         const platformAppeal=n.action === 'organization.store_platform_closing_appealed'
+        const platformFinalReview=n.action === 'organization.store_platform_closing_final_review_requested'
         const adminAlert=n.action === 'organization.store_platform_closing_mail_admin_alert'
         const lateOwner=n.action === 'organization.store_platform_closing_owner_added'
         return {
@@ -175,7 +178,8 @@ export class PersonalNotifications {
             'Mağaza için 30 günlük kapatma süreci başladı':ownerWithdrawn?
             'Mağaza kapatma talebi geri çekildi':platformClosing?
             'Platform mağaza kapatma incelemesi başladı':platformAppeal?
-            'Mağaza kapatma itirazı kaydedildi':lateOwner?
+            'Mağaza kapatma itirazı kaydedildi':platformFinalReview?
+            'Üst inceleme başvurusu kaydedildi':lateOwner?
             'Sorumluluğunuza yeni geçen mağazada kapatma süreci var':adminAlert?
             'Kapatma e-postaları teslim edilemedi — yönetici uyarısı':opened?
             'Yeni mağaza başvuru hakkı açıldı':'Yeni mağaza başvuru hakkı durduruldu',
@@ -189,7 +193,8 @@ export class PersonalNotifications {
             ownerClosing?'Şirketinizin bir mağazasında yeni satışlar durduruldu. Geri sayım ve gerekli işlemleri güvenli şirket alanından kontrol edin. Kalıcı kapatma henüz kesinleşmedi.':
             ownerWithdrawn?'Şirketinizin bir mağazasının kapatma talebi geri çekildi. Diğer satış engelleri yine geçerlidir.':
             platformClosing?'Şirketinizin bir mağazasında platform kararıyla yeni satışlar durduruldu. İtiraz saatini ve gerekçeyi güvenli şirket alanınızda görebilirsiniz.':
-            platformAppeal?'Şirketinizin mağazası için itiraz kaydedildi. İnceleme sürerken yeni satışlar kapalı kalır.':lateOwner?
+            platformAppeal?'Şirketinizin mağazası için itiraz kaydedildi. İnceleme sürerken yeni satışlar kapalı kalır.':
+            platformFinalReview?'Şirketinizin mağazası için bağımsız üst inceleme başvurusu kaydedildi. Karar beklenirken yeni satışlar kapalı kalır.':lateOwner?
             'Artık Owner olduğunuz mağazada daha önce başlatılmış platform kapatma süreci sürüyor. Yeni satışlar durduruldu; ayrıntı ve itiraz durumunu güvenli şirket alanınızdan kontrol edin.':adminAlert?
             'Kapatma güvenlik e-postasının dört denemede de teslimi doğrulanamadı. İtiraz süresi otomatik başlatıldı; teslimat sorununu yetkili platform kapatma ekranından inceleyin.':
             opened?
@@ -222,7 +227,8 @@ export class PersonalNotifications {
                       'organization.store_owner_closing_started',
                       'organization.store_owner_closing_withdrawn',
                       'organization.store_platform_closing_started',
-                      'organization.store_platform_closing_appealed')
+                      'organization.store_platform_closing_appealed',
+                      'organization.store_platform_closing_final_review_requested')
             and ((a.action in ('organization.store_application_rejected','organization.store_reactivated')
                   and a.resource='store-application'
                   and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
@@ -233,7 +239,8 @@ export class PersonalNotifications {
                   and a.resource='store-owner-closing'
                   and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
             or (a.action in ('organization.store_platform_closing_started',
-                             'organization.store_platform_closing_appealed')
+                             'organization.store_platform_closing_appealed',
+                      'organization.store_platform_closing_final_review_requested')
                 and a.resource='store-platform-closing'
                 and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
               or (a.action in ('organization.store_application_right_enabled',

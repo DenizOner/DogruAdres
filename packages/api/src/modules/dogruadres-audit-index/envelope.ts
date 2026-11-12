@@ -23,6 +23,7 @@ const resources = {
   "organization.store_owner_closing_withdrawn": "store-owner-closing",
   "organization.store_platform_closing_started": "store-platform-closing",
   "organization.store_platform_closing_appealed": "store-platform-closing",
+  "organization.store_platform_closing_final_review_requested": "store-platform-closing",
   "organization.store_platform_closing_deadline_started": "store-platform-closing",
   "organization.store_application_right_disabled": "organization",
   "organization.store_application_right_enabled": "organization",
@@ -79,7 +80,8 @@ const schema = z.object({
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id) &&
      (value.action==="organization.store_platform_closing_started"
        ?value.actor.role_context==="platform_staff"
-       :value.action==="organization.store_platform_closing_appealed"
+       :["organization.store_platform_closing_appealed",
+          "organization.store_platform_closing_final_review_requested"].includes(value.action)
          ?value.actor.role_context==="owner"
          :value.action==="organization.store_platform_closing_deadline_started"
            ?["owner","platform_automation"].includes(value.actor.role_context??"")
