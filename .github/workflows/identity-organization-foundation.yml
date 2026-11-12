@@ -216,6 +216,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # CI-only page is built and served on an isolated runner, never committed
+          # or deployed. It tests actual SafeImage hydration/error fallback.
+          if [ "$GITHUB_HEAD_REF" = "fix/storefront-image-allowlist-175" ]; then
+            mkdir -p src/app/image-175-ci-only
+            cat > src/app/image-175-ci-only/page.tsx <<'TSX'
+          'use client'
+          import Image from '@/components/molecules/SafeImage/SafeImage'
+          export default function Image175TestPage() {
+            return (
+              <main>
+                <Image
+                  data-testid="image175-remote"
+                  src="https://untrusted.example.test/no-image.png"
+                  alt="Blocked source"
+                  width={96}
+                  height={96}
+                  priority
+                />
+              </main>
+            )
+          }
+          TSX
+            trap 'rm -rf src/app/image-175-ci-only' EXIT
+          fi
           # Use the existing official Mercur CLI route codegen, never a
           # synthetic hand-written route map or unconditional unsafe cast.
           (cd ../../packages/api && bun run codegen)

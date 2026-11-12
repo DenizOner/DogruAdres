@@ -58,6 +58,31 @@ try {
   assert.match(directSvg.headers.get('content-type') || '', /image\/svg\+xml/)
   const svgOptimizer = await get(image('/images/placeholder.svg'))
   assert.equal(svgOptimizer.status, 400, 'SVG optimizer must reject SVG when disabled')
+  // Actual headless Chrome must hydrate the user-facing SafeImage wrapper.
+  // An optimizer 400 is not enough if the product page still shows a broken image.
+  const browser = await new Promise((resolve, reject) => {
+    const chrome = spawn('google-chrome', [
+      '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
+      '--disable-background-networking', '--no-first-run',
+      '--virtual-time-budget=7000', '--dump-dom', base + '/image-175-ci-only',
+    ], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let dom = ''
+    let errors = ''
+    chrome.stdout.on('data', (chunk) => { dom += String(chunk) })
+    chrome.stderr.on('data', (chunk) => { errors += String(chunk).slice(0, 3000) })
+    const timeout = setTimeout(() => chrome.kill('SIGKILL'), 35000)
+    chrome.once('error', reject)
+    chrome.once('close', (code) => {
+      clearTimeout(timeout)
+      if (code !== 0) return reject(Error('Real Chrome exit ' + code + ': ' + errors.slice(-1500)))
+      resolve(dom)
+    })
+  })
+  const imageTag = browser.match(/<img\b[^>]*data-testid="image175-remote"[^>]*>/i)?.[0] || ''
+  assert.ok(imageTag, 'real Chrome did not render the SafeImage product fixture')
+  assert.match(imageTag, /src="\/images\/placeholder\.svg"/, 'Chrome did not hydrate the safe image fallback')
+  console.log('PASS #175 real Chrome: forbidden product image replaced with safe local SVG after HTTP 400')
+
   console.log('PASS #175 real Next production HTTP: six remote 400 denials, JPEG 200, static SVG 200, optimized SVG 400')
 } finally {
   server.kill('SIGTERM')
