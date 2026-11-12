@@ -3453,7 +3453,6 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   process.stdout.write("PASS B22 real PG16: 51 unrelated audited Store associations do not hide bounded historical Seller proof; revoked candidate denied; global guard retained and fixture rolled back\n")
   process.stdout.write("PASS B22 Chrome/PG16: protected platform Staff reasoned pending Seller rejection during company pause, native terminated without approval, private Owner status and redacted notice, one audit/outbox, Owner/CSRF/short reason/replay denied\n")
 }
-}
 
 /** Separate test helper avoids TypeScript's huge-main control-flow limit.
  * Both HTTPS requests use the existing real Owner session and isolated PG16.
