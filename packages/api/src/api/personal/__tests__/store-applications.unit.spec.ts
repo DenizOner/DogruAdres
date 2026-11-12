@@ -1,4 +1,4 @@
-import {POST} from "../store-applications/route"
+import {GET,POST} from "../store-applications/route"
 import {GET as reviewStoreGET,POST as reviewStorePOST} from "../platform/stores/route"
 import {access,csrf,enabled,sessionToken} from "../security"
 import {createSellerAccountWorkflow,terminateSellerWorkflow,approveSellerWorkflow,unsuspendSellerWorkflow} from "@mercurjs/core/workflows"
@@ -11,6 +11,63 @@ jest.mock("@mercurjs/core/workflows",()=>({
   approveSellerWorkflow:jest.fn(),
   unsuspendSellerWorkflow:jest.fn()
 }))
+describe("B22 revoked Organization cannot observe a native Seller's private state",()=>{
+  let svc:any,native:any,req:any,res:any
+  const original={id:"daapp_"+"a".repeat(32),status:"created",seller_id:"sel_historical",created_at:"2026-11-01"}
+  beforeEach(()=>{
+    jest.resetAllMocks()
+    svc={personalStoreApplications:jest.fn().mockResolvedValue({
+      applications:[{...original,live_seller_authorized:true}],
+      drafts:[],draft_role:"owner",store_application_enabled:true,
+      has_more_drafts:false
+    })}
+    native={listSellers:jest.fn().mockResolvedValue([{
+      id:"sel_historical",status:"terminated",
+      status_reason:"Private rejection reason for current authorized Owner"
+    }])}
+    ;(access as jest.Mock).mockReturnValue(svc)
+    ;(enabled as jest.Mock).mockReturnValue(true)
+    ;(sessionToken as jest.Mock).mockReturnValue("opaque")
+    req={headers:{},query:{organization_id:"daorg_owner"},
+      scope:{resolve:jest.fn(()=>native)}}
+    res={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),json:jest.fn().mockReturnThis()}
+  })
+  it("returns current Seller status only with live canonical ownership proof",async()=>{
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(native.listSellers).toHaveBeenCalledWith({id:"sel_historical"})
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      applications:[{...original,seller_status:"terminated",
+        rejection_reason:"Private rejection reason for current authorized Owner"}]
+    }))
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("live_seller_authorized")
+  })
+  it.each([false,undefined])("keeps historical application but redacts revoked/missing proof: %s",async allowed=>{
+    svc.personalStoreApplications.mockResolvedValue({
+      applications:[{...original,live_seller_authorized:allowed}],
+      drafts:[],draft_role:"owner",store_application_enabled:true,
+      has_more_drafts:false
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(native.listSellers).not.toHaveBeenCalled()
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      applications:[{...original,seller_status:"unknown",rejection_reason:null}]
+    }))
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("live_seller_authorized")
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("Private rejection reason")
+  })
+  it("keeps delegated Member drafts but never reads native Seller status",async()=>{
+    svc.personalStoreApplications.mockResolvedValue({
+      applications:[],drafts:[],draft_role:"member",
+      store_application_enabled:true,has_more_drafts:false
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(native.listSellers).not.toHaveBeenCalled()
+  })
+})
+
 describe("B22 protected Owner Store application gate",()=>{
   const data={organization_id:"daorg_a",application_id:"daapp_"+"a".repeat(32),
     name:"Owner Store",email:"owner@example.invalid",currency_code:"try"}
