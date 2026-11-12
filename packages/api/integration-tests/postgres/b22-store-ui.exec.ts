@@ -3302,6 +3302,66 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
     n.title==="Mağaza başvurusu reddedildi"&&n.context===x.orgName).length,1)
   assert.equal(JSON.stringify(notice.body).includes(reason),false,
     "A private alert must not copy arbitrary staff reason text")
+  // P1 #323: a historical application must not confer live Seller status
+  // after its Organization↔Seller provenance is revoked. Use the same signed-in
+  // Owner and real HTTPS GET backed by this disposable native PG16 database.
+  const liveOwnership=await q(`select id,revoked_at from da_organization_seller_ownership
+    where organization_id=$1 and seller_id=$2`,[x.org,seller.id])
+  assert.equal(liveOwnership.length,1)
+  assert.equal(liveOwnership[0].revoked_at,null)
+  const beforeRevocationAudit=(await q(`select count(*)::int n from da_audit_event
+    where organization_id=$1 and target_id=$2`,[x.org,seller.id]))[0].n
+  assert.equal((await q(`update da_organization_seller_ownership
+    set revoked_at=clock_timestamp()
+    where id=$1 and revoked_at is null returning id`,[liveOwnership[0].id])).length,1)
+  try{
+    const historical=await browser.callFunction("async function(org){"+
+      "const r=await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org),{cache:'no-store'});"+
+      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}}",x.org)
+    assert.equal(historical.status,200)
+    assert.match(String(historical.cache),/no-store/)
+    const old=historical.body.applications.find((a:any)=>a.id===app)
+    assert.ok(old,"Past Organization application must remain readable")
+    assert.equal(old.status,"created")
+    assert.equal(old.seller_id,seller.id)
+    assert.equal(old.seller_status,"unknown",
+      "Revoked ownership must not reveal the native Seller status")
+    assert.equal(old.rejection_reason,null,
+      "Revoked ownership must not reveal the native private rejection reason")
+    assert.ok(!JSON.stringify(historical.body).includes(reason))
+    assert.ok(!JSON.stringify(historical.body).includes("live_seller_authorized"))
+    const actual=(await native.listSellers({id:seller.id}))[0]
+    assert.equal(actual.status,"terminated","Native Seller status remains unchanged")
+    assert.equal(actual.status_reason,reason,"Private canonical reason is not erased")
+
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.click("#store-applications-refresh")
+    await browser.wait("document.getElementById('store-application-list')?.textContent.includes('Başvurunun güncel mağaza sonucu doğrulanamadı')")
+    const text=String(await browser.eval("document.getElementById('store-application-list').textContent"))
+    assert.ok(text.includes(app),"Real Owner UI retains the historical application")
+    assert.equal(text.includes(reason),false,"Real Owner UI must not render former Seller's private reason")
+    assert.equal(text.includes("Mağaza başvurusu reddedildi"),false,
+      "Real Owner UI must not show the now-unowned Store's native terminal result")
+    const after=(await q(`select count(*)::int n from da_audit_event
+      where organization_id=$1 and target_id=$2`,[x.org,seller.id]))[0].n
+    assert.equal(after,beforeRevocationAudit,"Read-only forbidden status path creates zero audit writes")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: revoked Store ownership preserves historical application but hides live Seller status and private rejection reason in Owner HTTP and UI; no new audit\n")
+  }finally{
+    // Restore ONLY the temporary fixture for unrelated acceptance below.
+    assert.equal((await q(`update da_organization_seller_ownership
+      set revoked_at=null where id=$1 and revoked_at is not null
+      returning id`,[liveOwnership[0].id])).length,1)
+  }
+  const reauthorized=await browser.callFunction("async function(org){"+
+    "const r=await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org),{cache:'no-store'});"+
+    "return {status:r.status,body:await r.json()}}",x.org)
+  assert.equal(reauthorized.status,200)
+  const restored=reauthorized.body.applications.find((a:any)=>a.id===app)
+  assert.ok(restored)
+  assert.equal(restored.seller_status,"terminated")
+  assert.equal(restored.rejection_reason,reason,
+    "Only the currently verified Owner may resume private native status reads")
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible'")
   // An uncertain successful write must be reconciled with a fresh
