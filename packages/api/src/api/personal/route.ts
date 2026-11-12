@@ -370,6 +370,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         <label>İtiraz gerekçesi<textarea name="reason" minlength="10" maxlength="500" rows="3" required></textarea></label>
         <button type="submit" disabled>İtirazı gönder</button>
       </form>
+      <form id="store-platform-final-review-form" hidden>
+        <p>İlk 10 gün içinde itiraz oluşturulmadıysa, 10–30. gün arasında bağımsız platform incelemesi isteyebilirsiniz. Bu başvuru satışları yeniden açmaz.</p>
+        <label>Üst inceleme gerekçesi<textarea name="reason" minlength="10" maxlength="500" rows="3" required></textarea></label>
+        <button type="submit" disabled>Üst inceleme başvurusunu gönder</button>
+      </form>
       <button type="button" id="store-platform-appeal-refresh">Kararı yenile</button>
     </section>
     <section id="store-block-panel" hidden aria-labelledby="store-block-title">
@@ -544,7 +549,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const renameWrite=path==='store-rename-requests'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const closingWrite=['store-owner-closing','store-platform-closing','platform/store-closings','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
+    const closingWrite=['store-owner-closing','store-platform-closing','store-platform-closing-final-review','platform/store-closings','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
     const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite;
     let data;
     try{
@@ -4804,11 +4809,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   };
 
   let platformOwnerRead=0,platformOwnerPending=false,platformOwnerUncertain=false;
+  let platformFinalReviewPending=false,platformFinalReviewUncertain=false;
   let platformOwnerState=null;
   function clearPlatformClosingOwner(){
     platformOwnerRead++;platformOwnerState=null;
     platformOwnerPending=false;platformOwnerUncertain=false;
+    platformFinalReviewPending=false;platformFinalReviewUncertain=false;
     el('store-platform-appeal-panel').hidden=true;
+    el('store-platform-final-review-form').hidden=true;
+    el('store-platform-final-review-form').reset();
+    el('store-platform-final-review-form').querySelector('button').disabled=true;
     el('store-platform-appeal-reason').textContent='';
     el('store-platform-appeal-status').textContent='';
     const form=el('store-platform-appeal-form');
@@ -4834,6 +4844,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          !['none','notification_unverified','appealed'].includes(data.state)||
          !Number.isSafeInteger(data.version)||
          typeof data.deadline_started!=='boolean'||
+         typeof data.first_appeal_open!=='boolean'||
+         typeof data.final_review_open!=='boolean'||
+         typeof data.final_review_requested!=='boolean'||
          data.permanent_finalization_enabled!==false||
          typeof data.mandatory_email_verified!=='boolean')
          throw Error('Geçersiz karar');
@@ -4842,9 +4855,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(data.state==='none')return;
       el('store-platform-appeal-reason').textContent=
         'Platform karar gerekçesi: '+data.reason;
-      msg.textContent=(data.state==='appealed'?
+      msg.textContent=(data.final_review_requested?
+        'Bağımsız üst inceleme başvurusu kaydedildi; karar bekleniyor. Satışlar kapalı.':
+        data.state==='appealed'?
         'İtiraz kaydedildi; sonuç bekleniyor. Satışlar kapalı.':
-        'Satışlar yönetici kararıyla derhal durduruldu. İtiraz edebilirsiniz.')+
+        data.final_review_open?
+        'İlk 10 gün sona erdi. Kalan 20 günlük üst inceleme için başvurabilirsiniz. Satışlar kapalı.':
+        'Satışlar yönetici kararıyla derhal durduruldu. İlk itiraz yalnız süresi içinde gönderilebilir.')+
         (data.deadline_started?
           ' 10+20 günlük itiraz saati başladı; ilk aşama sonu: '+
           new Date(data.first_appeal_until).toLocaleString('tr-TR')+
@@ -4852,7 +4869,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           new Date(data.final_review_until).toLocaleString('tr-TR')+'.':
           ' Bildirim ve itiraz saati henüz doğrulanıyor.');
       el('store-platform-appeal-form').querySelector('button').disabled=
-        data.state!=='notification_unverified'||platformOwnerUncertain;
+        !data.first_appeal_open||platformOwnerUncertain;
+      const finalForm=el('store-platform-final-review-form');
+      finalForm.hidden=!data.final_review_open;
+      finalForm.querySelector('button').disabled=
+        !data.final_review_open||platformFinalReviewUncertain;
     }catch(e){
       if(seq!==platformOwnerRead||epoch!==viewEpoch)return;
       clearPlatformClosingOwner();
@@ -4863,7 +4884,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   }
   el('store-platform-appeal-refresh').onclick=()=>{
-    platformOwnerUncertain=false;
+    platformOwnerUncertain=false;platformFinalReviewUncertain=false;
     if(currentOrg)void refreshPlatformClosingOwner(currentOrg,organizationRequest);
   };
   el('store-platform-appeal-form').onsubmit=async event=>{
@@ -4873,6 +4894,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const reason=form.elements.namedItem('reason').value.trim();
     if(!org||!seller||!selectedStoreOwner||document.hidden||platformOwnerPending||
        platformOwnerUncertain||platformOwnerState?.state!=='notification_unverified'||
+       platformOwnerState.first_appeal_open!==true||
        platformOwnerState.seller_id!==seller||reason.length<10||reason.length>500)return;
     const button=form.querySelector('button');
     button.disabled=true;platformOwnerPending=true;
@@ -4901,7 +4923,50 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         'İtiraz reddedildi. Yetki ve güncel kararı yeniden doğrulayın.';
     }finally{
       platformOwnerPending=false;
-      button.disabled=platformOwnerUncertain||platformOwnerState?.state!=='notification_unverified';
+      button.disabled=platformOwnerUncertain||platformOwnerState?.first_appeal_open!==true;
+    }
+  };
+
+  el('store-platform-final-review-form').onsubmit=async event=>{
+    event.preventDefault();
+    const form=event.currentTarget,org=currentOrg,request=organizationRequest,epoch=viewEpoch;
+    const seller=el('store-owner-pause-form').elements.namedItem('seller_id')?.value;
+    const reason=form.elements.namedItem('reason').value.trim();
+    if(!org||!seller||!selectedStoreOwner||document.hidden||
+       platformFinalReviewPending||platformFinalReviewUncertain||
+       platformOwnerState?.final_review_open!==true||
+       platformOwnerState.seller_id!==seller||
+       reason.length<10||reason.length>500)return;
+    const button=form.querySelector('button'),msg=el('store-platform-appeal-status');
+    button.disabled=true;platformFinalReviewPending=true;
+    msg.textContent='Üst inceleme başvurusu kaydediliyor…';
+    try{
+      const result=await api('store-platform-closing-final-review',{
+        method:'POST',body:JSON.stringify({
+          organization_id:org,seller_id:seller,
+          request_id:'dasfr_'+crypto.randomUUID().replaceAll('-',''),
+          expected_version:1,reason})});
+      if(epoch!==viewEpoch||request!==organizationRequest||
+         org!==currentOrg||document.hidden)return;
+      if(result.status!=='review_requested'||
+         result.final_review_requested!==true||
+         result.permanent_finalization_enabled!==false||
+         result.organization_id!==org||result.seller_id!==seller){
+        const e=Error('Üst inceleme sonucu doğrulanamadı');
+        e.uncertain=true;throw e;
+      }
+      platformFinalReviewUncertain=false;form.reset();
+      await refreshPlatformClosingOwner(org,request);
+    }catch(e){
+      if(epoch!==viewEpoch||request!==organizationRequest)return;
+      platformFinalReviewUncertain=!!e.uncertain||e.httpStatus>=500;
+      msg.textContent=platformFinalReviewUncertain?
+        'Üst inceleme sonucu belirsiz; yeniden göndermeyin, önce güncel durumu yenileyin.':
+        'Üst inceleme başvurusu reddedildi. Yetki ve süreyi yeniden doğrulayın.';
+    }finally{
+      platformFinalReviewPending=false;
+      button.disabled=platformFinalReviewUncertain||
+        platformOwnerState?.final_review_open!==true;
     }
   };
 
