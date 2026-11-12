@@ -644,11 +644,19 @@ async function main(){
       "from da_audit_outbox x join da_audit_event e "+
       "on e.id=x.source_audit_event_id where e.target_id=$1",
       [expiredSeller]))[0].n,outboxBefore+1)
-    const reviewCanonical=(await q("select e.*,x.envelope,x.envelope_version,"+
+    const reviewRaw=(await q("select e.*,x.envelope,x.envelope_version,"+
       "x.source_audit_event_id,x.source_module "+
       "from da_audit_event e join da_audit_outbox x "+
       "on x.source_audit_event_id=e.id "+
       "where e.id=$1",[finalRow.final_review_audit_event_id]))[0]
+    assert.ok(reviewRaw)
+    const reviewCanonical={
+      ...reviewRaw,
+      new_values:typeof reviewRaw.new_values==="string"?
+        JSON.parse(reviewRaw.new_values):reviewRaw.new_values,
+      envelope:typeof reviewRaw.envelope==="string"?
+        JSON.parse(reviewRaw.envelope):reviewRaw.envelope
+    }
     assert.equal(reviewCanonical.action,
       "organization.store_platform_closing_final_review_requested")
     assert.equal(reviewCanonical.role_context,"owner")
