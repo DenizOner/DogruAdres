@@ -362,22 +362,109 @@ async function claimOwnerClosingMail(db:Db,seen:OwnerMailClaim[]){
   })
 }
 
+type OwnerMailOutcome="accepted"|"failed"|"unverified_identity"|"uncertain"|"invalidated"
+type OwnerMailActor={actor_type:"user"|"member"|"customer";
+  actor_id:string;auth_identity_id:string}
+
+async function persistOwnerMailResult(sql:Sql,claim:OwnerMailClaim,
+  outcome:OwnerMailOutcome,messageId:string|null){
+  const rows=await sql.execute(`update da_store_owner_closing_email
+    set last_result=?,message_id=(case when ?='accepted'
+      then ? else message_id end),
+      accepted_at=(case when ?='accepted' then clock_timestamp()
+        else accepted_at end),
+      claim_id=null,lease_until=null,updated_at=clock_timestamp()
+    where audit_event_id=? and person_id=? and claim_id=?::uuid
+      and last_result='inflight' returning audit_event_id`,[
+    outcome,outcome,messageId,outcome,
+    claim.audit_event_id,claim.person_id,claim.claim_id
+  ])
+  if(rows.length!==1)throw new Error("Owner closing mail result not committed")
+}
 async function settleOwnerClosingMail(db:Db,claim:OwnerMailClaim,
-  outcome:"accepted"|"failed"|"unverified_identity"|"uncertain",
-  messageId:string|null){
+  outcome:OwnerMailOutcome,messageId:string|null){
+  await db.transactional(sql=>persistOwnerMailResult(sql,claim,outcome,messageId))
+}
+
+/**
+ * The claim is NOT send authorization. Serialize SMTP DATA and the outcome
+ * with LIVE Owner membership, actor binding and the current closing source.
+ * FOR SHARE blocks a simultaneous UPDATE/DELETE of those actual rows:
+ * a completed revoke/withdraw denies sending; otherwise its COMMIT waits
+ * until the bounded SMTP submission has completed. No new queue or core
+ * change. This network call deliberately runs under a short PostgreSQL
+ * transaction; the existing SMTP transport enforces its own timeout.
+ */
+async function sendOwnerMailFenced(db:Db,claim:OwnerMailClaim,
+  actor:OwnerMailActor,
+  send:()=>Promise<{messageId:string}>){
   await db.transactional(async sql=>{
-    const rows=await sql.execute(`update da_store_owner_closing_email
-      set last_result=?,message_id=(case when ?='accepted'
-        then ? else message_id end),
-        accepted_at=(case when ?='accepted' then clock_timestamp()
-          else accepted_at end),
-        claim_id=null,lease_until=null,updated_at=clock_timestamp()
-      where audit_event_id=? and person_id=? and claim_id=?::uuid
-        and last_result='inflight' returning audit_event_id`,[
-      outcome,outcome,messageId,outcome,
-      claim.audit_event_id,claim.person_id,claim.claim_id
+    // Consistent lock order: current Owner identity first, closing row next.
+    const eligible=await sql.execute(`select m.id
+      from da_organization_membership m
+      join da_person p on p.id=m.person_id and p.disabled_at is null
+        and p.deleted_at is null
+      join da_login_binding b on b.person_id=m.person_id
+        and b.actor_type=? and b.actor_id=? and b.auth_identity_id=?
+        and b.revoked_at is null and b.verified_at is not null
+      join da_actor_mapping map on map.person_id=b.person_id
+        and map.actor_type=b.actor_type and map.actor_id=b.actor_id
+        and map.deleted_at is null
+      where m.person_id=? and m.organization_id=?
+        and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.revoked_at is null
+        and m.deleted_at is null
+      limit 2 for share of m,p,b,map`,[
+      actor.actor_type,actor.actor_id,actor.auth_identity_id,
+      claim.person_id,claim.organization_id
     ])
-    if(rows.length!==1)throw new Error("Owner closing mail result not committed")
+    if(eligible.length!==1){
+      await persistOwnerMailResult(sql,claim,"invalidated",null)
+      return
+    }
+
+    const current=await sql.execute(`select c.seller_id
+      from da_store_owner_closing c
+      join da_audit_event e on e.id=c.source_audit_event_id
+        and e.id=? and e.deleted_at is null
+        and e.module='dogruadres-access' and e.role_context='owner'
+        and e.resource='store-owner-closing'
+        and e.organization_id=c.organization_id
+        and e.target_id=c.seller_id and e.action=?
+        and e.new_values->>'request_id'=c.request_id
+        and e.new_values->>'state'=c.state
+        and e.new_values->>'version'=c.version::text
+        and (e.new_values->>'started_at')::timestamptz=c.started_at
+        and (e.new_values->>'due_at')::timestamptz=c.due_at
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+        and x.source_module='dogruadres-access' and x.deleted_at is null
+      join da_notification_receipt n on n.audit_event_id=e.id
+        and n.person_id=?
+      join da_store_owner_closing_email d on d.audit_event_id=e.id
+        and d.person_id=n.person_id and d.claim_id=?::uuid
+        and d.last_result='inflight'
+      where c.organization_id=?
+        and c.state=(case when ?='organization.store_owner_closing_started'
+          then 'closing' else 'withdrawn' end)
+      limit 2 for share of c,e,x,n,d`,[
+      claim.audit_event_id,claim.action,claim.person_id,
+      claim.claim_id,claim.organization_id,claim.action
+    ])
+    if(current.length!==1){
+      await persistOwnerMailResult(sql,claim,"invalidated",null)
+      return
+    }
+    let outcome:OwnerMailOutcome="uncertain",messageId:string|null=null
+    try{
+      const transport=await send()
+      messageId=transport.messageId
+      outcome="accepted" // not mailbox delivery
+    }catch(error){
+      outcome=error instanceof SmtpAcceptanceUncertainError?"uncertain":"failed"
+    }
+    // The DB-side send decision and SMTP outcome commit under the same
+    // membership/closing locks. The opposite operation cannot interleave.
+    await persistOwnerMailResult(sql,claim,outcome,messageId)
   })
 }
 
@@ -395,9 +482,8 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
     const claim=await claimOwnerClosingMail(db,seen)
     if(!claim)break
     seen.push(claim)
-    let result:"accepted"|"failed"|"unverified_identity"|"uncertain"=
-      "unverified_identity"
-    let messageId:string|null=null
+    let result:OwnerMailOutcome="unverified_identity"
+    let fenced=false
     try{
       const actor=await currentActor(db,claim)
       if(actor){
@@ -419,7 +505,7 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
           const smtp=await access.getActiveSmtpConfig()
           if(!smtp?.enabled)throw new Error("Mandatory mail transport unavailable")
           const started=claim.action==="organization.store_owner_closing_started"
-          const transport=await sendSmtpEmail({
+          await sendOwnerMailFenced(db,claim,actor,()=>sendSmtpEmail({
             to:email,
             subject:started?
               "DoğruAdres mağaza kapatma süreci güvenlik bildirimi":
@@ -437,15 +523,16 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
             security:smtp.security,username:smtp.username??undefined,
             password:smtp.password??undefined,
             fromEmail:smtp.from_email,fromName:smtp.from_name??undefined
-          })
-          messageId=transport.messageId
-          result="accepted" // SMTP acceptance is NOT verified mailbox delivery
+          }))
+          fenced=true
         }
       }
     }catch(error){
-      result=error instanceof SmtpAcceptanceUncertainError?"uncertain":"failed"
+      // Once the final fence starts, a transaction failure MAY follow DATA.
+      // An unknown SMTP outcome is never a definite rejection.
+      result=fenced?"unverified_identity":"uncertain"
     }
-    await settleOwnerClosingMail(db,claim,result,messageId)
+    if(!fenced)await settleOwnerClosingMail(db,claim,result,null)
   }
 }
 
