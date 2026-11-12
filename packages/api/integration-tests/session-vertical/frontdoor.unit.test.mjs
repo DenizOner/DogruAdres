@@ -15,6 +15,86 @@ test("B22 Owner temporary pause permits only exact GET/POST first-party relay",(
       assert.equal(allowedPublicRequest(method,path),false)
 })
 
+test('B22 Owner and Staff Store rename API paths require exact GET/POST relay',()=>{
+  for(const path of ['/personal/store-rename-requests','/personal/platform/store-renames']){
+    for(const method of ['GET','POST'])
+      assert.equal(allowedPublicRequest(method,path),true)
+    for(const method of ['HEAD','OPTIONS','PUT','PATCH','DELETE'])
+      assert.equal(allowedPublicRequest(method,path),false)
+    for(const nested of [path+'/',path+'/other'])
+      for(const method of ['GET','POST'])
+        assert.equal(allowedPublicRequest(method,nested),false)
+  }
+})
+
+test('B22 real frontdoor HTTP forwards exact Owner/Staff rename methods and rejects alternatives',async()=>{
+  const seen=[]
+  const upstream=http.createServer(async(req,res)=>{
+    const chunks=[]
+    for await(const chunk of req)chunks.push(chunk)
+    seen.push({method:req.method,path:req.url,
+      cookie:req.headers.cookie,csrf:req.headers['x-csrf-token'],
+      body:Buffer.concat(chunks).toString('utf8')})
+    res.setHeader('Content-Type','application/json')
+    res.end('{"synthetic":true}')
+  })
+  upstream.listen(0,'127.0.0.1');await once(upstream,'listening')
+  const reservation=http.createServer()
+  reservation.listen(0,'127.0.0.1');await once(reservation,'listening')
+  const port=reservation.address().port
+  await new Promise(resolve=>reservation.close(resolve))
+  const origin='http://127.0.0.1:'+port
+  const front=startFrontdoor({NODE_ENV:'test',DOGRUADRES_PUBLIC_ORIGIN:origin,
+    DOGRUADRES_PRIVATE_API:'http://127.0.0.1:'+upstream.address().port,
+    DOGRUADRES_FRONTDOOR_HOST:'127.0.0.1',DOGRUADRES_FRONTDOOR_PORT:String(port)})
+  await once(front,'listening')
+  try{
+    const routes=['/personal/store-rename-requests','/personal/platform/store-renames']
+    for(const path of routes){
+      for(const method of ['GET','POST']){
+        const target=path+'?organization_id=daorg_synthetic'
+        const response=await fetch(origin+target,{method,
+          headers:{cookie:'da_session=synthetic','x-csrf-token':'synthetic-csrf',
+            'content-type':'application/json'},
+          ...(method==='POST'?{body:'{"synthetic":true}'}:{})})
+        assert.equal(response.status,200,'Exact '+method+' '+path+' must relay')
+        assert.deepEqual(await response.json(),{synthetic:true})
+        const relayed=seen.at(-1)
+        assert.equal(relayed.method,method)
+        assert.equal(relayed.path,target)
+        assert.equal(relayed.cookie,'da_session=synthetic')
+        assert.equal(relayed.csrf,'synthetic-csrf')
+        assert.equal(relayed.body,method==='POST'?'{"synthetic":true}':'')
+      }
+    }
+    const allowedCount=seen.length
+    assert.equal(allowedCount,4)
+    for(const path of routes){
+      for(const method of ['HEAD','OPTIONS','PUT','PATCH','DELETE']){
+        const response=await fetch(origin+path,{method})
+        assert.equal(response.status,401,'Reject '+method+' '+path)
+        await response.arrayBuffer()
+        assert.equal(seen.length,allowedCount,'Forbidden verb reached private upstream')
+      }
+      for(const nested of [path+'/',path+'/other']){
+        for(const method of ['GET','POST']){
+          const response=await fetch(origin+nested,{method})
+          assert.equal(response.status,401,'Reject '+method+' '+nested)
+          await response.arrayBuffer()
+          assert.equal(seen.length,allowedCount,'Nested route reached private upstream')
+        }
+      }
+      const encoded=await fetch(origin+path+'%2fother')
+      assert.equal(encoded.status,400,'Encoded path must fail before upstream')
+      await encoded.arrayBuffer()
+      assert.equal(seen.length,allowedCount)
+    }
+  }finally{
+    front.closeAllConnections();upstream.closeAllConnections()
+    await Promise.all([new Promise(done=>front.close(done)),new Promise(done=>upstream.close(done))])
+  }
+})
+
 test("B22 historic order read uses only the exact personal GET relay",()=>{
   assert.equal(allowedPublicRequest("GET","/personal/order-groups"),true)
   for(const method of ["POST","PUT","PATCH","DELETE","HEAD","OPTIONS"])

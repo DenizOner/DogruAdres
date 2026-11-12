@@ -29,6 +29,10 @@ const resources = {
   "organization.store_application_right_disabled": "organization",
   "organization.store_application_right_enabled": "organization",
   "organization.store_application_rejected": "store-application",
+  "organization.store_rename_requested": "store-rename-request",
+  "organization.store_rename_withdrawn": "store-rename-request",
+  "organization.store_rename_rejected": "store-rename-request",
+  "organization.store_rename_approved": "store-rename-request",
   "organization.store_reactivation_claimed": "store-application",
   "organization.store_reactivation_released": "store-application",
   "organization.store_reactivated": "store-application",
@@ -51,7 +55,7 @@ const schema = z.object({
     role_context: z.enum(["platform_administrator", "platform_staff", "platform_automation", "owner", "admin", "member"]).nullable(),
   }).strict(),
   action: z.enum(Object.keys(resources) as [keyof typeof resources, ...(keyof typeof resources)[]]),
-  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow", "store-application", "store-application-draft", "store-draft-permission", "store-owner-pause", "store-owner-closing", "store-platform-closing"]),
+  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow", "store-application", "store-application-draft", "store-draft-permission", "store-owner-pause", "store-owner-closing", "store-platform-closing", "store-rename-request"]),
   target_id: reference,
   occurred_at: timestamp,
 }).strict()
@@ -116,12 +120,25 @@ const schema = z.object({
     (value.actor.role_context === "platform_staff" &&
      /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
+  // Source rename events record a real Store in an active Organization; the
+  // Index accepts only the expected Owner/Staff role, never a native role grant.
+  .refine(value => value.resource !== "store-rename-request" ||
+    (/^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^sel_[A-Za-z0-9_-]+$/.test(value.target_id) &&
+     (["organization.store_rename_requested",
+       "organization.store_rename_withdrawn"].includes(value.action)
+       ? value.actor.role_context === "owner"
+       : ["organization.store_rename_rejected",
+          "organization.store_rename_approved"].includes(value.action) &&
+         value.actor.role_context === "platform_staff")))
   // Only explicitly registered canonical Staff actions may cross the Index
   // boundary. A valid Staff role alone does not authorize arbitrary events.
   .refine(value => value.actor.role_context !== "platform_staff" ||
     value.action === "organization.provisioned" ||
     value.action === "organization.owner_assigned" ||
     value.action === "organization.store_application_rejected" ||
+    value.action === "organization.store_rename_rejected" ||
+    value.action === "organization.store_rename_approved" ||
     value.action === "organization.store_reactivation_claimed" ||
     value.action === "organization.store_reactivation_released" ||
     value.action === "organization.store_reactivated" ||
