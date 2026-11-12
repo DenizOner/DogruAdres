@@ -4,7 +4,8 @@
  */
 import assert from "node:assert/strict"
 import {createHash,randomBytes} from "node:crypto"
-import type {B06Chrome} from "./b06-ui-browser"
+import {B06Chrome} from "./b06-ui-browser"
+import {otp} from "./b19-browser"
 import {runPlatformClosingEmailTick} from "../../src/jobs/dogruadres-platform-closing-email"
 
 type Db=(sql:string,params?:unknown[])=>Promise<any[]>
