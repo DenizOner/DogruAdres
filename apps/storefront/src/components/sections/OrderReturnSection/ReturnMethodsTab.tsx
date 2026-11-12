@@ -1,17 +1,34 @@
 import { Card, Checkbox } from "@/components/atoms"
 
+type ReturnMethodOption = { id: string; name: string }
+
+const isReturnMethodOption = (value: unknown): value is ReturnMethodOption => {
+  if (typeof value !== "object" || value === null) return false
+  const method = value as Record<string, unknown>
+  return typeof method.id === "string" && method.id.length > 0 &&
+    typeof method.name === "string"
+}
+
 export const ReturnMethodsTab = ({
   shippingMethods,
   handleSetReturnMethod,
   returnMethod,
   seller,
 }: {
-  shippingMethods: any
-  handleSetReturnMethod: (method: any) => void
-  returnMethod: string
-  seller: any
+  shippingMethods: unknown
+  handleSetReturnMethod: (method: string) => void
+  returnMethod: string | null
+  seller: unknown
 }) => {
-  const noShippingMethods = !shippingMethods?.length || false
+  const methods = Array.isArray(shippingMethods)
+    ? shippingMethods.filter(isReturnMethodOption)
+    : []
+  const noShippingMethods = methods.length === 0
+  const sellerField = (key: string): string => {
+    if (typeof seller !== "object" || seller === null) return ""
+    const value = (seller as Record<string, unknown>)[key]
+    return typeof value === "string" ? value : ""
+  }
 
   return (
     <>
@@ -26,7 +43,7 @@ export const ReturnMethodsTab = ({
             </div>
           ) : (
             <ul>
-              {shippingMethods.map((method: any) => (
+              {methods.map((method) => (
                 <li
                   key={method.id}
                   onClick={() => handleSetReturnMethod(method.id)}
@@ -45,16 +62,16 @@ export const ReturnMethodsTab = ({
           <p className="label-lg uppercase">Shipping address</p>
         </Card>
         <Card className="p-4">
-          <p className="label-lg">{seller.name}</p>
-          <p className="label-md">{seller.address_line}</p>
+          <p className="label-lg">{sellerField("name")}</p>
+          <p className="label-md">{sellerField("address_line")}</p>
           <p className="label-md">
-            {seller.city}, {seller.state}
+            {sellerField("city")}, {sellerField("state")}
           </p>
           <p className="label-md">
-            {seller.postal_code}, {seller.country_code}
+            {sellerField("postal_code")}, {sellerField("country_code")}
           </p>
           <p className="label-md">
-            {seller.email}, {seller.phone}
+            {sellerField("email")}, {sellerField("phone")}
           </p>
         </Card>
       </div>
