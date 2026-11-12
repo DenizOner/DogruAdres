@@ -957,7 +957,7 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
   assert.notEqual(reviewerId,originalStaffPersonId)
   assert.equal((await read(independent,path)).status,403,
     "Strong but ungranted Staff cannot read private decisions")
-  const grantId="da_staff_b22_review_"+randomBytes(8).toString("hex")
+  let grantId="da_staff_b22_review_"+randomBytes(8).toString("hex")
   await q("insert into da_platform_staff_grant "+
     "(id,person_id,task,resource,granted_by_person_id,reason) "+
     "values ($1,$2,'store.closing.review','platform',$2,"+
@@ -979,6 +979,52 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
   assert.equal(caseItem.source_request_id,before[0].final_review_request_id)
   assert.equal(opened.body.candidates.some((c:any)=>c.seller_id===initialSellerId),true,
     "Independent reviewer may see another pending first appeal")
+  assert.ok(typeof caseItem.request_reason==="string"&&caseItem.request_reason.length>10)
+  // Force a real in-flight GET to pass its initial Staff check while the
+  // revocation has not committed. The final same-grant FOR SHARE must wait
+  // for that concurrent PostgreSQL transaction, then reject the private
+  // reason after the revoke commits. No sleeps or mocks on the HTTP route.
+  await q("begin")
+  let revokedCommitted=false
+  let inFlight:Promise<{status:number;body:any}>|undefined
+  try{
+    const changed=await q("update da_platform_staff_grant "+
+      "set revoked_at=clock_timestamp() "+
+      "where id=$1 and revoked_at is null returning id",[grantId])
+    assert.equal(changed.length,1)
+    inFlight=read(independent,path).catch(()=>({status:0,body:null}))
+    let waitingForGrant=false
+    for(let attempt=0;attempt<200;attempt++){
+      const blocked=await q("select count(*)::int n from pg_stat_activity "+
+        "where pid<>pg_backend_pid() and wait_event_type='Lock' "+
+        "and query ilike '%da_platform_staff_grant%' "+
+        "and query ilike '%for share%'")
+      if(Number(blocked[0]?.n)>0){waitingForGrant=true;break}
+      await new Promise(resolve=>setTimeout(resolve,50))
+    }
+    assert.equal(waitingForGrant,true,
+      "Real private GET must reach final reviewer grant lock while revoke is pending")
+    await q("commit")
+    revokedCommitted=true
+    const denied=await inFlight
+    assert.equal(denied.status,403,
+      "GET overlapping committed Staff revocation must deny private appeals")
+    assert.equal(JSON.stringify(denied.body).includes(caseItem.request_reason),false,
+      "Private Owner appeal reason cannot escape during task revocation")
+    assert.equal((await read(independent,path)).status,403,
+      "A fresh GET after committed revocation is also denied")
+  }finally{
+    if(!revokedCommitted)await q("rollback")
+    if(inFlight)await inFlight
+  }
+  // This synthetic reviewer may be re-authorized only by a NEW task grant,
+  // never by clearing the revoked grant. All test rows are disposable.
+  grantId="da_staff_b22_review_regrant_"+randomBytes(8).toString("hex")
+  await q("insert into da_platform_staff_grant "+
+    "(id,person_id,task,resource,granted_by_person_id,reason) "+
+    "values ($1,$2,'store.closing.review','platform',$2,"+
+    "'B22 fresh grant after in-flight revocation negative')",[grantId,reviewerId])
+  assert.equal((await read(independent,path)).status,200)
   const payload={organization_id:organizationId,seller_id:reviewSellerId,
     source_request_id:caseItem.source_request_id,
     request_id:"dasdr_"+randomBytes(16).toString("hex"),
