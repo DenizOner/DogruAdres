@@ -236,6 +236,46 @@ async function seed(seller:string,attempts=0,state="pending",leaseExpired=false,
     "case when $5::uuid is null then null else clock_timestamp()-interval '1 second' end)",
     [seller,owner,attempts,state,claim])
 }
+/** A real-migration, canonical Owner closing event in this disposable DB.
+ * No actual Store, bank, provider, customer data or production receiver.
+ */
+async function seedOwnerClosingMail(seller:string,
+  action:"started"|"withdrawn"="started"){
+  const started=new Date(Date.now()-60000).toISOString()
+  const due=new Date(new Date(started).getTime()+2592000000).toISOString()
+  const eventId="daaud_"+uuid(),requestId="dasc_"+uuid()
+  const state=action==="started"?"closing":"withdrawn"
+  const eventAction=action==="started"?
+    "organization.store_owner_closing_started":
+    "organization.store_owner_closing_withdrawn"
+  await q("insert into da_audit_event "+
+    "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
+    "action,module,resource,target_id,new_values,occurred_at) "+
+    "values ($1,$2,'user',$3,'owner',$4,$5,'dogruadres-access',"+
+    "'store-owner-closing',$6,jsonb_build_object('request_id',$7::text,"+
+    "'state',$8::text,'version',1,'started_at',$9::text,"+
+    "'due_at',$10::text),$9::timestamptz)",
+    [eventId,owner,syntheticActor,org,eventAction,seller,requestId,state,started,due])
+  await insertOutbox(db as Pg,"daaob_"+uuid(),{
+    source_audit_event_id:eventId,source_module:"dogruadres-access",
+    envelope_version:1,status:"pending",envelope:{
+      version:1,source_module:"dogruadres-access",
+      source_audit_event_id:eventId,organization_id:org,
+      actor:{person_id:owner,type:"user",id:syntheticActor,role_context:"owner"},
+      action:eventAction,resource:"store-owner-closing",
+      target_id:seller,occurred_at:started
+    }
+  })
+  await q("insert into da_store_owner_closing "+
+    "(seller_id,organization_id,state,version,request_id,"+
+    "source_audit_event_id,started_at,due_at) "+
+    "values ($1,$2,$3,1,$4,$5,$6,$7)",
+    [seller,org,state,requestId,eventId,started,due])
+  await q("insert into da_notification_receipt(id,person_id,audit_event_id) "+
+    "values ($1,$2,$3)",["danot_"+uuid(),owner,eventId])
+  return eventId
+}
+
 /** Disposable fixture only; never changes the real clock or protected data. */
 async function syntheticDeadline(seller:string,ageHours:number){
   const when=new Date(Date.now()-ageHours*3600000).toISOString()
