@@ -49,8 +49,7 @@ export class PersonalNotifications {
             or (a.action in ('organization.store_owner_closing_started',
                               'organization.store_owner_closing_withdrawn',
                       'organization.store_platform_closing_started',
-                      'organization.store_platform_closing_appealed',
-                      'organization.store_platform_closing_final_review_requested')
+                      'organization.store_platform_closing_appealed')
                 and a.resource='store-owner-closing'
                 and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
             or (a.action in ('organization.store_platform_closing_started',
@@ -236,8 +235,7 @@ export class PersonalNotifications {
               or (a.action in ('organization.store_owner_closing_started',
                                 'organization.store_owner_closing_withdrawn',
                       'organization.store_platform_closing_started',
-                      'organization.store_platform_closing_appealed',
-                      'organization.store_platform_closing_final_review_requested')
+                      'organization.store_platform_closing_appealed')
                   and a.resource='store-owner-closing'
                   and a.target_id ~ '^sel_[A-Za-z0-9_-]+$')
             or (a.action in ('organization.store_platform_closing_started',
