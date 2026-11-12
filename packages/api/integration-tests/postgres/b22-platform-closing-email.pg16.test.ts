@@ -10,6 +10,7 @@ import { createServer } from "node:net"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import AccessService from "../../src/modules/dogruadres-access/service"
 import { Migration20261111170000 } from "../../src/modules/dogruadres-access/migrations/Migration20261111170000"
+import { Migration20261112100000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112100000"
 import { runPlatformClosingEmailTick } from "../../src/jobs/dogruadres-platform-closing-email"
 import { canonicalEventForOutbox } from "../../src/modules/dogruadres-access/audit-delivery-policy"
 import { projectFoundationAuditEvent } from "../../src/modules/dogruadres-audit-index/envelope"
@@ -79,16 +80,20 @@ function serviceFor(tx:Pg){
     const rows:any[]=[]
     for(const e of events){
       const id="daaud_"+uuid()
+      const finalReview=e.action==="organization.store_platform_closing_final_review_requested"
+      const values=finalReview?
+        "jsonb_build_object('request_id',?::text,'stage',?::text,'reason_sha256',?::text)":
+        "jsonb_build_object('basis',?::text,'deadline_started_at',?::text,'evidence',?::text)"
       const inserted=await bind(tx,"insert into da_audit_event "+
         "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
         "action,module,resource,target_id,new_values,occurred_at) "+
-        "values (?,?,?,?,?,?,?,?,?,?,"+
-        "jsonb_build_object('basis',?::text,'deadline_started_at',?::text,'evidence',?::text),?) "+
-        "returning *",[
+        "values (?,?,?,?,?,?,?,?,?,?,"+values+",?) returning *",[
         id,e.actor_person_id,e.actor_type,e.actor_id,e.role_context??null,
         e.organization_id??null,e.action,e.module,e.resource,e.target_id??null,
-        e.new_values.basis,e.new_values.deadline_started_at,
-        e.new_values.evidence,e.occurred_at
+        finalReview?e.new_values.request_id:e.new_values.basis,
+        finalReview?e.new_values.stage:e.new_values.deadline_started_at,
+        finalReview?e.new_values.reason_sha256:e.new_values.evidence,
+        e.occurred_at
       ])
       rows.push(inserted[0])
     }
@@ -172,6 +177,7 @@ async function setup(){
   await q("create table da_actor_mapping (id text,person_id text,actor_type text,"+
     "actor_id text,deleted_at timestamptz)")
   await migrate(Migration20261111170000)
+  await migrate(Migration20261112100000)
   await q("insert into da_person(id) values ($1),($2)",[owner,staff])
   await q("insert into da_organization_membership"+
     "(id,organization_id,person_id,role,status,protected_owner)"+
@@ -221,6 +227,34 @@ async function seed(seller:string,attempts=0,state="pending",leaseExpired=false,
     "values ($1,$2,clock_timestamp()-interval '1 second',$3,$4,$5,"+
     "case when $5::uuid is null then null else clock_timestamp()-interval '1 second' end)",
     [seller,owner,attempts,state,claim])
+}
+/** Disposable fixture only; never changes the real clock or protected data. */
+async function syntheticDeadline(seller:string,ageHours:number){
+  const when=new Date(Date.now()-ageHours*3600000).toISOString()
+  const eventId="daaud_"+uuid()
+  await q("insert into da_audit_event "+
+    "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
+    "action,module,resource,target_id,new_values,occurred_at) "+
+    "values ($1,$2,'user',$3,'owner',$4,"+
+    "'organization.store_platform_closing_deadline_started',"+
+    "'dogruadres-access','store-platform-closing',$5,"+
+    "jsonb_build_object('basis','owner_delivery',"+
+    "'deadline_started_at',$6::text),$6::timestamptz)",
+    [eventId,owner,syntheticActor,org,seller,when])
+  await insertOutbox(db as Pg,"daaob_"+uuid(),{
+    source_audit_event_id:eventId,source_module:"dogruadres-access",
+    envelope_version:1,status:"pending",envelope:{
+      version:1,source_module:"dogruadres-access",
+      source_audit_event_id:eventId,organization_id:org,
+      actor:{person_id:owner,type:"user",id:syntheticActor,role_context:"owner"},
+      action:"organization.store_platform_closing_deadline_started",
+      resource:"store-platform-closing",target_id:seller,occurred_at:when
+    }
+  })
+  await q("update da_store_platform_closing "+
+    "set deadline_started_at=$2,deadline_basis='owner_delivery',"+
+    "deadline_audit_event_id=$3 where seller_id=$1",[seller,when,eventId])
+  return when
 }
 async function row(seller:string){
   const rows=await q("select * from da_store_platform_closing where seller_id=$1",[seller])
