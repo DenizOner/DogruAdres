@@ -43,7 +43,6 @@ export function createImageRemotePatterns(env: Record<string, string | undefined
   return patterns
 }
 
-import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   output: "standalone",
