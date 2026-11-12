@@ -282,6 +282,7 @@ async function run(){
         const postHoldRecipientMarker="PASS B22 Chrome/HTTPS/PG16: transferred old name remains reserved for B after source hold day 30, C HTTPS409 without request/audit, original timestamp restored, B native adoption succeeds"
         const independentStaffRaceMarker="PASS B22 Chrome/HTTPS/PG16: two independent strong Staff Persons race same first Store name-right transfer on observed PG advisory lock; HTTP201+409, one transfer/audit/outbox, replay200, both native Seller IDs unchanged"
         const platformClosingAppealMarker="PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, canonical 10+20 clock started on authenticated Owner link before first appeal; external mailbox delivery unverified and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no external mailbox delivery claim; one immutable clock, foreign denied"
+        const platformFinalReviewMarker="PASS B22 Chrome/HTTPS/PG16: synthetic T0+11d second-stage Owner request, real protected Owner/foreign Staff/CSRF/replay, one durable audit/outbox and private notice; Store stays closed, original 10+20 clock unchanged; stage time fixture is synthetic, real UI form not claimed"
         const platformClosingEmailLinkMarker="PASS B22 Chrome/HTTPS/PG16: synthetic hashed email link strong Owner POST, foreign/forged CSRF/scanner GET denied, 10+20 server clock starts once, no finalizer or sales reopening"
         const completedSourceOrderMarker="PASS B22 Chrome/HTTPS/PG16: completed native source OrderGroup/Order IDs, Order-Cart FK, source Seller/Offer and immutable Buyer attribution unchanged across A→B transfer, A same-ID recovery and B name adoption; zero payment"
         const historicalCartMarker="PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED"
@@ -336,7 +337,8 @@ async function run(){
               x===exceptionalStoreTransferMarker || x===exceptionalRecipientMarker ||
               x===postHoldRecipientMarker || x===independentStaffRaceMarker ||
               x===historicalCartMarker || x===completedSourceOrderMarker ||
-              (x===platformClosingAppealMarker || x===platformClosingEmailLinkMarker)).join("\n")
+              (x===platformClosingAppealMarker || x===platformClosingEmailLinkMarker ||
+               x===platformFinalReviewMarker)).join("\n")
           if(child.error||child.status!==0){
             // The long B22 child can legitimately fail at the still-blocked
             // tax-document approval. Do not bury *completed* earlier native
@@ -404,6 +406,8 @@ async function run(){
           "Missing real independent strong Staff and protected Owner platform closing/appeal HTTPS+PG16 proof")
         assert.ok(result.split("\n").includes(platformClosingEmailLinkMarker),
           "Missing real authenticated Owner email-link HTTPS/PG16, foreign/CSRF/scanner GET denials, one 10+20 clock and sales-block proof")
+        assert.ok(result.split("\n").includes(platformFinalReviewMarker),
+          "Missing day-11 second-stage Owner authenticated HTTPS/PG16 review and negative proof")
         // Both new B22 historical-reader negatives must be visible as full
         // redacted proof lines. Child success alone is not their evidence.
         for(const marker of [
