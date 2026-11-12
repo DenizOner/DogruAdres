@@ -1,3 +1,48 @@
+import type { NextConfig } from 'next'
+import { isIP } from 'node:net'
+
+// #175: Only operator configuration, never product-provided URLs, can add hosts.
+type RemotePattern = NonNullable<NonNullable<NextConfig['images']>['remotePatterns']>[number]
+
+export function createImageRemotePatterns(env: Record<string, string | undefined>): RemotePattern[] {
+  const production = env.NODE_ENV === 'production'
+  const patterns: RemotePattern[] = []
+  const configured = (env.DOGRUADRES_STOREFRONT_MEDIA_BASE_URL || env.MEDUSA_BACKEND_URL || '').trim()
+
+  if (configured) {
+    const origin = new URL(configured)
+    const hostname = origin.hostname.toLowerCase()
+    const loopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
+    const publicDns = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(hostname)
+      && !isIP(hostname)
+      && !['.local', '.localhost', '.internal', '.test', '.invalid', '.example'].some((suffix) => hostname.endsWith(suffix))
+    const safeHttps = origin.protocol === 'https:' && publicDns && origin.port === ''
+    const localDevelopment = !production && origin.protocol === 'http:' && loopback
+    const filePath = ['', '/', '/static', '/static/'].includes(origin.pathname)
+    if ((!safeHttps && !localDevelopment) || origin.username || origin.password
+      || origin.search || origin.hash || !filePath) {
+      throw new Error('REFUSED: Storefront media origin must be an exact approved HTTPS host and /static path (loopback only in development)')
+    }
+    patterns.push({
+      protocol: safeHttps ? 'https' : 'http',
+      hostname,
+      port: origin.port || '',
+      pathname: '/static/**',
+      search: '',
+    })
+  }
+
+  // Demo-only images never become production optimizer targets.
+  if (!production) {
+    patterns.push(
+      { protocol: 'https', hostname: 'cdn.jsdelivr.net', port: '', pathname: '/gh/mercurjs/mercur@main/static/**', search: '' },
+      { protocol: 'https', hostname: 'api.dicebear.com', port: '', pathname: '/9.x/initials/svg' },
+      { protocol: 'https', hostname: 'picsum.photos', port: '', pathname: '/seed/**', search: '' },
+    )
+  }
+  return patterns
+}
+
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
@@ -22,48 +67,11 @@ const nextConfig: NextConfig = {
     }
   },
   images: {
-    dangerouslyAllowSVG: true,
+    // SVG optimization is not required; public/ SVGs still load directly.
+    dangerouslyAllowSVG: false,
     contentDispositionType: 'attachment',
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'medusa-public-images.s3.eu-west-1.amazonaws.com'
-      },
-      {
-        protocol: 'https',
-        hostname: 'mercur-connect.s3.eu-central-1.amazonaws.com'
-      },
-      {
-        protocol: 'https',
-        hostname: 'api.mercurjs.com'
-      },
-      {
-        protocol: 'http',
-        hostname: 'localhost'
-      },
-      {
-        protocol: 'https',
-        hostname: 'api-sandbox.mercurjs.com',
-        pathname: '/static/**'
-      },
-      {
-        protocol: 'https',
-        hostname: 'i.imgur.com'
-      },
-      {
-        protocol: 'https',
-        hostname: 's3.eu-central-1.amazonaws.com'
-      },
-      {
-        protocol: "https",
-        hostname: "mercur-testing.up.railway.app",
-      },
-      {
-        protocol: 'https',
-        hostname: '**'
-      }
-    ]
+    remotePatterns: createImageRemotePatterns(process.env),
   }
 };
 

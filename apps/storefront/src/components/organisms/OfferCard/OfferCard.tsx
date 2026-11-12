@@ -1,6 +1,6 @@
 "use client"
 
-import Image from "next/image"
+import Image from "@/components/molecules/SafeImage/SafeImage"
 
 import { Button } from "@/components/atoms"
 import { toast } from "@/lib/helpers/toast"

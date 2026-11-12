@@ -210,7 +210,7 @@ jobs:
       # repair and #309 Next.js security patch branches only.
       # Never skip or suppress TypeScript, ESLint or Next production failures.
       - name: Storefront #159 type, lint and production build diagnostics
-        if: ${{ github.event_name == 'pull_request' && (github.head_ref == 'fix/storefront-build-eslint-types-159' || github.head_ref == 'fix/security-next-15528-309') && steps.install.outcome == 'success' }}
+        if: ${{ github.event_name == 'pull_request' && (github.head_ref == 'fix/storefront-build-eslint-types-159' || github.head_ref == 'fix/security-next-15528-309' || github.head_ref == 'fix/storefront-image-allowlist-175') && steps.install.outcome == 'success' }}
         timeout-minutes: 8
         working-directory: apps/storefront
         shell: bash
@@ -253,6 +253,10 @@ jobs:
           # #159: focused native-price DTO and invalid-value regressions, using existing Bun.
           bun test src/lib/helpers/get-product-price.test.ts
           test "$type_status" -eq 0 && test "$lint_status" -eq 0 && test "$build_status" -eq 0
+          if [ "$GITHUB_HEAD_REF" = "fix/storefront-image-allowlist-175" ]; then
+            bun test next.config.image.test.ts
+            node scripts/verify-image-optimizer.mjs
+          fi
       - name: Native SMTP HTTPS privacy negative regressions
         id: asvs_smtp_http
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
