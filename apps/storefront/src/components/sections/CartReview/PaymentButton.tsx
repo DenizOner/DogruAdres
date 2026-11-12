@@ -67,7 +67,7 @@ const StripePaymentButton = ({
     try {
       const res = await placeOrder()
       if (!res.ok) {
-        setErrorMessage(res.error?.message)
+        setErrorMessage(res.error?.message ?? "Unable to complete the order")
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : null
@@ -176,7 +176,7 @@ const ManualTestPaymentButton = ({ notReady }: { notReady: boolean }) => {
     try {
       const res = await placeOrder()
       if (!res.ok) {
-        setErrorMessage(res.error?.message)
+        setErrorMessage(res.error?.message ?? "Unable to complete the order")
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : null
