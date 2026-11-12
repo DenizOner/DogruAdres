@@ -3,12 +3,13 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:net'
 import { spawn } from 'node:child_process'
 import { createServer as createHttpsServer } from 'node:https'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
+const medusaRequire = createRequire(new URL('../../../packages/api/package.json', import.meta.url))
 const nextBin = require.resolve('next/dist/bin/next')
 const reserve = createServer()
 await new Promise((resolve, reject) => {
@@ -31,6 +32,7 @@ const get = (url) => fetch(url, { signal: AbortSignal.timeout(8000), redirect: '
 const fixtureHost = 'media-image175-ci.example.org'
 const fixtureUrl = 'https://' + fixtureHost + '/static/fixture.jpg'
 let mediaServer
+let medusaRoot
 try {
   // Real HTTPS/TLS test on a disposable CI loopback. This is NOT the real
   // Medusa File provider or an approved production FILE_BACKEND_URL.
@@ -39,13 +41,55 @@ try {
   assert.equal(process.env.DOGRUADRES_STOREFRONT_MEDIA_BASE_URL, 'https://' + fixtureHost + '/static')
   assert.ok(process.env.IMAGE175_TLS_KEY && process.env.IMAGE175_TLS_CERT)
   const fixtureBytes = readFileSync('public/images/product/placeholder.jpg')
+  // Reuse the installed, version-pinned Medusa LocalFileService, not a mock
+  // that manufactures file keys or URLs. The disposable public directory
+  // represents its native file-local upload store without API/DB/PII.
+  const { LocalFileService } = medusaRequire('@medusajs/medusa/file-local')
+  assert.equal(typeof LocalFileService, 'function')
+  medusaRoot = mkdtempSync(join(tmpdir(), 'dogruadres-image175-native-file-'))
+  const publicDir = join(medusaRoot, 'public')
+  const privateDir = join(medusaRoot, 'private')
+  mkdirSync(publicDir, { recursive: true })
+  mkdirSync(privateDir, { recursive: true })
+  const provider = new LocalFileService({}, {
+    upload_dir: publicDir,
+    private_upload_dir: privateDir,
+    backend_url: 'https://' + fixtureHost + '/static',
+  })
+  const nativeUpload = await provider.upload({
+    filename: 'image175-native.jpg',
+    mimeType: 'image/jpeg',
+    content: fixtureBytes.toString('base64'),
+    access: 'public',
+  })
+  assert.equal(typeof nativeUpload.key, 'string')
+  assert.match(nativeUpload.key, /^[a-zA-Z0-9_.-]+$/, 'Native Medusa file key must be a safe basename')
+  assert.equal(new URL(nativeUpload.url).origin, 'https://' + fixtureHost)
+  assert.equal(new URL(nativeUpload.url).pathname, '/static/' + nativeUpload.key)
+  assert.deepEqual(readFileSync(join(publicDir, nativeUpload.key)), fixtureBytes)
   let mediaHits = 0
+  let nativeHits = 0
   mediaServer = createHttpsServer({
     key: readFileSync(process.env.IMAGE175_TLS_KEY),
     cert: readFileSync(process.env.IMAGE175_TLS_CERT),
   }, (request, response) => {
-    if (request.method !== 'GET' || request.url !== '/static/fixture.jpg'
-      || request.headers.host !== fixtureHost) {
+    if (request.method !== 'GET' || request.headers.host !== fixtureHost) {
+      response.writeHead(404)
+      response.end()
+      return
+    }
+    if (request.url === '/static/' + nativeUpload.key) {
+      nativeHits += 1
+      const actualBytes = readFileSync(join(publicDir, nativeUpload.key))
+      response.writeHead(200, {
+        'Content-Type': 'image/jpeg',
+        'Cache-Control': 'no-store',
+        'Content-Length': actualBytes.length,
+      })
+      response.end(actualBytes)
+      return
+    }
+    if (request.url !== '/static/fixture.jpg') {
       response.writeHead(404)
       response.end()
       return
@@ -93,6 +137,13 @@ try {
   assert.match(allowedRemote.headers.get('content-type') || '', /^image\/(jpeg|webp|avif)$/)
   assert.ok((await allowedRemote.arrayBuffer()).byteLength > 100)
   assert.equal(mediaHits, 1, 'Next must fetch the authorized HTTPS fixture exactly once')
+  // Actual installed Medusa provider -> its generated file key and URL ->
+  // the same disposable HTTPS origin -> real Next image optimizer.
+  const nativeImage = await get(image(nativeUpload.url))
+  assert.equal(nativeImage.status, 200, 'Native Medusa public file URL must optimize over TLS')
+  assert.match(nativeImage.headers.get('content-type') || '', /^image\/(jpeg|webp|avif)$/)
+  assert.ok((await nativeImage.arrayBuffer()).byteLength > 100)
+  assert.equal(nativeHits, 1, 'Next must fetch the native Medusa uploaded bytes once')
   const outside = await get(image('https://' + fixtureHost + '/private.jpg'))
   assert.equal(outside.status, 400, 'Same host outside /static must be denied')
   assert.equal(mediaHits, 1, 'The forbidden URL must never reach upstream')
@@ -158,9 +209,10 @@ try {
   assert.match(browser, /data-testid="image175-media-result"[^>]*>loaded<\/p>/, 'Real Chrome did not render allowed HTTPS media')
   console.log('PASS #175 real Chrome: forbidden image safely replaced, HTTPS media fixture loaded')
 
-  console.log('PASS #175 real Next production HTTP: six forbidden 400, approved CI HTTPS media 200, off-path 400, JPEG 200, static SVG 200, optimized SVG 400')
+  console.log('PASS #175 real Next production HTTP: six forbidden 400, approved CI HTTPS media 200, native Medusa LocalFileService upload URL 200, off-path 400, JPEG 200, static SVG 200, optimized SVG 400')
 } finally {
   if (mediaServer?.listening) await new Promise((resolve) => mediaServer.close(resolve))
+  if (medusaRoot) rmSync(medusaRoot, { recursive: true, force: true })
   server.kill('SIGTERM')
   const timer = setTimeout(() => server.kill('SIGKILL'), 3000)
   timer.unref()
