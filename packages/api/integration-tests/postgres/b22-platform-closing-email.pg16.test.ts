@@ -607,6 +607,102 @@ async function main(){
       [expiredSeller]))[0].n,0,
       "Late appeal may not generate private Owner notices")
     process.stdout.write("PASS B22 PG16: expired day-11 first appeal denied with unchanged deadline, state, audit/outbox and private receipts\n")
+    // Day 11 is too late for a NEW first appeal, yet inside the approved
+    // day-10..30 independent review request window. Two real PG16 workers
+    // contend on the same Seller advisory lock and persist ONE canonical
+    // event/outbox and one Owner receipt.
+    const reviewRequestId="dasfr_"+uuid()
+    const reviewReason="Sentetik Owner kalan 20 günlük üst inceleme talebini sunuyor"
+    const requestReview=()=>db.begin(async (tx:Pg)=>{
+      const {service,context}=serviceFor(tx)
+      ;(service as any).ownerPauseScope_=async()=>({
+        actor:{person_id:owner,actor_type:"user",actor_id:syntheticActor}
+      })
+      return service.personalRequestPlatformStoreClosingFinalReview(
+        "synthetic-clock-only",{
+          organization_id:org,seller_id:expiredSeller,
+          request_id:reviewRequestId,expected_version:1,reason:reviewReason
+        },context)
+    })
+    const concurrent=await Promise.all([requestReview(),requestReview()])
+    assert.deepEqual(concurrent.map(x=>x?.status),[
+      "review_requested","review_requested"])
+    assert.deepEqual(concurrent.map(x=>x?.replayed).sort(),[false,true],
+      "Concurrent Owner submissions must persist only one review request")
+    const finalRow=await row(expiredSeller)
+    assert.equal(finalRow.state,"notification_unverified",
+      "An upper-review request must not reopen sales or decide the closure")
+    assert.equal(finalRow.version,1)
+    assert.equal(finalRow.final_review_request_id,reviewRequestId)
+    assert.equal(finalRow.final_review_reason,reviewReason)
+    assert.equal(finalRow.final_review_requested_by_person_id,owner)
+    assert.equal(finalRow.deadline_started_at.toISOString(),expiredDeadline,
+      "The canonical 10+20 clock must never restart")
+    assert.equal((await q("select count(*)::int n from da_audit_event "+
+      "where target_id=$1",[expiredSeller]))[0].n,countBefore+1)
+    assert.equal((await q("select count(*)::int n "+
+      "from da_audit_outbox x join da_audit_event e "+
+      "on e.id=x.source_audit_event_id where e.target_id=$1",
+      [expiredSeller]))[0].n,outboxBefore+1)
+    const reviewCanonical=(await q("select e.*,x.envelope,x.envelope_version,"+
+      "x.source_audit_event_id,x.source_module "+
+      "from da_audit_event e join da_audit_outbox x "+
+      "on x.source_audit_event_id=e.id "+
+      "where e.id=$1",[finalRow.final_review_audit_event_id]))[0]
+    assert.equal(reviewCanonical.action,
+      "organization.store_platform_closing_final_review_requested")
+    assert.equal(reviewCanonical.role_context,"owner")
+    assert.equal(reviewCanonical.new_values.reason_sha256,sha(reviewReason),
+      "Reason remains private, only its digest enters the audit")
+    assert.equal(JSON.stringify(reviewCanonical).includes(reviewReason),false)
+    assert.ok(canonicalEventForOutbox(reviewCanonical,reviewCanonical),
+      "The upper review has a real canonical source audit and outbox")
+    assert.equal(projectFoundationAuditEvent(reviewCanonical).action,
+      "organization.store_platform_closing_final_review_requested")
+    assert.equal((await q("select count(*)::int n from da_notification_receipt "+
+      "where audit_event_id=$1",[finalRow.final_review_audit_event_id]))[0].n,1)
+    const conflict=await db.begin(async (tx:Pg)=>{
+      const {service,context}=serviceFor(tx)
+      ;(service as any).ownerPauseScope_=async()=>({
+        actor:{person_id:owner,actor_type:"user",actor_id:syntheticActor}
+      })
+      return service.personalRequestPlatformStoreClosingFinalReview(
+        "synthetic-clock-only",{
+          organization_id:org,seller_id:expiredSeller,
+          request_id:"dasfr_"+uuid(),expected_version:1,reason:reviewReason
+        },context)
+    })
+    assert.deepEqual(conflict,{status:"conflict"},
+      "A different request may not generate another review")
+    for(const [seller,ageHours] of [
+      ["sel_b22_final_review_too_early",9*24],
+      ["sel_b22_final_review_too_late",31*24]
+    ] as const){
+      await seed(seller,4,"failed",false,
+        new Date(Date.now()-(ageHours+24)*3600000).toISOString())
+      const initialDeadline=await syntheticDeadline(seller,ageHours)
+      const before=(await q("select count(*)::int n from da_audit_event "+
+        "where target_id=$1",[seller]))[0].n
+      const denied=await db.begin(async (tx:Pg)=>{
+        const {service,context}=serviceFor(tx)
+        ;(service as any).ownerPauseScope_=async()=>({
+          actor:{person_id:owner,actor_type:"user",actor_id:syntheticActor}
+        })
+        return service.personalRequestPlatformStoreClosingFinalReview(
+          "synthetic-clock-only",{
+            organization_id:org,seller_id:seller,
+            request_id:"dasfr_"+uuid(),expected_version:1,reason:reviewReason
+          },context)
+      })
+      assert.deepEqual(denied,{status:"conflict"})
+      const unchanged=await row(seller)
+      assert.equal(unchanged.final_review_request_id,null)
+      assert.equal(unchanged.deadline_started_at.toISOString(),initialDeadline)
+      assert.equal((await q("select count(*)::int n from da_audit_event "+
+        "where target_id=$1",[seller]))[0].n,before,
+        "Denied out-of-window review cannot write audit/outbox or state")
+    }
+    process.stdout.write("PASS B22 PG16: day-11 independent review once under two workers, canonical audit/outbox and private receipt; day-9/day-31 conflict, no clock restart or finalizer\n")
     // New protected Owners get a separately timed current-state notice.
     // Their record must NOT backfill the original closure audit receipt.
     // A newly assigned Owner at T0+71h must not restart the initial
