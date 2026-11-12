@@ -316,11 +316,20 @@ async function claimOwnerClosingMail(db:Db,seen:OwnerMailClaim[]){
       select d.audit_event_id,d.person_id
       from da_store_owner_closing_email d
       join da_audit_event e on e.id=d.audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.resource='store-owner-closing' and e.role_context='owner'
       join da_store_owner_closing c on c.source_audit_event_id=e.id
         and c.organization_id=e.organization_id and c.seller_id=e.target_id
         and e.action=(case when c.state='closing'
           then 'organization.store_owner_closing_started'
           else 'organization.store_owner_closing_withdrawn' end)
+        and e.new_values->>'request_id'=c.request_id
+        and e.new_values->>'state'=c.state
+        and e.new_values->>'version'=c.version::text
+        and (e.new_values->>'started_at')::timestamptz=c.started_at
+        and (e.new_values->>'due_at')::timestamptz=c.due_at
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+        and x.source_module='dogruadres-access' and x.deleted_at is null
       join da_notification_receipt n on n.audit_event_id=d.audit_event_id
         and n.person_id=d.person_id
       join da_organization_membership m on m.person_id=d.person_id
