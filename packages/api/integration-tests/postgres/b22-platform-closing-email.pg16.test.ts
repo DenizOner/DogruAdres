@@ -12,7 +12,9 @@ import AccessService from "../../src/modules/dogruadres-access/service"
 import { Migration20261111170000 } from "../../src/modules/dogruadres-access/migrations/Migration20261111170000"
 import { Migration20261112100000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112100000"
 import { Migration20261112120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112120000"
-import { runPlatformClosingEmailTick } from "../../src/jobs/dogruadres-platform-closing-email"
+import { Migration20261110120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261110120000"
+import { Migration20261112130000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112130000"
+import { runPlatformClosingEmailTick, runOwnerClosingEmailTick } from "../../src/jobs/dogruadres-platform-closing-email"
 import { canonicalEventForOutbox } from "../../src/modules/dogruadres-access/audit-delivery-policy"
 import { projectFoundationAuditEvent } from "../../src/modules/dogruadres-audit-index/envelope"
 
@@ -150,6 +152,7 @@ async function setup(){
   await q("drop schema if exists public cascade")
   await q("create schema public")
   await q("create table da_person (id text primary key,disabled_at timestamptz,deleted_at timestamptz)")
+  await q("create table da_organization (id text primary key)")
   await q("create table da_organization_membership (id text primary key,"+
     "organization_id text,person_id text,role text,status text,"+
     "protected_owner boolean,revoked_at timestamptz,deleted_at timestamptz)")
@@ -180,6 +183,9 @@ async function setup(){
   await migrate(Migration20261111170000)
   await migrate(Migration20261112100000)
   await migrate(Migration20261112120000)
+  await migrate(Migration20261110120000)
+  await migrate(Migration20261112130000)
+  await q("insert into da_organization(id) values ($1)",[org])
   await q("insert into da_person(id) values ($1),($2)",[owner,staff])
   await q("insert into da_organization_membership"+
     "(id,organization_id,person_id,role,status,protected_owner)"+
