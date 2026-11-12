@@ -5240,7 +5240,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
    */
   private async ownerClosingRow_(db:SecuritySql,sellerId:string,lock=false){
     const rows=await db.execute(`select c.organization_id,c.seller_id,c.state,
-      c.version,c.request_id,c.started_at,c.due_at,
+      c.version,c.request_id,c.started_at,c.due_at,c.source_audit_event_id,
       exists(select 1 from da_audit_event e
         join da_audit_outbox x on x.source_audit_event_id=e.id
           and x.source_module='dogruadres-access' and x.deleted_at is null
@@ -5284,7 +5284,53 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const clock=await db.execute("select clock_timestamp() as now_at")
     if(clock.length!==1)throw new IdentityAccessDenied()
     const now=new Date(clock[0].now_at)
+    // Only the currently signed-in canonical Person's recipient record,
+    // scoped to the LATEST canonical closing audit event, is visible. No
+    // address, message ID, other Owner's attempts, or delivery claim leaks.
+    let noticeStatus="not_applicable",noticeAttempts=0
+    let smtpAccepted=false
+    if(row){
+      const own=await db.execute(`select n.id as receipt_id,
+        d.attempts,d.last_result,d.accepted_at
+        from da_notification_receipt n
+        left join da_store_owner_closing_email d
+          on d.audit_event_id=n.audit_event_id and d.person_id=n.person_id
+        where n.audit_event_id=? and n.person_id=?
+        limit 2`,[row.source_audit_event_id,scope.actor.person_id])
+      if(own.length>1)throw new IdentityAccessDenied()
+      if(own.length===1){
+        if(own[0].last_result===null){
+          noticeStatus="queued"
+        }else{
+          const status=String(own[0].last_result)
+          const attempts=Number(own[0].attempts)
+          if(!["pending","inflight","accepted","failed",
+              "unverified_identity","uncertain","invalidated"].includes(status)||
+             !Number.isSafeInteger(attempts)||attempts<0||attempts>4||
+             (status==="accepted"&&own[0].accepted_at===null))
+            throw new IdentityAccessDenied()
+          noticeStatus=status
+          noticeAttempts=attempts
+          smtpAccepted=own[0].accepted_at!==null
+        }
+      }
+    }
+    // Hold the current protected Owner grant until the read transaction
+    // commits; a concurrently committed revocation cannot return a private
+    // per-recipient status after authorization disappears.
+    const currentOwner=await db.execute(`select m.id
+      from da_organization_membership m
+      join da_person p on p.id=m.person_id
+      where m.person_id=? and m.organization_id=?
+        and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.revoked_at is null
+        and m.deleted_at is null and p.disabled_at is null
+        and p.deleted_at is null
+      limit 2 for share of m,p`,[scope.actor.person_id,organizationId])
+    if(currentOwner.length!==1)return null
     return {organization_id:organizationId,seller_id:sellerId,
+      email_notice:{status:noticeStatus,attempts:noticeAttempts,
+        smtp_accepted:smtpAccepted,mailbox_delivery_verified:false},
       state:row?.state??"none",version:row?Number(row.version):0,
       started_at:row?new Date(row.started_at).toISOString():null,
       due_at:row?new Date(row.due_at).toISOString():null,
