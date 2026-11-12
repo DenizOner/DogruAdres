@@ -5427,6 +5427,21 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           and a.new_values->>'appeal_reason_sha256'=
             encode(sha256(convert_to(c.appeal_reason,'UTF8')),'hex')
       )) as appeal_proof,
+      (c.final_review_audit_event_id is null or exists (
+        select 1 from da_audit_event a
+        join da_audit_outbox x on x.source_audit_event_id=a.id
+          and x.source_module='dogruadres-access' and x.deleted_at is null
+        where a.id=c.final_review_audit_event_id and a.deleted_at is null
+          and a.module='dogruadres-access' and a.role_context='owner'
+          and a.actor_person_id=c.final_review_requested_by_person_id
+          and a.resource='store-platform-closing'
+          and a.action='organization.store_platform_closing_final_review_requested'
+          and a.organization_id=c.organization_id and a.target_id=c.seller_id
+          and a.new_values->>'request_id'=c.final_review_request_id
+          and a.new_values->>'stage'='second_review'
+          and a.new_values->>'reason_sha256'=
+            encode(sha256(convert_to(c.final_review_reason,'UTF8')),'hex')
+      )) as final_review_proof,
       (c.deadline_started_at is null or exists (
         select 1 from da_audit_event e
         join da_audit_outbox x on x.source_audit_event_id=e.id
@@ -5445,6 +5460,19 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(rows.length>1||rows.some(row=>
       row.seller_id!==sellerId||row.start_proof!==true||
       row.appeal_proof!==true||row.deadline_proof!==true||
+      row.final_review_proof!==true||
+      (row.final_review_request_id===null?
+        row.final_review_reason!==null||
+        row.final_review_audit_event_id!==null||
+        row.final_review_requested_by_person_id!==null||
+        row.final_review_requested_at!==null:
+        !/^dasfr_[a-f0-9]{32}$/.test(String(row.final_review_request_id))||
+        typeof row.final_review_reason!=="string"||
+        row.final_review_reason.length<10||
+        row.final_review_reason.length>500||
+        !/^daprs_[A-Za-z0-9_-]+$/.test(String(row.final_review_requested_by_person_id))||
+        !Number.isFinite(new Date(row.final_review_requested_at).getTime())||
+        row.state!=="notification_unverified")||
       !["notification_unverified","appealed"].includes(row.state)||
       !/^dascp_[a-f0-9]{32}$/.test(String(row.request_id))||
       !Number.isFinite(new Date(row.started_at).getTime())||
@@ -5904,8 +5932,28 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!owner)return null
     const row=await this.platformClosingRow_(db,sellerId)
     if(row&&row.organization_id!==organizationId)throw new IdentityAccessDenied()
+    const windows=await db.execute(`select
+      (x.started_at is null or x.now_at <
+        x.started_at + interval '240 hours') as first_window,
+      (x.started_at is not null and x.now_at >=
+        x.started_at + interval '240 hours' and x.now_at <
+        x.started_at + interval '720 hours') as second_window
+      from (select ?::timestamptz as started_at,
+        clock_timestamp() as now_at) x`,[row?.deadline_started_at??null])
+    if(windows.length!==1||
+       typeof windows[0].first_window!=="boolean"||
+       typeof windows[0].second_window!=="boolean")
+      throw new IdentityAccessDenied()
     return {organization_id:organizationId,seller_id:sellerId,
       state:row?.state??"none",version:row?Number(row.version):0,
+      first_appeal_open:row?.state==="notification_unverified"&&
+        windows[0].first_window&&row?.final_review_request_id==null,
+      final_review_open:row?.state==="notification_unverified"&&
+        windows[0].second_window&&row?.final_review_request_id==null,
+      final_review_requested:row?.final_review_request_id!=null,
+      final_review_requested_at:row?.final_review_requested_at?
+        new Date(row.final_review_requested_at).toISOString():null,
+      final_review_reason:row?.final_review_reason??null,
       reason:row?.reason??null,started_at:row?
         new Date(row.started_at).toISOString():null,
       appeal_reason:row?.appeal_reason??null,
@@ -6001,6 +6049,95 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       on conflict (audit_event_id,person_id) do nothing`,
       [audit.id,input.organization_id])
     return {status:"appealed" as const,version:2,replayed:false}
+  }
+
+  /** A protected Owner may request independent platform review only
+   * in the second (10–30 day) window when no first appeal was filed.
+   * This is a durable pending request, NOT a Staff decision or finalizer.
+   */
+  @InjectTransactionManager()
+  async personalRequestPlatformStoreClosingFinalReview(token:string,input:{
+    organization_id:string;seller_id:string;request_id:string;
+    expected_version:number;reason:string
+  },@MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !/^dasfr_[a-f0-9]{32}$/.test(input.request_id)||
+       input.expected_version!==1||
+       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
+       input.reason.length<10||input.reason.length>500)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
+      [input.seller_id])
+    const owner=await this.ownerPauseScope_(db,token,input.organization_id,input.seller_id)
+    if(!owner)return null
+    const row=await this.platformClosingRow_(db,input.seller_id,true)
+    if(!row||row.organization_id!==input.organization_id)
+      return {status:"conflict" as const}
+    // Replay is limited to the same currently authorized Owner and content.
+    if(row.final_review_request_id!==null){
+      if(row.final_review_request_id===input.request_id&&
+         row.final_review_reason===input.reason&&
+         row.final_review_requested_by_person_id===owner.actor.person_id)
+        return {status:"review_requested" as const,replayed:true}
+      return {status:"conflict" as const}
+    }
+    if(row.state!=="notification_unverified"||Number(row.version)!==1||
+       row.deadline_started_at===null)
+      return {status:"conflict" as const}
+    const clock=await db.execute(`select x.now_at,
+      (x.now_at >= (?::timestamptz + interval '240 hours') and
+       x.now_at < (?::timestamptz + interval '720 hours'))
+        as second_window
+      from (select clock_timestamp() as now_at) x`,
+      [row.deadline_started_at,row.deadline_started_at])
+    if(clock.length!==1||
+       !Number.isFinite(new Date(clock[0].now_at).getTime())||
+       typeof clock[0].second_window!=="boolean")
+      throw new IdentityAccessDenied()
+    if(!clock[0].second_window)return {status:"conflict" as const}
+    const duplicate=await db.execute(`select id from da_audit_event
+      where module='dogruadres-access' and resource='store-platform-closing'
+        and target_id=? and new_values->>'request_id'=?
+        and deleted_at is null limit 2`,
+      [input.seller_id,input.request_id])
+    if(duplicate.length)throw new IdentityAccessDenied()
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:owner.actor.person_id,actor_type:owner.actor.actor_type,
+      actor_id:owner.actor.actor_id,role_context:"owner",
+      organization_id:input.organization_id,
+      action:"organization.store_platform_closing_final_review_requested",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"store-platform-closing",
+      target_id:input.seller_id,
+      new_values:{request_id:input.request_id,stage:"second_review",
+        reason_sha256:createHash("sha256").update(input.reason).digest("hex")},
+      occurred_at:new Date(clock[0].now_at)
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const changed=await db.execute(`update da_store_platform_closing
+      set final_review_request_id=?,final_review_reason=?,
+        final_review_audit_event_id=?,
+        final_review_requested_by_person_id=?,
+        final_review_requested_at=?,updated_at=clock_timestamp()
+      where seller_id=? and organization_id=? and version=1
+        and state='notification_unverified'
+        and final_review_request_id is null
+      returning seller_id`,[
+      input.request_id,input.reason,audit.id,owner.actor.person_id,
+      new Date(clock[0].now_at).toISOString(),
+      input.seller_id,input.organization_id])
+    if(changed.length!==1)throw new IdentityAccessDenied()
+    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
+      select 'danot_'||gen_random_uuid()::text,m.person_id,?
+      from da_organization_membership m join da_person p on p.id=m.person_id
+      where m.organization_id=? and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.revoked_at is null and m.deleted_at is null
+        and p.disabled_at is null and p.deleted_at is null
+      on conflict (audit_event_id,person_id) do nothing`,
+      [audit.id,input.organization_id])
+    return {status:"review_requested" as const,replayed:false}
   }
 
   // B22 product draft: Foundation-owned intent ledger, not another product
