@@ -499,7 +499,7 @@ async function main(){
               }
             }else if(line.includes("/personal#closing_notice=")){
               observed.secureLink=true
-            }else if(line.includes("https://example.invalid/personal")){
+            }else if(/(?:^|\\s)https:\/\/example\\.invalid\/personal(?:\\s|$)/.test(line)){
               observed.ownerSafeLink=true
             }
           }else if(line.startsWith("EHLO ")){
