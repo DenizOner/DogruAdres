@@ -41,7 +41,8 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     // never to a delegated draft Member. Native Seller is the ONLY status
     // authority; a DoğruAdres created-application row is not approval.
     const native=req.scope.resolve<{listSellers(filter:object):Promise<any[]>}>("seller")
-    const applications:Array<(typeof result.applications)[number]&{seller_status:string;rejection_reason:string|null}>=[]
+    const applications:Array<Omit<(typeof result.applications)[number],"live_seller_authorized">&
+      {seller_status:string;rejection_reason:string|null}>=[]
     for(const entry of result.applications){
       // Never serialize the internal ownership proof to a browser response.
       const {live_seller_authorized,...app}=entry
