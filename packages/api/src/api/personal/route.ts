@@ -3232,13 +3232,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const left=data.remaining_seconds;
         const days=Math.floor(left/86400),hours=Math.floor((left%86400)/3600);
         const minutes=Math.floor((left%3600)/60),seconds=left%60;
-        st.textContent='Yeni satışlar durduruldu. Kalan süre (yenilendiğinde): '+
+        st.textContent=left===0?
+          '30 günlük bekleme süresi doldu. Yeni satışlar hâlâ kapalı. '+
+          'Kapatma güvenlik kontrolleri tamamlanmadan geri dönüşsüz işlem yapılmıyor. '+
+          'Sürenin dolması mağaza adını veya geçmiş siparişleri kendiliğinden değiştirmez. '+
+          'Geri çekme süresi sona erdi.':
+          'Yeni satışlar durduruldu. Kalan süre (yenilendiğinde): '+
           days+' gün, '+hours+' saat, '+minutes+' dakika, '+seconds+
-          ' saniye. 30 günlük sürenin bitişi: '+
-          deadline+(data.can_withdraw?' — Süre dolmadan geri çekebilirsiniz.':
-          ' — Geri çekme süresi bitti; geri dönüşsüz işlem henüz etkin değil.');
+          ' saniye. 30 günlük sürenin bitişi: '+deadline+
+          (data.can_withdraw?' — Süre dolmadan geri çekebilirsiniz.':
+          ' — Güncel geri çekme hakkı doğrulanamadı; yeniden kontrol edin.');
         el('store-owner-pause-status').textContent=
-          '30 günlük kalıcı kapatma süreci devam ediyor; geçici ara verme kullanılamaz.';
+          'Mağaza için kapatma talebi etkin; geçici ara verme kullanılamaz.';
       }else if(data.state==='withdrawn'){
         st.textContent='Kapatma talebi geri çekildi. Diğer satış engelleri geçerliliğini korur.';
       }else st.textContent='Aktif 30 günlük kapatma talebi bulunmuyor.';
