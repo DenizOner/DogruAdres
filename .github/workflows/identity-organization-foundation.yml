@@ -250,6 +250,8 @@ jobs:
             exit 1
           }
           echo "PASS: ESLint rejects deliberately invalid TypeScript syntax"
+          # #159: focused native-price DTO and invalid-value regressions, using existing Bun.
+          bun test src/lib/helpers/get-product-price.test.ts
           test "$type_status" -eq 0 && test "$lint_status" -eq 0 && test "$build_status" -eq 0
       - name: Native SMTP HTTPS privacy negative regressions
         id: asvs_smtp_http

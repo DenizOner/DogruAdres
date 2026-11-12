@@ -2,12 +2,6 @@ import { HttpTypes } from "@medusajs/types"
 import { getPercentageDiff } from "./get-precentage-diff"
 import { convertToLocale } from "./money"
 
-// Preserve the legacy fallback sort if a variant includes the old
-// calculated_amount field. Native prices live in calculated_price.
-type LegacyPricedVariant = HttpTypes.StoreProductVariant & {
-  calculated_amount?: number
-}
-
 export const getPricesForVariant = (
   variant: HttpTypes.StoreProductVariant | null | undefined
 ) => {
@@ -22,6 +16,9 @@ export const getPricesForVariant = (
     typeof price.calculated_amount !== "number" ||
     typeof price.calculated_amount_without_tax !== "number" ||
     typeof price.original_amount !== "number" ||
+    !Number.isFinite(price.calculated_amount) ||
+    !Number.isFinite(price.calculated_amount_without_tax) ||
+    !Number.isFinite(price.original_amount) ||
     typeof price.currency_code !== "string"
   ) {
     return null
@@ -54,7 +51,11 @@ export const getPricesForVariant = (
     }
   }
 
-  if (typeof price.original_amount_with_tax !== "number") {
+  if (
+    typeof price.original_amount_with_tax !== "number" ||
+    !Number.isFinite(price.original_amount_with_tax) ||
+    !Number.isFinite(price.calculated_amount_with_tax)
+  ) {
     return null
   }
 
@@ -101,16 +102,20 @@ export function getProductPrice({
       return null
     }
 
-    return product.variants
-      .filter((v) => !!v.calculated_price)
-      .sort((a: LegacyPricedVariant, b: LegacyPricedVariant) => {
-        const aWithTax = a.calculated_price?.calculated_amount_with_tax
-        const bWithTax = b.calculated_price?.calculated_amount_with_tax
-        return aWithTax && bWithTax
-          ? aWithTax - bWithTax
-          : (a.calculated_amount ?? Number.NaN) -
-              (b.calculated_amount ?? Number.NaN)
-      })[0]
+    // Sort the native Medusa amount displayed to customers, not the
+    // removed top-level legacy amount. Ignore incomplete/invalid prices.
+    const priced = product.variants
+      .map((variant) => ({
+        variant,
+        amount: getPricesForVariant(variant)?.calculated_price_number,
+      }))
+      .filter(
+        (entry): entry is { variant: HttpTypes.StoreProductVariant; amount: number } =>
+          typeof entry.amount === "number" && Number.isFinite(entry.amount)
+      )
+      .sort((a, b) => a.amount - b.amount)
+
+    return priced[0]?.variant ?? null
   }
 
   const cheapestPrice = () => {
