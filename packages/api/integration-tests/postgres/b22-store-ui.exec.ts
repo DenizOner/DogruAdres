@@ -139,6 +139,50 @@ async function verifyOwnerClosingBrowser(input:{
   assert.equal(clockView.status,200)
   assert.equal(clockView.body.state,"closing")
   assert.equal(clockView.body.permanent_finalization_enabled,false)
+  assert.deepEqual(clockView.body.email_notice,{
+    status:"queued",attempts:0,smtp_accepted:false,
+    mailbox_delivery_verified:false
+  },"The closing source's private Owner receipt is pending a real SMTP attempt")
+  const readOwnClosing=async(b:B06Chrome,org:string,seller:string)=>
+    b.callFunction("async function(org,seller){const r=await fetch("+
+      "'/personal/store-owner-closing?'+new URLSearchParams("+
+      "{organization_id:org,seller_id:seller}),{cache:'no-store'});"+
+      "return {status:r.status,body:await r.json()}}",org,seller)
+  const coInitial=await readOwnClosing(reviewer,organizations[0].id,ownerStoreId)
+  assert.equal(coInitial.status,200)
+  assert.deepEqual(coInitial.body.email_notice,clockView.body.email_notice)
+  assert.equal((await readOwnClosing(reviewer,
+    organizations[1].id,ownerStoreId)).status,403,
+    "Another Organization cannot access this Store's email state")
+  // Synthetic task-only evidence for the UI: the real SMTP 250/550/ACK
+  // behavior is separately proven by PR #317's PG16/loopback SMTP test.
+  // This insert is not a delivery receipt or a live SMTP network request.
+  const ownerMailRecord=await q(`insert into da_store_owner_closing_email
+    (audit_event_id,person_id,attempts,next_attempt_at,
+     last_attempt_at,last_result,accepted_at)
+    values ($1,$2,1,clock_timestamp()+interval '24 hours',
+      clock_timestamp(),'accepted',clock_timestamp())
+    returning audit_event_id`,[closed.audit_event_id,closed.actor_person_id])
+  assert.equal(ownerMailRecord.length,1)
+  const selfAccepted=await readOwnClosing(browser,organizations[0].id,ownerStoreId)
+  assert.equal(selfAccepted.status,200)
+  assert.deepEqual(selfAccepted.body.email_notice,{
+    status:"accepted",attempts:1,smtp_accepted:true,
+    mailbox_delivery_verified:false
+  },"SMTP acceptance must never be named delivery")
+  assert.equal(JSON.stringify(selfAccepted.body).includes("message_id"),false)
+  assert.equal(JSON.stringify(selfAccepted.body).includes("person_id"),false)
+  const otherOwner=await readOwnClosing(reviewer,organizations[0].id,ownerStoreId)
+  assert.equal(otherOwner.status,200)
+  assert.deepEqual(otherOwner.body.email_notice,{
+    status:"queued",attempts:0,smtp_accepted:false,
+    mailbox_delivery_verified:false
+  },"Another protected Owner must not borrow this Person's SMTP result")
+  await browser.click('#store-owner-closing-refresh')
+  await browser.wait("document.getElementById('store-owner-closing-status')."+
+    "textContent.includes('SMTP sunucusu e-postayı kabul etti; posta kutusuna teslim doğrulanmadı.')")
+  assert.equal(await browser.eval(
+    "document.getElementById('store-owner-closing-status').getAttribute('role')"),"status")
   assert.ok(Number.isSafeInteger(clockView.body.remaining_seconds)&&
     clockView.body.remaining_seconds>0&&clockView.body.remaining_seconds<=2592000,
     "Owner's status includes a bounded canonical server-clock countdown")
@@ -199,6 +243,13 @@ async function verifyOwnerClosingBrowser(input:{
   assert.equal(withdrawn.notices,2)
   await assertNotifiedOwners(withdrawn.audit_event_id,
     "Mağaza kapatma talebi geri çekildi")
+  const withdrawnView=await readOwnClosing(browser,organizations[0].id,ownerStoreId)
+  assert.equal(withdrawnView.status,200)
+  assert.deepEqual(withdrawnView.body.email_notice,{
+    status:"queued",attempts:0,smtp_accepted:false,
+    mailbox_delivery_verified:false
+  },"Withdrawal's own source event cannot inherit the earlier accepted SMTP result")
+  assert.ok(!JSON.stringify(withdrawnView.body).includes(closed.audit_event_id))
   assert.equal(await foundation.authorizeBuyerCheckout(customerCart.id,nativeCustomer.id,cartStoreIds),true)
   assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]})).items?.length,2)
   assert.deepEqual((await q("select id,name,handle,status,approved_at,closed_from,closed_to from seller where id=$1",
