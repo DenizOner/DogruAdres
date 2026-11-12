@@ -37,7 +37,7 @@ test('#175 rejects loopback, private, wildcard, credentials and path escalation 
     'https://media.example.org/static?q=1',
   ]) {
     assert.throws(() => createImageRemotePatterns({
-      NODE_ENV: 'production', MEDUSA_BACKEND_URL: url,
+      NODE_ENV: 'production', DOGRUADRES_STOREFRONT_MEDIA_BASE_URL: url,
     }), /REFUSED/, url)
   }
 })
