@@ -364,6 +364,84 @@ async function main(){
       assert.equal((await db.unsafe("select count(*)::int n from da_audit_index_entry where source_event_id=$1",[ids[0]]))[0].n,1)
       assert.equal((await db.unsafe("select attempt_count from da_audit_outbox where source_audit_event_id=$1",[ids[0]]))[0].attempt_count,2)
       assert.equal(await deliver(),"idle")
+      // B22: the real Foundation writer persists an audit/outbox pair in one
+      // transaction. Exercise all four new rename actions through real PG16
+      // relay claim, Index commit, ACK, redaction, replay and quarantine.
+      const renameActions=[
+        {action:"organization.store_rename_requested",role:"owner"},
+        {action:"organization.store_rename_withdrawn",role:"owner"},
+        {action:"organization.store_rename_rejected",role:"platform_staff"},
+        {action:"organization.store_rename_approved",role:"platform_staff"},
+      ] as const
+      const enqueueRename=async(action:string,role:string,resource="store-rename-request",target="sel_rename_synthetic")=>{
+        return db.begin(async(tx:Query)=>{
+          const {service,context}=serviceFor(tx,"none")
+          const events=await service.persistAuditEventsWithOutbox_([{
+            actor_person_id:owner,actor_type:"user",actor_id:"user_tx_owner",
+            role_context:role,organization_id:org,action,module:"dogruadres-access",
+            resource,target_id:target,occurred_at:new Date(),
+            new_values:{reason:"SYNTHETIC_PRIVATE_REASON",staff_grant_id:"SYNTHETIC_PRIVATE_GRANT"},
+          }],context)
+          assert.equal(events.length,1)
+          return events[0].id as string
+        })
+      }
+      const renameIds:string[]=[]
+      for(const entry of renameActions)
+        renameIds.push(await enqueueRename(entry.action,entry.role))
+      for(const [i,id] of renameIds.entries()){
+        assert.equal(await deliver(),"delivered","Canonical rename relay must ACK "+renameActions[i].action)
+        const out=(await db.unsafe("select status,delivered_at from da_audit_outbox where source_audit_event_id=$1",[id]))[0]
+        assert.equal(out.status,"delivered")
+        assert.ok(out.delivered_at)
+        const rows=await db.unsafe("select * from da_audit_index_entry where source_event_id=$1",[id])
+        assert.equal(rows.length,1,"One Index projection per source event ID")
+        const row=rows[0],wire=typeof row.envelope==="string"?JSON.parse(row.envelope):row.envelope
+        assert.equal(row.organization_id,org)
+        assert.equal(row.target_id,"sel_rename_synthetic")
+        assert.equal(row.action,renameActions[i].action)
+        assert.equal(row.resource,"store-rename-request")
+        assert.equal(wire.actor.role_context,renameActions[i].role)
+        assert.equal(wire.source_event_id,id)
+        assert.ok(!JSON.stringify(row).includes("SYNTHETIC_PRIVATE_"),"No private reason/grant in Index")
+        const canonical=(await db.unsafe("select new_values from da_audit_event where id=$1",[id]))[0]
+        assert.ok(JSON.stringify(canonical.new_values).includes("SYNTHETIC_PRIVATE_REASON"),
+          "Original canonical audit retains the private reason for authorized investigations")
+      }
+      // Simulate lost ACK by reoffering each of four already-indexed events.
+      for(const id of renameIds){
+        const reset=await db.unsafe("update da_audit_outbox set status='pending',delivered_at=null "+
+          "where source_audit_event_id=$1 and status='delivered' and attempt_count=1 "+
+          "and lease_token is null returning id",[id])
+        assert.equal(reset.length,1)
+        assert.equal(await deliver(),"delivered")
+        const count=await db.unsafe("select count(*)::int as n from da_audit_index_entry where source_event_id=$1",[id])
+        assert.equal(count[0].n,1,"Lost ACK must not duplicate Index")
+      }
+      // Reject invented roles, wrong resources, invalid Store IDs and forged
+      // outbox Organization provenance; retain source audit without Index write.
+      const invalidIds=[
+        await enqueueRename("organization.store_rename_rejected","owner"),
+        await enqueueRename("organization.store_rename_requested","member"),
+        await enqueueRename("organization.store_rename_approved","platform_staff","membership"),
+        await enqueueRename("organization.store_rename_withdrawn","owner","store-rename-request","invalid_seller"),
+      ]
+      const mismatched=await enqueueRename("organization.store_rename_requested","owner")
+      await db.unsafe("update da_audit_outbox set "+
+        "envelope=jsonb_set(envelope,'{organization_id}','\"daorg_other_synthetic\"'::jsonb) "+
+        "where source_audit_event_id=$1 and status='pending'",[mismatched])
+      invalidIds.push(mismatched)
+      for(const [i,id] of invalidIds.entries()){
+        assert.equal(await deliver(),"quarantined","Invalid rename event must quarantine")
+        const out=(await db.unsafe("select status,last_error_code from da_audit_outbox where source_audit_event_id=$1",[id]))[0]
+        assert.equal(out.status,"quarantined")
+        assert.equal(out.last_error_code,i===invalidIds.length-1?"SOURCE_INVALID":"ENVELOPE_INVALID")
+        assert.equal((await db.unsafe("select id from da_audit_index_entry where source_event_id=$1",[id])).length,0)
+        assert.equal((await db.unsafe("select id from da_audit_event where id=$1",[id])).length,1,
+          "Canonical source must remain for investigation")
+      }
+      assert.equal(await deliver(),"idle")
+      process.stdout.write("PASS real PG16 B22 rename audit relay: four actions, dedup, redaction, five quarantine negatives\n")
     })
     process.stdout.write("PG16 Foundation service checks: "+count+" passed\n")
   }finally{
