@@ -775,7 +775,7 @@ async function main(){
       assert.equal(revokedAttempt.attempts,1)
       assert.equal(revokedAttempt.last_result,"invalidated")
       assert.equal(revokedAttempt.accepted_at,null)
-      process.stdout.write("PASS B22 Owner mail race: revocation COMMIT before SMTP DATA suppressed\\n")
+      process.stdout.write("PASS B22 Owner mail race: revocation COMMIT before SMTP DATA suppressed\n")
       await q("update da_organization_membership "+
         "set status='active',revoked_at=null where person_id=$1",[owner])
 
@@ -807,7 +807,7 @@ async function main(){
       assert.equal(withdrawnAttempt.accepted_at,null)
       assert.equal((await q("select state from da_store_owner_closing "+
         "where seller_id=$1",[withdrawnSeller]))[0].state,"withdrawn")
-      process.stdout.write("PASS B22 Owner mail race: withdrawal COMMIT before SMTP DATA suppressed\\n")
+      process.stdout.write("PASS B22 Owner mail race: withdrawal COMMIT before SMTP DATA suppressed\n")
       // The newly created withdrawal receipt is intentionally not mailed
       // without its own canonical per-recipient source receipt.
 
@@ -826,10 +826,11 @@ async function main(){
         assert.equal(observed.dataMessages,beforeSentFirst+1)
         // Bun SQL queries are lazy: a bare q(...) is NOT sent to PG.
         // Attach .then now, before asking pg_stat_activity for the real wait.
-        blockedRevoke=q("update da_organization_membership "+
+        const executingRevoke=q("update da_organization_membership "+
           "set status='revoked',revoked_at=clock_timestamp() "+
           "where person_id=$1 returning id",[owner]).then(rows=>rows)
-        void blockedRevoke.catch(()=>{}) // observed/rethrown after gate release
+        blockedRevoke=executingRevoke
+        void executingRevoke.catch(()=>{}) // observed/rethrown after gate release
         await assertRealPgLockWait("update da_organization_membership")
       }finally{
         ackGate.release();holdSmtpDataAck=null
@@ -843,7 +844,7 @@ async function main(){
       assert.ok(sentFirstAttempt.accepted_at)
       assert.equal((await q("select status from da_organization_membership "+
         "where person_id=$1",[owner]))[0].status,"revoked")
-      process.stdout.write("PASS B22 Owner mail race: SMTP DATA first blocked revoked membership COMMIT\\n")
+      process.stdout.write("PASS B22 Owner mail race: SMTP DATA first blocked revoked membership COMMIT\n")
       await q("update da_organization_membership "+
         "set status='active',revoked_at=null where person_id=$1",[owner])
 
@@ -879,7 +880,7 @@ async function main(){
         "PASS B22 PG16+loopback SMTP Owner security race: claim then revoke "+
         "or canonical withdrawal commits before DATA => invalidated/no mail; "+
         "DATA before revoke or withdrawal => both wait for actual PG row "+
-        "locks until send/outcome commit; 250 never denotes delivery\\n")
+        "locks until send/outcome commit; 250 never denotes delivery\n")
       process.stdout.write(
         "PASS B22 PG16+loopback SMTP: Owner closing event/recipient 250 accepted "+
         "not delivered, 550 failed, lost DATA ACK uncertain, 24h slot, "+
