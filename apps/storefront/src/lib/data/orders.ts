@@ -123,7 +123,7 @@ export const listOrders = async (
       orders: Array<
         HttpTypes.StoreOrder & {
           seller: { id: string; name: string };
-          order_group: { id: string };
+          order_group: { id: string; created_at: string; display_id: number };
         }
       >;
     }>

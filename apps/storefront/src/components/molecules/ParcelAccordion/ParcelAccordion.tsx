@@ -4,7 +4,7 @@ import { Button } from '@/components/atoms';
 import LocalizedClientLink from '@/components/molecules/LocalizedLink/LocalizedLink';
 import { convertToLocale } from '@/lib/helpers/money';
 
-import { ParcelAccordionItems } from './ParcelAccordionItems';
+import { ParcelAccordionItems, type MarketplaceParcelOrder } from './ParcelAccordionItems';
 
 export const ParcelAccordion = ({
   orderId,
@@ -19,7 +19,7 @@ export const ParcelAccordion = ({
   createdAt: string | Date;
   total: number;
   currency_code?: string;
-  orders: any[];
+  orders: MarketplaceParcelOrder[];
   defaultOpen?: boolean;
 }) => (
   <>
