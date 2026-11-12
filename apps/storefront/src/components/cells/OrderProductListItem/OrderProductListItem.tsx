@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import type { HttpTypes } from '@medusajs/types';
 
-import Image from 'next/image';
+import Image from "@/components/molecules/SafeImage/SafeImage"
 
 import { Divider } from '@/components/atoms';
 import LocalizedClientLink from '@/components/molecules/LocalizedLink/LocalizedLink';

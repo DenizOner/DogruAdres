@@ -3,7 +3,7 @@
 import { Button, Checkbox, Divider } from "@/components/atoms"
 import { Modal } from "@/components/molecules"
 import { useState } from "react"
-import Image from "next/image"
+import Image from "@/components/molecules/SafeImage/SafeImage"
 import { convertToLocale } from "@/lib/helpers/money"
 import { cn } from "@/lib/utils"
 import type { HttpTypes } from "@medusajs/types"
