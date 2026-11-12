@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:net'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { createServer as createHttpsServer } from 'node:https'
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -27,7 +28,40 @@ server.stderr.on('data', (data) => { output += String(data).slice(0, 2048) })
 const base = 'http://127.0.0.1:' + port
 const image = (src) => base + '/_next/image?' + new URLSearchParams({ url: src, w: '256', q: '75' })
 const get = (url) => fetch(url, { signal: AbortSignal.timeout(8000), redirect: 'manual' })
+const fixtureHost = 'media-image175-ci.example.org'
+const fixtureUrl = 'https://' + fixtureHost + '/static/fixture.jpg'
+let mediaServer
 try {
+  // Real HTTPS/TLS test on a disposable CI loopback. This is NOT the real
+  // Medusa File provider or an approved production FILE_BACKEND_URL.
+  assert.equal(process.env.GITHUB_ACTIONS, 'true')
+  assert.equal(process.env.GITHUB_HEAD_REF, 'fix/storefront-image-allowlist-175')
+  assert.equal(process.env.DOGRUADRES_STOREFRONT_MEDIA_BASE_URL, 'https://' + fixtureHost + '/static')
+  assert.ok(process.env.IMAGE175_TLS_KEY && process.env.IMAGE175_TLS_CERT)
+  const fixtureBytes = readFileSync('public/images/product/placeholder.jpg')
+  let mediaHits = 0
+  mediaServer = createHttpsServer({
+    key: readFileSync(process.env.IMAGE175_TLS_KEY),
+    cert: readFileSync(process.env.IMAGE175_TLS_CERT),
+  }, (request, response) => {
+    if (request.method !== 'GET' || request.url !== '/static/fixture.jpg'
+      || request.headers.host !== fixtureHost) {
+      response.writeHead(404)
+      response.end()
+      return
+    }
+    mediaHits += 1
+    response.writeHead(200, {
+      'Content-Type': 'image/jpeg',
+      'Cache-Control': 'no-store',
+      'Content-Length': fixtureBytes.length,
+    })
+    response.end(fixtureBytes)
+  })
+  await new Promise((resolve, reject) => {
+    mediaServer.once('error', reject)
+    mediaServer.listen(443, '127.0.0.1', resolve)
+  })
   let ready = false
   for (let n = 0; n < 100; n++) {
     if (server.exitCode !== null) throw Error('next start exited: ' + output.slice(-3500))
@@ -52,6 +86,17 @@ try {
     const result = await get(image(src))
     assert.equal(result.status, 400, 'Unexpectedly accepted: ' + src)
   }
+  // Positive authorization: Next's real optimizer must fetch only the
+  // exact-host, exact-path CI HTTPS fixture with certificate validation.
+  const allowedRemote = await get(image(fixtureUrl))
+  assert.equal(allowedRemote.status, 200, 'Approved HTTPS /static fixture must render')
+  assert.match(allowedRemote.headers.get('content-type') || '', /^image\/(jpeg|webp|avif)$/)
+  assert.ok((await allowedRemote.arrayBuffer()).byteLength > 100)
+  assert.equal(mediaHits, 1, 'Next must fetch the authorized HTTPS fixture exactly once')
+  const outside = await get(image('https://' + fixtureHost + '/private.jpg'))
+  assert.equal(outside.status, 400, 'Same host outside /static must be denied')
+  assert.equal(mediaHits, 1, 'The forbidden URL must never reach upstream')
+
   const local = await get(image('/images/product/placeholder.jpg'))
   assert.equal(local.status, 200, 'Allowed local JPEG must render')
   assert.match(local.headers.get('content-type') || '', /^image\/(jpeg|webp|avif)$/)
@@ -110,10 +155,12 @@ try {
   const imageTag = browser.match(/<img\b[^>]*data-testid="image175-remote"[^>]*>/i)?.[0] || ''
   assert.ok(imageTag, 'real Chrome did not render the SafeImage product fixture')
   assert.equal(new URL(imageTag.match(/\bsrc="([^"]+)"/i)?.[1] || '', base).pathname, '/images/placeholder.svg', 'Chrome did not hydrate the safe image fallback')
-  console.log('PASS #175 real Chrome: forbidden product image replaced with safe local SVG after HTTP 400')
+  assert.match(browser, /data-testid="image175-media-result"[^>]*>loaded<\/p>/, 'Real Chrome did not render allowed HTTPS media')
+  console.log('PASS #175 real Chrome: forbidden image safely replaced, HTTPS media fixture loaded')
 
-  console.log('PASS #175 real Next production HTTP: six remote 400 denials, JPEG 200, static SVG 200, optimized SVG 400')
+  console.log('PASS #175 real Next production HTTP: six forbidden 400, approved CI HTTPS media 200, off-path 400, JPEG 200, static SVG 200, optimized SVG 400')
 } finally {
+  if (mediaServer?.listening) await new Promise((resolve) => mediaServer.close(resolve))
   server.kill('SIGTERM')
   const timer = setTimeout(() => server.kill('SIGKILL'), 3000)
   timer.unref()

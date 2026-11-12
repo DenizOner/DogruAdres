@@ -219,21 +219,36 @@ jobs:
           # CI-only page is built and served on an isolated runner, never committed
           # or deployed. It tests actual SafeImage hydration/error fallback.
           if [ "$GITHUB_HEAD_REF" = "fix/storefront-image-allowlist-175" ]; then
+            # Isolated HTTPS fixture: only runner loopback, never production configuration.
+            export DOGRUADRES_STOREFRONT_MEDIA_BASE_URL="https://media-image175-ci.example.org/static"
+            export IMAGE175_TLS_CERT="$RUNNER_TEMP/image175-ci-cert.pem"
+            export IMAGE175_TLS_KEY="$RUNNER_TEMP/image175-ci-key.pem"
+            openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+              -keyout "$IMAGE175_TLS_KEY" -out "$IMAGE175_TLS_CERT" \
+              -subj "/CN=media-image175-ci.example.org" \
+              -addext "subjectAltName=DNS:media-image175-ci.example.org" > /dev/null 2>&1
+            printf '127.0.0.1 media-image175-ci.example.org\n' | sudo tee -a /etc/hosts > /dev/null
+            if [ "$(sysctl -n net.ipv4.ip_unprivileged_port_start)" -gt 0 ]; then
+              sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0 > /dev/null
+            fi
+            export NODE_EXTRA_CA_CERTS="$IMAGE175_TLS_CERT"
             mkdir -p src/app/images/image-175-ci-only
             cat > src/app/images/image-175-ci-only/page.tsx <<'TSX'
           'use client'
           import Image from '@/components/molecules/SafeImage/SafeImage'
+          import { useState } from 'react'
           export default function Image175TestPage() {
+            const [mediaLoaded, setMediaLoaded] = useState(false)
             return (
               <main>
-                <Image
-                  data-testid="image175-remote"
+                <Image data-testid="image175-remote"
                   src="https://untrusted.example.test/no-image.png"
-                  alt="Blocked source"
-                  width={96}
-                  height={96}
-                  priority
-                />
+                  alt="Blocked source" width={96} height={96} priority />
+                <Image data-testid="image175-allowed"
+                  src="https://media-image175-ci.example.org/static/fixture.jpg"
+                  alt="Approved CI fixture" width={96} height={96} priority
+                  onLoad={() => setMediaLoaded(true)} />
+                <p data-testid="image175-media-result">{mediaLoaded ? 'loaded' : 'pending'}</p>
               </main>
             )
           }
