@@ -215,6 +215,21 @@ describe("personal ingress (unit contract only)",()=>{
     expect(res.status).toHaveBeenCalledWith(403)
   })
 
+  it("admits only dedicated Staff review GET/POST, rejecting unsafe methods and nested routes",async()=>{
+    const path="/personal/platform/store-closing-reviews"
+    for(const method of ["GET","POST"])
+      expect((await probe(path,method)).next).toHaveBeenCalledTimes(1)
+    for(const [target,method] of [
+      [path,"PUT"],[path,"PATCH"],[path,"DELETE"],[path,"OPTIONS"],
+      [path+"/id","GET"],[path+"/id","POST"],
+      ["/vendor/platform/store-closing-reviews","GET"]
+    ]){
+      const denied=await probe(target,method,"Bearer native-forged")
+      expect(denied.next).not.toHaveBeenCalled()
+      expect(denied.res.status).toHaveBeenCalledWith(401)
+    }
+  })
+
   it("admits only second-stage private Owner review POST; all other verbs and nested paths stay closed",async()=>{
     const path="/personal/store-platform-closing-final-review"
     expect((await probe(path,"POST")).next).toHaveBeenCalledTimes(1)
