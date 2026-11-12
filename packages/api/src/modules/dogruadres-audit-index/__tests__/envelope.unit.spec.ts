@@ -267,6 +267,28 @@ describe("Audit Index version 1 validation and redaction", () => {
       expect(()=>projectFoundationAuditEvent({...event,...change}))
         .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
+  it.each([
+    ["organization.store_rename_requested","owner"],
+    ["organization.store_rename_withdrawn","owner"],
+    ["organization.store_rename_rejected","platform_staff"],
+    ["organization.store_rename_approved","platform_staff"],
+  ])("indexes a scoped Store rename event without private reason: %s", (action,role)=>{
+    const event={...source(),action,role_context:role,
+      resource:"store-rename-request",target_id:"sel_store_rename",
+      previous_values:{email:"SECRET-EMAIL"},
+      new_values:{reason:"SECRET-REASON",staff_grant_id:"SECRET-GRANT"}}
+    const indexed=projectFoundationAuditEvent(event)
+    expect(indexed.action).toBe(action)
+    expect(indexed.resource).toBe("store-rename-request")
+    expect(indexed.actor.role_context).toBe(role)
+    expect(validateAuditIndexEnvelope(indexed)).toEqual(indexed)
+    expect(JSON.stringify(indexed)).not.toContain("SECRET-")
+    for(const change of [{role_context:role==="owner"?"platform_staff":"owner"},
+      {role_context:"member"},{resource:"membership"},
+      {target_id:"not_a_seller"},{organization_id:"foreign"}])
+      expect(()=>projectFoundationAuditEvent({...event,...change}))
+        .toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
+  })
   it.each(["root", "platform-staff", "platform_staff ", "superuser"])("still rejects unsupported role %s", role => {
     expect(() => projectFoundationAuditEvent({ ...source(), role_context: role })).toThrow("INVALID_AUDIT_INDEX_ENVELOPE")
   })
