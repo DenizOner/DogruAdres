@@ -647,16 +647,23 @@ async function main(){
       // Concurrent ticks may commit ONLY ONE claim per Owner/source event.
       const ownerMailSeller="sel_b22_owner_closing_smtp_accepted"
       const ownerMailEvent=await seedOwnerClosingMail(ownerMailSeller)
-      await Promise.all([
+      // Never tear down the disposable database while a concurrent worker
+      // is still alive. Preserve the actual first failure, not a secondary
+      // "relation does not exist" after fixture cleanup.
+      const concurrentOwnerWorkers=await Promise.allSettled([
         runOwnerClosingEmailTick(container),
         runOwnerClosingEmailTick(container)
       ])
+      for(const run of concurrentOwnerWorkers)
+        if(run.status==="rejected")
+          throw Error("B22 Owner concurrent scheduler rejected: "+String(run.reason))
       const [ownerAttempt]=await q("select attempts,last_result,message_id,"+
         "accepted_at,next_attempt_at from da_store_owner_closing_email "+
         "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner])
       assert.equal(ownerAttempt.attempts,1,
         "Two workers cannot send the same Owner closing slot twice")
-      assert.equal(ownerAttempt.last_result,"accepted")
+      assert.equal(ownerAttempt.last_result,"accepted",
+        "Owner final fenced SMTP result was "+String(ownerAttempt.last_result))
       assert.ok(ownerAttempt.accepted_at&&ownerAttempt.message_id)
       const [ownerSource]=await q("select occurred_at from da_audit_event where id=$1",
         [ownerMailEvent])
