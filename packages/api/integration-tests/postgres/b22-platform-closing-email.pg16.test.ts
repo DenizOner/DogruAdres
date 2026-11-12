@@ -347,7 +347,9 @@ async function assertRealPgLockWait(fragment:string){
   for(let i=0;i<100;i++){
     const [record]=await q("select count(*)::int n from pg_stat_activity "+
       "where datname=current_database() and pid<>pg_backend_pid() "+
-      "and wait_event_type='Lock' and query like $1",["%"+fragment+"%"])
+      "and wait_event_type='Lock' "+
+      "and cardinality(pg_blocking_pids(pid))>0 "+
+      "and query like $1",["%"+fragment+"%"])
     if(Number(record.n)>0){found=true;break}
     await new Promise<void>(resolve=>setTimeout(resolve,50))
   }
@@ -822,9 +824,12 @@ async function main(){
       try{
         await waitForBarrier(ackGate.entered,"Owner SMTP DATA before revocation")
         assert.equal(observed.dataMessages,beforeSentFirst+1)
+        // Bun SQL queries are lazy: a bare q(...) is NOT sent to PG.
+        // Attach .then now, before asking pg_stat_activity for the real wait.
         blockedRevoke=q("update da_organization_membership "+
           "set status='revoked',revoked_at=clock_timestamp() "+
-          "where person_id=$1 returning id",[owner])
+          "where person_id=$1 returning id",[owner]).then(rows=>rows)
+        void blockedRevoke.catch(()=>{}) // observed/rethrown after gate release
         await assertRealPgLockWait("update da_organization_membership")
       }finally{
         ackGate.release();holdSmtpDataAck=null
