@@ -549,7 +549,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const renameWrite=path==='store-rename-requests'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const closingWrite=['store-owner-closing','store-platform-closing','store-platform-closing-final-review','platform/store-closings','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
+    const closingWrite=['store-owner-closing','store-platform-closing','store-platform-closing-final-review','platform/store-closings','platform/store-closing-reviews','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
     const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite;
     let data;
     try{
