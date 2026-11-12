@@ -368,6 +368,8 @@ async function verifyOwnerClosingBrowser(input:{
       "if(!c||!Array.from(c.options).some(o=>o.value===seller))return false;"+
       "c.value=seller;c.dispatchEvent(new Event('change',{bubbles:true}));"+
       "return true}",seller)
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
     assert.equal(await selectClosingStore(secondOwnerStoreId),true,
       "Real Owner must be able to select the expired approved Store")
     await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('30 günlük bekleme süresi doldu')")
