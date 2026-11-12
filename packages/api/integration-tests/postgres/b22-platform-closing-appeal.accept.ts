@@ -916,6 +916,38 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
     await independent.click("#mfa-enroll-verify button")
   }
   await independent.wait("!document.getElementById('workspace').hidden")
+  const beforeStrong=await independent.token()
+  assert.match(beforeStrong??"",/^[A-Za-z0-9_-]{43}$/)
+  const strongRows=await q("select last_strong_auth_at from da_browser_session "+
+    "where id=$1",[createHash("sha256").update(beforeStrong!).digest("hex")])
+  assert.equal(strongRows.length,1)
+  if(!strongRows[0].last_strong_auth_at){
+    // Optional MFA enrollment also must be completed through the actual UI:
+    // a synthetic Staff grant never upgrades a non-strong Person session.
+    await independent.wait("!document.getElementById('mfa-person').hidden")
+    assert.equal(await independent.eval(
+      "!document.getElementById('mfa-enroll-launch').hidden"),true)
+    await independent.click("#mfa-enroll-launch")
+    await independent.input("#mfa-enroll-start input[name=email]",email)
+    await independent.input("#mfa-enroll-start input[name=password]",password)
+    await independent.click("#mfa-enroll-start button")
+    await independent.wait("!document.getElementById('mfa-enroll-verify').hidden&&"+
+      "document.getElementById('mfa-seed').value.length>0")
+    const enrolled=await independent.eval("document.getElementById('mfa-seed').value")
+    const seed=enrolled.startsWith("otpauth:")?
+      new URL(enrolled).searchParams.get("secret"):enrolled
+    assert.ok(seed)
+    await independent.input("#mfa-enroll-verify input[name=code]",otp(seed!))
+    await independent.click("#mfa-enroll-verify button")
+    await independent.wait("!document.getElementById('workspace').hidden")
+  }
+  const active=await independent.token()
+  assert.match(active??"",/^[A-Za-z0-9_-]{43}$/)
+  const proof=await q("select last_strong_auth_at from da_browser_session "+
+    "where id=$1",[createHash("sha256").update(active!).digest("hex")])
+  assert.equal(proof.length,1)
+  assert.ok(proof[0].last_strong_auth_at,
+    "Independent Staff review must use real current native strong MFA")
   const ids=await q("select b.person_id from da_login_binding b "+
     "join public.customer c on c.id=b.actor_id where b.actor_type='customer' "+
     "and c.email=$1 and b.revoked_at is null and b.verified_at is not null",[email])
