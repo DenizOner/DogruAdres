@@ -262,7 +262,8 @@ jobs:
           set +e
           node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json > "$RUNNER_TEMP/storefront-159-types.log" 2>&1
           type_status=$?
-          bun run lint > "$RUNNER_TEMP/storefront-159-lint.log" 2>&1
+          # Every Storefront ESLint warning is an acceptance failure; keep all rules active.
+          node ../../node_modules/eslint/bin/eslint.js . --max-warnings 0 > "$RUNNER_TEMP/storefront-159-lint.log" 2>&1
           lint_status=$?
           bun run build > "$RUNNER_TEMP/storefront-159-build.log" 2>&1
           build_status=$?
@@ -295,6 +296,7 @@ jobs:
           if [ "$GITHUB_HEAD_REF" = "fix/storefront-image-allowlist-175" ]; then
             bun test next.config.image.test.ts
             node scripts/verify-image-optimizer.mjs
+            node scripts/verify-image-dev.mjs
           fi
       - name: Native SMTP HTTPS privacy negative regressions
         id: asvs_smtp_http
