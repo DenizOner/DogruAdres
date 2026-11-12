@@ -5326,7 +5326,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         and m.status='active' and m.revoked_at is null
         and m.deleted_at is null and p.disabled_at is null
         and p.deleted_at is null
-      for share of m,p limit 2`,[scope.actor.person_id,organizationId])
+      limit 2 for share of m,p`,[scope.actor.person_id,organizationId])
     if(currentOwner.length!==1)return null
     return {organization_id:organizationId,seller_id:sellerId,
       email_notice:{status:noticeStatus,attempts:noticeAttempts,
