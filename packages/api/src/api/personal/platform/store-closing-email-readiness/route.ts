@@ -71,6 +71,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       deadline_basis:progress.deadline_basis,
       admin_alert_at:progress.admin_alert_at,
       email_statuses:progress.owners,
+      terminal_preflight:progress.terminal_preflight,
       permanent_finalization_enabled:false
     })
   }catch(error){

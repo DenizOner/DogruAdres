@@ -285,6 +285,7 @@ async function run(){
         const platformStaffReviewMarker="PASS B22 Chrome/HTTPS/PG16: independent third Person strong Staff review decision, original Staff self-review denied, private Owner reason/notice, immutable clock and sales block; repeat idempotent, first-stage parallel single decision, revoked grant denied"
         const platformFinalReviewMarker="PASS B22 Chrome/HTTPS/PG16: synthetic T0+11d second-stage Owner request, real protected Owner/foreign Staff/CSRF/replay, one durable audit/outbox and private notice; Store stays closed, original 10+20 clock unchanged; stage time fixture is synthetic, real Owner Chrome form submitted and confirmed"
         const platformClosingEmailLinkMarker="PASS B22 Chrome/HTTPS/PG16: synthetic hashed email link strong Owner POST, foreign/forged CSRF/scanner GET denied, 10+20 server clock starts once, no finalizer or sales reopening"
+        const platformPreflightBoundaryMarker="PASS B22 Chrome/HTTPS/PG16: 720-hour Staff preflight false/true, pending first appeal and SMTP admin exception; permanent finalizer denied"
         const completedSourceOrderMarker="PASS B22 Chrome/HTTPS/PG16: completed native source OrderGroup/Order IDs, Order-Cart FK, source Seller/Offer and immutable Buyer attribution unchanged across A→B transfer, A same-ID recovery and B name adoption; zero payment"
         const historicalCartMarker="PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED"
         const ownerClosingNegativeMarker="PASS B22 real closing security: concurrent HTTP 200+409 one commit; revoked Owner/stale session HTTP403 no writes; expired 30-day withdraw HTTP409 no writes; both active Owners read private notices, two receipts each; native Seller unchanged"
@@ -342,7 +343,8 @@ async function run(){
               x===postHoldRecipientMarker || x===independentStaffRaceMarker ||
               x===historicalCartMarker || x===completedSourceOrderMarker ||
               (x===platformClosingAppealMarker || x===platformClosingEmailLinkMarker ||
-               x===platformFinalReviewMarker || x===platformStaffReviewMarker)).join("\n")
+               x===platformFinalReviewMarker || x===platformStaffReviewMarker ||
+               x===platformPreflightBoundaryMarker)).join("\n")
           if(child.error||child.status!==0){
             // The long B22 child can legitimately fail at the still-blocked
             // tax-document approval. Do not bury *completed* earlier native
@@ -414,6 +416,8 @@ async function run(){
           "Missing day-11 second-stage Owner authenticated HTTPS/PG16 review and negative proof")
         assert.ok(result.split("\n").includes(platformStaffReviewMarker),
           "Missing separate strong Staff decision, independent reviewer and real private Owner outcome")
+        assert.ok(result.split("\n").includes(platformPreflightBoundaryMarker),
+          "Missing HTTP/PG16 boundary, pending appeals and Staff admin-fallback acceptance proof")
         // Both new B22 historical-reader negatives must be visible as full
         // redacted proof lines. Child success alone is not their evidence.
         for(const marker of [

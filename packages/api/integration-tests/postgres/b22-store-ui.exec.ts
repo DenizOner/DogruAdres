@@ -4674,6 +4674,17 @@ export default async function({container}:any){
     })
     assert.equal((await companyRight(false,true,"B22 stale policy switch")).status,409,
       "Stale switch must be rejected while company is already disabled")
+    // A private-workspace re-render may legitimately conceal this Staff
+    // panel after the preceding native rejection. Reopen it through the
+    // real UI and reselect the Organization before the next authorized GET.
+    // Never bypass the browser visibility guard or reuse stale form state.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible' && "+
+      "!document.getElementById('workspace').hidden")
+    await reviewer.click("#platform-store-policy-open")
+    await reviewer.wait("!document.getElementById('platform-store-policy-panel').hidden")
+    await reviewer.input("#platform-store-policy-form input[name=organization_id]",
+      organizations[0].id)
     await reviewer.click("#platform-store-policy-read")
     await reviewer.wait("document.getElementById('platform-store-policy-apply').textContent.includes('aç')")
     await reviewer.input("#platform-store-policy-form input[name=reason]",

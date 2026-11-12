@@ -5943,8 +5943,31 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     })
     const started=closure.deadline_started_at?
       new Date(closure.deadline_started_at).toISOString():null
+    // Advisory-only closure blockers for the authorized Staff view. The
+    // canonical PostgreSQL clock controls the appeal-window calculation;
+    // none of these flags authorizes a native Seller termination or name
+    // release. Finance/legal verification is not integrated and must be
+    // represented as unknown rather than inferred from absence of orders.
+    const ticks=await db.execute("select clock_timestamp() as now_at")
+    if(ticks.length!==1)throw new IdentityAccessDenied()
+    const now=new Date(ticks[0].now_at).getTime()
+    if(!Number.isFinite(now))throw new IdentityAccessDenied()
+    const appealWindowElapsed=started!==null&&
+      now>=new Date(started).getTime()+2592000000
+    const appealReviewPending=closure.review_decision===null&&
+      (closure.appeal_request_id!==null||
+       closure.final_review_request_id!==null)
     return {
       owners,deadline_started_at:started,
+      terminal_preflight:{
+        appeal_window_elapsed:appealWindowElapsed,
+        appeal_review_pending:appealReviewPending,
+        appeal_accepted:closure.review_decision==="accepted",
+        notification_exception_review_required:
+          closure.deadline_basis==="admin_alert",
+        financial_legal_clearance_verified:false,
+        permanent_finalization_enabled:false
+      },
       deadline_basis:closure.deadline_basis??null,
       admin_alert_at:closure.admin_alert_at?
         new Date(closure.admin_alert_at).toISOString():null,
