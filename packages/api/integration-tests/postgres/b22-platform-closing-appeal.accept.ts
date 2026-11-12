@@ -788,12 +788,39 @@ export async function verifyB22PlatformClosingSecondStageRequest(input:{
     "Forged CSRF cannot file an upper review request")
   assert.equal((await write(staff,postPath,payload)).status,403,
     "Foreign protected Owner status cannot be inferred from platform Staff")
-  const first=await write(browser,postPath,payload)
-  assert.equal(first.status,200)
-  assert.equal(first.body?.status,"review_requested")
-  assert.equal(first.body?.replayed,false)
-  assert.equal(first.body?.final_review_requested,true)
-  assert.equal(first.body?.permanent_finalization_enabled,false)
+  // The positive journey must be a REAL Owner Chrome form submit, not
+  // a direct fetch disguised as browser acceptance. The server still owns
+  // eligibility, time and request ID; all requests use native CSRF/session.
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible' && "+
+    "!document.getElementById('store-owner-pause-panel').hidden")
+  const choice=await browser.eval("(()=>{"+
+    "const e=document.querySelector('#store-owner-pause-form select[name=seller_id]');"+
+    "if(!e||!Array.from(e.options).some(o=>o.value==="+
+    JSON.stringify(reviewSellerId)+"))return false;"+
+    "e.value="+JSON.stringify(reviewSellerId)+";"+
+    "e.dispatchEvent(new Event('change',{bubbles:true}));"+
+    "return e.value==="+JSON.stringify(reviewSellerId)+"})()")
+  assert.equal(choice,true,"Private Owner Store picker must offer the exact Store")
+  await browser.wait("!document.getElementById('store-platform-appeal-panel').hidden && "+
+    "!document.getElementById('store-platform-final-review-form').hidden && "+
+    "!document.querySelector('#store-platform-final-review-form button').disabled")
+  assert.equal(await browser.eval(
+    "document.querySelector('#store-platform-appeal-form button').disabled"),true,
+    "A new first appeal cannot be submitted during second-stage review")
+  await browser.input("#store-platform-final-review-form textarea[name=reason]",
+    reviewReason)
+  await browser.click("#store-platform-final-review-form button")
+  await browser.wait(
+    "document.getElementById('store-platform-appeal-status').textContent.includes("+
+    JSON.stringify("Bağımsız üst inceleme başvurusu kaydedildi")+") && "+
+    "document.getElementById('store-platform-final-review-form').hidden")
+  const saved=await q("select final_review_request_id from da_store_platform_closing "+
+    "where seller_id=$1",[reviewSellerId])
+  assert.equal(saved.length,1)
+  assert.match(saved[0].final_review_request_id,/^dasfr_[a-f0-9]{32}$/)
+  const actualRequestId=saved[0].final_review_request_id as string
+  const acceptedPayload={...payload,request_id:actualRequestId}
   const after=await read(browser,readPath)
   assert.equal(after.status,200)
   assert.equal(after.body?.final_review_requested,true)
@@ -802,9 +829,11 @@ export async function verifyB22PlatformClosingSecondStageRequest(input:{
     "Filing review never determines the outcome or reopens sales")
   assert.equal(after.body?.deadline_started_at,clockStart)
   assert.equal(after.body?.final_review_reason,reviewReason)
-  assert.equal((await write(browser,postPath,payload)).body?.replayed,true)
+  const replay=await write(browser,postPath,acceptedPayload)
+  assert.equal(replay.status,200)
+  assert.equal(replay.body?.replayed,true)
   assert.equal((await write(browser,postPath,{
-    ...payload,request_id:"dasfr_"+randomBytes(16).toString("hex")
+    ...acceptedPayload,request_id:"dasfr_"+randomBytes(16).toString("hex")
   })).status,409)
   const persisted=await q(`select c.final_review_request_id,c.final_review_audit_event_id,
     c.final_review_requested_at,c.deadline_started_at,c.state,
@@ -814,7 +843,7 @@ export async function verifyB22PlatformClosingSecondStageRequest(input:{
     join da_audit_outbox x on x.source_audit_event_id=e.id
     where c.seller_id=$1`,[reviewSellerId])
   assert.equal(persisted.length,1)
-  assert.equal(persisted[0].final_review_request_id,requestId)
+  assert.equal(persisted[0].final_review_request_id,actualRequestId)
   assert.equal(persisted[0].deadline_started_at.toISOString(),clockStart)
   assert.equal(persisted[0].state,"notification_unverified")
   assert.equal(persisted[0].new_values.reason_sha256,
@@ -829,5 +858,5 @@ export async function verifyB22PlatformClosingSecondStageRequest(input:{
   assert.ok(notifications.body?.notifications?.some((item:any)=>
     item.title==="Üst inceleme başvurusu kaydedildi"),
     "The Owner must see a private, actor-neutral review receipt")
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: synthetic T0+11d second-stage Owner request, real protected Owner/foreign Staff/CSRF/replay, one durable audit/outbox and private notice; Store stays closed, original 10+20 clock unchanged; stage time fixture is synthetic, real UI form not claimed\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: synthetic T0+11d second-stage Owner request, real protected Owner/foreign Staff/CSRF/replay, one durable audit/outbox and private notice; Store stays closed, original 10+20 clock unchanged; stage time fixture is synthetic, real Owner Chrome form submitted and confirmed\n")
 }
