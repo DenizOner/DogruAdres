@@ -6120,13 +6120,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       set final_review_request_id=?,final_review_reason=?,
         final_review_audit_event_id=?,
         final_review_requested_by_person_id=?,
-        final_review_requested_at=?,updated_at=clock_timestamp()
+        -- Keep the persisted cutoff timestamp at PostgreSQL microsecond
+        -- precision, not a lossy JavaScript Date millisecond conversion.
+        final_review_requested_at=clock_timestamp(),
+        updated_at=clock_timestamp()
       where seller_id=? and organization_id=? and version=1
         and state='notification_unverified'
         and final_review_request_id is null
       returning seller_id`,[
       input.request_id,input.reason,audit.id,owner.actor.person_id,
-      new Date(clock[0].now_at).toISOString(),
       input.seller_id,input.organization_id])
     if(changed.length!==1)throw new IdentityAccessDenied()
     await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
