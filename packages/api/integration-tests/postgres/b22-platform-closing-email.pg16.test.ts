@@ -72,6 +72,24 @@ const syntheticIdentity="auth_b22_mail_pg"
 const syntheticActor="user_b22_mail_pg"
 let testSmtp:{enabled:boolean;host:string;port:number;
   security:"none";from_email:string}|null=null
+type TestBarrier={entered:Promise<void>;proceed:Promise<void>;
+  arrive:()=>void;release:()=>void}
+function testBarrier():TestBarrier{
+  let arrive!:()=>void,release!:()=>void
+  const entered=new Promise<void>(resolve=>{arrive=resolve})
+  const proceed=new Promise<void>(resolve=>{release=resolve})
+  return {entered,proceed,arrive,release}
+}
+async function waitForBarrier(p:Promise<void>,label:string){
+  let timeout:ReturnType<typeof setTimeout>|undefined
+  try{
+    await Promise.race([p,new Promise<void>((_,reject)=>{
+      timeout=setTimeout(()=>reject(Error("Timed out awaiting "+label)),10000)
+    })])
+  }finally{if(timeout)clearTimeout(timeout)}
+}
+let beforeOwnerSmtpConfig:TestBarrier|null=null
+
 function serviceFor(tx:Pg){
   const service=Object.create(AccessService.prototype) as any
   const context:any={transactionManager:{
@@ -139,7 +157,14 @@ const container:any={resolve:(name:string)=>{
     }]
   }
   if(name==="dogruadresAccess")return {
-    getActiveSmtpConfig:async()=>testSmtp,
+    getActiveSmtpConfig:async()=>{
+      // Disposable test-only pause AFTER a claimed slot commits but BEFORE
+      // the final authorization and closing fence.
+      const gate=beforeOwnerSmtpConfig
+      beforeOwnerSmtpConfig=null
+      if(gate){gate.arrive();await gate.proceed}
+      return testSmtp
+    },
     settlePlatformClosingAdminFallback:()=>db.begin(async(tx:Pg)=>{
       const {service,context}=serviceFor(tx)
       return service.settlePlatformClosingAdminFallback(context)
@@ -475,8 +500,9 @@ async function main(){
     await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
       "values ($1,$2,'user',$3)",["damap_b22_mail_pg",owner,syntheticActor])
     const observed={acceptedRecipient:false,secureLink:false,
-      ownerSafeLink:false,acceptedData:false}
+      ownerSafeLink:false,acceptedData:false,dataMessages:0}
     let refuseRecipient=false,dropAfterData=false
+    let holdSmtpDataAck:TestBarrier|null=null
     const mock=createServer(socket=>{
       socket.setEncoding("utf8")
       socket.write("220 smtp.loopback.test ESMTP\r\n")
@@ -490,12 +516,21 @@ async function main(){
           if(receivingData){
             if(line==="."){
               receivingData=false
+              observed.dataMessages++
               if(dropAfterData){
                 // The remote side can commit DATA and drop before its 250 ACK.
                 socket.destroy()
               }else{
                 observed.acceptedData=true
-                socket.write("250 message queued on isolated loopback\r\n")
+                const gate=holdSmtpDataAck
+                holdSmtpDataAck=null
+                if(gate){
+                  gate.arrive()
+                  void gate.proceed.then(()=>{
+                    if(!socket.destroyed)
+                      socket.write("250 message queued on isolated loopback\r\n")
+                  })
+                }else socket.write("250 message queued on isolated loopback\r\n")
               }
             }else if(line.includes("/personal#closing_notice=")){
               observed.secureLink=true
