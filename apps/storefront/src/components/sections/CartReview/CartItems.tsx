@@ -1,11 +1,12 @@
 import { HttpTypes } from '@medusajs/types';
+import type { CartItemsBySeller, CartLineWithOffer } from '@/types/cart';
 
 import { CartItemsHeader, CartItemsProducts } from '@/components/cells';
 
 export const CartItems = ({ cart }: { cart: HttpTypes.StoreCart | null }) => {
   if (!cart) return null;
 
-  const groupedItems: any = groupItemsBySeller(cart);
+  const groupedItems = groupItemsBySeller(cart);
 
   return Object.keys(groupedItems).map(key => (
     <div
@@ -24,14 +25,14 @@ export const CartItems = ({ cart }: { cart: HttpTypes.StoreCart | null }) => {
 };
 
 function groupItemsBySeller(cart: HttpTypes.StoreCart) {
-  const groupedBySeller: any = {};
+  const groupedBySeller: CartItemsBySeller = {};
 
-  cart.items?.forEach((item: any) => {
+  cart.items?.forEach((item: CartLineWithOffer) => {
     const seller = item.offer?.seller;
     if (seller) {
       if (!groupedBySeller[seller.id]) {
         groupedBySeller[seller.id] = {
-          seller: { ...seller, photo: seller.photo ?? seller.logo },
+          seller: { ...seller, photo: seller.photo ?? seller.logo ?? undefined },
           items: []
         };
       }

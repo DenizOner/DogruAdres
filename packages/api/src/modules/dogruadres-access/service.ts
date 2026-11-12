@@ -5426,12 +5426,81 @@ export default class DogruAdresAccessModuleService extends MedusaService({
           and a.new_values->>'request_id'=c.appeal_request_id
           and a.new_values->>'appeal_reason_sha256'=
             encode(sha256(convert_to(c.appeal_reason,'UTF8')),'hex')
-      )) as appeal_proof
+      )) as appeal_proof,
+      (c.final_review_audit_event_id is null or exists (
+        select 1 from da_audit_event a
+        join da_audit_outbox x on x.source_audit_event_id=a.id
+          and x.source_module='dogruadres-access' and x.deleted_at is null
+        where a.id=c.final_review_audit_event_id and a.deleted_at is null
+          and a.module='dogruadres-access' and a.role_context='owner'
+          and a.actor_person_id=c.final_review_requested_by_person_id
+          and a.resource='store-platform-closing'
+          and a.action='organization.store_platform_closing_final_review_requested'
+          and a.organization_id=c.organization_id and a.target_id=c.seller_id
+          and a.new_values->>'request_id'=c.final_review_request_id
+          and a.new_values->>'stage'='second_review'
+          and a.new_values->>'reason_sha256'=
+            encode(sha256(convert_to(c.final_review_reason,'UTF8')),'hex')
+      )) as final_review_proof,
+      (c.review_decision_audit_event_id is null or exists (
+        select 1 from da_audit_event a
+        join da_audit_outbox x on x.source_audit_event_id=a.id
+          and x.source_module='dogruadres-access' and x.deleted_at is null
+        where a.id=c.review_decision_audit_event_id and a.deleted_at is null
+          and a.module='dogruadres-access' and a.role_context='platform_staff'
+          and a.actor_person_id=c.review_decided_by_person_id
+          and a.resource='store-platform-closing'
+          and a.action='organization.store_platform_closing_review_decided'
+          and a.organization_id=c.organization_id and a.target_id=c.seller_id
+          and a.new_values->>'request_id'=c.review_decision_request_id
+          and a.new_values->>'source_request_id'=c.review_decision_source_request_id
+          and a.new_values->>'decision'=c.review_decision
+          and a.new_values->>'reason_sha256'=
+            encode(sha256(convert_to(c.review_decision_reason,'UTF8')),'hex')
+      )) as review_decision_proof,
+      (c.deadline_started_at is null or exists (
+        select 1 from da_audit_event e
+        join da_audit_outbox x on x.source_audit_event_id=e.id
+          and x.source_module='dogruadres-access' and x.deleted_at is null
+        where e.id=c.deadline_audit_event_id and e.deleted_at is null
+          and e.module='dogruadres-access' and e.organization_id=c.organization_id
+          and e.target_id=c.seller_id and e.resource='store-platform-closing'
+          and e.action='organization.store_platform_closing_deadline_started'
+          and e.role_context=(case when c.deadline_basis='owner_delivery'
+            then 'owner' else 'platform_automation' end)
+          and e.new_values->>'basis'=c.deadline_basis
+          and (e.new_values->>'deadline_started_at')::timestamptz=c.deadline_started_at
+      )) as deadline_proof
       from da_store_platform_closing c where c.seller_id=?
       ${lock?'for update of c':''}`,[sellerId])
     if(rows.length>1||rows.some(row=>
       row.seller_id!==sellerId||row.start_proof!==true||
-      row.appeal_proof!==true||
+      row.appeal_proof!==true||row.deadline_proof!==true||
+      row.final_review_proof!==true||row.review_decision_proof!==true||
+      (row.review_decision_request_id===null?
+        row.review_decision!==null||row.review_decision_reason!==null||
+        row.review_decision_source_request_id!==null||
+        row.review_decision_audit_event_id!==null||
+        row.review_decided_by_person_id!==null||row.review_decided_at!==null:
+        !/^dasdr_[a-f0-9]{32}$/.test(String(row.review_decision_request_id))||
+        !["accepted","rejected"].includes(row.review_decision)||
+        typeof row.review_decision_reason!=="string"||
+        row.review_decision_reason.length<10||row.review_decision_reason.length>500||
+        row.review_decision_source_request_id!==
+          (row.appeal_request_id??row.final_review_request_id)||
+        !Number.isFinite(new Date(row.review_decided_at).getTime()))||
+      (row.final_review_request_id===null?
+        row.final_review_reason!==null||
+        row.final_review_audit_event_id!==null||
+        row.final_review_requested_by_person_id!==null||
+        row.final_review_requested_at!==null:
+        !/^dasfr_[a-f0-9]{32}$/.test(String(row.final_review_request_id))||
+        typeof row.final_review_reason!=="string"||
+        row.final_review_reason.length<10||
+        row.final_review_reason.length>500||
+        !/^daprs_[A-Za-z0-9_-]+$/.test(String(row.final_review_requested_by_person_id))||
+        !Number.isFinite(new Date(row.final_review_requested_at).getTime())||
+        row.state!=="notification_unverified")||
       !["notification_unverified","appealed"].includes(row.state)||
       !/^dascp_[a-f0-9]{32}$/.test(String(row.request_id))||
       !Number.isFinite(new Date(row.started_at).getTime())||
@@ -5553,9 +5622,147 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         and p.disabled_at is null and p.deleted_at is null
       on conflict (audit_event_id,person_id) do nothing`,
       [audit.id,input.organization_id])
+    // Durable first-attempt queue is born with the sale-blocking decision.
+    // One per current protected Owner; no e-mail is sent inside the transaction.
+    await db.execute(`insert into da_store_platform_closing_email
+      (seller_id,person_id,next_attempt_at)
+      select ?,m.person_id,?
+      from da_organization_membership m join da_person p on p.id=m.person_id
+      where m.organization_id=? and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.revoked_at is null and m.deleted_at is null
+        and p.disabled_at is null and p.deleted_at is null
+      on conflict (seller_id,person_id) do nothing`,
+      [input.seller_id,new Date(clock[0].now_at).toISOString(),input.organization_id])
     return {status:"notification_unverified" as const,version:1,replayed:false}
   }
 
+
+  /**
+   * Scheduled B22 fallback. Admin notification and 10+20 clock are one
+   * atomic Foundation operation with a canonical audit/outbox. An SMTP
+   * acceptance or expired lease NEVER counts as delivery proof. The initial
+   * authorized Staff is the audit attribution; the deadline is explicitly
+   * marked as platform automation, not a new Staff decision.
+   */
+  @InjectTransactionManager()
+  async settlePlatformClosingAdminFallback(@MedusaContext() context:Context={}){
+    const db=securitySql(context.transactionManager)
+    const candidates=await db.execute(`select c.seller_id,c.organization_id,
+      c.source_audit_event_id
+      from da_store_platform_closing c
+      where c.deadline_started_at is null
+        and c.started_at<=clock_timestamp()-interval '72 hours'
+        and exists (
+          select 1 from da_organization_membership m
+          join da_person p on p.id=m.person_id and p.deleted_at is null
+            and p.disabled_at is null
+          where m.organization_id=c.organization_id and m.role='owner'
+            and m.protected_owner=true and m.status='active'
+            and m.revoked_at is null and m.deleted_at is null
+        )
+        and not exists (
+          select 1 from da_store_platform_closing_email d
+          join da_organization_membership m on m.person_id=d.person_id
+            and m.organization_id=c.organization_id and m.status='active'
+            and m.role='owner' and m.protected_owner=true
+            and m.revoked_at is null and m.deleted_at is null
+          join da_person p on p.id=m.person_id and p.deleted_at is null
+            and p.disabled_at is null
+          where d.seller_id=c.seller_id
+            -- Only recipients of the original closure may hold its 72h
+            -- fallback clock. Later Owners keep their own separate notice.
+            and d.late_notice_id is null and (
+            d.attempts<4 or d.lease_until is not null
+            or d.last_result='inflight' or d.delivered_at is not null)
+        )
+        and not exists (
+          select 1 from da_organization_membership m
+          join da_person p on p.id=m.person_id
+            and p.disabled_at is null and p.deleted_at is null
+          where m.organization_id=c.organization_id and m.status='active'
+            and m.role='owner' and m.protected_owner=true
+            and m.revoked_at is null and m.deleted_at is null
+            and exists(select 1 from da_notification_receipt n
+              where n.audit_event_id=c.source_audit_event_id
+                and n.person_id=m.person_id)
+            and not exists(select 1 from da_store_platform_closing_email d
+              where d.seller_id=c.seller_id and d.person_id=m.person_id
+                and d.late_notice_id is null)
+        )
+      order by c.started_at,c.seller_id
+      for update of c skip locked limit 5`)
+    let started=0
+    for(const candidate of candidates){
+      const sellerId=String(candidate.seller_id)
+      const organizationId=String(candidate.organization_id)
+      const closure=await this.platformClosingRow_(db,sellerId,true)
+      if(!closure||closure.organization_id!==organizationId||
+         closure.deadline_started_at!==null||
+         closure.source_audit_event_id!==candidate.source_audit_event_id)
+        throw new IdentityAccessDenied()
+      const recipients=await db.execute(`select distinct g.person_id
+        from da_platform_staff_grant g
+        join da_person p on p.id=g.person_id and p.disabled_at is null
+          and p.deleted_at is null
+        where g.task='store.closing.manage' and g.resource='platform'
+          and g.revoked_at is null
+          and (g.expires_at is null or g.expires_at>clock_timestamp())
+        limit 101`)
+      if(!recipients.length)continue
+      if(recipients.length>100)throw new IdentityAccessDenied()
+      await db.execute(`insert into da_store_platform_closing_admin_notice
+        (id,seller_id,person_id)
+        select 'danal_'||replace(gen_random_uuid()::text,'-',''),?,g.person_id
+        from da_platform_staff_grant g
+        join da_person p on p.id=g.person_id and p.disabled_at is null
+          and p.deleted_at is null
+        where g.task='store.closing.manage' and g.resource='platform'
+          and g.revoked_at is null
+          and (g.expires_at is null or g.expires_at>clock_timestamp())
+        on conflict (seller_id,person_id) do nothing`,[sellerId])
+      const noticed=await db.execute(`select count(*)::int as n
+        from da_store_platform_closing_admin_notice n
+        join da_platform_staff_grant g on g.person_id=n.person_id
+          and g.task='store.closing.manage' and g.resource='platform'
+          and g.revoked_at is null
+          and (g.expires_at is null or g.expires_at>clock_timestamp())
+        join da_person p on p.id=g.person_id and p.disabled_at is null
+          and p.deleted_at is null where n.seller_id=?`,[sellerId])
+      if(!Number(noticed[0]?.n))throw new IdentityAccessDenied()
+      const actor=await db.execute(`select e.actor_person_id,e.actor_type,e.actor_id
+        from da_audit_event e where e.id=? and e.module='dogruadres-access'
+          and e.action='organization.store_platform_closing_started'
+          and e.resource='store-platform-closing' and e.role_context='platform_staff'
+          and e.organization_id=? and e.target_id=? and e.deleted_at is null
+        limit 2`,[closure.source_audit_event_id,organizationId,sellerId])
+      if(actor.length!==1)throw new IdentityAccessDenied()
+      const clock=await db.execute("select clock_timestamp() as at")
+      if(clock.length!==1)throw new IdentityAccessDenied()
+      const at=new Date(clock[0].at).toISOString()
+      const [deadlineAudit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:actor[0].actor_person_id,
+        actor_type:actor[0].actor_type,actor_id:actor[0].actor_id,
+        role_context:"platform_automation",organization_id:organizationId,
+        action:"organization.store_platform_closing_deadline_started",
+        module:DOGRUADRES_AUDIT_MODULE,resource:"store-platform-closing",
+        target_id:sellerId,
+        new_values:{basis:"admin_alert",deadline_started_at:at,
+          evidence:"four_scheduled_attempts_without_verified_delivery"},
+        occurred_at:new Date(at)
+      }],context)
+      if(!deadlineAudit?.id)throw new IdentityAccessDenied()
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      const updated=await db.execute(`update da_store_platform_closing
+        set deadline_started_at=?::timestamptz,deadline_basis='admin_alert',
+          admin_alert_at=?::timestamptz,deadline_audit_event_id=?,
+          updated_at=clock_timestamp()
+        where seller_id=? and organization_id=? and deadline_started_at is null
+        returning seller_id`,[at,at,deadlineAudit.id,sellerId,organizationId])
+      if(updated.length!==1)throw new IdentityAccessDenied()
+      started++
+    }
+    return started
+  }
 
   /**
    * B22 mandatory Owner mail preflight (read only).
@@ -5612,6 +5819,136 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }))
   }
 
+  /** Scoped staff-only progress. The output is status metadata only; email,
+   * Person ID, private reason and native auth IDs stay server-side. */
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingEmailProgress(token:string,organizationId:string,
+    sellerId:string,@MedusaContext() context:Context={}){
+    const audience=await this.personalPlatformStoreClosingEmailAudience(
+      token,organizationId,sellerId,context)
+    if(!audience)return null
+    const db=securitySql(context.transactionManager)
+    const closure=await this.platformClosingRow_(db,sellerId)
+    if(!closure||closure.organization_id!==organizationId)return null
+    const rows=await db.execute(`select d.person_id,d.attempts,d.last_result,
+      d.message_id,d.last_attempt_at,d.next_attempt_at,d.delivered_at,
+      d.delivery_source,d.email_link_visited_at,d.account_viewed_at
+      from da_store_platform_closing_email d
+      where d.seller_id=? order by d.person_id`,[sellerId])
+    const byPerson=new Map(rows.map(row=>[row.person_id as string,row]))
+    const unique=[...new Set(audience.map(row=>row.person_id))].sort()
+    const owners=unique.map((personId,index)=>{
+      const row=byPerson.get(personId)
+      return {
+        label:`Owner ${index+1}`,attempts:row?Number(row.attempts):0,
+        // A proven SMTP 250 is independent from later link delivery.
+        // The message ID itself remains private to the server.
+        smtp_accepted:typeof row?.message_id==="string"&&row.message_id.length>0,
+        status:row?.delivered_at?'delivered':row?.last_result??'pending',
+        last_attempt_at:row?.last_attempt_at?
+          new Date(row.last_attempt_at).toISOString():null,
+        next_attempt_at:row&&Number(row.attempts)<4&& !row.delivered_at?
+          new Date(row.next_attempt_at).toISOString():null,
+        delivered_at:row?.delivered_at?
+          new Date(row.delivered_at).toISOString():null,
+        link_visited_at:row?.email_link_visited_at?
+          new Date(row.email_link_visited_at).toISOString():null,
+        account_viewed_at:row?.account_viewed_at?
+          new Date(row.account_viewed_at).toISOString():null
+      }
+    })
+    const started=closure.deadline_started_at?
+      new Date(closure.deadline_started_at).toISOString():null
+    return {
+      owners,deadline_started_at:started,
+      deadline_basis:closure.deadline_basis??null,
+      admin_alert_at:closure.admin_alert_at?
+        new Date(closure.admin_alert_at).toISOString():null,
+      // No mailbox verification is inferred from SMTP acceptance.
+      delivery_verified_count:owners.filter(o=>o.delivered_at!==null).length,
+      delivered_evidence_available:owners.some(o=>o.delivered_at!==null)
+    }
+  }
+
+  /** A deliberate authenticated Owner visit to a link from their mail.
+   * Link fetches and scanner GETs must NEVER mutate the clock. A SHA-256
+   * digest and exact current protected-Owner authority are both required. */
+  @InjectTransactionManager()
+  async personalPlatformStoreClosingEmailLinkVisit(
+    token:string,linkToken:string,@MedusaContext() context:Context={}
+  ){
+    if(!/^[a-f0-9]{64}$/.test(linkToken))throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const current=await new IdentitySessions(db).current(token,true,false)
+    if(!current)return null
+    const digest=createHash("sha256").update(linkToken).digest("hex")
+    const choices=await db.execute(`select l.seller_id,l.person_id,c.organization_id
+      from da_store_platform_closing_email_link l
+      join da_store_platform_closing c on c.seller_id=l.seller_id
+      where l.token_sha256=? and l.issued_at>
+        clock_timestamp()-interval '30 days'
+      limit 2`,[digest])
+    if(choices.length!==1||choices[0].person_id!==current.person_id)
+      return null
+    const {seller_id:sellerId,organization_id:orgId}=choices[0]
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
+      [sellerId])
+    const owner=await this.ownerPauseScope_(db,token,orgId,sellerId)
+    if(!owner||owner.actor.person_id!==current.person_id)return null
+    const locks=await db.execute(`select l.seller_id,l.person_id,l.issued_at,
+      d.delivered_at,c.deadline_started_at,c.reason
+      from da_store_platform_closing_email_link l
+      join da_store_platform_closing_email d on d.seller_id=l.seller_id
+        and d.person_id=l.person_id
+      join da_store_platform_closing c on c.seller_id=l.seller_id
+        and c.organization_id=?
+      where l.token_sha256=? and l.person_id=?
+        and l.issued_at>clock_timestamp()-interval '30 days'
+      for update of l,d,c`,[orgId,digest,current.person_id])
+    if(locks.length!==1||locks[0].seller_id!==sellerId)return null
+    // Single server-clock event; a repeated click never resets any timestamp.
+    const tick=await db.execute("select clock_timestamp() as at")
+    if(tick.length!==1)throw new IdentityAccessDenied()
+    const at=new Date(tick[0].at).toISOString()
+    await db.execute(`update da_store_platform_closing_email_link
+      set visited_at=coalesce(visited_at,?::timestamptz)
+      where token_sha256=? and person_id=?`,[at,digest,current.person_id])
+    await db.execute(`update da_store_platform_closing_email
+      set delivered_at=coalesce(delivered_at,?::timestamptz),
+        delivery_source='authenticated_owner',
+        email_link_visited_at=coalesce(email_link_visited_at,?::timestamptz),
+        account_viewed_at=coalesce(account_viewed_at,?::timestamptz),
+        last_result='delivered',claim_id=null,lease_until=null,
+        updated_at=clock_timestamp()
+      where seller_id=? and person_id=?`,
+      [at,at,at,sellerId,current.person_id])
+    // Audit and clock share the same physical Foundation transaction. A
+    // repeated Owner visit must not create a second deadline audit/outbox.
+    if(locks[0].deadline_started_at===null){
+      const [deadlineAudit]=await this.persistAuditEventsWithOutbox_([{
+        actor_person_id:owner.actor.person_id,
+        actor_type:owner.actor.actor_type,actor_id:owner.actor.actor_id,
+        role_context:"owner",organization_id:orgId,
+        action:"organization.store_platform_closing_deadline_started",
+        module:DOGRUADRES_AUDIT_MODULE,
+        resource:"store-platform-closing",target_id:sellerId,
+        new_values:{basis:"owner_delivery",deadline_started_at:at,
+          evidence:"authenticated_owner_link"},
+        occurred_at:new Date(at)
+      }],context)
+      if(!deadlineAudit?.id)throw new IdentityAccessDenied()
+      await (context.transactionManager as {flush():Promise<void>}).flush()
+      const started=await db.execute(`update da_store_platform_closing
+        set deadline_started_at=?::timestamptz,deadline_basis='owner_delivery',
+          deadline_audit_event_id=?,updated_at=clock_timestamp()
+        where seller_id=? and organization_id=? and deadline_started_at is null
+        returning seller_id`,[at,deadlineAudit.id,sellerId,orgId])
+      if(started.length!==1)throw new IdentityAccessDenied()
+    }
+    return {viewed:true,reason:String(locks[0].reason),
+      deadline_started:true}
+  }
+
   @InjectTransactionManager()
   async personalPlatformStoreClosingState(token:string,organizationId:string,
     sellerId:string,@MedusaContext() context:Context={}){
@@ -5623,13 +5960,46 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!owner)return null
     const row=await this.platformClosingRow_(db,sellerId)
     if(row&&row.organization_id!==organizationId)throw new IdentityAccessDenied()
+    const windows=await db.execute(`select
+      (x.started_at is null or x.now_at <
+        x.started_at + interval '240 hours') as first_window,
+      (x.started_at is not null and x.now_at >=
+        x.started_at + interval '240 hours' and x.now_at <
+        x.started_at + interval '720 hours') as second_window
+      from (select ?::timestamptz as started_at,
+        clock_timestamp() as now_at) x`,[row?.deadline_started_at??null])
+    if(windows.length!==1||
+       typeof windows[0].first_window!=="boolean"||
+       typeof windows[0].second_window!=="boolean")
+      throw new IdentityAccessDenied()
     return {organization_id:organizationId,seller_id:sellerId,
       state:row?.state??"none",version:row?Number(row.version):0,
+      first_appeal_open:row?.state==="notification_unverified"&&
+        windows[0].first_window&&row?.final_review_request_id==null,
+      final_review_open:row?.state==="notification_unverified"&&
+        windows[0].second_window&&row?.final_review_request_id==null,
+      final_review_requested:row?.final_review_request_id!=null,
+      final_review_requested_at:row?.final_review_requested_at?
+        new Date(row.final_review_requested_at).toISOString():null,
+      final_review_reason:row?.final_review_reason??null,
+      review_decision:row?.review_decision??null,
+      review_decision_reason:row?.review_decision_reason??null,
+      review_decided_at:row?.review_decided_at?
+        new Date(row.review_decided_at).toISOString():null,
       reason:row?.reason??null,started_at:row?
         new Date(row.started_at).toISOString():null,
       appeal_reason:row?.appeal_reason??null,
-      // No claimed email delivery; 10/30-day clock is not authorized to start.
-      mandatory_email_verified:false,deadline_started:false,
+      // Owner sees the real server-owned 10+20 clock, never a browser clock
+      // used as authority. Sale denial was effective at initial Staff decision.
+      mandatory_email_verified:row?.deadline_basis==="owner_delivery",
+      deadline_started:!!row?.deadline_started_at,
+      deadline_started_at:row?.deadline_started_at?
+        new Date(row.deadline_started_at).toISOString():null,
+      first_appeal_until:row?.deadline_started_at?
+        new Date(new Date(row.deadline_started_at).getTime()+864000000).toISOString():null,
+      final_review_until:row?.deadline_started_at?
+        new Date(new Date(row.deadline_started_at).getTime()+2592000000).toISOString():null,
+      deadline_basis:row?.deadline_basis??null,
       permanent_finalization_enabled:false}
   }
 
@@ -5660,13 +6030,27 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     }
     if(row.state!=="notification_unverified"||Number(row.version)!==1)
       return {status:"conflict" as const}
+    // Existing accepted appeal replays are handled above. For a new first
+    // appeal, the canonical 10-day window is enforced by the PG16 clock,
+    // never by the browser. A pre-clock appeal remains allowed.
+    // Compare native timestamptz values in PostgreSQL at microsecond
+    // precision. 240 hours matches the existing UTC 10*24h contract;
+    // converting the cutoff to JS milliseconds could shift its last instant.
+    const clock=await db.execute(`select t.now_at,
+      coalesce(t.now_at >= (?::timestamptz + interval '240 hours'),false)
+        as first_appeal_expired
+      from (select clock_timestamp() as now_at) t`,[row.deadline_started_at])
+    if(clock.length!==1||
+       !Number.isFinite(new Date(clock[0].now_at).getTime())||
+       typeof clock[0].first_appeal_expired!=="boolean")
+      throw new IdentityAccessDenied()
+    if(clock[0].first_appeal_expired)
+      return {status:"conflict" as const}
     const history=await db.execute(`select id from da_audit_event
       where module='dogruadres-access' and resource='store-platform-closing'
         and target_id=? and new_values->>'request_id'=?
         and deleted_at is null limit 2`,[input.seller_id,input.request_id])
     if(history.length)throw new IdentityAccessDenied()
-    const clock=await db.execute("select clock_timestamp() as now_at")
-    if(clock.length!==1)throw new IdentityAccessDenied()
     const [audit]=await this.persistAuditEventsWithOutbox_([{
       actor_person_id:owner.actor.person_id,actor_type:owner.actor.actor_type,
       actor_id:owner.actor.actor_id,role_context:"owner",
@@ -5697,6 +6081,274 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       on conflict (audit_event_id,person_id) do nothing`,
       [audit.id,input.organization_id])
     return {status:"appealed" as const,version:2,replayed:false}
+  }
+
+  /** A protected Owner may request independent platform review only
+   * in the second (10–30 day) window when no first appeal was filed.
+   * This is a durable pending request, NOT a Staff decision or finalizer.
+   */
+  @InjectTransactionManager()
+  async personalRequestPlatformStoreClosingFinalReview(token:string,input:{
+    organization_id:string;seller_id:string;request_id:string;
+    expected_version:number;reason:string
+  },@MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !/^dasfr_[a-f0-9]{32}$/.test(input.request_id)||
+       input.expected_version!==1||
+       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
+       input.reason.length<10||input.reason.length>500)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
+      [input.seller_id])
+    const owner=await this.ownerPauseScope_(db,token,input.organization_id,input.seller_id)
+    if(!owner)return null
+    const row=await this.platformClosingRow_(db,input.seller_id,true)
+    if(!row||row.organization_id!==input.organization_id)
+      return {status:"conflict" as const}
+    // Replay is limited to the same currently authorized Owner and content.
+    if(row.final_review_request_id!==null){
+      if(row.final_review_request_id===input.request_id&&
+         row.final_review_reason===input.reason&&
+         row.final_review_requested_by_person_id===owner.actor.person_id)
+        return {status:"review_requested" as const,replayed:true}
+      return {status:"conflict" as const}
+    }
+    if(row.state!=="notification_unverified"||Number(row.version)!==1||
+       row.deadline_started_at===null)
+      return {status:"conflict" as const}
+    const clock=await db.execute(`select x.now_at,
+      (x.now_at >= (?::timestamptz + interval '240 hours') and
+       x.now_at < (?::timestamptz + interval '720 hours'))
+        as second_window
+      from (select clock_timestamp() as now_at) x`,
+      [row.deadline_started_at,row.deadline_started_at])
+    if(clock.length!==1||
+       !Number.isFinite(new Date(clock[0].now_at).getTime())||
+       typeof clock[0].second_window!=="boolean")
+      throw new IdentityAccessDenied()
+    if(!clock[0].second_window)return {status:"conflict" as const}
+    const duplicate=await db.execute(`select id from da_audit_event
+      where module='dogruadres-access' and resource='store-platform-closing'
+        and target_id=? and new_values->>'request_id'=?
+        and deleted_at is null limit 2`,
+      [input.seller_id,input.request_id])
+    if(duplicate.length)throw new IdentityAccessDenied()
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:owner.actor.person_id,actor_type:owner.actor.actor_type,
+      actor_id:owner.actor.actor_id,role_context:"owner",
+      organization_id:input.organization_id,
+      action:"organization.store_platform_closing_final_review_requested",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"store-platform-closing",
+      target_id:input.seller_id,
+      new_values:{request_id:input.request_id,stage:"second_review",
+        reason_sha256:createHash("sha256").update(input.reason).digest("hex")},
+      occurred_at:new Date(clock[0].now_at)
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const changed=await db.execute(`update da_store_platform_closing
+      set final_review_request_id=?,final_review_reason=?,
+        final_review_audit_event_id=?,
+        final_review_requested_by_person_id=?,
+        -- Keep the persisted cutoff timestamp at PostgreSQL microsecond
+        -- precision, not a lossy JavaScript Date millisecond conversion.
+        final_review_requested_at=clock_timestamp(),
+        updated_at=clock_timestamp()
+      where seller_id=? and organization_id=? and version=1
+        and state='notification_unverified'
+        and final_review_request_id is null
+      returning seller_id`,[
+      input.request_id,input.reason,audit.id,owner.actor.person_id,
+      input.seller_id,input.organization_id])
+    if(changed.length!==1)throw new IdentityAccessDenied()
+    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
+      select 'danot_'||gen_random_uuid()::text,m.person_id,?
+      from da_organization_membership m join da_person p on p.id=m.person_id
+      where m.organization_id=? and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.revoked_at is null and m.deleted_at is null
+        and p.disabled_at is null and p.deleted_at is null
+      on conflict (audit_event_id,person_id) do nothing`,
+      [audit.id,input.organization_id])
+    return {status:"review_requested" as const,replayed:false}
+  }
+
+  /**
+   * Independent Staff queue. The initiating closing Staff has NO implicit
+   * review authority. A separate explicit strong platform grant is required.
+   * Only verified source-backed Owner submissions are displayed.
+   */
+  @InjectTransactionManager()
+  async personalReviewablePlatformClosingAppeals(token:string,page=0,
+    @MedusaContext() context:Context={}){
+    if(!Number.isSafeInteger(page)||page<0||page>1000)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.closing.review","platform")
+    if(!staff)return null
+    const rows=await db.execute(`select c.seller_id,c.organization_id,
+      d.name organization_name,s.name store_name,
+      src.actor_person_id closing_staff_person_id
+      from da_store_platform_closing c
+      join da_organization d on d.id=c.organization_id
+        and d.status='active' and d.deleted_at is null
+      join seller s on s.id=c.seller_id and s.deleted_at is null
+        and s.approved_at is not null
+      join da_organization_seller_ownership o
+        on o.organization_id=c.organization_id and o.seller_id=c.seller_id
+        and o.revoked_at is null
+      join da_audit_event src on src.id=c.source_audit_event_id
+        and src.deleted_at is null and src.module='dogruadres-access'
+        and src.action='organization.store_platform_closing_started'
+        and src.resource='store-platform-closing'
+        and src.organization_id=c.organization_id and src.target_id=c.seller_id
+      where (c.appeal_request_id is not null or
+             c.final_review_request_id is not null)
+        and c.review_decision_request_id is null
+        and src.actor_person_id<>?
+      order by coalesce(c.final_review_requested_at,c.appealed_at),c.seller_id
+      limit 31 offset ?`,[staff.person_id,page*30])
+    if(rows.length>31)throw new IdentityAccessDenied()
+    const result:Array<{
+      seller_id:string;organization_id:string;organization_name:string;
+      store_name:string;stage:string;source_request_id:string;request_reason:string
+    }>=[]
+    for(const item of rows.slice(0,30)){
+      if(!(await platformApprovedSellerIds(db,item.organization_id)).includes(item.seller_id))
+        throw new IdentityAccessDenied()
+      const row=await this.platformClosingRow_(db,item.seller_id)
+      if(!row||row.organization_id!==item.organization_id||
+         row.review_decision_request_id!==null||
+         (row.appeal_request_id===null&&row.final_review_request_id===null))
+        throw new IdentityAccessDenied()
+      result.push({
+        seller_id:item.seller_id as string,
+        organization_id:item.organization_id as string,
+        organization_name:item.organization_name as string,
+        store_name:item.store_name as string,
+        stage:row.appeal_request_id!==null?"first_appeal":"second_review",
+        source_request_id:(row.appeal_request_id??row.final_review_request_id) as string,
+        request_reason:(row.appeal_reason??row.final_review_reason) as string
+      })
+    }
+    // Source reads can span many statements: a Staff task may be revoked
+    // while this private queue is assembled. Revalidate the same session,
+    // Person and grant immediately before release, then hold the live grant
+    // FOR SHARE until the read transaction commits. Concurrent revocation
+    // must commit before this check (403), or wait for this read to finish.
+    const fresh=await new IdentitySessions(db).staff(token,"store.closing.review","platform")
+    if(!fresh||fresh.person_id!==staff.person_id||
+       fresh.grant_id!==staff.grant_id)return null
+    const grant=await db.execute(`select g.id from da_platform_staff_grant g
+      where g.id=? and g.person_id=? and g.task='store.closing.review'
+        and g.resource='platform' and g.revoked_at is null
+        and (g.expires_at is null or g.expires_at>clock_timestamp())
+      for share`,[fresh.grant_id,fresh.person_id])
+    if(grant.length!==1)return null
+    return {candidates:result,page,has_more:rows.length>30}
+  }
+
+  /**
+   * Single, reasoned review decision, NOT the irreversible finalizer.
+   * Accepted requests preserve the closure sale block pending a separate
+   * authorized reopening; rejected requests preserve it likewise.
+   */
+  @InjectTransactionManager()
+  async personalDecidePlatformClosingAppeal(token:string,input:{
+    organization_id:string;seller_id:string;source_request_id:string;
+    request_id:string;decision:"accepted"|"rejected";reason:string
+  },@MedusaContext() context:Context={}){
+    if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(input.organization_id)||
+       !/^sel_[A-Za-z0-9_-]+$/.test(input.seller_id)||
+       !/^(dapa_|dasfr_)[a-f0-9]{32}$/.test(input.source_request_id)||
+       !/^dasdr_[a-f0-9]{32}$/.test(input.request_id)||
+       !["accepted","rejected"].includes(input.decision)||
+       typeof input.reason!=="string"||input.reason.trim()!==input.reason||
+       input.reason.length<10||input.reason.length>500)
+      throw new IdentityAccessDenied()
+    const db=securitySql(context.transactionManager)
+    const staff=await new IdentitySessions(db).staff(token,"store.closing.review","platform")
+    if(!staff)return null
+    const grant=await db.execute(`select g.id from da_platform_staff_grant g
+      where g.id=? and g.person_id=? and g.task='store.closing.review'
+        and g.resource='platform' and g.revoked_at is null
+        and (g.expires_at is null or g.expires_at>clock_timestamp())
+      for share`,[staff.grant_id,staff.person_id])
+    if(grant.length!==1)return null
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
+      [input.seller_id])
+    const row=await this.platformClosingRow_(db,input.seller_id,true)
+    if(!row||row.organization_id!==input.organization_id)
+      return {status:"conflict" as const}
+    // A historical closure audit is not a current Organization/Store grant.
+    // Revalidate the canonical approved native Seller relationship at write.
+    if(!(await platformApprovedSellerIds(db,input.organization_id)).includes(input.seller_id))
+      return null
+    const sourceId=row.appeal_request_id??row.final_review_request_id
+    if(sourceId!==input.source_request_id||sourceId===null)
+      return {status:"conflict" as const}
+    const initial=await db.execute(`select actor_person_id from da_audit_event
+      where id=? and action='organization.store_platform_closing_started'
+        and role_context='platform_staff' and organization_id=?
+        and target_id=? and deleted_at is null limit 2`,
+      [row.source_audit_event_id,input.organization_id,input.seller_id])
+    if(initial.length!==1||initial[0].actor_person_id===staff.person_id||
+       await isCurrentProtectedOwner(db,staff.person_id,input.organization_id))
+      return null
+    if(row.review_decision_request_id!==null){
+      if(row.review_decision_request_id===input.request_id&&
+         row.review_decision===input.decision&&
+         row.review_decision_reason===input.reason&&
+         row.review_decided_by_person_id===staff.person_id)
+        return {status:"decided" as const,replayed:true,
+          decision:row.review_decision as "accepted"|"rejected"}
+      return {status:"conflict" as const}
+    }
+    const duplicate=await db.execute(`select id from da_audit_event
+      where module='dogruadres-access' and resource='store-platform-closing'
+        and target_id=? and new_values->>'request_id'=?
+        and deleted_at is null limit 2`,[input.seller_id,input.request_id])
+    if(duplicate.length)throw new IdentityAccessDenied()
+    const clock=await db.execute("select clock_timestamp() as at")
+    if(clock.length!==1||
+       !Number.isFinite(new Date(clock[0].at).getTime()))
+      throw new IdentityAccessDenied()
+    const [audit]=await this.persistAuditEventsWithOutbox_([{
+      actor_person_id:staff.person_id,actor_type:staff.actor_type,
+      actor_id:staff.actor_id,role_context:"platform_staff",
+      organization_id:input.organization_id,
+      action:"organization.store_platform_closing_review_decided",
+      module:DOGRUADRES_AUDIT_MODULE,resource:"store-platform-closing",
+      target_id:input.seller_id,
+      new_values:{request_id:input.request_id,
+        source_request_id:sourceId,decision:input.decision,
+        reason_sha256:createHash("sha256").update(input.reason).digest("hex")},
+      occurred_at:new Date(clock[0].at)
+    }],context)
+    if(!audit?.id)throw new IdentityAccessDenied()
+    await (context.transactionManager as {flush():Promise<void>}).flush()
+    const changed=await db.execute(`update da_store_platform_closing
+      set review_decision_request_id=?,review_decision=?,
+        review_decision_reason=?,review_decision_source_request_id=?,
+        review_decision_audit_event_id=?,review_decided_by_person_id=?,
+        review_decided_at=clock_timestamp(),updated_at=clock_timestamp()
+      where seller_id=? and organization_id=?
+        and review_decision_request_id is null
+      returning seller_id`,[
+      input.request_id,input.decision,input.reason,sourceId,
+      audit.id,staff.person_id,input.seller_id,input.organization_id])
+    if(changed.length!==1)throw new IdentityAccessDenied()
+    await db.execute(`insert into da_notification_receipt(id,person_id,audit_event_id)
+      select 'danot_'||gen_random_uuid()::text,m.person_id,?
+      from da_organization_membership m join da_person p on p.id=m.person_id
+      where m.organization_id=? and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.revoked_at is null and m.deleted_at is null
+        and p.disabled_at is null and p.deleted_at is null
+      on conflict(audit_event_id,person_id) do nothing`,
+      [audit.id,input.organization_id])
+    return {status:"decided" as const,replayed:false,
+      decision:input.decision}
   }
 
   // B22 product draft: Foundation-owned intent ledger, not another product

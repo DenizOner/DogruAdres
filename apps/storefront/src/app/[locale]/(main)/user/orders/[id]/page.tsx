@@ -18,7 +18,7 @@ export default async function UserPage({
   const user = await retrieveCustomer()
   if (!user) return redirect("/login")
 
-  const orderGroup = (await retrieveOrderGroup(id)) as any
+  const orderGroup = await retrieveOrderGroup(id)
 
   return (
     <main className="container">

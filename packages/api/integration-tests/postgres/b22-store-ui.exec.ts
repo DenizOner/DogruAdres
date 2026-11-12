@@ -24,7 +24,9 @@ import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerW
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,createB22CompletedSourceOrderFixture} from "./b22-store-name-transfer.accept"
-import {verifyB22PlatformClosingAppeal} from "./b22-platform-closing-appeal.accept"
+import {verifyB22PlatformClosingAppeal,
+  verifyB22PlatformClosingSecondStageRequest,
+  verifyB22IndependentStaffClosingDecision} from "./b22-platform-closing-appeal.accept"
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
@@ -357,6 +359,32 @@ async function verifyOwnerClosingBrowser(input:{
     assert.equal(expired.body.can_withdraw,false)
     assert.equal(expired.body.remaining_seconds,0)
     assert.equal(expired.body.permanent_finalization_enabled,false)
+    // The actual authorized Owner screen must stop calling an expired
+    // waiting period a countdown. Do not display a completed/terminated
+    // Store, release its name, or enable a withdrawal after the deadline.
+    const selectClosingStore=async(seller:string)=>browser.callFunction(
+      "function(seller){const c=document.querySelector("+
+      "'#store-owner-pause-form select[name=seller_id]');"+
+      "if(!c||!Array.from(c.options).some(o=>o.value===seller))return false;"+
+      "c.value=seller;c.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return true}",seller)
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    assert.equal(await selectClosingStore(secondOwnerStoreId),true,
+      "Real Owner must be able to select the expired approved Store")
+    await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('30 günlük bekleme süresi doldu')")
+    const expiryScreen=await browser.eval("document.getElementById('store-owner-closing-status').textContent")
+    for(const message of ["Yeni satışlar hâlâ kapalı",
+      "geri dönüşsüz işlem yapılmıyor",
+      "mağaza adını veya geçmiş siparişleri kendiliğinden değiştirmez",
+      "Geri çekme süresi sona erdi"])
+      assert.ok(expiryScreen.includes(message),
+        "Real protected Owner must see a safe post-day-30 explanation: "+message)
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-owner-closing-form button[value=withdraw]').disabled"),true,
+      "The real UI cannot submit expired Owner withdrawal")
+    assert.equal(await selectClosingStore(ownerStoreId),true)
+    await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('Kalan süre (yenilendiğinde):')")
     const beforeExpirySideEffects=await q(
       "select count(*)::int n from da_audit_event e"+
       " where e.resource='store-owner-closing' and e.target_id=$1",
@@ -2580,6 +2608,23 @@ async function verifyRealNextStorefrontRenameUrls(
   assert.equal(nativeNew[0].id,storeId)
   assert.equal(nativeNew[0].name,rename.proposed_name)
 
+  // Next's first real Seller request initializes its country/Region middleware.
+  // A favicon-only readiness probe does not exercise this actual dependency.
+  // Verify the real installed Medusa GET and German country mapping before
+  // attributing a transient 500 to Seller rename or weakening HTTP assertions.
+  const nativeRegions=await fetch(backendOrigin+"/store/regions",{
+    headers:{"x-publishable-api-key":publishableKey},
+    signal:AbortSignal.timeout(15000)
+  })
+  assert.equal(nativeRegions.status,200,
+    "Disposable native Medusa Regions GET must work before Next's first page")
+  const regionBody=await nativeRegions.json() as {regions?:Array<{
+    countries?:Array<{iso_2?:string}>
+  }>}
+  assert.ok(regionBody.regions?.some(region=>
+    region.countries?.some(country=>country.iso_2==="de")),
+    "Disposable native Medusa Regions GET must expose the real de locale")
+
   const root=join(process.cwd(),"../../apps/storefront")
   const snapshot=join(temporaryDirectory,"b22-real-next-storefront")
   mkdirSync(snapshot,{recursive:false,mode:0o700})
@@ -2676,8 +2721,15 @@ async function verifyRealNextStorefrontRenameUrls(
         "backend-read":/TypeError|ReferenceError/i.test(lines)?
         "runtime-error":/region|locale/i.test(lines)?
         "region-resolution":"unclassified"
+      // If the first Next page fails, distinguish its middleware/renderer
+      // from the direct native Medusa Regions response, without logging PII.
+      const probe=await fetch(backendOrigin+"/store/regions",{
+        headers:{"x-publishable-api-key":publishableKey},
+        signal:AbortSignal.timeout(15000)
+      }).then(response=>response.status).catch(()=>0)
       throw new Error("Isolated legacy Store HTTP status "+former.status+
-        " (expected 404, no redirect); diagnostic="+reason)
+        " (expected 404, no redirect); diagnostic="+reason+
+        "; native_regions_status="+probe)
     }
     assert.equal(former.location,null,"Former Store URL may not redirect")
     assert.equal(former.status,404,
@@ -7376,13 +7428,18 @@ export default async function({container}:any){
     // buyer login or any automatic buyer.purchase permission.
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
-    // This part of the shared Buyer/Customer test can refresh the same
-    // personal workspace. Require a real, current Gamma membership button
-    // before clicking; a stale or wrong-Person DOM never grants authority.
+    // The same signed-in Owner's workspace can be stale after prior
+    // dual-proof/Buyer switches. Refresh the real Chrome document at most
+    // once, without spoofing session, Person or Organization membership.
+    const gammaButtonReady="!document.getElementById('workspace').hidden && "+
+      "Array.from(document.querySelectorAll('#organizations button')).some("+
+      "b=>b.textContent==="+JSON.stringify(sellerGamma.name+" — owner")+")"
+    if(!await browser.eval(gammaButtonReady)){
+      await browser.send("Page.reload",{ignoreCache:true})
+    }
+    // A still-missing real membership or expired session must fail closed.
     try{
-      await browser.wait("!document.getElementById('workspace').hidden && "+
-        "Array.from(document.querySelectorAll('#organizations button')).some("+
-        "b=>b.textContent==="+JSON.stringify(sellerGamma.name+" — owner")+")")
+      await browser.wait(gammaButtonReady)
     }catch{
       const state=await browser.callFunction(
         "function(){return {workspace:!document.getElementById('workspace')?.hidden,"+
@@ -8728,7 +8785,20 @@ export default async function({container}:any){
       sellerId:gammaSellerId,buyer:reviewer,
       buyerScopePath:betaScopeUrl,buyerOrganizationId:organizations[1].id,
       checkoutCartId:hookProbeCart.id,customerId:nativeCustomer.id,query,
-      auth,ownerEmail:A.email
+      auth,ownerEmail:A.email,container
+    })
+    await verifyB22PlatformClosingSecondStageRequest({
+      browser,staff:reviewer,q,foundation,sourceSellerId:gammaSellerId,
+      reviewSellerId:secondOwnerStoreId,
+      ownerPersonId:A.person,staffPersonId:B.person,
+      organizationId:organizations[0].id,
+      organizationName:organizations[0].name
+    })
+    await verifyB22IndependentStaffClosingDecision({
+      host,crt,browsers,ownerBrowser:browser,initialStaff:reviewer,
+      q,foundation,organizationId:organizations[0].id,
+      reviewSellerId:secondOwnerStoreId,initialSellerId:gammaSellerId,
+      ownerPersonId:A.person,originalStaffPersonId:B.person
     })
     // Continue the Alpha Buyer/permission tests from the real Owner workspace.
     await browser.send("Page.bringToFront")

@@ -11,7 +11,7 @@ import clsx from "clsx"
 
 type AddressSelectProps = {
   addresses: HttpTypes.StoreCustomerAddress[]
-  addressInput: HttpTypes.StoreCartAddress | null
+  addressInput: Record<string, string> | null
   onSelect: (
     address: HttpTypes.StoreCartAddress | undefined,
     email?: string

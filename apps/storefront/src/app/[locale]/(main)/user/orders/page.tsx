@@ -26,7 +26,7 @@ export default async function UserPage({
 
   const orderGroupsGrouped = orders.reduce(
     (acc, order) => {
-      const orderGroupId = (order as any).order_group.id;
+      const orderGroupId = order.order_group.id;
       if (!acc[orderGroupId]) {
         acc[orderGroupId] = [];
       }
@@ -38,7 +38,7 @@ export default async function UserPage({
 
   const orderGroups = Object.entries(orderGroupsGrouped).map(([orderGroupId, orders]) => {
     const firstOrder = orders[0];
-    const orderGroup = (firstOrder as any).order_group;
+    const orderGroup = firstOrder.order_group;
 
     return {
       id: orderGroupId,

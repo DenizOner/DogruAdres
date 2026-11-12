@@ -23,6 +23,9 @@ const resources = {
   "organization.store_owner_closing_withdrawn": "store-owner-closing",
   "organization.store_platform_closing_started": "store-platform-closing",
   "organization.store_platform_closing_appealed": "store-platform-closing",
+  "organization.store_platform_closing_final_review_requested": "store-platform-closing",
+  "organization.store_platform_closing_review_decided": "store-platform-closing",
+  "organization.store_platform_closing_deadline_started": "store-platform-closing",
   "organization.store_application_right_disabled": "organization",
   "organization.store_application_right_enabled": "organization",
   "organization.store_application_rejected": "store-application",
@@ -45,7 +48,7 @@ const schema = z.object({
     person_id: reference,
     type: z.enum(["user", "member", "customer"]),
     id: reference,
-    role_context: z.enum(["platform_administrator", "platform_staff", "owner", "admin", "member"]).nullable(),
+    role_context: z.enum(["platform_administrator", "platform_staff", "platform_automation", "owner", "admin", "member"]).nullable(),
   }).strict(),
   action: z.enum(Object.keys(resources) as [keyof typeof resources, ...(keyof typeof resources)[]]),
   resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow", "store-application", "store-application-draft", "store-draft-permission", "store-owner-pause", "store-owner-closing", "store-platform-closing"]),
@@ -71,13 +74,22 @@ const schema = z.object({
     (value.actor.role_context === "owner" &&
      /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
-  // Platform start and Owner appeal have distinct, independent strong grants.
+  // Explicit platform decision, Owner appeal and automatic clock are distinct.
+  // The clock's automation attribution is NOT a new Staff privilege.
   .refine(value => value.resource !== "store-platform-closing" ||
     (/^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id) &&
-     (value.action==="organization.store_platform_closing_started"
+     (["organization.store_platform_closing_started",
+        "organization.store_platform_closing_review_decided"].includes(value.action)
        ?value.actor.role_context==="platform_staff"
-       :value.actor.role_context==="owner")))
+       :["organization.store_platform_closing_appealed",
+          "organization.store_platform_closing_final_review_requested"].includes(value.action)
+         ?value.actor.role_context==="owner"
+         :value.action==="organization.store_platform_closing_deadline_started"
+           ?["owner","platform_automation"].includes(value.actor.role_context??"")
+           :false)))
+  .refine(value => value.actor.role_context !== "platform_automation" ||
+    value.action === "organization.store_platform_closing_deadline_started")
   // Owner or explicitly authorized Member may prepare private draft input.
   // The writer verifies the live membership+audited grant, not this envelope.
   .refine(value => value.action !== "organization.store_application_draft_saved" ||
@@ -114,6 +126,7 @@ const schema = z.object({
     value.action === "organization.store_reactivation_released" ||
     value.action === "organization.store_reactivated" ||
     value.action === "organization.store_platform_closing_started" ||
+    value.action === "organization.store_platform_closing_review_decided" ||
     isCompanyPolicyAction(value.action))
 
 export type AuditIndexEnvelopeV1 = z.infer<typeof schema>

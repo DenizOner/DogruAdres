@@ -206,6 +206,53 @@ jobs:
       - name: Install locked dependencies
         id: install
         run: bun install --frozen-lockfile
+      # #159: reuse the existing required Foundation job for targeted
+      # Storefront diagnostics on this authorized repair branch only.
+      # Never skip or suppress TypeScript, ESLint or Next production failures.
+      - name: Storefront #159 type, lint and production build diagnostics
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'fix/storefront-build-eslint-types-159' && steps.install.outcome == 'success' }}
+        timeout-minutes: 8
+        working-directory: apps/storefront
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use the existing official Mercur CLI route codegen, never a
+          # synthetic hand-written route map or unconditional unsafe cast.
+          (cd ../../packages/api && bun run codegen)
+          test -s ../../packages/api/.mercur/routes.d.ts
+          set +e
+          node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json > "$RUNNER_TEMP/storefront-159-types.log" 2>&1
+          type_status=$?
+          bun run lint > "$RUNNER_TEMP/storefront-159-lint.log" 2>&1
+          lint_status=$?
+          bun run build > "$RUNNER_TEMP/storefront-159-build.log" 2>&1
+          build_status=$?
+          set -e
+          echo "Storefront #159 type exit=$type_status"
+          echo "Storefront #159 TS diagnostics: $(grep -cE 'error TS[0-9]+' "$RUNNER_TEMP/storefront-159-types.log" || true)"
+          awk '/error TS[0-9]+/ && ++n<=180 { print }' "$RUNNER_TEMP/storefront-159-types.log"
+          echo "Storefront #159 lint exit=$lint_status"
+          awk '/  error  / {e++} /  warning  / {w++} END {printf "Storefront #159 complete lint totals: errors=%d warnings=%d\\n", e, w}' "$RUNNER_TEMP/storefront-159-lint.log"
+          sed -n '1,350p' "$RUNNER_TEMP/storefront-159-lint.log"
+          echo "Storefront #159 production build exit=$build_status"
+          sed -n '1,110p' "$RUNNER_TEMP/storefront-159-build.log"
+          # Negative probe: a broken TypeScript export must be rejected.
+          probe="src/__storefront_159_bad_syntax_probe__.ts"
+          trap 'rm -f "$probe"' EXIT
+          printf 'export const = ;\n' > "$probe"
+          if node ../../node_modules/eslint/bin/eslint.js "$probe" > "$RUNNER_TEMP/storefront-159-negative.log" 2>&1; then
+            echo "FAIL: ESLint accepted invalid TypeScript syntax"
+            exit 1
+          fi
+          grep -Eiq 'parsing error|unexpected token|unexpected character' "$RUNNER_TEMP/storefront-159-negative.log" || {
+            echo "FAIL: ESLint did not report a syntax diagnostic for the negative probe"
+            sed -n '1,30p' "$RUNNER_TEMP/storefront-159-negative.log"
+            exit 1
+          }
+          echo "PASS: ESLint rejects deliberately invalid TypeScript syntax"
+          # #159: focused native-price DTO and invalid-value regressions, using existing Bun.
+          bun test src/lib/helpers/get-product-price.test.ts
+          test "$type_status" -eq 0 && test "$lint_status" -eq 0 && test "$build_status" -eq 0
       - name: Native SMTP HTTPS privacy negative regressions
         id: asvs_smtp_http
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -460,6 +507,10 @@ jobs:
           bun integration-tests/postgres/mfa-persistence.pg16.test.ts
           bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
           bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
+          # Focused B22 delivery-clock PG16 acceptance is independent of the
+          # later, still-MANDATORY ClamAV/Chrome gates. An upstream APT mirror
+          # outage must not erase the evidence for this isolated user risk.
+          bun integration-tests/postgres/b22-platform-closing-email.pg16.test.ts
       - name: Existing Chrome task CA support for B22 scoped browser acceptance
         if: github.event_name != 'workflow_dispatch'
         run: |
@@ -479,21 +530,20 @@ jobs:
           # These packages are free and confined to this disposable CI runner.
           # A blocked signature download or unavailable sandbox MUST fail;
           # never downgrade the document review to header/magic-byte checks.
-          # GitHub's Azure Ubuntu mirror failed DNS resolution twice during
-          # #309 acceptance. Preserve signed packages and every scanner gate:
-          # only this disposable runner may use Ubuntu's official archive.
-          apt_options=(-o APT::Update::Error-Mode=any -o Acquire::Retries=0
-            -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
-          if ! sudo apt-get "${apt_options[@]}" update -qq; then
-            test -f /etc/apt/apt-mirrors.txt
-            grep -Fq 'azure.archive.ubuntu.com' /etc/apt/apt-mirrors.txt
-            sudo sed -i 's|azure[.]archive[.]ubuntu[.]com|archive.ubuntu.com|g' /etc/apt/apt-mirrors.txt
-            echo "Ubuntu Azure mirror unavailable; retrying official Ubuntu archive"
-            sudo apt-get "${apt_options[@]}" update -qq
+          # Two real PR runs stalled resolving the GitHub runner's Azure mirror.
+          # Prefer the official Ubuntu archive on this throwaway runner only;
+          # keep genuine distro package signatures, FreshClam and sandbox gates.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i \
+              -e 's#http://azure.archive.ubuntu.com/ubuntu/#https://archive.ubuntu.com/ubuntu/#g' \
+              -e 's#https://azure.archive.ubuntu.com/ubuntu/#https://archive.ubuntu.com/ubuntu/#g' \
+              /etc/apt/apt-mirrors.txt
           fi
-          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=0 \
-            -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 \
-            install -y -qq --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Acquire::Retries=1 -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 install -y -qq --no-install-recommends \
             clamav-daemon clamav-freshclam bubblewrap poppler-utils imagemagick \
             apparmor-profiles apparmor-utils acl
           # Ubuntu 24.04 blocks unprivileged bwrap namespaces by default.
@@ -592,7 +642,9 @@ jobs:
       - name: B22 real Chrome after signed R1 activation on separate disposable database
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
-        timeout-minutes: 10
+        # The existing full B22 browser child may need 8 minutes, plus
+        # isolated migrations and signed R1 activation. Keep all checks.
+        timeout-minutes: 12
         env:
           CI: 'true'
           PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1

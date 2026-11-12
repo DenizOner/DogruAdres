@@ -168,7 +168,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  let response = NextResponse.next();
+  const response = NextResponse.next();
 
   if (!cacheIdCookie) {
     response.cookies.set('_medusa_cache_id', cacheId, {

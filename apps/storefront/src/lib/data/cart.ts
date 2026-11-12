@@ -18,6 +18,27 @@ import {
 } from './cookies';
 import { getRegion } from './regions';
 
+// Medusa can reject with an Error or a structured HTTP response.
+// Preserve the API message without assuming an arbitrary thrown value's shape.
+const getCartErrorMessage = (error: unknown): string | undefined => {
+  const response =
+    typeof error === 'object' && error !== null && 'response' in error
+      ? error.response
+      : null;
+  const data =
+    typeof response === 'object' && response !== null && 'data' in response
+      ? response.data
+      : null;
+  if (typeof data === 'object' && data !== null &&
+      'message' in data && typeof data.message === 'string') {
+    return data.message;
+  }
+  return typeof error === 'object' && error !== null &&
+    'message' in error && typeof error.message === 'string'
+    ? error.message
+    : undefined;
+};
+
 export async function retrieveCart(cartId?: string) {
   const id = cartId || (await getCartId());
 
@@ -299,16 +320,12 @@ export async function applyPromotions(codes: string[]) {
     })
     const cartCacheTag = await getCacheTag("carts")
     revalidateTag(cartCacheTag)
-    // @ts-ignore
-    const applied = cart.promotions?.some((promotion: any) =>
-      codes.includes(promotion.code)
+    const applied = cart.promotions?.some(
+      (promotion) => typeof promotion.code === 'string' && codes.includes(promotion.code)
     )
     return { success: true, applied }
-  } catch (error: any) {
-    const errorMessage =
-      error?.response?.data?.message ||
-      error?.message ||
-      "Failed to apply promotion code"
+  } catch (error: unknown) {
+    const errorMessage = getCartErrorMessage(error) ?? "Failed to apply promotion code"
     return { success: false, error: errorMessage }
   }
 }
@@ -371,28 +388,33 @@ export async function setAddresses(currentState: unknown, formData: FormData) {
       throw new Error('No existing cart found when setting addresses');
     }
 
-    const data = {
-      shipping_address: {
-        first_name: formData.get('shipping_address.first_name'),
-        last_name: formData.get('shipping_address.last_name'),
-        address_1: formData.get('shipping_address.address_1'),
-        address_2: '',
-        company: formData.get('shipping_address.company'),
-        postal_code: formData.get('shipping_address.postal_code'),
-        city: formData.get('shipping_address.city'),
-        country_code: formData.get('shipping_address.country_code'),
-        province: formData.get('shipping_address.province'),
-        phone: formData.get('shipping_address.phone')
-      },
-      email: formData.get('email')
-    } as any;
+    const textField = (key: string): string | undefined => {
+      const value = formData.get(key);
+      return typeof value === 'string' ? value : undefined;
+    };
 
-    data.billing_address = data.shipping_address;
+    const shippingAddress = {
+      first_name: textField('shipping_address.first_name'),
+      last_name: textField('shipping_address.last_name'),
+      address_1: textField('shipping_address.address_1'),
+      address_2: '',
+      company: textField('shipping_address.company'),
+      postal_code: textField('shipping_address.postal_code'),
+      city: textField('shipping_address.city'),
+      country_code: textField('shipping_address.country_code'),
+      province: textField('shipping_address.province'),
+      phone: textField('shipping_address.phone')
+    };
+    const data: HttpTypes.StoreUpdateCart = {
+      shipping_address: shippingAddress,
+      billing_address: shippingAddress,
+      email: textField('email')
+    };
 
     await updateCart(data);
     await revalidatePath('/cart');
-  } catch (e: any) {
-    return e.message;
+  } catch (e: unknown) {
+    return getCartErrorMessage(e) ?? 'Unable to save address';
   }
 }
 
@@ -407,15 +429,33 @@ export async function placeOrder(cartId?: string) {
     ...(await getAuthHeaders())
   };
 
-  const res = await sdk.store.carts.$id.complete
+  const res: {
+    ok: boolean;
+    error: { message: string } | null;
+    data: unknown;
+  } = await sdk.store.carts.$id.complete
     .mutate({ $id: id, fetchOptions: { headers } })
-    .then(data => ({ ok: true, error: null, data: data as any }))
-    .catch(error => ({ ok: false, error, data: null as any }));
+    .then((data: unknown) => ({ ok: true, error: null, data }))
+    .catch((error: unknown) => ({
+      ok: false,
+      error: { message: getCartErrorMessage(error) ?? 'Unable to complete order' },
+      data: null
+    }));
 
   const cartCacheTag = await getCacheTag('carts');
   revalidateTag(cartCacheTag);
 
-  if (res.data?.order_group) {
+  const data = res.data;
+  const group =
+    typeof data === 'object' && data !== null &&
+    'order_group' in data && typeof data.order_group === 'object' &&
+    data.order_group !== null && 'id' in data.order_group &&
+    typeof data.order_group.id === 'string' &&
+    data.order_group.id.length > 0
+      ? data.order_group
+      : null;
+
+  if (group) {
     revalidatePath('/user/reviews');
     revalidatePath('/user/orders');
     removeCartId();
@@ -423,7 +463,7 @@ export async function placeOrder(cartId?: string) {
     // Send the shopper to the order-group detail page, which renders every
     // child order + aggregated totals. `order_group.id` is always present;
     // `orders[0].id` is not (the complete route omits `orders` from its fields).
-    redirect(`/user/orders/${res.data.order_group.id}`);
+    redirect(`/user/orders/${group.id}`);
   }
 
   return res;
@@ -463,7 +503,7 @@ export async function updateRegionWithValidation(
     throw new Error(`Region not found for country code: ${countryCode}`);
   }
 
-  let removedItems: string[] = [];
+  const removedItems: string[] = [];
 
   if (cartId) {
     const headers = {
@@ -472,12 +512,13 @@ export async function updateRegionWithValidation(
 
     try {
       await updateCart({ region_id: region.id });
-    } catch (error: any) {
-      if (!error?.message?.includes('do not have a price')) {
+    } catch (error: unknown) {
+      const message = getCartErrorMessage(error) ?? '';
+      if (!message.includes('do not have a price')) {
         throw error;
       }
 
-      const problematicVariantIds = parseVariantIdsFromError(error.message);
+      const problematicVariantIds = parseVariantIdsFromError(message);
 
       if (!problematicVariantIds.length) {
         throw new Error('Failed to parse variant IDs from error');

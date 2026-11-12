@@ -29,7 +29,23 @@ async function main(){
  const dir=await mkdtemp(path.join(os.tmpdir(),'r1-TEST_FIXTURE-')),nonce=new NativeFileAtomicNonceAdapter(dir)
  const deps={connectionString:u.toString(),privateKeyPem:privatePem,evidenceDirectory:dir,nonce,env,assertAuthority:async()=>{verifyR1ActivationInput(input,env)}}
 
- try { const result=await executeR1Activation(input,deps);assert.equal(result.outcome.status,'ARMED');const evidence=process.env.B06_EVIDENCE_DIR!;assert.ok(evidence.startsWith(process.env.RUNNER_TEMP!+'/'));await mkdir(evidence,{recursive:true});await writeFile(path.join(evidence,'activation.json'),JSON.stringify({label:'TEST_FIXTURE NOT_AUTHORITY',source:sha,status:result.outcome.status,entities:result.evidence.committedEntities.length,manifestSha256:createHash('sha256').update(canonical(manifest)).digest('hex'),armedSha256:createHash('sha256').update(canonical(result.outcome)).digest('hex'),at:new Date().toISOString()}));console.log('PASS B06 disposable native activation via existing R1 CAS/readback; TEST_FIXTURE NOT_AUTHORITY') } finally { await rm(dir,{recursive:true,force:true}) }
+ // Diagnose a refused pre-write R1 preflight only on this disposable CI DB.
+ // Print numeric counts/booleans, never identities, DB identifiers or signer material.
+ const brief=(v:any)=>({latch_off:v?.latch===false,version_one:v?.version===1,
+   users:v?.users,identities:v?.identities,people:v?.people,
+   mappings:v?.mappings,bindings:v?.bindings,factors:v?.factors,
+   recovery:v?.recovery,guards:v?.guards,other_sessions:v?.other_sessions})
+ try { const result=await executeR1Activation(input,deps);assert.equal(result.outcome.status,'ARMED');const evidence=process.env.B06_EVIDENCE_DIR!;assert.ok(evidence.startsWith(process.env.RUNNER_TEMP!+'/'));await mkdir(evidence,{recursive:true});await writeFile(path.join(evidence,'activation.json'),JSON.stringify({label:'TEST_FIXTURE NOT_AUTHORITY',source:sha,status:result.outcome.status,entities:result.evidence.committedEntities.length,manifestSha256:createHash('sha256').update(canonical(manifest)).digest('hex'),armedSha256:createHash('sha256').update(canonical(result.outcome)).digest('hex'),at:new Date().toISOString()}));console.log('PASS B06 disposable native activation via existing R1 CAS/readback; TEST_FIXTURE NOT_AUTHORITY') } catch(error) {
+   if(String(error).includes('REFUSED: R1 clean state')){
+     let after:any=null
+     const observation=new Client({connectionString:u.toString()})
+     try{await observation.connect();after=brief(await readR1Readiness(observation))}
+     catch{after={unavailable:true}}
+     finally{await observation.end().catch(()=>{})}
+     console.error('B22_DISPOSABLE_R1_PREFLIGHT_COUNTS '+JSON.stringify({before:brief(facts),after}))
+   }
+   throw error
+ } finally { await rm(dir,{recursive:true,force:true}) }
 }
 main().then(()=>process.exit(0)).catch((err)=>{console.error('B06 activation failed:',err instanceof Error?err.stack:String(err));process.exit(1)})
 

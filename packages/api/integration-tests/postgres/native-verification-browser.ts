@@ -159,7 +159,7 @@ export async function verifyNativeBrowser({
     )
     const customerRead = orderPage.indexOf("const user = await retrieveCustomer()")
     const accessDecision = orderPage.indexOf('if (!user) return redirect("/login")')
-    const orderRead = orderPage.indexOf("const orderGroup = (await retrieveOrderGroup(id))")
+    const orderRead = orderPage.indexOf("await retrieveOrderGroup(id)")
     assert.ok(
       customerRead >= 0 && customerRead < accessDecision && accessDecision < orderRead,
       "Order detail must check the customer before fetching a private order group",
