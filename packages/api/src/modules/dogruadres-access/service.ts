@@ -6215,6 +6215,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       store_name:string;stage:string;source_request_id:string;request_reason:string
     }>=[]
     for(const item of rows.slice(0,30)){
+      if(!(await platformApprovedSellerIds(db,item.organization_id)).includes(item.seller_id))
+        throw new IdentityAccessDenied()
       const row=await this.platformClosingRow_(db,item.seller_id)
       if(!row||row.organization_id!==item.organization_id||
          row.review_decision_request_id!==null||
@@ -6265,6 +6267,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const row=await this.platformClosingRow_(db,input.seller_id,true)
     if(!row||row.organization_id!==input.organization_id)
       return {status:"conflict" as const}
+    // A historical closure audit is not a current Organization/Store grant.
+    // Revalidate the canonical approved native Seller relationship at write.
+    if(!(await platformApprovedSellerIds(db,input.organization_id)).includes(input.seller_id))
+      return null
     const sourceId=row.appeal_request_id??row.final_review_request_id
     if(sourceId!==input.source_request_id||sourceId===null)
       return {status:"conflict" as const}
