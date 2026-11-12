@@ -1715,8 +1715,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // status and private rejection reason require today's verified, unrevoked
     // Organization↔Store association (including canonical audit/outbox).
     // This is a server-internal hint, never part of the public response.
-    const currentSellerIds=new Set(applications.length?
-      await platformApprovedSellerIds(db,org):[])
+    // Only currently displayed, structurally valid created-application
+    // Sellers can need live native state. Other verified Stores in this
+    // Organization must not exhaust a global 50-Store authorization cap.
+    const sellerCandidates=[...new Set(applications
+      .filter(app=>app.status==="created"&&typeof app.seller_id==="string"&&
+        /^sel_[A-Za-z0-9_-]+$/.test(app.seller_id))
+      .map(app=>app.seller_id as string))]
+    const currentSellerIds=new Set(sellerCandidates.length?
+      await platformApprovedSellerIds(db,org,sellerCandidates):[])
     const scopedApplications=applications.map(app=>({
       ...app,live_seller_authorized:app.status==="created" &&
         typeof app.seller_id==="string" && currentSellerIds.has(app.seller_id)
