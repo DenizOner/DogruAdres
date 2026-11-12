@@ -133,7 +133,7 @@ const CartShippingMethodsSection: FC<ShippingProps> = ({ cart, availableShipping
     setError(null);
   }, [isOpen]);
 
-  const groupedBySellerId = _shippingMethods?.reduce<Record<string, SellerShippingMethod[]>>((acc, method) => {
+  const groupedBySellerId = (_shippingMethods ?? []).reduce<Record<string, SellerShippingMethod[]>>((acc, method) => {
     const sellerId = method.seller_id;
 
     if (!acc[sellerId]) {

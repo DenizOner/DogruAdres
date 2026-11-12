@@ -37,7 +37,7 @@ export const PromoCode = ({ cart, defaultOpen = false }: { cart: HttpTypes.Store
       const result = await applyPromotions([promoCode]);
 
       if (!result.success) {
-        toast.info({ title: result.error });
+        toast.info({ title: result.error ?? 'Unable to apply promotion code' });
         setHasError(true);
         return;
       }
