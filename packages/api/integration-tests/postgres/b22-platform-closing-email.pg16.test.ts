@@ -759,7 +759,12 @@ async function main(){
         await q("update da_organization_membership "+
           "set status='revoked',revoked_at=clock_timestamp() "+
           "where person_id=$1",[owner])
-      }finally{revokeGate.release();beforeOwnerSmtpConfig=null}
+      }finally{
+        revokeGate.release();beforeOwnerSmtpConfig=null
+        // Even a failed assertion may not erase the disposable schema while
+        // the worker is still running.
+        await Promise.allSettled([revokeWorker])
+      }
       await revokeWorker
       assert.equal(observed.dataMessages,beforeRevokeData,
         "Revocation committed before the final fence must prevent SMTP DATA")
@@ -768,6 +773,7 @@ async function main(){
       assert.equal(revokedAttempt.attempts,1)
       assert.equal(revokedAttempt.last_result,"invalidated")
       assert.equal(revokedAttempt.accepted_at,null)
+      process.stdout.write("PASS B22 Owner mail race: revocation COMMIT before SMTP DATA suppressed\\n")
       await q("update da_organization_membership "+
         "set status='active',revoked_at=null where person_id=$1",[owner])
 
@@ -786,7 +792,10 @@ async function main(){
         assert.equal(claimed.attempts,1)
         assert.equal(claimed.last_result,"inflight")
         await withdrawOwnerClosingFixture(withdrawnSeller)
-      }finally{withdrawGate.release();beforeOwnerSmtpConfig=null}
+      }finally{
+        withdrawGate.release();beforeOwnerSmtpConfig=null
+        await Promise.allSettled([withdrawWorker])
+      }
       await withdrawWorker
       assert.equal(observed.dataMessages,beforeWithdrawData,
         "Withdrawal committed before final fence must prevent stale SMTP DATA")
@@ -796,6 +805,7 @@ async function main(){
       assert.equal(withdrawnAttempt.accepted_at,null)
       assert.equal((await q("select state from da_store_owner_closing "+
         "where seller_id=$1",[withdrawnSeller]))[0].state,"withdrawn")
+      process.stdout.write("PASS B22 Owner mail race: withdrawal COMMIT before SMTP DATA suppressed\\n")
       // The newly created withdrawal receipt is intentionally not mailed
       // without its own canonical per-recipient source receipt.
 
@@ -816,7 +826,10 @@ async function main(){
           "set status='revoked',revoked_at=clock_timestamp() "+
           "where person_id=$1 returning id",[owner])
         await assertRealPgLockWait("update da_organization_membership")
-      }finally{ackGate.release();holdSmtpDataAck=null}
+      }finally{
+        ackGate.release();holdSmtpDataAck=null
+        await Promise.allSettled([sendFirstWorker,...(blockedRevoke?[blockedRevoke]:[])])
+      }
       await sendFirstWorker
       if(blockedRevoke)await blockedRevoke
       const [sentFirstAttempt]=await q("select attempts,last_result,accepted_at "+
@@ -825,6 +838,7 @@ async function main(){
       assert.ok(sentFirstAttempt.accepted_at)
       assert.equal((await q("select status from da_organization_membership "+
         "where person_id=$1",[owner]))[0].status,"revoked")
+      process.stdout.write("PASS B22 Owner mail race: SMTP DATA first blocked revoked membership COMMIT\\n")
       await q("update da_organization_membership "+
         "set status='active',revoked_at=null where person_id=$1",[owner])
 
@@ -843,7 +857,10 @@ async function main(){
         assert.equal(observed.dataMessages,beforeSecondAck+1)
         blockedWithdraw=withdrawOwnerClosingFixture(sentThenWithdrawSeller)
         await assertRealPgLockWait("update da_store_owner_closing")
-      }finally{ackWithdraw.release();holdSmtpDataAck=null}
+      }finally{
+        ackWithdraw.release();holdSmtpDataAck=null
+        await Promise.allSettled([sendThenWithdrawWorker,...(blockedWithdraw?[blockedWithdraw]:[])])
+      }
       await sendThenWithdrawWorker
       if(blockedWithdraw)await blockedWithdraw
       const [sentThenWithdrawAttempt]=await q("select last_result,accepted_at "+
