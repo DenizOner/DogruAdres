@@ -4,7 +4,8 @@
  */
 import assert from "node:assert/strict"
 import {createHash,randomBytes} from "node:crypto"
-import type {B06Chrome} from "./b06-ui-browser"
+import {B06Chrome} from "./b06-ui-browser"
+import {otp} from "./b19-browser"
 import {runPlatformClosingEmailTick} from "../../src/jobs/dogruadres-platform-closing-email"
 
 type Db=(sql:string,params?:unknown[])=>Promise<any[]>
@@ -859,4 +860,305 @@ export async function verifyB22PlatformClosingSecondStageRequest(input:{
     item.title==="Üst inceleme başvurusu kaydedildi"),
     "The Owner must see a private, actor-neutral review receipt")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: synthetic T0+11d second-stage Owner request, real protected Owner/foreign Staff/CSRF/replay, one durable audit/outbox and private notice; Store stays closed, original 10+20 clock unchanged; stage time fixture is synthetic, real Owner Chrome form submitted and confirmed\n")
+}
+
+/** Real third Person and distinct Staff review task. Runs only in isolated
+ * B22 native Chrome/HTTPS/PG16 acceptance after the Owner's second-stage
+ * form has already created an unreviewed request.
+ */
+export async function verifyB22IndependentStaffClosingDecision(input:{
+  host:string;crt:string;browsers:B06Chrome[];
+  ownerBrowser:B06Chrome;initialStaff:B06Chrome;
+  q:Db;foundation:any;organizationId:string;
+  reviewSellerId:string;initialSellerId:string;
+  ownerPersonId:string;originalStaffPersonId:string
+}):Promise<void>{
+  const {host,crt,browsers,ownerBrowser,initialStaff,q,foundation,
+    organizationId,reviewSellerId,initialSellerId,
+    ownerPersonId,originalStaffPersonId}=input
+  const path="/personal/platform/store-closing-reviews"
+  const ownerPath="/personal/store-platform-closing?"+
+    new URLSearchParams({organization_id:organizationId,seller_id:reviewSellerId})
+  const before=await q("select c.final_review_request_id,c.final_review_requested_at,"+
+    "c.deadline_started_at,c.state from da_store_platform_closing c "+
+    "where c.seller_id=$1",[reviewSellerId])
+  assert.equal(before.length,1)
+  assert.equal(before[0].state,"notification_unverified")
+  assert.match(before[0].final_review_request_id,/^dasfr_[a-f0-9]{32}$/)
+  assert.equal((await read(initialStaff,path)).status,403,
+    "Original closing Staff without the separate task cannot read private reviews")
+
+  const independent=new B06Chrome(host,"B");browsers.push(independent)
+  await independent.start(crt)
+  const email="b22-closing-review-"+randomBytes(10).toString("hex")+"@example.invalid"
+  const password="Task-Strong-"+randomBytes(18).toString("hex")
+  await independent.click("#register-details summary")
+  await independent.input("#register input[name=first_name]","Synthetic")
+  await independent.input("#register input[name=last_name]","ClosureReviewer")
+  await independent.input("#register input[name=email]",email)
+  await independent.input("#register input[name=mobile_phone]","+905551234581")
+  await independent.input("#register input[name=password]",password)
+  await independent.click("#register button")
+  await independent.wait("document.getElementById('status').textContent.includes('Kişi hesabı kaydedildi')")
+  await independent.input("#login input[name=email]",email)
+  await independent.input("#login input[name=password]",password)
+  await independent.click("#login button")
+  await independent.wait("!document.getElementById('workspace').hidden || !document.getElementById('mfa-enrollment').hidden")
+  if(await independent.eval("!document.getElementById('mfa-enrollment').hidden")){
+    await independent.input("#mfa-enroll-start input[name=email]",email)
+    await independent.input("#mfa-enroll-start input[name=password]",password)
+    await independent.click("#mfa-enroll-start button")
+    await independent.wait("!document.getElementById('mfa-enroll-verify').hidden && document.getElementById('mfa-seed').value.length>0")
+    const url=await independent.eval("document.getElementById('mfa-seed').value")
+    const seed=url.startsWith("otpauth:")?new URL(url).searchParams.get("secret"):url
+    assert.ok(seed)
+    await independent.input("#mfa-enroll-verify input[name=code]",otp(seed!))
+    await independent.click("#mfa-enroll-verify button")
+  }
+  await independent.wait("!document.getElementById('workspace').hidden")
+  const beforeStrong=await independent.token()
+  assert.match(beforeStrong??"",/^[A-Za-z0-9_-]{43}$/)
+  const strongRows=await q("select last_strong_auth_at from da_browser_session "+
+    "where id=$1",[createHash("sha256").update(beforeStrong!).digest("hex")])
+  assert.equal(strongRows.length,1)
+  if(!strongRows[0].last_strong_auth_at){
+    // Optional MFA enrollment also must be completed through the actual UI:
+    // a synthetic Staff grant never upgrades a non-strong Person session.
+    await independent.wait("!document.getElementById('mfa-person').hidden")
+    assert.equal(await independent.eval(
+      "!document.getElementById('mfa-enroll-launch').hidden"),true)
+    await independent.click("#mfa-enroll-launch")
+    await independent.input("#mfa-enroll-start input[name=email]",email)
+    await independent.input("#mfa-enroll-start input[name=password]",password)
+    await independent.click("#mfa-enroll-start button")
+    await independent.wait("!document.getElementById('mfa-enroll-verify').hidden&&"+
+      "document.getElementById('mfa-seed').value.length>0")
+    const enrolled=await independent.eval("document.getElementById('mfa-seed').value")
+    const seed=enrolled.startsWith("otpauth:")?
+      new URL(enrolled).searchParams.get("secret"):enrolled
+    assert.ok(seed)
+    await independent.input("#mfa-enroll-verify input[name=code]",otp(seed!))
+    await independent.click("#mfa-enroll-verify button")
+    await independent.wait("!document.getElementById('workspace').hidden")
+  }
+  const active=await independent.token()
+  assert.match(active??"",/^[A-Za-z0-9_-]{43}$/)
+  const proof=await q("select last_strong_auth_at from da_browser_session "+
+    "where id=$1",[createHash("sha256").update(active!).digest("hex")])
+  assert.equal(proof.length,1)
+  assert.ok(proof[0].last_strong_auth_at,
+    "Independent Staff review must use real current native strong MFA")
+  const ids=await q("select b.person_id from da_login_binding b "+
+    "join public.customer c on c.id=b.actor_id where b.actor_type='customer' "+
+    "and c.email=$1 and b.revoked_at is null and b.verified_at is not null",[email])
+  assert.equal(ids.length,1)
+  const reviewerId=ids[0].person_id as string
+  assert.notEqual(reviewerId,ownerPersonId)
+  assert.notEqual(reviewerId,originalStaffPersonId)
+  assert.equal((await read(independent,path)).status,403,
+    "Strong but ungranted Staff cannot read private decisions")
+  let grantId="da_staff_b22_review_"+randomBytes(8).toString("hex")
+  await q("insert into da_platform_staff_grant "+
+    "(id,person_id,task,resource,granted_by_person_id,reason) "+
+    "values ($1,$2,'store.closing.review','platform',$2,"+
+    "'B22 task-only independent reviewer grant')",[grantId,reviewerId])
+  // The original Staff may be granted the same task, but cannot decide a
+  // closure that they personally initiated. This test-only grant is revoked.
+  const originalGrant="da_staff_b22_original_"+randomBytes(8).toString("hex")
+  await q("insert into da_platform_staff_grant "+
+    "(id,person_id,task,resource,granted_by_person_id,reason) "+
+    "values ($1,$2,'store.closing.review','platform',$2,"+
+    "'B22 task-only original Staff negative')",[originalGrant,originalStaffPersonId])
+
+  const opened=await read(independent,path)
+  assert.equal(opened.status,200)
+  assert.ok(Array.isArray(opened.body?.candidates))
+  const caseItem=opened.body.candidates.find((c:any)=>c.seller_id===reviewSellerId)
+  assert.ok(caseItem,"Reviewer must see the exact, independently filed request")
+  assert.equal(caseItem.stage,"second_review")
+  assert.equal(caseItem.source_request_id,before[0].final_review_request_id)
+  assert.equal(opened.body.candidates.some((c:any)=>c.seller_id===initialSellerId),true,
+    "Independent reviewer may see another pending first appeal")
+  assert.ok(typeof caseItem.request_reason==="string"&&caseItem.request_reason.length>10)
+  // Force a real in-flight GET to pass its initial Staff check while the
+  // revocation has not committed. The final same-grant FOR SHARE must wait
+  // for that concurrent PostgreSQL transaction, then reject the private
+  // reason after the revoke commits. No sleeps or mocks on the HTTP route.
+  await q("begin")
+  let revokedCommitted=false
+  let inFlight:Promise<{status:number;body:any}>|undefined
+  try{
+    const changed=await q("update da_platform_staff_grant "+
+      "set revoked_at=clock_timestamp() "+
+      "where id=$1 and revoked_at is null returning id",[grantId])
+    assert.equal(changed.length,1)
+    // Match the PostgreSQL *blocking relationship*, not SQL text as seen
+    // in pg_stat_activity: the Medusa driver may use a prepared statement
+    // name instead of the literal FOR SHARE query in that diagnostic field.
+    const [{pid:revokerPid}]=await q("select pg_backend_pid()::int as pid")
+    let requestSettled=false
+    inFlight=read(independent,path).catch(()=>({status:0,body:null}))
+      .then(response=>{requestSettled=true;return response})
+    let waitingForGrant=false
+    for(let attempt=0;attempt<200;attempt++){
+      const blocked=await q("select count(*)::int n from pg_stat_activity "+
+        "where pid<>$1 and $1=any(pg_blocking_pids(pid))",[revokerPid])
+      if(Number(blocked[0]?.n)>0){waitingForGrant=true;break}
+      if(requestSettled)break
+      await new Promise(resolve=>setTimeout(resolve,50))
+    }
+    assert.equal(waitingForGrant,true,
+      "Real private GET must be blocked by the task-only grant revocation transaction; "+
+      "request_finished_early="+requestSettled)
+    await q("commit")
+    revokedCommitted=true
+    const denied=await inFlight
+    assert.equal(denied.status,403,
+      "GET overlapping committed Staff revocation must deny private appeals")
+    assert.equal(JSON.stringify(denied.body).includes(caseItem.request_reason),false,
+      "Private Owner appeal reason cannot escape during task revocation")
+    assert.equal((await read(independent,path)).status,403,
+      "A fresh GET after committed revocation is also denied")
+  }finally{
+    if(!revokedCommitted)await q("rollback")
+    if(inFlight)await inFlight
+  }
+  // This synthetic reviewer may be re-authorized only by a NEW task grant,
+  // never by clearing the revoked grant. All test rows are disposable.
+  grantId="da_staff_b22_review_regrant_"+randomBytes(8).toString("hex")
+  await q("insert into da_platform_staff_grant "+
+    "(id,person_id,task,resource,granted_by_person_id,reason) "+
+    "values ($1,$2,'store.closing.review','platform',$2,"+
+    "'B22 fresh grant after in-flight revocation negative')",[grantId,reviewerId])
+  assert.equal((await read(independent,path)).status,200)
+  const payload={organization_id:organizationId,seller_id:reviewSellerId,
+    source_request_id:caseItem.source_request_id,
+    request_id:"dasdr_"+randomBytes(16).toString("hex"),
+    decision:"accepted",reason:"Başvurudaki gerekçeler incelendi; itiraz yerinde bulundu"}
+  assert.equal((await write(independent,path,payload,true)).status,403)
+  assert.equal((await write(initialStaff,path,payload)).status,403,
+    "Even a separately granted original decision maker cannot judge their own case")
+  const noDecision=await q("select review_decision_request_id from da_store_platform_closing "+
+    "where seller_id=$1",[reviewSellerId])
+  assert.equal(noDecision[0].review_decision_request_id,null)
+  // Trigger the already-bound refresh from an authorized real Chrome session.
+  await independent.eval("document.getElementById('platform-closing-review-refresh').onclick()")
+  await independent.wait("!document.getElementById('platform-closing-review-panel').hidden && "+
+    "document.querySelectorAll('#platform-closing-review-list form').length>0")
+  // Untrusted Store IDs cross CDP only as typed call arguments, never
+  // interpolated into a JavaScript expression or CSS selector in click().
+  const selected=await independent.callFunction(
+    "function(seller){const f=Array.from(document.querySelectorAll("+
+    "'#platform-closing-review-list form')).find(x=>x.dataset.sellerId===seller);"+
+    "if(!f)return false;f.dataset.b22Selected='true';"+
+    "f.querySelector('select[name=decision]').value='accepted';return true}",
+    reviewSellerId)
+  assert.equal(selected,true)
+  const selector="#platform-closing-review-list form[data-b22-selected=true]"
+  await independent.input(selector+" textarea[name=reason]",payload.reason)
+  await independent.click(selector+" button[type=submit]")
+  await independent.wait("!document.querySelector("+
+    JSON.stringify(selector)+")")
+  const stored=await q("select c.review_decision_request_id,c.review_decision,"+
+    "c.review_decision_reason,c.review_decision_audit_event_id,c.review_decided_by_person_id,"+
+    "c.deadline_started_at,c.state from da_store_platform_closing c where c.seller_id=$1",
+    [reviewSellerId])
+  assert.equal(stored.length,1)
+  assert.match(stored[0].review_decision_request_id,/^dasdr_[a-f0-9]{32}$/)
+  assert.equal(stored[0].review_decision,"accepted")
+  assert.equal(stored[0].review_decision_reason,payload.reason)
+  assert.equal(stored[0].review_decided_by_person_id,reviewerId)
+  assert.equal(stored[0].deadline_started_at.toISOString(),
+    before[0].deadline_started_at.toISOString())
+  assert.equal(stored[0].state,before[0].state)
+  const eventRows=await q("select e.action,e.role_context,e.new_values,"+
+    "o.envelope from da_audit_event e join da_audit_outbox o "+
+    "on o.source_audit_event_id=e.id where e.id=$1",
+    [stored[0].review_decision_audit_event_id])
+  assert.equal(eventRows.length,1)
+  assert.equal(eventRows[0].action,"organization.store_platform_closing_review_decided")
+  assert.equal(eventRows[0].role_context,"platform_staff")
+  assert.equal(eventRows[0].new_values.reason_sha256,
+    createHash("sha256").update(payload.reason).digest("hex"))
+  assert.equal(JSON.stringify(eventRows).includes(payload.reason),false)
+  assert.equal((await q("select count(*)::int n from da_notification_receipt "+
+    "where audit_event_id=$1",[stored[0].review_decision_audit_event_id]))[0].n>=1,true)
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([reviewSellerId]),false,
+    "Review accepted does not reopen Seller or enable checkout")
+  const same=await write(independent,path,{...payload,
+    request_id:stored[0].review_decision_request_id})
+  assert.equal(same.status,200)
+  assert.equal(same.body?.replayed,true)
+  assert.equal((await write(independent,path,payload)).status,409,
+    "A different request id cannot overwrite the reasoned decision")
+  const privateOwner=await read(ownerBrowser,ownerPath)
+  assert.equal(privateOwner.status,200)
+  assert.equal(privateOwner.body?.review_decision,"accepted")
+  assert.equal(privateOwner.body?.review_decision_reason,payload.reason)
+  await ownerBrowser.click("#store-platform-appeal-refresh")
+  await ownerBrowser.wait("document.getElementById('store-platform-review-decision').textContent.includes("+
+    JSON.stringify(payload.reason)+")")
+  const privateNotice=await read(ownerBrowser,"/personal/notifications")
+  assert.equal(privateNotice.status,200)
+  assert.ok(privateNotice.body?.notifications?.some((x:any)=>
+    x.title==="Mağaza itirazı hakkında gerekçeli karar verildi"))
+  // A different pending FIRST appeal is also decided, under two real
+  // concurrent HTTPS writes from this same independently authorized reviewer.
+  // It must allow one decision only, with rejected status and no sale reopening.
+  const firstPending=opened.body.candidates.find((c:any)=>
+    c.seller_id===initialSellerId&&c.stage==="first_appeal")
+  assert.ok(firstPending)
+  const reason="İlk itiraz incelendi; platform kararı korunuyor ve satışlar kapalı"
+  const two=[
+    {organization_id:firstPending.organization_id,seller_id:initialSellerId,
+     source_request_id:firstPending.source_request_id,
+     request_id:"dasdr_"+randomBytes(16).toString("hex"),
+     decision:"rejected",reason},
+    {organization_id:firstPending.organization_id,seller_id:initialSellerId,
+     source_request_id:firstPending.source_request_id,
+     request_id:"dasdr_"+randomBytes(16).toString("hex"),
+     decision:"rejected",reason}
+  ]
+  const pair=await independent.callFunction(
+    "async function(raw){const items=JSON.parse(raw);"+
+    "const s=await(await fetch('/personal/session')).json();"+
+    "return await Promise.all(items.map(async p=>{"+
+    "const r=await fetch('/personal/platform/store-closing-reviews',"+
+    "{method:'POST',headers:{'content-type':'application/json',"+
+    "'x-csrf-token':s.csrf_token},body:JSON.stringify(p)});"+
+    "return {status:r.status,body:await r.json()}}))}",
+    JSON.stringify(two))
+  assert.deepEqual(pair.map((p:any)=>p.status).sort(),[200,409])
+  const firstStored=(await q("select state,review_decision,review_decision_request_id,"+
+    "review_decision_audit_event_id from da_store_platform_closing "+
+    "where seller_id=$1",[initialSellerId]))[0]
+  assert.equal(firstStored.state,"appealed")
+  assert.equal(firstStored.review_decision,"rejected")
+  assert.ok(two.some(x=>x.request_id===firstStored.review_decision_request_id))
+  assert.equal((await q("select count(*)::int n from da_audit_event "+
+    "where id=$1 and action='organization.store_platform_closing_review_decided'",
+    [firstStored.review_decision_audit_event_id]))[0].n,1)
+  assert.equal((await q("select count(*)::int n from da_audit_outbox "+
+    "where source_audit_event_id=$1",[firstStored.review_decision_audit_event_id]))[0].n,1)
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([initialSellerId]),false)
+  // Current protected Organization Owner cannot self-judge by acquiring a
+  // Staff task grant; the source and decision authority remain separate.
+  const ownerGrant="da_staff_b22_owner_"+randomBytes(8).toString("hex")
+  await q("insert into da_platform_staff_grant "+
+    "(id,person_id,task,resource,granted_by_person_id,reason) "+
+    "values ($1,$2,'store.closing.review','platform',$2,"+
+    "'B22 task-only Owner self-review negative')",[ownerGrant,ownerPersonId])
+  assert.equal((await write(ownerBrowser,path,{
+    ...two[0],request_id:firstStored.review_decision_request_id})).status,403,
+    "Protected Owner cannot judge their own Organization even with a Staff task")
+  await q("update da_platform_staff_grant set revoked_at=clock_timestamp() "+
+    "where id=$1",[ownerGrant])
+
+  // Revocation denies even a historically accepted idempotent replay.
+  await q("update da_platform_staff_grant set revoked_at=clock_timestamp() "+
+    "where id in ($1,$2)",[grantId,originalGrant])
+  assert.equal((await read(independent,path)).status,403)
+  assert.equal((await write(independent,path,{
+    ...payload,request_id:stored[0].review_decision_request_id})).status,403)
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent third Person strong Staff review decision, original Staff self-review denied, private Owner reason/notice, immutable clock and sales block; repeat idempotent, first-stage parallel single decision, revoked grant denied\n")
 }

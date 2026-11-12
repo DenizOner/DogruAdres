@@ -328,6 +328,17 @@ test('real public email CORS enforces configured Storefront origin and exact JSO
   }
 })
 
+test('B22 independent Staff decision exposes exact protected GET/POST only',()=>{
+  const path='/personal/platform/store-closing-reviews'
+  for(const method of ['GET','POST'])
+    assert.equal(allowedPublicRequest(method,path),true)
+  for(const method of ['PUT','PATCH','DELETE','OPTIONS'])
+    assert.equal(allowedPublicRequest(method,path),false)
+  for(const nested of [path+'/id',path+'/',path+'/native'])
+    for(const method of ['GET','POST'])
+      assert.equal(allowedPublicRequest(method,nested),false)
+})
+
 test('B22 second-stage Owner review accepts exact POST only at the public TLS ingress',()=>{
   const path='/personal/store-platform-closing-final-review'
   assert.equal(allowedPublicRequest('POST',path),true)

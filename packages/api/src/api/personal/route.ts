@@ -255,6 +255,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="platform-closing-refresh">Mağazaları yenile</button>
     <button type="button" id="platform-closing-more" hidden>Diğer mağazalar</button>
   </section>
+  <section id="platform-closing-review-panel" hidden style="grid-column:1/-1"
+    aria-labelledby="platform-closing-review-title">
+    <h2 id="platform-closing-review-title">Bağımsız mağaza kapatma incelemesi</h2>
+    <p>Yalnız açık platform inceleme görevi ve güncel güçlü girişle gerekçeli karar verilebilir.
+    Kapatmayı başlatan görevli aynı dosyayı karara bağlayamaz. Karar yeni satışları kendiliğinden açmaz.</p>
+    <p id="platform-closing-review-status" role="status" aria-live="polite"></p>
+    <div id="platform-closing-review-list"></div>
+    <button type="button" id="platform-closing-review-refresh">Dosyaları yenile</button>
+    <button type="button" id="platform-closing-review-more" hidden>Diğer dosyalar</button>
+  </section>
   <section id="store-approval-panel" hidden style="grid-column:1/-1">
     <h2>Platform mağaza onayları</h2>
     <p>Yalnız açık mağaza onay görevi ve güncel güçlü giriş ile bekleyen mağazalar onaylanabilir. Kuruluş ile mağaza bağı başvuruda kurulmuştur; ayrıca ilişki onayı yapılmaz.</p>
@@ -366,6 +376,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <p>Kapatma gerekçesini güvenle inceleyebilirsiniz. Satışlar platform kararıyla hemen durur. 10+20 günlük itiraz süresi güvenilir e-posta teslimiyle veya dört gönderim girişimi sonrasında zorunlu yönetici uyarısı güvenle kaydedilince başlayabilir. Kesin kapatma ayrı inceleme ve güvenlik koşullarına bağlıdır.</p>
       <p id="store-platform-appeal-reason"></p>
       <p id="store-platform-appeal-status" role="status" aria-live="polite"></p>
+      <p id="store-platform-review-decision" hidden></p>
       <form id="store-platform-appeal-form">
         <label>İtiraz gerekçesi<textarea name="reason" minlength="10" maxlength="500" rows="3" required></textarea></label>
         <button type="submit" disabled>İtirazı gönder</button>
@@ -549,7 +560,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const renameWrite=path==='store-rename-requests'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
-    const closingWrite=['store-owner-closing','store-platform-closing','store-platform-closing-final-review','platform/store-closings','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
+    const closingWrite=['store-owner-closing','store-platform-closing','store-platform-closing-final-review','platform/store-closings','platform/store-closing-reviews','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
     const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite;
     let data;
     try{
@@ -4258,7 +4269,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
   el('org-stores-refresh').onclick=()=>{if(currentOrg)void organizationStores(currentOrg,organizationRequest)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;clearOrganizationReviews();try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshPlatformClosings();void refreshStoreRenameReviews();void refreshOrganizationReviews();
+  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;clearOrganizationReviews();try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshPlatformClosings();void refreshPlatformClosingReviews();void refreshStoreRenameReviews();void refreshOrganizationReviews();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
@@ -4266,7 +4277,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
-    clearMemberships();clearOrganizationStores();clearStoreApprovals();clearStoreRenameReviews();for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
+    clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPlatformClosingReviews();clearStoreRenameReviews();for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings'])el(id).replaceChildren();status('Giriş gerekli')}}
   async function updateMfaForm(form,body){
     const button=form.querySelector('button');button.disabled=true;
     let uncertain=false;
@@ -4629,7 +4640,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
     clearPlatformStorePolicy();
-    clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPlatformClosings();clearStoreRenameReviews();clearPendingInvitations();clearOrganizationReviews();
+    clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPlatformClosings();clearPlatformClosingReviews();clearStoreRenameReviews();clearPendingInvitations();clearOrganizationReviews();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
     el('mfa-seed').value='';el('invite-member').hidden=true;status('Erişim yeniden doğrulanıyor');
@@ -4643,6 +4654,129 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }catch{if(epoch===viewEpoch){concealPrivateView();el('login').hidden=false;status('Erişim yeniden doğrulanmalı')}}
     finally{observing=false}
   }
+
+  // A platform closing initiator is NOT an independent reviewer. This
+  // workspace is populated only after an explicit store.closing.review grant.
+  let platformReviewRead=0,platformReviewPage=0,platformReviewBusy=false;
+  function clearPlatformClosingReviews(){
+    platformReviewRead++;platformReviewPage=0;platformReviewBusy=false;
+    el('platform-closing-review-panel').hidden=true;
+    el('platform-closing-review-status').textContent='';
+    el('platform-closing-review-list').replaceChildren();
+    el('platform-closing-review-more').hidden=true;
+  }
+  async function refreshPlatformClosingReviews(){
+    if(document.hidden||el('workspace').hidden)return;
+    const seq=++platformReviewRead,epoch=viewEpoch,page=platformReviewPage;
+    const panel=el('platform-closing-review-panel');
+    const statusEl=el('platform-closing-review-status');
+    try{
+      const data=await api('platform/store-closing-reviews?page='+page);
+      if(seq!==platformReviewRead||epoch!==viewEpoch||document.hidden)return;
+      if(data.page!==page||typeof data.has_more!=='boolean'||
+         !Array.isArray(data.candidates)||data.candidates.length>30||
+         data.candidates.some(x=>
+           !/^sel_[A-Za-z0-9_-]+$/.test(x?.seller_id)||
+           !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(x?.organization_id)||
+           !/^(dapa_|dasfr_)[a-f0-9]{32}$/.test(x?.source_request_id)||
+           !['first_appeal','second_review'].includes(x?.stage)||
+           typeof x.organization_name!=='string'||
+           typeof x.store_name!=='string'||
+           typeof x.request_reason!=='string'))
+        throw Error('Geçersiz inceleme kuyruğu');
+      const root=el('platform-closing-review-list');
+      root.replaceChildren();
+      for(const item of data.candidates){
+        const form=document.createElement('form');
+        form.dataset.sellerId=item.seller_id;
+        const heading=document.createElement('h3');
+        heading.textContent=item.organization_name+' / '+item.store_name;
+        const information=document.createElement('p');
+        information.textContent=(item.stage==='first_appeal'?
+          'İlk itiraz':'Bağımsız üst inceleme')+
+          ' — Başvuru gerekçesi: '+item.request_reason;
+        const label=document.createElement('label');
+        label.textContent='Gerekçeli inceleme kararı ';
+        const selector=document.createElement('select');
+        selector.name='decision';selector.required=true;
+        for(const [value,title] of [
+          ['accepted','İtirazı kabul et'],['rejected','İtirazı reddet']
+        ]){
+          const option=document.createElement('option');
+          option.value=value;option.textContent=title;selector.append(option);
+        }
+        label.append(selector);
+        const reasonLabel=document.createElement('label');
+        reasonLabel.textContent='Karar gerekçesi ';
+        const reason=document.createElement('textarea');
+        reason.name='reason';reason.required=true;
+        reason.minLength=10;reason.maxLength=500;reason.rows=3;
+        reasonLabel.append(reason);
+        const submit=document.createElement('button');
+        submit.type='submit';submit.textContent='Gerekçeli kararı kaydet';
+        const feedback=document.createElement('p');
+        feedback.setAttribute('role','status');
+        feedback.setAttribute('aria-live','polite');
+        form.append(heading,information,label,reasonLabel,submit,feedback);
+        form.onsubmit=async event=>{
+          event.preventDefault();
+          if(platformReviewBusy||document.hidden||submit.disabled)return;
+          const text=reason.value.trim();
+          if(text.length<10||text.length>500)return;
+          submit.disabled=true;platformReviewBusy=true;
+          feedback.textContent='Karar güvenli biçimde kaydediliyor…';
+          try{
+            const chosen=selector.value;
+            const result=await api('platform/store-closing-reviews',{
+              method:'POST',body:JSON.stringify({
+                organization_id:item.organization_id,seller_id:item.seller_id,
+                source_request_id:item.source_request_id,
+                request_id:'dasdr_'+crypto.randomUUID().replaceAll('-',''),
+                decision:chosen,reason:text
+              })
+            });
+            if(epoch!==viewEpoch||seq!==platformReviewRead||document.hidden)return;
+            if(result.status!=='decided'||result.decision!==chosen||
+               result.organization_id!==item.organization_id||
+               result.seller_id!==item.seller_id||
+               result.store_reopened!==false||
+               result.permanent_finalization_enabled!==false){
+              const err=Error('Karar sonucu doğrulanamadı');
+              err.uncertain=true;throw err;
+            }
+            feedback.textContent='Gerekçeli karar kaydedildi. Satışlar otomatik açılmaz.';
+            await refreshPlatformClosingReviews();
+          }catch(err){
+            if(epoch!==viewEpoch||seq!==platformReviewRead)return;
+            feedback.textContent=err.uncertain||err.httpStatus>=500?
+              'Karar sonucu belirsiz; tekrar göndermeyin. Önce kayıtları yenileyin.':
+              'Karar kaydedilemedi. Yetki ve güncel dosyayı yeniden doğrulayın.';
+          }finally{platformReviewBusy=false}
+        };
+        root.append(form);
+      }
+      panel.hidden=false;
+      statusEl.textContent=data.candidates.length?
+        'Bekleyen başvurular. Her karar ayrı, güçlü yetki ve gerekçe gerektirir.':
+        'Bu sayfada açık inceleme bulunmuyor.';
+      el('platform-closing-review-more').hidden=!data.has_more;
+    }catch(error){
+      if(seq!==platformReviewRead||epoch!==viewEpoch)return;
+      if([401,403].includes(error.httpStatus)){
+        clearPlatformClosingReviews();return;
+      }
+      panel.hidden=false;
+      el('platform-closing-review-list').replaceChildren();
+      el('platform-closing-review-more').hidden=true;
+      statusEl.textContent='İnceleme kaydı doğrulanamadı. Karar verilemez.';
+    }
+  }
+  el('platform-closing-review-refresh').onclick=()=>{
+    platformReviewPage=0;void refreshPlatformClosingReviews();
+  };
+  el('platform-closing-review-more').onclick=()=>{
+    if(platformReviewPage<1000){platformReviewPage++;void refreshPlatformClosingReviews()}
+  };
 
   // B22 platform 10+20 first stage: separate platform closing grant and
   // protected Owner appeal. No browser-computed deadline or implicit authority.
@@ -4821,6 +4955,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-platform-final-review-form').querySelector('button').disabled=true;
     el('store-platform-appeal-reason').textContent='';
     el('store-platform-appeal-status').textContent='';
+    el('store-platform-review-decision').textContent='';
+    el('store-platform-review-decision').hidden=true;
     const form=el('store-platform-appeal-form');
     if(typeof form?.reset==='function')form.reset();
     const button=typeof form?.querySelector==='function'?form.querySelector('button'):null;
@@ -4847,6 +4983,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          typeof data.first_appeal_open!=='boolean'||
          typeof data.final_review_open!=='boolean'||
          typeof data.final_review_requested!=='boolean'||
+         ![null,'accepted','rejected'].includes(data.review_decision)||
+         (data.review_decision!==null&&
+           (typeof data.review_decision_reason!=='string'||
+            typeof data.review_decided_at!=='string'))||
          data.permanent_finalization_enabled!==false||
          typeof data.mandatory_email_verified!=='boolean')
          throw Error('Geçersiz karar');
@@ -4855,7 +4995,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(data.state==='none')return;
       el('store-platform-appeal-reason').textContent=
         'Platform karar gerekçesi: '+data.reason;
-      msg.textContent=(data.final_review_requested?
+      const decisionText=el('store-platform-review-decision');
+      decisionText.hidden=data.review_decision===null;
+      decisionText.textContent=data.review_decision===null?'':(
+        (data.review_decision==='accepted'?'İtiraz kabul edildi. ':
+          'İtiraz reddedildi. ')+
+        'Kararın gerekçesi: '+data.review_decision_reason+
+        '. Satışlar ayrıca yetkili karar verilmeden yeniden açılmaz.');
+      msg.textContent=(data.review_decision!==null?
+        'İtiraz hakkında gerekçeli karar verildi. Satışlar kapalı.':
+        data.final_review_requested?
         'Bağımsız üst inceleme başvurusu kaydedildi; karar bekleniyor. Satışlar kapalı.':
         data.state==='appealed'?
         'İtiraz kaydedildi; sonuç bekleniyor. Satışlar kapalı.':

@@ -24,6 +24,7 @@ const resources = {
   "organization.store_platform_closing_started": "store-platform-closing",
   "organization.store_platform_closing_appealed": "store-platform-closing",
   "organization.store_platform_closing_final_review_requested": "store-platform-closing",
+  "organization.store_platform_closing_review_decided": "store-platform-closing",
   "organization.store_platform_closing_deadline_started": "store-platform-closing",
   "organization.store_application_right_disabled": "organization",
   "organization.store_application_right_enabled": "organization",
@@ -78,7 +79,8 @@ const schema = z.object({
   .refine(value => value.resource !== "store-platform-closing" ||
     (/^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id) &&
-     (value.action==="organization.store_platform_closing_started"
+     (["organization.store_platform_closing_started",
+        "organization.store_platform_closing_review_decided"].includes(value.action)
        ?value.actor.role_context==="platform_staff"
        :["organization.store_platform_closing_appealed",
           "organization.store_platform_closing_final_review_requested"].includes(value.action)
@@ -124,6 +126,7 @@ const schema = z.object({
     value.action === "organization.store_reactivation_released" ||
     value.action === "organization.store_reactivated" ||
     value.action === "organization.store_platform_closing_started" ||
+    value.action === "organization.store_platform_closing_review_decided" ||
     isCompanyPolicyAction(value.action))
 
 export type AuditIndexEnvelopeV1 = z.infer<typeof schema>
