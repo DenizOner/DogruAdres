@@ -6210,7 +6210,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       order by coalesce(c.final_review_requested_at,c.appealed_at),c.seller_id
       limit 31 offset ?`,[staff.person_id,page*30])
     if(rows.length>31)throw new IdentityAccessDenied()
-    const result=[]
+    const result:Array<{
+      seller_id:string;organization_id:string;organization_name:string;
+      store_name:string;stage:string;source_request_id:string;request_reason:string
+    }>=[]
     for(const item of rows.slice(0,30)){
       const row=await this.platformClosingRow_(db,item.seller_id)
       if(!row||row.organization_id!==item.organization_id||
