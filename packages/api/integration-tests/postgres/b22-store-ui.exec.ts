@@ -7378,13 +7378,18 @@ export default async function({container}:any){
     // buyer login or any automatic buyer.purchase permission.
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
-    // This part of the shared Buyer/Customer test can refresh the same
-    // personal workspace. Require a real, current Gamma membership button
-    // before clicking; a stale or wrong-Person DOM never grants authority.
+    // The same signed-in Owner's workspace can be stale after prior
+    // dual-proof/Buyer switches. Refresh the real Chrome document at most
+    // once, without spoofing session, Person or Organization membership.
+    const gammaButtonReady="!document.getElementById('workspace').hidden && "+
+      "Array.from(document.querySelectorAll('#organizations button')).some("+
+      "b=>b.textContent==="+JSON.stringify(sellerGamma.name+" — owner")+")"
+    if(!await browser.eval(gammaButtonReady)){
+      await browser.send("Page.reload",{ignoreCache:true})
+    }
+    // A still-missing real membership or expired session must fail closed.
     try{
-      await browser.wait("!document.getElementById('workspace').hidden && "+
-        "Array.from(document.querySelectorAll('#organizations button')).some("+
-        "b=>b.textContent==="+JSON.stringify(sellerGamma.name+" — owner")+")")
+      await browser.wait(gammaButtonReady)
     }catch{
       const state=await browser.callFunction(
         "function(){return {workspace:!document.getElementById('workspace')?.hidden,"+
