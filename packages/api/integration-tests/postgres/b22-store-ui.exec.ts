@@ -2582,6 +2582,23 @@ async function verifyRealNextStorefrontRenameUrls(
   assert.equal(nativeNew[0].id,storeId)
   assert.equal(nativeNew[0].name,rename.proposed_name)
 
+  // Next's first real Seller request initializes its country/Region middleware.
+  // A favicon-only readiness probe does not exercise this actual dependency.
+  // Verify the real installed Medusa GET and German country mapping before
+  // attributing a transient 500 to Seller rename or weakening HTTP assertions.
+  const nativeRegions=await fetch(backendOrigin+"/store/regions",{
+    headers:{"x-publishable-api-key":publishableKey},
+    signal:AbortSignal.timeout(15000)
+  })
+  assert.equal(nativeRegions.status,200,
+    "Disposable native Medusa Regions GET must work before Next's first page")
+  const regionBody=await nativeRegions.json() as {regions?:Array<{
+    countries?:Array<{iso_2?:string}>
+  }>}
+  assert.ok(regionBody.regions?.some(region=>
+    region.countries?.some(country=>country.iso_2==="de")),
+    "Disposable native Medusa Regions GET must expose the real de locale")
+
   const root=join(process.cwd(),"../../apps/storefront")
   const snapshot=join(temporaryDirectory,"b22-real-next-storefront")
   mkdirSync(snapshot,{recursive:false,mode:0o700})
@@ -2678,8 +2695,15 @@ async function verifyRealNextStorefrontRenameUrls(
         "backend-read":/TypeError|ReferenceError/i.test(lines)?
         "runtime-error":/region|locale/i.test(lines)?
         "region-resolution":"unclassified"
+      // If the first Next page fails, distinguish its middleware/renderer
+      // from the direct native Medusa Regions response, without logging PII.
+      const probe=await fetch(backendOrigin+"/store/regions",{
+        headers:{"x-publishable-api-key":publishableKey},
+        signal:AbortSignal.timeout(15000)
+      }).then(response=>response.status).catch(()=>0)
       throw new Error("Isolated legacy Store HTTP status "+former.status+
-        " (expected 404, no redirect); diagnostic="+reason)
+        " (expected 404, no redirect); diagnostic="+reason+
+        "; native_regions_status="+probe)
     }
     assert.equal(former.location,null,"Former Store URL may not redirect")
     assert.equal(former.status,404,
