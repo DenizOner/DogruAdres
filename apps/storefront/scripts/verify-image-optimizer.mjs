@@ -2,6 +2,9 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:net'
 import { spawn } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -64,24 +67,46 @@ try {
   assert.equal(fixtureResponse.status, 200, 'CI-only image test page must bypass Medusa locale middleware')
   assert.match(await fixtureResponse.text(), /image175-remote/, 'CI image fixture not rendered')
 
-  const browser = await new Promise((resolve, reject) => {
-    const chrome = spawn('google-chrome', [
-      '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
-      '--disable-background-networking', '--no-first-run',
-      '--virtual-time-budget=7000', '--dump-dom', base + '/images/image-175-ci-only',
-    ], { stdio: ['ignore', 'pipe', 'pipe'] })
-    let dom = ''
-    let errors = ''
-    chrome.stdout.on('data', (chunk) => { dom += String(chunk) })
-    chrome.stderr.on('data', (chunk) => { errors += String(chunk).slice(0, 3000) })
-    const timeout = setTimeout(() => chrome.kill('SIGKILL'), 35000)
-    chrome.once('error', reject)
-    chrome.once('close', (code) => {
-      clearTimeout(timeout)
-      if (code !== 0) return reject(Error('Real Chrome exit ' + code + ': ' + errors.slice(-1500)))
-      resolve(dom)
-    })
-  })
+  // Headless Chrome can occasionally stall during startup on shared CI hosts.
+  // Keep the real DOM assertion mandatory; only a proven watchdog timeout
+  // gets one isolated retry, never a failed HTTP/image assertion.
+  let browser = ''
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const profile = mkdtempSync(join(tmpdir(), 'dogruadres-image175-chrome-'))
+    try {
+      browser = await new Promise((resolve, reject) => {
+        const chrome = spawn('google-chrome', [
+          '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
+          '--disable-background-networking', '--no-first-run', '--no-default-browser-check',
+          '--user-data-dir=' + profile,
+          '--virtual-time-budget=7000', '--dump-dom', base + '/images/image-175-ci-only',
+        ], { stdio: ['ignore', 'pipe', 'pipe'] })
+        let dom = ''
+        let errors = ''
+        let timedOut = false
+        chrome.stdout.on('data', (chunk) => { dom += String(chunk) })
+        chrome.stderr.on('data', (chunk) => { errors += String(chunk).slice(0, 3000) })
+        const timeout = setTimeout(() => { timedOut = true; chrome.kill('SIGKILL') }, 35000)
+        chrome.once('error', reject)
+        chrome.once('close', (code) => {
+          clearTimeout(timeout)
+          if (timedOut) {
+            const failure = Error('Real Chrome startup watchdog timed out: ' + errors.slice(-1500))
+            failure.code = 'CHROME_TIMEOUT'
+            return reject(failure)
+          }
+          if (code !== 0) return reject(Error('Real Chrome exit ' + code + ': ' + errors.slice(-1500)))
+          resolve(dom)
+        })
+      })
+      break
+    } catch (error) {
+      if (error.code !== 'CHROME_TIMEOUT' || attempt !== 0) throw error
+      console.warn('Chrome startup watchdog: retrying once with a fresh isolated profile')
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
+  }
   const imageTag = browser.match(/<img\b[^>]*data-testid="image175-remote"[^>]*>/i)?.[0] || ''
   assert.ok(imageTag, 'real Chrome did not render the SafeImage product fixture')
   assert.equal(new URL(imageTag.match(/\bsrc="([^"]+)"/i)?.[1] || '', base).pathname, '/images/placeholder.svg', 'Chrome did not hydrate the safe image fallback')
