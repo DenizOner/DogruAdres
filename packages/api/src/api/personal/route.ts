@@ -4887,7 +4887,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          org!==currentOrg||document.hidden)return;
       if(result.status!=='appealed'||result.version!==2||
          result.organization_id!==org||result.seller_id!==seller||
-         result.deadline_started!==false){
+         typeof result.deadline_started!=='boolean'){
         const e=Error('İtiraz sonucu doğrulanamadı');e.uncertain=true;throw e;
       }
       platformOwnerUncertain=false;

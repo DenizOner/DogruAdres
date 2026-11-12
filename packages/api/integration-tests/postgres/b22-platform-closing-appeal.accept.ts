@@ -366,116 +366,6 @@ export async function verifyB22PlatformClosingAppeal(input:{
     "Late Owner's new notice has an independent persistent read state")
   assert.equal(newlyProtected.body?.mandatory_email_verified,false)
   assert.equal(newlyProtected.body?.deadline_started,false)
-  const appealReason="B22 sentetik yetkili Owner kapatma kararına itiraz ediyor"
-  await browser.input("#store-platform-appeal-form textarea[name=reason]",appealReason)
-  await browser.click("#store-platform-appeal-form button")
-  await browser.wait("document.getElementById('store-platform-appeal-status').textContent.includes('İtiraz kaydedildi')")
-  const appealed=await read(browser,readPath)
-  assert.equal(appealed.status,200)
-  assert.equal(appealed.body?.state,"appealed")
-  assert.equal(appealed.body?.appeal_reason,appealReason)
-  assert.equal(appealed.body?.deadline_started,false)
-  assert.equal(appealed.body?.permanent_finalization_enabled,false)
-  const appealNotices=await read(browser,"/personal/notifications?organization="+
-    encodeURIComponent(ownerOrgId))
-  assert.equal(appealNotices.status,200)
-  const appealNotice=appealNotices.body.notifications?.find((x:any)=>
-    x.title==="Mağaza kapatma itirazı kaydedildi")
-  assert.ok(appealNotice,"Owner must receive a real private appeal receipt")
-  assert.match(appealNotice.description,/Şirketinizin mağazası için itiraz kaydedildi/)
-  assert.equal(appealNotice.description.includes("itirazınız kaydedildi"),false,
-    "The actor-neutral message must not tell a co-Owner they made the appeal")
-  assert.match(appealNotice.description,/yeni satışlar kapalı kalır/)
-  assert.equal(appealNotice.description.includes("Mevcut faal mağazalar etkilenmez"),false)
-  assert.equal(JSON.stringify(appealNotices.body).includes(appealReason),false)
-  const appealRecipients=await q(`select n.person_id,n.id
-    from da_notification_receipt n
-    join da_audit_event e on e.id=n.audit_event_id
-    where e.organization_id=$1 and e.target_id=$2
-      and e.action='organization.store_platform_closing_appealed'
-    order by n.person_id`,[ownerOrgId,sellerId])
-  assert.equal(appealRecipients.length,2,
-    "One genuine appeal must create exactly two private protected-Owner receipts")
-  assert.deepEqual(new Set(appealRecipients.map((row:any)=>row.person_id)),
-    new Set([ownerPersonId,staffPersonId]))
-  assert.equal(appealRecipients.some((row:any)=>
-    row.person_id===ownerPersonId&&row.id===appealNotice.id),true)
-  const otherOwnerNotices=await read(staff,"/personal/notifications?organization="+
-    encodeURIComponent(ownerOrgId))
-  assert.equal(otherOwnerNotices.status,200,
-    "Second protected Owner must read their own private appeal receipt over HTTPS")
-  const otherOwnerAppeal=otherOwnerNotices.body.notifications?.find((x:any)=>
-    x.title==="Mağaza kapatma itirazı kaydedildi")
-  assert.ok(otherOwnerAppeal,"Non-appealing Owner must receive the same neutral notice")
-  assert.equal(otherOwnerAppeal.description,appealNotice.description)
-  assert.notEqual(otherOwnerAppeal.id,appealNotice.id,
-    "Owners receive separate private receipts for the same canonical event")
-  assert.equal(appealRecipients.some((row:any)=>
-    row.person_id===staffPersonId&&row.id===otherOwnerAppeal.id),true)
-  assert.equal(JSON.stringify(otherOwnerNotices.body).includes(appealReason),false)
-  assert.equal(JSON.stringify(otherOwnerNotices.body).includes(reason),false)
-  await browser.click("#notification-bell")
-  await browser.wait("!document.getElementById('notification-panel').hidden && "+
-    "document.getElementById('notification-list').textContent.includes('yeni satışlar kapalı kalır')")
-  assert.equal(await browser.eval(
-    "Array.from(document.querySelectorAll('#notification-list li')).some("+
-    "li=>li.querySelector('h3')?.textContent==='Mağaza kapatma itirazı kaydedildi' && "+
-    "li.querySelector('p')?.textContent.includes('Mevcut faal mağazalar etkilenmez'))"),false)
-  await browser.click("#notification-close")
-  // A's real Chrome UI has just displayed the notice. B did not submit
-  // the appeal: their separate authenticated Chrome must display the SAME
-  // impersonal description, never a forged action attribution or reason.
-  await staff.send("Page.bringToFront")
-  await staff.send("Page.reload",{ignoreCache:true})
-  await staff.wait("document.readyState==='complete'&&!document.getElementById('workspace').hidden")
-  await staff.select(ownerOrgName,"owner")
-  await staff.click("#notification-bell")
-  await staff.wait("!document.getElementById('notification-panel').hidden && "+
-    "document.getElementById('notification-list').textContent.includes('Şirketinizin mağazası için itiraz kaydedildi')")
-  const secondOwnerUi=await staff.eval(`(()=>{
-    const item=Array.from(document.querySelectorAll('#notification-list li'))
-      .find(li=>li.querySelector('h3')?.textContent==='Mağaza kapatma itirazı kaydedildi');
-    return item?{text:item.textContent,description:item.querySelector('p')?.textContent}:null;
-  })()`)
-  assert.ok(secondOwnerUi)
-  assert.match(secondOwnerUi.description,/Şirketinizin mağazası için itiraz kaydedildi/)
-  assert.equal(secondOwnerUi.description.includes("itirazınız kaydedildi"),false)
-  assert.equal(secondOwnerUi.text.includes(appealReason),false)
-  assert.equal(secondOwnerUi.text.includes(reason),false)
-  await staff.click("#notification-close")
-  await browser.send("Page.bringToFront")
-  await browser.wait("document.visibilityState==='visible'")
-  assert.equal(await count(),auditBefore+2)
-  const [ledger]=await q(`select version,request_id,appeal_request_id,
-    started_at,appealed_at from da_store_platform_closing where seller_id=$1`,[sellerId])
-  assert.equal(ledger.version,2)
-  assert.equal(ledger.request_id,requestId)
-  assert.match(ledger.appeal_request_id,/^dapa_[a-f0-9]{32}$/)
-  assert.ok(ledger.appealed_at&&ledger.started_at)
-  const appealReplay=await write(browser,privatePath,{
-    organization_id:ownerOrgId,seller_id:sellerId,
-    request_id:ledger.appeal_request_id,expected_version:1,reason:appealReason})
-  assert.equal(appealReplay.status,200)
-  assert.equal(appealReplay.body.replayed,true)
-  assert.equal((await write(browser,privatePath,{
-    organization_id:ownerOrgId,seller_id:sellerId,
-    request_id:"dapa_"+randomBytes(16).toString("hex"),
-    expected_version:1,reason:appealReason})).status,409)
-  assert.equal((await q("select count(*)::int n from da_store_platform_closing where seller_id=$1",
-    [sellerId]))[0].n,1)
-  assert.equal(await count(),auditBefore+2)
-  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false,
-    "Appeal does not re-enable sales or release the Store name")
-  const appealedCatalog=await read(buyer,catalogPage)
-  assert.equal(appealedCatalog.status,200)
-  assert.equal(appealedCatalog.body?.stores?.some((store:any)=>store.id===sellerId),false,
-    "Owner appeal must not restore Gamma to the real Buyer HTTPS catalogue")
-  assert.equal(await foundation.authorizeBuyerCheckout(
-    checkoutCartId,customerId,[sellerId]),false,
-    "Owner appeal must not re-enable the final Buyer L")
-  assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
-  assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
-    [sellerId]))[0],before)
   // Isolated synthetic sent-link record: this proves the real Owner HTTPS
   // callback, NOT SMTP transport or mailbox delivery. Scheduled job and
   // four-send retry require their own actual execution evidence.
@@ -576,7 +466,130 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(await foundation.authorizeBuyerCheckout(checkoutCartId,customerId,[sellerId]),false)
   assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: synthetic hashed email link strong Owner POST, foreign/forged CSRF/scanner GET denied, 10+20 server clock starts once, no finalizer or sales reopening\n")
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, no timer/mail delivery proven at this checkpoint and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no delivery/timer at this checkpoint, foreign denied\n")
+  // An authenticated Owner link started the canonical server clock.
+  // The first appeal must stay actionable in the real Chrome interface.
+  await browser.click("#store-platform-appeal-refresh")
+  await browser.wait("document.getElementById('store-platform-appeal-status').textContent.includes('10+20 günlük itiraz saati başladı')")
+  assert.equal(await browser.eval(
+    "!document.querySelector('#store-platform-appeal-form button').disabled"),true,
+    "A started clock must not disable the protected Owner's first appeal")
+  const appealReason="B22 sentetik yetkili Owner kapatma kararına itiraz ediyor"
+  await browser.input("#store-platform-appeal-form textarea[name=reason]",appealReason)
+  await browser.click("#store-platform-appeal-form button")
+  await browser.wait("document.getElementById('store-platform-appeal-status').textContent.includes('İtiraz kaydedildi')")
+  const appealed=await read(browser,readPath)
+  assert.equal(appealed.status,200)
+  assert.equal(appealed.body?.state,"appealed")
+  assert.equal(appealed.body?.appeal_reason,appealReason)
+  assert.equal(appealed.body?.deadline_started,true,
+    "Submitting an appeal must preserve the already-started server clock")
+  assert.equal(appealed.body?.permanent_finalization_enabled,false)
+  assert.equal((await q("select count(*)::int n from da_audit_event "+
+    "where organization_id=$1 and target_id=$2 and "+
+    "action='organization.store_platform_closing_deadline_started'",
+    [ownerOrgId,sellerId]))[0].n,1,
+    "Owner appeal must not create a second clock or deadline audit")
+  const appealNotices=await read(browser,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))
+  assert.equal(appealNotices.status,200)
+  const appealNotice=appealNotices.body.notifications?.find((x:any)=>
+    x.title==="Mağaza kapatma itirazı kaydedildi")
+  assert.ok(appealNotice,"Owner must receive a real private appeal receipt")
+  assert.match(appealNotice.description,/Şirketinizin mağazası için itiraz kaydedildi/)
+  assert.equal(appealNotice.description.includes("itirazınız kaydedildi"),false,
+    "The actor-neutral message must not tell a co-Owner they made the appeal")
+  assert.match(appealNotice.description,/yeni satışlar kapalı kalır/)
+  assert.equal(appealNotice.description.includes("Mevcut faal mağazalar etkilenmez"),false)
+  assert.equal(JSON.stringify(appealNotices.body).includes(appealReason),false)
+  const appealRecipients=await q(`select n.person_id,n.id
+    from da_notification_receipt n
+    join da_audit_event e on e.id=n.audit_event_id
+    where e.organization_id=$1 and e.target_id=$2
+      and e.action='organization.store_platform_closing_appealed'
+    order by n.person_id`,[ownerOrgId,sellerId])
+  assert.equal(appealRecipients.length,2,
+    "One genuine appeal must create exactly two private protected-Owner receipts")
+  assert.deepEqual(new Set(appealRecipients.map((row:any)=>row.person_id)),
+    new Set([ownerPersonId,staffPersonId]))
+  assert.equal(appealRecipients.some((row:any)=>
+    row.person_id===ownerPersonId&&row.id===appealNotice.id),true)
+  const otherOwnerNotices=await read(staff,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId))
+  assert.equal(otherOwnerNotices.status,200,
+    "Second protected Owner must read their own private appeal receipt over HTTPS")
+  const otherOwnerAppeal=otherOwnerNotices.body.notifications?.find((x:any)=>
+    x.title==="Mağaza kapatma itirazı kaydedildi")
+  assert.ok(otherOwnerAppeal,"Non-appealing Owner must receive the same neutral notice")
+  assert.equal(otherOwnerAppeal.description,appealNotice.description)
+  assert.notEqual(otherOwnerAppeal.id,appealNotice.id,
+    "Owners receive separate private receipts for the same canonical event")
+  assert.equal(appealRecipients.some((row:any)=>
+    row.person_id===staffPersonId&&row.id===otherOwnerAppeal.id),true)
+  assert.equal(JSON.stringify(otherOwnerNotices.body).includes(appealReason),false)
+  assert.equal(JSON.stringify(otherOwnerNotices.body).includes(reason),false)
+  await browser.click("#notification-bell")
+  await browser.wait("!document.getElementById('notification-panel').hidden && "+
+    "document.getElementById('notification-list').textContent.includes('yeni satışlar kapalı kalır')")
+  assert.equal(await browser.eval(
+    "Array.from(document.querySelectorAll('#notification-list li')).some("+
+    "li=>li.querySelector('h3')?.textContent==='Mağaza kapatma itirazı kaydedildi' && "+
+    "li.querySelector('p')?.textContent.includes('Mevcut faal mağazalar etkilenmez'))"),false)
+  await browser.click("#notification-close")
+  // A's real Chrome UI has just displayed the notice. B did not submit
+  // the appeal: their separate authenticated Chrome must display the SAME
+  // impersonal description, never a forged action attribution or reason.
+  await staff.send("Page.bringToFront")
+  await staff.send("Page.reload",{ignoreCache:true})
+  await staff.wait("document.readyState==='complete'&&!document.getElementById('workspace').hidden")
+  await staff.select(ownerOrgName,"owner")
+  await staff.click("#notification-bell")
+  await staff.wait("!document.getElementById('notification-panel').hidden && "+
+    "document.getElementById('notification-list').textContent.includes('Şirketinizin mağazası için itiraz kaydedildi')")
+  const secondOwnerUi=await staff.eval(`(()=>{
+    const item=Array.from(document.querySelectorAll('#notification-list li'))
+      .find(li=>li.querySelector('h3')?.textContent==='Mağaza kapatma itirazı kaydedildi');
+    return item?{text:item.textContent,description:item.querySelector('p')?.textContent}:null;
+  })()`)
+  assert.ok(secondOwnerUi)
+  assert.match(secondOwnerUi.description,/Şirketinizin mağazası için itiraz kaydedildi/)
+  assert.equal(secondOwnerUi.description.includes("itirazınız kaydedildi"),false)
+  assert.equal(secondOwnerUi.text.includes(appealReason),false)
+  assert.equal(secondOwnerUi.text.includes(reason),false)
+  await staff.click("#notification-close")
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible'")
+  assert.equal(await count(),auditBefore+3)
+  const [ledger]=await q(`select version,request_id,appeal_request_id,
+    started_at,appealed_at from da_store_platform_closing where seller_id=$1`,[sellerId])
+  assert.equal(ledger.version,2)
+  assert.equal(ledger.request_id,requestId)
+  assert.match(ledger.appeal_request_id,/^dapa_[a-f0-9]{32}$/)
+  assert.ok(ledger.appealed_at&&ledger.started_at)
+  const appealReplay=await write(browser,privatePath,{
+    organization_id:ownerOrgId,seller_id:sellerId,
+    request_id:ledger.appeal_request_id,expected_version:1,reason:appealReason})
+  assert.equal(appealReplay.status,200)
+  assert.equal(appealReplay.body.replayed,true)
+  assert.equal((await write(browser,privatePath,{
+    organization_id:ownerOrgId,seller_id:sellerId,
+    request_id:"dapa_"+randomBytes(16).toString("hex"),
+    expected_version:1,reason:appealReason})).status,409)
+  assert.equal((await q("select count(*)::int n from da_store_platform_closing where seller_id=$1",
+    [sellerId]))[0].n,1)
+  assert.equal(await count(),auditBefore+3)
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false,
+    "Appeal does not re-enable sales or release the Store name")
+  const appealedCatalog=await read(buyer,catalogPage)
+  assert.equal(appealedCatalog.status,200)
+  assert.equal(appealedCatalog.body?.stores?.some((store:any)=>store.id===sellerId),false,
+    "Owner appeal must not restore Gamma to the real Buyer HTTPS catalogue")
+  assert.equal(await foundation.authorizeBuyerCheckout(
+    checkoutCartId,customerId,[sellerId]),false,
+    "Owner appeal must not re-enable the final Buyer L")
+  assert.equal(Number((await q('select count(*)::int n from "order"'))[0].n),orderBefore)
+  assert.deepEqual((await q("select id,status,name,handle from seller where id=$1",
+    [sellerId]))[0],before)
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, canonical 10+20 clock started on authenticated Owner link before first appeal; external mailbox delivery unverified and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no external mailbox delivery claim; one immutable clock, foreign denied\n")
   // Suspended Organization must NOT hide a durable platform-staff alert
   // after the real Foundation fallback commits its canonical clock/audit.
   // Every row below is a synthetic, disposable CI-only fixture.

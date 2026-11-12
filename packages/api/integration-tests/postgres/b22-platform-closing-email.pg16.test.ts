@@ -181,11 +181,12 @@ async function setup(){
     "(id,person_id,task,resource) values ($1,$2,'store.closing.manage','platform')",
     ["dastaff_b22_mail",staff])
 }
-async function seed(seller:string,attempts=0,state="pending",leaseExpired=false){
+async function seed(seller:string,attempts=0,state="pending",leaseExpired=false,
+  occurredAt?:string){
   const reason="Sentetik B22 mağaza kapatma işlemi için güvenlik gerekçesi"
   const requestId="dascp_"+uuid()
   const eventId="daaud_"+uuid()
-  const occurred=new Date(Date.now()-73*3600000).toISOString()
+  const occurred=occurredAt??new Date(Date.now()-73*3600000).toISOString()
   const event={
     id:eventId,actor_person_id:staff,actor_type:"user",actor_id:"user_b22_staff",
     role_context:"platform_staff",organization_id:org,
@@ -499,6 +500,79 @@ async function main(){
       process.stdout.write(
         "PASS B22 PG16+loopback SMTP: 250 accepted, 550 refused, post-DATA "+
         "disconnect uncertain; none grants mailbox delivery or premature clock\n")
+    // Focused real PG16 clock-negative: the first appeal is a different
+    // action from a post-day-10 independent review. Reuse the existing
+    // Foundation service directly, while the separate Chrome test exercises
+    // real session/Owner authorization; only this synthetic isolation
+    // replaces the authorization lookup to target the clock boundary.
+    const expiredSeller="sel_b22_first_appeal_day11"
+    const expiredStart=new Date(Date.now()-12*86400000).toISOString()
+    const expiredDeadline=new Date(Date.now()-11*86400000).toISOString()
+    await seed(expiredSeller,4,"failed",false,expiredStart)
+    const expiredAuditId="daaud_"+uuid()
+    await q("insert into da_audit_event "+
+      "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
+      "action,module,resource,target_id,new_values,occurred_at) "+
+      "values ($1,$2,'user',$3,'owner',$4,"+
+      "'organization.store_platform_closing_deadline_started',"+
+      "'dogruadres-access','store-platform-closing',$5,"+
+      "jsonb_build_object('basis','owner_delivery',"+
+      "'deadline_started_at',$6::text),$6::timestamptz)",
+      [expiredAuditId,owner,syntheticActor,org,expiredSeller,expiredDeadline])
+    await insertOutbox(db as Pg,"daaob_"+uuid(),{
+      source_audit_event_id:expiredAuditId,source_module:"dogruadres-access",
+      envelope_version:1,status:"pending",envelope:{
+        version:1,source_module:"dogruadres-access",
+        source_audit_event_id:expiredAuditId,organization_id:org,
+        actor:{person_id:owner,type:"user",id:syntheticActor,role_context:"owner"},
+        action:"organization.store_platform_closing_deadline_started",
+        resource:"store-platform-closing",target_id:expiredSeller,
+        occurred_at:expiredDeadline
+      }
+    })
+    await q("update da_store_platform_closing "+
+      "set deadline_started_at=$2,deadline_basis='owner_delivery',"+
+      "deadline_audit_event_id=$3 where seller_id=$1",
+      [expiredSeller,expiredDeadline,expiredAuditId])
+    const countBefore=(await q("select count(*)::int n from da_audit_event "+
+      "where target_id=$1",[expiredSeller]))[0].n
+    const outboxBefore=(await q("select count(*)::int n "+
+      "from da_audit_outbox x join da_audit_event e "+
+      "on e.id=x.source_audit_event_id where e.target_id=$1",
+      [expiredSeller]))[0].n
+    const lateResult=await db.begin(async (tx:Pg)=>{
+      const {service,context}=serviceFor(tx)
+      ;(service as any).ownerPauseScope_=async()=>({
+        actor:{person_id:owner,actor_type:"user",actor_id:syntheticActor}
+      })
+      return service.personalAppealPlatformStoreClosing("synthetic-clock-only",{
+        organization_id:org,seller_id:expiredSeller,
+        request_id:"dapa_"+uuid(),expected_version:1,
+        reason:"Sentetik on birinci günde geç ilk itiraz reddedilmeli"
+      },context)
+    })
+    assert.deepEqual(lateResult,{status:"conflict"},
+      "A new first appeal after ten server calendar days must be denied")
+    const expiredAfter=await row(expiredSeller)
+    assert.equal(expiredAfter.state,"notification_unverified")
+    assert.equal(expiredAfter.version,1)
+    assert.equal(expiredAfter.appeal_request_id,null)
+    assert.equal(expiredAfter.deadline_started_at.toISOString(),expiredDeadline)
+    assert.equal((await q("select count(*)::int n from da_audit_event "+
+      "where target_id=$1",[expiredSeller]))[0].n,countBefore,
+      "Late appeal may not write a new canonical event")
+    assert.equal((await q("select count(*)::int n "+
+      "from da_audit_outbox x join da_audit_event e "+
+      "on e.id=x.source_audit_event_id where e.target_id=$1",
+      [expiredSeller]))[0].n,outboxBefore,
+      "Late appeal may not write a source outbox event")
+    assert.equal((await q("select count(*)::int n "+
+      "from da_notification_receipt n join da_audit_event e "+
+      "on e.id=n.audit_event_id where e.target_id=$1 and "+
+      "e.action='organization.store_platform_closing_appealed'",
+      [expiredSeller]))[0].n,0,
+      "Late appeal may not generate private Owner notices")
+    process.stdout.write("PASS B22 PG16: expired day-11 first appeal denied with unchanged deadline, state, audit/outbox and private receipts\n")
     // New protected Owners get a separately timed current-state notice.
     // Their record must NOT backfill the original closure audit receipt.
     // A newly assigned Owner at T0+71h must not restart the initial
