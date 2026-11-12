@@ -371,6 +371,22 @@ async function verifyOwnerClosingBrowser(input:{
   const justExpiredStart=new Date(
     new Date(justExpiredDue).getTime()-2592000000).toISOString()
   const expiredKey="dasc_"+randomBytes(16).toString("hex")
+  // Record the real approved Seller and name claim before the synthetic
+  // expired Owner intent. Elapsed time alone must never release either.
+  const expiredNativeBefore=(await q(
+    "select id,name,handle,status,approved_at,closed_from,closed_to from seller where id=$1",
+    [secondOwnerStoreId]))[0]
+  assert.ok(expiredNativeBefore?.id)
+  const expiredClaimQuery=`select id,organization_id,seller_id,status,
+    store_name_hash,name_claim_released_at from da_store_application
+    where seller_id=$1 and organization_id=$2 and status='created' order by id`
+  const expiredClaimBefore=await q(expiredClaimQuery,
+    [secondOwnerStoreId,organizations[0].id])
+  assert.equal(expiredClaimBefore.length,1,
+    "The second approved Store needs one canonical original name claim")
+  assert.ok(expiredClaimBefore[0].store_name_hash)
+  assert.equal(expiredClaimBefore[0].name_claim_released_at,null,
+    "The Store must still own its original name before Owner expiry")
   let expiryFixtureAuditId=""
   await q("begin")
   try{
@@ -470,6 +486,18 @@ async function verifyOwnerClosingBrowser(input:{
     assert.equal((await q("select count(*)::int n from da_notification_receipt"+
       " where audit_event_id=$1",[expiryFixtureAuditId]))[0].n,0,
       "No notification is manufactured for denied withdrawal")
+    assert.deepEqual((await q(
+      "select id,name,handle,status,approved_at,closed_from,closed_to from seller where id=$1",
+      [secondOwnerStoreId]))[0],expiredNativeBefore,
+      "Expired Owner waiting period must not mutate native Seller identity or status")
+    assert.deepEqual(await q(expiredClaimQuery,
+      [secondOwnerStoreId,organizations[0].id]),expiredClaimBefore,
+      "Expired Owner waiting period must preserve the exclusive name claim")
+    const expiredCatalogue=await get(catalogUrl(organizations[0].id))
+    assert.equal(expiredCatalogue.status,200)
+    assert.equal(expiredCatalogue.body.stores.some(
+      (x:any)=>x.id===secondOwnerStoreId),false,
+      "Expired but unfinalized Store must remain blocked from new sales")
     await unchangedEffects(snapshot)
   }finally{
     // The row is a test-only expired fixture, NOT a real HTTP Owner request.
