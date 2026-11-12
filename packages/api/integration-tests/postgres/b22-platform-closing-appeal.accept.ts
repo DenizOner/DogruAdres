@@ -992,17 +992,21 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
   // Trigger the already-bound refresh from an authorized real Chrome session.
   await independent.eval("document.getElementById('platform-closing-review-refresh').onclick()")
   await independent.wait("!document.getElementById('platform-closing-review-panel').hidden && "+
-    "Array.from(document.querySelectorAll('#platform-closing-review-list form')).some(f=>"+
-    "f.dataset.sellerId==="+JSON.stringify(reviewSellerId)+")")
-  const selector="#platform-closing-review-list form[data-seller-id="+
-    JSON.stringify(reviewSellerId)+"]"
-  await independent.eval("(()=>{const e=document.querySelector("+JSON.stringify(selector)+
-    ");if(!e)return false;e.querySelector('select[name=decision]').value='accepted';return true})()")
+    "document.querySelectorAll('#platform-closing-review-list form').length>0")
+  // Untrusted Store IDs cross CDP only as typed call arguments, never
+  // interpolated into a JavaScript expression or CSS selector in click().
+  const selected=await independent.callFunction(
+    "function(seller){const f=Array.from(document.querySelectorAll("+
+    "'#platform-closing-review-list form')).find(x=>x.dataset.sellerId===seller);"+
+    "if(!f)return false;f.dataset.b22Selected='true';"+
+    "f.querySelector('select[name=decision]').value='accepted';return true}",
+    reviewSellerId)
+  assert.equal(selected,true)
+  const selector="#platform-closing-review-list form[data-b22-selected=true]"
   await independent.input(selector+" textarea[name=reason]",payload.reason)
   await independent.click(selector+" button[type=submit]")
-  await independent.wait("Array.from(document.querySelectorAll("+
-    JSON.stringify("#platform-closing-review-list form")+")).every(f=>"+
-    "f.dataset.sellerId!=="+JSON.stringify(reviewSellerId)+")")
+  await independent.wait("!document.querySelector("+
+    JSON.stringify(selector)+")")
   const stored=await q("select c.review_decision_request_id,c.review_decision,"+
     "c.review_decision_reason,c.review_decision_audit_event_id,c.review_decided_by_person_id,"+
     "c.deadline_started_at,c.state from da_store_platform_closing c where c.seller_id=$1",
