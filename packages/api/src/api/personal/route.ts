@@ -3221,6 +3221,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          !Number.isSafeInteger(data.remaining_seconds)||
          data.remaining_seconds<0||data.remaining_seconds>2592000||
          data.permanent_finalization_enabled!==false||
+         !data.email_notice||
+         !['not_applicable','queued','pending','inflight','accepted',
+           'failed','unverified_identity','uncertain','invalidated']
+           .includes(data.email_notice.status)||
+         !Number.isSafeInteger(data.email_notice.attempts)||
+         data.email_notice.attempts<0||data.email_notice.attempts>4||
+         typeof data.email_notice.smtp_accepted!=='boolean'||
+         data.email_notice.mailbox_delivery_verified!==false||
          (data.state!=='none'&&
            (!Number.isFinite(new Date(data.due_at).getTime())||
             !Number.isFinite(new Date(data.started_at).getTime()))))
@@ -3247,6 +3255,27 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }else if(data.state==='withdrawn'){
         st.textContent='Kapatma talebi geri çekildi. Diğer satış engelleri geçerliliğini korur.';
       }else st.textContent='Aktif 30 günlük kapatma talebi bulunmuyor.';
+      if(data.state!=='none'){
+        // This is the current logged-in Person's private security notice.
+        // SMTP acceptance is NOT mailbox delivery or proof of reading.
+        const notice=data.email_notice;
+        const labels={
+          not_applicable:'Bu hesabınız için bildirim alıcısı kaydı bulunamadı.',
+          queued:'Kişisel bildirim kaydedildi; e-posta denemesi sırada.',
+          pending:'E-posta denemesi planlandı.',
+          inflight:'E-posta denemesi sürüyor.',
+          accepted:'SMTP sunucusu e-postayı kabul etti; posta kutusuna teslim doğrulanmadı.',
+          failed:'Son e-posta denemesi başarısız; teslim doğrulanmadı.',
+          unverified_identity:'Doğrulanmış e-posta kimliği bulunamadı; teslim doğrulanmadı.',
+          uncertain:'E-posta gönderim sonucu belirsiz; teslim doğrulanmadı.',
+          invalidated:'Bu olay için gönderim yetki veya kapatma değişimi nedeniyle geçersiz.'
+        };
+        st.textContent+=' Kişisel güvenlik e-postanız: '+
+          labels[notice.status]+
+          (notice.attempts>0?' Deneme sayısı: '+notice.attempts+'.':'')+
+          (notice.status!=='accepted'&&notice.smtp_accepted?
+            ' Önceki bir denemeyi SMTP kabul etmişti; teslim yine doğrulanmadı.':'');
+      }
     }catch{
       if(seq!==ownerClosingRead||request!==organizationRequest||org!==currentOrg)return;
       ownerClosingUncertain=true;ownerClosingButtons();ownerPauseButtons();
