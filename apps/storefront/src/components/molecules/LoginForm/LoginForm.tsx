@@ -62,7 +62,7 @@ const Form = () => {
   };
 
   const clearApiError = () => {
-    isAuthError && setIsAuthError(false);
+    if (isAuthError) setIsAuthError(false);
   };
 
   const getAuthMessage = () => {

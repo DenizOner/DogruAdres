@@ -85,7 +85,7 @@ const Form: FC<Props> = ({ regions, handleClose }) => {
     }
 
     setError('');
-    handleClose && handleClose();
+    handleClose?.();
   };
 
   return (
