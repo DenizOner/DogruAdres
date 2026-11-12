@@ -6232,6 +6232,20 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         request_reason:(row.appeal_reason??row.final_review_reason) as string
       })
     }
+    // Source reads can span many statements: a Staff task may be revoked
+    // while this private queue is assembled. Revalidate the same session,
+    // Person and grant immediately before release, then hold the live grant
+    // FOR SHARE until the read transaction commits. Concurrent revocation
+    // must commit before this check (403), or wait for this read to finish.
+    const fresh=await new IdentitySessions(db).staff(token,"store.closing.review","platform")
+    if(!fresh||fresh.person_id!==staff.person_id||
+       fresh.grant_id!==staff.grant_id)return null
+    const grant=await db.execute(`select g.id from da_platform_staff_grant g
+      where g.id=? and g.person_id=? and g.task='store.closing.review'
+        and g.resource='platform' and g.revoked_at is null
+        and (g.expires_at is null or g.expires_at>clock_timestamp())
+      for share`,[fresh.grant_id,fresh.person_id])
+    if(grant.length!==1)return null
     return {candidates:result,page,has_more:rows.length>30}
   }
 
