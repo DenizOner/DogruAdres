@@ -3229,6 +3229,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          data.email_notice.attempts<0||data.email_notice.attempts>4||
          typeof data.email_notice.smtp_accepted!=='boolean'||
          data.email_notice.mailbox_delivery_verified!==false||
+         !data.notification_coverage||
+         !Number.isSafeInteger(data.notification_coverage.protected_owners)||
+         data.notification_coverage.protected_owners<0||
+         data.notification_coverage.protected_owners>100||
+         !Number.isSafeInteger(data.notification_coverage.personal_receipts)||
+         data.notification_coverage.personal_receipts<0||
+         data.notification_coverage.personal_receipts>
+           data.notification_coverage.protected_owners||
+         data.notification_coverage.mailbox_delivery_verified!==false||
          (data.state!=='none'&&
            (!Number.isFinite(new Date(data.due_at).getTime())||
             !Number.isFinite(new Date(data.started_at).getTime()))))
@@ -3256,6 +3265,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         st.textContent='Kapatma talebi geri çekildi. Diğer satış engelleri geçerliliğini korur.';
       }else st.textContent='Aktif 30 günlük kapatma talebi bulunmuyor.';
       if(data.state!=='none'){
+        // The current event's aggregate in-account receipts are visible in
+        // BOTH closing and withdrawn states, never proof of mailbox delivery.
+        const coverage=data.notification_coverage;
+        st.textContent+=' Korunan Owner bildirim kayıtları: '+
+          coverage.personal_receipts+'/'+coverage.protected_owners+
+          ' kişiye özel kayıt oluşturuldu. E-posta teslimi veya okunma bu sayılardan doğrulanmaz.';
         // This is the current logged-in Person's private security notice.
         // SMTP acceptance is NOT mailbox delivery or proof of reading.
         const notice=data.email_notice;
