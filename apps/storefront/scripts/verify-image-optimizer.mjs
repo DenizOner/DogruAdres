@@ -84,7 +84,7 @@ try {
   })
   const imageTag = browser.match(/<img\b[^>]*data-testid="image175-remote"[^>]*>/i)?.[0] || ''
   assert.ok(imageTag, 'real Chrome did not render the SafeImage product fixture')
-  assert.match(imageTag, /src="\/images\/placeholder\.svg"/, 'Chrome did not hydrate the safe image fallback')
+  assert.equal(new URL(imageTag.match(/\bsrc="([^"]+)"/i)?.[1] || '', base).pathname, '/images/placeholder.svg', 'Chrome did not hydrate the safe image fallback')
   console.log('PASS #175 real Chrome: forbidden product image replaced with safe local SVG after HTTP 400')
 
   console.log('PASS #175 real Next production HTTP: six remote 400 denials, JPEG 200, static SVG 200, optimized SVG 400')
