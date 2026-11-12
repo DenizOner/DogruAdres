@@ -255,6 +255,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="platform-closing-refresh">Mağazaları yenile</button>
     <button type="button" id="platform-closing-more" hidden>Diğer mağazalar</button>
   </section>
+  <section id="platform-closing-review-panel" hidden style="grid-column:1/-1"
+    aria-labelledby="platform-closing-review-title">
+    <h2 id="platform-closing-review-title">Bağımsız mağaza kapatma incelemesi</h2>
+    <p>Yalnız açık platform inceleme görevi ve güncel güçlü girişle gerekçeli karar verilebilir.
+    Kapatmayı başlatan görevli aynı dosyayı karara bağlayamaz. Karar yeni satışları kendiliğinden açmaz.</p>
+    <p id="platform-closing-review-status" role="status" aria-live="polite"></p>
+    <div id="platform-closing-review-list"></div>
+    <button type="button" id="platform-closing-review-refresh">Dosyaları yenile</button>
+    <button type="button" id="platform-closing-review-more" hidden>Diğer dosyalar</button>
+  </section>
   <section id="store-approval-panel" hidden style="grid-column:1/-1">
     <h2>Platform mağaza onayları</h2>
     <p>Yalnız açık mağaza onay görevi ve güncel güçlü giriş ile bekleyen mağazalar onaylanabilir. Kuruluş ile mağaza bağı başvuruda kurulmuştur; ayrıca ilişki onayı yapılmaz.</p>
@@ -366,6 +376,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <p>Kapatma gerekçesini güvenle inceleyebilirsiniz. Satışlar platform kararıyla hemen durur. 10+20 günlük itiraz süresi güvenilir e-posta teslimiyle veya dört gönderim girişimi sonrasında zorunlu yönetici uyarısı güvenle kaydedilince başlayabilir. Kesin kapatma ayrı inceleme ve güvenlik koşullarına bağlıdır.</p>
       <p id="store-platform-appeal-reason"></p>
       <p id="store-platform-appeal-status" role="status" aria-live="polite"></p>
+      <p id="store-platform-review-decision" hidden></p>
       <form id="store-platform-appeal-form">
         <label>İtiraz gerekçesi<textarea name="reason" minlength="10" maxlength="500" rows="3" required></textarea></label>
         <button type="submit" disabled>İtirazı gönder</button>
@@ -4821,6 +4832,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     el('store-platform-final-review-form').querySelector('button').disabled=true;
     el('store-platform-appeal-reason').textContent='';
     el('store-platform-appeal-status').textContent='';
+    el('store-platform-review-decision').textContent='';
+    el('store-platform-review-decision').hidden=true;
     const form=el('store-platform-appeal-form');
     if(typeof form?.reset==='function')form.reset();
     const button=typeof form?.querySelector==='function'?form.querySelector('button'):null;
@@ -4847,6 +4860,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          typeof data.first_appeal_open!=='boolean'||
          typeof data.final_review_open!=='boolean'||
          typeof data.final_review_requested!=='boolean'||
+         ![null,'accepted','rejected'].includes(data.review_decision)||
+         (data.review_decision!==null&&
+           (typeof data.review_decision_reason!=='string'||
+            typeof data.review_decided_at!=='string'))||
          data.permanent_finalization_enabled!==false||
          typeof data.mandatory_email_verified!=='boolean')
          throw Error('Geçersiz karar');
@@ -4855,7 +4872,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(data.state==='none')return;
       el('store-platform-appeal-reason').textContent=
         'Platform karar gerekçesi: '+data.reason;
-      msg.textContent=(data.final_review_requested?
+      const decisionText=el('store-platform-review-decision');
+      decisionText.hidden=data.review_decision===null;
+      decisionText.textContent=data.review_decision===null?'':(
+        (data.review_decision==='accepted'?'İtiraz kabul edildi. ':
+          'İtiraz reddedildi. ')+
+        'Kararın gerekçesi: '+data.review_decision_reason+
+        '. Satışlar ayrıca yetkili karar verilmeden yeniden açılmaz.');
+      msg.textContent=(data.review_decision!==null?
+        'İtiraz hakkında gerekçeli karar verildi. Satışlar kapalı.':
+        data.final_review_requested?
         'Bağımsız üst inceleme başvurusu kaydedildi; karar bekleniyor. Satışlar kapalı.':
         data.state==='appealed'?
         'İtiraz kaydedildi; sonuç bekleniyor. Satışlar kapalı.':
