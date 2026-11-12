@@ -8,6 +8,12 @@ import { sdk } from '../client';
 import medusaError from '../helpers/medusa-error';
 import { getAuthHeaders, getCacheOptions } from './cookies';
 
+// Legacy returns endpoints remain on the existing authorized SDK route.
+export type ReturnableStoreOrder = HttpTypes.StoreOrder & {
+  seller: SellerDTO;
+  order_group: { id: string };
+};
+
 // TODO: legacy returns endpoints — migrate when the returns module lands
 type LooseRoute = {
   query: <T = unknown>(i?: never) => Promise<T>;
@@ -45,9 +51,9 @@ export const retrieveOrder = async (id: string) => {
         next,
         cache: 'force-cache'
       }
-    } as never) as unknown as Promise<
-      HttpTypes.StoreOrderResponse & { seller: SellerDTO }
-    >
+    } as never) as unknown as Promise<{
+      order: ReturnableStoreOrder
+    }>
   )
     .then(({ order }) => order)
     .catch(err => medusaError(err));
