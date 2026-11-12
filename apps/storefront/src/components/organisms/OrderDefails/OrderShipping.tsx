@@ -47,7 +47,7 @@ const OrderShipping = ({ order }: ShippingDetailsProps) => {
           Delivery method
         </Text>
         <Text className="txt-medium text-ui-fg-subtle">
-          {(order as any).shipping_methods[0]?.name} (
+          {order.shipping_methods?.[0]?.name} (
           {convertToLocale({
             amount: order.shipping_methods?.[0].total ?? 0,
             currency_code: order.currency_code,
