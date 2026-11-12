@@ -15,6 +15,18 @@ test("B22 Owner temporary pause permits only exact GET/POST first-party relay",(
       assert.equal(allowedPublicRequest(method,path),false)
 })
 
+test('B22 Owner and Staff Store rename API paths require exact GET/POST relay',()=>{
+  for(const path of ['/personal/store-rename-requests','/personal/platform/store-renames']){
+    for(const method of ['GET','POST'])
+      assert.equal(allowedPublicRequest(method,path),true)
+    for(const method of ['HEAD','OPTIONS','PUT','PATCH','DELETE'])
+      assert.equal(allowedPublicRequest(method,path),false)
+    for(const nested of [path+'/',path+'/other'])
+      for(const method of ['GET','POST'])
+        assert.equal(allowedPublicRequest(method,nested),false)
+  }
+})
+
 test("B22 historic order read uses only the exact personal GET relay",()=>{
   assert.equal(allowedPublicRequest("GET","/personal/order-groups"),true)
   for(const method of ["POST","PUT","PATCH","DELETE","HEAD","OPTIONS"])
