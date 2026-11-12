@@ -42,9 +42,11 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     // authority; a DoğruAdres created-application row is not approval.
     const native=req.scope.resolve<{listSellers(filter:object):Promise<any[]>}>("seller")
     const applications:Array<(typeof result.applications)[number]&{seller_status:string;rejection_reason:string|null}>=[]
-    for(const app of result.applications){
+    for(const entry of result.applications){
+      // Never serialize the internal ownership proof to a browser response.
+      const {live_seller_authorized,...app}=entry
       let seller_status="unknown",rejection_reason:null|string=null
-      if(app.status==="created"&&app.seller_id){
+      if(app.status==="created"&&app.seller_id&&live_seller_authorized===true){
         const sellers=await native.listSellers({id:app.seller_id})
         if(sellers.length===1&&sellers[0].id===app.seller_id){
           const value=sellers[0].status
