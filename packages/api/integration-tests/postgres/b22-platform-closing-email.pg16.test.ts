@@ -301,6 +301,59 @@ async function seedOwnerClosingMail(seller:string,
   return eventId
 }
 
+/** Commit a canonical, independently audited Owner withdrawal in the
+ * disposable PG16 database while another transaction may be sending SMTP.
+ * This is intentionally a separate DB actor, not a mock auth flag.
+ */
+async function withdrawOwnerClosingFixture(seller:string){
+  const [previous]=await q("select started_at,due_at from "+
+    "da_store_owner_closing where seller_id=$1 and state='closing'",[seller])
+  assert.ok(previous,"Expected existing active Owner closing")
+  const started=new Date(previous.started_at).toISOString()
+  const due=new Date(previous.due_at).toISOString()
+  const occurred=new Date().toISOString(),eventId="daaud_"+uuid()
+  const requestId="dasc_"+uuid()
+  await db.begin(async(tx:Pg)=>{
+    await bind(tx,"insert into da_audit_event "+
+      "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
+      "action,module,resource,target_id,new_values,occurred_at) "+
+      "values (?,?,'user',?,'owner',?,"+
+      "'organization.store_owner_closing_withdrawn',"+
+      "'dogruadres-access','store-owner-closing',?,"+
+      "jsonb_build_object('request_id',?::text,'state','withdrawn',"+
+      "'version',2,'started_at',?::text,'due_at',?::text),?::timestamptz)",[
+      eventId,owner,syntheticActor,org,seller,requestId,started,due,occurred
+    ])
+    await insertOutbox(tx,"daaob_"+uuid(),{
+      source_audit_event_id:eventId,source_module:"dogruadres-access",
+      envelope_version:1,status:"pending",envelope:{
+        version:1,source_module:"dogruadres-access",
+        source_audit_event_id:eventId,organization_id:org,
+        actor:{person_id:owner,type:"user",id:syntheticActor,role_context:"owner"},
+        action:"organization.store_owner_closing_withdrawn",
+        resource:"store-owner-closing",target_id:seller,occurred_at:occurred
+      }
+    })
+    const updated=await bind(tx,"update da_store_owner_closing "+
+      "set state='withdrawn',version=2,request_id=?,source_audit_event_id=?,"+
+      "updated_at=clock_timestamp() where seller_id=? and state='closing' "+
+      "and version=1 returning seller_id",[requestId,eventId,seller])
+    assert.equal(updated.length,1,"Canonical Owner withdrawal must commit exactly once")
+  })
+  return eventId
+}
+async function assertRealPgLockWait(fragment:string){
+  let found=false
+  for(let i=0;i<100;i++){
+    const [record]=await q("select count(*)::int n from pg_stat_activity "+
+      "where datname=current_database() and pid<>pg_backend_pid() "+
+      "and wait_event_type='Lock' and query like $1",["%"+fragment+"%"])
+    if(Number(record.n)>0){found=true;break}
+    await new Promise<void>(resolve=>setTimeout(resolve,50))
+  }
+  assert.equal(found,true,"Expected real PG16 row-lock wait for "+fragment)
+}
+
 /** Disposable fixture only; never changes the real clock or protected data. */
 async function syntheticDeadline(seller:string,ageHours:number){
   const when=new Date(Date.now()-ageHours*3600000).toISOString()
