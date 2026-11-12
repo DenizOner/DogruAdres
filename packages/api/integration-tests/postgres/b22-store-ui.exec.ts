@@ -250,7 +250,14 @@ async function verifyOwnerClosingBrowser(input:{
   await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
   await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
   await browser.eval("window.confirm=window.__b22ClosingConfirm;delete window.__b22ClosingConfirm")
-  await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('geri çekildi')")
+  await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('geri çekildi') && "+
+    "document.getElementById('store-owner-closing-status').textContent.includes('Korunan Owner bildirim kayıtları: 2/2')")
+  assert.ok((await browser.eval(
+    "document.getElementById('store-owner-closing-status').textContent")).includes(
+      'E-posta teslimi veya okunma bu sayılardan doğrulanmaz.'),
+    "Real withdrawn Owner screen must not claim mailbox delivery or reading")
+  assert.equal(await browser.eval(
+    "document.getElementById('store-owner-closing-status').getAttribute('role')"),"status")
   const [withdrawn]=await q(
     "select c.state,c.version,c.started_at,c.due_at,e.id as audit_event_id,e.action,"+
     "(select count(*)::int from da_audit_outbox x where x.source_audit_event_id=e.id) as outbox_count,"+

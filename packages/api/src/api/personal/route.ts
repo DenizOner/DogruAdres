@@ -3259,18 +3259,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           ' saniye. 30 günlük sürenin bitişi: '+deadline+
           (data.can_withdraw?' — Süre dolmadan geri çekebilirsiniz.':
           ' — Güncel geri çekme hakkı doğrulanamadı; yeniden kontrol edin.');
-        // Aggregate receipt coverage is NOT per-recipient mail status or
-        // proof that an external mailbox received/read the email.
-        const coverage=data.notification_coverage;
-        st.textContent+=' Korunan Owner bildirim kayıtları: '+
-          coverage.personal_receipts+'/'+coverage.protected_owners+
-          ' kişiye özel kayıt oluşturuldu. E-posta teslimi veya okunma bu sayılardan doğrulanmaz.';
         el('store-owner-pause-status').textContent=
           'Mağaza için kapatma talebi etkin; geçici ara verme kullanılamaz.';
       }else if(data.state==='withdrawn'){
         st.textContent='Kapatma talebi geri çekildi. Diğer satış engelleri geçerliliğini korur.';
       }else st.textContent='Aktif 30 günlük kapatma talebi bulunmuyor.';
       if(data.state!=='none'){
+        // The current event's aggregate in-account receipts are visible in
+        // BOTH closing and withdrawn states, never proof of mailbox delivery.
+        const coverage=data.notification_coverage;
+        st.textContent+=' Korunan Owner bildirim kayıtları: '+
+          coverage.personal_receipts+'/'+coverage.protected_owners+
+          ' kişiye özel kayıt oluşturuldu. E-posta teslimi veya okunma bu sayılardan doğrulanmaz.';
         // This is the current logged-in Person's private security notice.
         // SMTP acceptance is NOT mailbox delivery or proof of reading.
         const notice=data.email_notice;
