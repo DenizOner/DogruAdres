@@ -12,7 +12,9 @@ import AccessService from "../../src/modules/dogruadres-access/service"
 import { Migration20261111170000 } from "../../src/modules/dogruadres-access/migrations/Migration20261111170000"
 import { Migration20261112100000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112100000"
 import { Migration20261112120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112120000"
-import { runPlatformClosingEmailTick } from "../../src/jobs/dogruadres-platform-closing-email"
+import { Migration20261110120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261110120000"
+import { Migration20261112130000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112130000"
+import { runPlatformClosingEmailTick, runOwnerClosingEmailTick } from "../../src/jobs/dogruadres-platform-closing-email"
 import { canonicalEventForOutbox } from "../../src/modules/dogruadres-access/audit-delivery-policy"
 import { projectFoundationAuditEvent } from "../../src/modules/dogruadres-audit-index/envelope"
 
@@ -70,6 +72,24 @@ const syntheticIdentity="auth_b22_mail_pg"
 const syntheticActor="user_b22_mail_pg"
 let testSmtp:{enabled:boolean;host:string;port:number;
   security:"none";from_email:string}|null=null
+type TestBarrier={entered:Promise<void>;proceed:Promise<void>;
+  arrive:()=>void;release:()=>void}
+function testBarrier():TestBarrier{
+  let arrive!:()=>void,release!:()=>void
+  const entered=new Promise<void>(resolve=>{arrive=resolve})
+  const proceed=new Promise<void>(resolve=>{release=resolve})
+  return {entered,proceed,arrive,release}
+}
+async function waitForBarrier(p:Promise<void>,label:string){
+  let timeout:ReturnType<typeof setTimeout>|undefined
+  try{
+    await Promise.race([p,new Promise<void>((_,reject)=>{
+      timeout=setTimeout(()=>reject(Error("Timed out awaiting "+label)),10000)
+    })])
+  }finally{if(timeout)clearTimeout(timeout)}
+}
+let beforeOwnerSmtpConfig:TestBarrier|null=null
+
 function serviceFor(tx:Pg){
   const service=Object.create(AccessService.prototype) as any
   const context:any={transactionManager:{
@@ -137,7 +157,14 @@ const container:any={resolve:(name:string)=>{
     }]
   }
   if(name==="dogruadresAccess")return {
-    getActiveSmtpConfig:async()=>testSmtp,
+    getActiveSmtpConfig:async()=>{
+      // Disposable test-only pause AFTER a claimed slot commits but BEFORE
+      // the final authorization and closing fence.
+      const gate=beforeOwnerSmtpConfig
+      beforeOwnerSmtpConfig=null
+      if(gate){gate.arrive();await gate.proceed}
+      return testSmtp
+    },
     settlePlatformClosingAdminFallback:()=>db.begin(async(tx:Pg)=>{
       const {service,context}=serviceFor(tx)
       return service.settlePlatformClosingAdminFallback(context)
@@ -150,6 +177,7 @@ async function setup(){
   await q("drop schema if exists public cascade")
   await q("create schema public")
   await q("create table da_person (id text primary key,disabled_at timestamptz,deleted_at timestamptz)")
+  await q("create table da_organization (id text primary key)")
   await q("create table da_organization_membership (id text primary key,"+
     "organization_id text,person_id text,role text,status text,"+
     "protected_owner boolean,revoked_at timestamptz,deleted_at timestamptz)")
@@ -180,6 +208,9 @@ async function setup(){
   await migrate(Migration20261111170000)
   await migrate(Migration20261112100000)
   await migrate(Migration20261112120000)
+  await migrate(Migration20261110120000)
+  await migrate(Migration20261112130000)
+  await q("insert into da_organization(id) values ($1)",[org])
   await q("insert into da_person(id) values ($1),($2)",[owner,staff])
   await q("insert into da_organization_membership"+
     "(id,organization_id,person_id,role,status,protected_owner)"+
@@ -230,6 +261,101 @@ async function seed(seller:string,attempts=0,state="pending",leaseExpired=false,
     "case when $5::uuid is null then null else clock_timestamp()-interval '1 second' end)",
     [seller,owner,attempts,state,claim])
 }
+/** A real-migration, canonical Owner closing event in this disposable DB.
+ * No actual Store, bank, provider, customer data or production receiver.
+ */
+async function seedOwnerClosingMail(seller:string,
+  action:"started"|"withdrawn"="started"){
+  const started=new Date(Date.now()-60000).toISOString()
+  const due=new Date(new Date(started).getTime()+2592000000).toISOString()
+  const eventId="daaud_"+uuid(),requestId="dasc_"+uuid()
+  const state=action==="started"?"closing":"withdrawn"
+  const eventAction=action==="started"?
+    "organization.store_owner_closing_started":
+    "organization.store_owner_closing_withdrawn"
+  await q("insert into da_audit_event "+
+    "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
+    "action,module,resource,target_id,new_values,occurred_at) "+
+    "values ($1,$2,'user',$3,'owner',$4,$5,'dogruadres-access',"+
+    "'store-owner-closing',$6,jsonb_build_object('request_id',$7::text,"+
+    "'state',$8::text,'version',1,'started_at',$9::text,"+
+    "'due_at',$10::text),$9::timestamptz)",
+    [eventId,owner,syntheticActor,org,eventAction,seller,requestId,state,started,due])
+  await insertOutbox(db as Pg,"daaob_"+uuid(),{
+    source_audit_event_id:eventId,source_module:"dogruadres-access",
+    envelope_version:1,status:"pending",envelope:{
+      version:1,source_module:"dogruadres-access",
+      source_audit_event_id:eventId,organization_id:org,
+      actor:{person_id:owner,type:"user",id:syntheticActor,role_context:"owner"},
+      action:eventAction,resource:"store-owner-closing",
+      target_id:seller,occurred_at:started
+    }
+  })
+  await q("insert into da_store_owner_closing "+
+    "(seller_id,organization_id,state,version,request_id,"+
+    "source_audit_event_id,started_at,due_at) "+
+    "values ($1,$2,$3,1,$4,$5,$6,$7)",
+    [seller,org,state,requestId,eventId,started,due])
+  await q("insert into da_notification_receipt(id,person_id,audit_event_id) "+
+    "values ($1,$2,$3)",["danot_"+uuid(),owner,eventId])
+  return eventId
+}
+
+/** Commit a canonical, independently audited Owner withdrawal in the
+ * disposable PG16 database while another transaction may be sending SMTP.
+ * This is intentionally a separate DB actor, not a mock auth flag.
+ */
+async function withdrawOwnerClosingFixture(seller:string){
+  const [previous]=await q("select started_at,due_at from "+
+    "da_store_owner_closing where seller_id=$1 and state='closing'",[seller])
+  assert.ok(previous,"Expected existing active Owner closing")
+  const started=new Date(previous.started_at).toISOString()
+  const due=new Date(previous.due_at).toISOString()
+  const occurred=new Date().toISOString(),eventId="daaud_"+uuid()
+  const requestId="dasc_"+uuid()
+  await db.begin(async(tx:Pg)=>{
+    await bind(tx,"insert into da_audit_event "+
+      "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
+      "action,module,resource,target_id,new_values,occurred_at) "+
+      "values (?,?,'user',?,'owner',?,"+
+      "'organization.store_owner_closing_withdrawn',"+
+      "'dogruadres-access','store-owner-closing',?,"+
+      "jsonb_build_object('request_id',?::text,'state','withdrawn',"+
+      "'version',2,'started_at',?::text,'due_at',?::text),?::timestamptz)",[
+      eventId,owner,syntheticActor,org,seller,requestId,started,due,occurred
+    ])
+    await insertOutbox(tx,"daaob_"+uuid(),{
+      source_audit_event_id:eventId,source_module:"dogruadres-access",
+      envelope_version:1,status:"pending",envelope:{
+        version:1,source_module:"dogruadres-access",
+        source_audit_event_id:eventId,organization_id:org,
+        actor:{person_id:owner,type:"user",id:syntheticActor,role_context:"owner"},
+        action:"organization.store_owner_closing_withdrawn",
+        resource:"store-owner-closing",target_id:seller,occurred_at:occurred
+      }
+    })
+    const updated=await bind(tx,"update da_store_owner_closing "+
+      "set state='withdrawn',version=2,request_id=?,source_audit_event_id=?,"+
+      "updated_at=clock_timestamp() where seller_id=? and state='closing' "+
+      "and version=1 returning seller_id",[requestId,eventId,seller])
+    assert.equal(updated.length,1,"Canonical Owner withdrawal must commit exactly once")
+  })
+  return eventId
+}
+async function assertRealPgLockWait(fragment:string){
+  let found=false
+  for(let i=0;i<100;i++){
+    const [record]=await q("select count(*)::int n from pg_stat_activity "+
+      "where datname=current_database() and pid<>pg_backend_pid() "+
+      "and wait_event_type='Lock' "+
+      "and cardinality(pg_blocking_pids(pid))>0 "+
+      "and query like $1",["%"+fragment+"%"])
+    if(Number(record.n)>0){found=true;break}
+    await new Promise<void>(resolve=>setTimeout(resolve,50))
+  }
+  assert.equal(found,true,"Expected real PG16 row-lock wait for "+fragment)
+}
+
 /** Disposable fixture only; never changes the real clock or protected data. */
 async function syntheticDeadline(seller:string,ageHours:number){
   const when=new Date(Date.now()-ageHours*3600000).toISOString()
@@ -428,8 +554,10 @@ async function main(){
       [owner,syntheticActor,syntheticIdentity])
     await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
       "values ($1,$2,'user',$3)",["damap_b22_mail_pg",owner,syntheticActor])
-    const observed={acceptedRecipient:false,secureLink:false,acceptedData:false}
+    const observed={acceptedRecipient:false,secureLink:false,
+      ownerSafeLink:false,acceptedData:false,dataMessages:0}
     let refuseRecipient=false,dropAfterData=false
+    let holdSmtpDataAck:TestBarrier|null=null
     const mock=createServer(socket=>{
       socket.setEncoding("utf8")
       socket.write("220 smtp.loopback.test ESMTP\r\n")
@@ -443,15 +571,26 @@ async function main(){
           if(receivingData){
             if(line==="."){
               receivingData=false
+              observed.dataMessages++
               if(dropAfterData){
                 // The remote side can commit DATA and drop before its 250 ACK.
                 socket.destroy()
               }else{
                 observed.acceptedData=true
-                socket.write("250 message queued on isolated loopback\r\n")
+                const gate=holdSmtpDataAck
+                holdSmtpDataAck=null
+                if(gate){
+                  gate.arrive()
+                  void gate.proceed.then(()=>{
+                    if(!socket.destroyed)
+                      socket.write("250 message queued on isolated loopback\r\n")
+                  })
+                }else socket.write("250 message queued on isolated loopback\r\n")
               }
             }else if(line.includes("/personal#closing_notice=")){
               observed.secureLink=true
+            }else if(/(?:^|\s)https:\/\/example\.invalid\/personal(?:\s|$)/.test(line)){
+              observed.ownerSafeLink=true
             }
           }else if(line.startsWith("EHLO ")){
             socket.write("250 smtp.loopback.test\r\n")
@@ -505,6 +644,248 @@ async function main(){
       assert.equal(Number((await q("select count(*)::int n "+
         "from da_store_platform_closing_email_link "+
         "where seller_id=$1",[mailSeller]))[0].n),1)
+      // Owner 30-day closing: reuse the exact same native SMTP provider,
+      // verified Person email and scheduler with its NEW event/recipient ledger.
+      // Concurrent ticks may commit ONLY ONE claim per Owner/source event.
+      const ownerMailSeller="sel_b22_owner_closing_smtp_accepted"
+      const ownerMailEvent=await seedOwnerClosingMail(ownerMailSeller)
+      // Never tear down the disposable database while a concurrent worker
+      // is still alive. Preserve the actual first failure, not a secondary
+      // "relation does not exist" after fixture cleanup.
+      const concurrentOwnerWorkers=await Promise.allSettled([
+        runOwnerClosingEmailTick(container),
+        runOwnerClosingEmailTick(container)
+      ])
+      for(const run of concurrentOwnerWorkers)
+        if(run.status==="rejected")
+          throw Error("B22 Owner concurrent scheduler rejected: "+String(run.reason))
+      const [ownerAttempt]=await q("select attempts,last_result,message_id,"+
+        "accepted_at,next_attempt_at from da_store_owner_closing_email "+
+        "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner])
+      assert.equal(ownerAttempt.attempts,1,
+        "Two workers cannot send the same Owner closing slot twice")
+      assert.equal(ownerAttempt.last_result,"accepted",
+        "Owner final fenced SMTP result was "+String(ownerAttempt.last_result))
+      assert.ok(ownerAttempt.accepted_at&&ownerAttempt.message_id)
+      const [ownerSource]=await q("select occurred_at from da_audit_event where id=$1",
+        [ownerMailEvent])
+      assert.equal(new Date(ownerAttempt.next_attempt_at).getTime()-
+        new Date(ownerSource.occurred_at).getTime(),86400000,
+        "The next SMTP attempt must be 24h from immutable source time")
+      assert.equal(observed.ownerSafeLink,true,
+        "Owner security notice must link only to the authenticated personal area")
+      await runOwnerClosingEmailTick(container)
+      assert.equal((await q("select attempts from da_store_owner_closing_email "+
+        "where audit_event_id=$1",[ownerMailEvent]))[0].attempts,1,
+        "Immediate rerun cannot send before the next scheduled slot")
+      // Time moves ONLY in disposable PG16 mail scheduling data. Every
+      // retry remains anchored to the immutable original event time.
+      for(let slot=2;slot<=4;slot++){
+        await q("update da_store_owner_closing_email "+
+          "set next_attempt_at=clock_timestamp()-interval '1 second' "+
+          "where audit_event_id=$1",[ownerMailEvent])
+        await runOwnerClosingEmailTick(container)
+        const [attempt]=await q("select attempts,next_attempt_at "+
+          "from da_store_owner_closing_email where audit_event_id=$1",
+          [ownerMailEvent])
+        assert.equal(attempt.attempts,slot)
+        assert.equal(new Date(attempt.next_attempt_at).getTime()-
+          new Date(ownerSource.occurred_at).getTime(),slot*86400000,
+          "Retry is anchored to +24/+48/+72h from original event")
+      }
+      await q("update da_store_owner_closing_email "+
+        "set next_attempt_at=clock_timestamp()-interval '1 second' "+
+        "where audit_event_id=$1",[ownerMailEvent])
+      await runOwnerClosingEmailTick(container)
+      assert.equal((await q("select attempts from da_store_owner_closing_email "+
+        "where audit_event_id=$1",[ownerMailEvent]))[0].attempts,4,
+        "Mandatory Owner notice may never exceed four SMTP attempts")
+      // Nothing in the Owner mail worker can mark mailbox delivery or
+      // enable the irreversible Seller/name transition.
+
+      // An SMTP 550 is a failed attempt, not recipient delivery.
+      refuseRecipient=true
+      const ownerRejected=await seedOwnerClosingMail(
+        "sel_b22_owner_closing_smtp_rejected","withdrawn")
+      await runOwnerClosingEmailTick(container)
+      const [ownerReject]=await q("select attempts,last_result,message_id,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",[ownerRejected])
+      assert.equal(ownerReject.attempts,1)
+      assert.equal(ownerReject.last_result,"failed")
+      assert.equal(ownerReject.message_id,null)
+      assert.equal(ownerReject.accepted_at,null)
+      refuseRecipient=false
+
+      // A remote SMTP DATA ACK that gets lost is uncertain; retry stays
+      // scheduled, never marks a mailbox as delivered.
+      dropAfterData=true
+      const ownerUnknown=await seedOwnerClosingMail(
+        "sel_b22_owner_closing_smtp_unknown")
+      await runOwnerClosingEmailTick(container)
+      const [ownerMaybe]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",[ownerUnknown])
+      assert.equal(ownerMaybe.attempts,1)
+      assert.equal(ownerMaybe.last_result,"uncertain")
+      assert.equal(ownerMaybe.accepted_at,null)
+      dropAfterData=false
+
+      // Revoked protected Owner must not receive a newly claimed SMTP notice.
+      const ownerRevoked=await seedOwnerClosingMail(
+        "sel_b22_owner_closing_smtp_revoked")
+      await q("update da_organization_membership set status='revoked',"+
+        "revoked_at=clock_timestamp() where person_id=$1",[owner])
+      await runOwnerClosingEmailTick(container)
+      assert.equal(Number((await q("select count(*)::int n "+
+        "from da_store_owner_closing_email where audit_event_id=$1",
+        [ownerRevoked]))[0].n),0)
+      await q("update da_organization_membership "+
+        "set status='active',revoked_at=null where person_id=$1",[owner])
+      // Flush the previously revoked Owner's now-current notice before
+      // installing race barriers for new source events.
+      await runOwnerClosingEmailTick(container)
+
+      // Actual claim -> revoke COMMIT -> SMTP eligibility: the prior claim
+      // must become INVALIDATED, and NO DATA can reach the loopback server.
+      const revokeSeller="sel_b22_owner_mail_race_revoked"
+      const revokeEvent=await seedOwnerClosingMail(revokeSeller)
+      const revokeGate=testBarrier()
+      const beforeRevokeData=observed.dataMessages
+      beforeOwnerSmtpConfig=revokeGate
+      const revokeWorker=runOwnerClosingEmailTick(container)
+      try{
+        await waitForBarrier(revokeGate.entered,"revoke after claimed Owner mail")
+        const [claimed]=await q("select attempts,last_result from "+
+          "da_store_owner_closing_email where audit_event_id=$1",[revokeEvent])
+        assert.equal(claimed.attempts,1)
+        assert.equal(claimed.last_result,"inflight")
+        await q("update da_organization_membership "+
+          "set status='revoked',revoked_at=clock_timestamp() "+
+          "where person_id=$1",[owner])
+      }finally{
+        revokeGate.release();beforeOwnerSmtpConfig=null
+        // Even a failed assertion may not erase the disposable schema while
+        // the worker is still running.
+        await Promise.allSettled([revokeWorker])
+      }
+      await revokeWorker
+      assert.equal(observed.dataMessages,beforeRevokeData,
+        "Revocation committed before the final fence must prevent SMTP DATA")
+      const [revokedAttempt]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",[revokeEvent])
+      assert.equal(revokedAttempt.attempts,1)
+      assert.equal(revokedAttempt.last_result,"invalidated")
+      assert.equal(revokedAttempt.accepted_at,null)
+      process.stdout.write("PASS B22 Owner mail race: revocation COMMIT before SMTP DATA suppressed\n")
+      await q("update da_organization_membership "+
+        "set status='active',revoked_at=null where person_id=$1",[owner])
+
+      // Actual claim -> canonical Owner withdrawal COMMIT -> SMTP eligibility:
+      // the original start event is now stale; no misleading mail is sent.
+      const withdrawnSeller="sel_b22_owner_mail_race_withdrawn"
+      const withdrawnEvent=await seedOwnerClosingMail(withdrawnSeller)
+      const withdrawGate=testBarrier()
+      const beforeWithdrawData=observed.dataMessages
+      beforeOwnerSmtpConfig=withdrawGate
+      const withdrawWorker=runOwnerClosingEmailTick(container)
+      try{
+        await waitForBarrier(withdrawGate.entered,"withdrawal after claimed Owner mail")
+        const [claimed]=await q("select attempts,last_result from "+
+          "da_store_owner_closing_email where audit_event_id=$1",[withdrawnEvent])
+        assert.equal(claimed.attempts,1)
+        assert.equal(claimed.last_result,"inflight")
+        await withdrawOwnerClosingFixture(withdrawnSeller)
+      }finally{
+        withdrawGate.release();beforeOwnerSmtpConfig=null
+        await Promise.allSettled([withdrawWorker])
+      }
+      await withdrawWorker
+      assert.equal(observed.dataMessages,beforeWithdrawData,
+        "Withdrawal committed before final fence must prevent stale SMTP DATA")
+      const [withdrawnAttempt]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",[withdrawnEvent])
+      assert.equal(withdrawnAttempt.last_result,"invalidated")
+      assert.equal(withdrawnAttempt.accepted_at,null)
+      assert.equal((await q("select state from da_store_owner_closing "+
+        "where seller_id=$1",[withdrawnSeller]))[0].state,"withdrawn")
+      process.stdout.write("PASS B22 Owner mail race: withdrawal COMMIT before SMTP DATA suppressed\n")
+      // The newly created withdrawal receipt is intentionally not mailed
+      // without its own canonical per-recipient source receipt.
+
+      // Opposite ordering: SMTP DATA has reached the loopback server while
+      // its 250 ACK is withheld. Revocation MUST wait on a REAL PostgreSQL
+      // membership lock until the send and result transaction commits.
+      const sentFirstSeller="sel_b22_owner_mail_race_sent_first"
+      const sentFirstEvent=await seedOwnerClosingMail(sentFirstSeller)
+      const ackGate=testBarrier()
+      const beforeSentFirst=observed.dataMessages
+      holdSmtpDataAck=ackGate
+      const sendFirstWorker=runOwnerClosingEmailTick(container)
+      let blockedRevoke:Promise<unknown>|null=null
+      try{
+        await waitForBarrier(ackGate.entered,"Owner SMTP DATA before revocation")
+        assert.equal(observed.dataMessages,beforeSentFirst+1)
+        // Bun SQL queries are lazy: a bare q(...) is NOT sent to PG.
+        // Attach .then now, before asking pg_stat_activity for the real wait.
+        const executingRevoke=q("update da_organization_membership "+
+          "set status='revoked',revoked_at=clock_timestamp() "+
+          "where person_id=$1 returning id",[owner]).then(rows=>rows)
+        blockedRevoke=executingRevoke
+        void executingRevoke.catch(()=>{}) // observed/rethrown after gate release
+        await assertRealPgLockWait("update da_organization_membership")
+      }finally{
+        ackGate.release();holdSmtpDataAck=null
+        await Promise.allSettled([sendFirstWorker,...(blockedRevoke?[blockedRevoke]:[])])
+      }
+      await sendFirstWorker
+      if(blockedRevoke)await blockedRevoke
+      const [sentFirstAttempt]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",[sentFirstEvent])
+      assert.equal(sentFirstAttempt.last_result,"accepted")
+      assert.ok(sentFirstAttempt.accepted_at)
+      assert.equal((await q("select status from da_organization_membership "+
+        "where person_id=$1",[owner]))[0].status,"revoked")
+      process.stdout.write("PASS B22 Owner mail race: SMTP DATA first blocked revoked membership COMMIT\n")
+      await q("update da_organization_membership "+
+        "set status='active',revoked_at=null where person_id=$1",[owner])
+
+      // DATA-first also blocks a canonical withdrawal of the current Store
+      // until the SMTP result is committed; the opposite commit ordering
+      // above already proved that a prior withdrawal prevents sending.
+      const sentThenWithdrawSeller="sel_b22_owner_mail_race_withdraw_after_data"
+      const sentThenWithdrawEvent=await seedOwnerClosingMail(sentThenWithdrawSeller)
+      const ackWithdraw=testBarrier()
+      const beforeSecondAck=observed.dataMessages
+      holdSmtpDataAck=ackWithdraw
+      const sendThenWithdrawWorker=runOwnerClosingEmailTick(container)
+      let blockedWithdraw:Promise<unknown>|null=null
+      try{
+        await waitForBarrier(ackWithdraw.entered,"Owner SMTP DATA before withdrawal")
+        assert.equal(observed.dataMessages,beforeSecondAck+1)
+        blockedWithdraw=withdrawOwnerClosingFixture(sentThenWithdrawSeller)
+        await assertRealPgLockWait("update da_store_owner_closing")
+      }finally{
+        ackWithdraw.release();holdSmtpDataAck=null
+        await Promise.allSettled([sendThenWithdrawWorker,...(blockedWithdraw?[blockedWithdraw]:[])])
+      }
+      await sendThenWithdrawWorker
+      if(blockedWithdraw)await blockedWithdraw
+      const [sentThenWithdrawAttempt]=await q("select last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",
+        [sentThenWithdrawEvent])
+      assert.equal(sentThenWithdrawAttempt.last_result,"accepted")
+      assert.ok(sentThenWithdrawAttempt.accepted_at)
+      assert.equal((await q("select state from da_store_owner_closing "+
+        "where seller_id=$1",[sentThenWithdrawSeller]))[0].state,"withdrawn")
+      process.stdout.write(
+        "PASS B22 PG16+loopback SMTP Owner security race: claim then revoke "+
+        "or canonical withdrawal commits before DATA => invalidated/no mail; "+
+        "DATA before revoke or withdrawal => both wait for actual PG row "+
+        "locks until send/outcome commit; 250 never denotes delivery\n")
+      process.stdout.write(
+        "PASS B22 PG16+loopback SMTP: Owner closing event/recipient 250 accepted "+
+        "not delivered, 550 failed, lost DATA ACK uncertain, 24h slot, "+
+        "concurrent single claim, revoked Owner denied; finalizer remains off\\n")
+
       // The same job must handle a real SMTP 550 without delivery or a clock.
       refuseRecipient=true
       await seed(rejectedSeller)
