@@ -5328,7 +5328,35 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         and p.deleted_at is null
       limit 2 for share of m,p`,[scope.actor.person_id,organizationId])
     if(currentOwner.length!==1)return null
+    // Only an aggregate count of current protected Owners and canonical
+    // in-account receipts. Do NOT expose another Owner's SMTP attempts,
+    // Person ID, address or read status. This is informational, NEVER an
+    // irreversible-finalization decision or mailbox-delivery proof.
+    const noticeCoverage={protected_owners:0,personal_receipts:0,
+      mailbox_delivery_verified:false}
+    if(row){
+      const coverage=await db.execute(`select
+        count(distinct m.person_id)::int as protected_owners,
+        count(distinct n.person_id)::int as personal_receipts
+        from da_organization_membership m
+        join da_person p on p.id=m.person_id and p.deleted_at is null
+          and p.disabled_at is null
+        left join da_notification_receipt n
+          on n.audit_event_id=? and n.person_id=m.person_id
+        where m.organization_id=? and m.role='owner'
+          and m.protected_owner=true and m.status='active'
+          and m.revoked_at is null and m.deleted_at is null`,
+        [row.source_audit_event_id,organizationId])
+      const owners=Number(coverage[0]?.protected_owners)
+      const receipts=Number(coverage[0]?.personal_receipts)
+      if(coverage.length!==1||!Number.isSafeInteger(owners)||
+         owners<1||owners>100||!Number.isSafeInteger(receipts)||
+         receipts<0||receipts>owners)throw new IdentityAccessDenied()
+      noticeCoverage.protected_owners=owners
+      noticeCoverage.personal_receipts=receipts
+    }
     return {organization_id:organizationId,seller_id:sellerId,
+      notification_coverage:noticeCoverage,
       email_notice:{status:noticeStatus,attempts:noticeAttempts,
         smtp_accepted:smtpAccepted,mailbox_delivery_verified:false},
       state:row?.state??"none",version:row?Number(row.version):0,

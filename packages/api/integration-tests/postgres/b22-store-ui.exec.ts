@@ -139,6 +139,9 @@ async function verifyOwnerClosingBrowser(input:{
   assert.equal(clockView.status,200)
   assert.equal(clockView.body.state,"closing")
   assert.equal(clockView.body.permanent_finalization_enabled,false)
+  assert.deepEqual(clockView.body.notification_coverage,{
+    protected_owners:2,personal_receipts:2,mailbox_delivery_verified:false
+  },"Both active protected Owners have a private in-account receipt, not email delivery")
   assert.deepEqual(clockView.body.email_notice,{
     status:"queued",attempts:0,smtp_accepted:false,
     mailbox_delivery_verified:false
@@ -171,6 +174,9 @@ async function verifyOwnerClosingBrowser(input:{
   assert.equal(ownerMailRecord.length,1)
   const selfAccepted=await readOwnClosing(browser,organizations[0].id,ownerStoreId)
   assert.equal(selfAccepted.status,200)
+  assert.deepEqual(selfAccepted.body.notification_coverage,{
+    protected_owners:2,personal_receipts:2,mailbox_delivery_verified:false
+  },"One Owner's SMTP acceptance cannot alter another Owner's private coverage")
   assert.deepEqual(selfAccepted.body.email_notice,{
     status:"accepted",attempts:1,smtp_accepted:true,
     mailbox_delivery_verified:false
@@ -192,7 +198,11 @@ async function verifyOwnerClosingBrowser(input:{
     "Only the current authorized Person's synthetic SMTP status was accepted")
   await browser.click('#store-owner-closing-refresh')
   await browser.wait("document.getElementById('store-owner-closing-status')."+
-    "textContent.includes('SMTP sunucusu e-postayı kabul etti; posta kutusuna teslim doğrulanmadı.')")
+    "textContent.includes('SMTP sunucusu e-postayı kabul etti; posta kutusuna teslim doğrulanmadı.') && "+
+    "document.getElementById('store-owner-closing-status').textContent.includes('Korunan Owner bildirim kayıtları: 2/2')")
+  assert.ok((await browser.eval(
+    "document.getElementById('store-owner-closing-status').textContent")).includes(
+      'E-posta teslimi veya okunma bu sayılardan doğrulanmaz.'))
   assert.equal(await browser.eval(
     "document.getElementById('store-owner-closing-status').getAttribute('role')"),"status")
   assert.ok(Number.isSafeInteger(clockView.body.remaining_seconds)&&
@@ -257,6 +267,9 @@ async function verifyOwnerClosingBrowser(input:{
     "Mağaza kapatma talebi geri çekildi")
   const withdrawnView=await readOwnClosing(browser,organizations[0].id,ownerStoreId)
   assert.equal(withdrawnView.status,200)
+  assert.deepEqual(withdrawnView.body.notification_coverage,{
+    protected_owners:2,personal_receipts:2,mailbox_delivery_verified:false
+  },"Withdrawal must use its own new event receipts")
   assert.deepEqual(withdrawnView.body.email_notice,{
     status:"queued",attempts:0,smtp_accepted:false,
     mailbox_delivery_verified:false
@@ -438,6 +451,9 @@ async function verifyOwnerClosingBrowser(input:{
     assert.equal(expired.body.can_withdraw,false)
     assert.equal(expired.body.remaining_seconds,0)
     assert.equal(expired.body.permanent_finalization_enabled,false)
+    assert.deepEqual(expired.body.notification_coverage,{
+      protected_owners:2,personal_receipts:0,mailbox_delivery_verified:false
+    },"Synthetic expired event has no mandatory in-account delivery records")
     // The actual authorized Owner screen must stop calling an expired
     // waiting period a countdown. Do not display a completed/terminated
     // Store, release its name, or enable a withdrawal after the deadline.
@@ -456,7 +472,8 @@ async function verifyOwnerClosingBrowser(input:{
     for(const message of ["Yeni satışlar hâlâ kapalı",
       "geri dönüşsüz işlem yapılmıyor",
       "mağaza adını veya geçmiş siparişleri kendiliğinden değiştirmez",
-      "Geri çekme süresi sona erdi"])
+      "Geri çekme süresi sona erdi",
+      "Korunan Owner bildirim kayıtları: 0/2"])
       assert.ok(expiryScreen.includes(message),
         "Real protected Owner must see a safe post-day-30 explanation: "+message)
     assert.equal(await browser.eval(

@@ -3229,6 +3229,15 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          data.email_notice.attempts<0||data.email_notice.attempts>4||
          typeof data.email_notice.smtp_accepted!=='boolean'||
          data.email_notice.mailbox_delivery_verified!==false||
+         !data.notification_coverage||
+         !Number.isSafeInteger(data.notification_coverage.protected_owners)||
+         data.notification_coverage.protected_owners<0||
+         data.notification_coverage.protected_owners>100||
+         !Number.isSafeInteger(data.notification_coverage.personal_receipts)||
+         data.notification_coverage.personal_receipts<0||
+         data.notification_coverage.personal_receipts>
+           data.notification_coverage.protected_owners||
+         data.notification_coverage.mailbox_delivery_verified!==false||
          (data.state!=='none'&&
            (!Number.isFinite(new Date(data.due_at).getTime())||
             !Number.isFinite(new Date(data.started_at).getTime()))))
@@ -3250,6 +3259,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           ' saniye. 30 günlük sürenin bitişi: '+deadline+
           (data.can_withdraw?' — Süre dolmadan geri çekebilirsiniz.':
           ' — Güncel geri çekme hakkı doğrulanamadı; yeniden kontrol edin.');
+        // Aggregate receipt coverage is NOT per-recipient mail status or
+        // proof that an external mailbox received/read the email.
+        const coverage=data.notification_coverage;
+        st.textContent+=' Korunan Owner bildirim kayıtları: '+
+          coverage.personal_receipts+'/'+coverage.protected_owners+
+          ' kişiye özel kayıt oluşturuldu. E-posta teslimi veya okunma bu sayılardan doğrulanmaz.';
         el('store-owner-pause-status').textContent=
           'Mağaza için kapatma talebi etkin; geçici ara verme kullanılamaz.';
       }else if(data.state==='withdrawn'){
