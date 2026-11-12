@@ -66,7 +66,7 @@ const Form = () => {
 
     const res = await signup(formData)
 
-    if (res && !res?.id) {
+    if (typeof res === 'string' && res) {
 
       // Temporary solution. Check also for status code when it's fixed by backend
       const errorMessage = res.toLowerCase().includes('error: identity with email already exists') ? 'It seems the email you entered is already associated with another account. Please log in instead.' : res

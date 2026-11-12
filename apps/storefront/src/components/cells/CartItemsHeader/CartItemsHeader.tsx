@@ -1,5 +1,5 @@
 import { Divider } from "@/components/atoms"
-import { SingleProductSeller } from "@/types/product"
+import type { CartSellerHeader } from "@/types/cart"
 import { format } from "date-fns"
 import { SellerAvatar } from "../SellerAvatar/SellerAvatar"
 import LocalizedClientLink from "@/components/molecules/LocalizedLink/LocalizedLink"
@@ -7,7 +7,7 @@ import LocalizedClientLink from "@/components/molecules/LocalizedLink/LocalizedL
 export const CartItemsHeader = ({
   seller,
 }: {
-  seller: SingleProductSeller
+  seller: CartSellerHeader
 }) => {
   return (
     <LocalizedClientLink href={`/sellers/${seller.handle}`}>

@@ -58,7 +58,10 @@ async function rasterize(content: Buffer, mime: TaxCertificateFormat["mimeType"]
   return new Promise<Buffer>((resolve,reject) => {
     const child = spawn("/usr/bin/prlimit", args, {
       stdio: ["pipe", "pipe", "ignore"],
-      env: { PATH:"/usr/bin:/bin", HOME:"/tmp" },
+      // Next's ambient ProcessEnv type requires NODE_ENV, but this sandbox
+      // MUST NOT inherit or add it. The assertion affects types only:
+      // the child still receives exactly PATH and HOME, nothing else.
+      env: { PATH:"/usr/bin:/bin", HOME:"/tmp" } as unknown as NodeJS.ProcessEnv,
     })
     let done = false, count = 0
     const chunks: Buffer[] = []

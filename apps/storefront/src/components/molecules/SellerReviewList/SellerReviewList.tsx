@@ -3,10 +3,11 @@
 import { OrdersPagination } from "@/components/sections"
 import { SellerReview } from "../SellerReview/SellerReview"
 import { useSearchParams } from "next/navigation"
+import type { SingleProductReview } from "@/types/product"
 
 const LIMIT = 10
 
-export const SellerReviewList = ({ reviews }: { reviews?: any[] }) => {
+export const SellerReviewList = ({ reviews }: { reviews?: SingleProductReview[] }) => {
   const searchParams = useSearchParams()
   const page = searchParams.get("page") || 1
 

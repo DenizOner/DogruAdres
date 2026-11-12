@@ -206,6 +206,53 @@ jobs:
       - name: Install locked dependencies
         id: install
         run: bun install --frozen-lockfile
+      # #159: reuse the existing required Foundation job for targeted
+      # Storefront diagnostics on this authorized repair branch only.
+      # Never skip or suppress TypeScript, ESLint or Next production failures.
+      - name: Storefront #159 type, lint and production build diagnostics
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'fix/storefront-build-eslint-types-159' && steps.install.outcome == 'success' }}
+        timeout-minutes: 8
+        working-directory: apps/storefront
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use the existing official Mercur CLI route codegen, never a
+          # synthetic hand-written route map or unconditional unsafe cast.
+          (cd ../../packages/api && bun run codegen)
+          test -s ../../packages/api/.mercur/routes.d.ts
+          set +e
+          node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json > "$RUNNER_TEMP/storefront-159-types.log" 2>&1
+          type_status=$?
+          bun run lint > "$RUNNER_TEMP/storefront-159-lint.log" 2>&1
+          lint_status=$?
+          bun run build > "$RUNNER_TEMP/storefront-159-build.log" 2>&1
+          build_status=$?
+          set -e
+          echo "Storefront #159 type exit=$type_status"
+          echo "Storefront #159 TS diagnostics: $(grep -cE 'error TS[0-9]+' "$RUNNER_TEMP/storefront-159-types.log" || true)"
+          awk '/error TS[0-9]+/ && ++n<=180 { print }' "$RUNNER_TEMP/storefront-159-types.log"
+          echo "Storefront #159 lint exit=$lint_status"
+          awk '/  error  / {e++} /  warning  / {w++} END {printf "Storefront #159 complete lint totals: errors=%d warnings=%d\\n", e, w}' "$RUNNER_TEMP/storefront-159-lint.log"
+          sed -n '1,350p' "$RUNNER_TEMP/storefront-159-lint.log"
+          echo "Storefront #159 production build exit=$build_status"
+          sed -n '1,110p' "$RUNNER_TEMP/storefront-159-build.log"
+          # Negative probe: a broken TypeScript export must be rejected.
+          probe="src/__storefront_159_bad_syntax_probe__.ts"
+          trap 'rm -f "$probe"' EXIT
+          printf 'export const = ;\n' > "$probe"
+          if node ../../node_modules/eslint/bin/eslint.js "$probe" > "$RUNNER_TEMP/storefront-159-negative.log" 2>&1; then
+            echo "FAIL: ESLint accepted invalid TypeScript syntax"
+            exit 1
+          fi
+          grep -Eiq 'parsing error|unexpected token|unexpected character' "$RUNNER_TEMP/storefront-159-negative.log" || {
+            echo "FAIL: ESLint did not report a syntax diagnostic for the negative probe"
+            sed -n '1,30p' "$RUNNER_TEMP/storefront-159-negative.log"
+            exit 1
+          }
+          echo "PASS: ESLint rejects deliberately invalid TypeScript syntax"
+          # #159: focused native-price DTO and invalid-value regressions, using existing Bun.
+          bun test src/lib/helpers/get-product-price.test.ts
+          test "$type_status" -eq 0 && test "$lint_status" -eq 0 && test "$build_status" -eq 0
       - name: Native SMTP HTTPS privacy negative regressions
         id: asvs_smtp_http
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

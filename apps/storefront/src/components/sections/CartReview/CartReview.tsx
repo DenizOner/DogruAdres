@@ -5,20 +5,25 @@ import { PromoCode } from '@/components/organisms/PromoCode/PromoCode';
 
 import { CartItems } from './CartItems';
 import PaymentButton from './PaymentButton';
+import type { HttpTypes } from '@medusajs/types';
 
-const Review = ({ cart }: { cart: any }) => {
-  const paidByGiftcard = cart?.gift_cards && cart?.gift_cards?.length > 0 && cart?.total === 0;
+const Review = ({ cart }: { cart: HttpTypes.StoreCart }) => {
+  const giftCards = 'gift_cards' in cart && Array.isArray(cart.gift_cards) ? cart.gift_cards : [];
+  const paidByGiftcard = giftCards.length > 0 && cart.total === 0;
 
   // Every seller in the cart must have a shipping method. The backend enforces
   // one method per seller, so covering each seller means one method per seller.
   const cartSellerCount = new Set(
-    (cart?.items ?? [])
-      .map((item: any) => item.offer?.seller_id)
-      .filter(Boolean)
+    (cart.items ?? []).flatMap((item) => {
+      if (!('offer' in item) || !item.offer || typeof item.offer !== 'object' ||
+          !('seller_id' in item.offer)) return [];
+      const sellerId = item.offer.seller_id;
+      return typeof sellerId === 'string' && sellerId ? [sellerId] : [];
+    })
   ).size;
   const allSellersHaveShipping =
-    cart.shipping_methods.length > 0 &&
-    cart.shipping_methods.length >= cartSellerCount;
+    (cart.shipping_methods?.length ?? 0) > 0 &&
+    (cart.shipping_methods?.length ?? 0) >= cartSellerCount;
 
   const previousStepsCompleted =
     cart.shipping_address &&

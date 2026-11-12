@@ -5,6 +5,8 @@ import { revalidateTag } from 'next/cache';
 import { redirect } from 'next/navigation';
 
 import { sdk } from '../client';
+
+type CustomerActionResult = { success: boolean; error: string | null };
 import {
   getAuthHeaders,
   getCacheOptions,
@@ -101,8 +103,8 @@ export async function signup(formData: FormData) {
     await transferCart();
 
     return createdCustomer;
-  } catch (error: any) {
-    return error.toString();
+  } catch (error: unknown) {
+    return String(error);
   }
 }
 
@@ -155,7 +157,7 @@ export async function transferCart() {
   revalidateTag(cartCacheTag);
 }
 
-export const addCustomerAddress = async (formData: FormData): Promise<any> => {
+export const addCustomerAddress = async (formData: FormData): Promise<CustomerActionResult> => {
   const address = {
     address_name: formData.get('address_name') as string,
     first_name: formData.get('first_name') as string,
@@ -204,7 +206,7 @@ export const deleteCustomerAddress = async (addressId: string): Promise<void> =>
     });
 };
 
-export const updateCustomerAddress = async (formData: FormData): Promise<any> => {
+export const updateCustomerAddress = async (formData: FormData): Promise<CustomerActionResult> => {
   const addressId = formData.get('addressId') as string;
 
   if (!addressId) {
@@ -246,7 +248,7 @@ export const updateCustomerAddress = async (formData: FormData): Promise<any> =>
     });
 };
 
-export const updateCustomerPassword = async (password: string, token: string): Promise<any> => {
+export const updateCustomerPassword = async (password: string, token: string): Promise<CustomerActionResult> => {
   const res = await (sdk.auth.$actorType.$authProvider.update
     .mutate({
       $actorType: 'customer',

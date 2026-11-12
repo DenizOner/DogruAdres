@@ -38,21 +38,27 @@ export type StoreCardShippingMethod = HttpTypes.StoreCartShippingOption & {
   };
 };
 
-type ShippingProps = {
-  cart: Omit<HttpTypes.StoreCart, 'items'> & {
-    items?: CartItem[];
-  };
-  availableShippingMethods:
-    | (StoreCardShippingMethod &
-        {
-          rules: any;
-          seller_id: string;
-          price_type: string;
-          id: string;
-          amount?: number;
-        }[])
-    | null;
+type SellerShippingMethod = StoreCardShippingMethod & {
+  rules?: Array<{ attribute?: string; value?: string }>;
+  seller_id: string;
+  price_type: string;
+  id: string;
+  amount?: number;
 };
+
+type ShippingProps = {
+  cart: Omit<HttpTypes.StoreCart, 'items'> & { items?: CartItem[] };
+  availableShippingMethods: StoreCardShippingMethod[] | null;
+};
+
+// The seller grouping key must come from the authoritative shipping option.
+// Unknown seller context is not accepted as a valid checkout option.
+const isSellerShippingMethod = (
+  method: StoreCardShippingMethod
+): method is SellerShippingMethod =>
+  typeof method.seller_id === 'string' &&
+  method.seller_id.length > 0 &&
+  (method.price_type === 'flat' || method.price_type === 'calculated');
 
 const CartShippingMethodsSection: FC<ShippingProps> = ({ cart, availableShippingMethods }) => {
   const [isLoadingPrices, setIsLoadingPrices] = useState(false);
@@ -66,9 +72,9 @@ const CartShippingMethodsSection: FC<ShippingProps> = ({ cart, availableShipping
 
   const isOpen = searchParams.get('step') === 'delivery';
 
-  const _shippingMethods = availableShippingMethods?.filter(
-    sm => sm.rules?.find((rule: any) => rule.attribute === 'is_return')?.value !== 'true'
-  );
+  const _shippingMethods = availableShippingMethods
+    ?.filter(isSellerShippingMethod)
+    .filter(sm => sm.rules?.find((rule) => rule.attribute === 'is_return')?.value !== 'true');
 
   useEffect(() => {
     if (_shippingMethods?.length) {
@@ -81,7 +87,11 @@ const CartShippingMethodsSection: FC<ShippingProps> = ({ cart, availableShipping
           const pricesMap: Record<string, number> = {};
           res
             .filter(r => r.status === 'fulfilled')
-            .forEach(p => (pricesMap[p.value?.id || ''] = p.value?.amount!));
+            .forEach(p => {
+              if (p.value?.id && typeof p.value.amount === 'number') {
+                pricesMap[p.value.id] = p.value.amount;
+              }
+            });
 
           setCalculatedPricesMap(pricesMap);
           setIsLoadingPrices(false);
@@ -109,9 +119,11 @@ const CartShippingMethodsSection: FC<ShippingProps> = ({ cart, availableShipping
       if (!res.ok) {
         return setError(res.error?.message);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       setError(
-        error?.message?.replace('Error setting up the request: ', '') || 'An error occurred'
+        error instanceof Error
+          ? error.message.replace('Error setting up the request: ', '')
+          : 'An error occurred'
       );
     } finally {
       setIsLoadingPrices(false);
@@ -130,8 +142,8 @@ const CartShippingMethodsSection: FC<ShippingProps> = ({ cart, availableShipping
     setError(null);
   }, [isOpen]);
 
-  const groupedBySellerId = _shippingMethods?.reduce((acc: any, method) => {
-    const sellerId = method.seller_id!;
+  const groupedBySellerId = (_shippingMethods ?? []).reduce<Record<string, SellerShippingMethod[]>>((acc, method) => {
+    const sellerId = method.seller_id;
 
     if (!acc[sellerId]) {
       acc[sellerId] = [];
@@ -161,7 +173,7 @@ const CartShippingMethodsSection: FC<ShippingProps> = ({ cart, availableShipping
   // the option ids that belong to that seller.
   const getSelectedMethodForSeller = (key: string) => {
     const optionIds = new Set<string>(
-      (groupedBySellerId?.[key] ?? []).map((o: any) => o.id)
+      (groupedBySellerId?.[key] ?? []).map((o) => o.id)
     );
     return cart.shipping_methods?.find(
       method =>
@@ -176,7 +188,7 @@ const CartShippingMethodsSection: FC<ShippingProps> = ({ cart, availableShipping
 
   // Map each selected method back to its seller name for the summary rows.
   const sellerNameByOptionId = new Map<string, string | undefined>(
-    (_shippingMethods ?? []).map((option: any) => [option.id, option.seller_name])
+    (_shippingMethods ?? []).map((option) => [option.id, option.seller_name])
   );
 
   return (
@@ -256,7 +268,7 @@ const CartShippingMethodsSection: FC<ShippingProps> = ({ cart, availableShipping
                                 className="text-small-regular border-top-0 absolute z-20 max-h-60 w-full overflow-auto rounded-lg border bg-white focus:outline-none sm:text-sm"
                                 data-testid="shipping-address-options"
                               >
-                                {groupedBySellerId[key].map((option: any) => (
+                                {groupedBySellerId[key].map((option) => (
                                   <Listbox.Option
                                     className="relative cursor-pointer select-none border-b py-4 pl-6 pr-10 hover:bg-gray-50"
                                     value={option.id}

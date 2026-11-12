@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useTransition } from 'react';
+import type { HttpTypes } from '@medusajs/types';
 
 import { Button, Card, Input } from '@/components/atoms';
 import { BinIcon, CollapseIcon, DiscountIcon } from '@/icons';
@@ -8,7 +9,7 @@ import { applyPromotions, deletePromotionCode } from '@/lib/data/cart';
 import { toast } from '@/lib/helpers/toast';
 import { cn } from '@/lib/utils';
 
-export const PromoCode = ({ cart, defaultOpen = false }: { cart: any; defaultOpen?: boolean }) => {
+export const PromoCode = ({ cart, defaultOpen = false }: { cart: HttpTypes.StoreCart; defaultOpen?: boolean }) => {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const [height, setHeight] = useState(0);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -36,7 +37,7 @@ export const PromoCode = ({ cart, defaultOpen = false }: { cart: any; defaultOpe
       const result = await applyPromotions([promoCode]);
 
       if (!result.success) {
-        toast.info({ title: result.error });
+        toast.info({ title: result.error ?? 'Unable to apply promotion code' });
         setHasError(true);
         return;
       }
@@ -53,8 +54,8 @@ export const PromoCode = ({ cart, defaultOpen = false }: { cart: any; defaultOpe
     });
   };
 
-  const handleRemoveCode = (code: string) => {
-    if (isPending) return;
+  const handleRemoveCode = (code: string | undefined) => {
+    if (!code || isPending) return;
 
     startTransition(async () => {
       try {
@@ -126,7 +127,7 @@ export const PromoCode = ({ cart, defaultOpen = false }: { cart: any; defaultOpe
               </Button>
             </div>
           ) : (
-            cart.promotions.map((promo: any) => (
+            cart.promotions.map((promo) => (
               <div
                 key={promo.id}
                 className="flex items-center justify-between py-2"
@@ -134,7 +135,7 @@ export const PromoCode = ({ cart, defaultOpen = false }: { cart: any; defaultOpe
                 <span>{promo.code}</span>
                 <button
                   onClick={() => handleRemoveCode(promo.code)}
-                  disabled={isPending}
+                  disabled={isPending || !promo.code}
                   className="text-primary transition-colors hover:text-red-500 disabled:opacity-50"
                 >
                   <BinIcon size={20} />
