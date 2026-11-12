@@ -1058,11 +1058,11 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
   assert.ok(firstPending)
   const reason="İlk itiraz incelendi; platform kararı korunuyor ve satışlar kapalı"
   const two=[
-    {organization_id:organizationId,seller_id:initialSellerId,
+    {organization_id:firstPending.organization_id,seller_id:initialSellerId,
      source_request_id:firstPending.source_request_id,
      request_id:"dasdr_"+randomBytes(16).toString("hex"),
      decision:"rejected",reason},
-    {organization_id:organizationId,seller_id:initialSellerId,
+    {organization_id:firstPending.organization_id,seller_id:initialSellerId,
      source_request_id:firstPending.source_request_id,
      request_id:"dasdr_"+randomBytes(16).toString("hex"),
      decision:"rejected",reason}
