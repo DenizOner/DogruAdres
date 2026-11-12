@@ -21,6 +21,7 @@ export function allowedPublicRequest(method,path){
     '/personal/store-owner-pause':['GET','POST'],
     '/personal/store-owner-closing':['GET','POST'],
     '/personal/store-platform-closing':['GET','POST'],
+    '/personal/store-platform-closing-final-review':['POST'],
     '/personal/platform/store-closings':['GET','POST'],
     '/personal/platform/store-closing-email-readiness':['GET'],
     '/personal/store-platform-closing-email-visit':['POST'],
