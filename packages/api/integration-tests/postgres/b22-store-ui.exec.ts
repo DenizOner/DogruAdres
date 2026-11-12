@@ -3302,6 +3302,15 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
     n.title==="Mağaza başvurusu reddedildi"&&n.context===x.orgName).length,1)
   assert.equal(JSON.stringify(notice.body).includes(reason),false,
     "A private alert must not copy arbitrary staff reason text")
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  // An uncertain successful write must be reconciled with a fresh
+  // authorized GET. Its terminated Seller must disappear from the
+  // pending-review UI; there must be no retry of the write.
+  await reviewer.click("#store-approval-refresh")
+  await reviewer.wait("!document.getElementById('store-approval-list').textContent.includes("+JSON.stringify(seller.id)+")")
+  assert.equal(await reviewer.eval("window.__b22RejectPostCount"),1,
+    "Readback must not issue another platform Store decision")
   // P1 #323: a historical application must not confer live Seller status
   // after its Organization↔Seller provenance is revoked. Use the same signed-in
   // Owner and real HTTPS GET backed by this disposable native PG16 database.
@@ -3362,15 +3371,18 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   assert.equal(restored.seller_status,"terminated")
   assert.equal(restored.rejection_reason,reason,
     "Only the currently verified Owner may resume private native status reads")
+  // The real Owner UI test above necessarily foregrounds a different
+  // first-party session. Staff panels fail closed while backgrounded; restore
+  // their authorized visible state before the caller resumes policy review.
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible'")
-  // An uncertain successful write must be reconciled with a fresh
-  // authorized GET. Its terminated Seller must disappear from the
-  // pending-review UI; there must be no retry of the write.
-  await reviewer.click("#store-approval-refresh")
-  await reviewer.wait("!document.getElementById('store-approval-list').textContent.includes("+JSON.stringify(seller.id)+")")
-  assert.equal(await reviewer.eval("window.__b22RejectPostCount"),1,
-    "Readback must not issue another platform Store decision")
+  if(!await reviewer.eval("!document.getElementById('workspace').hidden && "+
+      "!document.getElementById('platform-store-policy-panel').hidden")){
+    await reviewer.send("Page.reload",{ignoreCache:true})
+    await reviewer.wait("document.visibilityState==='visible' && "+
+      "!document.getElementById('workspace').hidden && "+
+      "!document.getElementById('platform-store-policy-panel').hidden")
+  }
   process.stdout.write("PASS B22 Chrome/PG16: protected platform Staff reasoned pending Seller rejection during company pause, native terminated without approval, private Owner status and redacted notice, one audit/outbox, Owner/CSRF/short reason/replay denied\n")
 }
 
