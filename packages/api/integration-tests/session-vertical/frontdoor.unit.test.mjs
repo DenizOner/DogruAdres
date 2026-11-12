@@ -328,6 +328,15 @@ test('real public email CORS enforces configured Storefront origin and exact JSO
   }
 })
 
+test('B22 second-stage Owner review accepts exact POST only at the public TLS ingress',()=>{
+  const path='/personal/store-platform-closing-final-review'
+  assert.equal(allowedPublicRequest('POST',path),true)
+  for(const method of ['GET','PUT','PATCH','DELETE','OPTIONS'])
+    assert.equal(allowedPublicRequest(method,path),false)
+  for(const nested of [path+'/x',path+'/',path+'/sel_foreign'])
+    assert.equal(allowedPublicRequest('POST',nested),false)
+})
+
 test('B22 Owner email link accepts exact POST only, not scanner GET or native paths',()=>{
   const path='/personal/store-platform-closing-email-visit'
   assert.equal(allowedPublicRequest('POST',path),true)
