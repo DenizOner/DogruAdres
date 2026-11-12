@@ -11,9 +11,7 @@ import { listRegions } from "@/lib/data/regions"
 import { retrieveCustomer } from "@/lib/data/customer"
 import { ParentCategoryLinks } from "@/components/molecules/ParentCategoryLinks/ParentCategoryLinks"
 
-export const Header = async ({ locale } : {
-  locale: string
-}) => {
+export const Header = async ({}: { locale: string }) => {
   const user = await retrieveCustomer().catch(() => null)
   const isLoggedIn = Boolean(user)
 

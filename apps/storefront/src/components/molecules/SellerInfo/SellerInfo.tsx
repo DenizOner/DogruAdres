@@ -4,7 +4,6 @@ import { SellerInfoHeader } from "../SellerInfoHeader/SellerInfoHeader"
 
 export const SellerInfo = ({
   seller,
-  header = false,
   showArrow = false,
   bottomBorder = false,
   showReviews = false,
