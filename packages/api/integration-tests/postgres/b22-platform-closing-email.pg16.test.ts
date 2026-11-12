@@ -474,7 +474,8 @@ async function main(){
       [owner,syntheticActor,syntheticIdentity])
     await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
       "values ($1,$2,'user',$3)",["damap_b22_mail_pg",owner,syntheticActor])
-    const observed={acceptedRecipient:false,secureLink:false,acceptedData:false}
+    const observed={acceptedRecipient:false,secureLink:false,
+      ownerSafeLink:false,acceptedData:false}
     let refuseRecipient=false,dropAfterData=false
     const mock=createServer(socket=>{
       socket.setEncoding("utf8")
@@ -498,6 +499,8 @@ async function main(){
               }
             }else if(line.includes("/personal#closing_notice=")){
               observed.secureLink=true
+            }else if(line.includes("https://example.invalid/personal")){
+              observed.ownerSafeLink=true
             }
           }else if(line.startsWith("EHLO ")){
             socket.write("250 smtp.loopback.test\r\n")
@@ -551,6 +554,76 @@ async function main(){
       assert.equal(Number((await q("select count(*)::int n "+
         "from da_store_platform_closing_email_link "+
         "where seller_id=$1",[mailSeller]))[0].n),1)
+      // Owner 30-day closing: reuse the exact same native SMTP provider,
+      // verified Person email and scheduler with its NEW event/recipient ledger.
+      // Concurrent ticks may commit ONLY ONE claim per Owner/source event.
+      const ownerMailSeller="sel_b22_owner_closing_smtp_accepted"
+      const ownerMailEvent=await seedOwnerClosingMail(ownerMailSeller)
+      await Promise.all([
+        runOwnerClosingEmailTick(container),
+        runOwnerClosingEmailTick(container)
+      ])
+      const [ownerAttempt]=await q("select attempts,last_result,message_id,"+
+        "accepted_at,next_attempt_at from da_store_owner_closing_email "+
+        "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner])
+      assert.equal(ownerAttempt.attempts,1,
+        "Two workers cannot send the same Owner closing slot twice")
+      assert.equal(ownerAttempt.last_result,"accepted")
+      assert.ok(ownerAttempt.accepted_at&&ownerAttempt.message_id)
+      const [ownerSource]=await q("select occurred_at from da_audit_event where id=$1",
+        [ownerMailEvent])
+      assert.equal(new Date(ownerAttempt.next_attempt_at).getTime()-
+        new Date(ownerSource.occurred_at).getTime(),86400000,
+        "The next SMTP attempt must be 24h from immutable source time")
+      assert.equal(observed.ownerSafeLink,true,
+        "Owner security notice must link only to the authenticated personal area")
+      await runOwnerClosingEmailTick(container)
+      assert.equal((await q("select attempts from da_store_owner_closing_email "+
+        "where audit_event_id=$1",[ownerMailEvent]))[0].attempts,1,
+        "Immediate rerun cannot send before the next scheduled slot")
+
+      // An SMTP 550 is a failed attempt, not recipient delivery.
+      refuseRecipient=true
+      const ownerRejected=await seedOwnerClosingMail(
+        "sel_b22_owner_closing_smtp_rejected","withdrawn")
+      await runOwnerClosingEmailTick(container)
+      const [ownerReject]=await q("select attempts,last_result,message_id,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",[ownerRejected])
+      assert.equal(ownerReject.attempts,1)
+      assert.equal(ownerReject.last_result,"failed")
+      assert.equal(ownerReject.message_id,null)
+      assert.equal(ownerReject.accepted_at,null)
+      refuseRecipient=false
+
+      // A remote SMTP DATA ACK that gets lost is uncertain; retry stays
+      // scheduled, never marks a mailbox as delivered.
+      dropAfterData=true
+      const ownerUnknown=await seedOwnerClosingMail(
+        "sel_b22_owner_closing_smtp_unknown")
+      await runOwnerClosingEmailTick(container)
+      const [ownerMaybe]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",[ownerUnknown])
+      assert.equal(ownerMaybe.attempts,1)
+      assert.equal(ownerMaybe.last_result,"uncertain")
+      assert.equal(ownerMaybe.accepted_at,null)
+      dropAfterData=false
+
+      // Revoked protected Owner must not receive a newly claimed SMTP notice.
+      const ownerRevoked=await seedOwnerClosingMail(
+        "sel_b22_owner_closing_smtp_revoked")
+      await q("update da_organization_membership set status='revoked',"+
+        "revoked_at=clock_timestamp() where person_id=$1",[owner])
+      await runOwnerClosingEmailTick(container)
+      assert.equal(Number((await q("select count(*)::int n "+
+        "from da_store_owner_closing_email where audit_event_id=$1",
+        [ownerRevoked]))[0].n),0)
+      await q("update da_organization_membership "+
+        "set status='active',revoked_at=null where person_id=$1",[owner])
+      process.stdout.write(
+        "PASS B22 PG16+loopback SMTP: Owner closing event/recipient 250 accepted "+
+        "not delivered, 550 failed, lost DATA ACK uncertain, 24h slot, "+
+        "concurrent single claim, revoked Owner denied; finalizer remains off\\n")
+
       // The same job must handle a real SMTP 550 without delivery or a clock.
       refuseRecipient=true
       await seed(rejectedSeller)
