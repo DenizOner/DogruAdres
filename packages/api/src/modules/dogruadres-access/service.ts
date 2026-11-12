@@ -1711,11 +1711,21 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const applications=drafts.draft_role==="owner"?
       await readStoreApplications(db,token,org):[]
     if(!applications)return null
+    // Historical applications stay readable, but the native Seller's *live*
+    // status and private rejection reason require today's verified, unrevoked
+    // Organization↔Store association (including canonical audit/outbox).
+    // This is a server-internal hint, never part of the public response.
+    const currentSellerIds=new Set(applications.length?
+      await platformApprovedSellerIds(db,org):[])
+    const scopedApplications=applications.map(app=>({
+      ...app,live_seller_authorized:app.status==="created" &&
+        typeof app.seller_id==="string" && currentSellerIds.has(app.seller_id)
+    }))
     const policy=await db.execute(`select store_application_enabled from da_organization
       where id=? and status='active' and deleted_at is null`,[org])
     if(policy.length!==1||typeof policy[0].store_application_enabled!=="boolean")
       return null
-    return {applications,store_application_enabled:policy[0].store_application_enabled as boolean,
+    return {applications:scopedApplications,store_application_enabled:policy[0].store_application_enabled as boolean,
       draft_role:drafts.draft_role,drafts:drafts.drafts,
       has_more_drafts:drafts.has_more_drafts}
   }
