@@ -7,8 +7,6 @@ import { HttpTypes } from "@medusajs/types"
 import { useElements, useStripe } from "@stripe/react-stripe-js"
 import React, { useEffect, useState } from "react"
 import { Button } from "@/components/atoms"
-import { orderErrorFormatter } from "@/lib/helpers/order-error-formatter"
-import { toast } from "@/lib/helpers/toast"
 
 type PaymentButtonProps = {
   cart: HttpTypes.StoreCart
@@ -154,6 +152,7 @@ const StripePaymentButton = ({
     <>
       <Button
         disabled={disabled || notReady}
+        data-testid={dataTestId}
         onClick={handlePayment}
         loading={submitting}
         className="w-full"
