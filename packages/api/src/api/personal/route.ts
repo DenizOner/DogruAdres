@@ -363,7 +363,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     </section>
     <section id="store-platform-appeal-panel" hidden aria-labelledby="store-platform-appeal-title">
       <h3 id="store-platform-appeal-title">Platform kapatma kararı ve itiraz</h3>
-      <p>Kapatma gerekçesini güvenle inceleyebilirsiniz. Zorunlu e-posta teslimi kanıtlanmadan 10/30 günlük sayaç çalışmaz ve kesin kapanış uygulanmaz.</p>
+      <p>Kapatma gerekçesini güvenle inceleyebilirsiniz. Satışlar platform kararıyla hemen durur. 10+20 günlük itiraz süresi güvenilir e-posta teslimiyle veya dört gönderim girişimi sonrasında zorunlu yönetici uyarısı güvenle kaydedilince başlayabilir. Kesin kapatma ayrı inceleme ve güvenlik koşullarına bağlıdır.</p>
       <p id="store-platform-appeal-reason"></p>
       <p id="store-platform-appeal-status" role="status" aria-live="polite"></p>
       <form id="store-platform-appeal-form">
