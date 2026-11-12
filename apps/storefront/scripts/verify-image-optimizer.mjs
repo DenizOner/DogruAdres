@@ -60,11 +60,15 @@ try {
   assert.equal(svgOptimizer.status, 400, 'SVG optimizer must reject SVG when disabled')
   // Actual headless Chrome must hydrate the user-facing SafeImage wrapper.
   // An optimizer 400 is not enough if the product page still shows a broken image.
+  const fixtureResponse = await get(base + '/images/image-175-ci-only')
+  assert.equal(fixtureResponse.status, 200, 'CI-only image test page must bypass Medusa locale middleware')
+  assert.match(await fixtureResponse.text(), /image175-remote/, 'CI image fixture not rendered')
+
   const browser = await new Promise((resolve, reject) => {
     const chrome = spawn('google-chrome', [
       '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
       '--disable-background-networking', '--no-first-run',
-      '--virtual-time-budget=7000', '--dump-dom', base + '/image-175-ci-only',
+      '--virtual-time-budget=7000', '--dump-dom', base + '/images/image-175-ci-only',
     ], { stdio: ['ignore', 'pipe', 'pipe'] })
     let dom = ''
     let errors = ''
