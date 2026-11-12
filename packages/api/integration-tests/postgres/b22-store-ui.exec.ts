@@ -34,6 +34,8 @@ import {assertWcag22AxeInChrome} from "./wcag22-axe-chrome"
 import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
+import {platformApprovedSellerIds} from "../../src/modules/dogruadres-access/legal-store-ownership"
+import {IdentityAccessDenied} from "../../src/modules/dogruadres-access/identity-session"
 import taxCertificateInventory, {inspectTaxCertificateSnapshot} from "../../src/scripts/tax-certificate-inventory"
 
 
@@ -3383,7 +3385,74 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
       "!document.getElementById('workspace').hidden && "+
       "!document.getElementById('platform-store-policy-panel').hidden")
   }
+  // P2 #325: same production proof SQL against 51 unrelated, fully
+  // source-backed current Store associations in disposable PostgreSQL 16.
+  // All fixture writes roll back: no native Seller, payment or live data.
+  await q("begin")
+  try{
+    const [actor]=await q(`select actor_person_id,actor_type,actor_id
+      from da_audit_event
+      where action='organization.store_application_rejected'
+        and organization_id=$1 and target_id=$2
+      order by occurred_at desc limit 1`,[x.org,seller.id])
+    assert.ok(actor?.actor_person_id&&actor?.actor_type&&actor?.actor_id)
+    const fixtures=await q(`insert into da_audit_event
+      (id,actor_person_id,actor_type,actor_id,organization_id,action,
+       module,resource,target_id,role_context,new_values,occurred_at)
+      select 'daaud_'||gen_random_uuid()::text,$1,$2,$3,$4,
+        'organization.store_association_approved','dogruadres-access',
+        'store-association','sel_b22_scale_'||n::text,'platform_staff',
+        '{}'::jsonb,clock_timestamp()
+      from generate_series(1,51) n returning id,target_id`,
+      [actor.actor_person_id,actor.actor_type,actor.actor_id,x.org])
+    assert.equal(fixtures.length,51)
+    const eventIds=fixtures.map(row=>row.id)
+    const outbox=await q(`insert into da_audit_outbox
+      (id,source_audit_event_id,source_module,envelope)
+      select 'daaob_'||gen_random_uuid()::text,e.id,
+        'dogruadres-access','{}'::jsonb
+      from da_audit_event e where e.id=any($1::text[])
+      returning id`,[eventIds])
+    assert.equal(outbox.length,51)
+    const related=await q(`insert into da_organization_seller_ownership
+      (id,organization_id,seller_id,verification_audit_event_id,verified_at)
+      select 'daown_'||gen_random_uuid()::text,e.organization_id,
+        e.target_id,e.id,clock_timestamp()
+      from da_audit_event e where e.id=any($1::text[])
+      returning id`,[eventIds])
+    assert.equal(related.length,51)
+    const [{n:active}]=await q(`select count(*)::int n
+      from da_organization_seller_ownership
+      where organization_id=$1 and revoked_at is null`,[x.org])
+    assert.ok(active>50)
+    // Source helper uses '?' placeholders; translate for the real PG client
+    // with a strict count, never concatenate user-supplied SQL arguments.
+    const scopedDb={execute:(sql:string,values:unknown[]=[])=>{
+      let index=0
+      const pgSql=sql.replace(/\?/g,()=>"$"+(++index))
+      assert.equal(index,values.length)
+      return q(pgSql,values)
+    }}
+    await assert.rejects(platformApprovedSellerIds(scopedDb,x.org),
+      IdentityAccessDenied,"Original unfiltered >50 guard remains fail-closed")
+    assert.deepEqual(await platformApprovedSellerIds(scopedDb,x.org,[seller.id]),
+      [seller.id],"Unrelated Store count cannot hide one current valid application")
+    const removed=await q(`update da_organization_seller_ownership
+      set revoked_at=clock_timestamp()
+      where id=$1 and revoked_at is null returning id`,[liveOwnership[0].id])
+    assert.equal(removed.length,1)
+    assert.deepEqual(await platformApprovedSellerIds(scopedDb,x.org,[seller.id]),[],
+      "Revoked candidate cannot reveal live native Seller status")
+  }finally{
+    await q("rollback")
+  }
+  const [restoredOrigin]=await q(`select revoked_at from da_organization_seller_ownership
+    where id=$1`,[liveOwnership[0].id])
+  assert.equal(restoredOrigin?.revoked_at,null,
+    "The original verified ownership must survive the rolled-back scale probe")
+  process.stdout.write("PASS B22 real PG16: 51 unrelated audited Store associations do not hide bounded historical Seller proof; revoked candidate denied; global guard retained and fixture rolled back\n")
   process.stdout.write("PASS B22 Chrome/PG16: protected platform Staff reasoned pending Seller rejection during company pause, native terminated without approval, private Owner status and redacted notice, one audit/outbox, Owner/CSRF/short reason/replay denied\n")
+}
 }
 
 /** Separate test helper avoids TypeScript's huge-main control-flow limit.
