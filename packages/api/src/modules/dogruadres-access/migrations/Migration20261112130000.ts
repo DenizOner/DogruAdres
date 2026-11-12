@@ -15,7 +15,7 @@ export class Migration20261112130000 extends Migration {
       last_attempt_at timestamptz,
       last_result text not null default 'pending'
         check (last_result in ('pending','inflight','accepted',
-          'failed','unverified_identity','uncertain')),
+          'failed','unverified_identity','uncertain','invalidated')),
       message_id text,
       claim_id uuid,
       lease_until timestamptz,
