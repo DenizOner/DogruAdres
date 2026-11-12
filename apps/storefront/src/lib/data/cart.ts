@@ -388,23 +388,28 @@ export async function setAddresses(currentState: unknown, formData: FormData) {
       throw new Error('No existing cart found when setting addresses');
     }
 
-    const data = {
-      shipping_address: {
-        first_name: formData.get('shipping_address.first_name'),
-        last_name: formData.get('shipping_address.last_name'),
-        address_1: formData.get('shipping_address.address_1'),
-        address_2: '',
-        company: formData.get('shipping_address.company'),
-        postal_code: formData.get('shipping_address.postal_code'),
-        city: formData.get('shipping_address.city'),
-        country_code: formData.get('shipping_address.country_code'),
-        province: formData.get('shipping_address.province'),
-        phone: formData.get('shipping_address.phone')
-      },
-      email: formData.get('email')
-    } as any;
+    const textField = (key: string): string | undefined => {
+      const value = formData.get(key);
+      return typeof value === 'string' ? value : undefined;
+    };
 
-    data.billing_address = data.shipping_address;
+    const shippingAddress = {
+      first_name: textField('shipping_address.first_name'),
+      last_name: textField('shipping_address.last_name'),
+      address_1: textField('shipping_address.address_1'),
+      address_2: '',
+      company: textField('shipping_address.company'),
+      postal_code: textField('shipping_address.postal_code'),
+      city: textField('shipping_address.city'),
+      country_code: textField('shipping_address.country_code'),
+      province: textField('shipping_address.province'),
+      phone: textField('shipping_address.phone')
+    };
+    const data: HttpTypes.StoreUpdateCart = {
+      shipping_address: shippingAddress,
+      billing_address: shippingAddress,
+      email: textField('email')
+    };
 
     await updateCart(data);
     await revalidatePath('/cart');
@@ -424,15 +429,33 @@ export async function placeOrder(cartId?: string) {
     ...(await getAuthHeaders())
   };
 
-  const res = await sdk.store.carts.$id.complete
+  const res: {
+    ok: boolean;
+    error: { message: string } | null;
+    data: unknown;
+  } = await sdk.store.carts.$id.complete
     .mutate({ $id: id, fetchOptions: { headers } })
-    .then(data => ({ ok: true, error: null, data: data as any }))
-    .catch(error => ({ ok: false, error, data: null as any }));
+    .then((data: unknown) => ({ ok: true, error: null, data }))
+    .catch((error: unknown) => ({
+      ok: false,
+      error: { message: getCartErrorMessage(error) ?? 'Unable to complete order' },
+      data: null
+    }));
 
   const cartCacheTag = await getCacheTag('carts');
   revalidateTag(cartCacheTag);
 
-  if (res.data?.order_group) {
+  const data = res.data;
+  const group =
+    typeof data === 'object' && data !== null &&
+    'order_group' in data && typeof data.order_group === 'object' &&
+    data.order_group !== null && 'id' in data.order_group &&
+    typeof data.order_group.id === 'string' &&
+    data.order_group.id.length > 0
+      ? data.order_group
+      : null;
+
+  if (group) {
     revalidatePath('/user/reviews');
     revalidatePath('/user/orders');
     removeCartId();
@@ -440,7 +463,7 @@ export async function placeOrder(cartId?: string) {
     // Send the shopper to the order-group detail page, which renders every
     // child order + aggregated totals. `order_group.id` is always present;
     // `orders[0].id` is not (the complete route omits `orders` from its fields).
-    redirect(`/user/orders/${res.data.order_group.id}`);
+    redirect(`/user/orders/${group.id}`);
   }
 
   return res;
