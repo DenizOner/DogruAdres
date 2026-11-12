@@ -149,8 +149,13 @@ async function verifyOwnerClosingBrowser(input:{
       "{organization_id:org,seller_id:seller}),{cache:'no-store'});"+
       "return {status:r.status,body:await r.json()}}",org,seller)
   const coInitial=await readOwnClosing(reviewer,organizations[0].id,ownerStoreId)
-  assert.equal(coInitial.status,200)
-  assert.deepEqual(coInitial.body.email_notice,clockView.body.email_notice)
+  // B's protected Organization Owner receipt is valid, but B has not yet
+  // completed the separate native SellerMember link. That real user flow
+  // occurs later in this same acceptance; it is NOT legal to bypass this
+  // Store-scoped requirement merely to read the private SMTP status.
+  assert.equal(coInitial.status,403)
+  assert.deepEqual(coInitial.body,{message:"Access denied"},
+    "Protected Organization membership alone never grants native Store access")
   assert.equal((await readOwnClosing(reviewer,
     organizations[1].id,ownerStoreId)).status,403,
     "Another Organization cannot access this Store's email state")
@@ -173,11 +178,18 @@ async function verifyOwnerClosingBrowser(input:{
   assert.equal(JSON.stringify(selfAccepted.body).includes("message_id"),false)
   assert.equal(JSON.stringify(selfAccepted.body).includes("person_id"),false)
   const otherOwner=await readOwnClosing(reviewer,organizations[0].id,ownerStoreId)
-  assert.equal(otherOwner.status,200)
-  assert.deepEqual(otherOwner.body.email_notice,{
-    status:"queued",attempts:0,smtp_accepted:false,
-    mailbox_delivery_verified:false
-  },"Another protected Owner must not borrow this Person's SMTP result")
+  assert.equal(otherOwner.status,403,
+    "An unlinked native Member must never borrow another Owner's SMTP result")
+  assert.deepEqual(otherOwner.body,{message:"Access denied"})
+  const [separateRecipients]=await q(`select
+    (select count(*)::int from da_notification_receipt
+      where audit_event_id=$1) as protected_owner_receipts,
+    (select count(*)::int from da_store_owner_closing_email
+      where audit_event_id=$1 and last_result='accepted') as accepted_people`,
+    [closed.audit_event_id])
+  assert.equal(separateRecipients.protected_owner_receipts,2)
+  assert.equal(separateRecipients.accepted_people,1,
+    "Only the current authorized Person's synthetic SMTP status was accepted")
   await browser.click('#store-owner-closing-refresh')
   await browser.wait("document.getElementById('store-owner-closing-status')."+
     "textContent.includes('SMTP sunucusu e-postayı kabul etti; posta kutusuna teslim doğrulanmadı.')")
