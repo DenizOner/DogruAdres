@@ -731,6 +731,126 @@ async function main(){
         [ownerRevoked]))[0].n),0)
       await q("update da_organization_membership "+
         "set status='active',revoked_at=null where person_id=$1",[owner])
+      // Flush the previously revoked Owner's now-current notice before
+      // installing race barriers for new source events.
+      await runOwnerClosingEmailTick(container)
+
+      // Actual claim -> revoke COMMIT -> SMTP eligibility: the prior claim
+      // must become INVALIDATED, and NO DATA can reach the loopback server.
+      const revokeSeller="sel_b22_owner_mail_race_revoked"
+      const revokeEvent=await seedOwnerClosingMail(revokeSeller)
+      const revokeGate=testBarrier()
+      const beforeRevokeData=observed.dataMessages
+      beforeOwnerSmtpConfig=revokeGate
+      const revokeWorker=runOwnerClosingEmailTick(container)
+      try{
+        await waitForBarrier(revokeGate.entered,"revoke after claimed Owner mail")
+        const [claimed]=await q("select attempts,last_result from "+
+          "da_store_owner_closing_email where audit_event_id=$1",[revokeEvent])
+        assert.equal(claimed.attempts,1)
+        assert.equal(claimed.last_result,"inflight")
+        await q("update da_organization_membership "+
+          "set status='revoked',revoked_at=clock_timestamp() "+
+          "where person_id=$1",[owner])
+      }finally{revokeGate.release();beforeOwnerSmtpConfig=null}
+      await revokeWorker
+      assert.equal(observed.dataMessages,beforeRevokeData,
+        "Revocation committed before the final fence must prevent SMTP DATA")
+      const [revokedAttempt]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",[revokeEvent])
+      assert.equal(revokedAttempt.attempts,1)
+      assert.equal(revokedAttempt.last_result,"invalidated")
+      assert.equal(revokedAttempt.accepted_at,null)
+      await q("update da_organization_membership "+
+        "set status='active',revoked_at=null where person_id=$1",[owner])
+
+      // Actual claim -> canonical Owner withdrawal COMMIT -> SMTP eligibility:
+      // the original start event is now stale; no misleading mail is sent.
+      const withdrawnSeller="sel_b22_owner_mail_race_withdrawn"
+      const withdrawnEvent=await seedOwnerClosingMail(withdrawnSeller)
+      const withdrawGate=testBarrier()
+      const beforeWithdrawData=observed.dataMessages
+      beforeOwnerSmtpConfig=withdrawGate
+      const withdrawWorker=runOwnerClosingEmailTick(container)
+      try{
+        await waitForBarrier(withdrawGate.entered,"withdrawal after claimed Owner mail")
+        const [claimed]=await q("select attempts,last_result from "+
+          "da_store_owner_closing_email where audit_event_id=$1",[withdrawnEvent])
+        assert.equal(claimed.attempts,1)
+        assert.equal(claimed.last_result,"inflight")
+        await withdrawOwnerClosingFixture(withdrawnSeller)
+      }finally{withdrawGate.release();beforeOwnerSmtpConfig=null}
+      await withdrawWorker
+      assert.equal(observed.dataMessages,beforeWithdrawData,
+        "Withdrawal committed before final fence must prevent stale SMTP DATA")
+      const [withdrawnAttempt]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",[withdrawnEvent])
+      assert.equal(withdrawnAttempt.last_result,"invalidated")
+      assert.equal(withdrawnAttempt.accepted_at,null)
+      assert.equal((await q("select state from da_store_owner_closing "+
+        "where seller_id=$1",[withdrawnSeller]))[0].state,"withdrawn")
+      // The newly created withdrawal receipt is intentionally not mailed
+      // without its own canonical per-recipient source receipt.
+
+      // Opposite ordering: SMTP DATA has reached the loopback server while
+      // its 250 ACK is withheld. Revocation MUST wait on a REAL PostgreSQL
+      // membership lock until the send and result transaction commits.
+      const sentFirstSeller="sel_b22_owner_mail_race_sent_first"
+      const sentFirstEvent=await seedOwnerClosingMail(sentFirstSeller)
+      const ackGate=testBarrier()
+      const beforeSentFirst=observed.dataMessages
+      holdSmtpDataAck=ackGate
+      const sendFirstWorker=runOwnerClosingEmailTick(container)
+      let blockedRevoke:Promise<unknown>|null=null
+      try{
+        await waitForBarrier(ackGate.entered,"Owner SMTP DATA before revocation")
+        assert.equal(observed.dataMessages,beforeSentFirst+1)
+        blockedRevoke=q("update da_organization_membership "+
+          "set status='revoked',revoked_at=clock_timestamp() "+
+          "where person_id=$1 returning id",[owner])
+        await assertRealPgLockWait("update da_organization_membership")
+      }finally{ackGate.release();holdSmtpDataAck=null}
+      await sendFirstWorker
+      if(blockedRevoke)await blockedRevoke
+      const [sentFirstAttempt]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",[sentFirstEvent])
+      assert.equal(sentFirstAttempt.last_result,"accepted")
+      assert.ok(sentFirstAttempt.accepted_at)
+      assert.equal((await q("select status from da_organization_membership "+
+        "where person_id=$1",[owner]))[0].status,"revoked")
+      await q("update da_organization_membership "+
+        "set status='active',revoked_at=null where person_id=$1",[owner])
+
+      // DATA-first also blocks a canonical withdrawal of the current Store
+      // until the SMTP result is committed; the opposite commit ordering
+      // above already proved that a prior withdrawal prevents sending.
+      const sentThenWithdrawSeller="sel_b22_owner_mail_race_withdraw_after_data"
+      const sentThenWithdrawEvent=await seedOwnerClosingMail(sentThenWithdrawSeller)
+      const ackWithdraw=testBarrier()
+      const beforeSecondAck=observed.dataMessages
+      holdSmtpDataAck=ackWithdraw
+      const sendThenWithdrawWorker=runOwnerClosingEmailTick(container)
+      let blockedWithdraw:Promise<unknown>|null=null
+      try{
+        await waitForBarrier(ackWithdraw.entered,"Owner SMTP DATA before withdrawal")
+        assert.equal(observed.dataMessages,beforeSecondAck+1)
+        blockedWithdraw=withdrawOwnerClosingFixture(sentThenWithdrawSeller)
+        await assertRealPgLockWait("update da_store_owner_closing")
+      }finally{ackWithdraw.release();holdSmtpDataAck=null}
+      await sendThenWithdrawWorker
+      if(blockedWithdraw)await blockedWithdraw
+      const [sentThenWithdrawAttempt]=await q("select last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",
+        [sentThenWithdrawEvent])
+      assert.equal(sentThenWithdrawAttempt.last_result,"accepted")
+      assert.ok(sentThenWithdrawAttempt.accepted_at)
+      assert.equal((await q("select state from da_store_owner_closing "+
+        "where seller_id=$1",[sentThenWithdrawSeller]))[0].state,"withdrawn")
+      process.stdout.write(
+        "PASS B22 PG16+loopback SMTP Owner security race: claim then revoke "+
+        "or canonical withdrawal commits before DATA => invalidated/no mail; "+
+        "DATA before revoke or withdrawal => both wait for actual PG row "+
+        "locks until send/outcome commit; 250 never denotes delivery\\n")
       process.stdout.write(
         "PASS B22 PG16+loopback SMTP: Owner closing event/recipient 250 accepted "+
         "not delivered, 550 failed, lost DATA ACK uncertain, 24h slot, "+
