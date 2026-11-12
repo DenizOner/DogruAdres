@@ -359,6 +359,32 @@ async function verifyOwnerClosingBrowser(input:{
     assert.equal(expired.body.can_withdraw,false)
     assert.equal(expired.body.remaining_seconds,0)
     assert.equal(expired.body.permanent_finalization_enabled,false)
+    // The actual authorized Owner screen must stop calling an expired
+    // waiting period a countdown. Do not display a completed/terminated
+    // Store, release its name, or enable a withdrawal after the deadline.
+    const selectClosingStore=async(seller:string)=>browser.callFunction(
+      "function(seller){const c=document.querySelector("+
+      "'#store-owner-pause-form select[name=seller_id]');"+
+      "if(!c||!Array.from(c.options).some(o=>o.value===seller))return false;"+
+      "c.value=seller;c.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return true}",seller)
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    assert.equal(await selectClosingStore(secondOwnerStoreId),true,
+      "Real Owner must be able to select the expired approved Store")
+    await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('30 günlük bekleme süresi doldu')")
+    const expiryScreen=await browser.eval("document.getElementById('store-owner-closing-status').textContent")
+    for(const message of ["Yeni satışlar hâlâ kapalı",
+      "geri dönüşsüz işlem yapılmıyor",
+      "mağaza adını veya geçmiş siparişleri kendiliğinden değiştirmez",
+      "Geri çekme süresi sona erdi"])
+      assert.ok(expiryScreen.includes(message),
+        "Real protected Owner must see a safe post-day-30 explanation: "+message)
+    assert.equal(await browser.eval(
+      "document.querySelector('#store-owner-closing-form button[value=withdraw]').disabled"),true,
+      "The real UI cannot submit expired Owner withdrawal")
+    assert.equal(await selectClosingStore(ownerStoreId),true)
+    await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('Kalan süre (yenilendiğinde):')")
     const beforeExpirySideEffects=await q(
       "select count(*)::int n from da_audit_event e"+
       " where e.resource='store-owner-closing' and e.target_id=$1",
