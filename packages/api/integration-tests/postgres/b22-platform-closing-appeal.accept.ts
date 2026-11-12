@@ -967,8 +967,9 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
     ");if(!e)return false;e.querySelector('select[name=decision]').value='accepted';return true})()")
   await independent.input(selector+" textarea[name=reason]",payload.reason)
   await independent.click(selector+" button[type=submit]")
-  await independent.wait("document.getElementById('platform-closing-review-status').textContent.includes('Bekleyen') || "+
-    "document.getElementById('platform-closing-review-status').textContent.includes('Bu sayfada')")
+  await independent.wait("Array.from(document.querySelectorAll("+
+    JSON.stringify("#platform-closing-review-list form")+")).every(f=>"+
+    "f.dataset.sellerId!=="+JSON.stringify(reviewSellerId)+")")
   const stored=await q("select c.review_decision_request_id,c.review_decision,"+
     "c.review_decision_reason,c.review_decision_audit_event_id,c.review_decided_by_person_id,"+
     "c.deadline_started_at,c.state from da_store_platform_closing c where c.seller_id=$1",
@@ -1012,11 +1013,63 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
   assert.equal(privateNotice.status,200)
   assert.ok(privateNotice.body?.notifications?.some((x:any)=>
     x.title==="Mağaza itirazı hakkında gerekçeli karar verildi"))
+  // A different pending FIRST appeal is also decided, under two real
+  // concurrent HTTPS writes from this same independently authorized reviewer.
+  // It must allow one decision only, with rejected status and no sale reopening.
+  const firstPending=opened.body.candidates.find((c:any)=>
+    c.seller_id===initialSellerId&&c.stage==="first_appeal")
+  assert.ok(firstPending)
+  const reason="İlk itiraz incelendi; platform kararı korunuyor ve satışlar kapalı"
+  const two=[
+    {organization_id:organizationId,seller_id:initialSellerId,
+     source_request_id:firstPending.source_request_id,
+     request_id:"dasdr_"+randomBytes(16).toString("hex"),
+     decision:"rejected",reason},
+    {organization_id:organizationId,seller_id:initialSellerId,
+     source_request_id:firstPending.source_request_id,
+     request_id:"dasdr_"+randomBytes(16).toString("hex"),
+     decision:"rejected",reason}
+  ]
+  const pair=await independent.callFunction(
+    "async function(raw){const items=JSON.parse(raw);"+
+    "const s=await(await fetch('/personal/session')).json();"+
+    "return await Promise.all(items.map(async p=>{"+
+    "const r=await fetch('/personal/platform/store-closing-reviews',"+
+    "{method:'POST',headers:{'content-type':'application/json',"+
+    "'x-csrf-token':s.csrf_token},body:JSON.stringify(p)});"+
+    "return {status:r.status,body:await r.json()}}))}",
+    JSON.stringify(two))
+  assert.deepEqual(pair.map((p:any)=>p.status).sort(),[200,409])
+  const firstStored=(await q("select state,review_decision,review_decision_request_id,"+
+    "review_decision_audit_event_id from da_store_platform_closing "+
+    "where seller_id=$1",[initialSellerId]))[0]
+  assert.equal(firstStored.state,"appealed")
+  assert.equal(firstStored.review_decision,"rejected")
+  assert.ok(two.some(x=>x.request_id===firstStored.review_decision_request_id))
+  assert.equal((await q("select count(*)::int n from da_audit_event "+
+    "where id=$1 and action='organization.store_platform_closing_review_decided'",
+    [firstStored.review_decision_audit_event_id]))[0].n,1)
+  assert.equal((await q("select count(*)::int n from da_audit_outbox "+
+    "where source_audit_event_id=$1",[firstStored.review_decision_audit_event_id]))[0].n,1)
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([initialSellerId]),false)
+  // Current protected Organization Owner cannot self-judge by acquiring a
+  // Staff task grant; the source and decision authority remain separate.
+  const ownerGrant="da_staff_b22_owner_"+randomBytes(8).toString("hex")
+  await q("insert into da_platform_staff_grant "+
+    "(id,person_id,task,resource,granted_by_person_id,reason) "+
+    "values ($1,$2,'store.closing.review','platform',$2,"+
+    "'B22 task-only Owner self-review negative')",[ownerGrant,ownerPersonId])
+  assert.equal((await write(ownerBrowser,path,{
+    ...two[0],request_id:firstStored.review_decision_request_id})).status,403,
+    "Protected Owner cannot judge their own Organization even with a Staff task")
+  await q("update da_platform_staff_grant set revoked_at=clock_timestamp() "+
+    "where id=$1",[ownerGrant])
+
   // Revocation denies even a historically accepted idempotent replay.
   await q("update da_platform_staff_grant set revoked_at=clock_timestamp() "+
     "where id in ($1,$2)",[grantId,originalGrant])
   assert.equal((await read(independent,path)).status,403)
   assert.equal((await write(independent,path,{
     ...payload,request_id:stored[0].review_decision_request_id})).status,403)
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent third Person strong Staff review decision, original Staff self-review denied, private Owner reason/notice, immutable clock and sales block; repeat idempotent, revoked grant denied\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: independent third Person strong Staff review decision, original Staff self-review denied, private Owner reason/notice, immutable clock and sales block; repeat idempotent, first-stage parallel single decision, revoked grant denied\n")
 }
