@@ -51,7 +51,7 @@ async function CheckoutPageContent({}) {
             />
             <CartShippingMethodsSection
               cart={cart}
-              availableShippingMethods={shippingMethods as any}
+              availableShippingMethods={shippingMethods}
             />
             <CartPaymentSection
               cart={cart}

@@ -48,8 +48,17 @@ type SellerShippingMethod = StoreCardShippingMethod & {
 
 type ShippingProps = {
   cart: Omit<HttpTypes.StoreCart, 'items'> & { items?: CartItem[] };
-  availableShippingMethods: SellerShippingMethod[] | null;
+  availableShippingMethods: StoreCardShippingMethod[] | null;
 };
+
+// The seller grouping key must come from the authoritative shipping option.
+// Unknown seller context is not accepted as a valid checkout option.
+const isSellerShippingMethod = (
+  method: StoreCardShippingMethod
+): method is SellerShippingMethod =>
+  typeof method.seller_id === 'string' &&
+  method.seller_id.length > 0 &&
+  (method.price_type === 'flat' || method.price_type === 'calculated');
 
 const CartShippingMethodsSection: FC<ShippingProps> = ({ cart, availableShippingMethods }) => {
   const [isLoadingPrices, setIsLoadingPrices] = useState(false);
@@ -63,9 +72,9 @@ const CartShippingMethodsSection: FC<ShippingProps> = ({ cart, availableShipping
 
   const isOpen = searchParams.get('step') === 'delivery';
 
-  const _shippingMethods = availableShippingMethods?.filter(
-    sm => sm.rules?.find((rule) => rule.attribute === 'is_return')?.value !== 'true'
-  );
+  const _shippingMethods = availableShippingMethods
+    ?.filter(isSellerShippingMethod)
+    .filter(sm => sm.rules?.find((rule) => rule.attribute === 'is_return')?.value !== 'true');
 
   useEffect(() => {
     if (_shippingMethods?.length) {

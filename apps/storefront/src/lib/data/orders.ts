@@ -9,6 +9,15 @@ import medusaError from '../helpers/medusa-error';
 import { getAuthHeaders, getCacheOptions } from './cookies';
 
 // Legacy returns endpoints remain on the existing authorized SDK route.
+export type StorefrontOrderGroup = {
+  id: string;
+  display_id: number;
+  created_at: string;
+  orders: Array<HttpTypes.StoreOrder & { seller?: SellerDTO }>;
+  total?: number | null;
+  currency_code?: string | null;
+};
+
 export type ReturnableStoreOrder = HttpTypes.StoreOrder & {
   seller: SellerDTO;
   order_group: { id: string };
@@ -46,7 +55,7 @@ export const retrieveOrderGroup = async (id: string) => {
         headers: { ...(await getAuthHeaders()) },
         cache: 'no-cache'
       }
-    } as never) as unknown as Promise<{ order_group: Record<string, unknown> }>
+    } as never) as unknown as Promise<{ order_group: StorefrontOrderGroup }>
   )
     .then(({ order_group }) => order_group)
     .catch(err => medusaError(err));
