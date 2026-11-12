@@ -427,9 +427,17 @@ async function main(){
         await enqueueRename("organization.store_rename_withdrawn","owner","store-rename-request","invalid_seller"),
       ]
       const mismatched=await enqueueRename("organization.store_rename_requested","owner")
-      await db.unsafe("update da_audit_outbox set "+
-        "envelope=jsonb_set(envelope,'{organization_id}','\"daorg_other_synthetic\"'::jsonb) "+
-        "where source_audit_event_id=$1 and status='pending'",[mismatched])
+      const envelopeRow=(await db.unsafe(
+        "select envelope from da_audit_outbox where source_audit_event_id=$1",[mismatched]))[0]
+      const originalEnvelope=typeof envelopeRow.envelope==="string"
+        ?JSON.parse(envelopeRow.envelope):envelopeRow.envelope
+      assert.equal(originalEnvelope.organization_id,org)
+      const forged={...originalEnvelope,organization_id:"daorg_other_synthetic"}
+      const changed=await db.unsafe(
+        "update da_audit_outbox set envelope=$2::jsonb "+
+        "where source_audit_event_id=$1 and status='pending' returning id",
+        [mismatched,JSON.stringify(forged)])
+      assert.equal(changed.length,1)
       invalidIds.push(mismatched)
       for(const [i,id] of invalidIds.entries()){
         assert.equal(await deliver(),"quarantined","Invalid rename event must quarantine")
