@@ -483,7 +483,7 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
     if(!claim)break
     seen.push(claim)
     let result:OwnerMailOutcome="unverified_identity"
-    let fenced=false
+    let fenced=false,sendFenceStarted=false
     try{
       const actor=await currentActor(db,claim)
       if(actor){
@@ -505,6 +505,7 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
           const smtp=await access.getActiveSmtpConfig()
           if(!smtp?.enabled)throw new Error("Mandatory mail transport unavailable")
           const started=claim.action==="organization.store_owner_closing_started"
+          sendFenceStarted=true
           await sendOwnerMailFenced(db,claim,actor,()=>sendSmtpEmail({
             to:email,
             subject:started?
@@ -528,9 +529,10 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
         }
       }
     }catch(error){
-      // Once the final fence starts, a transaction failure MAY follow DATA.
-      // An unknown SMTP outcome is never a definite rejection.
-      result=fenced?"unverified_identity":"uncertain"
+      // A configuration/identity failure is a definite unsuccessful attempt.
+      // After opening the send fence, even a DB commit error may FOLLOW DATA:
+      // never invent a remote SMTP rejection in that case.
+      result=sendFenceStarted?"uncertain":"failed"
     }
     if(!fenced)await settleOwnerClosingMail(db,claim,result,null)
   }
