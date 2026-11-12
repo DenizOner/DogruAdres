@@ -581,6 +581,30 @@ async function main(){
       assert.equal((await q("select attempts from da_store_owner_closing_email "+
         "where audit_event_id=$1",[ownerMailEvent]))[0].attempts,1,
         "Immediate rerun cannot send before the next scheduled slot")
+      // Time moves ONLY in disposable PG16 mail scheduling data. Every
+      // retry remains anchored to the immutable original event time.
+      for(let slot=2;slot<=4;slot++){
+        await q("update da_store_owner_closing_email "+
+          "set next_attempt_at=clock_timestamp()-interval '1 second' "+
+          "where audit_event_id=$1",[ownerMailEvent])
+        await runOwnerClosingEmailTick(container)
+        const [attempt]=await q("select attempts,next_attempt_at "+
+          "from da_store_owner_closing_email where audit_event_id=$1",
+          [ownerMailEvent])
+        assert.equal(attempt.attempts,slot)
+        assert.equal(new Date(attempt.next_attempt_at).getTime()-
+          new Date(ownerSource.occurred_at).getTime(),slot*86400000,
+          "Retry is anchored to +24/+48/+72h from original event")
+      }
+      await q("update da_store_owner_closing_email "+
+        "set next_attempt_at=clock_timestamp()-interval '1 second' "+
+        "where audit_event_id=$1",[ownerMailEvent])
+      await runOwnerClosingEmailTick(container)
+      assert.equal((await q("select attempts from da_store_owner_closing_email "+
+        "where audit_event_id=$1",[ownerMailEvent]))[0].attempts,4,
+        "Mandatory Owner notice may never exceed four SMTP attempts")
+      // Nothing in the Owner mail worker can mark mailbox delivery or
+      // enable the irreversible Seller/name transition.
 
       // An SMTP 550 is a failed attempt, not recipient delivery.
       refuseRecipient=true
