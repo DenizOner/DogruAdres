@@ -6,9 +6,14 @@ test('#175 production has no arbitrary or demo image host', () => {
   const patterns = createImageRemotePatterns({ NODE_ENV: 'production' })
   assert.deepEqual(patterns, [])
 })
-test('#175 exact authorized Medusa HTTPS origin is /static scoped', () => {
+test('#175 production never implicitly trusts API URL as a remote media host', () => {
   assert.deepEqual(createImageRemotePatterns({
     NODE_ENV: 'production', MEDUSA_BACKEND_URL: 'https://api.dogruadres.example.org',
+  }), [])
+})
+test('#175 explicit authorized Medusa HTTPS media origin is /static scoped', () => {
+  assert.deepEqual(createImageRemotePatterns({
+    NODE_ENV: 'production', DOGRUADRES_STOREFRONT_MEDIA_BASE_URL: 'https://api.dogruadres.example.org',
   }), [{
     protocol: 'https', hostname: 'api.dogruadres.example.org',
     port: '', pathname: '/static/**', search: '',

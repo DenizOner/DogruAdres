@@ -7,7 +7,11 @@ type RemotePattern = NonNullable<NonNullable<NextConfig['images']>['remotePatter
 export function createImageRemotePatterns(env: Record<string, string | undefined>): RemotePattern[] {
   const production = env.NODE_ENV === 'production'
   const patterns: RemotePattern[] = []
-  const configured = (env.DOGRUADRES_STOREFRONT_MEDIA_BASE_URL || env.MEDUSA_BACKEND_URL || '').trim()
+  // In production, an API URL is not permission for the image proxy to fetch from that host.
+  // Enable remote optimization only with an explicitly approved HTTPS media origin.
+  // Redirect-free /static delivery and safe DNS/IP are separate deployment acceptance gates.
+  const configured = (env.DOGRUADRES_STOREFRONT_MEDIA_BASE_URL
+    || (!production ? env.MEDUSA_BACKEND_URL : undefined) || '').trim()
 
   if (configured) {
     const origin = new URL(configured)
