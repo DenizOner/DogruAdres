@@ -67,8 +67,8 @@ export const ProductDetailsHeader = ({
     : allSearchParams
 
   const variantId =
-    product.variants?.find(({ options }: { options: any }) =>
-      options?.every((option: any) =>
+    product.variants?.find(({ options }) =>
+      options?.every((option) =>
         selectedVariant[option.option?.title.toLowerCase() || ""]?.includes(
           option.value
         )
