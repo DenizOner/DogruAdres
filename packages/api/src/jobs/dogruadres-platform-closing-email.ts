@@ -125,7 +125,7 @@ async function claimDue(db: Db, seen: Array<{seller_id:string;person_id:string}>
   })
 }
 
-async function currentActor(db: Db, claim: Claim) {
+async function currentActor(db: Db, claim: Pick<Claim, "organization_id"|"person_id">) {
   return db.transactional(async em => {
     const rows = await em.execute(`select b.actor_type,b.actor_id,
       b.auth_identity_id
@@ -263,8 +263,186 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
   await settleExhaustion(container)
 }
 
+/**
+ * Owner-initiated 30-day closing reuses the same Medusa scheduler, verified
+ * identity and configured SMTP transport. Unlike platform-closing mail,
+ * no token or delivery-based clock is issued: this is a security notice,
+ * and irreversible finalization remains separately DISABLED.
+ */
+type OwnerMailClaim = {
+  audit_event_id:string;person_id:string;organization_id:string;
+  action:"organization.store_owner_closing_started"|
+    "organization.store_owner_closing_withdrawn";
+  claim_id:string;attempts:number
+}
+
+async function refreshOwnerClosingAudience(db:Db){
+  await db.transactional(async sql=>{
+    await sql.execute(`insert into da_store_owner_closing_email
+      (audit_event_id,person_id,next_attempt_at)
+      select e.id,n.person_id,e.occurred_at
+      from da_store_owner_closing c
+      join da_audit_event e on e.id=c.source_audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.resource='store-owner-closing' and e.role_context='owner'
+        and e.organization_id=c.organization_id and e.target_id=c.seller_id
+        and e.action=(case when c.state='closing'
+          then 'organization.store_owner_closing_started'
+          else 'organization.store_owner_closing_withdrawn' end)
+        and e.new_values->>'request_id'=c.request_id
+        and e.new_values->>'state'=c.state
+        and e.new_values->>'version'=c.version::text
+        and (e.new_values->>'started_at')::timestamptz=c.started_at
+        and (e.new_values->>'due_at')::timestamptz=c.due_at
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+        and x.source_module='dogruadres-access' and x.deleted_at is null
+      join da_notification_receipt n on n.audit_event_id=e.id
+      join da_organization_membership m on m.person_id=n.person_id
+        and m.organization_id=c.organization_id and m.role='owner'
+        and m.protected_owner=true and m.status='active'
+        and m.revoked_at is null and m.deleted_at is null
+      join da_person p on p.id=n.person_id and p.disabled_at is null
+        and p.deleted_at is null
+      on conflict (audit_event_id,person_id) do nothing`)
+  })
+}
+
+async function claimOwnerClosingMail(db:Db,seen:OwnerMailClaim[]){
+  return db.transactional(async sql=>{
+    const exclusions=seen.map(()=>
+      "and not (d.audit_event_id=? and d.person_id=?)").join(" ")
+    const claimId=randomUUID()
+    const rows=await sql.execute(`with due as (
+      select d.audit_event_id,d.person_id
+      from da_store_owner_closing_email d
+      join da_audit_event e on e.id=d.audit_event_id
+      join da_store_owner_closing c on c.source_audit_event_id=e.id
+        and c.organization_id=e.organization_id and c.seller_id=e.target_id
+        and e.action=(case when c.state='closing'
+          then 'organization.store_owner_closing_started'
+          else 'organization.store_owner_closing_withdrawn' end)
+      join da_notification_receipt n on n.audit_event_id=d.audit_event_id
+        and n.person_id=d.person_id
+      join da_organization_membership m on m.person_id=d.person_id
+        and m.organization_id=c.organization_id and m.role='owner'
+        and m.protected_owner=true and m.status='active'
+        and m.revoked_at is null and m.deleted_at is null
+      join da_person p on p.id=d.person_id and p.disabled_at is null
+        and p.deleted_at is null
+      where d.attempts<4 and d.next_attempt_at<=clock_timestamp()
+        and (d.lease_until is null or d.lease_until<clock_timestamp())
+        ${exclusions}
+      order by d.next_attempt_at,d.audit_event_id,d.person_id
+      for update of d skip locked limit 1
+    )
+    update da_store_owner_closing_email d
+    set attempts=d.attempts+1,claim_id=?::uuid,
+      last_result='inflight',last_attempt_at=clock_timestamp(),
+      next_attempt_at=e.occurred_at+((d.attempts+1)*interval '24 hours'),
+      lease_until=clock_timestamp()+interval '10 minutes',
+      updated_at=clock_timestamp()
+    from due,da_audit_event e
+    where d.audit_event_id=due.audit_event_id
+      and d.person_id=due.person_id and e.id=due.audit_event_id
+    returning d.audit_event_id,d.person_id,e.organization_id,e.action,
+      d.claim_id::text as claim_id,d.attempts`,[
+      ...seen.flatMap(x=>[x.audit_event_id,x.person_id]),claimId
+    ])
+    if(rows.length>1)throw new Error("Owner closing mail claim cardinality uncertain")
+    return rows.length?rows[0] as OwnerMailClaim:null
+  })
+}
+
+async function settleOwnerClosingMail(db:Db,claim:OwnerMailClaim,
+  outcome:"accepted"|"failed"|"unverified_identity"|"uncertain",
+  messageId:string|null){
+  await db.transactional(async sql=>{
+    const rows=await sql.execute(`update da_store_owner_closing_email
+      set last_result=?,message_id=(case when ?='accepted'
+        then ? else message_id end),
+        accepted_at=(case when ?='accepted' then clock_timestamp()
+          else accepted_at end),
+        claim_id=null,lease_until=null,updated_at=clock_timestamp()
+      where audit_event_id=? and person_id=? and claim_id=?::uuid
+        and last_result='inflight' returning audit_event_id`,[
+      outcome,outcome,messageId,outcome,
+      claim.audit_event_id,claim.person_id,claim.claim_id
+    ])
+    if(rows.length!==1)throw new Error("Owner closing mail result not committed")
+  })
+}
+
+export async function runOwnerClosingEmailTick(container:MedusaContainer){
+  const db=scope(container)
+  await refreshOwnerClosingAudience(db)
+  // A crashed SMTP connection is UNKNOWN, not evidence of delivery or
+  // definite rejection. Retain its slot; the next scheduled slot may retry.
+  await db.transactional(sql=>sql.execute(`update da_store_owner_closing_email
+    set last_result='uncertain',claim_id=null,lease_until=null,
+      updated_at=clock_timestamp()
+    where last_result='inflight' and lease_until<=clock_timestamp()`).then(()=>{}))
+  const seen:OwnerMailClaim[]=[]
+  for(let i=0;i<MAX_PER_TICK;i++){
+    const claim=await claimOwnerClosingMail(db,seen)
+    if(!claim)break
+    seen.push(claim)
+    let result:"accepted"|"failed"|"unverified_identity"|"uncertain"=
+      "unverified_identity"
+    let messageId:string|null=null
+    try{
+      const actor=await currentActor(db,claim)
+      if(actor){
+        const email=await verifiedEmailForActorContext(
+          {scope:container} as any,{
+            ...actor,auth_provider:"emailpass",user_metadata:{}
+          })
+        if(email){
+          const origin=process.env.DOGRUADRES_PUBLIC_ORIGIN
+          if(!origin||new URL(origin).protocol!=="https:")
+            throw new Error("Missing secure first-party notification origin")
+          const access=container.resolve("dogruadresAccess") as {
+            getActiveSmtpConfig():Promise<{
+              enabled:boolean;host:string;port:number;
+              security:"ssl"|"tls"|"none";username?:string|null;
+              password?:string|null;from_email:string;from_name?:string|null
+            }|null>
+          }
+          const smtp=await access.getActiveSmtpConfig()
+          if(!smtp?.enabled)throw new Error("Mandatory mail transport unavailable")
+          const started=claim.action==="organization.store_owner_closing_started"
+          const transport=await sendSmtpEmail({
+            to:email,
+            subject:started?
+              "DoğruAdres mağaza kapatma süreci güvenlik bildirimi":
+              "DoğruAdres mağaza kapatma talebi geri çekildi",
+            text:started?
+              "Yetkili bir Owner, sorumluluğunuzdaki bir mağaza için 30 günlük "+
+              "kapatma sürecini başlattı. Yeni satışlar durduruldu. "+
+              "Güvenli hesabınızdan güncel durum ve süreyi kontrol edin: "+
+              origin+"/personal":
+              "Sorumluluğunuzdaki bir mağazanın kapatma talebi geri çekildi. "+
+              "Diğer satış engelleri devam edebilir. Güncel durumu "+
+              "güvenli hesabınızdan kontrol edin: "+origin+"/personal"
+          },{
+            enabled:smtp.enabled,host:smtp.host,port:smtp.port,
+            security:smtp.security,username:smtp.username??undefined,
+            password:smtp.password??undefined,
+            fromEmail:smtp.from_email,fromName:smtp.from_name??undefined
+          })
+          messageId=transport.messageId
+          result="accepted" // SMTP acceptance is NOT verified mailbox delivery
+        }
+      }
+    }catch(error){
+      result=error instanceof SmtpAcceptanceUncertainError?"uncertain":"failed"
+    }
+    await settleOwnerClosingMail(db,claim,result,messageId)
+  }
+}
+
 export default async function platformClosingEmailJob(container:MedusaContainer){
   await runPlatformClosingEmailTick(container)
+  await runOwnerClosingEmailTick(container)
 }
 export const config={
   name:"dogruadres-platform-closing-email",
