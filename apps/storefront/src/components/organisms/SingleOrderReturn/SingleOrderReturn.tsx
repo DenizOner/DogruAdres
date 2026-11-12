@@ -1,5 +1,7 @@
 "use client"
 
+import type { HttpTypes } from "@medusajs/types"
+import type { StorefrontReturnRequest } from "@/lib/data/orders"
 import { Avatar, Badge, Card, Divider } from "@/components/atoms"
 import { CollapseIcon } from "@/icons"
 import { cn } from "@/lib/utils"
@@ -21,10 +23,10 @@ export const SingleOrderReturn = ({
   priceTestId,
   testIdPrefix,
 }: {
-  item: any
-  user: any
+  item: StorefrontReturnRequest
+  user: HttpTypes.StoreCustomer | null
   defaultOpen: boolean
-  returnReason: any[]
+  returnReason: HttpTypes.StoreReturnReason[]
   priceTestId?: string
   testIdPrefix?: string
 }) => {
@@ -41,14 +43,14 @@ export const SingleOrderReturn = ({
   }, [])
 
   const filteredItems = item.order.items
-    .filter((orderItem: any) =>
+    .filter((orderItem) =>
       item.line_items.some(
-        (lineItem: any) => lineItem.line_item_id === orderItem.id
+        (lineItem) => lineItem.line_item_id === orderItem.id
       )
     )
-    .map((orderItem: any) => {
+    .map((orderItem) => {
       const correspondingLineItem = item.line_items.find(
-        (lineItem: any) => lineItem.line_item_id === orderItem.id
+        (lineItem) => lineItem.line_item_id === orderItem.id
       )
       return {
         ...orderItem,
@@ -60,7 +62,7 @@ export const SingleOrderReturn = ({
 
   const currency_code = item.order.currency_code || "usd"
 
-  const total = filteredItems.reduce((acc: number, item: any) => {
+  const total = filteredItems.reduce((acc: number, item) => {
     return acc + item.unit_price
   }, 0)
 
@@ -127,21 +129,21 @@ export const SingleOrderReturn = ({
           <Divider />
           <div className="p-4 flex justify-between w-full">
             <div className="flex flex-col gap-4 w-full">
-              {filteredItems.map((filteredItem: any) => (
+              {filteredItems.map((filteredItem) => (
                 <div key={filteredItem.id} className="flex items-center gap-2" data-testid={testIdPrefix ? `${testIdPrefix}-item-${filteredItem.id}` : undefined}>
                   <div className="flex items-center gap-4 w-1/2">
                     <div className="rounded-sm overflow-hidden border">
                       {filteredItem.thumbnail ? (
                         <Image
                           src={filteredItem.thumbnail}
-                          alt={filteredItem.product_title}
+                          alt={filteredItem.product_title ?? "Returned item"}
                           width={60}
                           height={60}
                         />
                       ) : (
                         <Image
                           src="/images/placeholder.svg"
-                          alt={filteredItem.product_title}
+                          alt={filteredItem.product_title ?? "Returned item"}
                           width={60}
                           height={60}
                           className="scale-50 opacity-25"

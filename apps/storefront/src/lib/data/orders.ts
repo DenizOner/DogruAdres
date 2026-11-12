@@ -14,6 +14,22 @@ export type ReturnableStoreOrder = HttpTypes.StoreOrder & {
   order_group: { id: string };
 };
 
+// Current return-request view contract of the existing Mercur store endpoint.
+// This is a declared response shape, not runtime acceptance evidence.
+export type StorefrontReturnRequest = {
+  id: string;
+  status: string;
+  line_items: Array<{
+    line_item_id: string;
+    reason_id?: string | null;
+    created_at: string;
+  }>;
+  order: HttpTypes.StoreOrder & {
+    seller: SellerDTO;
+    items: HttpTypes.StoreOrderLineItem[];
+  };
+};
+
 // TODO: legacy returns endpoints — migrate when the returns module lands
 type LooseRoute = {
   query: <T = unknown>(i?: never) => Promise<T>;
@@ -73,12 +89,7 @@ export const createReturnRequest = async (data: Record<string, unknown>) => {
 export const getReturns = async () => {
   return storeLoose.returnRequest
     .query<{
-      order_return_requests: Array<
-        { line_items: Array<{ created_at: string; reason_id?: string }> } & Record<
-          string,
-          unknown
-        >
-      >;
+      order_return_requests: StorefrontReturnRequest[];
     }>({
       fields: '*line_items.reason_id',
       fetchOptions: {
