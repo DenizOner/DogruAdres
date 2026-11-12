@@ -992,18 +992,24 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
       "set revoked_at=clock_timestamp() "+
       "where id=$1 and revoked_at is null returning id",[grantId])
     assert.equal(changed.length,1)
+    // Match the PostgreSQL *blocking relationship*, not SQL text as seen
+    // in pg_stat_activity: the Medusa driver may use a prepared statement
+    // name instead of the literal FOR SHARE query in that diagnostic field.
+    const [{pid:revokerPid}]=await q("select pg_backend_pid()::int as pid")
+    let requestSettled=false
     inFlight=read(independent,path).catch(()=>({status:0,body:null}))
+      .then(response=>{requestSettled=true;return response})
     let waitingForGrant=false
     for(let attempt=0;attempt<200;attempt++){
       const blocked=await q("select count(*)::int n from pg_stat_activity "+
-        "where pid<>pg_backend_pid() and wait_event_type='Lock' "+
-        "and query ilike '%da_platform_staff_grant%' "+
-        "and query ilike '%for share%'")
+        "where pid<>$1 and $1=any(pg_blocking_pids(pid))",[revokerPid])
       if(Number(blocked[0]?.n)>0){waitingForGrant=true;break}
+      if(requestSettled)break
       await new Promise(resolve=>setTimeout(resolve,50))
     }
     assert.equal(waitingForGrant,true,
-      "Real private GET must reach final reviewer grant lock while revoke is pending")
+      "Real private GET must be blocked by the task-only grant revocation transaction; "+
+      "request_finished_early="+requestSettled)
     await q("commit")
     revokedCommitted=true
     const denied=await inFlight
