@@ -20,6 +20,44 @@ const write=async(browser:B06Chrome,path:string,payload:unknown,badCsrf=false)=>
   "return {status:r.status,body:await r.json()}}",
   JSON.stringify({path,payload,bad:badCsrf}))
 
+
+/** Existing authorized Staff Chrome/HTTPS screen and accessible status. */
+async function assertStaffBlockers(staff:B06Chrome,sellerId:string,
+  shown:string,absent:string[]=[]){
+  await staff.send("Page.bringToFront")
+  await staff.send("Page.reload",{ignoreCache:true})
+  await staff.wait("document.readyState==='complete' && "+
+    "!document.getElementById('workspace').hidden && "+
+    "!document.getElementById('platform-closing-panel').hidden")
+  let found=false
+  for(let page=0;page<50;page++){
+    found=await staff.callFunction(
+      "function(seller){const e=document.querySelector("+
+      "'#platform-closing-form select[name=seller_id]');"+
+      "if(!e||!Array.from(e.options).some(o=>o.value===seller))return false;"+
+      "e.value=seller;e.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return e.value===seller}",sellerId)
+    if(found)break
+    assert.equal(await staff.eval(
+      "!document.getElementById('platform-closing-more').hidden"),true)
+    await staff.click("#platform-closing-more")
+    await staff.wait("document.getElementById('platform-closing-status').textContent!=="+
+      JSON.stringify("Yetkili mağazalar doğrulanıyor…"))
+  }
+  assert.equal(found,true,"Staff picker must contain the approved Seller")
+  await staff.wait("document.getElementById('platform-closing-mail-status')."+
+    "textContent.includes("+JSON.stringify(shown)+")")
+  const result=await staff.eval("(()=>{const e=document.getElementById("+
+    "'platform-closing-mail-status');return {text:e.textContent,"+
+    "role:e.getAttribute('role'),live:e.getAttribute('aria-live')}})()")
+  assert.equal(result.role,"status")
+  assert.equal(result.live,"polite")
+  assert.match(result.text,/mali ve hukuki yükümlülüklerin temizlendiği doğrulanmadı/)
+  assert.match(result.text,/geri dönüşsüz kapatma kapalıdır/)
+  for(const text of absent)assert.equal(result.text.includes(text),false,
+    "Irrelevant blocker must not be shown")
+}
+
 export async function verifyB22PlatformClosingAppeal(input:{
   browser:B06Chrome;staff:B06Chrome;q:Db;foundation:any;
   ownerPersonId:string;staffPersonId:string;
@@ -497,6 +535,14 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(appealed.body?.deadline_started,true,
     "Submitting an appeal must preserve the already-started server clock")
   assert.equal(appealed.body?.permanent_finalization_enabled,false)
+  const pendingFirst=await read(staff,mailPath)
+  assert.equal(pendingFirst.status,200)
+  assert.deepEqual(pendingFirst.body?.terminal_preflight,{
+    appeal_window_elapsed:false,appeal_review_pending:true,
+    appeal_accepted:false,notification_exception_review_required:false,
+    financial_legal_clearance_verified:false,
+    permanent_finalization_enabled:false
+  },"Real first Owner appeal must remain undecided in Staff preflight")
   assert.equal((await q("select count(*)::int n from da_audit_event "+
     "where organization_id=$1 and target_id=$2 and "+
     "action='organization.store_platform_closing_deadline_started'",
@@ -668,6 +714,18 @@ export async function verifyB22PlatformClosingAppeal(input:{
     assert.equal(nowClosed.length,1)
     assert.equal(nowClosed[0].deadline_basis,"admin_alert")
     assert.ok(nowClosed[0].deadline_started_at&&nowClosed[0].deadline_audit_event_id)
+    const fallbackPath="/personal/platform/store-closing-email-readiness?"+
+      new URLSearchParams({organization_id:ownerOrgId,seller_id:suspendedSeller})
+    const fallback=await read(staff,fallbackPath)
+    assert.equal(fallback.status,200)
+    assert.equal(fallback.body.deadline_basis,"admin_alert")
+    assert.deepEqual(fallback.body.terminal_preflight,{
+      appeal_window_elapsed:false,appeal_review_pending:false,
+      appeal_accepted:false,notification_exception_review_required:true,
+      financial_legal_clearance_verified:false,permanent_finalization_enabled:false
+    },"Exhausted Owner email must flag Staff exception, not delivery")
+    assert.equal(fallback.body.mailbox_delivery_verified_count,0)
+    assert.equal((await read(browser,fallbackPath)).status,403)
     const visible=await q(`select id,read_at from
       da_store_platform_closing_admin_notice where seller_id=$1
       and person_id=$2`,[suspendedSeller,staffPersonId])
@@ -695,6 +753,85 @@ export async function verifyB22PlatformClosingAppeal(input:{
   }finally{
     await q("update da_organization set status='active' where id=$1",[ownerOrgId])
   }
+  await assertStaffBlockers(staff,sellerId,
+    "sonuçlanmamış itiraz veya üst inceleme mevcut",
+    ["itiraz kabul edildi; ayrıca kapatma uygulanamaz"])
+
+  // Isolated source-backed synthetic PostgreSQL boundary. No native Seller,
+  // money, name release, or mutable production event; live Staff HTTP reads.
+  const ownerActors=await q("select e.actor_person_id,e.actor_type,e.actor_id "+
+    "from da_store_platform_closing c join da_audit_event e "+
+    "on e.id=c.deadline_audit_event_id where c.seller_id=$1",[sellerId])
+  assert.equal(ownerActors.length,1)
+  const [clock]=await q("select clock_timestamp() as now_at")
+  const boundary=new Date(new Date(clock.now_at).getTime()-720*3600000)
+  for(const edge of [
+    {tag:"before",date:new Date(boundary.getTime()+600000),elapsed:false},
+    {tag:"at",date:boundary,elapsed:true}
+  ]){
+    const syntheticSeller="sel_b22_preflight_"+edge.tag+"_"+
+      randomBytes(10).toString("hex")
+    const sourceId="daaud_"+randomBytes(16).toString("hex")
+    const deadlineId="daaud_"+randomBytes(16).toString("hex")
+    const request="dascp_"+randomBytes(16).toString("hex")
+    const reason="B22 sentetik otuz gün sınırında Staff ön kontrolü"
+    const deadline=edge.date.toISOString()
+    const sourceAt=new Date(edge.date.getTime()-3600000).toISOString()
+    const events=[
+      {id:sourceId,actor:source,role:"platform_staff",
+       action:"organization.store_platform_closing_started",at:sourceAt,
+       data:{request_id:request,state:"notification_unverified",
+        reason_sha256:createHash("sha256").update(reason).digest("hex")}},
+      {id:deadlineId,actor:ownerActors[0],role:"owner",
+       action:"organization.store_platform_closing_deadline_started",at:deadline,
+       data:{basis:"owner_delivery",deadline_started_at:deadline}}
+    ]
+    for(const event of events){
+      await q("insert into da_audit_event "+
+        "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
+        "action,module,resource,target_id,new_values,occurred_at) "+
+        "values ($1,$2,$3,$4,$5,$6,$7,'dogruadres-access',"+
+        "'store-platform-closing',$8,$9::jsonb,$10::timestamptz)",[
+        event.id,event.actor.actor_person_id,event.actor.actor_type,
+        event.actor.actor_id,event.role,ownerOrgId,event.action,
+        syntheticSeller,JSON.stringify(event.data),event.at])
+      const envelope={version:1,source_module:"dogruadres-access",
+        source_audit_event_id:event.id,organization_id:ownerOrgId,
+        actor:{person_id:event.actor.actor_person_id,
+          type:event.actor.actor_type,id:event.actor.actor_id,
+          role_context:event.role},action:event.action,
+        resource:"store-platform-closing",target_id:syntheticSeller,
+        occurred_at:event.at}
+      await q("insert into da_audit_outbox "+
+        "(id,source_audit_event_id,source_module,envelope_version,envelope,status) "+
+        "values ($1,$2,'dogruadres-access',1,$3::jsonb,'pending')",[
+        "daaob_"+randomBytes(16).toString("hex"),event.id,
+        JSON.stringify(envelope)])
+    }
+    await q("insert into da_store_platform_closing "+
+      "(seller_id,organization_id,state,version,request_id,reason,"+
+      "source_audit_event_id,started_at,deadline_started_at,deadline_basis,"+
+      "deadline_audit_event_id) values "+
+      "($1,$2,'notification_unverified',1,$3,$4,$5,"+
+      "$6::timestamptz,$7::timestamptz,'owner_delivery',$8)",[
+      syntheticSeller,ownerOrgId,request,reason,sourceId,
+      sourceAt,deadline,deadlineId])
+    const path="/personal/platform/store-closing-email-readiness?"+
+      new URLSearchParams({organization_id:ownerOrgId,
+        seller_id:syntheticSeller})
+    const result=await read(staff,path)
+    assert.equal(result.status,200)
+    assert.equal(result.body.terminal_preflight.appeal_window_elapsed,
+      edge.elapsed,"PostgreSQL source-backed 720-hour boundary: "+edge.tag)
+    assert.equal(result.body.terminal_preflight.appeal_review_pending,false)
+    assert.equal(result.body.terminal_preflight.appeal_accepted,false)
+    assert.equal(result.body.terminal_preflight.financial_legal_clearance_verified,false)
+    assert.equal(result.body.terminal_preflight.permanent_finalization_enabled,false)
+    assert.equal((await read(browser,path)).status,403)
+    assert.equal((await q("select count(*)::int n from seller where id=$1",
+      [syntheticSeller]))[0].n,0)
+  }
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: 720-hour Staff preflight false/true, pending first appeal and SMTP admin exception; permanent finalizer denied\n")
   return secondOwnerMembership.id
 }
 
@@ -842,6 +979,17 @@ export async function verifyB22PlatformClosingSecondStageRequest(input:{
     "Filing review never determines the outcome or reopens sales")
   assert.equal(after.body?.deadline_started_at,clockStart)
   assert.equal(after.body?.final_review_reason,reviewReason)
+  const staffPath="/personal/platform/store-closing-email-readiness?"+
+    new URLSearchParams({organization_id:organizationId,seller_id:reviewSellerId})
+  const secondPending=await read(staff,staffPath)
+  assert.equal(secondPending.status,200)
+  assert.equal(secondPending.body.terminal_preflight.appeal_review_pending,true)
+  assert.equal(secondPending.body.terminal_preflight.appeal_accepted,false)
+  assert.equal(secondPending.body.terminal_preflight.appeal_window_elapsed,false)
+  assert.equal(secondPending.body.terminal_preflight.permanent_finalization_enabled,false)
+  await assertStaffBlockers(staff,reviewSellerId,
+    "sonuçlanmamış itiraz veya üst inceleme mevcut",
+    ["itiraz kabul edildi; ayrıca kapatma uygulanamaz"])
   const replay=await write(browser,postPath,acceptedPayload)
   assert.equal(replay.status,200)
   assert.equal(replay.body?.replayed,true)
@@ -1078,6 +1226,15 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
   assert.equal(stored.length,1)
   assert.match(stored[0].review_decision_request_id,/^dasdr_[a-f0-9]{32}$/)
   assert.equal(stored[0].review_decision,"accepted")
+  const acceptedPath="/personal/platform/store-closing-email-readiness?"+
+    new URLSearchParams({organization_id:organizationId,seller_id:reviewSellerId})
+  const acceptedPreflight=await read(initialStaff,acceptedPath)
+  assert.equal(acceptedPreflight.status,200)
+  assert.equal(acceptedPreflight.body.terminal_preflight.appeal_review_pending,false)
+  assert.equal(acceptedPreflight.body.terminal_preflight.appeal_accepted,true)
+  assert.equal(acceptedPreflight.body.terminal_preflight.appeal_window_elapsed,false)
+  assert.equal(acceptedPreflight.body.terminal_preflight.financial_legal_clearance_verified,false)
+  assert.equal(acceptedPreflight.body.terminal_preflight.permanent_finalization_enabled,false)
   assert.equal(stored[0].review_decision_reason,payload.reason)
   assert.equal(stored[0].review_decided_by_person_id,reviewerId)
   assert.equal(stored[0].deadline_started_at.toISOString(),
@@ -1146,6 +1303,16 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
     "where seller_id=$1",[initialSellerId]))[0]
   assert.equal(firstStored.state,"appealed")
   assert.equal(firstStored.review_decision,"rejected")
+  const rejectedPath="/personal/platform/store-closing-email-readiness?"+
+    new URLSearchParams({organization_id:firstPending.organization_id,
+      seller_id:initialSellerId})
+  const rejectedPreflight=await read(initialStaff,rejectedPath)
+  assert.equal(rejectedPreflight.status,200)
+  assert.equal(rejectedPreflight.body.terminal_preflight.appeal_review_pending,false)
+  assert.equal(rejectedPreflight.body.terminal_preflight.appeal_accepted,false)
+  assert.equal(rejectedPreflight.body.terminal_preflight.appeal_window_elapsed,false)
+  assert.equal(rejectedPreflight.body.terminal_preflight.financial_legal_clearance_verified,false)
+  assert.equal(rejectedPreflight.body.terminal_preflight.permanent_finalization_enabled,false)
   assert.ok(two.some(x=>x.request_id===firstStored.review_decision_request_id))
   assert.equal((await q("select count(*)::int n from da_audit_event "+
     "where id=$1 and action='organization.store_platform_closing_review_decided'",
@@ -1153,6 +1320,13 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
   assert.equal((await q("select count(*)::int n from da_audit_outbox "+
     "where source_audit_event_id=$1",[firstStored.review_decision_audit_event_id]))[0].n,1)
   assert.equal(await foundation.storeOwnerPauseAcceptingOrders([initialSellerId]),false)
+  await assertStaffBlockers(initialStaff,reviewSellerId,
+    "itiraz kabul edildi; ayrıca kapatma uygulanamaz",
+    ["sonuçlanmamış itiraz veya üst inceleme mevcut"])
+  await assertStaffBlockers(initialStaff,initialSellerId,
+    "mali ve hukuki yükümlülüklerin temizlendiği doğrulanmadı",
+    ["sonuçlanmamış itiraz veya üst inceleme mevcut",
+     "itiraz kabul edildi; ayrıca kapatma uygulanamaz"])
   // Current protected Organization Owner cannot self-judge by acquiring a
   // Staff task grant; the source and decision authority remain separate.
   const ownerGrant="da_staff_b22_owner_"+randomBytes(8).toString("hex")
