@@ -151,6 +151,9 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.match(mailUi.text,/Korunan Owner 1, doğrulanmış e-posta kimliği 1/)
   assert.match(mailUi.text,/Owner 1: .*deneme [0-4]\/4/)
   assert.match(mailUi.text,/itiraz saati henüz başlamadı/)
+  assert.match(mailUi.text,/Kesin kapatma engelleri:/)
+  assert.match(mailUi.text,/mali ve hukuki yükümlülüklerin temizlendiği doğrulanmadı/)
+  assert.match(mailUi.text,/geri dönüşsüz kapatma kapalıdır/)
   assert.equal(mailUi.role,"status")
   assert.equal(mailUi.live,"polite")
   const createdRows=await q("select request_id,state,version from da_store_platform_closing where seller_id=$1 and organization_id=$2",[sellerId,ownerOrgId])
@@ -168,6 +171,12 @@ export async function verifyB22PlatformClosingAppeal(input:{
     "Native-confirmed Owner email is visible to the real Staff HTTPS route")
   assert.equal(mailReadiness.body?.mailbox_delivery_verified_count,0)
   assert.equal(mailReadiness.body?.deadline_started,false)
+  assert.deepEqual(mailReadiness.body?.terminal_preflight,{
+    appeal_window_elapsed:false,appeal_review_pending:false,
+    appeal_accepted:false,notification_exception_review_required:false,
+    financial_legal_clearance_verified:false,
+    permanent_finalization_enabled:false
+  },"No delivery/clock or finance verification can permit terminal closure")
   assert.equal(mailReadiness.body?.permanent_finalization_enabled,false)
   assert.equal(JSON.stringify(mailReadiness.body).includes("@example.invalid"),false)
   assert.equal(JSON.stringify(mailReadiness.body).includes(reason),false)
@@ -441,6 +450,9 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(deliveryStatus.body.mailbox_delivery_verified_count,1)
   assert.equal(deliveryStatus.body.deadline_started,true)
   assert.equal(deliveryStatus.body.deadline_basis,"owner_delivery")
+  assert.equal(deliveryStatus.body.terminal_preflight.appeal_window_elapsed,false)
+  assert.equal(deliveryStatus.body.terminal_preflight.financial_legal_clearance_verified,false)
+  assert.equal(deliveryStatus.body.terminal_preflight.permanent_finalization_enabled,false)
   assert.equal(deliveryStatus.body.smtp_accepted_count,
     deliveryStatus.body.email_statuses.filter((x:any)=>x.smtp_accepted===true).length,
     "An Owner link visit must not erase an earlier SMTP acceptance or fabricate one")

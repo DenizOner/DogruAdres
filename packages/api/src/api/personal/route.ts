@@ -4870,7 +4870,16 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          data.email_statuses.some(x=>!/^Owner [0-9]+$/.test(x?.label)||
            !Number.isSafeInteger(x?.attempts)||x.attempts<0||x.attempts>4||
            typeof x?.smtp_accepted!=='boolean'||
-           !Object.hasOwn(closingMailLabel,x?.status)))
+           !Object.hasOwn(closingMailLabel,x?.status))||
+         data.permanent_finalization_enabled!==false||
+         !data.terminal_preflight||
+         !['appeal_window_elapsed','appeal_review_pending',
+           'appeal_accepted','notification_exception_review_required',
+           'financial_legal_clearance_verified',
+           'permanent_finalization_enabled'].every(
+             k=>typeof data.terminal_preflight[k]==='boolean')||
+         data.terminal_preflight.financial_legal_clearance_verified!==false||
+         data.terminal_preflight.permanent_finalization_enabled!==false)
         throw Error('Bildirim kanıtı doğrulanamadı');
       const rows=data.email_statuses.map(row=>row.label+': '+
         closingMailLabel[row.status]+
@@ -4888,6 +4897,19 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           '10+20 günlük itiraz saati henüz başlamadı.')+
         (data.admin_alert_at?' Yöneticiye teslimat sorunu bildirildi.':'')+
         ' Gönderildi, iletildi ve okundu birbirinden ayrı kanıtlardır.';
+      const safety=data.terminal_preflight;
+      const blockers=[];
+      if(!safety.appeal_window_elapsed)
+        blockers.push('30 günlük itiraz süresi henüz tamamlanmadı veya başlamadı');
+      if(safety.appeal_review_pending)
+        blockers.push('sonuçlanmamış itiraz veya üst inceleme mevcut');
+      if(safety.appeal_accepted)
+        blockers.push('itiraz kabul edildi; ayrıca kapatma uygulanamaz');
+      if(safety.notification_exception_review_required)
+        blockers.push('bildirim başarısızlığı istisnası ayrıca incelenmeli');
+      blockers.push('mali ve hukuki yükümlülüklerin temizlendiği doğrulanmadı');
+      target.textContent+=' Kesin kapatma engelleri: '+blockers.join('; ')+
+        '. Mağaza kimliği, geçmiş işlemler ve ad hakkı korunur; geri dönüşsüz kapatma kapalıdır.';
     }catch(e){
       if(epoch===viewEpoch)target.textContent=
         e.httpStatus===403?'Bu mağaza için henüz kapatma kaydı yok.':
