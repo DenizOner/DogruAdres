@@ -6752,6 +6752,14 @@ export default async function({container}:any){
     // payload. This tests the UI's 503 recovery, NOT an actual server 503.
     const auditBeforeRevoke503=Number((await q(
       "select count(*)::int n from da_audit_event"))[0].n)
+    // The preceding Buyer catalogue flow uses a different Chrome window.
+    // Re-enter the real Owner page and reselect the exact Store/Group/Buyer.
+    // A stale hidden tab cannot count as an active authorization UI test.
+    await restoreStorePriceGroupOwnerBrowser({
+      browser,organizationName:organizations[0].name,storeId:ownerStoreId,
+      groupId:priceGroup.id,buyerOrganizationId:organizations[1].id
+    })
+    // Intercept only AFTER the helper's possible real Page.reload.
     await browser.eval("(()=>{"+
       "const original=window.fetch.bind(window);"+
       "window.__daRevokeActualFetch=window.fetch;"+
@@ -6769,13 +6777,6 @@ export default async function({container}:any){
           "})"+
         "}return original(resource,options)"+
       "};return true})()")
-    // The preceding Buyer catalogue flow uses a different Chrome window.
-    // Re-enter the real Owner page and reselect the exact Store/Group/Buyer.
-    // A stale hidden tab cannot count as an active authorization UI test.
-    await restoreStorePriceGroupOwnerBrowser({
-      browser,organizationName:organizations[0].name,storeId:ownerStoreId,
-      groupId:priceGroup.id,buyerOrganizationId:organizations[1].id
-    })
     // Wait for the previously authorized visible control; never bypass UI.
     await browser.wait("(()=>{const e=document.querySelector('#store-price-group-form button[value=\\\"revoke\\\"]');"+
       "return !!e && !!e.getClientRects().length && !e.disabled})()")
