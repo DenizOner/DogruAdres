@@ -25,7 +25,8 @@ import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,l
 import {B06Chrome} from "./b06-ui-browser"
 import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,createB22CompletedSourceOrderFixture} from "./b22-store-name-transfer.accept"
 import {verifyB22PlatformClosingAppeal,
-  verifyB22PlatformClosingSecondStageRequest} from "./b22-platform-closing-appeal.accept"
+  verifyB22PlatformClosingSecondStageRequest,
+  verifyB22IndependentStaffClosingDecision} from "./b22-platform-closing-appeal.accept"
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
@@ -8737,6 +8738,12 @@ export default async function({container}:any){
       ownerPersonId:A.person,staffPersonId:B.person,
       organizationId:organizations[0].id,
       organizationName:organizations[0].name
+    })
+    await verifyB22IndependentStaffClosingDecision({
+      host,crt,browsers,ownerBrowser:browser,initialStaff:reviewer,
+      q,foundation,organizationId:organizations[0].id,
+      reviewSellerId:secondOwnerStoreId,initialSellerId:gammaSellerId,
+      ownerPersonId:A.person,originalStaffPersonId:B.person
     })
     // Continue the Alpha Buyer/permission tests from the real Owner workspace.
     await browser.send("Page.bringToFront")
