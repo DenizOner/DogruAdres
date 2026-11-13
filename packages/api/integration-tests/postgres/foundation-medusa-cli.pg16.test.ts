@@ -292,6 +292,7 @@ async function run(){
         const ownerClosingMarker="PASS B22 real Owner 30-day closing intent/withdraw: Chrome/HTTPS/PG16, exact server deadline, protected Owner notices, whole-Cart L deny then restore, CSRF/foreign/replay denied; native Seller unchanged; irreversible finalization disabled"
         const ownerPauseAcceptanceMarker="PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed"
         const storeDraftNegativeMarkers=[
+          "PASS B22 Chrome/PG16: Store draft and Owner closing GET wait Person-first, epoch NOWAIT free, HTTPS200 each, no draft or closing writes",
           "PASS B22 Chrome/PG16: concurrent Store draft GET and Person mobile POST both wait Person-first, epoch NOWAIT free, HTTPS200 each, one private audit/outbox, draft unchanged",
           "PASS B22 PG16/Chrome: global normalized Store name claim; case/NFKC/native legacy conflicts409, no second application or Seller",
           "PASS B22 PG16/Chrome: invisible Store names HTTP400; zero application, native Seller, audit/outbox effects",
@@ -454,6 +455,8 @@ async function run(){
           "Missing real private Owner Store draft persistence and negative Chrome/PG16 acceptance")
         assert.ok(result.split("\n").includes("PASS B22 Chrome/PG16: concurrent Store draft GET and Person mobile POST both wait Person-first, epoch NOWAIT free, HTTPS200 each, one private audit/outbox, draft unchanged"),
           "Missing real #279 Person-first Store draft/mobile concurrency and audit proof")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome/PG16: Store draft and Owner closing GET wait Person-first, epoch NOWAIT free, HTTPS200 each, no draft or closing writes"),
+          "Missing real #329 Store draft/Owner closing state deadlock regression proof")
         assert.ok(result.includes("PASS B22 Chrome: paused company Store draft remains editable but native Owner submit is denied"),
           "Missing retained editable Store draft while native submissions are paused")
         assert.ok(result.split("\n").includes(

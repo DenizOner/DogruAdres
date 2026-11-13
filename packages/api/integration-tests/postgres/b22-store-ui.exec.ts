@@ -129,14 +129,93 @@ async function verifyStoreDraftPhonePersonLockRace(input:{
   }
 }
 
+async function verifyStoreDraftClosingPersonLockRace(input:{
+  browser:B06Chrome;q:(sql:string,params?:any[])=>Promise<any[]>;
+  connectionString:string;personId:string;organizationId:string;sellerId:string;
+}):Promise<void>{
+  const {browser,q,connectionString,personId,organizationId,sellerId}=input
+  // #329 P2: both authorized GET paths must take Person before session/epoch;
+  // no synthetic lock mock can establish the PostgreSQL lock order.
+  const beforeDrafts=await q(
+    "select id,name,version from da_store_application_draft where organization_id=$1 order by id",
+    [organizationId])
+  const beforeClosings=await q(
+    "select count(*)::int n from da_store_owner_closing where seller_id=$1",[sellerId])
+  const beforeAudits=await q(`select count(*)::int n from da_audit_event
+    where organization_id=$1 and target_id=$2 and resource='store-owner-closing'`,
+    [organizationId,sellerId])
+  const barrier=new Client({connectionString})
+  const probe=new Client({connectionString})
+  let barrierConnected=false,probeConnected=false,barrierHeld=false,probeHeld=false
+  let raceStarted=false
+  try{
+    await barrier.connect();barrierConnected=true
+    await probe.connect();probeConnected=true
+    await barrier.query("BEGIN");barrierHeld=true
+    await barrier.query("select id from da_person where id=$1 for update",[personId])
+    await browser.callFunction(
+      "async function(org,seller){"+
+      "const draft=fetch('/personal/store-applications?organization_id='+encodeURIComponent(org),"+
+      "{cache:'no-store',signal:AbortSignal.timeout(45000)}).then(async r=>({status:r.status,body:await r.json()}));"+
+      "const closing=fetch('/personal/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}),"+
+      "{cache:'no-store',signal:AbortSignal.timeout(45000)}).then(async r=>({status:r.status,body:await r.json()}));"+
+      "globalThis.__daDraftClosingRace=Promise.all([draft,closing]);return true}",
+      organizationId,sellerId)
+    raceStarted=true
+    await until(async()=>{
+      const [wait]=await q(`select count(*)::int n from pg_stat_activity
+        where datname=current_database() and wait_event_type='Lock'
+          and query ilike '%from da_browser_session s%'
+          and query ilike '%for update of p%'`)
+      return Number(wait.n)>=2
+    },15000,"#329 two real draft/closing GET Person-first lock waiters")
+    // Previously the closing read could hold session/epoch while waiting
+    // for Person FOR SHARE; that opposite order must fail this NOWAIT proof.
+    await probe.query("BEGIN");probeHeld=true
+    await probe.query(
+      "select epoch from da_person_security where person_id=$1 for update nowait",
+      [personId])
+    await probe.query("ROLLBACK");probeHeld=false
+    await barrier.query("COMMIT");barrierHeld=false
+    const values=await browser.eval("globalThis.__daDraftClosingRace")
+    assert.equal(values.length,2)
+    assert.equal(values[0].status,200,"Owner draft GET must finish without 503")
+    assert.ok(Array.isArray(values[0].body.drafts))
+    assert.equal(values[1].status,200,"Owner closing GET must finish without 503")
+    assert.equal(values[1].body.organization_id,organizationId)
+    assert.equal(values[1].body.seller_id,sellerId)
+    assert.equal(values[1].body.state,"none")
+    assert.equal(values[1].body.permanent_finalization_enabled,false)
+    assert.deepEqual(await q(
+      "select id,name,version from da_store_application_draft where organization_id=$1 order by id",
+      [organizationId]),beforeDrafts,"Read race must not modify Store drafts")
+    assert.deepEqual(await q(
+      "select count(*)::int n from da_store_owner_closing where seller_id=$1",
+      [sellerId]),beforeClosings,"Read race must not create closing state")
+    assert.deepEqual(await q(`select count(*)::int n from da_audit_event
+      where organization_id=$1 and target_id=$2 and resource='store-owner-closing'`,
+      [organizationId,sellerId]),beforeAudits,"Read race must not append closing audit/outbox")
+    process.stdout.write("PASS B22 Chrome/PG16: Store draft and Owner closing GET wait Person-first, epoch NOWAIT free, HTTPS200 each, no draft or closing writes\n")
+  }finally{
+    if(probeHeld)await probe.query("ROLLBACK")
+    if(barrierHeld)await barrier.query("ROLLBACK")
+    if(raceStarted)await browser.eval(
+      "Promise.allSettled([globalThis.__daDraftClosingRace])").catch(()=>{})
+    if(probeConnected)await probe.end()
+    if(barrierConnected)await barrier.end()
+  }
+}
+
 async function verifyOwnerClosingBrowser(input:{
   browser:B06Chrome;reviewer:B06Chrome;coOwnerPersonId:string;
+  ownerPersonId:string;connectionString:string;
   organizations:any[];ownerStoreId:string;secondOwnerStoreId:string;
   nativeCustomer:any;customerCart:any;cartStoreIds:string[];foundation:any;cartService:any;
   q:(sql:string,params?:any[])=>Promise<any[]>;
   get:(url:string)=>Promise<any>;catalogUrl:(org:string)=>string;
 }):Promise<void>{
-  const {browser,reviewer,coOwnerPersonId,organizations,ownerStoreId,secondOwnerStoreId,
+  const {browser,reviewer,coOwnerPersonId,ownerPersonId,connectionString,
+    organizations,ownerStoreId,secondOwnerStoreId,
     nativeCustomer,customerCart,cartStoreIds,foundation,cartService,q,get,catalogUrl}=input
   // Isolated synthetic Store. Never turn on public checkout or payments.
   const nativeBefore=(await q(
@@ -202,6 +281,8 @@ async function verifyOwnerClosingBrowser(input:{
     "'#store-owner-closing-form input[name=consequences_acknowledged]');"+
     "a.checked=true;a.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
   await browser.wait("!document.querySelector('#store-owner-closing-form button[value=start]').disabled")
+  await verifyStoreDraftClosingPersonLockRace({browser,q,connectionString,
+    personId:ownerPersonId,organizationId:organizations[0].id,sellerId:ownerStoreId})
   await browser.eval("window.__b22ClosingConfirm=window.confirm;window.confirm=()=>true")
   assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-closing-form button[value=start]');b.focus();return document.activeElement===b})()"),true)
   await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
@@ -7891,6 +7972,7 @@ export default async function({container}:any){
       secondOwnerStoreId,nativeCustomer,customerCart,cartStoreIds,container,
       foundation,cartService,q,get,catalogUrl})
     await verifyOwnerClosingBrowser({browser,reviewer,coOwnerPersonId:B.person,
+      ownerPersonId:A.person,connectionString:u.toString(),
       organizations,ownerStoreId,secondOwnerStoreId,nativeCustomer,
       customerCart,cartStoreIds,foundation,cartService,q,get,catalogUrl})
     // One native Seller suspended means NO partially authorized two-Store

@@ -5123,9 +5123,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return rows.length?rows[0]:null
   }
 
-  private async ownerPauseScope_(db:SecuritySql,token:string,organizationId:string,sellerId:string){
+  private async ownerPauseScope_(db:SecuritySql,token:string,organizationId:string,sellerId:string,
+    personFirst=false){
     const sessions=new IdentitySessions(db)
-    const actor=await sessions.current(token,true,false)
+    // Closing-state GET later takes Person FOR SHARE. Acquire Person before
+    // session/epoch only for that read to prevent a draft GET lock cycle.
+    // Existing Seller advisory-locked write paths retain their prior order.
+    const actor=personFirst?
+      await sessions.currentWithPersonLock(token,true,false):
+      await sessions.current(token,true,false)
     if(!actor)return null
     const scope=await sessions.organizations(token,organizationId,false)
     if(!scope||scope.person_id!==actor.person_id||
@@ -5294,7 +5300,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        !/^sel_[A-Za-z0-9_-]+$/.test(sellerId))
       throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager)
-    const scope=await this.ownerPauseScope_(db,token,organizationId,sellerId)
+    const scope=await this.ownerPauseScope_(db,token,organizationId,sellerId,true)
     if(!scope)return null
     const row=await this.ownerClosingRow_(db,sellerId)
     if(row&&row.organization_id!==organizationId)throw new IdentityAccessDenied()
