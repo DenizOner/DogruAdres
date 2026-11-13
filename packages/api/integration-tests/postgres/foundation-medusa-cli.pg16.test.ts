@@ -316,7 +316,7 @@ async function run(){
           // Chrome/HTTPS+PG16 revocation test; both log and mandatory assert.
           "PASS B22 real PG16: 51 unrelated audited Store associations do not hide bounded historical Seller proof; revoked candidate denied; global guard retained and fixture rolled back",
           "PASS B22 Chrome/HTTPS/PG16: revoked Store ownership preserves historical application but hides live Seller status and private rejection reason in Owner HTTP and UI; no new audit",
-          "PASS B22 Chrome/HTTPS/PG16: two authorized Stores; refresh retains exact second target and risk; removed target resets name/URL/consent, disables submit across repeat refresh; manual Store selection restores blank safe form, zero rename writes",
+          "PASS B22 Chrome/HTTPS/PG16: two authorized Stores; overlapping refresh dedup, second target and consent preserved, removed target resets name/URL/risk across repeat refresh; manual Store selection restores blank safe form, zero writes",
         ] as const
         function invoke(file:string,env:NodeJS.ProcessEnv,direct=false){
           const child=spawnSync(process.execPath,direct?[file]:["run","medusa","exec",file],{
