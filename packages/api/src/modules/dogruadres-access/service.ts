@@ -2697,6 +2697,34 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return {status:"assigned" as const,replayed:false}
   }
 
+  /** A native unsuspend may have committed while the separate canonical
+   * completion failed. Under the existing per-Seller advisory lock, any
+   * unclosed reactivation claim blocks a new rename request or Staff claim.
+   * A malformed/incomplete claim also fails closed; a terminal decision must
+   * have its own durable outbox proof. This query grants NO authority.
+   */
+  private async hasUnresolvedStoreReactivationClaim_(
+    db:SecuritySql,sellerId:string
+  ):Promise<boolean>{
+    const rows=await db.execute(`select 1 from da_audit_event c
+      where c.target_id=? and c.module='dogruadres-access'
+        and c.resource='store-application'
+        and c.action='organization.store_reactivation_claimed'
+        and c.deleted_at is null
+        and not exists(select 1 from da_audit_event done
+          join da_audit_outbox x on x.source_audit_event_id=done.id
+            and x.source_module='dogruadres-access' and x.deleted_at is null
+          where done.module='dogruadres-access'
+            and done.resource='store-application'
+            and done.action in ('organization.store_reactivated',
+              'organization.store_reactivation_released')
+            and done.organization_id=c.organization_id
+            and done.target_id=c.target_id and done.deleted_at is null
+            and done.new_values->>'claim_audit_id'=c.id)
+      limit 1`,[sellerId])
+    return rows.length>0
+  }
+
   @InjectTransactionManager()
   async personalCurrentSuspendedStoreName(token:string,target:{
     application_id:string;seller_id:string;expected_status?:"open"
@@ -3337,6 +3365,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!fresh||fresh.grant_id!==staff.grant_id)return null
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext(?))",
       [input.seller_id])
+    // An OPEN Seller whose unsuspend completion is still unresolved must
+    // retain the exact name+URL needed for canonical Staff reconciliation.
+    if(await this.hasUnresolvedStoreReactivationClaim_(db,input.seller_id))
+      return {status:"conflict" as const}
     const rows=await db.execute(`select r.organization_id,r.old_name,r.old_handle,
       r.proposed_name,r.proposed_handle,r.risk_version
       from da_store_rename_request r
@@ -3688,6 +3720,10 @@ export default class DogruAdresAccessModuleService extends MedusaService({
          row.risk_version!==input.risk_version)throw new IdentityAccessDenied()
       return {status:row.status as string,request_id:input.request_id,replayed:true}
     }
+    // Staff may still be completing an earlier native Store unsuspend.
+    // No NEW Owner rename is allowed until its claim has a terminal receipt.
+    if(await this.hasUnresolvedStoreReactivationClaim_(db,input.seller_id))
+      return {status:"conflict" as const}
     const pending=await db.execute(`select id from da_store_rename_request
       where seller_id=? and status in ('pending_review','approving') limit 1`,[input.seller_id])
     if(pending.length)return {status:"conflict" as const}
