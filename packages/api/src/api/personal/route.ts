@@ -582,10 +582,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Hash fragments never reach a web server or reverse-proxy access log.
   // Reading the link is optional: not visiting never blocks the automatic
   // admin-alert fallback. Do not let email scanners pre-confirm anything.
-  let platformMailLinkToken='';
+  let platformMailLinkToken='',platformMailLinkRequest=0;
   // An Owner's email-link explanation and bearer capability belong to one
   // authenticated view. Neither survives an actor/Organization change.
   function clearPrivateClosingEmailLink(){
+    platformMailLinkRequest++;
     platformMailLinkToken='';
     el('platform-closing-email-link-status').textContent='';
     el('platform-closing-email-link-panel').hidden=true;
@@ -603,7 +604,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   if(typeof el==='function' && el('platform-closing-email-link-open'))
     el('platform-closing-email-link-open').onclick=async()=>{
     const msg=el('platform-closing-email-link-status');
-    const epoch=viewEpoch,person=currentPersonId;
+    const epoch=viewEpoch,person=currentPersonId,request=++platformMailLinkRequest;
     if(!platformMailLinkToken||!person)return;
     if(document.hidden||el('workspace').hidden){
       msg.textContent='Önce güvenli kişisel hesabınızda oturum açın.';
@@ -617,8 +618,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         method:'POST',
         body:JSON.stringify({token:platformMailLinkToken})
       });
-      if(epoch!==viewEpoch||person!==currentPersonId||
-         document.hidden||el('workspace').hidden)return;
+      if(request!==platformMailLinkRequest||epoch!==viewEpoch||
+         person!==currentPersonId||document.hidden||el('workspace').hidden)return;
       if(result.viewed!==true||typeof result.reason!=='string'||
          typeof result.deadline_started!=='boolean')
         throw Error('Bildirimin kimliği doğrulanamadı');
@@ -630,8 +631,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       platformMailLinkToken='';
       button.hidden=true;
     }catch{
-      if(epoch!==viewEpoch||person!==currentPersonId||
-         document.hidden||el('workspace').hidden)return;
+      if(request!==platformMailLinkRequest||epoch!==viewEpoch||
+         person!==currentPersonId||document.hidden||el('workspace').hidden)return;
       msg.textContent='Bağlantı doğrulanamadı. Güncel ve yetkili kuruluş alanınızdan kapatma bildirimini kontrol edin.';
       button.disabled=false;
     }
@@ -1593,7 +1594,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(currentOrg)await pendingInvitations(currentOrg,organizationRequest);
   };
   async function selectOrg(id){
-    if(currentOrg&&currentOrg!==id)clearPrivateClosingEmailLink();
+    // Preserve an unread first-login email link, but never a displayed old
+    // explanation when selecting the first/different Organization.
+    if(currentOrg!==id&&(currentOrg||
+       el('platform-closing-email-link-status').textContent))clearPrivateClosingEmailLink();
     // Never carry a verified role from the previously selected Organization.
     applicationRole='';
     clearNotifications();
