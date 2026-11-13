@@ -2763,6 +2763,20 @@ async function verifyStaffReopensSuspendedStore(
     [sellerId]))[0]
   assert.equal(before.status,"open")
   assert.ok(before.approved_at)
+  // Earlier real A-B-C-B reactivation is retained as canonical history.
+  // Validate exactly ONE new record per decision relative to that baseline.
+  const [baseline]=await q(`select
+    (select count(*)::int from da_audit_event
+      where action='organization.store_reactivation_claimed'
+        and organization_id=$1 and target_id=$2) as claims,
+    (select count(*)::int from da_audit_event
+      where action='organization.store_reactivated'
+        and organization_id=$1 and target_id=$2) as completed`,
+    [organizationId,sellerId])
+  assert.ok(baseline&&Number.isInteger(baseline.claims)&&
+    Number.isInteger(baseline.completed))
+  const initialClaims=baseline.claims as number
+  const initialCompleted=baseline.completed as number
   const original=(await q(`select id from da_store_application where seller_id=$1
     and organization_id=$2 and status='created'`,[sellerId,organizationId]))
   assert.equal(original.length,1)
@@ -2882,18 +2896,21 @@ async function verifyStaffReopensSuspendedStore(
     const audited=await q(`select e.id,x.id as outbox_id,e.actor_person_id,e.new_values
       from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
       where e.action='organization.store_reactivated'
-        and e.organization_id=$1 and e.target_id=$2`,[organizationId,sellerId])
-    assert.equal(audited.length,1,"Exactly one completed canonical audit/outbox")
-    assert.equal(audited[0].new_values.application_id,target.application_id)
-    assert.equal(audited[0].new_values.resolution_confirmed,true)
-    assert.ok(audited[0].outbox_id)
+        and e.organization_id=$1 and e.target_id=$2
+      order by e.occurred_at,e.id`,[organizationId,sellerId])
+    assert.equal(audited.length,initialCompleted+1,
+      "Exactly one new completed canonical audit/outbox")
+    const lastAudit=audited[audited.length-1]
+    assert.equal(lastAudit.new_values.application_id,target.application_id)
+    assert.equal(lastAudit.new_values.resolution_confirmed,true)
+    assert.ok(lastAudit.outbox_id)
     const notices=await q(`select count(*)::int n from da_notification_receipt n
-      where n.audit_event_id=$1`,[audited[0].id])
+      where n.audit_event_id=$1`,[lastAudit.id])
     assert.ok(notices[0].n>=1,"The current Owner has a private receipt")
     assert.equal((await post(reviewer,target)).status,409,"Replay must not open a second time")
     assert.equal((await q(`select count(*)::int n from da_audit_event
       where action='organization.store_reactivated' and target_id=$1`,
-      [sellerId]))[0].n,1)
+      [sellerId]))[0].n,initialCompleted+1)
     await owner.send("Page.bringToFront")
     await owner.wait("document.visibilityState==='visible'")
     await owner.select(organizationName,"owner")
@@ -2945,13 +2962,13 @@ async function verifyStaffReopensSuspendedStore(
         where e.action='organization.store_reactivation_claimed'
           and e.organization_id=$1 and e.target_id=$2
         order by e.occurred_at,e.id`,[organizationId,sellerId])
-      assert.equal(claims.length,2,
-        "Both native opening cycles must have an independently committed claim")
-      assert.ok(claims[1].outbox_id)
+      assert.equal(claims.length,initialClaims+2,
+        "Two more native opening attempts each require a durable claim")
+      assert.ok(claims[claims.length-1].outbox_id)
       const completed=await q(`select id from da_audit_event
         where action='organization.store_reactivated'
           and organization_id=$1 and target_id=$2`,[organizationId,sellerId])
-      assert.equal(completed.length,1,
+      assert.equal(completed.length,initialCompleted+1,
         "The injected second completion transaction must not partially commit")
       assert.equal((await post(reviewer,target)).status,409,
         "Do not unsuspend an already open native Seller again")
@@ -2983,20 +3000,24 @@ async function verifyStaffReopensSuspendedStore(
       where e.action='organization.store_reactivated'
         and e.organization_id=$1 and e.target_id=$2
       order by e.occurred_at,e.id`,[organizationId,sellerId])
-    assert.equal(finished.length,2,"One completed event per suspension/claim")
-    assert.notEqual(finished[0].claim_id,finished[1].claim_id)
+    assert.equal(finished.length,initialCompleted+2,
+      "Reconciled claim must add exactly one completed event")
+    assert.notEqual(finished[finished.length-2].claim_id,
+      finished[finished.length-1].claim_id)
     assert.ok(finished.every((v:any)=>v.outbox_id))
     const notices2=await q(`select count(*)::int n
       from da_notification_receipt where audit_event_id in
         (select id from da_audit_event
           where action='organization.store_reactivated'
             and organization_id=$1 and target_id=$2)`,[organizationId,sellerId])
-    assert.ok(notices2[0].n>=2,"Current Owner gets one private completion receipt per cycle")
+    assert.ok(notices2[0].n>=initialCompleted+2,
+      "Current Owner gets one private completion receipt per cycle")
     assert.equal((await post(reviewer,{...target,action:"reconcile"})).status,409)
     assert.equal((await post(reviewer,target)).status,409)
     assert.equal((await q(`select count(*)::int n from da_audit_event
       where action='organization.store_reactivated'
-        and organization_id=$1 and target_id=$2`,[organizationId,sellerId]))[0].n,2)
+        and organization_id=$1 and target_id=$2`,[organizationId,sellerId]))[0].n,
+      initialCompleted+2)
     process.stdout.write("PASS B22 Chrome/HTTPS/PG16: post-native reactivation audit failure preserves durable claim/outbox, Store open and HTTP503; real Staff UI reconciles with no second native opening, Owner notice persists once, replay denied\n")
 
     // Exact pre-native crash interval: commit the source-proven intent and
@@ -3103,7 +3124,7 @@ async function verifyStaffReopensSuspendedStore(
     const completions=await q(`select count(*)::int n from da_audit_event
       where action='organization.store_reactivated'
         and organization_id=$1 and target_id=$2`,[organizationId,sellerId])
-    assert.equal(completions[0].n,3,
+    assert.equal(completions[0].n,initialCompleted+3,
       "A released pre-native claim has no fake completion; new native opening has one")
     process.stdout.write("PASS B22 Chrome/HTTPS/PG16: pre-native crash retains suspended Seller and committed claim/outbox; real Staff UI releases intent with one terminal audit, Owner/CSRF/forgery/replay denied, no blind native retry; new authorized attempt succeeds\n")
 
