@@ -8691,7 +8691,10 @@ export default async function({container}:any){
       competitor:{seller_id:ownerStoreId,organization_id:organizations[0].id},
       targetOrganizationName:sellerGamma.name,
       competitorOrganizationName:organizations[0].name,
-      ...transferAssignment,sourceVacated:true})
+      ...transferAssignment,sourceVacated:true,
+      suspend:async()=>{await suspendSellerWorkflow(container).run({input:{
+        seller_id:gammaSellerId,reason:"B22 isolated transferred recipient reactivation"
+      }})}})
     await verifyTwoIndependentStaffNameRightRace({
       owner:browser,reviewer,reviewerPersonId:B.person,origin:host,ca:crt,
       rand,organizationName:sellerGamma.name,organizationId:sellerGamma.id,
