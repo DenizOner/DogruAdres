@@ -1509,6 +1509,18 @@ async function verifyOwnerRenameTargetRefresh(
     "document.querySelector('#store-rename-form select[name=seller_id]').value===''")
   assert.deepEqual(await state(),{seller:"",name:"",handle:"",risk:false,disabled:true},
     "Former target must force new Store selection/name/URL and fresh consent")
+  // Even if the Owner types while no target is selected, a later refresh may
+  // not silently bind that draft to the first returned Store.
+  await browser.eval("(()=>{const f=document.getElementById('store-rename-form');"+
+    "f.elements.namedItem('name').value='Unbound prepared Store';"+
+    "f.elements.namedItem('handle').value='unbound-prepared-store';"+
+    "f.elements.namedItem('risk_acknowledged').checked=true})()")
+  await browser.click("#org-stores-refresh")
+  await browser.wait("document.querySelector('#store-rename-form select[name=seller_id]').value==='' && "+
+    "document.getElementById('store-rename-form').elements.namedItem('name').value==='' && "+
+    "document.getElementById('store-rename-form').elements.namedItem('handle').value===''")
+  assert.deepEqual(await state(),{seller:"",name:"",handle:"",risk:false,disabled:true},
+    "Unbound stale values require a fresh Store selection and explicit risk consent")
   assert.deepEqual(await snapshot(),before,"Refresh must create no rename or audit writes")
   // Restore live authorized picker, not a simulated session or Seller grant.
   await browser.click("#org-stores-refresh")
