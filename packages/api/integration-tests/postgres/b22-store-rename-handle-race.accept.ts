@@ -144,5 +144,5 @@ export async function verifyTwoStoreSameHandleApprovalRace(input:{
   const finalized=await q("select status from da_store_rename_request where id in ($1,$2)",
     requests.map(r=>r.request_id))
   assert.deepEqual(finalized.map((r:any)=>r.status),["withdrawn","withdrawn"])
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: distinct Stores/different names same proposed handle, two observed shared URL lock waiters; one approving claim and one HTTP409, native suppressed on winner, no native Seller/audit change, Owner task requests withdrawn\\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: distinct Stores/different names same proposed handle, two observed shared URL lock waiters; one approving claim and one HTTP409, native suppressed on winner, no native Seller/audit change, Owner task requests withdrawn\n")
 }
