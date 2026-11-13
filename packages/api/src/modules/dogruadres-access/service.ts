@@ -3148,13 +3148,17 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!staff)return null
     const rows=await db.execute(`select r.id request_id,r.organization_id,
       d.name organization_name,r.seller_id,r.old_name,r.old_handle,
-      r.proposed_name,r.proposed_handle,r.created_at,s.status seller_status
+      r.proposed_name,r.proposed_handle,r.created_at,s.status seller_status,
+      r.status request_status
       from da_store_rename_request r
       join da_organization d on d.id=r.organization_id
         and d.status='active' and d.deleted_at is null
       join seller s on s.id=r.seller_id and s.deleted_at is null
         and s.status in ('open','suspended') and s.approved_at is not null
-        and s.name=r.old_name and s.handle=r.old_handle
+        and ((r.status='pending_review' and s.name=r.old_name and s.handle=r.old_handle)
+          or (r.status='approving' and
+             ((s.name=r.old_name and s.handle=r.old_handle) or
+              (s.name=r.proposed_name and s.handle=r.proposed_handle))))
       join da_organization_seller_ownership o on o.seller_id=r.seller_id
         and o.organization_id=r.organization_id and o.revoked_at is null
       join da_audit_event origin on origin.id=o.verification_audit_event_id
@@ -3171,7 +3175,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         and e.new_values->>'request_id'=r.id
         and e.new_values->>'risk_version'=r.risk_version
         and e.actor_person_id=r.requested_by_person_id
-      where r.status='pending_review' and r.risk_version=?
+      where r.status in ('pending_review','approving') and r.risk_version=?
         and r.risk_acknowledged_at is not null
         and exists(select 1 from da_audit_outbox x
           where x.source_audit_event_id=e.id
@@ -3190,6 +3194,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
          !/^sel_[A-Za-z0-9_-]+$/.test(row.seller_id)||
          typeof row.organization_name!=="string"||
          !["open","suspended"].includes(row.seller_status)||
+         !["pending_review","approving"].includes(row.request_status)||
          typeof row.old_name!=="string"||typeof row.old_handle!=="string"||
          typeof row.proposed_name!=="string"||
          !validStoreName(row.proposed_name)||
@@ -3213,7 +3218,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       organization_name:row.organization_name as string,seller_id:row.seller_id as string,
       old_name:row.old_name as string,old_handle:row.old_handle as string,
       proposed_name:row.proposed_name as string,proposed_handle:row.proposed_handle as string,
-      created_at:row.created_at,seller_status:row.seller_status as "open"|"suspended"
+      created_at:row.created_at,seller_status:row.seller_status as "open"|"suspended",
+      status:row.request_status as "pending_review"|"approving"
     }))}
   }
 
@@ -3855,7 +3861,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       order by created_at desc,id desc limit 10`,[organizationId,sellerId])
     if(requests.length>10||requests.some(row=>typeof row.id!=="string"||
        !/^dasrn_[a-f0-9]{32}$/.test(row.id)||
-       !["pending_review","approved","rejected","withdrawn"].includes(row.status)))
+       !["pending_review","approving","approved","rejected","withdrawn"].includes(row.status)))
       throw new IdentityAccessDenied()
     return {organization_id:organizationId,seller_id:sellerId,
       requests:requests.map(row=>({id:row.id as string,status:row.status as string,
