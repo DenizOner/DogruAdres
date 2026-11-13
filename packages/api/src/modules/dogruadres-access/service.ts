@@ -5127,6 +5127,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     return rows.length?rows[0]:null
   }
 
+  /** #307 P2: one real Person-first lock shared by protected Owner writers.
+   * Not an authorization grant: ownerPauseScope_ still checks live scope.
+   * Separated only so pure clock-fixture tests can mock this narrow gateway,
+   * without bypassing native session validation on any real HTTP request.
+   */
+  private async ownerPauseSessionPrelock_(db:SecuritySql,token:string){
+    return new IdentitySessions(db).currentWithPersonLock(token,true,false,true)
+  }
+
   private async ownerPauseScope_(db:SecuritySql,token:string,organizationId:string,sellerId:string,
     personFirst=false){
     const sessions=new IdentitySessions(db)
@@ -5190,7 +5199,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
     // protected Owner, Organization, native Member/Seller and current origin
     // under the serialized Seller lock before any write.
-    if(!await new IdentitySessions(db).currentWithPersonLock(token,true,false,true))
+    if(!await this.ownerPauseSessionPrelock_(db,token))
       return null
     // Same per-Seller lock serializes parallel pause, resume, read-modify-
     // write and the live native Seller row SHARE lock with platform updates.
@@ -5424,7 +5433,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
     // protected Owner, Organization, native Member/Seller and current origin
     // under the serialized Seller lock before any write.
-    if(!await new IdentitySessions(db).currentWithPersonLock(token,true,false,true))
+    if(!await this.ownerPauseSessionPrelock_(db,token))
       return null
     // Reuse the existing per-Seller lock, without changing the native Seller.
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
@@ -6157,7 +6166,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
     // protected Owner, Organization, native Member/Seller and current origin
     // under the serialized Seller lock before any write.
-    if(!await new IdentitySessions(db).currentWithPersonLock(token,true,false,true))
+    if(!await this.ownerPauseSessionPrelock_(db,token))
       return null
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
       [input.seller_id])
@@ -6247,7 +6256,7 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
     // protected Owner, Organization, native Member/Seller and current origin
     // under the serialized Seller lock before any write.
-    if(!await new IdentitySessions(db).currentWithPersonLock(token,true,false,true))
+    if(!await this.ownerPauseSessionPrelock_(db,token))
       return null
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
       [input.seller_id])
