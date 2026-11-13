@@ -3365,7 +3365,8 @@ async function verifyOwnerSubmittedMemberDraft(
   reviewer:B06Chrome,browser:B06Chrome,
   organizations:{id:string;name:string}[],rand:string,
   ownerPersonId:string,native:any,
-  q:(sql:string,params?:any[])=>Promise<any[]>
+  q:(sql:string,params?:any[])=>Promise<any[]>,
+  secondPersonId:string,connectionString:string
 ):Promise<void>{
       // An earlier Member prepared a durable Beta draft; their explicit draft
       // permission was revoked. Only Beta's independently authenticated,
@@ -3448,7 +3449,9 @@ async function verifyOwnerSubmittedMemberDraft(
         where organization_id=$1 and seller_id=$2 and revoked_at is null`,
         [organizations[1].id,submittedApplication.seller_id]))[0].n,1)
       process.stdout.write("PASS B22 Chrome: revoked Member's preserved Store draft submitted once by fresh-MFA protected Owner through native Mercur; duplicate/stale/CSRF/Member denied, PG16 draft/app/ownership/audit/outbox persisted, Seller pending only\n")
-      await verifyStoreDraftSubmissionNegativePaths(reviewer,organizations[1].id,ownerPersonId,q)
+      await verifyStoreDraftSubmissionNegativePaths(
+        reviewer,browser,organizations[1].id,ownerPersonId,
+        secondPersonId,connectionString,q)
       await reviewer.select(organizations[0].name,"member")
 
  }
@@ -3458,8 +3461,107 @@ async function verifyOwnerSubmittedMemberDraft(
  * Only disposable CI fixtures may change, and all fault injection is removed.
  * No free-text personal data or bearer/session secrets enter the logs.
  */
+/** #280: The first real Owner HTTPS submission previously committed a
+ * creating/submitting claim. Reproduce its native completion lock footprint
+ * in real PostgreSQL while a different, separately authenticated Owner POSTs
+ * that SAME ID. Only task-owned PG fixtures are changed, then restored.
+ */
+async function verifyTwoOwnersStoreDraftApplicationLockOrder(input:{
+  browser:B06Chrome;otherOwnerId:string;organizationId:string;
+  draftId:string;applicationId:string;email:string;connectionString:string;
+  q:(sql:string,params?:unknown[])=>Promise<any[]>
+}):Promise<void>{
+  const {browser,otherOwnerId,organizationId,draftId,applicationId,email,connectionString,q}=input
+  const [claim]=await q("select id,person_id,status,seller_id from da_store_application where id=$1",[applicationId])
+  assert.ok(claim&&claim.person_id!==otherOwnerId&&claim.status==="creating"&&claim.seller_id===null)
+  const [draft]=await q("select status,submitted_application_id,version from da_store_application_draft where id=$1",[draftId])
+  assert.deepEqual(draft,{status:"submitting",submitted_application_id:applicationId,version:1})
+  const [membership]=await q(`select id,role,protected_owner from da_organization_membership
+    where organization_id=$1 and person_id=$2 and status='active' and revoked_at is null
+      and deleted_at is null`,[organizationId,otherOwnerId])
+  assert.ok(membership&&membership.role==="member"&&membership.protected_owner===false,
+    "The different actual Member is promoted only in isolated test PG16")
+  const before=await q(`select
+    (select count(*)::int from seller where email=$1) as sellers,
+    (select count(*)::int from da_audit_event where action='organization.store_application_created'
+      and new_values->>'draft_id'=$2) as completed_audits,
+    (select count(*)::int from da_organization_seller_ownership where organization_id=$3) as origins`,
+    [email,draftId,organizationId])
+  const barrier=new Client({connectionString})
+  let connected=false,held=false,started=false,promoted=false
+  try{
+    const changed=await q(`update da_organization_membership
+      set role='owner',protected_owner=true,updated_at=clock_timestamp()
+      where id=$1 and role='member' and protected_owner=false and status='active'
+        and revoked_at is null returning id`,[membership.id])
+    assert.equal(changed.length,1)
+    promoted=true
+    // Actual live membership authorization, not just a synthetic Owner label.
+    const visible=await browser.callFunction(
+      "async function(org){const r=await fetch('/personal/store-applications?organization_id='+"+
+      "encodeURIComponent(org),{cache:'no-store'});return {status:r.status,body:await r.json()}}",
+      organizationId)
+    assert.equal(visible.status,200,"Second independently signed-in Owner must be authorized")
+    assert.equal(visible.body.draft_role,"owner")
+    await barrier.connect();connected=true
+    await barrier.query("BEGIN");held=true
+    // Same application SHARE lock held across native Mercur Seller creation
+    // by personalWithStoreApplicationOwnerLock (not a mock DB lock).
+    const retained=await barrier.query(
+      "select id from da_store_application where id=$1 for share",[applicationId])
+    assert.equal(retained.rows.length,1)
+    await browser.callFunction(
+      "async function(org,draft,app){"+
+      "const session=await(await fetch('/personal/session')).json();"+
+      "globalThis.__b22OwnerSameAppRace=fetch('/personal/store-applications',"+
+      "{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({action:'submit_draft',organization_id:org,draft_id:draft,"+
+      "expected_version:1,application_id:app}),signal:AbortSignal.timeout(45000)})"+
+      ".then(async r=>({status:r.status,body:await r.json()}));return true}",
+      organizationId,draftId,applicationId)
+    started=true
+    await until(async()=>{
+      const [wait]=await q(`select count(*)::int n from pg_stat_activity
+        where datname=current_database() and wait_event_type='Lock'
+          and query ilike '%select * from da_store_application where id=%for update%'`)
+      return Number(wait.n)>=1
+    },15000,"#280 different Owner real HTTPS POST must wait on application before draft")
+    // If reserve still takes the draft first, NOWAIT here fails 55P03:
+    // that recreates the actual native-finish deadlock edge.
+    const available=await barrier.query(
+      "select id from da_store_application_draft where id=$1 for update nowait",[draftId])
+    assert.equal(available.rows.length,1)
+    await barrier.query("ROLLBACK");held=false
+    const result=await browser.eval("globalThis.__b22OwnerSameAppRace")
+    assert.equal(result.status,403,
+      "Different Owner must not claim the first Owner's committed request ID")
+    assert.deepEqual(await q("select id,person_id,status,seller_id from da_store_application where id=$1",[applicationId]),[claim])
+    assert.deepEqual(await q("select status,submitted_application_id,version from da_store_application_draft where id=$1",[draftId]),[draft])
+    assert.deepEqual(await q(`select
+      (select count(*)::int from seller where email=$1) as sellers,
+      (select count(*)::int from da_audit_event where action='organization.store_application_created'
+        and new_values->>'draft_id'=$2) as completed_audits,
+      (select count(*)::int from da_organization_seller_ownership where organization_id=$3) as origins`,
+      [email,draftId,organizationId]),before,
+      "The losing Owner must not create a Seller, Origin or canonical audit")
+    process.stdout.write("PASS B22 Chrome/PG16: two distinct protected Owners same draft/application ID; second HTTPS reserve waits application row before draft; first native claim finish draft NOWAIT free; loser403, creating/submitting and Seller/audit unchanged\\n")
+  }finally{
+    if(held)await barrier.query("ROLLBACK")
+    if(started)await browser.eval(
+      "Promise.allSettled([globalThis.__b22OwnerSameAppRace])").catch(()=>{})
+    if(connected)await barrier.end()
+    if(promoted){
+      const restored=await q(`update da_organization_membership
+        set role='member',protected_owner=false,updated_at=clock_timestamp()
+        where id=$1 and role='owner' and protected_owner=true returning id`,[membership.id])
+      assert.equal(restored.length,1,"Restore the task-only second Owner membership")
+    }
+  }
+}
+
 async function verifyStoreDraftSubmissionNegativePaths(
-  reviewer:B06Chrome,organizationId:string,ownerId:string,
+  reviewer:B06Chrome,browser:B06Chrome,organizationId:string,ownerId:string,
+  otherOwnerId:string,connectionString:string,
   q:(sql:string,params?:unknown[])=>Promise<any[]>
 ):Promise<void>{
   assert.match(organizationId,/^daorg_[A-Za-z0-9_-]{1,80}$/)
@@ -3636,6 +3738,10 @@ async function verifyStoreDraftSubmissionNegativePaths(
     [organizationId,uncertainApp]))[0].n,1)
   assert.equal((await q("select count(*)::int n from da_audit_event where action='organization.store_application_created' and new_values->>'draft_id'=$1",
     [uncertainDraft.draftId]))[0].n,0)
+  await verifyTwoOwnersStoreDraftApplicationLockOrder({
+    browser,otherOwnerId,organizationId,draftId:uncertainDraft.draftId,
+    applicationId:uncertainApp,email:uncertainDraft.email,connectionString,q
+  })
   process.stdout.write("PASS B22 Chrome/PG16: injected native Seller finalization interruption 503, durable creating/submitting, same/different retry409, no duplicate Seller, fault trigger removed\n")
 }
 
@@ -10608,7 +10714,8 @@ export default async function({container}:any){
       assert.equal(bMemberBindings.length,1)
       assert.equal(bMemberBindings[0].actor_id,bNativeMember.id)
 
-      await verifyOwnerSubmittedMemberDraft(reviewer,browser,organizations,rand,B.person,native,q)
+      await verifyOwnerSubmittedMemberDraft(
+        reviewer,browser,organizations,rand,B.person,native,q,A.person,u.toString())
 
       const withoutStore=await memberDraftStores()
       assert.deepEqual(withoutStore,{status:200,stores:[]},
