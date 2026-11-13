@@ -40,6 +40,27 @@ import taxCertificateInventory, {inspectTaxCertificateSnapshot} from "../../src/
 
 
 
+
+/** #311 P2: after same-page A→B→A logins, the lock test must probe the
+ * CURRENT active native A session, not an already-revoked original cookie.
+ * Keep this exact DB assertion outside the long B22 function so TS can
+ * analyze it without weakening any check.
+ */
+async function currentOwnerCookieForLock(input:{
+  browser:B06Chrome;oldCookie:string;personId:string;
+  q:(sql:string,params?:unknown[])=>Promise<any[]>;
+}):Promise<string>{
+  const cookie=await input.browser.token()
+  assert.match(cookie??"",/^[A-Za-z0-9_-]{43}$/)
+  assert.notEqual(cookie,input.oldCookie,
+    "Cross-Person login test must rotate A's exact native session")
+  const hash=createHash("sha256").update(cookie!).digest("hex")
+  assert.deepEqual(await input.q("select person_id,status from da_browser_session where id=$1",
+    [hash]),[{person_id:input.personId,status:"active"}],
+    "Lock acceptance must target the live, strongly authenticated Owner A session")
+  return cookie!
+}
+
 async function verifyStoreApplicationInitialReadRetry(input:{
   browser:B06Chrome;q:(sql:string,params?:any[])=>Promise<any[]>;
   organizationId:string;organizationName:string;
@@ -4633,8 +4654,8 @@ export default async function({container}:any){
     assert.deepEqual(retiredLauncher,{present:false,get:403,post:403})
     assert.deepEqual(await q("select id,person_id,app_ids,collapsed_ids,version from da_launcher_preference order by id"),legacyPrefsBefore)
     process.stdout.write("PASS B22 Chrome: no personal launcher; old GET/POST 403, historic preference rows untouched\n")
-    const initialOwnerCookie=await browser.token()
-    assert.match(initialOwnerCookie??"",/^[A-Za-z0-9_-]{43}$/)
+    let cookie=await browser.token()
+    assert.match(cookie??"",/^[A-Za-z0-9_-]{43}$/)
     // Execute the INSTALLED native Mercur product workflow on the existing
     // disposable CI DB, before creating any new personal commerce writer.
     // Workflow input is INTERNAL ONLY: it is not a visitor authorization.
@@ -11295,17 +11316,11 @@ export default async function({container}:any){
     // Both supported user actions share the exact same CSRF-protected lock.
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
-    // #311 P2: the same-page A→B→A privacy test creates a new native A
-    // session. Capture the actual CURRENT session immediately before lock,
-    // not the old token obtained before A logged out.
-    const cookie=await browser.token()
-    assert.match(cookie??"",/^[A-Za-z0-9_-]{43}$/)
-    assert.notEqual(cookie,initialOwnerCookie,
-      "Cross-Person login test must rotate A's exact native session")
-    const currentSessionHash=createHash("sha256").update(cookie).digest("hex")
-    assert.deepEqual(await q("select person_id,status from da_browser_session where id=$1",
-      [currentSessionHash]),[{person_id:A.person,status:"active"}],
-      "Lock acceptance must target the live, strongly authenticated Owner A session")
+    // Refresh the exact live credential after the A→B→A same-page sign-ins.
+    // This is still the real Owner/PG16 session used by the following lock.
+    cookie=await currentOwnerCookieForLock({
+      browser,oldCookie:cookie!,personId:A.person,q
+    })
     const ownerButton=await browser.eval(`Array.from(document.querySelectorAll('#organizations button')).some(b=>b.textContent===${JSON.stringify(organizations[0].name+" — owner")})`)
     let clickedLock=false
     if(ownerButton){
