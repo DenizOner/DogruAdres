@@ -2,6 +2,7 @@
 import assert from "node:assert/strict"
 import {randomBytes} from "node:crypto"
 import {B06Chrome} from "./b06-ui-browser"
+import {verifyTwoStoreSameHandleApprovalRace} from "./b22-store-rename-handle-race.accept"
 
 type Rows=(sql:string,params?:unknown[])=>Promise<any[]>
 type Target={application_id:string;seller_id:string;organization_id:string}
@@ -9,13 +10,15 @@ type Target={application_id:string;seller_id:string;organization_id:string}
 export async function verifyTwoIndependentStaffNameRightRace(input:{
   owner:B06Chrome;reviewer:B06Chrome;reviewerPersonId:string;
   origin:string;ca:string;rand:string;organizationName:string;
-  organizationId:string;target:Target;
+  organizationId:string;target:Target;targetOrganizationName:string;
+  renameCompetitorSellerId:string;
   users:any;auth:any;foundation:any;
   browsers:B06Chrome[];q:Rows;
   suspend:(sellerId:string)=>Promise<void>
 }):Promise<void>{
   const {owner,reviewer,reviewerPersonId,origin,ca,rand,organizationName,
-    organizationId,target,users,auth,foundation,browsers,q,suspend}=input
+    organizationId,target,targetOrganizationName,renameCompetitorSellerId,
+    users,auth,foundation,browsers,q,suspend}=input
   const name="B22 race Store "+rand
   const application_id="daapp_"+randomBytes(16).toString("hex")
   await owner.send("Page.bringToFront")
@@ -177,4 +180,15 @@ export async function verifyTwoIndependentStaffNameRightRace(input:{
     [target.seller_id]))[0],targetBefore,
     "Recipient native Store must not change on a RIGHT assignment")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: two independent strong Staff Persons race same first Store name-right transfer on observed PG advisory lock; HTTP201+409, one transfer/audit/outbox, replay200, both native Seller IDs unchanged\n")
+  // Reuse the same two independent strong Staff browser sessions and the
+  // existing two legal Organizations to challenge the native rename URL
+  // claim. Keep this outside the huge B22 UI function's control-flow body.
+  await verifyTwoStoreSameHandleApprovalRace({
+    owner,staff:reviewer,staff2:other,foundation,q,rand,
+    stores:[
+      {organizationId:target.organization_id,
+        organizationName:targetOrganizationName,sellerId:target.seller_id},
+      {organizationId,organizationName,sellerId:renameCompetitorSellerId}
+    ]
+  })
 }

@@ -8651,6 +8651,8 @@ export default async function({container}:any){
     await verifyTwoIndependentStaffNameRightRace({
       owner:browser,reviewer,reviewerPersonId:B.person,origin:host,ca:crt,
       rand,organizationName:sellerGamma.name,organizationId:sellerGamma.id,
+      targetOrganizationName:organizations[0].name,
+      renameCompetitorSellerId:gammaSellerId,
       target:{application_id:applicationId,seller_id:ownerStoreId,
         organization_id:organizations[0].id},
       users,auth,foundation,browsers,q,
