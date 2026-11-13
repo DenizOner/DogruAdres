@@ -3110,7 +3110,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!form||typeof form.querySelectorAll!=='function')return;
     for(const b of form.querySelectorAll('button[type=submit]')){
       b.disabled=ownerPausePending||ownerPauseUncertain||
-        !ownerPauseState||ownerPauseState.store_status!=='open'||
+        !ownerPauseState||ownerPauseState.platform_closed!==false||
+        ownerPauseState.store_status!=='open'||
         ownerClosingState?.state==='closing'||
         (b.value==='pause'?ownerPauseState.paused:!ownerPauseState.paused);
     }
@@ -3132,7 +3133,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          request!==organizationRequest||org!==currentOrg||
          seller!==form.elements.namedItem('seller_id').value||document.hidden)return;
       if(data.organization_id!==org||data.seller_id!==seller||
-         typeof data.paused!=='boolean'||
+         typeof data.paused!=='boolean'||typeof data.platform_closed!=='boolean'||
          !Number.isSafeInteger(data.version)||data.version<0||
          !['open','suspended','terminated'].includes(data.store_status))
         throw Error('Mağaza durumu doğrulanamadı');
@@ -3140,6 +3141,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       ownerPauseButtons();
       st.textContent=ownerClosingState?.state==='closing'?
         'Mağaza kalıcı kapatma sürecinde. Geçici ara verme işlemleri kapalı.':
+        data.platform_closed?
+        'Mağaza platform kararıyla kapatıldı. Satışlar durduruldu; geçici ara verme ve satışa devam işlemleri kapalı.':
         data.store_status!=='open'?
         'Platform kaynaklı askı veya kapanış var. Owner bu ekrandan satış açamaz.':
         data.paused?'Mağaza geçici arada. Adınız korunuyor; yeni satış kabul edilmiyor.':
@@ -3176,6 +3179,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
        ownerPauseUncertain||!ownerPauseState||ownerPauseVersion===null||
        ownerPauseState.seller_id!==seller||
        !['pause','resume'].includes(action)||
+       ownerPauseState.platform_closed!==false||
        ownerPauseState.store_status!=='open')return;
     if(!confirm(action==='pause'?
       'Bu mağazanın yeni satışlarını hemen durdurmak istiyor musunuz? Mevcut sepetler satın alınamaz.':
@@ -3238,6 +3242,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       b.disabled=ownerClosingPending||ownerClosingUncertain||
         (b.value==='start'&&!agreed)||!ownerClosingState||
         (b.value==='start'?
+          ownerPauseState?.platform_closed!==false||
           ownerClosingState.state==='closing'||ownerClosingState.store_status!=='open':
           ownerClosingState.state!=='closing'||ownerClosingState.can_withdraw!==true);
     }
@@ -3362,7 +3367,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
        (action==='start'&&
          !ownerClosingForm.elements.namedItem('consequences_acknowledged').checked)||
        !['start','withdraw'].includes(action)||
-       (action==='start'&&(state.state==='closing'||state.store_status!=='open'))||
+       (action==='start'&&(ownerPauseState?.platform_closed!==false||
+         state.state==='closing'||state.store_status!=='open'))||
        (action==='withdraw'&&(state.state!=='closing'||!state.can_withdraw)))return;
     if(!confirm(action==='start'?
       'Bu mağazanın yeni satışlarını hemen durdurmak ve 30 günlük kalıcı kapatma sürecini başlatmak istiyor musunuz?':
