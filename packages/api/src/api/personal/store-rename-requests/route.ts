@@ -33,9 +33,51 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
   const parsed=query.safeParse(req.query)
   if(!parsed.success)return res.status(400).json({message:"Invalid context"})
   try{
-    const result=await access(req).personalStoreRenameRequests(
-      sessionToken(req),parsed.data.organization_id,parsed.data.seller_id)
+    const svc=access(req),token=sessionToken(req)
+    const {organization_id:organizationId,seller_id:sellerId}=parsed.data
+    // A protected Organization Owner and its audit-backed Store association
+    // are necessary but insufficient for a private Store history read.
+    const initial=await svc.personalStoreRenameCandidateIds(token,organizationId)
+    if(!initial||!Array.isArray(initial.seller_ids)||
+       !initial.seller_ids.includes(sellerId))
+      return res.status(403).json({message:"Access denied"})
+    const binding=await svc.personalActorBinding(token,"member")
+    if(!binding||binding.revoked_at||binding.person_id!==initial.person_id||
+       typeof binding.actor_id!=="string")
+      return res.status(403).json({message:"Access denied"})
+    const native=req.scope.resolve<{
+      listMembers(f:object):Promise<any[]>
+      listSellerMembers(f:object):Promise<any[]>
+      listSellers(f:object):Promise<any[]>
+    }>("seller")
+    const live=async()=>{
+      const [members,relations,sellers]=await Promise.all([
+        native.listMembers({id:binding.actor_id,is_active:true}),
+        native.listSellerMembers({member_id:binding.actor_id,seller_id:sellerId}),
+        native.listSellers({id:sellerId})
+      ])
+      return members.length===1&&members[0].id===binding.actor_id&&
+        members[0].is_active===true&&
+        relations.length===1&&relations[0].member_id===binding.actor_id&&
+        relations[0].seller_id===sellerId&&
+        sellers.length===1&&sellers[0].id===sellerId&&
+        // Approved suspended Stores remain rename-manageable by their Owner.
+        // Suspended is NOT a grant for normal selling or product mutation.
+        ["open","suspended"].includes(sellers[0].status)&&!!sellers[0].approved_at
+    }
+    if(!await live())return res.status(403).json({message:"Access denied"})
+    const result=await svc.personalStoreRenameRequests(token,organizationId,sellerId)
     if(!result)return res.status(403).json({message:"Access denied"})
+    // Recheck both ownership proof and the native actor link at the response
+    // boundary. Do not return private proposals after an intervening revocation.
+    const last=await svc.personalStoreRenameCandidateIds(token,organizationId)
+    const lastBinding=await svc.personalActorBinding(token,"member")
+    if(!last||last.person_id!==initial.person_id||
+       !Array.isArray(last.seller_ids)||!last.seller_ids.includes(sellerId)||
+       !lastBinding||lastBinding.revoked_at||
+       lastBinding.person_id!==initial.person_id||
+       lastBinding.actor_id!==binding.actor_id||!await live())
+      return res.status(403).json({message:"Access denied"})
     return res.status(200).json(result)
   }catch(error){
     return res.status(error instanceof IdentityAccessDenied?403:503)
