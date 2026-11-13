@@ -523,7 +523,8 @@ export async function verifyAssignedRecipientUse(input:{
   source:Store;target:Store;competitor:Pick<Store,'seller_id'|'organization_id'>;
   targetOrganizationName:string;competitorOrganizationName:string;
   formerName:string;formerHandle:string;sourceVacated:boolean;
-  cartHistory:CartHistory;completedOrder:CompletedOrderHistory
+  cartHistory:CartHistory;completedOrder:CompletedOrderHistory;
+  suspend:()=>Promise<void>
 }):Promise<void>{
   const {owner,reviewer,q,source,target,competitor,formerName,
     formerHandle,sourceVacated,targetOrganizationName,
@@ -772,6 +773,124 @@ export async function verifyAssignedRecipientUse(input:{
   assert.deepEqual(cartHistory,input.cartHistory.snapshot,
     "B's native name adoption cannot transfer original Cart/Offer/Seller attribution")
   await assertSourceOrderUnchanged(q,input.completedOrder,"Recipient B native adoption")
+  if(sourceVacated){
+    // Source A's ordinary 30-day old-name hold stays live. A canonical
+    // assignment ONLY exempts the named recipient B after A vacates both
+    // its native name and URL; an unrelated C never receives the exemption.
+    const nativeBeforeReopen=(await q(
+      "select id,name,handle,status,approved_at from seller where id=$1",
+      [target.seller_id]))[0]
+    assert.equal(nativeBeforeReopen.status,"open")
+    assert.equal(nativeBeforeReopen.name,formerName)
+    assert.equal(nativeBeforeReopen.handle,formerHandle)
+    const readEvents=()=>q(
+      "select e.id,e.action,e.new_values,x.id outbox_id "+
+      "from da_audit_event e left join da_audit_outbox x "+
+      "on x.source_audit_event_id=e.id and x.source_module='dogruadres-access' "+
+      "and x.deleted_at is null where e.organization_id=$1 and e.target_id=$2 "+
+      "and e.action in ('organization.store_reactivation_claimed',"+
+      "'organization.store_reactivated') and e.deleted_at is null "+
+      "order by e.occurred_at,e.id",[target.organization_id,target.seller_id])
+    const beforeEvents=await readEvents()
+    const beforeIds=new Set(beforeEvents.map((r:any)=>r.id))
+    const postReopen=(actor:B06Chrome)=>actor.callFunction(
+      "async function(body){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body});return {status:r.status,body:await r.json()}}",
+      JSON.stringify({action:"unsuspend",application_id:target.application_id,
+        seller_id:target.seller_id}))
+    const staffList=()=>reviewer.callFunction(
+      "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
+      "const body=await r.json();return {status:r.status,"+
+      "row:body.suspended?.find(x=>x.seller_id===id)}}",target.seller_id)
+    await input.suspend()
+    const suspended=(await q(
+      "select id,name,handle,status,approved_at from seller where id=$1",
+      [target.seller_id]))[0]
+    assert.deepEqual(suspended,{...nativeBeforeReopen,status:"suspended"},
+      "Native Seller suspension must retain B's identity, new name/URL and approval")
+    await owner.send("Page.bringToFront")
+    await owner.wait("document.visibilityState==='visible'")
+    await owner.select(targetOrganizationName,"owner")
+    assert.equal((await postReopen(owner)).status,403,
+      "Owner B cannot invoke the platform Staff unsuspend endpoint")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+
+    // A forged or missing canonical transfer outbox MUST NOT waive A's hold.
+    const proof=await q(
+      "select x.id outbox_id from da_store_name_transfer t "+
+      "join da_audit_event e on e.id=t.source_audit_event_id "+
+      "and e.action='organization.store_name_right_assigned' "+
+      "and e.deleted_at is null "+
+      "join da_audit_outbox x on x.source_audit_event_id=e.id "+
+      "and x.source_module='dogruadres-access' and x.deleted_at is null "+
+      "where t.status='assigned' and t.source_seller_id=$1 "+
+      "and t.target_seller_id=$2 and t.old_name=$3 and t.old_handle=$4",
+      [source.seller_id,target.seller_id,formerName,formerHandle])
+    assert.equal(proof.length,1,"One canonical audited transfer is required")
+    assert.equal((await q(
+      "update da_audit_outbox set deleted_at=clock_timestamp() "+
+      "where id=$1 and deleted_at is null returning id",
+      [proof[0].outbox_id])).length,1)
+    try{
+      assert.equal((await postReopen(reviewer)).status,409,
+        "A transfer without its canonical outbox must not reopen B during A's hold")
+      const blocked=await staffList()
+      assert.equal(blocked.status,200)
+      assert.equal(blocked.row?.name_review_required,true,
+        "Staff must see review-only state while B's entitlement proof is missing")
+      assert.deepEqual((await q(
+        "select id,name,handle,status,approved_at from seller where id=$1",
+        [target.seller_id]))[0],suspended)
+      assert.deepEqual(await readEvents(),beforeEvents,
+        "Denied reopening must have zero claimed/completed audit or outbox effects")
+    }finally{
+      assert.equal((await q(
+        "update da_audit_outbox set deleted_at=null "+
+        "where id=$1 and deleted_at is not null returning id",
+        [proof[0].outbox_id])).length,1,
+        "Restore task-owned canonical outbox after negative test")
+    }
+    const eligible=await staffList()
+    assert.equal(eligible.status,200)
+    assert.equal(eligible.row?.name_review_required,false,
+      "Source-proven transferred B must be eligible before day 30")
+    const opened=await postReopen(reviewer)
+    assert.equal(opened.status,200,
+      "Authorized Staff must reopen B despite source A's active old-name hold")
+    assert.equal(opened.body?.status,"open")
+    assert.deepEqual((await q(
+      "select id,name,handle,status,approved_at from seller where id=$1",
+      [target.seller_id]))[0],nativeBeforeReopen,
+      "Real native unsuspend must preserve B's Seller ID, name, URL and approved_at")
+    const afterEvents=await readEvents()
+    const fresh=afterEvents.filter((e:any)=>!beforeIds.has(e.id))
+    assert.equal(fresh.filter((e:any)=>e.action==="organization.store_reactivation_claimed").length,1)
+    assert.equal(fresh.filter((e:any)=>e.action==="organization.store_reactivated").length,1)
+    assert.equal(fresh.length,2,"Exactly one canonical claim and completion must be added")
+    assert.ok(fresh.every((e:any)=>e.outbox_id),
+      "Both new native reactivation phases need durable source outbox")
+    const claim=fresh.find((e:any)=>e.action==="organization.store_reactivation_claimed")
+    const completed=fresh.find((e:any)=>e.action==="organization.store_reactivated")
+    assert.equal(completed.new_values.claim_audit_id,claim.id,
+      "Completion must link the exact new reactivation claim")
+    const [notice]=await q(
+      "select count(*)::int n from da_notification_receipt where audit_event_id=$1",
+      [completed.id])
+    assert.ok(notice.n>=1,"The current Owner gets a private completion receipt")
+    assert.equal((await postReopen(reviewer)).status,409,
+      "A replay must not run native unsuspend or create additional events")
+    assert.deepEqual(await readEvents(),afterEvents)
+    assert.equal((await q(
+      "select count(*)::int n from da_store_rename_request "+
+      "where seller_id=$1 and old_name=$2 and old_handle=$3 "+
+      "and status='approved' and approved_at>clock_timestamp()-interval '30 days'",
+      [source.seller_id,formerName,formerHandle]))[0].n,1,
+      "Reopening B must not shorten or delete A's 30-day hold")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: assigned recipient B reopens same native Seller before source A 30-day hold expires, Staff HTTP200, Owner403, replay409; missing transfer outbox HTTP409 review-only with zero audit; one claim+completion outbox and Owner receipt\n")
+  }
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: completed native source OrderGroup/Order IDs, Order-Cart FK, source Seller/Offer and immutable Buyer attribution unchanged across A→B transfer, A same-ID recovery and B name adoption; zero payment\n")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED\n")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: recipient B native name and URL adopted after source A vacates, historical 30-day hold retained, unrelated Store C HTTP409 before/after, Staff approval and audit/outbox durable\n")
