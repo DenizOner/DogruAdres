@@ -3393,11 +3393,20 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const originalClaim=await db.execute(`select id from da_store_application
       where seller_id=? and store_name_hash=? and name_claim_released_at is null
       limit 2`,[input.seller_id,oldHash])
-    const priorClaim=await db.execute(`select id from da_store_rename_request
-      where seller_id=? and id<>? and status='approved' and
+    // History may legitimately contain A -> B -> C -> B. Only the MOST
+    // RECENT completed rename proves the currently active native name+URL;
+    // older matching rows are retained as immutable history, not ambiguity.
+    const priorClaim=await db.execute(`select proposed_handle,
       encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(proposed_name,NFKC)),
-        '[[:space:]]+',' ','g')),'UTF8')),'hex')=?
-      limit 2`,[input.seller_id,input.request_id,oldHash])
+        '[[:space:]]+',' ','g')),'UTF8')),'hex') as approved_name_hash
+      from da_store_rename_request
+      where seller_id=? and id<>? and status='approved'
+        and approved_at is not null
+      order by approved_at desc,id desc limit 1`,
+      [input.seller_id,input.request_id])
+    const currentPrior=priorClaim.length===1&&
+      priorClaim[0].approved_name_hash===oldHash&&
+      priorClaim[0].proposed_handle===r.old_handle
     const transferredSource=await db.execute(`select 1 from da_store_name_transfer
       where status='assigned' and source_seller_id=? and old_handle=?
         and name_hash=? and source_organization_id=?
@@ -3408,8 +3417,8 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             and e.module='dogruadres-access'
             and e.deleted_at is null and x.deleted_at is null)
       limit 2`,[input.seller_id,r.old_handle,oldHash,r.organization_id])
-    if(originalClaim.length>1||priorClaim.length>1||transferredSource.length>1||
-       !(originalClaim.length===1||priorClaim.length===1||transferredSource.length===1))
+    if(originalClaim.length>1||transferredSource.length>1||
+       !(originalClaim.length===1||currentPrior||transferredSource.length===1))
       return {status:"conflict" as const}
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-name'),hashtext(?))",
       [hash])
@@ -3564,12 +3573,18 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       for update`,[input.seller_id,oldHash])
     if(original.length>1)throw new IdentityAccessDenied()
     if(!original.length){
-      const previous=await db.execute(`select id from da_store_rename_request
-        where seller_id=? and id<>? and status='approved' and
+      // The same prior name can appear in several valid historical cycles.
+      // Check the last COMPLETED name+URL, not the number of matching rows.
+      const previous=await db.execute(`select proposed_handle,
         encode(sha256(convert_to(lower(regexp_replace(btrim(normalize(proposed_name,NFKC)),
-          '[[:space:]]+',' ','g')),'UTF8')),'hex')=?
-        limit 2`,[input.seller_id,input.request_id,oldHash])
-      if(previous.length!==1){
+          '[[:space:]]+',' ','g')),'UTF8')),'hex') as approved_name_hash
+        from da_store_rename_request
+        where seller_id=? and id<>? and status='approved'
+          and approved_at is not null
+        order by approved_at desc,id desc limit 1`,
+        [input.seller_id,input.request_id])
+      if(previous.length!==1||previous[0].approved_name_hash!==oldHash||
+         previous[0].proposed_handle!==r.old_handle){
         const assigned=await db.execute(`select 1 from da_store_name_transfer
           where source_seller_id=? and source_organization_id=? and
             old_handle=? and name_hash=? and status='assigned' limit 2`,
