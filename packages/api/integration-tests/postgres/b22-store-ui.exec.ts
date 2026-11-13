@@ -8662,8 +8662,11 @@ export default async function({container}:any){
     // Cross-Organization Store rename requests use different proposed names
     // but the SAME proposed handle. Assert real PG16 shared-handle waiters
     // before any native Mercur workflow can run; withdraw task-owned intents.
+    const secondStrongStaff=browsers[browsers.length-1]
+    assert.ok(secondStrongStaff&&secondStrongStaff!==reviewer,
+      "Independent Staff race must provide a distinct logged-in Chrome actor")
     await verifyTwoStoreSameHandleApprovalRace({
-      owner:browser,staff:reviewer,foundation,q,rand,
+      owner:browser,staff:reviewer,staff2:secondStrongStaff,foundation,q,rand,
       stores:[
         {organizationId:organizations[0].id,
           organizationName:organizations[0].name,sellerId:ownerStoreId},
