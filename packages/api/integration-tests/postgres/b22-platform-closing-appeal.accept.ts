@@ -69,7 +69,10 @@ async function verifyCrossSessionClosingReason(input:{
   await browser.wait("!document.getElementById('login').hidden&&"+
     "document.getElementById('workspace').hidden")
   await assertCleared()
-  assert.equal((await read(browser,privatePath)).status,401)
+  // This private route deliberately uses 403 for missing or unauthorized
+  // sessions, not a distinct 401 that could disclose authentication state.
+  assert.equal((await read(browser,privatePath)).status,403,
+    "Anonymous access must receive the route's existing generic denial")
   await loginExisting(foreignEmail,foreignPassword,foreignPersonId,staff)
   await assertCleared()
   assert.equal((await read(browser,privatePath)).status,403,
