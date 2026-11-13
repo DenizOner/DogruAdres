@@ -1580,7 +1580,7 @@ async function verifyOwnerRenameTargetRefresh(
   assert.deepEqual(await state(),{seller:storeA,name:"",handle:"",risk:false,disabled:false},
     "Explicit new Store selection cannot carry the old Store risk consent")
   assert.deepEqual(await snapshot(),before,"Only GET and UI selection; zero rename writes")
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: two authorized Stores; refresh retains exact second target and risk; removed target resets name/URL/consent, disables submit across repeat refresh; manual Store selection restores blank safe form, zero rename writes\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: two authorized Stores; overlapping refresh dedup, second target and consent preserved, removed target resets name/URL/risk across repeat refresh; manual Store selection restores blank safe form, zero writes\n")
 }
 
 /** Real B22 Store rename REQUEST only: no native name/handle mutation or
