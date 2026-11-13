@@ -122,15 +122,21 @@ export class IdentitySessions {
    * This preliminary lookup grants NO authority: currentHash below performs
    * the full fresh session, epoch, MFA and actor-binding checks.
    */
-  async currentForPersonWrite(token: string) {
+  // Preliminary Person row lock is NOT an authorization decision. Always
+  // perform full live session/epoch/MFA/actor checks after it.
+  async currentWithPersonLock(token: string, sensitive: boolean, touch: boolean) {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new IdentityAccessDenied()
     const hash=digest(token)
     const rows=await this.db.execute(`select p.id from da_browser_session s
       join da_person p on p.id=s.person_id and p.deleted_at is null and p.disabled_at is null
       where s.id=? and s.status='active' for update of p`,[hash])
     if(rows.length!==1 || typeof rows[0].id!=="string")return null
-    const session=await this.currentHash(hash,true)
+    const session=await this.currentHash(hash,sensitive,touch)
     return session?.person_id===rows[0].id ? session : null
+  }
+
+  async currentForPersonWrite(token: string) {
+    return this.currentWithPersonLock(token,true,true)
   }
 
   async current(token: string, sensitive = false, touch = true) {

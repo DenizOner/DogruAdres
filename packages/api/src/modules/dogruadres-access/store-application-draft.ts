@@ -50,7 +50,9 @@ export async function verifiedStoreDraftGrant(
 export async function authorizedStoreDraftActor(db:SecuritySql,token:string,org:string) {
   if(!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org))throw new IdentityAccessDenied()
   const identities=new IdentitySessions(db)
-  const person=await identities.current(token,false,false)
+  // Phone writes already take Person before session/security. Keep the same
+  // lock order for both draft GET and POST without requiring fresh MFA here.
+  const person=await identities.currentWithPersonLock(token,false,false)
   if(!person)return null
   const scope=await identities.organizations(token,org,false)
   if(!scope||scope.person_id!==person.person_id||scope.organizations.length!==1)return null
