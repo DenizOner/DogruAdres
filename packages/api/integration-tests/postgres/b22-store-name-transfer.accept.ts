@@ -102,7 +102,6 @@ export async function createB22CompletedSourceOrderFixture(input:{
     assert.deepEqual(restored[0],sellerBeforeWindow,
       "Native closed-window fixture must be restored, including null bounds")
   }
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: native scheduled Seller closure denies actual zero-payment Cart before OrderGroup, preserves open Cart, and restores exact PG16 bounds; subsequent lawful native Order completes once\n")
   const result=await completeCartWithSplitOrdersWorkflow(container).run({
     input:{cart_id:cart.id},throwOnError:false
   })
@@ -113,6 +112,7 @@ export async function createB22CompletedSourceOrderFixture(input:{
     q,query,cartId:cart.id,customerId,
     organizationId:buyerOrgId,sourceSellerId
   })
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: native scheduled Seller closure denies actual zero-payment Cart before OrderGroup, preserves open Cart, and restores exact PG16 bounds; subsequent lawful native Order completes once\n")
   process.stdout.write("B22 task-only: pre-transfer source OrderGroup/Order from native zero-total workflow; no payment\n")
   return {query,cartId:cart.id,customerId,organizationId:buyerOrgId,
     sourceSellerId,snapshot}
