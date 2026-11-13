@@ -279,6 +279,13 @@ describe("personal memberships route", () => {
         document: doc,
         api: (path: string, options?: any) => new Promise((resolve, reject) => pending.push({ path, options, resolve, reject })),
       })
+      // Use the shipped private email-link cleanup, not a permissive stub.
+      // This VM deliberately slices out earlier page definitions.
+      const privateStart=source.indexOf("  function clearPrivateClosingEmailLink(){")
+      const privateEnd=source.indexOf("  const hashMatch",privateStart)
+      if(privateStart<0||privateEnd<=privateStart)throw Error("Missing private cleanup")
+      runInContext("let platformMailLinkToken='';\n"+
+        source.slice(privateStart,privateEnd),context)
       runInContext(source.slice(begin, end), context)
       return {
         state,
