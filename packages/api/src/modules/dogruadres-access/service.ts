@@ -5126,11 +5126,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
   private async ownerPauseScope_(db:SecuritySql,token:string,organizationId:string,sellerId:string,
     personFirst=false){
     const sessions=new IdentitySessions(db)
-    // Closing-state GET later takes Person FOR SHARE. Acquire Person before
-    // session/epoch only for that read to prevent a draft GET lock cycle.
-    // Existing Seller advisory-locked write paths retain their prior order.
+    // Closing-state GET later takes Person FOR SHARE. Acquire the compatible
+    // shared Person row lock before session/epoch; audit FK KEY SHARE remains
+    // permitted while the separate advisory-locked closing writer commits.
+    // Other Seller write paths retain their original ordering.
     const actor=personFirst?
-      await sessions.currentWithPersonLock(token,true,false):
+      await sessions.currentWithPersonLock(token,true,false,true):
       await sessions.current(token,true,false)
     if(!actor)return null
     const scope=await sessions.organizations(token,organizationId,false)

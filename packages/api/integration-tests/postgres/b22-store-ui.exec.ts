@@ -75,12 +75,14 @@ async function verifyStoreDraftPhonePersonLockRace(input:{
       organizationId)
     raceStarted=true
     await until(async()=>{
-      const [w]=await q(`select count(*)::int n from pg_stat_activity
+      const [w]=await q(`select
+        count(*) filter (where query ilike '%for share of p%')::int readers,
+        count(*) filter (where query ilike '%for update of p%')::int writers
+        from pg_stat_activity
         where datname=current_database() and wait_event_type='Lock'
-          and query ilike '%from da_browser_session s%'
-          and query ilike '%for update of p%'`)
-      return Number(w.n)>=2
-    },15000,"#279 both real draft GET and mobile POST must wait for Person first")
+          and query ilike '%from da_browser_session s%'`)
+      return Number(w.readers)>=1&&Number(w.writers)>=1
+    },15000,"#279 real draft SHARE and mobile UPDATE must both wait Person first")
     // Under the original session-first order, draft GET would already
     // lock the epoch. NOWAIT would fail while it waits for Person.
     await draftProbe.query("BEGIN");draftProbeHeld=true
@@ -166,7 +168,7 @@ async function verifyStoreDraftClosingPersonLockRace(input:{
       const [wait]=await q(`select count(*)::int n from pg_stat_activity
         where datname=current_database() and wait_event_type='Lock'
           and query ilike '%from da_browser_session s%'
-          and query ilike '%for update of p%'`)
+          and query ilike '%for share of p%'`)
       return Number(wait.n)>=2
     },15000,"#329 two real draft/closing GET Person-first lock waiters")
     // Prior UI status fetches can briefly hold epoch independently. Give
@@ -190,7 +192,7 @@ async function verifyStoreDraftClosingPersonLockRace(input:{
     const [stillWaiting]=await q(`select count(*)::int n from pg_stat_activity
       where datname=current_database() and wait_event_type='Lock'
         and query ilike '%from da_browser_session s%'
-        and query ilike '%for update of p%'`)
+        and query ilike '%for share of p%'`)
     assert.ok(Number(stillWaiting.n)>=2,"Both targeted GETs must still wait Person")
     await barrier.query("COMMIT");barrierHeld=false
     const values=await browser.eval("globalThis.__daDraftClosingRace")

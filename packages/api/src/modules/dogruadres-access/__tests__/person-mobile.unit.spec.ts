@@ -41,7 +41,7 @@ describe("canonical Person mobile contact persistence (synthetic transaction)",(
     const token="a".repeat(43)
     const db={execute:jest.fn(async(sql:string,args:unknown[]=[])=>{
       expect(sql).toContain("from da_browser_session s")
-      expect(sql).toContain("for update of p")
+      expect(sql).toMatch(/for (update|share) of p/)
       expect(sql).toContain("s.status='active'")
       expect(args).toEqual([digest(token)])
       return [{id:session.person_id}]
@@ -57,11 +57,16 @@ describe("canonical Person mobile contact persistence (synthetic transaction)",(
     expect(verify).toHaveBeenCalledWith(digest(token),false,false)
     expect(db.execute).toHaveBeenCalledTimes(2)
     expect(db.execute.mock.calls[0][0]).toContain("for update of p")
+    verify.mockClear()
+    expect(await checker.currentWithPersonLock(token,false,false,true)).toEqual(session)
+    expect(verify).toHaveBeenCalledWith(digest(token),false,false)
+    expect(db.execute.mock.calls[2][0]).toContain("for share of p")
+    expect(db.execute).toHaveBeenCalledTimes(3)
     verify.mockResolvedValue(null)
     expect(await checker.currentForPersonWrite(token)).toBeNull()
-    expect(db.execute).toHaveBeenCalledTimes(3)
+    expect(db.execute).toHaveBeenCalledTimes(4)
     await expect(checker.currentForPersonWrite("bad")).rejects.toThrow("Access denied")
-    expect(db.execute).toHaveBeenCalledTimes(3)
+    expect(db.execute).toHaveBeenCalledTimes(4)
   })
   it("reads a private Person contact using only server-verified session identity",async()=>{
     row={mobile_phone:mobile,mobile_version:9}
