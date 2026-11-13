@@ -13809,8 +13809,12 @@ export default async function({container}:any){
         await reviewChrome.send("Page.reload",{ignoreCache:true})
         await reviewChrome.wait("!document.getElementById('workspace').hidden")
         await reviewChrome.eval("document.getElementById('organization-review-refresh').onclick()")
+        // The panel and pagination control can appear one render tick before
+        // the first HTTP page's rows are painted. Wait for the actual 100
+        // authenticated results, not just the visible container.
         await reviewChrome.wait("!document.getElementById('organization-review-panel').hidden && "+
           "!document.getElementById('organization-review-more').hidden && "+
+          "document.querySelectorAll('#organization-review-list p').length===100 && "+
           "(()=>{const r=document.getElementById('organization-review-more').getBoundingClientRect();"+
           "return r.width>0&&r.height>0})()")
         assert.equal(await reviewChrome.eval(
