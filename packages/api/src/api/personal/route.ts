@@ -3356,6 +3356,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   async function organizationStores(org,request){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
     const seq=++storeRequest;
+    // Capture the exact prepared Store before the ordinary list clears the
+    // native select. A later rename-only response must never select another.
+    const existingRenameForm=el('store-rename-form');
+    const existingRenameSelect=existingRenameForm?.elements?.namedItem('seller_id');
+    const preparedRenameSeller=existingRenameSelect?.value||'';
     const target=el('org-stores'),message=el('org-stores-status');
     el('org-stores-panel').hidden=false;
     target.replaceChildren();message.textContent='Mağazalar kontrol ediliyor…';
@@ -3396,6 +3401,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                    !['open','suspended'].includes(s?.status))||
                  new Set(renameData.stores.map(s=>s.id)).size!==renameData.stores.length)
                 throw Error('Name-management Store response invalid');
+              const sameSeller=preparedRenameSeller&&
+                renameData.stores.some(store=>store.id===preparedRenameSeller);
               select.replaceChildren();
               for(const store of renameData.stores){
                 const opt=document.createElement('option');
@@ -3404,8 +3411,25 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                   (store.status==='suspended'?' — askıda':'');
                 select.append(opt);
               }
+              if(sameSeller)select.value=preparedRenameSeller;
+              else if(preparedRenameSeller){
+                // Never bind a prepared name/handle/explicit risk consent to
+                // the first option after the original Store loses authority.
+                const placeholder=document.createElement('option');
+                placeholder.value='';placeholder.textContent='Mağazayı yeniden seçin';
+                select.prepend(placeholder);select.value='';
+                existingRenameForm.elements.namedItem('name').value='';
+                existingRenameForm.elements.namedItem('handle').value='';
+                existingRenameForm.elements.namedItem('risk_acknowledged').checked=false;
+                renameRead++;renameUncertain=true;
+                el('store-rename-history').replaceChildren();
+                existingRenameForm.querySelector('button[type=submit]').disabled=true;
+                el('store-rename-status').textContent=
+                  'Önceki mağaza artık yetkili listede yok. Yeni mağazayı seçip adı, bağlantıyı ve risk kabulünü yeniden doldurun.';
+              }
               el('store-rename-panel').hidden=renameData.stores.length===0;
-              if(!el('store-rename-panel').hidden)void refreshStoreRename(org,request);
+              if(!el('store-rename-panel').hidden&&select.value)
+                void refreshStoreRename(org,request);
               // Owner's pause selector is private and independent from the
               // commercial Store picker. It also lists a currently paused
               // native-OPEN Store so its Owner can safely resume.
@@ -3433,7 +3457,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               if(request!==organizationRequest||seq!==storeRequest||
                  currentOrg!==org||document.hidden)return;
               clearOwnerPause();
+              renameRead++;renameUncertain=true;
+              if(typeof existingRenameForm?.reset==='function')existingRenameForm.reset();
+              existingRenameForm?.querySelector('button[type=submit]')?.setAttribute('disabled','');
               select.replaceChildren();
+              el('store-rename-history').replaceChildren();
               el('store-rename-panel').hidden=true;
               el('store-rename-status').textContent=
                 'Mağaza adı yönetimi doğrulanamadı. Yeniden deneyin.';
