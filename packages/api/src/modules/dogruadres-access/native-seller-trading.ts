@@ -15,6 +15,7 @@ export function nativeSellerTradingAt(s:{
   if(s.status!=="open"||!s.approved_at||!Number.isFinite(now))return false
   const from=s.closed_from==null?null:new Date(s.closed_from).getTime()
   const to=s.closed_to==null?null:new Date(s.closed_to).getTime()
+  if(from===null&&to===null)return true
   if((from!==null&&!Number.isFinite(from))||
      (to!==null&&!Number.isFinite(to))||
      (from!==null&&to!==null&&from>=to))return false
