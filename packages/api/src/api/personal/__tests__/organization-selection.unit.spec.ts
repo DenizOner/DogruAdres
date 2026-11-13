@@ -121,6 +121,13 @@ describe('B22 selected Organization Store presentation (UI scheduling, not API a
     expect(runInContext('platformMailLinkPreservedPerson',h.context)).toBe('')
   })
 
+  it('never interprets a pagehide event object as permission to keep an unopened private link',()=>{
+    const h=harness()
+    runInContext("currentPersonId='owner-A';platformMailLinkToken='unopened';clearPrivateClosingEmailLink({type:'pagehide'})",h.context)
+    expect(runInContext('platformMailLinkToken',h.context)).toBe('')
+    expect(runInContext('platformMailLinkPreservedPerson',h.context)).toBe('')
+  })
+
   it('drops an attempted or already displayed email-link reason on a hidden-tab clear',()=>{
     const h=harness()
     runInContext("currentPersonId='owner-A';platformMailLinkToken='synthetic-attempted';platformMailLinkOpened=true",h.context)

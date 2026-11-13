@@ -587,7 +587,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // private reason, in-flight verification or cross-Person authority survives.
   function clearPrivateClosingEmailLink(preserveUnopened=false){
     const msg=el('platform-closing-email-link-status');
-    const keep=preserveUnopened&&!!platformMailLinkToken&&
+    const keep=preserveUnopened===true&&!!platformMailLinkToken&&
       !platformMailLinkOpened&&!msg.textContent;
     platformMailLinkRequest++; // invalidate every pending async response
     if(keep){
