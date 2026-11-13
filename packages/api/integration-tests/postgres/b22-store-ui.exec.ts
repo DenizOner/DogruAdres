@@ -1594,8 +1594,8 @@ async function verifyOwnerStoreRenameRequest(
   }
   assert.equal((await ownerHistory()).status,200,
     "Restored approved Seller must regain authorized historical read")
-  process.stdout.write("PASS B22 real Chrome/HTTPS/PG16 #286: terminated native Seller private rename GET 403, approved suspended Owner GET 200, restored open GET 200, foreign Owner 403\\n")
-  process.stdout.write("PASS B22 Chrome/PG16: Owner Store name+URL change request with explicit risk acknowledgement, one private pending record and audit/outbox; foreign/CSRF/invalid/duplicate denied; native Seller unchanged\\n")
+  process.stdout.write("PASS B22 Chrome: #286 private Store rename history denied for terminated Seller 403, approved suspended Owner 200, restored open Owner 200, foreign Owner 403\n")
+  process.stdout.write("PASS B22 Chrome/PG16: Owner Store name+URL change request with explicit risk acknowledgement, one private pending record and audit/outbox; foreign/CSRF/invalid/duplicate denied; native Seller unchanged\n")
   // Platform Store approver is a distinct current Person. An ordinary Owner
   // may not even see the pending name-change queue.
   assert.equal(await browser.eval("(async()=>{return (await fetch('/personal/platform/store-renames')).status})()"),
