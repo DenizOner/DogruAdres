@@ -647,6 +647,67 @@ export async function verifyAssignedRecipientUse(input:{
   const [pending]=await q("select id,status from da_store_rename_request where id=$1",
     [b.request_id])
   assert.equal(pending?.status,"pending_review")
+  // Simulate the first durable approval claim on disposable PG16, without
+  // invoking native Mercur or actually killing a process. Restore even on FAIL.
+  const decisionAudits=async()=>Number((await q(`select count(*)::int n
+    from da_audit_event where new_values->>'request_id'=$1 and
+    action in ('organization.store_rename_approved','organization.store_rename_rejected')`,
+    [b.request_id]))[0].n)
+  const auditBefore=await decisionAudits()
+  assert.equal((await q(`update da_store_rename_request set status='approving'
+    where id=$1 and status='pending_review' returning id`,[b.request_id])).length,1)
+  try{
+    const ownerRead=await owner.callFunction(
+      "async function(url){const r=await fetch(url);return {status:r.status,body:await r.json()}}",
+      "/personal/store-rename-requests?"+new URLSearchParams({
+        organization_id:target.organization_id,seller_id:target.seller_id
+      }).toString())
+    assert.equal(ownerRead.status,200)
+    assert.equal(ownerRead.body?.requests?.find((r:any)=>r.id===b.request_id)?.status,
+      "approving","Owner must read the durable unresolved claim")
+    const staffRead=await reviewer.callFunction(
+      "async function(){const r=await fetch('/personal/platform/store-renames?page=0');"+
+      "return {status:r.status,body:await r.json()}}")
+    assert.equal(staffRead.status,200)
+    assert.equal(staffRead.body?.pending?.find((r:any)=>r.request_id===b.request_id)?.status,
+      "approving","Live Staff grant must reveal the same unresolved claim")
+    const repeat=await reviewer.callFunction(
+      "async function(body){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body});return r.status}",
+      JSON.stringify({action:"approve",request_id:b.request_id,seller_id:b.seller_id}))
+    assert.equal(repeat,409,"Claimed approval must not run native Mercur twice")
+    assert.equal(await decisionAudits(),auditBefore,
+      "Rejected replay and readback have zero decision audit side effects")
+    await owner.send("Page.bringToFront")
+    await owner.wait("document.visibilityState==='visible'")
+    await owner.wait("!document.getElementById('store-rename-panel').hidden")
+    await owner.click("#store-rename-refresh")
+    await owner.wait("document.getElementById('store-rename-status').textContent.includes('platform uzlaştırması gerekir')")
+    const ownerUI=await owner.callFunction(
+      "function(){return {disabled:document.querySelector("+
+      "'#store-rename-form button[type=submit]').disabled,"+
+      "visible:document.getElementById('store-rename-history').textContent.includes('Onay işlemi belirsiz')}}")
+    assert.deepEqual(ownerUI,{disabled:true,visible:true},
+      "Owner must see uncertain status and cannot submit a new rename")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    await reviewer.click("#store-rename-review-refresh")
+    await reviewer.wait("document.getElementById('store-rename-review-list').textContent.includes('Onay işlemi belirsiz')")
+    const staffUI=await reviewer.callFunction(
+      "function(name){const row=Array.from(document.querySelectorAll("+
+      "'#store-rename-review-list > div')).find(e=>e.textContent.includes(name));"+
+      "return {visible:!!row,buttons:row?.querySelectorAll('button').length??-1}}",
+      formerName)
+    assert.deepEqual(staffUI,{visible:true,buttons:0},
+      "Staff uncertain claim must be visible without approve/reject controls")
+  }finally{
+    assert.equal((await q(`update da_store_rename_request set status='pending_review'
+      where id=$1 and status='approving' returning id`,[b.request_id])).length,1,
+      "Disposable PG16 status must be restored exactly")
+  }
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: in-flight rename claim Owner+Staff read, safe disabled UI, POST409, no new decision audit; synthetic PG status restored\\n")
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible'")
   await reviewer.click("#store-rename-review-refresh")
