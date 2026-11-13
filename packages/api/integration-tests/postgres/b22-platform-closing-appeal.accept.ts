@@ -258,6 +258,12 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const before=(await q("select id,status,name,handle from seller where id=$1",[sellerId]))[0]
   assert.equal(before?.id,sellerId)
   assert.equal(before?.status,"open","Source Store must be trading before Staff closes")
+  const initialOwnerPause=await read(browser,"/personal/store-owner-pause?"+
+    new URLSearchParams({organization_id:ownerOrgId,seller_id:sellerId}))
+  assert.equal(initialOwnerPause.status,200,
+    "Protected Owner can check the actual native Store before Staff closes it")
+  assert.equal(initialOwnerPause.body.platform_closed,false,
+    "A native-open Store without a platform closure must remain available")
   assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),true)
   assert.equal((await q("select count(*)::int n from da_store_platform_closing where seller_id=$1",
     [sellerId]))[0].n,0)
