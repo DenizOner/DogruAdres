@@ -10,9 +10,9 @@ type Rows=(sql:string,params?:unknown[])=>Promise<any[]>
 
 export async function verifyRepeatedApprovedStoreRenameHistory(input:{
   owner:B06Chrome;reviewer:B06Chrome;organizationId:string;
-  sellerId:string;q:Rows
+  sellerId:string;q:Rows;suspend:()=>Promise<void>
 }):Promise<void>{
-  const {owner,reviewer,organizationId,sellerId,q}=input
+  const {owner,reviewer,organizationId,sellerId,q,suspend}=input
   const [company]=await q("select name from da_organization where id=$1 and status='active'",
     [organizationId])
   assert.ok(typeof company?.name==="string"&&company.name.length>0)
@@ -121,6 +121,94 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
       [sellerId,originalB.name,originalB.handle])
     assert.equal(repeat.length,2,"Two historical B approvals are normal, not a conflict")
     assert.equal(repeat[0].id,cToB,"Latest approved B must be canonical")
+    // The real native Store has two lawful B approvals. A later forged
+    // approval must not borrow the earlier B record to authorize reopening.
+    await suspend()
+    const [suspended]=await q(
+      "select id,name,handle,status,approved_at from seller where id=$1",[sellerId])
+    assert.deepEqual(suspended,{...nativeBefore,name:originalB.name,
+      handle:originalB.handle,status:"suspended"},
+      "Native suspension must preserve identity, name and URL")
+    const applications=await q(
+      "select id from da_store_application where seller_id=$1 and status='created'",
+      [sellerId])
+    assert.equal(applications.length,1)
+    const reopenTarget={action:"unsuspend",application_id:applications[0].id,seller_id:sellerId}
+    const reopen=async(actor:B06Chrome)=>actor.callFunction(
+      "async function(json){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:json});return {status:r.status,body:await r.json()}}",
+      JSON.stringify(reopenTarget))
+    const proofCount=async()=>Number((await q(
+      "select count(*)::int n from da_audit_event where target_id=$1 "+
+      "and organization_id=$2 and action in "+
+      "('organization.store_reactivation_claimed','organization.store_reactivated')",
+      [sellerId,organizationId]))[0].n)
+    const auditBefore=await proofCount()
+    await owner.send("Page.bringToFront")
+    await owner.wait("document.visibilityState==='visible'")
+    assert.equal((await reopen(owner)).status,403,
+      "Business Owner must not gain the platform Store reopen privilege")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    assert.equal((await q("update da_store_rename_request set proposed_handle=$1 "+
+      "where id=$2 and status='approved' returning id",
+      ["b22-forged-reopening-handle",cToB])).length,1)
+    try{
+      assert.equal((await reopen(reviewer)).status,409,
+        "An unproven latest handle must prevent any native reopening")
+      const blocked=await reviewer.callFunction(
+        "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
+        "const b=await r.json();return {status:r.status,"+
+        "row:b.suspended?.find(x=>x.seller_id===id)}}",sellerId)
+      assert.equal(blocked.status,200)
+      assert.equal(blocked.row?.name_review_required,true,
+        "Staff must see review-only status for an invalid latest approval")
+      assert.deepEqual((await q(
+        "select id,name,handle,status,approved_at from seller where id=$1",
+        [sellerId]))[0],suspended,"Denied reopening must leave Seller unchanged")
+      assert.equal(await proofCount(),auditBefore,
+        "Rejected proof cannot create a reactivation claim or completion")
+    }finally{
+      assert.equal((await q("update da_store_rename_request set proposed_handle=$1 "+
+        "where id=$2 and status='approved' returning id",
+        [originalB.handle,cToB])).length,1,
+        "Restore the task-owned latest approval without deleting history")
+    }
+    const available=await reviewer.callFunction(
+      "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
+      "const b=await r.json();return {status:r.status,"+
+      "row:b.suspended?.find(x=>x.seller_id===id)}}",sellerId)
+    assert.equal(available.status,200)
+    assert.equal(available.row?.name_review_required,false,
+      "Last source-proven B approval must restore reopen eligibility")
+    const opened=await reopen(reviewer)
+    assert.equal(opened.status,200,
+      "Two lawful B approvals must permit one real native Mercur unsuspend")
+    assert.equal(opened.body?.status,"open")
+    assert.deepEqual((await q(
+      "select id,name,handle,status,approved_at from seller where id=$1",
+      [sellerId]))[0],{...nativeBefore,name:originalB.name,handle:originalB.handle},
+      "Reopened Seller must retain same ID, latest B name/URL and approved_at")
+    assert.equal(await proofCount(),auditBefore+2,
+      "One native reopen must create one claim and one completion")
+    const recorded=await q(
+      "select e.action,x.id outbox_id from da_audit_event e "+
+      "join da_audit_outbox x on x.source_audit_event_id=e.id "+
+      "and x.source_module='dogruadres-access' and x.deleted_at is null "+
+      "where e.target_id=$1 and e.organization_id=$2 "+
+      "and e.action in ('organization.store_reactivation_claimed',"+
+      "'organization.store_reactivated') and e.deleted_at is null "+
+      "order by e.occurred_at desc,e.id desc limit 2",
+      [sellerId,organizationId])
+    assert.equal(recorded.length,2)
+    assert.ok(recorded.every((r:any)=>r.outbox_id),
+      "Each new native reopening phase must have durable source outbox")
+    assert.equal((await reopen(reviewer)).status,409,
+      "Replaying a completed reopening must not rerun native Mercur")
+    assert.equal(await proofCount(),auditBefore+2)
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: repeated B name with two lawful approvals reopens same native Seller once using newest proven name+URL; forged newest handle returns 409 and no reactivation audit; Owner denied, Staff HTTP200, replay409\n")
     // B -> D must not reject merely because BOTH A->B and C->B are retained.
     const bToD=await submit(d)
     const [beforeRejected]=await q("select status from da_store_rename_request where id=$1",
