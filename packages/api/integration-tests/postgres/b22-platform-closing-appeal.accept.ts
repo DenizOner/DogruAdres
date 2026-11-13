@@ -4,6 +4,8 @@
  */
 import assert from "node:assert/strict"
 import {createHash,randomBytes} from "node:crypto"
+import {Client} from "@medusajs/framework/pg"
+import {until} from "./b19-browser"
 import {B06Chrome} from "./b06-ui-browser"
 import {otp} from "./b19-browser"
 import {runPlatformClosingEmailTick} from "../../src/jobs/dogruadres-platform-closing-email"
@@ -93,6 +95,110 @@ async function verifyCrossSessionClosingReason(input:{
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Owner A real private closing GET, same-page logout clears old reason and synthetic email-result DOM; Person B real password+MFA login sees no private text and Gamma GET403; Owner A fresh login re-reads authorized reason\n")
 }
 
+
+/**
+ * #307 P2: the same native Person is both platform Staff and a protected
+ * Store Owner. Force a real Seller advisory wait, then start Staff for that
+ * Person. Staff must wait for session/epoch behind Owner rather than hold
+ * session while also waiting on Seller. Both real HTTPS mutations are denied
+ * for an already-closed Store; no private data or ledger write may change.
+ */
+async function verifyDualRolePlatformOwnerLockOrder(input:{
+  staff:B06Chrome;q:Db;pgUrl:string;personId:string;
+  organizationId:string;sellerId:string
+}):Promise<void>{
+  const {staff,q,pgUrl,organizationId,sellerId,personId}=input
+  const ownerRead="/personal/store-owner-pause?"+
+    new URLSearchParams({organization_id:organizationId,seller_id:sellerId})
+  assert.equal((await read(staff,ownerRead)).status,200,
+    "Real dual-role Staff Person independently has protected Owner access")
+  assert.equal((await read(staff,"/personal/platform/store-closings")).status,200,
+    "Same Person independently has strong platform closing grant")
+  const cookie=await staff.token()
+  assert.match(cookie??"",/^[A-Za-z0-9_-]{43}$/)
+  const digest=createHash("sha256").update(cookie!).digest("hex")
+  assert.deepEqual(await q(
+    "select person_id,status from da_browser_session where id=$1",[digest]),
+    [{person_id:personId,status:"active"}],
+    "Both real role requests use the identical current active Person session")
+  const csrf=await staff.callFunction(
+    "async function(){const r=await fetch('/personal/session');"+
+    "if(r.status!==200)throw Error('Missing live B22 Person session');"+
+    "return (await r.json()).csrf_token}")
+  assert.match(csrf,/^[A-Za-z0-9_-]{43}$/)
+  const snapshot="select "+
+    "(select count(*)::int from da_audit_event where target_id=$1) audits,"+
+    "(select count(*)::int from da_audit_outbox x join da_audit_event e "+
+      "on e.id=x.source_audit_event_id where e.target_id=$1) outbox,"+
+    "(select count(*)::int from da_store_owner_pause where seller_id=$1) pauses,"+
+    "(select count(*)::int from da_store_platform_closing where seller_id=$1) closings"
+  const prior=await q(snapshot,[sellerId])
+  assert.equal(prior.length,1)
+  assert.equal(prior[0].closings,1,"Existing closing is safe negative fixture")
+  const barrier=new Client({connectionString:pgUrl})
+  let held=false,ownerStarted=false,staffStarted=false
+  await barrier.connect()
+  try{
+    await staff.send("Page.bringToFront")
+    await staff.wait("document.visibilityState==='visible'")
+    await barrier.query("BEGIN");held=true
+    const pid=(await barrier.query("select pg_backend_pid()::int pid")).rows[0].pid
+    await barrier.query(
+      "select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext($1))",
+      [sellerId])
+    const owner={organization_id:organizationId,seller_id:sellerId,
+      action:"resume",request_id:"dasp_"+randomBytes(16).toString("hex"),
+      expected_version:0}
+    const staffPayload={organization_id:organizationId,seller_id:sellerId,
+      request_id:"dascp_"+randomBytes(16).toString("hex"),
+      reason:"B22 already closed: dual-authority concurrency must be denied"}
+    const send=(path:string,payload:unknown)=>
+      staff.callFunction("function(arg){const x=JSON.parse(arg);"+
+        "const p=fetch(x.path,{method:'POST',headers:{'content-type':'application/json',"+
+        "'x-csrf-token':x.csrf},body:JSON.stringify(x.payload),"+
+        "signal:AbortSignal.timeout(45000)}).then(r=>r.status);"+
+        "globalThis[x.result]=p;return true}",
+        JSON.stringify({path,payload,csrf,
+          result:path==="/personal/store-owner-pause"?
+            "__daDualRoleOwner":"__daDualRoleStaff"}))
+    await send("/personal/store-owner-pause",owner)
+    ownerStarted=true
+    const waitingAdvisory=async()=>Number((await q(
+      "select count(*)::int n from pg_locks h join pg_locks w "+
+      "on w.locktype=h.locktype and w.database=h.database "+
+      "and w.classid=h.classid and w.objid=h.objid and "+
+      "w.objsubid=h.objsubid and w.pid<>h.pid and w.granted=false "+
+      "where h.pid=$1 and h.locktype='advisory' and h.granted=true",
+      [pid]))[0].n)
+    await until(async()=>await waitingAdvisory()===1,19000,
+      "Owner HTTPS waits on Seller advisory with active Person session")
+    await send("/personal/platform/store-closings",staffPayload)
+    staffStarted=true
+    await until(async()=>{
+      const [w]=await q("select count(*)::int n from pg_stat_activity "+
+        "where datname=current_database() and wait_event_type='Lock' "+
+        "and query ilike '%from da_browser_session s%' and pid<>$1",[pid])
+      return Number(w.n)>=1&&await waitingAdvisory()===1
+    },19000,"Staff waits Person session; only Owner waits Seller lock")
+    await barrier.query("COMMIT");held=false
+    const statuses=await staff.eval(
+      "Promise.all([globalThis.__daDualRoleOwner,globalThis.__daDualRoleStaff])")
+    assert.deepEqual(statuses,[403,409],
+      "Same Person returns Owner denial and Staff conflict, never 503/deadlock")
+    const after=await q(snapshot,[sellerId])
+    assert.deepEqual(after,prior,
+      "Concurrent denied operations leave closure, audit and outbox unchanged")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: same strong Person dual Staff/Owner, Owner Seller-lock wait before Staff session wait; HTTP403+409, no deadlock/503, closing/audit/outbox unchanged\n")
+  }finally{
+    if(held)await barrier.query("ROLLBACK")
+    if(ownerStarted||staffStarted){
+      await staff.eval("Promise.allSettled([globalThis.__daDualRoleOwner,globalThis.__daDualRoleStaff].filter(Boolean))").catch(()=>{})
+      await staff.eval("delete globalThis.__daDualRoleOwner;delete globalThis.__daDualRoleStaff;true").catch(()=>{})
+    }
+    await barrier.end()
+  }
+}
+
 /** Existing authorized Staff Chrome/HTTPS screen and accessible status. */
 async function assertStaffBlockers(staff:B06Chrome,sellerId:string,
   shown:string,absent:string[]=[]){
@@ -137,7 +243,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   buyer:B06Chrome;buyerScopePath:string;buyerOrganizationId:string;
   checkoutCartId:string;customerId:string;query:any;auth:any;ownerEmail:string;
   ownerPassword:string;foreignEmail:string;foreignPassword:string;
-  foreignPersonId:string;foreignOrgName:string;container:any
+  foreignPersonId:string;foreignOrgName:string;pgUrl:string;container:any
 }):Promise<string>{
   const {browser,staff,q,foundation,ownerPersonId,staffPersonId,
     ownerOrgId,ownerOrgName,sellerId,buyer,buyerScopePath,
@@ -467,6 +573,10 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(newlyProtected.body?.protected_owner_count,2)
   assert.equal(newlyProtected.body?.private_receipt_count,1,
     "Only the initial Owner may hold the original closure audit receipt")
+  await verifyDualRolePlatformOwnerLockOrder({
+    staff,q,pgUrl:input.pgUrl,personId:staffPersonId,
+    organizationId:ownerOrgId,sellerId
+  })
   await runPlatformClosingEmailTick(container)
   const originalRecipients=await q(`select n.person_id
     from da_notification_receipt n

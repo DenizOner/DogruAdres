@@ -5186,6 +5186,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        input.expected_version<0||input.expected_version>2147483646)
       throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager)
+    // #307 P2: Person SHARE -> live session/security -> Seller advisory.
+    // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
+    // protected Owner, Organization, native Member/Seller and current origin
+    // under the serialized Seller lock before any write.
+    if(!await new IdentitySessions(db).currentWithPersonLock(token,true,false,true))
+      return null
     // Same per-Seller lock serializes parallel pause, resume, read-modify-
     // write and the live native Seller row SHARE lock with platform updates.
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
@@ -5414,6 +5420,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        input.expected_version<0||input.expected_version>2147483646)
       throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager)
+    // #307 P2: Person SHARE -> live session/security -> Seller advisory.
+    // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
+    // protected Owner, Organization, native Member/Seller and current origin
+    // under the serialized Seller lock before any write.
+    if(!await new IdentitySessions(db).currentWithPersonLock(token,true,false,true))
+      return null
     // Reuse the existing per-Seller lock, without changing the native Seller.
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
       [input.seller_id])
@@ -6141,6 +6153,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        input.reason.length<10||input.reason.length>500)
       throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager)
+    // #307 P2: Person SHARE -> live session/security -> Seller advisory.
+    // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
+    // protected Owner, Organization, native Member/Seller and current origin
+    // under the serialized Seller lock before any write.
+    if(!await new IdentitySessions(db).currentWithPersonLock(token,true,false,true))
+      return null
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
       [input.seller_id])
     const owner=await this.ownerPauseScope_(db,token,input.organization_id,input.seller_id)
@@ -6225,6 +6243,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
        input.reason.length<10||input.reason.length>500)
       throw new IdentityAccessDenied()
     const db=securitySql(context.transactionManager)
+    // #307 P2: Person SHARE -> live session/security -> Seller advisory.
+    // Preliminary identity is NOT Owner authority; ownerPauseScope_ rechecks
+    // protected Owner, Organization, native Member/Seller and current origin
+    // under the serialized Seller lock before any write.
+    if(!await new IdentitySessions(db).currentWithPersonLock(token,true,false,true))
+      return null
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-owner-pause'),hashtext(?))",
       [input.seller_id])
     const owner=await this.ownerPauseScope_(db,token,input.organization_id,input.seller_id)
