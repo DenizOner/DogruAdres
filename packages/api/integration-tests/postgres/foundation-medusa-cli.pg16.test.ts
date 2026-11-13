@@ -278,6 +278,7 @@ async function run(){
         const ownerClosingIndexMarker="PASS B22 real audit relay: Owner 30-day closing/withdrawal delivered to Index, private countdown redacted, durable ACK and lost-ACK retry deduplicated"
         const ownerPauseIndexMarker="PASS B22 real audit relay: Owner temporary pause/resume events delivered to Index with redacted envelopes, durable ACKs and single row on retry"
         const exceptionalStoreTransferMarker="PASS B22 Chrome/HTTPS/PG16: exceptional suspended Seller name-right assigned to approved separate Store; Owner new name and Staff reopen same ID, native/Order untouched before rename, foreign/CSRF/replay denied, audit/outbox and recipient reservation"
+        const renameApprovingReadMarker="PASS B22 Chrome/HTTPS/PG16: in-flight rename claim Owner+Staff read, safe disabled UI, POST409, no new decision audit; synthetic PG status restored"
         const exceptionalRecipientMarker="PASS B22 Chrome/HTTPS/PG16: recipient B native name and URL adopted after source A vacates, historical 30-day hold retained, unrelated Store C HTTP409 before/after, Staff approval and audit/outbox durable"
         const postHoldRecipientMarker="PASS B22 Chrome/HTTPS/PG16: transferred old name remains reserved for B after source hold day 30, C HTTPS409 without request/audit, original timestamp restored, B native adoption succeeds"
         const independentStaffRaceMarker="PASS B22 Chrome/HTTPS/PG16: two independent strong Staff Persons race same first Store name-right transfer on observed PG advisory lock; HTTP201+409, one transfer/audit/outbox, replay200, both native Seller IDs unchanged"
@@ -352,6 +353,7 @@ async function run(){
               x===ownerPauseAcceptanceMarker || x===ownerPauseConcurrentMarker ||
               x===ownerPauseIndexMarker || x===ownerClosingNegativeMarker ||
               x===exceptionalStoreTransferMarker || x===exceptionalRecipientMarker ||
+              x===renameApprovingReadMarker ||
               x===postHoldRecipientMarker || x===independentStaffRaceMarker ||
               x===historicalCartMarker || x===completedSourceOrderMarker ||
               (x===ownerPlatformClosedUiMarker || x===legacyPlatformClosingMarker || x===dualRoleLockMarker || x===platformCrossSessionMarker ||
@@ -411,6 +413,8 @@ async function run(){
         }
         assert.ok(result.split("\n").includes(exceptionalStoreTransferMarker),
           "Missing exact Chrome/HTTPS/PG16 exceptional Store name-right assignment and same-ID Owner recovery acceptance evidence")
+        assert.ok(result.split("\n").includes(renameApprovingReadMarker),
+          "Missing real Chrome/HTTPS/PG16 Owner and Staff approving readback, denied replay and restored synthetic claim")
         assert.ok(result.split("\n").includes(exceptionalRecipientMarker),
           "Missing real HTTPS/PG16 B native adoption, source vacate and C denied acceptance evidence")
         assert.ok(result.split("\n").includes(postHoldRecipientMarker),

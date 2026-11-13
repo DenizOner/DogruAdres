@@ -2092,6 +2092,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(data.page!==renameReviewPage||typeof data.has_more!=='boolean'||
          !Array.isArray(data.pending)||data.pending.length>20||
          data.pending.some(row=>
+           !['pending_review','approving'].includes(row?.status)||
            !/^dasrn_[a-f0-9]{32}$/.test(row?.request_id)||
            !/^sel_[A-Za-z0-9_-]+$/.test(row?.seller_id)||
            !/^daorg_[A-Za-z0-9_-]{1,80}$/.test(row?.organization_id)||
@@ -2113,6 +2114,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           (entry.seller_status==='suspended'?' — Askıda (isim onayı mağazayı açmaz)':'')+' — '+entry.old_name+
           ' / '+entry.old_handle+' → '+entry.proposed_name+
           ' / '+entry.proposed_handle;
+        if(entry.status==='approving'){
+          // Committed claim may already have reached native Mercur.
+          // Staff may inspect, never retry or reject this uncertain write.
+          summary.textContent+=' — Onay işlemi belirsiz. Yeniden onay veya ret göndermeyin; yetkili uzlaştırma gerekir.';
+          line.append(summary);list.append(line);continue;
+        }
         const reason=document.createElement('textarea');
         reason.maxLength=500;reason.placeholder='Ret gerekçesi (10–500 karakter)';
         reason.setAttribute('aria-label',entry.organization_name+' için değişiklik ret gerekçesi');
@@ -2978,7 +2985,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(data.organization_id!==org||data.seller_id!==seller||
          !Array.isArray(data.requests)||data.requests.length>10||
          data.requests.some(x=>!/^dasrn_[a-f0-9]{32}$/.test(x?.id)||
-           !['pending_review','approved','rejected','withdrawn'].includes(x?.status)||
+           !['pending_review','approving','approved','rejected','withdrawn'].includes(x?.status)||
            typeof x?.proposed_name!=='string'||typeof x?.proposed_handle!=='string'))
         throw Error('Talep bilgisi doğrulanamadı');
       renameUncertain=false;
@@ -2987,6 +2994,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const row=document.createElement('div'),item=document.createElement('p');
         item.textContent=x.proposed_name+' / '+x.proposed_handle+' — '+
           (x.status==='pending_review'?'Platform incelemesinde':
+            x.status==='approving'?'Onay işlemi belirsiz; platform uzlaştırması gerekiyor':
             x.status==='withdrawn'?'Geri çekildi':x.status);
         row.append(item);
         if(x.status==='pending_review'){
@@ -3031,9 +3039,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         list.append(row);
       }
       renameUncertain=false;
-      const pending=data.requests.some(x=>x.status==='pending_review');
+      const approving=data.requests.some(x=>x.status==='approving');
+      const pending=approving||data.requests.some(x=>x.status==='pending_review');
       form.querySelector('button[type=submit]').disabled=renamePending||pending;
-      message.textContent=pending?'Mevcut talep incelemede; yeni talep oluşturulamaz.':
+      message.textContent=approving?
+        'Onay işleminin sonucu belirsiz. Yeni talep göndermeyin; platform uzlaştırması gerekir.':
+        pending?'Mevcut talep incelemede; yeni talep oluşturulamaz.':
         'Yeni isim ve bağlantı için ayrı risk kabulüyle başvurabilirsiniz.';
     }catch{
       if(seq!==renameRead||request!==organizationRequest||org!==currentOrg)return;
