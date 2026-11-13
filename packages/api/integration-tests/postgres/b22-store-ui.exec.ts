@@ -169,13 +169,29 @@ async function verifyStoreDraftClosingPersonLockRace(input:{
           and query ilike '%for update of p%'`)
       return Number(wait.n)>=2
     },15000,"#329 two real draft/closing GET Person-first lock waiters")
-    // Previously the closing read could hold session/epoch while waiting
-    // for Person FOR SHARE; that opposite order must fail this NOWAIT proof.
-    await probe.query("BEGIN");probeHeld=true
-    await probe.query(
-      "select epoch from da_person_security where person_id=$1 for update nowait",
-      [personId])
-    await probe.query("ROLLBACK");probeHeld=false
+    // Prior UI status fetches can briefly hold epoch independently. Give
+    // those finite reads time to finish while Person stays blocked: an
+    // inverse session->Person lock order cannot escape this barrier and
+    // must still FAIL rather than being treated as a transient conflict.
+    await until(async()=>{
+      await probe.query("BEGIN");probeHeld=true
+      try{
+        await probe.query(
+          "select epoch from da_person_security where person_id=$1 for update nowait",
+          [personId])
+        await probe.query("ROLLBACK");probeHeld=false
+        return true
+      }catch(error){
+        await probe.query("ROLLBACK");probeHeld=false
+        if((error as {code?:string}).code!=="55P03")throw error
+        return false
+      }
+    },4000,"#329 epoch NOWAIT must become free while Person barrier remains held")
+    const [stillWaiting]=await q(`select count(*)::int n from pg_stat_activity
+      where datname=current_database() and wait_event_type='Lock'
+        and query ilike '%from da_browser_session s%'
+        and query ilike '%for update of p%'`)
+    assert.ok(Number(stillWaiting.n)>=2,"Both targeted GETs must still wait Person")
     await barrier.query("COMMIT");barrierHeld=false
     const values=await browser.eval("globalThis.__daDraftClosingRace")
     assert.equal(values.length,2)
