@@ -2907,10 +2907,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
 
 
   let renameRead=0,renamePending=false,renameUncertain=false;
+  let renameTargetMustSelect=false;
   function clearStoreRename(preserveSelectedOwner=false){
     // A transient Store-list failure is not an Organization role change.
     // Only Organization switch/logout/concealment may discard that role.
-    renameRead++;if(!preserveSelectedOwner)selectedStoreOwner=false;
+    renameRead++;renameTargetMustSelect=false;
+    if(!preserveSelectedOwner)selectedStoreOwner=false;
     renamePending=false;renameUncertain=false;
     el('store-rename-panel').hidden=true;
     el('store-rename-status').textContent='';
@@ -3007,8 +3009,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   const renameForm=el('store-rename-form');
   if(renameForm?.elements&&typeof renameForm.elements.namedItem==='function')
     renameForm.elements.namedItem('seller_id').onchange=()=>{
+      const selected=renameForm.elements.namedItem('seller_id').value;
+      // Explicit Store switches never inherit the previous Store's name or
+      // risk acknowledgement. A lost target requires a new manual choice.
+      renameTargetMustSelect=!selected;
+      renameRead++;renameUncertain=true;
+      renameForm.elements.namedItem('name').value='';
+      renameForm.elements.namedItem('handle').value='';
+      renameForm.elements.namedItem('risk_acknowledged').checked=false;
+      el('store-rename-history').replaceChildren();
       renameForm.querySelector('button[type=submit]').disabled=true;
-      if(currentOrg)void refreshStoreRename(currentOrg,organizationRequest);
+      if(currentOrg&&selected)void refreshStoreRename(currentOrg,organizationRequest);
     };
   el('store-rename-refresh').onclick=()=>{
     if(currentOrg)void refreshStoreRename(currentOrg,organizationRequest);
@@ -3417,7 +3428,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                 select.append(opt);
               }
               if(sameSeller)select.value=preparedRenameSeller;
-              else if(preparedRenameSeller||hadPreparedRename){
+              else if(preparedRenameSeller||hadPreparedRename||renameTargetMustSelect){
                 // Never bind a prepared name/handle/explicit risk consent to
                 // the first option after the original Store loses authority.
                 const placeholder=document.createElement('option');
@@ -3426,6 +3437,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                 existingRenameForm.elements.namedItem('name').value='';
                 existingRenameForm.elements.namedItem('handle').value='';
                 existingRenameForm.elements.namedItem('risk_acknowledged').checked=false;
+                renameTargetMustSelect=true;
                 renameRead++;renameUncertain=true;
                 el('store-rename-history').replaceChildren();
                 existingRenameForm.querySelector('button[type=submit]').disabled=true;
