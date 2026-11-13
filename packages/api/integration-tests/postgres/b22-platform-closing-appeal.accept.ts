@@ -21,6 +21,78 @@ const write=async(browser:B06Chrome,path:string,payload:unknown,badCsrf=false)=>
   JSON.stringify({path,payload,bad:badCsrf}))
 
 
+
+/** #311 P1: same Chrome page, two separately authenticated native Persons.
+ * The email-result DOM canary is intentionally synthetic; the protected
+ * Owner's closing reason is obtained from the real authorized HTTPS GET.
+ */
+async function verifyCrossSessionClosingReason(input:{
+  browser:B06Chrome;staff:B06Chrome;reason:string;ownerOrgName:string;
+  foreignOrgName:string;privatePath:string;
+  ownerEmail:string;ownerPassword:string;ownerPersonId:string;
+  foreignEmail:string;foreignPassword:string;foreignPersonId:string;
+}):Promise<void>{
+  const {browser,staff,reason,ownerOrgName,foreignOrgName,privatePath,
+    ownerEmail,ownerPassword,ownerPersonId,
+    foreignEmail,foreignPassword,foreignPersonId}=input
+  assert.equal(await browser.eval("document.getElementById('store-platform-appeal-reason').textContent"),
+    "Platform karar gerekçesi: "+reason)
+  // Simulate only the previous authenticated email-result DOM rendering.
+  // No mailbox delivery or appeal timer is triggered by this synthetic canary.
+  await browser.eval("(()=>{const panel=document.getElementById('platform-closing-email-link-panel');"+
+    "panel.hidden=false;document.getElementById('platform-closing-email-link-status').textContent="+
+    JSON.stringify("Mağaza kapatma kararının gerekçesi: "+reason)+
+    ";document.getElementById('platform-closing-email-link-open').hidden=true;return true})()")
+  const assertCleared=async()=>{
+    const state=await browser.eval("({"+
+      "ownerReason:document.getElementById('store-platform-appeal-reason').textContent,"+
+      "ownerHidden:document.getElementById('store-platform-appeal-panel').hidden,"+
+      "mailReason:document.getElementById('platform-closing-email-link-status').textContent,"+
+      "mailHidden:document.getElementById('platform-closing-email-link-panel').hidden,"+
+      "bodyHasReason:document.body.textContent.includes("+JSON.stringify(reason)+")})")
+    assert.deepEqual(state,{ownerReason:"",ownerHidden:true,
+      mailReason:"",mailHidden:true,bodyHasReason:false},
+      "No old private reason may survive in the page, even in hidden DOM")
+  }
+  const loginExisting=async(email:string,password:string,personId:string,
+    otpSource:B06Chrome)=>{
+    await browser.input("#login input[name=email]",email)
+    await browser.input("#login input[name=password]",password)
+    await browser.click("#login button")
+    await browser.wait("!document.getElementById('challenge').hidden")
+    await browser.input("#challenge input[name=code]",await otpSource.nextLoginOtp())
+    await browser.click("#challenge button")
+    await browser.wait("!document.getElementById('workspace').hidden&&"+
+      "document.getElementById('person').textContent==="+JSON.stringify("Person: "+personId))
+  }
+  await browser.click("#logout")
+  await browser.wait("!document.getElementById('login').hidden&&"+
+    "document.getElementById('workspace').hidden")
+  await assertCleared()
+  // This private route deliberately uses 403 for missing or unauthorized
+  // sessions, not a distinct 401 that could disclose authentication state.
+  assert.equal((await read(browser,privatePath)).status,403,
+    "Anonymous access must receive the route's existing generic denial")
+  await loginExisting(foreignEmail,foreignPassword,foreignPersonId,staff)
+  await assertCleared()
+  assert.equal((await read(browser,privatePath)).status,403,
+    "Other Person must not read the first Owner's private closing")
+  await browser.select(foreignOrgName,"owner")
+  await assertCleared()
+  await browser.click("#logout")
+  await browser.wait("!document.getElementById('login').hidden&&"+
+    "document.getElementById('workspace').hidden")
+  await assertCleared()
+  await loginExisting(ownerEmail,ownerPassword,ownerPersonId,browser)
+  await browser.select(ownerOrgName,"owner")
+  await browser.wait("!document.getElementById('store-platform-appeal-panel').hidden&&"+
+    "document.getElementById('store-platform-appeal-reason').textContent==="+
+    JSON.stringify("Platform karar gerekçesi: "+reason))
+  assert.equal((await read(browser,privatePath)).status,200,
+    "Only a new authorized Owner GET restores the private reason")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Owner A real private closing GET, same-page logout clears old reason and synthetic email-result DOM; Person B real password+MFA login sees no private text and Gamma GET403; Owner A fresh login re-reads authorized reason\n")
+}
+
 /** Existing authorized Staff Chrome/HTTPS screen and accessible status. */
 async function assertStaffBlockers(staff:B06Chrome,sellerId:string,
   shown:string,absent:string[]=[]){
@@ -64,11 +136,13 @@ export async function verifyB22PlatformClosingAppeal(input:{
   ownerOrgId:string;ownerOrgName:string;sellerId:string;
   buyer:B06Chrome;buyerScopePath:string;buyerOrganizationId:string;
   checkoutCartId:string;customerId:string;query:any;auth:any;ownerEmail:string;
-  container:any
+  ownerPassword:string;foreignEmail:string;foreignPassword:string;
+  foreignPersonId:string;foreignOrgName:string;container:any
 }):Promise<string>{
   const {browser,staff,q,foundation,ownerPersonId,staffPersonId,
     ownerOrgId,ownerOrgName,sellerId,buyer,buyerScopePath,
-    buyerOrganizationId,checkoutCartId,customerId,query,auth,ownerEmail,container}=input
+    buyerOrganizationId,checkoutCartId,customerId,query,auth,ownerEmail,
+    ownerPassword,foreignEmail,foreignPassword,foreignPersonId,foreignOrgName,container}=input
   const path="/personal/platform/store-closings"
   const privatePath="/personal/store-platform-closing"
   const mailPath="/personal/platform/store-closing-email-readiness?"+
@@ -184,7 +258,11 @@ export async function verifyB22PlatformClosingAppeal(input:{
   await staff.input("#platform-closing-form textarea[name=reason]",reason)
   await staff.click("#platform-closing-form input[name=confirmed]")
   await staff.click("#platform-closing-form button[type=submit]")
-  await staff.wait("document.getElementById('platform-closing-mail-status').textContent.includes('doğrulanmış e-posta kimliği 1')")
+  // The POST's first mail-read is followed by a live Store-list refresh,
+  // which starts a second authorized mail-read. Assert the FINAL refresh,
+  // not its transient first result while the second displays "loading".
+  await staff.wait("document.getElementById('platform-closing-status').textContent.includes('Gerekçe ile yeni satışları derhal durdurabilirsiniz.')&&"+
+    "document.getElementById('platform-closing-mail-status').textContent.includes('doğrulanmış e-posta kimliği 1')")
   const mailUi=await staff.eval("(()=>{const e=document.getElementById('platform-closing-mail-status');return {text:e.textContent,role:e.getAttribute('role'),live:e.getAttribute('aria-live')}})()")
   assert.match(mailUi.text,/Korunan Owner 1, doğrulanmış e-posta kimliği 1/)
   assert.match(mailUi.text,/Owner 1: .*deneme [0-4]\/4/)
@@ -370,6 +448,11 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(ui.status,"status")
   assert.equal(ui.live,"polite")
   assert.equal(ui.enabled,true)
+  await verifyCrossSessionClosingReason({
+    browser,staff,reason,ownerOrgName,foreignOrgName,privatePath:readPath,
+    ownerEmail,ownerPassword,ownerPersonId,
+    foreignEmail,foreignPassword,foreignPersonId
+  })
   // Add B as the genuine second protected Gamma Owner only AFTER all foreign
   // Staff/Owner denial checks. This reuses the later fixture's same membership
   // and never relaxes any production Owner-protection or Staff permission.

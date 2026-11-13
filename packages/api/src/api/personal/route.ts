@@ -582,7 +582,27 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Hash fragments never reach a web server or reverse-proxy access log.
   // Reading the link is optional: not visiting never blocks the automatic
   // admin-alert fallback. Do not let email scanners pre-confirm anything.
-  let platformMailLinkToken='';
+  let platformMailLinkToken='',platformMailLinkRequest=0,platformMailLinkOpened=false,platformMailLinkPreservedPerson='';
+  // Unread email-link capabilities survive an ordinary tab hide, but no
+  // private reason, in-flight verification or cross-Person authority survives.
+  function clearPrivateClosingEmailLink(preserveUnopened=false){
+    const msg=el('platform-closing-email-link-status');
+    const keep=preserveUnopened===true&&!!platformMailLinkToken&&
+      !platformMailLinkOpened&&!msg.textContent;
+    platformMailLinkRequest++; // invalidate every pending async response
+    if(keep){
+      if(!platformMailLinkPreservedPerson)
+        platformMailLinkPreservedPerson=currentPersonId;
+    }else{
+      platformMailLinkToken='';
+      platformMailLinkPreservedPerson='';
+    }
+    platformMailLinkOpened=false;
+    msg.textContent='';
+    el('platform-closing-email-link-panel').hidden=true;
+    const button=el('platform-closing-email-link-open');
+    button.hidden=false;button.disabled=false;
+  }
   const hashMatch=typeof location!=='undefined'&&typeof location.hash==='string'?
     location.hash.match(/^#closing_notice=([a-f0-9]{64})$/):null;
   if(hashMatch){
@@ -594,12 +614,14 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   if(typeof el==='function' && el('platform-closing-email-link-open'))
     el('platform-closing-email-link-open').onclick=async()=>{
     const msg=el('platform-closing-email-link-status');
-    if(!platformMailLinkToken)return;
+    const epoch=viewEpoch,person=currentPersonId,request=++platformMailLinkRequest;
+    if(!platformMailLinkToken||!person)return;
     if(document.hidden||el('workspace').hidden){
       msg.textContent='Önce güvenli kişisel hesabınızda oturum açın.';
       return;
     }
     const button=el('platform-closing-email-link-open');
+    platformMailLinkOpened=true;
     button.disabled=true;
     msg.textContent='Mağaza bildirimi güvenli biçimde doğrulanıyor…';
     try{
@@ -607,6 +629,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         method:'POST',
         body:JSON.stringify({token:platformMailLinkToken})
       });
+      if(request!==platformMailLinkRequest||epoch!==viewEpoch||
+         person!==currentPersonId||document.hidden||el('workspace').hidden)return;
       if(result.viewed!==true||typeof result.reason!=='string'||
          typeof result.deadline_started!=='boolean')
         throw Error('Bildirimin kimliği doğrulanamadı');
@@ -616,8 +640,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          '. İtiraz süreci işlemektedir. Ayrıntıları kuruluş alanınızdan inceleyin.':
          '. İtiraz saati henüz başlamadı.');
       platformMailLinkToken='';
+      platformMailLinkPreservedPerson='';
       button.hidden=true;
     }catch{
+      if(request!==platformMailLinkRequest||epoch!==viewEpoch||
+         person!==currentPersonId||document.hidden||el('workspace').hidden)return;
       msg.textContent='Bağlantı doğrulanamadı. Güncel ve yetkili kuruluş alanınızdan kapatma bildirimini kontrol edin.';
       button.disabled=false;
     }
@@ -1579,6 +1606,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(currentOrg)await pendingInvitations(currentOrg,organizationRequest);
   };
   async function selectOrg(id){
+    // Preserve an unread first-login email link, but never a displayed old
+    // explanation when selecting the first/different Organization.
+    if(currentOrg!==id&&(currentOrg||
+       el('platform-closing-email-link-status').textContent))clearPrivateClosingEmailLink();
     // Never carry a verified role from the previously selected Organization.
     applicationRole='';
     clearNotifications();
@@ -4382,11 +4413,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   el('memberships-refresh').onclick=async()=>{if(currentOrg)await selectOrg(currentOrg)};
   el('org-stores-refresh').onclick=()=>{if(currentOrg)void organizationStores(currentOrg,organizationRequest)};
-  async function load(){if(document.hidden){concealPrivateView();return}const epoch=++viewEpoch;clearOrganizationReviews();try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshPlatformClosings();void refreshPlatformClosingReviews();void refreshStoreRenameReviews();void refreshOrganizationReviews();
+  async function load(){if(document.hidden){concealPrivateView(true);return}const epoch=++viewEpoch;clearOrganizationReviews();try{el('smtp-platform').hidden=true;smtpSettings=null;const me=await api('session');if(platformMailLinkPreservedPerson&&
+       platformMailLinkPreservedPerson!==me.person_id)clearPrivateClosingEmailLink();
+    if(currentPersonId&&currentPersonId!==me.person_id){concealPrivateView();el('login').hidden=false;status('Oturum kimliği değişti. Erişimi yeniden doğrulayın.');return}csrf=me.csrf_token;currentPersonId=me.person_id;el('person').textContent='Person: '+me.person_id;el('verification-email').textContent=me.email_verification==='verified'?'E-posta: Native doğrulama kaydı mevcut.':me.email_verification==='not_verified'?'E-posta: Doğrulanmış kayıt bulunamadı.':'E-posta: Doğrulama durumu şu anda okunamıyor.';const data=await api('organizations');loadedScope=JSON.stringify(data);
+    if(platformMailLinkToken&&!document.hidden&&
+       (!platformMailLinkPreservedPerson||platformMailLinkPreservedPerson===me.person_id))
+      el('platform-closing-email-link-panel').hidden=false;
+    el('organizations').replaceChildren();for(const o of data.organizations){const b=document.createElement('button');b.type='button';b.textContent=o.name+' — '+o.role;b.onclick=()=>selectOrg(o.id);el('organizations').append(b)}el('login').hidden=true;el('register-details').hidden=true;el('session-lock').hidden=false;el('session-lock').disabled=false;el('notification-bell').hidden=false;void notifications();el('workspace').hidden=false;void refreshOrganizationDrafts();status('Oturum açık');void refreshPersonMobile();await links();await refreshMfa();await refreshSmtp();void refreshStoreApprovals();void refreshPlatformClosings();void refreshPlatformClosingReviews();void refreshStoreRenameReviews();void refreshOrganizationReviews();
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
-    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;clearNotifications();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('register-details').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPersonMobile();clearOrganizationDrafts();clearPendingInvitations();el('invite-result').textContent='';
+    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;if(currentPersonId)clearPrivateClosingEmailLink();clearNotifications();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('register-details').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPersonMobile();clearOrganizationDrafts();clearPendingInvitations();el('invite-result').textContent='';
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
@@ -4749,10 +4786,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   };
   // Conceal before browser history or hidden-page restoration; pending reads
   // belong to a view epoch and cannot repopulate a concealed private workspace.
-  function concealPrivateView(){
+  function concealPrivateView(preserveUnopenedClosingLink=false){
     clearNotifications();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
     clearPlatformStorePolicy();
+    clearPrivateClosingEmailLink(preserveUnopenedClosingLink);
+    currentPersonId='';
     clearPersonMobile();clearOrganizationDrafts();el('workspace').hidden=true;el('session-lock').hidden=true;el('invitation-section').hidden=true;el('mfa-enrollment').hidden=true;el('challenge').hidden=true;el('audit-timeline-section').hidden=true;clearMemberships();clearOrganizationStores();clearStoreApprovals();clearPlatformClosings();clearPlatformClosingReviews();clearStoreRenameReviews();clearPendingInvitations();clearOrganizationReviews();
     for(const id of ['detail','memberships','organizations','actor-result','provision-result','person','verification-email','bindings','invite-result','invitation-result','mfa-info','smtp-status','smtp-test-result','mfa-enroll-secret','audit-timeline-entries','audit-timeline-status'])el(id).replaceChildren();
     for(const form of el('workspace').querySelectorAll('form'))form.reset();
@@ -5256,7 +5295,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
 
   window.addEventListener('pagehide',concealPrivateView);
   window.addEventListener('pageshow',event=>{if(event.persisted){concealPrivateView();load()}});
-  document.addEventListener('visibilitychange',()=>{if(document.hidden)concealPrivateView();else load()});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)concealPrivateView(true);else load()});
   window.addEventListener('focus',()=>{if(el('workspace').hidden&&loadedScope==='')load();else observeAccess()});
   window.addEventListener('popstate',()=>{concealPrivateView();load()});
   setInterval(observeAccess,5000);

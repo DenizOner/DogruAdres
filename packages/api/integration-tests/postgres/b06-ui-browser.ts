@@ -58,6 +58,8 @@ export class B06Chrome {
     if(this.requestProof.size>160)
       this.requestProof.delete(this.requestProof.keys().next().value!)
   }
+  // Task-owned native MFA seed only; never logged or exported as evidence.
+  private mfaSeed='';private lastLoginOtpCounter=-1;
   secretCanary='';secretLeaks=false
   runtimeErrors:string[]=[]
   constructor(readonly origin:string,readonly actor:'A'|'B'){}
@@ -136,8 +138,20 @@ export class B06Chrome {
     await this.input('#login input[name=email]',email);await this.input('#login input[name=password]',password);await this.click('#login button')
     await this.wait("!document.getElementById('challenge').hidden")
     // Medusa verifies the code; the test generator only holds its newly issued seed in memory.
-    await this.input('#challenge input[name=code]',otp(seed));seed='';await this.click('#challenge button')
+    const loginCounter=Math.floor(Date.now()/30000)
+    await this.input('#challenge input[name=code]',otp(seed));
+    this.mfaSeed=seed;this.lastLoginOtpCounter=loginCounter;seed='';
+    await this.click('#challenge button')
     await this.wait(`!document.getElementById('workspace').hidden&&document.getElementById('person').textContent===${JSON.stringify('Person: '+person)}`)
+  }
+  async nextLoginOtp(){
+    assert.ok(this.mfaSeed,"Only a genuinely enrolled B22 Person can supply native MFA")
+    await until(async()=>{
+      const now=Date.now()
+      return Math.floor(now/30000)>this.lastLoginOtpCounter&&now%30000<20000
+    },35000,"Fresh B22 native TOTP window")
+    this.lastLoginOtpCounter=Math.floor(Date.now()/30000)
+    return otp(this.mfaSeed)
   }
   async select(name:string,role:string){const n=await this.eval(`Array.from(document.querySelectorAll('#organizations button')).findIndex(b=>b.textContent===${JSON.stringify(name+' — '+role)})`);assert.ok(n>=0);await this.click(`#organizations button:nth-child(${n+1})`);await this.wait(`JSON.parse(document.getElementById('detail').textContent||'{}').role===${JSON.stringify(role)}`)}
   async ready(){await this.wait("document.getElementById('memberships-status').textContent==='Üyelik listesi güncellendi.'")}
@@ -152,5 +166,5 @@ export class B06Chrome {
   }
   async reload(role:string){await this.send('Page.reload',{ignoreCache:true});await this.wait(`JSON.parse(document.getElementById('detail').textContent||'{}').role===${JSON.stringify(role)}`);assert.ok(await this.eval("location.protocol==='https:'"))}
   async screenshot(file:string){const r=await this.send('Page.captureScreenshot',{format:'png'});writeFileSync(file,Buffer.from(r.data,'base64'))}
-  async close(){for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(Error('Closing'))}this.pending.clear();this.ws?.close();if(this.chrome){killProcess(this.chrome);await until(async()=>this.chrome!.exitCode!==null||this.chrome!.signalCode!==null,8000,'B06 Chrome child termination')}rmSync(this.root,{recursive:true,force:true});assert.ok(!existsSync(this.root));this.cleanup=true}
+  async close(){this.mfaSeed='';for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(Error('Closing'))}this.pending.clear();this.ws?.close();if(this.chrome){killProcess(this.chrome);await until(async()=>this.chrome!.exitCode!==null||this.chrome!.signalCode!==null,8000,'B06 Chrome child termination')}rmSync(this.root,{recursive:true,force:true});assert.ok(!existsSync(this.root));this.cleanup=true}
 }

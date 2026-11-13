@@ -281,6 +281,7 @@ async function run(){
         const exceptionalRecipientMarker="PASS B22 Chrome/HTTPS/PG16: recipient B native name and URL adopted after source A vacates, historical 30-day hold retained, unrelated Store C HTTP409 before/after, Staff approval and audit/outbox durable"
         const postHoldRecipientMarker="PASS B22 Chrome/HTTPS/PG16: transferred old name remains reserved for B after source hold day 30, C HTTPS409 without request/audit, original timestamp restored, B native adoption succeeds"
         const independentStaffRaceMarker="PASS B22 Chrome/HTTPS/PG16: two independent strong Staff Persons race same first Store name-right transfer on observed PG advisory lock; HTTP201+409, one transfer/audit/outbox, replay200, both native Seller IDs unchanged"
+        const platformCrossSessionMarker="PASS B22 Chrome/HTTPS/PG16: Owner A real private closing GET, same-page logout clears old reason and synthetic email-result DOM; Person B real password+MFA login sees no private text and Gamma GET403; Owner A fresh login re-reads authorized reason"
         const platformClosingAppealMarker="PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, canonical 10+20 clock started on authenticated Owner link before first appeal; external mailbox delivery unverified and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no external mailbox delivery claim; one immutable clock, foreign denied"
         const platformStaffReviewMarker="PASS B22 Chrome/HTTPS/PG16: independent third Person strong Staff review decision, original Staff self-review denied, private Owner reason/notice, immutable clock and sales block; repeat idempotent, first-stage parallel single decision, revoked grant denied"
         const platformFinalReviewMarker="PASS B22 Chrome/HTTPS/PG16: synthetic T0+11d second-stage Owner request, real protected Owner/foreign Staff/CSRF/replay, one durable audit/outbox and private notice; Store stays closed, original 10+20 clock unchanged; stage time fixture is synthetic, real Owner Chrome form submitted and confirmed"
@@ -350,7 +351,8 @@ async function run(){
               x===exceptionalStoreTransferMarker || x===exceptionalRecipientMarker ||
               x===postHoldRecipientMarker || x===independentStaffRaceMarker ||
               x===historicalCartMarker || x===completedSourceOrderMarker ||
-              (x===platformClosingAppealMarker || x===platformClosingEmailLinkMarker ||
+              (x===platformCrossSessionMarker ||
+               x===platformClosingAppealMarker || x===platformClosingEmailLinkMarker ||
                x===platformFinalReviewMarker || x===platformStaffReviewMarker ||
                x===platformPreflightBoundaryMarker)).join("\n")
           if(child.error||child.status!==0){
@@ -416,6 +418,8 @@ async function run(){
           "Missing exact PG16 Cart identity/Offer/Seller/Buyer attribution comparison across A→B transfer")
         assert.ok(result.split("\n").includes(completedSourceOrderMarker),
           "Missing real pre-transfer completed OrderGroup/Order IDs, exact Cart FK, source Seller and Buyer attribution across A→B name transfer")
+        assert.ok(result.split("\n").includes(platformCrossSessionMarker),
+          "Missing same-page two native Person logins, private DOM clear and foreign 403")
         assert.ok(result.split("\n").includes(platformClosingAppealMarker),
           "Missing real independent strong Staff and protected Owner platform closing/appeal HTTPS+PG16 proof")
         assert.ok(result.split("\n").includes(platformClosingEmailLinkMarker),
