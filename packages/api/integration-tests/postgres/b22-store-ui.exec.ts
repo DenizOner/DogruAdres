@@ -2320,7 +2320,7 @@ async function verifyConcurrentOwnerStoreRenameRequests(
 async function verifyPlatformStoreRenameApproval(
   owner:B06Chrome,reviewer:B06Chrome,org:string,storeId:string,
   q:(sql:string,params?:any[])=>Promise<any[]>,
-  databaseUrl:string
+  databaseUrl:string,container:any
 ):Promise<void>{
   const pending=await q(`select id,old_name,old_handle,proposed_name,proposed_handle
     from da_store_rename_request where organization_id=$1 and seller_id=$2
@@ -8545,7 +8545,7 @@ export default async function({container}:any){
     await verifyConcurrentOwnerStoreRenameRequests(
       browser,sellerGamma.id,gammaSellerId,A.person,rand,q)
     await verifyPlatformStoreRenameApproval(
-      browser,reviewer,sellerGamma.id,gammaSellerId,q,u.toString())
+      browser,reviewer,sellerGamma.id,gammaSellerId,q,u.toString(),container)
     await verifyStaffReopensSuspendedStore(
       browser,reviewer,sellerGamma.id,sellerGamma.name,gammaSellerId,container,q)
     await verifySuspendedStoreRenameBeforeReopen(
