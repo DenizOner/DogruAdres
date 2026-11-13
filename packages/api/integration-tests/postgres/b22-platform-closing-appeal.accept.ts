@@ -1162,8 +1162,17 @@ export async function verifyB22PlatformClosingSecondStageRequest(input:{
       $7::timestamptz,'owner_delivery',$8)`,[
     reviewSellerId,organizationId,sourceRequest,reason,sourceAudit,
     sourceStart,clockStart,deadlineAudit])
+  // The previous Staff/Owner Chrome journey can conceal this tab's private
+  // Organization choices while another Person is foregrounded. Re-enter via
+  // a genuine fresh page and current server-owned session, never by changing
+  // hidden DOM flags or bypassing authorization.
   await browser.send("Page.bringToFront")
-  await browser.wait("document.visibilityState==='visible'")
+  await browser.send("Page.reload",{ignoreCache:true})
+  await browser.wait("document.readyState==='complete' && "+
+    "document.visibilityState==='visible' && "+
+    "!document.getElementById('workspace').hidden && "+
+    "Array.from(document.querySelectorAll('#organizations button')).some(b=>"+
+    "b.textContent==="+JSON.stringify(organizationName+" — owner")+")")
   await browser.select(organizationName,"owner")
   const prior=await read(browser,readPath)
   assert.equal(prior.status,200,
