@@ -10,7 +10,7 @@ import {
 import { clx } from "@medusajs/ui"
 import { ChevronUpDown } from "@medusajs/icons"
 
-import Image from "next/image"
+import Image from "@/components/molecules/SafeImage/SafeImage"
 import { cn } from "@/lib/utils"
 
 export const ReturnItemsTab = ({

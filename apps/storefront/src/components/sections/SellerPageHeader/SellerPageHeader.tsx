@@ -3,7 +3,6 @@ import { HttpTypes } from "@medusajs/types"
 import type { SellerDTO } from "@mercurjs/types"
 
 export const SellerPageHeader = ({
-  header = false,
   seller,
   user,
 }: {

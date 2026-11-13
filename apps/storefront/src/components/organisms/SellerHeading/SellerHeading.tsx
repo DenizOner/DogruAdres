@@ -3,7 +3,6 @@ import { sanitizeRichText } from "@/lib/helpers/sanitize-rich-text"
 import { SellerDTO } from "@mercurjs/types"
 import { Chat } from "../Chat/Chat"
 import { HttpTypes } from "@medusajs/types"
-import { Button } from "@medusajs/ui"
 
 export const SellerHeading = ({
   seller,

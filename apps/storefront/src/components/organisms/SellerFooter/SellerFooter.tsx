@@ -1,8 +1,6 @@
 "use client"
 import { Button, Divider } from "@/components/atoms"
 import { Modal, ReportSellerForm } from "@/components/molecules"
-import { DoneIcon } from "@/icons"
-import { SingleProductSeller } from "@/types/product"
 import { SellerDTO } from "@mercurjs/types"
 import { format } from "date-fns"
 import { useState } from "react"

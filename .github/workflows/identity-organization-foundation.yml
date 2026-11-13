@@ -210,12 +210,51 @@ jobs:
       # repair and #309 Next.js security patch branches only.
       # Never skip or suppress TypeScript, ESLint or Next production failures.
       - name: Storefront #159 type, lint and production build diagnostics
-        if: ${{ github.event_name == 'pull_request' && (github.head_ref == 'fix/storefront-build-eslint-types-159' || github.head_ref == 'fix/security-next-15528-309') && steps.install.outcome == 'success' }}
+        if: ${{ github.event_name == 'pull_request' && (github.head_ref == 'fix/storefront-build-eslint-types-159' || github.head_ref == 'fix/security-next-15528-309' || github.head_ref == 'fix/storefront-image-allowlist-175') && steps.install.outcome == 'success' }}
         timeout-minutes: 8
         working-directory: apps/storefront
         shell: bash
         run: |
           set -euo pipefail
+          # CI-only page is built and served on an isolated runner, never committed
+          # or deployed. It tests actual SafeImage hydration/error fallback.
+          if [ "$GITHUB_HEAD_REF" = "fix/storefront-image-allowlist-175" ]; then
+            # Isolated HTTPS fixture: only runner loopback, never production configuration.
+            export DOGRUADRES_STOREFRONT_MEDIA_BASE_URL="https://media-image175-ci.example.org/static"
+            export IMAGE175_TLS_CERT="$RUNNER_TEMP/image175-ci-cert.pem"
+            export IMAGE175_TLS_KEY="$RUNNER_TEMP/image175-ci-key.pem"
+            openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+              -keyout "$IMAGE175_TLS_KEY" -out "$IMAGE175_TLS_CERT" \
+              -subj "/CN=media-image175-ci.example.org" \
+              -addext "subjectAltName=DNS:media-image175-ci.example.org" > /dev/null 2>&1
+            printf '127.0.0.1 media-image175-ci.example.org\n' | sudo tee -a /etc/hosts > /dev/null
+            if [ "$(sysctl -n net.ipv4.ip_unprivileged_port_start)" -gt 0 ]; then
+              sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0 > /dev/null
+            fi
+            export NODE_EXTRA_CA_CERTS="$IMAGE175_TLS_CERT"
+            mkdir -p src/app/images/image-175-ci-only
+            cat > src/app/images/image-175-ci-only/page.tsx <<'TSX'
+          'use client'
+          import Image from '@/components/molecules/SafeImage/SafeImage'
+          import { useState } from 'react'
+          export default function Image175TestPage() {
+            const [mediaLoaded, setMediaLoaded] = useState(false)
+            return (
+              <main>
+                <Image data-testid="image175-remote"
+                  src="https://untrusted.example.test/no-image.png"
+                  alt="Blocked source" width={96} height={96} priority />
+                <Image data-testid="image175-allowed"
+                  src="https://media-image175-ci.example.org/static/fixture.jpg"
+                  alt="Approved CI fixture" width={96} height={96} priority
+                  onLoad={() => setMediaLoaded(true)} />
+                <p data-testid="image175-media-result">{mediaLoaded ? 'loaded' : 'pending'}</p>
+              </main>
+            )
+          }
+          TSX
+            trap 'rm -rf src/app/images/image-175-ci-only' EXIT
+          fi
           # Use the existing official Mercur CLI route codegen, never a
           # synthetic hand-written route map or unconditional unsafe cast.
           (cd ../../packages/api && bun run codegen)
@@ -223,7 +262,8 @@ jobs:
           set +e
           node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json > "$RUNNER_TEMP/storefront-159-types.log" 2>&1
           type_status=$?
-          bun run lint > "$RUNNER_TEMP/storefront-159-lint.log" 2>&1
+          # Every Storefront ESLint warning is an acceptance failure; keep all rules active.
+          node ../../node_modules/eslint/bin/eslint.js . --max-warnings 0 > "$RUNNER_TEMP/storefront-159-lint.log" 2>&1
           lint_status=$?
           bun run build > "$RUNNER_TEMP/storefront-159-build.log" 2>&1
           build_status=$?
@@ -253,6 +293,11 @@ jobs:
           # #159: focused native-price DTO and invalid-value regressions, using existing Bun.
           bun test src/lib/helpers/get-product-price.test.ts
           test "$type_status" -eq 0 && test "$lint_status" -eq 0 && test "$build_status" -eq 0
+          if [ "$GITHUB_HEAD_REF" = "fix/storefront-image-allowlist-175" ]; then
+            bun test next.config.image.test.ts
+            node scripts/verify-image-optimizer.mjs
+            node scripts/verify-image-dev.mjs
+          fi
       - name: Native SMTP HTTPS privacy negative regressions
         id: asvs_smtp_http
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

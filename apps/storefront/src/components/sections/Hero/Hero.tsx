@@ -1,4 +1,4 @@
-import Image from "next/image"
+import Image from "@/components/molecules/SafeImage/SafeImage"
 
 import tailwindConfig from "../../../../tailwind.config"
 import { ArrowRightIcon } from "@/icons"

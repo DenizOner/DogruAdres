@@ -541,7 +541,7 @@ export async function updateRegionWithValidation(
                 fetchOptions: { headers }
               });
               removedItems.push(item.product_title || 'Unknown product');
-            } catch (deleteError) {
+            } catch {
               // ignore individual delete failures and continue removing the rest
             }
           }
@@ -550,7 +550,7 @@ export async function updateRegionWithValidation(
         if (removedItems.length > 0) {
           await updateCart({ region_id: region.id });
         }
-      } catch (fetchError) {
+      } catch {
         throw new Error('Failed to handle incompatible cart items');
       }
     }

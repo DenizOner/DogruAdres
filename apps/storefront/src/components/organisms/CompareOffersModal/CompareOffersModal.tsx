@@ -37,7 +37,7 @@ export const CompareOffersModal = ({
     try {
       await addToCart({ offerId: offer.id, quantity: 1, countryCode: locale })
       toast.success({ title: "Added to cart" })
-    } catch (error) {
+    } catch {
       toast.error({
         title: "Error adding to cart",
         description: "This offer does not have the required inventory",

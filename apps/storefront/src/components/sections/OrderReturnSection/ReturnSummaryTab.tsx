@@ -1,7 +1,7 @@
 import type { HttpTypes } from "@medusajs/types"
 import { Button, Card } from "@/components/atoms"
 import { convertToLocale } from "@/lib/helpers/money"
-import Image from "next/image"
+import Image from "@/components/molecules/SafeImage/SafeImage"
 
 export const ReturnSummaryTab = ({
   selectedItems,

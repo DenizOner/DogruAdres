@@ -8,12 +8,6 @@ type OrderDetailsProps = {
 }
 
 const OrderDetails = ({ order, showStatus }: OrderDetailsProps) => {
-  const formatStatus = (str: string) => {
-    const formatted = str.split("_").join(" ")
-
-    return formatted.slice(0, 1).toUpperCase() + formatted.slice(1)
-  }
-
   return (
     <div className="border rounded-sm p-4 bg-ui-bg-subtle grid lg:grid-cols-2">
       <Text className="mt-2">

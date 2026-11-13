@@ -17,8 +17,10 @@ const storybookCompat = new FlatCompat({
   recommendedConfig: js.configs.recommended,
 });
 
-export default [
+const eslintConfig = [
   ...nextCompat.extends('next/core-web-vitals', 'next/typescript'),
   ...storybookCompat.extends('plugin:storybook/recommended'),
   { ignores: ['.next/**', 'out/**', 'storybook-static/**', 'node_modules/**'] },
 ];
+
+export default eslintConfig;

@@ -1,6 +1,6 @@
 import { convertToLocale } from "@/lib/helpers/money"
 import { HttpTypes } from "@medusajs/types"
-import Image from "next/image"
+import Image from "@/components/molecules/SafeImage/SafeImage"
 
 export const CartDropdownItem = ({
   item,
@@ -9,11 +9,6 @@ export const CartDropdownItem = ({
   item: HttpTypes.StoreCartLineItem
   currency_code: string
 }) => {
-  const original_total = convertToLocale({
-    amount: (item.compare_at_unit_price || 0) * item.quantity,
-    currency_code,
-  })
-
   const total = convertToLocale({
     amount: item.subtotal ?? 0,
     currency_code,

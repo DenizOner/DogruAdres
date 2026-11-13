@@ -1,6 +1,6 @@
 "use client"
 
-import { Button, Card } from "@/components/atoms"
+import { Button } from "@/components/atoms"
 import { LabeledInput } from "@/components/cells"
 import { zodResolver } from "@hookform/resolvers/zod"
 import {
