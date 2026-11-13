@@ -2827,7 +2827,9 @@ export default class DogruAdresAccessModuleService extends MedusaService({
             (encode(sha256(convert_to(lower(regexp_replace(
               btrim(normalize(h.proposed_name,NFKC)),'[[:space:]]+',' ','g')),'UTF8')),'hex')=?
              or lower(h.proposed_handle)=lower(?))))
-      limit 1`,[target.seller_id,hash,r.handle,hash,r.handle])
+        ${authorizedTransferredOldNameHoldExclusion}
+      limit 1`,[target.seller_id,hash,r.handle,hash,r.handle,
+        target.seller_id,r.organization_id,hash,r.handle])
     if(conflicts.length||native.length||held.length)
       return {status:"conflict" as const}
     return {status:"eligible" as const,organization_id:r.organization_id as string,
