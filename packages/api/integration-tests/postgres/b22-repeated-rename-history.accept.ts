@@ -10,9 +10,13 @@ type Rows=(sql:string,params?:unknown[])=>Promise<any[]>
 
 export async function verifyRepeatedApprovedStoreRenameHistory(input:{
   owner:B06Chrome;reviewer:B06Chrome;organizationId:string;
-  organizationName:string;sellerId:string;q:Rows
+  sellerId:string;q:Rows
 }):Promise<void>{
-  const {owner,reviewer,organizationId,organizationName,sellerId,q}=input
+  const {owner,reviewer,organizationId,sellerId,q}=input
+  const [company]=await q("select name from da_organization where id=$1 and status='active'",
+    [organizationId])
+  assert.ok(typeof company?.name==="string"&&company.name.length>0)
+  const organizationName=company.name as string
   const [nativeBefore]=await q("select id,name,handle,status,approved_at from seller where id=$1",
     [sellerId])
   assert.ok(nativeBefore?.id===sellerId&&nativeBefore.status==="open"&&nativeBefore.approved_at)
