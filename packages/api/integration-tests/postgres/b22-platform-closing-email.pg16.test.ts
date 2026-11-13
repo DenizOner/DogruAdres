@@ -959,7 +959,8 @@ async function main(){
       [expiredSeller]))[0].n
     const lateResult=await db.begin(async (tx:Pg)=>{
       const {service,context}=serviceFor(tx)
-      ;(service as any).ownerPauseScope_=async()=>({
+      ;(service as any).ownerPauseSessionPrelock_=async()=>({person_id:owner})
+       ;(service as any).ownerPauseScope_=async()=>({
         actor:{person_id:owner,actor_type:"user",actor_id:syntheticActor}
       })
       return service.personalAppealPlatformStoreClosing("synthetic-clock-only",{
@@ -998,7 +999,8 @@ async function main(){
     const reviewReason="Sentetik Owner kalan 20 günlük üst inceleme talebini sunuyor"
     const requestReview=()=>db.begin(async (tx:Pg)=>{
       const {service,context}=serviceFor(tx)
-      ;(service as any).ownerPauseScope_=async()=>({
+      ;(service as any).ownerPauseSessionPrelock_=async()=>({person_id:owner})
+       ;(service as any).ownerPauseScope_=async()=>({
         actor:{person_id:owner,actor_type:"user",actor_id:syntheticActor}
       })
       return service.personalRequestPlatformStoreClosingFinalReview(
@@ -1054,7 +1056,8 @@ async function main(){
       "where audit_event_id=$1",[finalRow.final_review_audit_event_id]))[0].n,1)
     const conflict=await db.begin(async (tx:Pg)=>{
       const {service,context}=serviceFor(tx)
-      ;(service as any).ownerPauseScope_=async()=>({
+      ;(service as any).ownerPauseSessionPrelock_=async()=>({person_id:owner})
+       ;(service as any).ownerPauseScope_=async()=>({
         actor:{person_id:owner,actor_type:"user",actor_id:syntheticActor}
       })
       return service.personalRequestPlatformStoreClosingFinalReview(
@@ -1076,7 +1079,8 @@ async function main(){
         "where target_id=$1",[seller]))[0].n
       const denied=await db.begin(async (tx:Pg)=>{
         const {service,context}=serviceFor(tx)
-        ;(service as any).ownerPauseScope_=async()=>({
+        ;(service as any).ownerPauseSessionPrelock_=async()=>({person_id:owner})
+       ;(service as any).ownerPauseScope_=async()=>({
           actor:{person_id:owner,actor_type:"user",actor_id:syntheticActor}
         })
         return service.personalRequestPlatformStoreClosingFinalReview(
