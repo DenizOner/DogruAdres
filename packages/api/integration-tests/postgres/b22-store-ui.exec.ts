@@ -40,6 +40,80 @@ import taxCertificateInventory, {inspectTaxCertificateSnapshot} from "../../src/
 
 
 
+async function verifyStoreApplicationInitialReadRetry(input:{
+  browser:B06Chrome;q:(sql:string,params?:any[])=>Promise<any[]>;
+  organizationId:string;organizationName:string;
+}):Promise<void>{
+  const {browser,q,organizationId,organizationName}=input
+  // Only the first READ response is faulted inside the task-only Chrome
+  // browser. Retry uses actual HTTPS and the existing PG16 authorization.
+  const before=await q(`select
+    (select count(*)::int from da_store_application_draft where organization_id=$1) as drafts,
+    (select count(*)::int from da_store_application where organization_id=$1) as applications,
+    (select count(*)::int from da_audit_event where organization_id=$1
+      and action in ('organization.store_application_draft_saved',
+        'organization.store_application_created')) as audits`,[organizationId])
+  assert.equal(before.length,1)
+  await browser.eval("(()=>{"+
+    "const real=window.fetch.bind(window);"+
+    "window.__daApplicationRetryOriginal=window.fetch;"+
+    "window.__daApplicationRetryFault='503';"+
+    "window.__daApplicationRetryInjected=0;window.__daApplicationRetryReal=0;"+
+    "window.fetch=(resource,options)=>{"+
+    "const url=typeof resource==='string'?resource:resource?.url;"+
+    "if(typeof url==='string'&&url.startsWith('/personal/store-applications?')&&"+
+    "(!options?.method||options.method==='GET')){"+
+    "const fault=window.__daApplicationRetryFault;"+
+    "if(fault){window.__daApplicationRetryFault='';window.__daApplicationRetryInjected++;"+
+    "if(fault==='503')return Promise.resolve(new Response(JSON.stringify({message:'Service unavailable'}),"+
+    "{status:503,headers:{'Content-Type':'application/json'}}));"+
+    "return real(resource,options).then(response=>response.status===200?"+
+    "new Response('{',{status:200,headers:{'Content-Type':'application/json'}}):response)"+
+    "}window.__daApplicationRetryReal++"+
+    "}return real(resource,options)"+
+    "};return true})()")
+  try{
+    await browser.select(organizationName,"owner")
+    await browser.wait("!document.getElementById('store-application-panel').hidden&&"+
+      "document.getElementById('store-application-status').textContent.includes('Başvurular güvenli biçimde okunamadı.')")
+    assert.deepEqual(await browser.eval("({faults:window.__daApplicationRetryInjected,"+
+      "reads:window.__daApplicationRetryReal})"),{faults:1,reads:0},
+      "The very first Owner application read must fail without another silent GET")
+    assert.equal(await browser.eval("document.getElementById('store-application-form').hidden"),true)
+    await browser.click("#store-applications-refresh")
+    await browser.wait("!document.getElementById('store-application-form').hidden&&"+
+      "!document.getElementById('store-draft-form').hidden")
+    assert.equal(await browser.eval("window.__daApplicationRetryReal"),1,
+      "Refresh after first 503 must make a fresh authorized HTTPS GET")
+    await browser.eval("window.__daApplicationRetryFault='malformed'")
+    await browser.click("#store-applications-refresh")
+    await browser.wait("document.getElementById('store-application-status').textContent.includes('Başvurular güvenli biçimde okunamadı.')")
+    assert.equal(await browser.eval("window.__daApplicationRetryInjected"),2)
+    assert.equal(await browser.eval("document.getElementById('store-application-form').hidden"),true,
+      "Malformed successful response may never keep submission enabled")
+    await browser.click("#store-applications-refresh")
+    await browser.wait("!document.getElementById('store-application-form').hidden&&"+
+      "!document.getElementById('store-draft-form').hidden")
+    assert.equal(await browser.eval("window.__daApplicationRetryReal"),2,
+      "Malformed response must not strand the verified Owner refresh button")
+    assert.deepEqual(await q(`select
+      (select count(*)::int from da_store_application_draft where organization_id=$1) as drafts,
+      (select count(*)::int from da_store_application where organization_id=$1) as applications,
+      (select count(*)::int from da_audit_event where organization_id=$1
+        and action in ('organization.store_application_draft_saved',
+          'organization.store_application_created')) as audits`,[organizationId]),before,
+      "Read retries must not create a Store draft, Seller or audit")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: verified Owner initial Store applications GET simulated 503 and malformed response each recover by refresh; actual authorized HTTPS GET, no Store draft/Seller/audit writes\n")
+  }finally{
+    await browser.eval("(()=>{if(window.__daApplicationRetryOriginal){"+
+      "window.fetch=window.__daApplicationRetryOriginal;"+
+      "delete window.__daApplicationRetryOriginal;"+
+      "delete window.__daApplicationRetryFault;"+
+      "delete window.__daApplicationRetryInjected;"+
+      "delete window.__daApplicationRetryReal}return true})()").catch(()=>{})
+  }
+}
+
 async function verifyStoreDraftPhonePersonLockRace(input:{
   browser:B06Chrome;
   q:(sql:string,params?:any[])=>Promise<any[]>;
@@ -4524,7 +4598,10 @@ export default async function({container}:any){
     assert.equal(verified.length,1);assert.match(verified[0].proof_reference,/^dual-proof:/)
     // The real Owner UI submits via native Mercur createSellerAccountWorkflow.
     // No extra Store-to-Organization approval or native dashboard login.
-    await browser.select(organizations[0].name,"owner")
+    await verifyStoreApplicationInitialReadRetry({
+      browser,q,organizationId:organizations[0].id,
+      organizationName:organizations[0].name
+    })
     await browser.wait("!document.getElementById('store-application-form').hidden")
     // An Owner can create/reopen/edit a PRIVATE Organization Store draft
     // without creating any native Seller or irreversible application claim.
