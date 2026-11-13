@@ -3544,7 +3544,7 @@ async function verifyTwoOwnersStoreDraftApplicationLockOrder(input:{
       (select count(*)::int from da_organization_seller_ownership where organization_id=$3) as origins`,
       [email,draftId,organizationId]),before,
       "The losing Owner must not create a Seller, Origin or canonical audit")
-    process.stdout.write("PASS B22 Chrome/PG16: two distinct protected Owners same draft/application ID; second HTTPS reserve waits application row before draft; first native claim finish draft NOWAIT free; loser403, creating/submitting and Seller/audit unchanged\\n")
+    process.stdout.write("PASS B22 Chrome/PG16: two distinct protected Owners same draft/application ID; second HTTPS reserve waits application row before draft; first native claim finish draft NOWAIT free; loser403, creating/submitting and Seller/audit unchanged\n")
   }finally{
     if(held)await barrier.query("ROLLBACK")
     if(started)await browser.eval(
