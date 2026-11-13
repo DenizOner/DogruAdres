@@ -41,6 +41,63 @@ import taxCertificateInventory, {inspectTaxCertificateSnapshot} from "../../src/
 
 
 
+
+/** Run the existing native Chrome/HTTPS/PG16 closing journey with a legacy
+ * audited Store Origin, then restore the isolated test-only original source.
+ * Keep fixture setup outside the intentionally huge B22 acceptance function
+ * so the full API TypeScript control-flow check remains enforceable.
+ */
+async function withLegacyPlatformClosingOrigin<T>(input:{
+  q:(sql:string,params?:any[])=>Promise<any[]>;
+  organizationId:string;sellerId:string;
+  actorPersonId:string;actorId:string;
+  run:()=>Promise<T>;
+}):Promise<T>{
+  const {q,organizationId,sellerId,actorPersonId,actorId,run}=input
+  const [origin]=await q(`select o.id,o.verification_audit_event_id,e.action
+    from da_organization_seller_ownership o
+    join da_audit_event e on e.id=o.verification_audit_event_id
+    where o.organization_id=$1 and o.seller_id=$2 and o.revoked_at is null`,
+    [organizationId,sellerId])
+  assert.ok(origin)
+  assert.equal(origin.action,"organization.store_application_created")
+  const sourceId="daaud_"+randomBytes(16).toString("hex")
+  await q(`insert into da_audit_event
+    (id,actor_person_id,actor_type,actor_id,organization_id,
+     action,module,resource,target_id,role_context,occurred_at)
+    values ($1,$2,'user',$3,$4,'organization.store_association_approved',
+      'dogruadres-access','store-association',$5,'platform_staff',clock_timestamp())`,
+    [sourceId,actorPersonId,actorId,organizationId,sellerId])
+  await q(`insert into da_audit_outbox
+    (id,source_audit_event_id,source_module,envelope)
+    values ($1,$2,'dogruadres-access','{}'::jsonb)`,
+    ["daaob_"+randomBytes(16).toString("hex"),sourceId])
+  let moved=false,completed=false
+  try{
+    const changed=await q(`update da_organization_seller_ownership
+      set verification_audit_event_id=$1
+      where id=$2 and verification_audit_event_id=$3
+        and revoked_at is null returning id`,
+      [sourceId,origin.id,origin.verification_audit_event_id])
+    assert.equal(changed.length,1)
+    moved=true
+    const result=await run()
+    completed=true
+    return result
+  }finally{
+    if(moved){
+      const restored=await q(`update da_organization_seller_ownership
+        set verification_audit_event_id=$1
+        where id=$2 and verification_audit_event_id=$3
+          and revoked_at is null returning id`,
+        [origin.verification_audit_event_id,origin.id,sourceId])
+      assert.equal(restored.length,1,
+        "Task-only legacy Store Origin must be restored")
+    }
+    if(completed)process.stdout.write("PASS B22 Chrome/HTTPS/PG16: legacy approved Store association with native Seller and strong Staff; revoked and foreign Origin HTTP403; single closing/audit/outbox and Owner notice durable; original application proof restored\n")
+  }
+}
+
 /** #311 P2: after same-page A→B→A logins, the lock test must probe the
  * CURRENT active native A session, not an already-revoked original cookie.
  * Keep this exact DB assertion outside the long B22 function so TS can
@@ -9662,38 +9719,10 @@ export default async function({container}:any){
     // intentionally revokes that Customer binding. All initial foreign Staff
     // checks run before the helper adds B as the second protected Gamma Owner.
     // Reuse that same Owner membership in the later native Owner race.
-    // Task-only existing Gamma Seller temporarily uses its legacy
-    // approved-association audit as the current canonical Origin. Restore
-    // the original source proof even if the real Chrome journey fails.
-    const gammaProof=await q(`select o.id,o.verification_audit_event_id,
-      e.action from da_organization_seller_ownership o
-      join da_audit_event e on e.id=o.verification_audit_event_id
-      where o.organization_id=$1 and o.seller_id=$2
-        and o.revoked_at is null`,[sellerGamma.id,gammaSellerId])
-    assert.equal(gammaProof.length,1)
-    assert.equal(gammaProof[0].action,"organization.store_application_created")
-    const legacyEventId="daaud_"+randomBytes(16).toString("hex")
-    await q(`insert into da_audit_event
-      (id,actor_person_id,actor_type,actor_id,organization_id,
-       action,module,resource,target_id,role_context,occurred_at)
-      values ($1,$2,'user',$3,$4,'organization.store_association_approved',
-        'dogruadres-access','store-association',$5,'platform_staff',clock_timestamp())`,
-      [legacyEventId,B.person,B.actor,sellerGamma.id,gammaSellerId])
-    await q(`insert into da_audit_outbox
-      (id,source_audit_event_id,source_module,envelope)
-      values ($1,$2,'dogruadres-access','{}'::jsonb)`,
-      ["daaob_"+randomBytes(16).toString("hex"),legacyEventId])
-    let secondGammaOwnerId:string
-    let proofMoved=false
-    try{
-      const moved=await q(`update da_organization_seller_ownership
-        set verification_audit_event_id=$1
-        where id=$2 and verification_audit_event_id=$3
-          and revoked_at is null returning id`,
-        [legacyEventId,gammaProof[0].id,gammaProof[0].verification_audit_event_id])
-      assert.equal(moved.length,1)
-      proofMoved=true
-      secondGammaOwnerId=await verifyB22PlatformClosingAppeal({
+    const secondGammaOwnerId=await withLegacyPlatformClosingOrigin({
+      q,organizationId:sellerGamma.id,sellerId:gammaSellerId,
+      actorPersonId:B.person,actorId:B.actor,
+      run:()=>verifyB22PlatformClosingAppeal({
       browser,staff:reviewer,q,foundation,
       ownerPersonId:A.person,staffPersonId:B.person,
       ownerOrgId:sellerGamma.id,ownerOrgName:sellerGamma.name,
@@ -9705,17 +9734,7 @@ export default async function({container}:any){
       foreignPersonId:B.person,foreignOrgName:organizations[1].name,
       pgUrl:u.toString(),container
     })
-    }finally{
-      if(proofMoved){
-        const restored=await q(`update da_organization_seller_ownership
-          set verification_audit_event_id=$1
-          where id=$2 and verification_audit_event_id=$3
-            and revoked_at is null returning id`,
-          [gammaProof[0].verification_audit_event_id,gammaProof[0].id,legacyEventId])
-        assert.equal(restored.length,1,"Test-only Store Origin must be restored")
-      }
-    }
-    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: legacy approved Store association with native Seller and strong Staff; revoked and foreign Origin HTTP403; single closing/audit/outbox and Owner notice durable; original application proof restored\n")
+    })
     await verifyB22PlatformClosingSecondStageRequest({
       browser,staff:reviewer,q,foundation,sourceSellerId:gammaSellerId,
       reviewSellerId:secondOwnerStoreId,
