@@ -3479,8 +3479,9 @@ async function verifyTwoOwnersStoreDraftApplicationLockOrder(input:{
   const [membership]=await q(`select id,role,protected_owner from da_organization_membership
     where organization_id=$1 and person_id=$2 and status='active' and revoked_at is null
       and deleted_at is null`,[organizationId,otherOwnerId])
-  assert.ok(membership&&membership.role==="member"&&membership.protected_owner===false,
-    "The different actual Member is promoted only in isolated test PG16")
+  assert.ok(membership&&["admin","member"].includes(membership.role)&&
+    membership.protected_owner===false,
+    "Second actor must have an existing, unprotected role in isolated PG16")
   const before=await q(`select
     (select count(*)::int from seller where email=$1) as sellers,
     (select count(*)::int from da_audit_event where action='organization.store_application_created'
@@ -3492,8 +3493,8 @@ async function verifyTwoOwnersStoreDraftApplicationLockOrder(input:{
   try{
     const changed=await q(`update da_organization_membership
       set role='owner',protected_owner=true,updated_at=clock_timestamp()
-      where id=$1 and role='member' and protected_owner=false and status='active'
-        and revoked_at is null returning id`,[membership.id])
+      where id=$1 and role=$2 and protected_owner=false and status='active'
+        and revoked_at is null returning id`,[membership.id,membership.role])
     assert.equal(changed.length,1)
     promoted=true
     // Actual live membership authorization, not just a synthetic Owner label.
@@ -3552,9 +3553,10 @@ async function verifyTwoOwnersStoreDraftApplicationLockOrder(input:{
     if(connected)await barrier.end()
     if(promoted){
       const restored=await q(`update da_organization_membership
-        set role='member',protected_owner=false,updated_at=clock_timestamp()
-        where id=$1 and role='owner' and protected_owner=true returning id`,[membership.id])
-      assert.equal(restored.length,1,"Restore the task-only second Owner membership")
+        set role=$2,protected_owner=false,updated_at=clock_timestamp()
+        where id=$1 and role='owner' and protected_owner=true returning id`,
+        [membership.id,membership.role])
+      assert.equal(restored.length,1,"Restore the exact original task-only role")
     }
   }
 }
