@@ -711,8 +711,13 @@ export async function verifyAssignedRecipientUse(input:{
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible'")
   await reviewer.click("#store-rename-review-refresh")
+  // A previous 'approving' readback row stays in the DOM while the
+  // authorized pending-review GET refresh is running. Never treat that stale
+  // read-only row as a freshly actionable approval target.
   await reviewer.wait("Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
-    ".some(e=>e.textContent.includes("+JSON.stringify(formerName)+"))")
+    ".some(e=>e.textContent.includes("+JSON.stringify(formerName)+") && "+
+    "Array.from(e.querySelectorAll('button')).some(b=>"+
+    "b.textContent.includes('Yeni ad ve bağlantıyı onayla')&&!b.disabled))")
   const clicked=await reviewer.callFunction(
     "function(name){const row=Array.from(document.querySelectorAll("+
     "'#store-rename-review-list > div')).find(e=>e.textContent.includes(name));"+
