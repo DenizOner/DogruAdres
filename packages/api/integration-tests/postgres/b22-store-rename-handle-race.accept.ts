@@ -57,13 +57,13 @@ export async function verifyTwoStoreSameHandleApprovalRace(input:{
   // real-HTTP test. The real SQL claim, locks and authorization run unchanged.
   // It models interruption, NOT a real SIGKILL or full native rename test.
   const staffPosts=(payloads:object[])=>staff.callFunction(
-    "async function(items){const s=await(await fetch('/personal/session')).json();"+
+    "async function(payload){const items=JSON.parse(payload);const s=await(await fetch('/personal/session')).json();"+
     "return Promise.all(items.map(async item=>{"+
     "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
     "body:JSON.stringify(item),signal:AbortSignal.timeout(45000)});"+
     "return {status:r.status}}))}",
-    requests.map(x=>({action:"approve",request_id:x.request_id,seller_id:x.seller_id})))
+    JSON.stringify(payloads))
   const observedWaiters=async()=>Number((await q(`select count(*)::int n
     from pg_locks where locktype='advisory' and granted=false and objsubid=2
       and classid=hashtext('b22-global-store-handle')::oid
@@ -81,7 +81,7 @@ export async function verifyTwoStoreSameHandleApprovalRace(input:{
     }
     await staff.send("Page.bringToFront")
     await staff.wait("document.visibilityState==='visible'")
-    result=staffPosts(requests)
+    result=staffPosts(requests.map(x=>({action:"approve",request_id:x.request_id,seller_id:x.seller_id})))
     // Observe actual PostgreSQL waiters before releasing the barrier.
     // A mere Promise.all is NOT proof that two HTTP requests serialized.
     for(let i=0;i<150;i++){
