@@ -24,6 +24,7 @@ import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerW
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,createB22CompletedSourceOrderFixture} from "./b22-store-name-transfer.accept"
+import {verifyRepeatedApprovedStoreRenameHistory} from "./b22-repeated-rename-history.accept"
 import {verifyB22PlatformClosingAppeal,
   verifyB22PlatformClosingSecondStageRequest,
   verifyB22IndependentStaffClosingDecision} from "./b22-platform-closing-appeal.accept"
@@ -2518,6 +2519,11 @@ async function verifyPlatformStoreRenameApproval(
   assert.equal(history.status,200)
   assert.equal(history.body.requests.find((x:any)=>x.id===request.id)?.status,"approved")
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Staff approves native Seller name+handle via real UI; same Store identity, Owner private readback, original name+URL held 30 days, Owner/CSRF/repeat/conflicting reject denied, one durable audit/outbox\n")
+  // Continue from the real A->B native approval with repeated lawful B
+  // history. Keep this out of the huge top-level B22 TypeScript function.
+  await verifyRepeatedApprovedStoreRenameHistory({
+    owner,reviewer,organizationId:org,sellerId:storeId,q
+  })
 }
 
 
