@@ -3360,7 +3360,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     // native select. A later rename-only response must never select another.
     const existingRenameForm=el('store-rename-form');
     const existingRenameSelect=existingRenameForm?.elements?.namedItem('seller_id');
-    const preparedRenameSeller=existingRenameSelect?.value||'';
+    // Capture at the moment options are replaced (not before the HTTP GET):
+    // the Owner may have changed selection while the request was pending.
+    let preparedRenameSeller='',hadPreparedRename=false;
     const target=el('org-stores'),message=el('org-stores-status');
     el('org-stores-panel').hidden=false;
     target.replaceChildren();message.textContent='Mağazalar kontrol ediliyor…';
@@ -3381,6 +3383,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const select=renameForm?.elements&&typeof renameForm.elements.namedItem==='function'?
         renameForm.elements.namedItem('seller_id'):null;
       if(select&&typeof select.replaceChildren==='function'){
+        preparedRenameSeller=select.value||'';
+        hadPreparedRename=!!(existingRenameForm.elements.namedItem('name').value||
+          existingRenameForm.elements.namedItem('handle').value||
+          existingRenameForm.elements.namedItem('risk_acknowledged').checked);
         select.replaceChildren();
         el('store-rename-panel').hidden=true;
         if(selectedStoreOwner){
@@ -3412,7 +3418,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
                 select.append(opt);
               }
               if(sameSeller)select.value=preparedRenameSeller;
-              else if(preparedRenameSeller){
+              else if(preparedRenameSeller||hadPreparedRename){
                 // Never bind a prepared name/handle/explicit risk consent to
                 // the first option after the original Store loses authority.
                 const placeholder=document.createElement('option');
