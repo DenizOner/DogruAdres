@@ -85,7 +85,10 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
   // B -> C is a genuinely approved native rename; after 30 days the Store
   // may reclaim B. Only this isolated historical timestamp is advanced.
   const bToC=await submit(c)
-  const bToCApproved=await approve(bToC,c)
+  await approve(bToC,c)
+  const [exact]=await q("select approved_at::text as stamp from da_store_rename_request where id=$1",
+    [bToC])
+  assert.ok(typeof exact?.stamp==="string")
   let aged=false
   try{
     const [changed]=await q(`update da_store_rename_request
@@ -93,6 +96,11 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
       where id=$1 and status='approved' returning id`,[bToC])
     assert.equal(changed?.id,bToC)
     aged=true
+    const [latestProof]=await q(`select (approved_at>(
+      select approved_at from da_store_rename_request where id=$2)) as newer
+      from da_store_rename_request where id=$1`,[bToC,first[0].id])
+    assert.equal(latestProof.newer,true,
+      "Simulated day-30 B->C must remain newer than the original A->B")
     // C -> B is a second real approval of the original B name+URL.
     const cToB=await submit(originalB)
     await approve(cToB,originalB)
@@ -146,10 +154,12 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
     assert.ok(view.body?.requests?.some((r:any)=>r.id===bToD&&r.status==="approved"))
   }finally{
     if(aged){
-      assert.equal((await q(`update da_store_rename_request set approved_at=$2
-        where id=$1 and status='approved' returning id`,
-        [bToC,bToCApproved.approved_at])).length,1,
-        "Task-only 30-day time simulation must restore original precision")
+      const [restored]=await q(`update da_store_rename_request
+        set approved_at=$2::timestamptz
+        where id=$1 and status='approved' returning approved_at::text as stamp`,
+        [bToC,exact.stamp])
+      assert.equal(restored?.stamp,exact.stamp,
+        "Task-only 30-day time simulation must restore exact PostgreSQL precision")
     }
   }
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: real A-B-C-B-D native Seller rename history, two lawful B approvals, latest name+URL provenance, forged newest handle HTTP409, final Staff HTTP200, unique audits/outbox and Owner private readback; historical timestamp restored\n")
