@@ -2523,7 +2523,10 @@ async function verifyPlatformStoreRenameApproval(
   // Continue from the real A->B native approval with repeated lawful B
   // history. Keep this out of the huge top-level B22 TypeScript function.
   await verifyRepeatedApprovedStoreRenameHistory({
-    owner,reviewer,organizationId:org,sellerId:storeId,q
+    owner,reviewer,organizationId:org,sellerId:storeId,q,
+    suspend:async()=>{await suspendSellerWorkflow(container).run({input:{
+      seller_id:storeId,reason:"B22 disposable repeated-name native reactivation"
+    }})}
   })
 }
 

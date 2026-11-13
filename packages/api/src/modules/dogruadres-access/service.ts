@@ -2777,23 +2777,30 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       where id=? and seller_id=? and store_name_hash=?
         and name_claim_released_at is null limit 2`,
       [target.application_id,target.seller_id,hash])
-    const renamed=await db.execute(`select r.id from da_store_rename_request r
-      where r.seller_id=? and r.status='approved'
-        and r.proposed_name=? and r.proposed_handle=?
-        and exists(select 1 from da_audit_event e
+    // A -> B -> C -> B is lawful history, not two competing rights.
+    // The LAST completed approval must itself prove the native name + URL.
+    // Never borrow an older matching audit if the newest approval differs.
+    const renamed=await db.execute(`select r.proposed_name,r.proposed_handle,
+        exists(select 1 from da_audit_event e
           join da_audit_outbox x on x.source_audit_event_id=e.id
             and x.source_module='dogruadres-access' and x.deleted_at is null
-          where e.organization_id=? and e.target_id=?
+          where e.organization_id=r.organization_id and e.target_id=r.seller_id
             and e.action='organization.store_rename_approved'
-            and e.module='dogruadres-access' and e.resource='store-rename-request'
+            and e.module='dogruadres-access'
+            and e.resource='store-rename-request'
             and e.new_values->>'request_id'=r.id and e.deleted_at is null)
-      limit 2`,[target.seller_id,r.name,r.handle,r.organization_id,target.seller_id])
-    // Initial native Seller URLs are derived from the initial Store name.
-    // A later direct handle mutation is not authorized by the original
-    // name hash alone; only a recorded Staff-approved rename can change it.
+          as source_proven
+      from da_store_rename_request r
+      where r.seller_id=? and r.organization_id=?
+        and r.status='approved' and r.approved_at is not null
+      order by r.approved_at desc,r.id desc limit 1`,
+      [target.seller_id,r.organization_id])
+    // An original application proves only its name-derived native URL.
     const originalHandleMatches=original.length===1&&toHandle(r.name)===r.handle
-    if((!originalHandleMatches&&renamed.length!==1)||
-       original.length>1||renamed.length>1)
+    const latestRenameMatches=renamed.length===1&&
+      renamed[0].source_proven===true&&
+      renamed[0].proposed_name===r.name&&renamed[0].proposed_handle===r.handle
+    if((!originalHandleMatches&&!latestRenameMatches)||original.length>1)
       return {status:"conflict" as const}
     const transferred=await db.execute(`select 1 from da_store_name_transfer
       where source_seller_id=? and status='assigned' and
