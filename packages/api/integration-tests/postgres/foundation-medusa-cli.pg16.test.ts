@@ -297,6 +297,7 @@ async function run(){
           "PASS B22 Chrome/PG16: separate legal Organization Owner cannot reuse Alpha normalized Store name; Gamma original Seller retained",
           "PASS B22 Chrome/PG16: Owner Store name+URL change request with explicit risk acknowledgement, one private pending record and audit/outbox; foreign/CSRF/invalid/duplicate denied; native Seller unchanged",
           "PASS B22 Chrome: #286 private Store rename history denied for terminated Seller 403, approved suspended Owner 200, restored open Owner 200, foreign Owner 403",
+          "PASS B22 Chrome: #289 Owner versus Staff rename same PG16 lock, 2 observed advisory waiters, Seller NOWAIT free, HTTP200 Staff and Owner400/409, zero losing writes",
           "PASS B22 Chrome/PG16: authorized Store staff sees private pending name-change, rejects with reason using real UI; Owner reads final rejection; foreign Owner/CSRF/replay denied, single audit/outbox and native Seller unchanged",
           "PASS B22 Chrome/HTTPS: temporary Store list 503 hides private rename panel, same Owner refresh restores request form from fresh real authorized GET",
           "PASS B22 Chrome/PG16: simultaneous distinct-id Store rename requests 201+409, one pending PG row and audit/outbox, loser zero effects and native Seller unchanged",

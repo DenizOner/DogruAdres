@@ -1965,7 +1965,8 @@ async function verifyConcurrentOwnerStoreRenameRequests(
  */
 async function verifyPlatformStoreRenameApproval(
   owner:B06Chrome,reviewer:B06Chrome,org:string,storeId:string,
-  q:(sql:string,params?:any[])=>Promise<any[]>
+  q:(sql:string,params?:any[])=>Promise<any[]>,
+  databaseUrl:string
 ):Promise<void>{
   const pending=await q(`select id,old_name,old_handle,proposed_name,proposed_handle
     from da_store_rename_request where organization_id=$1 and seller_id=$2
@@ -2002,21 +2003,79 @@ async function verifyPlatformStoreRenameApproval(
   await reviewer.wait("!document.getElementById('store-rename-review-panel').hidden && "+
     "Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
     ".some(e=>e.textContent.includes("+JSON.stringify(request.proposed_name)+"))")
-  // Real Staff decision button; accept only the browser confirm prompt in the
-  // disposable test, without changing production permissions or cookie state.
-  const clicked=await reviewer.eval(`(()=>{
-    const row=Array.from(document.querySelectorAll('#store-rename-review-list > div'))
-      .find(e=>e.textContent.includes(${JSON.stringify(request.proposed_name)}))
-    const button=Array.from(row?.querySelectorAll('button')??[])
-      .find(b=>b.textContent.includes('Yeni ad ve bağlantıyı onayla'))
-    if(!button||button.disabled)return false
-    const original=window.confirm
-    window.confirm=()=>true
-    try{button.click()}finally{window.confirm=original}
-    return true
-  })()`)
-  assert.equal(clicked,true,"Visible Staff approval UI must submit once")
-  await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('etkinleşti')")
+  // #289: Two independently authenticated Chrome actors must really WAIT
+  // on the SAME Seller advisory lock. Do not infer concurrency from promises.
+  const barrier=new Client({connectionString:databaseUrl})
+  const probe=new Client({connectionString:databaseUrl})
+  await barrier.connect();await probe.connect()
+  let barrierHeld=false,probeHeld=false
+  let ownerRace:Promise<{value?:{status:number};error?:string}>|undefined
+  const competing={request_id:"dasrn_"+randomBytes(16).toString("hex"),
+    organization_id:org,seller_id:storeId,name:request.proposed_name,
+    handle:request.proposed_handle,risk_acknowledged:true,
+    risk_version:"store-rename-risks-v2"}
+  const waiters=async()=>Number((await q(`select count(*)::int n from pg_locks
+    where locktype='advisory' and not granted and objsubid=2
+    and classid=hashtext('b22-store-rename')::oid
+    and objid=hashtext($1)::oid`,[storeId]))[0].n)
+  try{
+    await barrier.query("BEGIN");barrierHeld=true
+    await barrier.query("select pg_advisory_xact_lock(hashtext('b22-store-rename'),hashtext($1))",
+      [storeId])
+    ownerRace=owner.callFunction(
+      "async function(payload){const sess=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-rename-requests',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':sess.csrf_token},"+
+      "body:payload,signal:AbortSignal.timeout(30000)});return {status:r.status}}",
+      JSON.stringify(competing)).then(value=>({value}),error=>({error:String(error)}))
+    await until(async()=>await waiters()>=1,15000,
+      "#289 real Owner POST must wait for its Seller advisory lock")
+    // Original P1 had Owner Seller FOR SHARE before advisory. NOWAIT proves
+    // Seller is still unlocked while the Owner is waiting for advisory.
+    await probe.query("BEGIN");probeHeld=true
+    await probe.query("select id from seller where id=$1 for update nowait",[storeId])
+    await probe.query("ROLLBACK");probeHeld=false
+    // Staff approves via its existing REAL browser form, not an internal API.
+    // Real Staff decision button; accept only the browser confirm prompt in the
+    // disposable test, without changing production permissions or cookie state.
+    const clicked=await reviewer.eval(`(()=>{
+      const row=Array.from(document.querySelectorAll('#store-rename-review-list > div'))
+        .find(e=>e.textContent.includes(${JSON.stringify(request.proposed_name)}))
+      const button=Array.from(row?.querySelectorAll('button')??[])
+        .find(b=>b.textContent.includes('Yeni ad ve bağlantıyı onayla'))
+      if(!button||button.disabled)return false
+      const original=window.confirm
+      window.confirm=()=>true
+      try{button.click()}finally{window.confirm=original}
+      return true
+    })()`)
+    assert.equal(clicked,true,"Visible Staff approval UI must submit once")
+    await until(async()=>await waiters()>=2,15000,
+      "#289 two real Owner/Staff HTTP operations must wait on the same PG16 lock")
+    await barrier.query("COMMIT");barrierHeld=false
+    const ownerResult=await ownerRace
+    assert.equal(ownerResult.error,undefined,ownerResult.error||"Owner response must finish")
+    assert.ok([400,409].includes(ownerResult.value?.status??-1),
+      "Competing Owner POST must reject pending request or unchanged approved name")
+    await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('etkinleşti')")
+    assert.ok(reviewer.http.some((x:any)=>x.method==='POST'&&
+      x.path==='/personal/platform/store-renames'&&x.status===200),
+      "Staff native approval must produce real HTTPS 200")
+    const [extraRequest]=await q("select count(*)::int n from da_store_rename_request where id=$1",
+      [competing.request_id])
+    assert.equal(extraRequest.n,0,"Losing Owner request must write no second pending row")
+    const [extraAudit]=await q(`select count(*)::int n from da_audit_event
+      where action='organization.store_rename_requested'
+      and new_values->>'request_id'=$1`,[competing.request_id])
+    assert.equal(extraAudit.n,0,"Losing Owner request must write no audit")
+  }finally{
+    if(probeHeld)await probe.query("ROLLBACK")
+    if(barrierHeld)await barrier.query("ROLLBACK")
+    await Promise.allSettled([ownerRace].filter(Boolean) as Promise<any>[])
+    await probe.end();await barrier.end()
+  }
+  process.stdout.write("PASS B22 Chrome: #289 Owner versus Staff rename same PG16 lock, 2 observed advisory waiters, Seller NOWAIT free, HTTP200 Staff and Owner400/409, zero losing writes\n")
+
   const after=(await q("select id,name,handle,status,approved_at from seller where id=$1",
     [storeId]))[0]
   assert.equal(after.id,before.id,"Rename must not create or replace Store")
@@ -7995,7 +8054,7 @@ export default async function({container}:any){
     await verifyConcurrentOwnerStoreRenameRequests(
       browser,sellerGamma.id,gammaSellerId,A.person,rand,q)
     await verifyPlatformStoreRenameApproval(
-      browser,reviewer,sellerGamma.id,gammaSellerId,q)
+      browser,reviewer,sellerGamma.id,gammaSellerId,q,u.toString())
     await verifyStaffReopensSuspendedStore(
       browser,reviewer,sellerGamma.id,sellerGamma.name,gammaSellerId,container,q)
     await verifySuspendedStoreRenameBeforeReopen(
