@@ -1579,6 +1579,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(currentOrg)await pendingInvitations(currentOrg,organizationRequest);
   };
   async function selectOrg(id){
+    // Never carry a verified role from the previously selected Organization.
+    applicationRole='';
     clearNotifications();
     const request=++organizationRequest;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('invite-member').hidden=true;el('invite-result').textContent='';clearPendingInvitations();el('detail').textContent='';el('actor-result').textContent='';if(typeof el('seller').reset==='function')el('seller').reset();clearMemberships();clearOrganizationStores();history.replaceState(null,'','/personal');
     el('memberships').ariaBusy='true';el('memberships-status').textContent='Üyelikler yükleniyor…';
@@ -2182,6 +2184,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     // Keep the verified Organization role separate from the transient form
     // visibility, which a platform-wide pause can legitimately hide.
     if(!['owner','member'].includes(role))return;
+    // The Organization role came from the current verified membership GET.
+    // Keep it for a read-only retry even when this first GET is 503/malformed.
+    // Each retry rechecks live server permission; 401/403 still fail closed.
+    applicationRole=role;
     const sequence=++applicationRequest;
     const panel=el('store-application-panel'),list=el('store-application-list'),message=el('store-application-status');
     panel.hidden=false;
@@ -2206,7 +2212,6 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         throw new Error('Başvuru yanıtı doğrulanamadı');
       // A Member receives only unfinished drafts, never official applications.
       if(role==='member'&&result.applications.length!==0)throw new Error('Başvuru kapsamı geçersiz');
-      applicationRole=role;
       for(const a of result.applications){
         const line=document.createElement('p');
         const resultLabel=a.status!=='created'?'Başvuru işlem sonucu kontrol edilmeli':
