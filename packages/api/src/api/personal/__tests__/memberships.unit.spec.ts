@@ -284,7 +284,7 @@ describe("personal memberships route", () => {
       const privateStart=source.indexOf("  function clearPrivateClosingEmailLink(){")
       const privateEnd=source.indexOf("  const hashMatch",privateStart)
       if(privateStart<0||privateEnd<=privateStart)throw Error("Missing private cleanup")
-      runInContext("let platformMailLinkToken='';\n"+
+      runInContext("let platformMailLinkToken='',platformMailLinkRequest=0;\n"+
         source.slice(privateStart,privateEnd),context)
       runInContext(source.slice(begin, end), context)
       return {
