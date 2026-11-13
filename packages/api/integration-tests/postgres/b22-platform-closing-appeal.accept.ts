@@ -255,7 +255,11 @@ export async function verifyB22PlatformClosingAppeal(input:{
   await staff.input("#platform-closing-form textarea[name=reason]",reason)
   await staff.click("#platform-closing-form input[name=confirmed]")
   await staff.click("#platform-closing-form button[type=submit]")
-  await staff.wait("document.getElementById('platform-closing-mail-status').textContent.includes('doğrulanmış e-posta kimliği 1')")
+  // The POST's first mail-read is followed by a live Store-list refresh,
+  // which starts a second authorized mail-read. Assert the FINAL refresh,
+  // not its transient first result while the second displays "loading".
+  await staff.wait("document.getElementById('platform-closing-status').textContent.includes('Gerekçe ile yeni satışları derhal durdurabilirsiniz.')&&"+
+    "document.getElementById('platform-closing-mail-status').textContent.includes('doğrulanmış e-posta kimliği 1')")
   const mailUi=await staff.eval("(()=>{const e=document.getElementById('platform-closing-mail-status');return {text:e.textContent,role:e.getAttribute('role'),live:e.getAttribute('aria-live')}})()")
   assert.match(mailUi.text,/Korunan Owner 1, doğrulanmış e-posta kimliği 1/)
   assert.match(mailUi.text,/Owner 1: .*deneme [0-4]\/4/)
