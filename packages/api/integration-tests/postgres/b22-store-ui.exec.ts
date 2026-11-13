@@ -3212,13 +3212,18 @@ async function verifyRealNextStorefrontRenameUrls(
 ):Promise<void>{
   const rows=await q("select old_name,old_handle,proposed_name,proposed_handle "+
     "from da_store_rename_request where seller_id=$1 and status='approved' "+
-    "order by approved_at desc limit 3",[storeId])
-  assert.equal(rows.length,2,
-    "One earlier approved rename and one subsequent suspended rename must remain historical")
-  assert.equal(rows[0].old_name,rows[1].proposed_name,
-    "The newer name must be connected to the immutable preceding name history")
-  assert.equal(rows[0].old_handle,rows[1].proposed_handle,
-    "The newer URL must descend from the previous approved Store URL")
+    "order by approved_at desc,id desc",[storeId])
+  assert.ok(rows.length>=2,
+    "Native Storefront proof requires at least two preserved approved renames")
+  // Repeated A->B->C->B->D is valid history, not a provenance conflict.
+  // The entire ordered chain must still be contiguous and immutable; never
+  // force a fixed total or hide older rows to make the native URL test pass.
+  for(let i=0;i<rows.length-1;i++){
+    assert.equal(rows[i].old_name,rows[i+1].proposed_name,
+      "Every newer approved name must descend from the preceding historical name")
+    assert.equal(rows[i].old_handle,rows[i+1].proposed_handle,
+      "Every newer approved URL must descend from the preceding historical URL")
+  }
   const rename=rows[0]
   const original=(await container.resolve("seller").listSellers({id:storeId}))[0]
   assert.equal(original.id,storeId)
