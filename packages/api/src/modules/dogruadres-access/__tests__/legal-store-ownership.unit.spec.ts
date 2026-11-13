@@ -1,5 +1,5 @@
 import { IdentitySessions, IdentityAccessDenied } from "../identity-session"
-import { authorizedLegalSellerIds, authorizedProductEditScope, verifiedStoreProductEditGrant } from "../legal-store-ownership"
+import { authorizedLegalSellerIds, authorizedProductEditScope, verifiedStoreProductEditGrant, platformApprovedSellerIds } from "../legal-store-ownership"
 import { organizationActionAllowed, ownerRoleAllows, DEFAULT_OWNER_ACTIONS } from "../role-action-policy"
 import { authorizedBuyerOrganization } from "../buyer-permission"
 
@@ -51,6 +51,48 @@ describe("B22 legal Organization ownership candidate gate (SQL-mock, NOT Postgre
   it("rejects malformed Organization IDs before touching any DB",async()=>{
     const execute=jest.fn()
     await expect(authorizedLegalSellerIds({execute},token,"invalid")).rejects.toBeInstanceOf(IdentityAccessDenied)
+    expect(execute).not.toHaveBeenCalled()
+  })
+})
+
+describe("B22 bounded historical Store ownership proof (SQL mock, NOT PG16)",()=>{
+  const org="daorg_A"
+  it("reads only listed Sellers, not 51 unrelated verified Organization Stores",async()=>{
+    const all=Array.from({length:51},(_,i)=>({seller_id:"sel_unrelated_"+i}))
+    const execute=jest.fn(async(sql:string,params:unknown[])=>{
+      if(sql.includes("o.seller_id in (?)")&&params.length===2)
+        return [{seller_id:"sel_target"}]
+      return all
+    })
+    await expect(platformApprovedSellerIds({execute},org,["sel_target"]))
+      .resolves.toEqual(["sel_target"])
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(execute.mock.calls[0][0]).toContain("da_audit_outbox")
+    expect(execute.mock.calls[0][0]).toContain("o.revoked_at is null")
+    expect(execute.mock.calls[0][1]).toEqual([org,"sel_target"])
+    await expect(platformApprovedSellerIds({execute},org))
+      .rejects.toBeInstanceOf(IdentityAccessDenied)
+  })
+  it("keeps a revoked/missing candidate absent, never falls back to all Stores",async()=>{
+    const execute=jest.fn().mockResolvedValue([])
+    await expect(platformApprovedSellerIds({execute},org,["sel_revoked"]))
+      .resolves.toEqual([])
+    expect(execute.mock.calls[0][1]).toEqual([org,"sel_revoked"])
+    expect(execute.mock.calls[0][0]).toContain("o.seller_id in (?)")
+  })
+  it("skips database access when a history page has no created Seller candidates",async()=>{
+    const execute=jest.fn()
+    await expect(platformApprovedSellerIds({execute},org,[])).resolves.toEqual([])
+    expect(execute).not.toHaveBeenCalled()
+  })
+  it.each([
+    ["malformed",["bad"]],
+    ["duplicate",["sel_a","sel_a"]],
+    ["more than a single 30-application page",Array.from({length:31},(_,i)=>"sel_"+i)]
+  ])("rejects unsafe %s candidate IDs before a native or SQL read",async(_,ids)=>{
+    const execute=jest.fn()
+    await expect(platformApprovedSellerIds({execute},org,ids))
+      .rejects.toBeInstanceOf(IdentityAccessDenied)
     expect(execute).not.toHaveBeenCalled()
   })
 })

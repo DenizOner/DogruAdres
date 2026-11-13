@@ -34,6 +34,8 @@ import {assertWcag22AxeInChrome} from "./wcag22-axe-chrome"
 import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
 import {otp,until} from "./b19-browser"
 import {projectFoundationAuditEvent} from "../../src/modules/dogruadres-audit-index/envelope"
+import {platformApprovedSellerIds} from "../../src/modules/dogruadres-access/legal-store-ownership"
+import {IdentityAccessDenied} from "../../src/modules/dogruadres-access/identity-session"
 import taxCertificateInventory, {inspectTaxCertificateSnapshot} from "../../src/scripts/tax-certificate-inventory"
 
 
@@ -3311,6 +3313,144 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   await reviewer.wait("!document.getElementById('store-approval-list').textContent.includes("+JSON.stringify(seller.id)+")")
   assert.equal(await reviewer.eval("window.__b22RejectPostCount"),1,
     "Readback must not issue another platform Store decision")
+  // P1 #323: a historical application must not confer live Seller status
+  // after its Organization↔Seller provenance is revoked. Use the same signed-in
+  // Owner and real HTTPS GET backed by this disposable native PG16 database.
+  const liveOwnership=await q(`select id,revoked_at from da_organization_seller_ownership
+    where organization_id=$1 and seller_id=$2`,[x.org,seller.id])
+  assert.equal(liveOwnership.length,1)
+  assert.equal(liveOwnership[0].revoked_at,null)
+  const beforeRevocationAudit=(await q(`select count(*)::int n from da_audit_event
+    where organization_id=$1 and target_id=$2`,[x.org,seller.id]))[0].n
+  assert.equal((await q(`update da_organization_seller_ownership
+    set revoked_at=clock_timestamp()
+    where id=$1 and revoked_at is null returning id`,[liveOwnership[0].id])).length,1)
+  try{
+    const historical=await browser.callFunction("async function(org){"+
+      "const r=await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org),{cache:'no-store'});"+
+      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}}",x.org)
+    assert.equal(historical.status,200)
+    assert.match(String(historical.cache),/no-store/)
+    const old=historical.body.applications.find((a:any)=>a.id===app)
+    assert.ok(old,"Past Organization application must remain readable")
+    assert.equal(old.status,"created")
+    assert.equal(old.seller_id,seller.id)
+    assert.equal(old.seller_status,"unknown",
+      "Revoked ownership must not reveal the native Seller status")
+    assert.equal(old.rejection_reason,null,
+      "Revoked ownership must not reveal the native private rejection reason")
+    assert.ok(!JSON.stringify(historical.body).includes(reason))
+    assert.ok(!JSON.stringify(historical.body).includes("live_seller_authorized"))
+    const actual=(await native.listSellers({id:seller.id}))[0]
+    assert.equal(actual.status,"terminated","Native Seller status remains unchanged")
+    assert.equal(actual.status_reason,reason,"Private canonical reason is not erased")
+
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.click("#store-applications-refresh")
+    await browser.wait("document.getElementById('store-application-list')?.textContent.includes('Başvurunun güncel mağaza sonucu doğrulanamadı')")
+    const text=String(await browser.eval("document.getElementById('store-application-list').textContent"))
+    assert.ok(text.includes(app),"Real Owner UI retains the historical application")
+    assert.equal(text.includes(reason),false,"Real Owner UI must not render former Seller's private reason")
+    assert.equal(text.includes("Mağaza başvurusu reddedildi"),false,
+      "Real Owner UI must not show the now-unowned Store's native terminal result")
+    const after=(await q(`select count(*)::int n from da_audit_event
+      where organization_id=$1 and target_id=$2`,[x.org,seller.id]))[0].n
+    assert.equal(after,beforeRevocationAudit,"Read-only forbidden status path creates zero audit writes")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: revoked Store ownership preserves historical application but hides live Seller status and private rejection reason in Owner HTTP and UI; no new audit\n")
+  }finally{
+    // Restore ONLY the temporary fixture for unrelated acceptance below.
+    assert.equal((await q(`update da_organization_seller_ownership
+      set revoked_at=null where id=$1 and revoked_at is not null
+      returning id`,[liveOwnership[0].id])).length,1)
+  }
+  const reauthorized=await browser.callFunction("async function(org){"+
+    "const r=await fetch('/personal/store-applications?organization_id='+encodeURIComponent(org),{cache:'no-store'});"+
+    "return {status:r.status,body:await r.json()}}",x.org)
+  assert.equal(reauthorized.status,200)
+  const restored=reauthorized.body.applications.find((a:any)=>a.id===app)
+  assert.ok(restored)
+  assert.equal(restored.seller_status,"terminated")
+  assert.equal(restored.rejection_reason,reason,
+    "Only the currently verified Owner may resume private native status reads")
+  // The real Owner UI test above necessarily foregrounds a different
+  // first-party session. Staff panels fail closed while backgrounded; restore
+  // their authorized visible state before the caller resumes policy review.
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  if(!await reviewer.eval("!document.getElementById('workspace').hidden && "+
+      "!document.getElementById('platform-store-policy-panel').hidden")){
+    await reviewer.send("Page.reload",{ignoreCache:true})
+    await reviewer.wait("document.visibilityState==='visible' && "+
+      "!document.getElementById('workspace').hidden && "+
+      "!document.getElementById('platform-store-policy-panel').hidden")
+  }
+  // P2 #325: same production proof SQL against 51 unrelated, fully
+  // source-backed current Store associations in disposable PostgreSQL 16.
+  // All fixture writes roll back: no native Seller, payment or live data.
+  await q("begin")
+  try{
+    const [actor]=await q(`select actor_person_id,actor_type,actor_id
+      from da_audit_event
+      where action='organization.store_application_rejected'
+        and organization_id=$1 and target_id=$2
+      order by occurred_at desc limit 1`,[x.org,seller.id])
+    assert.ok(actor?.actor_person_id&&actor?.actor_type&&actor?.actor_id)
+    const fixtures=await q(`insert into da_audit_event
+      (id,actor_person_id,actor_type,actor_id,organization_id,action,
+       module,resource,target_id,role_context,new_values,occurred_at)
+      select 'daaud_'||gen_random_uuid()::text,$1,$2,$3,$4,
+        'organization.store_association_approved','dogruadres-access',
+        'store-association','sel_b22_scale_'||n::text,'platform_staff',
+        '{}'::jsonb,clock_timestamp()
+      from generate_series(1,51) n returning id,target_id`,
+      [actor.actor_person_id,actor.actor_type,actor.actor_id,x.org])
+    assert.equal(fixtures.length,51)
+    const eventIds=fixtures.map(row=>row.id)
+    const outbox=await q(`insert into da_audit_outbox
+      (id,source_audit_event_id,source_module,envelope)
+      select 'daaob_'||gen_random_uuid()::text,e.id,
+        'dogruadres-access','{}'::jsonb
+      from da_audit_event e where e.id=any($1::text[])
+      returning id`,[eventIds])
+    assert.equal(outbox.length,51)
+    const related=await q(`insert into da_organization_seller_ownership
+      (id,organization_id,seller_id,verification_audit_event_id,verified_at)
+      select 'daown_'||gen_random_uuid()::text,e.organization_id,
+        e.target_id,e.id,clock_timestamp()
+      from da_audit_event e where e.id=any($1::text[])
+      returning id`,[eventIds])
+    assert.equal(related.length,51)
+    const [{n:active}]=await q(`select count(*)::int n
+      from da_organization_seller_ownership
+      where organization_id=$1 and revoked_at is null`,[x.org])
+    assert.ok(active>50)
+    // Source helper uses '?' placeholders; translate for the real PG client
+    // with a strict count, never concatenate user-supplied SQL arguments.
+    const scopedDb={execute:(sql:string,values:unknown[]=[])=>{
+      let index=0
+      const pgSql=sql.replace(/\?/g,()=>"$"+(++index))
+      assert.equal(index,values.length)
+      return q(pgSql,values)
+    }}
+    await assert.rejects(platformApprovedSellerIds(scopedDb,x.org),
+      IdentityAccessDenied,"Original unfiltered >50 guard remains fail-closed")
+    assert.deepEqual(await platformApprovedSellerIds(scopedDb,x.org,[seller.id]),
+      [seller.id],"Unrelated Store count cannot hide one current valid application")
+    const removed=await q(`update da_organization_seller_ownership
+      set revoked_at=clock_timestamp()
+      where id=$1 and revoked_at is null returning id`,[liveOwnership[0].id])
+    assert.equal(removed.length,1)
+    assert.deepEqual(await platformApprovedSellerIds(scopedDb,x.org,[seller.id]),[],
+      "Revoked candidate cannot reveal live native Seller status")
+  }finally{
+    await q("rollback")
+  }
+  const [restoredOrigin]=await q(`select revoked_at from da_organization_seller_ownership
+    where id=$1`,[liveOwnership[0].id])
+  assert.equal(restoredOrigin?.revoked_at,null,
+    "The original verified ownership must survive the rolled-back scale probe")
+  process.stdout.write("PASS B22 real PG16: 51 unrelated audited Store associations do not hide bounded historical Seller proof; revoked candidate denied; global guard retained and fixture rolled back\n")
   process.stdout.write("PASS B22 Chrome/PG16: protected platform Staff reasoned pending Seller rejection during company pause, native terminated without approval, private Owner status and redacted notice, one audit/outbox, Owner/CSRF/short reason/replay denied\n")
 }
 
