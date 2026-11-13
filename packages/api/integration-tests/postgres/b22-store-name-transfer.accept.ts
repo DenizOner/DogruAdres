@@ -524,7 +524,7 @@ export async function verifyAssignedRecipientUse(input:{
   targetOrganizationName:string;competitorOrganizationName:string;
   formerName:string;formerHandle:string;sourceVacated:boolean;
   cartHistory:CartHistory;completedOrder:CompletedOrderHistory;
-  suspend:()=>Promise<void>
+  suspend?:()=>Promise<void>
 }):Promise<void>{
   const {owner,reviewer,q,source,target,competitor,formerName,
     formerHandle,sourceVacated,targetOrganizationName,
@@ -804,7 +804,9 @@ export async function verifyAssignedRecipientUse(input:{
       "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
       "const body=await r.json();return {status:r.status,"+
       "row:body.suspended?.find(x=>x.seller_id===id)}}",target.seller_id)
-    await input.suspend()
+    const suspend=input.suspend
+    if(!suspend)throw new Error("Native suspend required for transferred recipient reopening")
+    await suspend()
     const suspended=(await q(
       "select id,name,handle,status,approved_at from seller where id=$1",
       [target.seller_id]))[0]
