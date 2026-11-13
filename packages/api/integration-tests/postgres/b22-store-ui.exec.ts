@@ -25,6 +25,7 @@ import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,l
 import {B06Chrome} from "./b06-ui-browser"
 import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,createB22CompletedSourceOrderFixture} from "./b22-store-name-transfer.accept"
 import {verifyRepeatedApprovedStoreRenameHistory} from "./b22-repeated-rename-history.accept"
+import {prepareRenameBeforeStoreReactivation,verifyReactivationClaimFreezesRenames} from "./b22-reactivation-rename-claim.accept"
 import {verifyB22PlatformClosingAppeal,
   verifyB22PlatformClosingSecondStageRequest,
   verifyB22IndependentStaffClosingDecision} from "./b22-platform-closing-appeal.accept"
@@ -2904,6 +2905,11 @@ async function verifyStaffReopensSuspendedStore(
       "The native Store reactivation audit receipt must appear in the actual Owner notification UI")
     process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Staff safely unsuspends same approved Store via real UI; current name/handle/ID preserved, paused new applications allowed, forged/CSRF/Owner/name-conflict/replay denied, one durable audit/outbox and Owner readback\n")
 
+    // A real Owner's already-pending rename is an additional competing
+    // operation. It must NOT run while the next native opening is uncertain.
+    const preReopenRename=await prepareRenameBeforeStoreReactivation({
+      owner,organizationId,sellerId,q
+    })
     // The next disposable suspension forces an audit/outbox failure AFTER
     // the native Seller becomes open. Its durable intent must survive so a
     // different authorized Staff may reconcile without native replay.
@@ -2950,6 +2956,9 @@ async function verifyStaffReopensSuspendedStore(
       await q("drop trigger if exists b22_reactivation_audit_fault on da_audit_outbox")
       await q("drop function if exists b22_reactivation_audit_fault()")
     }
+    await verifyReactivationClaimFreezesRenames({
+      owner,staff:reviewer,q,request:preReopenRename
+    })
     await reviewer.click("#store-approval-refresh")
     await reviewer.wait("Array.from(document.querySelectorAll('#store-reactivation-list p'))"+
       ".some(e=>e.textContent.includes('denetim kaydı eksik') && !!e.querySelector('button'))")
