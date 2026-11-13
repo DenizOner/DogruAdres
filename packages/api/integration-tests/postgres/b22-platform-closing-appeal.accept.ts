@@ -573,10 +573,29 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(newlyProtected.body?.protected_owner_count,2)
   assert.equal(newlyProtected.body?.private_receipt_count,1,
     "Only the initial Owner may hold the original closure audit receipt")
-  await verifyDualRolePlatformOwnerLockOrder({
-    staff,q,pgUrl:input.pgUrl,personId:staffPersonId,
-    organizationId:ownerOrgId,sellerId
-  })
+  // The existing Owner A already has the genuine native SellerMember link.
+  // B receives its native Member linkage only later in B22; do NOT invent it.
+  // Grant A the same real platform task temporarily in this disposable DB,
+  // then revoke it even if the forced lock race fails.
+  const dualRoleGrantId="da_staff_dual_"+randomBytes(8).toString("hex")
+  const dualGrant=await q(`insert into da_platform_staff_grant
+    (id,person_id,task,resource,granted_by_person_id,reason)
+    values($1,$2,'store.closing.manage','platform',$2,
+      'B22 disposable same Person Staff-Owner lock race')
+    returning id`,[dualRoleGrantId,ownerPersonId])
+  assert.deepEqual(dualGrant,[{id:dualRoleGrantId}])
+  try{
+    await verifyDualRolePlatformOwnerLockOrder({
+      staff:browser,q,pgUrl:input.pgUrl,personId:ownerPersonId,
+      organizationId:ownerOrgId,sellerId
+    })
+  }finally{
+    const revoked=await q(`update da_platform_staff_grant
+      set revoked_at=clock_timestamp()
+      where id=$1 and revoked_at is null returning id`,[dualRoleGrantId])
+    assert.deepEqual(revoked,[{id:dualRoleGrantId}],
+      "Task-only dual Staff grant must never survive this isolated race")
+  }
   await runPlatformClosingEmailTick(container)
   const originalRecipients=await q(`select n.person_id
     from da_notification_receipt n
