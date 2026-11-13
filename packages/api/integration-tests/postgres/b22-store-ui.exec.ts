@@ -28,7 +28,6 @@ import {verifyB22PlatformClosingAppeal,
   verifyB22PlatformClosingSecondStageRequest,
   verifyB22IndependentStaffClosingDecision} from "./b22-platform-closing-appeal.accept"
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
-import {verifyTwoStoreSameHandleApprovalRace} from "./b22-store-rename-handle-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {assertWcag22AxeInChrome} from "./wcag22-axe-chrome"
@@ -8652,27 +8651,14 @@ export default async function({container}:any){
     await verifyTwoIndependentStaffNameRightRace({
       owner:browser,reviewer,reviewerPersonId:B.person,origin:host,ca:crt,
       rand,organizationName:sellerGamma.name,organizationId:sellerGamma.id,
+      targetOrganizationName:organizations[0].name,
+      renameCompetitorSellerId:gammaSellerId,
       target:{application_id:applicationId,seller_id:ownerStoreId,
         organization_id:organizations[0].id},
       users,auth,foundation,browsers,q,
       suspend:async seller_id=>{await suspendSellerWorkflow(container).run({
         input:{seller_id,reason:"B22 isolated simultaneous Staff name-right decision"}
       })}
-    })
-    // Cross-Organization Store rename requests use different proposed names
-    // but the SAME proposed handle. Assert real PG16 shared-handle waiters
-    // before any native Mercur workflow can run; withdraw task-owned intents.
-    const secondStrongStaff=browsers[browsers.length-1]
-    assert.ok(secondStrongStaff&&secondStrongStaff!==reviewer,
-      "Independent Staff race must provide a distinct logged-in Chrome actor")
-    await verifyTwoStoreSameHandleApprovalRace({
-      owner:browser,staff:reviewer,staff2:secondStrongStaff,foundation,q,rand,
-      stores:[
-        {organizationId:organizations[0].id,
-          organizationName:organizations[0].name,sellerId:ownerStoreId},
-        {organizationId:sellerGamma.id,
-          organizationName:sellerGamma.name,sellerId:gammaSellerId}
-      ]
     })
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
