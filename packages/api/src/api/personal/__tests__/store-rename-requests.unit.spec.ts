@@ -12,10 +12,17 @@ describe("B22 private Store rename REQUEST, not native Store mutation",()=>{
     name:"Yeni Mağaza",handle:"yeni-magaza",
     risk_acknowledged:true,risk_version:"store-rename-risks-v2"
   }
-  let req:any,res:any,svc:any
+  let req:any,res:any,svc:any,native:any
   beforeEach(()=>{
     jest.resetAllMocks()
     svc={
+      personalStoreRenameCandidateIds:jest.fn().mockResolvedValue({
+        person_id:"daprs_one",organization_id:data.organization_id,
+        seller_ids:[data.seller_id]
+      }),
+      personalActorBinding:jest.fn().mockResolvedValue({
+        person_id:"daprs_one",actor_id:"mem_one",revoked_at:null
+      }),
       personalRequestStoreRename:jest.fn().mockResolvedValue({
         request_id:data.request_id,status:"pending_review",replayed:false
       }),
@@ -30,9 +37,18 @@ describe("B22 private Store rename REQUEST, not native Store mutation",()=>{
     ;(csrf as jest.Mock).mockResolvedValue(true)
     ;(enabled as jest.Mock).mockReturnValue(true)
     ;(sessionToken as jest.Mock).mockReturnValue("opaque")
+    native={
+      listMembers:jest.fn().mockResolvedValue([{id:"mem_one",is_active:true}]),
+      listSellerMembers:jest.fn().mockResolvedValue([
+        {seller_id:data.seller_id,member_id:"mem_one"}
+      ]),
+      listSellers:jest.fn().mockResolvedValue([
+        {id:data.seller_id,status:"open",approved_at:"2026-11-06"}
+      ])
+    }
     req={body:{...data},query:{
       organization_id:data.organization_id,seller_id:data.seller_id
-    },headers:{}}
+    },headers:{},scope:{resolve:jest.fn().mockReturnValue(native)}}
     res={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),
       json:jest.fn().mockReturnThis()}
   })
@@ -167,4 +183,66 @@ describe("B22 private Store rename REQUEST, not native Store mutation",()=>{
     await GET(req,res)
     expect(res.status).toHaveBeenCalledWith(403)
   })
+  it("rejects private history before reading when live Member is disabled",async()=>{
+    native.listMembers.mockResolvedValue([])
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(svc.personalStoreRenameRequests).not.toHaveBeenCalled()
+  })
+  it("rejects private history before reading when SellerMember link is gone",async()=>{
+    native.listSellerMembers.mockResolvedValue([])
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(svc.personalStoreRenameRequests).not.toHaveBeenCalled()
+  })
+  it.each(["terminated","pending_approval"])(
+    "rejects private history for non-manageable native Seller %s",async status=>{
+      native.listSellers.mockResolvedValue([{id:data.seller_id,status,approved_at:"2026-11-06"}])
+      await GET(req,res)
+      expect(res.status).toHaveBeenCalledWith(403)
+      expect(svc.personalStoreRenameRequests).not.toHaveBeenCalled()
+    })
+  it("allows approved Owner to read rename history of suspended Store",async()=>{
+    native.listSellers.mockResolvedValue([
+      {id:data.seller_id,status:"suspended",approved_at:"2026-11-06"}
+    ])
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(svc.personalStoreRenameRequests).toHaveBeenCalledTimes(1)
+  })
+  it("rejects before reading if canonical Store ownership is revoked",async()=>{
+    svc.personalStoreRenameCandidateIds.mockResolvedValue({
+      person_id:"daprs_one",organization_id:data.organization_id,seller_ids:[]
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(svc.personalStoreRenameRequests).not.toHaveBeenCalled()
+  })
+  it("rejects returned proposals when native link disappears during GET",async()=>{
+    native.listSellerMembers
+      .mockResolvedValueOnce([{seller_id:data.seller_id,member_id:"mem_one"}])
+      .mockResolvedValueOnce([])
+    await GET(req,res)
+    expect(svc.personalStoreRenameRequests).toHaveBeenCalledTimes(1)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(res.json).toHaveBeenCalledWith({message:"Access denied"})
+  })
+  it("rejects returned proposals when Foundation ownership is revoked during GET",async()=>{
+    svc.personalStoreRenameCandidateIds
+      .mockResolvedValueOnce({
+        person_id:"daprs_one",organization_id:data.organization_id,seller_ids:[data.seller_id]
+      })
+      .mockResolvedValueOnce(null)
+    await GET(req,res)
+    expect(svc.personalStoreRenameRequests).toHaveBeenCalledTimes(1)
+    expect(res.status).toHaveBeenCalledWith(403)
+  })
+  it("fails closed without leaking history on native access exception",async()=>{
+    native.listMembers.mockRejectedValue(new Error("private native failure"))
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(503)
+    expect(res.json).toHaveBeenCalledWith({message:"Unavailable"})
+    expect(svc.personalStoreRenameRequests).not.toHaveBeenCalled()
+  })
+
 })

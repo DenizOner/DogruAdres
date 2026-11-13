@@ -1670,6 +1670,28 @@ async function verifyOwnerStoreRenameRequest(
     "async function(org,id){const r=await fetch('/personal/store-rename-requests?'+new URLSearchParams({"+
     "organization_id:org,seller_id:id}));return r.status}",org,storeId)
   assert.equal(privateRead,403,"Foreign Owner cannot see proposed private name")
+  // Actual protected GET must lose access if native Seller status ceases to
+  // authorize Store name management, even if Owner/Origin stays valid.
+  const ownerHistory=async()=>browser.callFunction(
+    "async function(org,id){const r=await fetch('/personal/store-rename-requests?'+new URLSearchParams({"+
+    "organization_id:org,seller_id:id}));return {status:r.status,body:await r.json()}}",
+    org,storeId)
+  assert.equal((await ownerHistory()).status,200,"Current approved Owner sees its private history")
+  try{
+    await q("update seller set status='terminated' where id=$1",[storeId])
+    const denied=await ownerHistory()
+    assert.equal(denied.status,403,"Terminated native Seller must deny private rename history")
+    assert.deepEqual(denied.body,{message:"Access denied"})
+    // Suspension is a specific approved Owner name-management exception.
+    await q("update seller set status='suspended' where id=$1",[storeId])
+    assert.equal((await ownerHistory()).status,200,
+      "Protected Owner may manage the rename of an approved suspended Store")
+  }finally{
+    await q("update seller set status=$1 where id=$2",[before.status,storeId])
+  }
+  assert.equal((await ownerHistory()).status,200,
+    "Restored approved Seller must regain authorized historical read")
+  process.stdout.write("PASS B22 Chrome: #286 private Store rename history denied for terminated Seller 403, approved suspended Owner 200, restored open Owner 200, foreign Owner 403\n")
   process.stdout.write("PASS B22 Chrome/PG16: Owner Store name+URL change request with explicit risk acknowledgement, one private pending record and audit/outbox; foreign/CSRF/invalid/duplicate denied; native Seller unchanged\n")
   // Platform Store approver is a distinct current Person. An ordinary Owner
   // may not even see the pending name-change queue.
