@@ -5646,29 +5646,38 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const db=securitySql(context.transactionManager)
     const staff=await new IdentitySessions(db).staff(token,"store.closing.manage","platform")
     if(!staff)return null
-    const rows=await db.execute(`select a.organization_id,a.seller_id,
+    // Both current audited Store Origins are valid: a new application or a
+    // historically approved association. Never infer ownership from Seller
+    // status alone; require the unrevoked Origin and canonical audit/outbox.
+    const rows=await db.execute(`select o.organization_id,o.seller_id,
       d.name organization_name,s.name store_name,s.status store_status
-      from da_store_application a
-      join da_organization d on d.id=a.organization_id
+      from da_organization_seller_ownership o
+      join da_organization d on d.id=o.organization_id
         and d.status='active' and d.deleted_at is null
-      join da_organization_seller_ownership o on o.organization_id=a.organization_id
-        and o.seller_id=a.seller_id and o.revoked_at is null
       join da_audit_event e on e.id=o.verification_audit_event_id
         and e.deleted_at is null and e.module='dogruadres-access'
-        and e.organization_id=a.organization_id and e.target_id=a.seller_id
-        and e.action='organization.store_application_created'
-        and e.resource='store-application' and e.actor_person_id=a.person_id
-        and e.new_values->>'application_id'=a.id
-      join seller s on s.id=a.seller_id and s.deleted_at is null
+        and e.organization_id=o.organization_id and e.target_id=o.seller_id
+        and (
+          (e.action='organization.store_application_created'
+           and e.resource='store-application'
+           and exists(select 1 from da_store_application a
+             where a.id=(e.new_values->>'application_id')
+               and a.organization_id=o.organization_id
+               and a.seller_id=o.seller_id and a.status='created'
+               and a.person_id=e.actor_person_id))
+          or (e.action='organization.store_association_approved'
+              and e.resource='store-association')
+        )
+      join seller s on s.id=o.seller_id and s.deleted_at is null
         and s.approved_at is not null and s.status in ('open','suspended')
-      where a.status='created' and a.seller_id is not null
+      where o.revoked_at is null and o.verified_at is not null
         and exists(select 1 from da_audit_outbox x
           where x.source_audit_event_id=e.id and x.source_module='dogruadres-access'
             and x.deleted_at is null)
-        ${target?'and a.organization_id=? and a.seller_id=?':''}
+        ${target?'and o.organization_id=? and o.seller_id=?':''}
         and not exists(select 1 from da_store_owner_closing c
           where c.seller_id=s.id and c.state='closing')
-      order by a.created_at desc,a.id desc
+      order by o.verified_at desc,o.id desc
       limit ${target?2:31} offset ${target?0:page*30}`,
       target?[target.organization_id,target.seller_id]:[])
     if(!Array.isArray(rows)||rows.length>(target?1:31)||

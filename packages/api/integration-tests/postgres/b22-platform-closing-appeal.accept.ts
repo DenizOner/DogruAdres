@@ -304,6 +304,39 @@ export async function verifyB22PlatformClosingAppeal(input:{
     (id,person_id,task,resource,granted_by_person_id,reason)
     values ($1,$2,'store.closing.manage','platform',$2,
       'B22 disposable platform closing security fixture')`,[grantId,staffPersonId])
+  // Exercise the exact legacy Origin (not an application audit) over real
+  // Staff HTTPS before the existing successful browser closure.
+  const liveLegacy=await q(`select o.id,e.action,e.resource
+    from da_organization_seller_ownership o
+    join da_audit_event e on e.id=o.verification_audit_event_id
+    where o.organization_id=$1 and o.seller_id=$2
+      and o.revoked_at is null`,[ownerOrgId,sellerId])
+  assert.equal(liveLegacy.length,1)
+  assert.deepEqual([liveLegacy[0].action,liveLegacy[0].resource],
+    ["organization.store_association_approved","store-association"])
+  const legacyAuditBefore=Number((await q(`select count(*)::int n
+    from da_audit_event where action='organization.store_platform_closing_started'
+      and target_id=$1`,[sellerId]))[0].n)
+  assert.equal((await write(staff,path,{
+    organization_id:buyerOrganizationId,seller_id:sellerId,
+    request_id:requestId,reason})).status,403,
+    "Foreign Organization cannot claim another Store's legacy Origin")
+  await q("update da_organization_seller_ownership set revoked_at=clock_timestamp() where id=$1",[liveLegacy[0].id])
+  try{
+    assert.equal((await write(staff,path,{
+      organization_id:ownerOrgId,seller_id:sellerId,
+      request_id:requestId,reason})).status,403,
+      "Revoked legacy ownership must deny independent strong Staff")
+    assert.equal((await read(staff,path)).status,200,
+      "Strong Staff can still inspect other authorized Stores")
+  }finally{
+    const restored=await q("update da_organization_seller_ownership set revoked_at=null where id=$1 and revoked_at is not null returning id",[liveLegacy[0].id])
+    assert.equal(restored.length,1)
+  }
+  assert.equal(Number((await q(`select count(*)::int n
+    from da_audit_event where action='organization.store_platform_closing_started'
+      and target_id=$1`,[sellerId]))[0].n),legacyAuditBefore,
+    "Revoked and foreign Store attempts must add no closing audit")
   // Native Store fixture has >30 earlier applications. Inspect the existing
   // bounded Staff queue across actual server pages, not only the newest 30.
   let found=false,foundPage=-1
