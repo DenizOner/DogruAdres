@@ -4409,6 +4409,86 @@ export default async function({container}:any){
       [organizations[0].id]))[0].n,0,
       "Two successful drafts and rejected retries create zero native Store applications")
     process.stdout.write("PASS B22 Chrome: Owner Store draft saved, edited, reloaded with version and audit/outbox; stale409, CSRF403, foreign403; zero native Seller applications\n")
+    // #279 P2: Two simultaneous authenticated browser HTTPS operations on
+    // one Person must WAIT for Person before touching session/epoch locks.
+    const draftBarrier=new Client({connectionString:u.toString()})
+    const draftProbe=new Client({connectionString:u.toString()})
+    let draftBarrierConnected=false,draftProbeConnected=false
+    let draftBarrierHeld=false,draftProbeHeld=false,raceStarted=false
+    try{
+      await draftBarrier.connect();draftBarrierConnected=true
+      await draftProbe.connect();draftProbeConnected=true
+      const beforeRaceAudits=Number((await q(
+        "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='person.mobile_updated'",
+        [A.person]))[0].n)
+      await draftBarrier.query("BEGIN");draftBarrierHeld=true
+      await draftBarrier.query("select id from da_person where id=$1 for update",[A.person])
+      await browser.callFunction(
+        "async function(org){"+
+        "const s=await(await fetch('/personal/session')).json();"+
+        "const read=fetch('/personal/store-applications?organization_id='+encodeURIComponent(org),"+
+        "{signal:AbortSignal.timeout(45000)}).then(async r=>({status:r.status,body:await r.json()}));"+
+        "const write=fetch('/personal/profile',{method:'POST',headers:{"+
+        "'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({mobile_phone:'+905551234568',expected_version:1}),"+
+        "signal:AbortSignal.timeout(45000)}).then(async r=>({status:r.status,body:await r.json()}));"+
+        "globalThis.__daDraftMobileRace=Promise.all([read,write]);return true}",
+        organizations[0].id)
+      raceStarted=true
+      await until(async()=>{
+        const [w]=await q(`select count(*)::int n from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock'
+            and query ilike '%from da_browser_session s%'
+            and query ilike '%for update of p%'`)
+        return Number(w.n)>=2
+      },15000,"#279 both real draft GET and mobile POST must wait for Person first")
+      // Under the original session-first order, draft GET would already
+      // lock the epoch. NOWAIT would fail while it waits for Person.
+      await draftProbe.query("BEGIN");draftProbeHeld=true
+      await draftProbe.query(
+        "select epoch from da_person_security where person_id=$1 for update nowait",
+        [A.person])
+      await draftProbe.query("ROLLBACK");draftProbeHeld=false
+      await draftBarrier.query("COMMIT");draftBarrierHeld=false
+      const outcome=await browser.eval("globalThis.__daDraftMobileRace")
+      assert.equal(outcome.length,2)
+      assert.equal(outcome[0].status,200,"Authorized draft GET must finish")
+      assert.equal(outcome[0].body.drafts.find((d:any)=>d.id===storeDraftId)?.version,2)
+      assert.equal(outcome[1].status,200,"Authenticated phone update must finish")
+      assert.equal(outcome[1].body.version,2)
+      assert.deepEqual(await q("select mobile_phone,mobile_version from da_person where id=$1",
+        [A.person]),[{mobile_phone:"+905551234568",mobile_version:2}])
+      assert.deepEqual(await q("select version,name from da_store_application_draft where id=$1",
+        [storeDraftId]),[{version:2,name:draftEdited}])
+      const mobileRaceAudit=await q(`select e.id,e.new_values,x.id as outbox_id
+        from da_audit_event e join da_audit_outbox x on x.source_audit_event_id=e.id
+        where e.actor_person_id=$1 and e.action='person.mobile_updated'`,[A.person])
+      assert.equal(mobileRaceAudit.length,beforeRaceAudits+1)
+      assert.ok(!JSON.stringify(mobileRaceAudit).includes("+905551234568"),
+        "Private phone must not leak in audit or outbox")
+      const restored=await browser.callFunction(
+        "async function(){const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/profile',{method:'POST',headers:{"+
+        "'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({mobile_phone:'+905551234567',expected_version:2})});"+
+        "return {status:r.status,body:await r.json()}}")
+      assert.equal(restored.status,200)
+      assert.equal(restored.body.version,3)
+      assert.deepEqual(await q("select mobile_phone,mobile_version from da_person where id=$1",
+        [A.person]),[{mobile_phone:personalPhone,mobile_version:3}])
+      assert.equal(Number((await q(
+        "select count(*)::int n from da_audit_event where actor_person_id=$1 and action='person.mobile_updated'",
+        [A.person]))[0].n),beforeRaceAudits+2)
+      process.stdout.write("PASS B22 Chrome/PG16: concurrent Store draft GET and Person mobile POST both wait Person-first, epoch NOWAIT free, HTTPS200 each, one private audit/outbox, draft unchanged\n")
+    }finally{
+      if(draftProbeHeld)await draftProbe.query("ROLLBACK")
+      if(draftBarrierHeld)await draftBarrier.query("ROLLBACK")
+      if(raceStarted)await browser.eval(
+        "Promise.allSettled([globalThis.__daDraftMobileRace])").catch(()=>{})
+      if(draftProbeConnected)await draftProbe.end()
+      if(draftBarrierConnected)await draftBarrier.end()
+    }
+
     const applicationName="B22 Owner application "+rand
     const applicationEmail="b22-owner-app-"+rand+"@example.invalid"
     await browser.input("#store-application-form input[name=name]",applicationName)

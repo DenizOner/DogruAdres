@@ -451,6 +451,8 @@ async function run(){
           "Missing real PG16 company policy pause vs native Mercur Seller approval lock collision, ordering, audit/outbox and private notice proof")
         assert.ok(result.includes("PASS B22 Chrome: Owner Store draft saved, edited, reloaded with version and audit/outbox; stale409, CSRF403, foreign403; zero native Seller applications"),
           "Missing real private Owner Store draft persistence and negative Chrome/PG16 acceptance")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome/PG16: concurrent Store draft GET and Person mobile POST both wait Person-first, epoch NOWAIT free, HTTPS200 each, one private audit/outbox, draft unchanged"),
+          "Missing real #279 Person-first Store draft/mobile concurrency and audit proof")
         assert.ok(result.includes("PASS B22 Chrome: paused company Store draft remains editable but native Owner submit is denied"),
           "Missing retained editable Store draft while native submissions are paused")
         assert.ok(result.split("\n").includes(
