@@ -707,7 +707,7 @@ export async function verifyAssignedRecipientUse(input:{
       where id=$1 and status='approving' returning id`,[b.request_id])).length,1,
       "Disposable PG16 status must be restored exactly")
   }
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: in-flight rename claim Owner+Staff read, safe disabled UI, POST409, no new decision audit; synthetic PG status restored\\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: in-flight rename claim Owner+Staff read, safe disabled UI, POST409, no new decision audit; synthetic PG status restored\n")
   await reviewer.send("Page.bringToFront")
   await reviewer.wait("document.visibilityState==='visible'")
   await reviewer.click("#store-rename-review-refresh")
