@@ -9648,7 +9648,9 @@ export default async function({container}:any){
       sellerId:gammaSellerId,buyer:reviewer,
       buyerScopePath:betaScopeUrl,buyerOrganizationId:organizations[1].id,
       checkoutCartId:hookProbeCart.id,customerId:nativeCustomer.id,query,
-      auth,ownerEmail:A.email,container
+      auth,ownerEmail:A.email,ownerPassword:A.password,
+      foreignEmail:B.email,foreignPassword:B.password,
+      foreignPersonId:B.person,foreignOrgName:organizations[1].name,container
     })
     await verifyB22PlatformClosingSecondStageRequest({
       browser,staff:reviewer,q,foundation,sourceSellerId:gammaSellerId,
