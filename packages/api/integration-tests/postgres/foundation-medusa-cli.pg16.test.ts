@@ -292,6 +292,7 @@ async function run(){
         const ownerClosingMarker="PASS B22 real Owner 30-day closing intent/withdraw: Chrome/HTTPS/PG16, exact server deadline, protected Owner notices, whole-Cart L deny then restore, CSRF/foreign/replay denied; native Seller unchanged; irreversible finalization disabled"
         const ownerPauseAcceptanceMarker="PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed"
         const storeDraftNegativeMarkers=[
+          "PASS B22 Chrome/PG16: two distinct protected Owners same draft/application ID; second HTTPS reserve waits application row before draft; first native claim finish draft NOWAIT free; loser403, creating/submitting and Seller/audit unchanged",
           "PASS B22 Chrome/HTTPS/PG16: verified Owner initial Store applications GET simulated 503 and malformed response each recover by refresh; actual authorized HTTPS GET, no Store draft/Seller/audit writes",
           "PASS B22 Chrome/PG16: Store draft and Owner closing GET wait Person-first, epoch NOWAIT free, HTTPS200 each, no draft or closing writes",
           "PASS B22 Chrome/PG16: concurrent Store draft GET and Person mobile POST both wait Person-first, epoch NOWAIT free, HTTPS200 each, one private audit/outbox, draft unchanged",
@@ -456,6 +457,8 @@ async function run(){
           "Missing real Owner Store application first-read 503/malformed retry via Chrome and authorized PG16 readback")
         assert.ok(result.includes("PASS B22 Chrome: Owner Store draft saved, edited, reloaded with version and audit/outbox; stale409, CSRF403, foreign403; zero native Seller applications"),
           "Missing real private Owner Store draft persistence and negative Chrome/PG16 acceptance")
+        assert.ok(result.split("\n").includes("PASS B22 Chrome/PG16: two distinct protected Owners same draft/application ID; second HTTPS reserve waits application row before draft; first native claim finish draft NOWAIT free; loser403, creating/submitting and Seller/audit unchanged"),
+          "Missing real two-protected-Owner same-key application-first PG16 lock witness, HTTP denial and no extra Seller/audit")
         assert.ok(result.split("\n").includes("PASS B22 Chrome/PG16: concurrent Store draft GET and Person mobile POST both wait Person-first, epoch NOWAIT free, HTTPS200 each, one private audit/outbox, draft unchanged"),
           "Missing real #279 Person-first Store draft/mobile concurrency and audit proof")
         assert.ok(result.split("\n").includes("PASS B22 Chrome/PG16: Store draft and Owner closing GET wait Person-first, epoch NOWAIT free, HTTPS200 each, no draft or closing writes"),
