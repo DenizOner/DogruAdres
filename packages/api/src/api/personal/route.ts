@@ -3359,7 +3359,6 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     // Capture the exact prepared Store before the ordinary list clears the
     // native select. A later rename-only response must never select another.
     const existingRenameForm=el('store-rename-form');
-    const existingRenameSelect=existingRenameForm?.elements?.namedItem('seller_id');
     // Capture at the moment options are replaced (not before the HTTP GET):
     // the Owner may have changed selection while the request was pending.
     let preparedRenameSeller='',hadPreparedRename=false;
