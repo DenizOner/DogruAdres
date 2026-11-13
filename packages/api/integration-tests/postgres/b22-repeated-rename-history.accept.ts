@@ -82,20 +82,30 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
     assert.ok(completed.approved_at)
     return completed
   }
-  // B -> C is a genuinely approved native rename; after 30 days the Store
-  // may reclaim B. Only this isolated historical timestamp is advanced.
+  // B -> C is genuinely approved. Simulate >30 elapsed days while keeping
+  // both task-owned historic decisions in their actual chronological order.
+  // Restore both exact timestamps even when the new acceptance fails.
   const bToC=await submit(c)
   await approve(bToC,c)
-  const [exact]=await q("select approved_at::text as stamp from da_store_rename_request where id=$1",
-    [bToC])
-  assert.ok(typeof exact?.stamp==="string")
-  let aged=false
+  const historic=await q("select id,approved_at::text as stamp from da_store_rename_request where id in ($1,$2) and status='approved'",
+    [first[0].id,bToC])
+  assert.equal(historic.length,2)
+  assert.ok(historic.every((r:any)=>typeof r.stamp==="string"))
+  const firstStamp=historic.find((r:any)=>r.id===first[0].id)?.stamp
+  const secondStamp=historic.find((r:any)=>r.id===bToC)?.stamp
+  assert.ok(firstStamp&&secondStamp)
+  let agedFirst=false,agedSecond=false
   try{
-    const [changed]=await q(`update da_store_rename_request
+    const [earlier]=await q(`update da_store_rename_request
+      set approved_at=clock_timestamp()-interval '31 days'
+      where id=$1 and status='approved' returning id`,[first[0].id])
+    assert.equal(earlier?.id,first[0].id)
+    agedFirst=true
+    const [later]=await q(`update da_store_rename_request
       set approved_at=clock_timestamp()-interval '30 days 1 second'
       where id=$1 and status='approved' returning id`,[bToC])
-    assert.equal(changed?.id,bToC)
-    aged=true
+    assert.equal(later?.id,bToC)
+    agedSecond=true
     const [latestProof]=await q(`select (approved_at>(
       select approved_at from da_store_rename_request where id=$2)) as newer
       from da_store_rename_request where id=$1`,[bToC,first[0].id])
@@ -153,13 +163,23 @@ export async function verifyRepeatedApprovedStoreRenameHistory(input:{
     assert.equal(view.status,200,"Only live protected Owner reads private rename history")
     assert.ok(view.body?.requests?.some((r:any)=>r.id===bToD&&r.status==="approved"))
   }finally{
-    if(aged){
+    // Restore both existing historical decisions independently; no test may
+    // leave a reordered synthetic approved_at in the disposable database.
+    if(agedSecond){
       const [restored]=await q(`update da_store_rename_request
         set approved_at=$2::timestamptz
         where id=$1 and status='approved' returning approved_at::text as stamp`,
-        [bToC,exact.stamp])
-      assert.equal(restored?.stamp,exact.stamp,
-        "Task-only 30-day time simulation must restore exact PostgreSQL precision")
+        [bToC,secondStamp])
+      assert.equal(restored?.stamp,secondStamp,
+        "B->C timestamp must be restored with exact PostgreSQL precision")
+    }
+    if(agedFirst){
+      const [restored]=await q(`update da_store_rename_request
+        set approved_at=$2::timestamptz
+        where id=$1 and status='approved' returning approved_at::text as stamp`,
+        [first[0].id,firstStamp])
+      assert.equal(restored?.stamp,firstStamp,
+        "A->B timestamp must be restored with exact PostgreSQL precision")
     }
   }
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: real A-B-C-B-D native Seller rename history, two lawful B approvals, latest name+URL provenance, forged newest handle HTTP409, final Staff HTTP200, unique audits/outbox and Owner private readback; historical timestamp restored\n")
