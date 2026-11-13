@@ -3123,7 +3123,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!org||!seller||!selectedStoreOwner||document.hidden||
        el('store-owner-pause-panel').hidden)return;
     const seq=++ownerPauseRead,epoch=viewEpoch,st=el('store-owner-pause-status');
-    ownerPauseVersion=null;ownerPauseState=null;ownerPauseButtons();
+    ownerPauseVersion=null;ownerPauseState=null;ownerPauseButtons();ownerClosingButtons();
     st.textContent='Güncel mağaza durumu doğrulanıyor…';
     try{
       const data=await api('store-owner-pause?'+new URLSearchParams({
@@ -3138,7 +3138,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
          !['open','suspended','terminated'].includes(data.store_status))
         throw Error('Mağaza durumu doğrulanamadı');
       ownerPauseVersion=data.version;ownerPauseState=data;ownerPauseUncertain=false;
-      ownerPauseButtons();
+      ownerPauseButtons();ownerClosingButtons();
       st.textContent=ownerClosingState?.state==='closing'?
         'Mağaza kalıcı kapatma sürecinde. Geçici ara verme işlemleri kapalı.':
         data.platform_closed?
@@ -3149,7 +3149,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           'Mağaza satışa açık. Geçici ara verebilirsiniz.';
     }catch{
       if(seq!==ownerPauseRead||request!==organizationRequest||org!==currentOrg)return;
-      ownerPauseUncertain=true;ownerPauseButtons();
+      ownerPauseUncertain=true;ownerPauseButtons();ownerClosingButtons();
       st.textContent='Durum güvenle doğrulanamadı; değişiklik kapatıldı. Yeniden kontrol edin.';
     }
   }
