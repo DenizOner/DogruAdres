@@ -812,8 +812,20 @@ async function verifyOwnerClosingBrowser(input:{
       "if(!c||!Array.from(c.options).some(o=>o.value===seller))return false;"+
       "c.value=seller;c.dispatchEvent(new Event('change',{bubbles:true}));"+
       "return true}",seller)
+    // A preceding real Owner/Store action can leave the Organization
+    // selector mid-refresh. Re-enter through a genuine current native
+    // session and wait for the server-owned Store option; never inject
+    // a synthetic option or bypass protected Owner authorization.
     await browser.send("Page.bringToFront")
-    await browser.wait("document.visibilityState==='visible'")
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("document.readyState==='complete' && "+
+      "document.visibilityState==='visible' && "+
+      "!document.getElementById('workspace').hidden")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("!document.getElementById('store-owner-pause-panel').hidden && "+
+      "Array.from(document.querySelectorAll("+
+      "'#store-owner-pause-form select[name=seller_id] option')).some("+
+      "o=>o.value==="+JSON.stringify(secondOwnerStoreId)+")")
     assert.equal(await selectClosingStore(secondOwnerStoreId),true,
       "Real Owner must be able to select the expired approved Store")
     await browser.wait("document.getElementById('store-owner-closing-status').textContent.includes('30 günlük bekleme süresi doldu')")

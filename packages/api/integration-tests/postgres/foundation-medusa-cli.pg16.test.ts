@@ -284,6 +284,7 @@ async function run(){
         const platformCrossSessionMarker="PASS B22 Chrome/HTTPS/PG16: Owner A real private closing GET, same-page logout clears old reason and synthetic email-result DOM; Person B real password+MFA login sees no private text and Gamma GET403; Owner A fresh login re-reads authorized reason"
         const dualRoleLockMarker="PASS B22 Chrome/HTTPS/PG16: same strong Person dual Staff/Owner, Owner Seller-lock wait before Staff session wait; HTTP403+409, no deadlock/503, closing/audit/outbox unchanged"
         const legacyPlatformClosingMarker="PASS B22 Chrome/HTTPS/PG16: legacy approved Store association with native Seller and strong Staff; revoked and foreign Origin HTTP403; single closing/audit/outbox and Owner notice durable; original application proof restored"
+        const ownerPlatformClosedUiMarker="PASS B22 Chrome/HTTPS/PG16: platform-closed native-open Seller Owner sale-status accessible and consistent, pause/resume/second closing disabled, direct HTTP403+409, zero voluntary audit/outbox"
         const platformClosingAppealMarker="PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, canonical 10+20 clock started on authenticated Owner link before first appeal; external mailbox delivery unverified and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no external mailbox delivery claim; one immutable clock, foreign denied"
         const platformStaffReviewMarker="PASS B22 Chrome/HTTPS/PG16: independent third Person strong Staff review decision, original Staff self-review denied, private Owner reason/notice, immutable clock and sales block; repeat idempotent, first-stage parallel single decision, revoked grant denied"
         const platformFinalReviewMarker="PASS B22 Chrome/HTTPS/PG16: synthetic T0+11d second-stage Owner request, real protected Owner/foreign Staff/CSRF/replay, one durable audit/outbox and private notice; Store stays closed, original 10+20 clock unchanged; stage time fixture is synthetic, real Owner Chrome form submitted and confirmed"
@@ -353,7 +354,7 @@ async function run(){
               x===exceptionalStoreTransferMarker || x===exceptionalRecipientMarker ||
               x===postHoldRecipientMarker || x===independentStaffRaceMarker ||
               x===historicalCartMarker || x===completedSourceOrderMarker ||
-              (x===legacyPlatformClosingMarker || x===dualRoleLockMarker || x===platformCrossSessionMarker ||
+              (x===ownerPlatformClosedUiMarker || x===legacyPlatformClosingMarker || x===dualRoleLockMarker || x===platformCrossSessionMarker ||
                x===platformClosingAppealMarker || x===platformClosingEmailLinkMarker ||
                x===platformFinalReviewMarker || x===platformStaffReviewMarker ||
                x===platformPreflightBoundaryMarker)).join("\n")
@@ -424,6 +425,8 @@ async function run(){
           "Missing real same-Person Staff/Owner lock ordering and denied zero-write outcomes")
         assert.ok(result.split("\n").includes(legacyPlatformClosingMarker),
           "Missing legacy audited Store Origin real Staff Chrome/PG16 and foreign/revoked negative evidence")
+        assert.ok(result.split("\n").includes(ownerPlatformClosedUiMarker),
+          "Missing real platform-closed native-open Owner UI/HTTP403+409 and zero-side-effect evidence")
         assert.ok(result.split("\n").includes(platformCrossSessionMarker),
           "Missing same-page two native Person logins, private DOM clear and foreign 403")
         assert.ok(result.split("\n").includes(platformClosingAppealMarker),

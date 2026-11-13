@@ -258,6 +258,12 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const before=(await q("select id,status,name,handle from seller where id=$1",[sellerId]))[0]
   assert.equal(before?.id,sellerId)
   assert.equal(before?.status,"open","Source Store must be trading before Staff closes")
+  const initialOwnerPause=await read(browser,"/personal/store-owner-pause?"+
+    new URLSearchParams({organization_id:ownerOrgId,seller_id:sellerId}))
+  assert.equal(initialOwnerPause.status,200,
+    "Protected Owner can check the actual native Store before Staff closes it")
+  assert.equal(initialOwnerPause.body.platform_closed,false,
+    "A native-open Store without a platform closure must remain available")
   assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),true)
   assert.equal((await q("select count(*)::int n from da_store_platform_closing where seller_id=$1",
     [sellerId]))[0].n,0)
@@ -577,6 +583,65 @@ export async function verifyB22PlatformClosingAppeal(input:{
   })()`)
   assert.equal(selected,true)
   await browser.wait("!document.getElementById('store-platform-appeal-panel').hidden")
+  // #307 P2: although native Seller remains 'open', the actual protected
+  // Owner's personal HTTPS pause state must honor the separate platform
+  // closure; all voluntary controls stay disabled after a real page reload.
+  const pausePath="/personal/store-owner-pause?"+
+    new URLSearchParams({organization_id:ownerOrgId,seller_id:sellerId})
+  const ownerPauseRead=await read(browser,pausePath)
+  assert.equal(ownerPauseRead.status,200)
+  assert.equal(ownerPauseRead.body.store_status,"open",
+    "Native Seller remains open; separate platform closure blocks sales")
+  assert.equal(ownerPauseRead.body.platform_closed,true)
+  assert.equal((await read(staff,pausePath)).status,403,
+    "Unrelated Staff cannot obtain protected Owner pause state")
+  await browser.wait("document.getElementById('store-owner-pause-status')."+
+    "textContent.includes('Mağaza platform kararıyla kapatıldı') && "+
+    "document.querySelector('#store-owner-pause-form button[value=pause]').disabled && "+
+    "document.querySelector('#store-owner-pause-form button[value=resume]').disabled && "+
+    "document.querySelector('#store-owner-closing-form button[value=start]').disabled")
+  const closedOwnerUi=await browser.eval("(()=>{const s=document.getElementById("+
+    "'store-owner-pause-status');const a=document.querySelector("+
+    "'#store-owner-closing-form input[name=consequences_acknowledged]');"+
+    "a.checked=true;a.dispatchEvent(new Event('change',{bubbles:true}));"+
+    "return {text:s.textContent,role:s.getAttribute('role'),"+
+    "live:s.getAttribute('aria-live'),"+
+    "pause:document.querySelector('#store-owner-pause-form button[value=pause]').disabled,"+
+    "resume:document.querySelector('#store-owner-pause-form button[value=resume]').disabled,"+
+    "start:document.querySelector('#store-owner-closing-form button[value=start]').disabled}})()")
+  assert.ok(!closedOwnerUi.text.includes("Mağaza satışa açık"),
+    "Platform-closed Store must never be described as open for sales")
+  assert.deepEqual([closedOwnerUi.role,closedOwnerUi.live,
+    closedOwnerUi.pause,closedOwnerUi.resume,closedOwnerUi.start],
+    ["status","polite",true,true,true],
+    "Accessible live status and all unavailable controls fail closed")
+  const voluntaryWrites=()=>q(`select
+    (select count(*)::int from da_audit_event e where e.target_id=$1
+      and e.resource in ('store-owner-pause','store-owner-closing')) audits,
+    (select count(*)::int from da_audit_outbox x
+      join da_audit_event e on e.id=x.source_audit_event_id
+      where e.target_id=$1 and e.resource in
+        ('store-owner-pause','store-owner-closing')) outbox,
+    (select count(*)::int from da_store_owner_pause where seller_id=$1) pauses,
+    (select count(*)::int from da_store_owner_closing where seller_id=$1) closings`,
+    [sellerId])
+  const voluntaryBefore=await voluntaryWrites()
+  assert.equal((await write(browser,"/personal/store-owner-pause",{
+    action:"resume",organization_id:ownerOrgId,seller_id:sellerId,
+    request_id:"dasp_"+randomBytes(16).toString("hex"),
+    expected_version:ownerPauseRead.body.version})).status,403,
+    "Owner cannot resume platform-closed sales even through direct HTTPS")
+  assert.equal((await write(browser,"/personal/store-owner-closing",{
+    action:"start",organization_id:ownerOrgId,seller_id:sellerId,
+    request_id:"dasc_"+randomBytes(16).toString("hex"),
+    expected_version:0,consequences_acknowledged:true})).status,409,
+    "Owner cannot start a conflicting separate closing clock")
+  assert.deepEqual(await voluntaryWrites(),voluntaryBefore,
+    "Denied Owner controls may not create pause/closing/audit/outbox")
+  await browser.eval("(()=>{const a=document.querySelector("+
+    "'#store-owner-closing-form input[name=consequences_acknowledged]');"+
+    "a.checked=false;a.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: platform-closed native-open Seller Owner sale-status accessible and consistent, pause/resume/second closing disabled, direct HTTP403+409, zero voluntary audit/outbox\n")
   const ui=await browser.eval(`({
     reason:document.getElementById('store-platform-appeal-reason').textContent,
     status:document.getElementById('store-platform-appeal-status').getAttribute('role'),

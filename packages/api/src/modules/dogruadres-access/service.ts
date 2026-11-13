@@ -5177,9 +5177,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     if(!authority)return null
     const row=await this.ownerPauseRow_(db,sellerId)
     if(row&&row.organization_id!==organizationId)throw new IdentityAccessDenied()
+    // Reuse the exact audited Foundation closing proof. Native Seller 'open'
+    // does not mean sales are open after a stronger platform closure.
+    const platformClosed=(await this.platformClosingRow_(db,sellerId))!==null
     return {organization_id:organizationId,seller_id:sellerId,
       paused:row?.paused===true,version:row?Number(row.version):0,
-      store_status:authority.store_status}
+      store_status:authority.store_status,platform_closed:platformClosed}
   }
 
   @InjectTransactionManager()
