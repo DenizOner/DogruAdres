@@ -1523,12 +1523,26 @@ async function verifyOwnerRenameTargetRefresh(
     "Unbound stale values require a fresh Store selection and explicit risk consent")
   assert.deepEqual(await snapshot(),before,"Refresh must create no rename or audit writes")
   // Restore live authorized picker, not a simulated session or Seller grant.
+  // A later refresh must STILL demand a manual Store choice; no first-option
+  // fallback after revocation, even after all prepared fields were cleared.
   await browser.click("#org-stores-refresh")
   await browser.wait("!document.getElementById('store-rename-panel').hidden && "+
     "Array.from(document.querySelector('#store-rename-form select[name=seller_id]').options).some(o=>o.value==="+
     JSON.stringify(storeB)+") && "+
-    "!document.querySelector('#store-rename-form button[type=submit]').disabled")
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: two authorized Stores; refresh retains exact second target and risk; removed target resets name/URL/consent, disables submit, zero rename writes\n")
+    "document.querySelector('#store-rename-form select[name=seller_id]').value===''")
+  assert.deepEqual(await state(),{seller:"",name:"",handle:"",risk:false,disabled:true},
+    "Further refresh cannot silently select first Store after a lost target")
+  // Explicit Owner re-selection restores access to private history, without
+  // inheriting any prepared name, URL or consent from the prior Seller.
+  await browser.eval("(()=>{const f=document.getElementById('store-rename-form');"+
+    "f.elements.namedItem('seller_id').value="+JSON.stringify(storeA)+";"+
+    "f.elements.namedItem('seller_id').dispatchEvent(new Event('change',{bubbles:true}))})()")
+  await browser.wait("document.querySelector('#store-rename-form select[name=seller_id]').value==="+
+    JSON.stringify(storeA)+" && !document.querySelector('#store-rename-form button[type=submit]').disabled")
+  assert.deepEqual(await state(),{seller:storeA,name:"",handle:"",risk:false,disabled:false},
+    "Explicit new Store selection cannot carry the old Store risk consent")
+  assert.deepEqual(await snapshot(),before,"Only GET and UI selection; zero rename writes")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: two authorized Stores; refresh retains exact second target and risk; removed target resets name/URL/consent, disables submit across repeat refresh; manual Store selection restores blank safe form, zero rename writes\n")
 }
 
 /** Real B22 Store rename REQUEST only: no native name/handle mutation or
