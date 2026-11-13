@@ -3413,6 +3413,12 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       return {status:"conflict" as const}
     await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-name'),hashtext(?))",
       [hash])
+    // Different proposed names may still target ONE native Seller URL.
+    // Always lock name first, then URL, BEFORE reading shared reservations.
+    // The URL advisory is transaction-scoped: the second Store can observe
+    // the first committed 'approving' hold and fail closed before Mercur.
+    await db.execute("select pg_advisory_xact_lock(hashtext('b22-global-store-handle'),hashtext(?))",
+      [r.proposed_handle])
     const application=await db.execute(`select 1 from da_store_application
       where store_name_hash=?
         and (name_claim_released_at is null or name_claim_released_at>clock_timestamp())
