@@ -2301,8 +2301,14 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const fingerprint=storeRequestFingerprint(input)
     await db.execute(`select pg_advisory_xact_lock(hashtext('b22-store-application'),hashtext(?))`,
       [input.application_id])
-    // Different request IDs must not turn one private draft into two Sellers.
-    // Member saves also lock this row and require status='draft'.
+    // Lock the application row BEFORE its draft. The native Seller
+    // completion transaction holds this application FOR SHARE and later
+    // updates the draft. A second Owner must wait on the application, not
+    // hold the draft while waiting: that would deadlock the first Owner.
+    // The advisory lock still serializes identical application IDs; the
+    // draft row still serializes distinct IDs and concurrent Member saves.
+    const prior=await db.execute(`select * from da_store_application where id=? for update`,[input.application_id])
+    if(prior.length>1)throw new IdentityAccessDenied()
     let draft:null|{status:string;submitted_application_id:string|null}=null
     if(input.draft_id!==undefined){
       const rows=await db.execute(`select name,email,currency_code,version,status,submitted_application_id
@@ -2319,8 +2325,6 @@ export default class DogruAdresAccessModuleService extends MedusaService({
         return {status:"conflict" as const}
       draft={status:d.status,submitted_application_id:d.submitted_application_id}
     }
-    const prior=await db.execute(`select * from da_store_application where id=? for update`,[input.application_id])
-    if(prior.length>1)throw new IdentityAccessDenied()
     if(prior.length){
       const r=prior[0]
       if(r.organization_id!==input.organization_id||r.person_id!==actor.person_id||
