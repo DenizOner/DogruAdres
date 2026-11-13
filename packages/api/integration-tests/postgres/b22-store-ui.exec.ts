@@ -1448,6 +1448,141 @@ async function verifyNativeOrganizationReadPolicy({
   process.stdout.write("PASS B22 native organization.read role policy: protected Owner remains allowed with legacy setting; Admin/Member unchanged, foreign/role-only Owner denied, native ingress401\n")
 }
 
+/** Real signed-in Chrome/HTTPS/PG16: two genuinely authorized native
+ * Seller choices, selection retention and fail-closed lost-target refresh.
+ */
+async function verifyOwnerRenameTargetRefresh(
+  browser:B06Chrome,org:string,storeA:string,storeB:string,
+  q:(sql:string,params?:any[])=>Promise<any[]>
+):Promise<void>{
+  const authorized=await browser.callFunction(
+    "async function(org){const r=await fetch('/personal/organization-stores?organization='+"+
+    "encodeURIComponent(org)+'&purpose=rename',{cache:'no-store'});"+
+    "return {status:r.status,body:await r.json()}}",org)
+  assert.equal(authorized.status,200)
+  assert.equal(authorized.body.organization_id,org)
+  assert.equal(authorized.body.stores.filter((s:any)=>[storeA,storeB].includes(s.id)).length,2,
+    "The two native Stores must share actual current approved Owner rename scope")
+  const snapshot=async()=>q("select seller_id,count(*)::int n from da_store_rename_request "+
+    "where seller_id in ($1,$2) group by seller_id order by seller_id",[storeA,storeB])
+  const before=await snapshot()
+  await browser.wait("!document.getElementById('store-rename-panel').hidden")
+  await browser.eval("(()=>{const f=document.getElementById('store-rename-form');"+
+    "f.elements.namedItem('seller_id').value="+JSON.stringify(storeB)+";"+
+    "f.elements.namedItem('seller_id').dispatchEvent(new Event('change',{bubbles:true}))})()")
+  await browser.wait("document.querySelector('#store-rename-form select[name=seller_id]').value==="+
+    JSON.stringify(storeB)+" && !document.querySelector('#store-rename-form button[type=submit]').disabled && "+
+    "!document.getElementById('org-stores-refresh').disabled")
+  await browser.eval("(()=>{const f=document.getElementById('store-rename-form');"+
+    "f.elements.namedItem('name').value='Prepared second Store name';"+
+    "f.elements.namedItem('handle').value='prepared-second-store';"+
+    "f.elements.namedItem('risk_acknowledged').checked=true})()")
+  await browser.click("#org-stores-refresh")
+  await browser.wait("document.getElementById('org-stores-status').textContent.includes('Yetkili mağazalar güncellendi') && "+
+    "document.querySelector('#store-rename-form select[name=seller_id]').value==="+JSON.stringify(storeB)+
+    " && !document.getElementById('store-rename-panel').hidden")
+  const state=()=>browser.callFunction(
+    "function(){const f=document.getElementById('store-rename-form');return {"+
+    "seller:f.elements.namedItem('seller_id').value,"+
+    "name:f.elements.namedItem('name').value,"+
+    "handle:f.elements.namedItem('handle').value,"+
+    "risk:f.elements.namedItem('risk_acknowledged').checked,"+
+    "disabled:f.querySelector('button[type=submit]').disabled}}")
+  const preserved=await state()
+  assert.equal(preserved.seller,storeB)
+  assert.equal(preserved.name,"Prepared second Store name")
+  assert.equal(preserved.handle,"prepared-second-store")
+  assert.equal(preserved.risk,true)
+  // P2 overlapping refresh: delay ONLY the one rename-only response in this
+  // genuine Chrome tab. Second click while loading must be deduplicated;
+  // the prepared B name/URL/risk must survive without any retargeting.
+  const cycleBefore=await browser.eval("storeRequest")
+  await browser.eval("(()=>{const original=window.fetch;let unblock=null;"+
+    "const state={count:0,release:()=>{if(unblock){unblock();unblock=null}},"+
+    "restore:()=>{window.fetch=original}};window.__b22RenameHold=state;"+
+    "window.fetch=(...args)=>{const path=String(args[0]);"+
+    "if(path.startsWith('/personal/organization-stores?')&&path.includes('purpose=rename')){"+
+    "state.count++;const pending=original(...args);"+
+    "if(state.count===1)return new Promise((resolve,reject)=>{unblock=()=>pending.then(resolve,reject)});"+
+    "return pending;}return original(...args)}})()")
+  try{
+    await browser.click("#org-stores-refresh")
+    await browser.wait("window.__b22RenameHold.count===1 && "+
+      "document.getElementById('org-stores-refresh').disabled")
+    await browser.eval("document.getElementById('org-stores-refresh').click()")
+    assert.equal(await browser.eval("storeRequest"),cycleBefore+1,
+      "Overlapping Owner refresh must not start a second GET cycle")
+    assert.equal(await browser.eval("window.__b22RenameHold.count"),1)
+    await browser.eval("window.__b22RenameHold.release()")
+    await browser.wait("!document.getElementById('org-stores-refresh').disabled && "+
+      "document.querySelector('#store-rename-form select[name=seller_id]').value==="+
+      JSON.stringify(storeB))
+    assert.equal((await state()).name,"Prepared second Store name")
+    assert.equal((await state()).handle,"prepared-second-store")
+    assert.equal((await state()).risk,true,
+      "Repeated click while pending must not discard explicit risk consent")
+  }finally{
+    await browser.eval("(()=>{const hold=window.__b22RenameHold;"+
+      "if(hold){hold.release();hold.restore();delete window.__b22RenameHold}})()")
+  }
+  // The sole fake element is the revoked Seller's omission from one browser
+  // response. The initial two-Seller scope, HTTP, and database are all real.
+  await browser.eval("(()=>{const original=window.fetch;let once=true;"+
+    "window.fetch=async(...args)=>{const response=await original(...args);"+
+    "const path=String(args[0]);"+
+    "if(!once||!path.startsWith('/personal/organization-stores?')||"+
+    "!path.includes('purpose=rename'))return response;"+
+    "once=false;window.fetch=original;"+
+    "const data=await response.json();"+
+    "data.stores=data.stores.filter(s=>s.id!=="+JSON.stringify(storeB)+");"+
+    "return new Response(JSON.stringify(data),{status:response.status,"+
+    "headers:{'content-type':'application/json','cache-control':'no-store'}})}})()")
+  await browser.click("#org-stores-refresh")
+  await browser.wait("document.getElementById('store-rename-status').textContent.includes('Önceki mağaza artık yetkili listede yok') && "+
+    "document.querySelector('#store-rename-form select[name=seller_id]').value==='' && "+
+    "!document.getElementById('org-stores-refresh').disabled")
+  assert.deepEqual(await state(),{seller:"",name:"",handle:"",risk:false,disabled:true},
+    "Former target must force new Store selection/name/URL and fresh consent")
+  // Even if the Owner types while no target is selected, a later refresh may
+  // not silently bind that draft to the first returned Store.
+  await browser.eval("(()=>{const f=document.getElementById('store-rename-form');"+
+    "f.elements.namedItem('name').value='Unbound prepared Store';"+
+    "f.elements.namedItem('handle').value='unbound-prepared-store';"+
+    "f.elements.namedItem('risk_acknowledged').checked=true})()")
+  await browser.click("#org-stores-refresh")
+  await browser.wait("document.querySelector('#store-rename-form select[name=seller_id]').value==='' && "+
+    "document.getElementById('store-rename-form').elements.namedItem('name').value==='' && "+
+    "document.getElementById('store-rename-form').elements.namedItem('handle').value==='' && "+
+    "!document.getElementById('org-stores-refresh').disabled")
+  assert.deepEqual(await state(),{seller:"",name:"",handle:"",risk:false,disabled:true},
+    "Unbound stale values require a fresh Store selection and explicit risk consent")
+  assert.deepEqual(await snapshot(),before,"Refresh must create no rename or audit writes")
+  // Restore live authorized picker, not a simulated session or Seller grant.
+  // A later refresh must STILL demand a manual Store choice; no first-option
+  // fallback after revocation, even after all prepared fields were cleared.
+  const finalCycle=await browser.eval("storeRequest")
+  await browser.click("#org-stores-refresh")
+  await browser.wait("storeRequest>"+finalCycle+" && "+
+    "!document.getElementById('org-stores-refresh').disabled && "+
+    "!document.getElementById('store-rename-panel').hidden && "+
+    "Array.from(document.querySelector('#store-rename-form select[name=seller_id]').options).some(o=>o.value==="+
+    JSON.stringify(storeB)+") && "+
+    "document.querySelector('#store-rename-form select[name=seller_id]').value===''")
+  assert.deepEqual(await state(),{seller:"",name:"",handle:"",risk:false,disabled:true},
+    "Further refresh cannot silently select first Store after a lost target")
+  // Explicit Owner re-selection restores access to private history, without
+  // inheriting any prepared name, URL or consent from the prior Seller.
+  await browser.eval("(()=>{const f=document.getElementById('store-rename-form');"+
+    "f.elements.namedItem('seller_id').value="+JSON.stringify(storeA)+";"+
+    "f.elements.namedItem('seller_id').dispatchEvent(new Event('change',{bubbles:true}))})()")
+  await browser.wait("document.querySelector('#store-rename-form select[name=seller_id]').value==="+
+    JSON.stringify(storeA)+" && !document.querySelector('#store-rename-form button[type=submit]').disabled")
+  assert.deepEqual(await state(),{seller:storeA,name:"",handle:"",risk:false,disabled:false},
+    "Explicit new Store selection cannot carry the old Store risk consent")
+  assert.deepEqual(await snapshot(),before,"Only GET and UI selection; zero rename writes")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: two authorized Stores; overlapping refresh dedup, second target and consent preserved, removed target resets name/URL/risk across repeat refresh; manual Store selection restores blank safe form, zero writes\n")
+}
+
 /** Real B22 Store rename REQUEST only: no native name/handle mutation or
  * 30-day release is claimed. Uses current disposable Chrome and PG16 Owner.
  */
@@ -7847,6 +7982,8 @@ export default async function({container}:any){
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.select(organizations[0].name,"owner")
+    await verifyOwnerRenameTargetRefresh(
+      browser,organizations[0].id,ownerStoreId,secondOwnerStoreId,q)
     await verifyOwnerStoreRenameRequest(
       browser,reviewer,organizations[0].id,sellerGamma.id,ownerStoreId,A.person,rand,q)
     // Gamma is a separate already-approved task-only Seller, so this race
