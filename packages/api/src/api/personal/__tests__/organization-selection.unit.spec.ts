@@ -13,6 +13,12 @@ function harness() {
   const pending:Array<{path:string;resolve:(x:any)=>void;reject:(e:Error)=>void}>=[]
   const state={status:'',url:'/personal',pending,el}
   const context=createContext({el,clearNotifications:()=>{el('notification-list').replaceChildren();el('notification-bell').hidden=true},notifications:async()=>{},status:(s:string)=>{state.status=s},history:{replaceState:(_:unknown,__:unknown,url:string)=>{state.url=url}},document:{createElement:()=>({textContent:''})},api:(path:string)=>new Promise((resolve,reject)=>pending.push({path,resolve,reject}))})
+  // Evaluate the real private email-link cleanup used by selectOrg.
+  const privateStart=source.indexOf("  function clearPrivateClosingEmailLink(){")
+  const privateEnd=source.indexOf("  const hashMatch",privateStart)
+  if(privateStart<0||privateEnd<=privateStart)throw Error("Missing private cleanup")
+  runInContext("let platformMailLinkToken='';\n"+
+    source.slice(privateStart,privateEnd),context)
   runInContext(source.slice(begin,end),context)
   return {...state,context,state,select:(id:string)=>runInContext(`selectOrg(${JSON.stringify(id)})`,context)}
 }
@@ -84,6 +90,20 @@ describe('B22 selected Organization Store presentation (UI scheduling, not API a
     expect(h.el('org-stores').children).toHaveLength(1)
     expect(h.el('org-stores').children[0].textContent).toContain('B Mağazası')
     expect(h.el('org-stores').children[0].textContent).not.toContain('A Özel')
+  })
+
+  it('clears a prior private closing email explanation and capability on Organization switch',async()=>{
+    const h=harness(),a=h.select('A');await finishSelection(h,'A',a)
+    h.el('platform-closing-email-link-status').textContent='PRIVATE CLOSING A'
+    h.el('platform-closing-email-link-panel').hidden=false
+    runInContext("platformMailLinkToken='synthetic-only'",h.context)
+    const denied=h.select('foreign')
+    expect(h.el('platform-closing-email-link-status').textContent).toBe('')
+    expect(h.el('platform-closing-email-link-panel').hidden).toBe(true)
+    expect(runInContext('platformMailLinkToken',h.context)).toBe('')
+    h.pending.find(p=>p.path==='organizations?id=foreign')!.reject(new Error('Access denied'))
+    await denied
+    expect(h.el('platform-closing-email-link-status').textContent).toBe('')
   })
 
   it('clears the previous Store view immediately on a denied Organization switch',async()=>{
