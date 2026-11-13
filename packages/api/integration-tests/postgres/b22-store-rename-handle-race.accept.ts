@@ -10,12 +10,15 @@ type Rows=(sql:string,args?:unknown[])=>Promise<any[]>
 type Store={organizationId:string;organizationName:string;sellerId:string}
 
 export async function verifyTwoStoreSameHandleApprovalRace(input:{
-  owner:B06Chrome;staff:B06Chrome;foundation:any;q:Rows;
+  owner:B06Chrome;staff:B06Chrome;staff2:B06Chrome;foundation:any;q:Rows;
   stores:[Store,Store];rand:string
 }):Promise<void>{
-  const {owner,staff,foundation,q,stores,rand}=input
+  const {owner,staff,staff2,foundation,q,stores,rand}=input
   assert.notEqual(stores[0].sellerId,stores[1].sellerId)
   assert.notEqual(stores[0].organizationId,stores[1].organizationId)
+  const [staffCookieA,staffCookieB]=await Promise.all([staff.token(),staff2.token()])
+  assert.ok(staffCookieA&&staffCookieB&&staffCookieA!==staffCookieB,
+    "Real concurrent approvals need two separately authenticated Staff Persons")
   const handle="b22-handle-race-"+rand.toLowerCase().replace(/[^a-z0-9-]/g,"")
   const requests=stores.map((store,i)=>({
     request_id:"dasrn_"+randomBytes(16).toString("hex"),
@@ -56,21 +59,20 @@ export async function verifyTwoStoreSameHandleApprovalRace(input:{
   // Only the *post-claim* native phase is withheld inside this disposable
   // real-HTTP test. The real SQL claim, locks and authorization run unchanged.
   // It models interruption, NOT a real SIGKILL or full native rename test.
-  const staffPosts=(payloads:object[])=>staff.callFunction(
-    "async function(payload){const items=JSON.parse(payload);const s=await(await fetch('/personal/session')).json();"+
-    "return Promise.all(items.map(async item=>{"+
+  const staffPost=(actor:B06Chrome,payload:object)=>actor.callFunction(
+    "async function(body){const s=await(await fetch('/personal/session')).json();"+
     "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
     "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-    "body:JSON.stringify(item),signal:AbortSignal.timeout(45000)});"+
-    "return {status:r.status}}))}",
-    JSON.stringify(payloads))
+    "body,signal:AbortSignal.timeout(45000)});"+
+    "return {status:r.status}}",
+    JSON.stringify(payload))
   const observedWaiters=async()=>Number((await q(`select count(*)::int n
     from pg_locks where locktype='advisory' and granted=false and objsubid=2
       and classid=hashtext('b22-global-store-handle')::oid
       and objid=hashtext($1)::oid`,[handle]))[0].n)
   let locked=false
   let result:Promise<{status:number}[]>|undefined
-  let seenTwo=false
+  let seenTwo=false,maxWaiters=0
   try{
     await q("select pg_advisory_lock(hashtext('b22-global-store-handle'),hashtext($1))",
       [handle])
@@ -81,11 +83,18 @@ export async function verifyTwoStoreSameHandleApprovalRace(input:{
     }
     await staff.send("Page.bringToFront")
     await staff.wait("document.visibilityState==='visible'")
-    result=staffPosts(requests.map(x=>({action:"approve",request_id:x.request_id,seller_id:x.seller_id})))
+    // Two distinct strong Staff identities and two Chrome/CDP sessions:
+    // no same-session serialization may masquerade as global URL exclusion.
+    const approval=(x:typeof requests[number])=>({
+      action:"approve",request_id:x.request_id,seller_id:x.seller_id
+    })
+    result=Promise.all([staffPost(staff,approval(requests[0])),
+      staffPost(staff2,approval(requests[1]))])
     // Observe actual PostgreSQL waiters before releasing the barrier.
     // A mere Promise.all is NOT proof that two HTTP requests serialized.
     for(let i=0;i<150;i++){
-      if(await observedWaiters()>=2){seenTwo=true;break}
+      maxWaiters=Math.max(maxWaiters,await observedWaiters())
+      if(maxWaiters>=2){seenTwo=true;break}
       await new Promise(resolve=>setTimeout(resolve,100))
     }
   }finally{
@@ -99,8 +108,11 @@ export async function verifyTwoStoreSameHandleApprovalRace(input:{
   try{
     if(!result)throw Error("Real Staff requests did not start")
     responses=await result
-    assert.equal(seenTwo,true,"Two real Staff HTTPS transactions must wait on ONE URL lock")
-    assert.deepEqual(responses.map(x=>x.status).sort((a,b)=>a-b),[409,503],
+    const codes=responses.map(x=>x.status).sort((a,b)=>a-b)
+    assert.equal(seenTwo,true,
+      "Two distinct Staff HTTPS requests must wait on ONE URL lock; max_waiters="+
+      maxWaiters+", HTTP codes="+JSON.stringify(codes))
+    assert.deepEqual(codes,[409,503],
       "One durable claim, one pre-native conflict; native phase intentionally withheld")
     assert.equal(suppressedNative,1,"Only the winning Staff claim reaches the native stage")
     const rows=await q("select id,seller_id,proposed_name,proposed_handle,status from da_store_rename_request where id in ($1,$2)",
