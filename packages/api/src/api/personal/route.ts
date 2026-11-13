@@ -3364,8 +3364,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     }
   };
 
+  let organizationStoresBusyKey=null;
   async function organizationStores(org,request){
     if(request!==organizationRequest||currentOrg!==org||document.hidden)return;
+    // A second refresh of this same Owner/Organization while the ordinary
+    // or private rename-only GET is pending would see a temporarily empty
+    // select and wrongly discard its prepared Store. Serialize that cycle.
+    const key=org+'|'+request;
+    if(organizationStoresBusyKey===key)return;
+    organizationStoresBusyKey=key;
+    const refreshButton=el('org-stores-refresh');
+    refreshButton.disabled=true;
     const seq=++storeRequest;
     // Capture the exact prepared Store before the ordinary list clears the
     // native select. A later rename-only response must never select another.
@@ -3403,7 +3412,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           // A rename-only HTTP read may be slower than the ordinary Store
           // list or may fail. Never block open Store rendering or re-open
           // stale private values after a different Organization is selected.
-          void (async()=>{
+          await (async()=>{
             try{
               const renameData=await api('organization-stores?organization='+
                 encodeURIComponent(org)+'&purpose=rename');
@@ -3493,6 +3502,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       target.replaceChildren();clearStoreRename(![401,403,404].includes(e.httpStatus));
       if(e.httpStatus===401){concealPrivateView();el('login').hidden=false;return}
       message.textContent=[403,404].includes(e.httpStatus)?'Bu kuruluşun mağazalarına erişim izniniz yok.':'Mağazalar doğrulanamadı. Yeniden deneyin.';
+    }finally{
+      if(organizationStoresBusyKey===key){
+        organizationStoresBusyKey=null;
+        refreshButton.disabled=false;
+      }
     }
   }
 
