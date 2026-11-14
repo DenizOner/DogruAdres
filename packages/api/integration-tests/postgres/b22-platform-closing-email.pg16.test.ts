@@ -861,6 +861,72 @@ async function main(){
         "The next SMTP attempt must be 24h from immutable source time")
       assert.equal(observed.ownerSafeLink,true,
         "Owner security notice must link only to the authenticated personal area")
+      // B22 #252: ONE canonical event, TWO protected legal-Org Owners.
+      // Only one has a verified native email binding. One SMTP 250 must not
+      // silently count as notification delivery for *both* recipients.
+      // Use the existing real PG16 ledger and loopback SMTP; never create a
+      // real mailbox, add an external provider or enable finalization.
+      const unverifiedOwner="daprs_b22_mail_owner_without_email_binding"
+      await q("insert into da_person(id) values ($1)",[unverifiedOwner])
+      await q("insert into da_organization_membership "+
+        "(id,organization_id,person_id,role,status,protected_owner) "+
+        "values ($1,$2,$3,'owner','active',true)",[
+          "daomem_b22_mail_unverified_owner",org,unverifiedOwner
+        ])
+      const multiOwnerEvent=await seedOwnerClosingMail(
+        "sel_b22_owner_closing_mixed_recipient_status")
+      await q("insert into da_notification_receipt "+
+        "(id,person_id,audit_event_id) values ($1,$2,$3)",[
+          "danot_"+uuid(),unverifiedOwner,multiOwnerEvent
+        ])
+      const dataBeforeMixed=observed.dataMessages
+      await runOwnerClosingEmailTick(container)
+      const mixed=await q("select person_id,attempts,last_result,"+
+        "message_id,accepted_at,next_attempt_at from "+
+        "da_store_owner_closing_email where audit_event_id=$1 "+
+        "order by person_id",[multiOwnerEvent])
+      assert.equal(mixed.length,2,
+        "Both protected Owners need separate durable notification outcomes")
+      const byRecipient=new Map(mixed.map((x:any)=>[x.person_id,x]))
+      const original=byRecipient.get(owner) as any
+      const missing=byRecipient.get(unverifiedOwner) as any
+      assert.ok(original&&missing,"Neither protected Owner may be dropped")
+      assert.equal(original.attempts,1)
+      assert.equal(original.last_result,"accepted")
+      assert.ok(original.accepted_at&&original.message_id,
+        "Only the verified Owner has an SMTP 250 acceptance proof")
+      assert.equal(missing.attempts,1)
+      assert.equal(missing.last_result,"unverified_identity",
+        "Owner without a verified native email cannot be counted as sent")
+      assert.equal(missing.accepted_at,null)
+      assert.equal(missing.message_id,null)
+      assert.equal(observed.dataMessages,dataBeforeMixed+1,
+        "Two protected Owners with one unverified email create exactly one DATA")
+      const [multiSource]=await q(
+        "select occurred_at from da_audit_event where id=$1",[multiOwnerEvent])
+      for(const attempt of mixed)assert.equal(
+        new Date(attempt.next_attempt_at).getTime()-
+        new Date(multiSource.occurred_at).getTime(),86400000,
+        "Each Owner keeps a separate +24h retry slot for the same event")
+      await runOwnerClosingEmailTick(container)
+      assert.equal(observed.dataMessages,dataBeforeMixed+1,
+        "Repeated scheduler ticks cannot create extra SMTP sends")
+      assert.deepEqual((await q(
+        "select person_id,attempts,last_result from "+
+        "da_store_owner_closing_email where audit_event_id=$1 "+
+        "order by person_id",[multiOwnerEvent])).map((r:any)=>[
+          r.person_id,r.attempts,r.last_result
+        ]),mixed.map((r:any)=>[
+          r.person_id,r.attempts,r.last_result
+        ]),"A second tick must preserve both independent Owner outcomes")
+      // Scope the extra synthetic membership to this single mixed test.
+      await q("update da_organization_membership set status='revoked',"+
+        "revoked_at=clock_timestamp() where person_id=$1",[unverifiedOwner])
+      process.stdout.write(
+        "PASS B22 PG16+loopback SMTP: two protected Owners one accepted "+
+        "and one unverified identity; separate receipts, one DATA, "+
+        "no false all-Owner delivery or replay\\n")
+
       await runOwnerClosingEmailTick(container)
       assert.equal((await q("select attempts from da_store_owner_closing_email "+
         "where audit_event_id=$1",[ownerMailEvent]))[0].attempts,1,
