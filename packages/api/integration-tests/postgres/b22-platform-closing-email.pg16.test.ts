@@ -709,7 +709,7 @@ async function main(){
       await runPlatformClosingEmailTick(container)
       assert.equal(observed.dataMessages,messagesAfterVisit,
         "Settled authenticated delivery must never send a second email")
-      process.stdout.write("PASS B22 PG16+loopback SMTP: Owner-link committed between DATA and 250 ACK retains private acceptance Message-ID, one attempt, no resend and no clock change from SMTP settlement\\n")
+      process.stdout.write("PASS B22 PG16+loopback SMTP: Owner-link committed between DATA and 250 ACK retains private acceptance Message-ID, one attempt, no resend and no clock change from SMTP settlement\n")
 
       // Owner 30-day closing: reuse the exact same native SMTP provider,
       // verified Person email and scheduler with its NEW event/recipient ledger.
