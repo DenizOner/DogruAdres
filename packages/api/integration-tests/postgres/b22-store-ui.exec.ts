@@ -560,7 +560,46 @@ async function verifyOwnerClosingBrowser(input:{
     browser,coOwner:reviewer,container,q,firstPersonId:ownerPersonId,
     secondPersonId:coOwnerPersonId,eventId:closed.audit_event_id,
     firstEmail,secondEmail
-  })
+  })  // #252 post-real-SMTP readback: the first Owner's private UI previously
+  // used a synthetic accepted row. After the other Owner's ACTUAL loopback
+  // SMTP 250, the server and UI must still show ONLY this Owner's own state.
+  const postNativeSmtpOwner=await readOwnClosing(
+    browser,organizations[0].id,ownerStoreId)
+  assert.equal(postNativeSmtpOwner.status,200)
+  assert.deepEqual(postNativeSmtpOwner.body.email_notice,{
+    status:"accepted",attempts:1,smtp_accepted:true,
+    mailbox_delivery_verified:false
+  },"Another Owner's real SMTP 250 must not replace this Person's private status")
+  assert.deepEqual(postNativeSmtpOwner.body.notification_coverage,{
+    protected_owners:2,personal_receipts:2,mailbox_delivery_verified:false
+  },"Both separate private receipts persist; SMTP acceptance is not mailbox delivery")
+  assert.equal(postNativeSmtpOwner.body.permanent_finalization_enabled,false)
+  assert.equal(postNativeSmtpOwner.body.state,"closing")
+  assert.equal(JSON.stringify(postNativeSmtpOwner.body).includes(secondEmail),false,
+    "A's owner-scoped response must never contain B's private email")
+  const postNativeSmtpOther=await readOwnClosing(
+    reviewer,organizations[0].id,ownerStoreId)
+  assert.equal(postNativeSmtpOther.status,403,
+    "Second protected Organization Owner is NOT native Seller-linked yet")
+  assert.deepEqual(postNativeSmtpOther.body,{message:"Access denied"})
+  assert.equal((await readOwnClosing(reviewer,
+    organizations[1].id,ownerStoreId)).status,403,
+    "Another Organization must not read either Owner's SMTP result")
+  await browser.click("#store-owner-closing-refresh")
+  await browser.wait("document.getElementById('store-owner-closing-status')."+
+    "textContent.includes('SMTP sunucusu e-postayı kabul etti; posta kutusuna teslim doğrulanmadı.') && "+
+    "document.getElementById('store-owner-closing-status').textContent.includes('Korunan Owner bildirim kayıtları: 2/2')")
+  const afterRealSmtpText=await browser.eval(
+    "document.getElementById('store-owner-closing-status').textContent")
+  assert.equal(afterRealSmtpText.includes(secondEmail),false)
+  assert.equal(afterRealSmtpText.includes("Message-ID"),false)
+  assert.equal(await browser.eval(
+    "document.getElementById('store-owner-closing-status').getAttribute('role')"),"status")
+  assert.deepEqual((await q("select id,name,handle,status,approved_at,"+
+    "closed_from,closed_to from seller where id=$1",[ownerStoreId]))[0],
+    nativeBefore,"A second SMTP acceptance cannot close or rename a Seller")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: after second Owner native SMTP 250, first Owner HTTPS/UI keeps own accepted-not-delivered status; unlinked second Owner and foreign Org HTTP403; canonical receipts remain 2, no terminal finalization\\n")
+
   assert.equal(closed.outbox_count,1)
   assert.equal(closed.notices,2,"Every protected Owner must receive one closing notice")
   await assertNotifiedOwners(closed.audit_event_id,
