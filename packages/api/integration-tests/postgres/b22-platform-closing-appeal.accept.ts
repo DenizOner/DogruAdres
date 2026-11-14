@@ -414,6 +414,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.match(mailUi.text,/itiraz saati henüz başlamadı/)
   assert.match(mailUi.text,/Kesin kapatma engelleri:/)
   assert.match(mailUi.text,/mali ve hukuki yükümlülüklerin temizlendiği doğrulanmadı/)
+  assert.match(mailUi.text,/bu mağazaya bağlı gerçek geçmiş sipariş kaydı saptandı/,
+    "Prior native Seller OrderGroup must be signposted to authorized Staff")
   assert.match(mailUi.text,/geri dönüşsüz kapatma kapalıdır/)
   assert.equal(mailUi.role,"status")
   assert.equal(mailUi.live,"polite")
@@ -432,6 +434,10 @@ export async function verifyB22PlatformClosingAppeal(input:{
     "Native-confirmed Owner email is visible to the real Staff HTTPS route")
   assert.equal(mailReadiness.body?.mailbox_delivery_verified_count,0)
   assert.equal(mailReadiness.body?.deadline_started,false)
+  assert.equal(mailReadiness.body?.native_order_history_observed,true,
+    "Real prior Mercur OrderGroup is observed, not financially cleared")
+  assert.equal(JSON.stringify(mailReadiness.body).includes("og_"),false,
+    "Native OrderGroup IDs are not exposed to Staff")
   assert.deepEqual(mailReadiness.body?.terminal_preflight,{
     appeal_window_elapsed:false,appeal_review_pending:false,
     appeal_accepted:false,notification_exception_review_required:false,
@@ -1135,6 +1141,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
       edge.elapsed,"PostgreSQL source-backed 720-hour boundary: "+edge.tag)
     assert.equal(result.body.terminal_preflight.appeal_review_pending,false)
     assert.equal(result.body.terminal_preflight.appeal_accepted,false)
+    assert.equal(result.body.native_order_history_observed,false,
+      "Synthetic closing with no native Seller/OrderGroup must stay unknown")
     assert.equal(result.body.terminal_preflight.financial_legal_clearance_verified,false)
     assert.equal(result.body.terminal_preflight.permanent_finalization_enabled,false)
     assert.equal((await read(browser,path)).status,403)
