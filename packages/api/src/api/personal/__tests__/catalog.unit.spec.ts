@@ -8,6 +8,7 @@ import {MercurModules} from "@mercurjs/types"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 import {nativeDirectTryListPrice} from "../catalog/native-try-list-price"
 import {nativeBuyerGroupTryReference} from "../catalog/native-group-try-reference"
+import {nativeSellerTradingAt} from "../../../modules/dogruadres-access/native-seller-trading"
 
 jest.mock("../security",()=>({
   access:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
@@ -112,6 +113,51 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
     await GET(req,res)
     expect(res.status).toHaveBeenLastCalledWith(200)
     expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+  })
+  it("uses one half-open native closure interval for private catalogue discovery",async()=>{
+    const now=Date.now(),iso=(offset:number)=>new Date(now+offset).toISOString()
+    for(const [from,to,visible] of [
+      [iso(120000),iso(240000),true],   // before planned closure
+      [iso(-120000),iso(120000),false], // inside the closed interval
+      [iso(-240000),iso(-120000),true], // after planned reopening
+    ] as const){
+      stores[0]={...stores[0],closed_from:from,closed_to:to}
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(200)
+      expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(
+        visible?["sel_a","sel_b"]:["sel_b"])
+    }
+    // One-sided native closures retain their previous safe meaning.
+    stores[0]={...stores[0],closed_from:iso(-120000),closed_to:null}
+    await GET(req,res)
+    expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+    stores[0]={...stores[0],closed_from:null,closed_to:iso(120000)}
+    await GET(req,res)
+    expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+  })
+  it("rejects malformed or reversed native closure timestamps instead of allowing a sale",async()=>{
+    const now=Date.now(),iso=(offset:number)=>new Date(now+offset).toISOString()
+    for(const [from,to] of [
+      ["bad-date",iso(120000)],
+      [iso(-120000),"bad-date"],
+      [iso(120000),iso(-120000)],
+      [iso(120000),iso(120000)]
+    ]){
+      stores[0]={...stores[0],closed_from:from,closed_to:to}
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(200)
+      expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+    }
+    // Exact boundary semantics are reused by the final native Cart hook.
+    const seller={status:"open",approved_at:iso(-240000),
+      closed_from:iso(10000),closed_to:iso(20000)}
+    expect(nativeSellerTradingAt(seller,now+9999)).toBe(true)
+    expect(nativeSellerTradingAt(seller,now+10000)).toBe(false)
+    expect(nativeSellerTradingAt(seller,now+19999)).toBe(false)
+    expect(nativeSellerTradingAt(seller,now+20000)).toBe(true)
+    expect(nativeSellerTradingAt({...seller,status:"suspended"},now)).toBe(false)
+    expect(nativeSellerTradingAt({...seller,approved_at:null},now)).toBe(false)
+    expect(nativeSellerTradingAt({...seller,closed_to:"garbled"},now)).toBe(false)
   })
   it("renders direct TRY list amount for exact Store Offer but no final checkout price",async()=>{
     ;(nativeDirectTryListPrice as jest.Mock).mockImplementation(async(_req:any,o:any)=>

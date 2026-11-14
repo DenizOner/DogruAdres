@@ -281,6 +281,8 @@ async function run(){
         const renameApprovingReadMarker="PASS B22 Chrome/HTTPS/PG16: in-flight rename claim Owner+Staff read, safe disabled UI, POST409, no new decision audit; synthetic PG status restored"
         const sharedRenameHandleMarker="PASS B22 Chrome/HTTPS/PG16: distinct Stores/different names same proposed handle, two observed shared URL lock waiters; one approving claim and one HTTP409, native suppressed on winner, no native Seller/audit change, Owner task requests withdrawn"
         const assignedRecipientReopenMarker="PASS B22 Chrome/HTTPS/PG16: assigned recipient B reopens same native Seller before source A 30-day hold expires, Staff HTTP200, Owner403, replay409; missing transfer outbox HTTP409 review-only with zero audit; one claim+completion outbox and Owner receipt"
+        const scheduledCatalogMarker="PASS B22 Chrome/HTTPS/PG16: planned native Seller closure Buyer catalogue before=visible, during=hidden, after=visible, reversed=hidden; unrelated Store visible, original PG16 schedule restored, no audit or checkout"
+        const scheduledNativeCartMarker="PASS B22 Chrome/HTTPS/PG16: native scheduled Seller closure denies actual zero-payment Cart before OrderGroup, preserves open Cart, and restores exact PG16 bounds; subsequent lawful native Order completes once"
         const exceptionalRecipientMarker="PASS B22 Chrome/HTTPS/PG16: recipient B native name and URL adopted after source A vacates, historical 30-day hold retained, unrelated Store C HTTP409 before/after, Staff approval and audit/outbox durable"
         const postHoldRecipientMarker="PASS B22 Chrome/HTTPS/PG16: transferred old name remains reserved for B after source hold day 30, C HTTPS409 without request/audit, original timestamp restored, B native adoption succeeds"
         const independentStaffRaceMarker="PASS B22 Chrome/HTTPS/PG16: two independent strong Staff Persons race same first Store name-right transfer on observed PG advisory lock; HTTP201+409, one transfer/audit/outbox, replay200, both native Seller IDs unchanged"
@@ -358,6 +360,7 @@ async function run(){
               x===ownerPauseAcceptanceMarker || x===ownerPauseConcurrentMarker ||
               x===ownerPauseIndexMarker || x===ownerClosingNegativeMarker ||
               x===exceptionalStoreTransferMarker || x===exceptionalRecipientMarker ||
+              x===scheduledCatalogMarker || x===scheduledNativeCartMarker ||
               x===assignedRecipientReopenMarker ||
               x===renameApprovingReadMarker || x===sharedRenameHandleMarker ||
               x===postHoldRecipientMarker || x===independentStaffRaceMarker ||
@@ -425,6 +428,10 @@ async function run(){
           "Missing real Chrome/HTTPS/PG16 Owner and Staff approving readback, denied replay and restored synthetic claim")
         assert.ok(result.split("\n").includes(exceptionalRecipientMarker),
           "Missing real HTTPS/PG16 B native adoption, source vacate and C denied acceptance evidence")
+        assert.ok(result.split("\n").includes(scheduledCatalogMarker),
+          "Missing real HTTPS/PG16 Buyer scheduled closure before/inside/after and invalid dates")
+        assert.ok(result.split("\n").includes(scheduledNativeCartMarker),
+          "Missing real native Cart pre-Order scheduled closure denial and lawful retry")
         assert.ok(result.split("\n").includes(assignedRecipientReopenMarker),
           "Missing real HTTP/PG16 source-proven recipient B native reopening and negative audit/outbox proof")
         assert.ok(result.split("\n").includes(postHoldRecipientMarker),

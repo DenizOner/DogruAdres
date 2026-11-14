@@ -24,6 +24,7 @@ import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerW
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
 import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,createB22CompletedSourceOrderFixture} from "./b22-store-name-transfer.accept"
+import {verifyB22ScheduledSellerWindow} from "./b22-scheduled-seller-window.accept"
 import {verifyRepeatedApprovedStoreRenameHistory} from "./b22-repeated-rename-history.accept"
 import {prepareRenameBeforeStoreReactivation,verifyReactivationClaimFreezesRenames} from "./b22-reactivation-rename-claim.accept"
 import {verifyB22PlatformClosingAppeal,
@@ -7832,6 +7833,9 @@ export default async function({container}:any){
     const catalogUrl=(org:string)=>"/personal/catalog?organization_id="+
       encodeURIComponent(org)
     const catalogAuditBefore=await q("select count(*)::int n from da_audit_event")
+    await verifyB22ScheduledSellerWindow({q,get,catalogUrl,
+      organizationId:organizations[0].id,ownerStoreId,secondOwnerStoreId,
+      auditBefore:Number(catalogAuditBefore[0].n)})
     const scopedCatalog=await get(catalogUrl(organizations[0].id))
     assert.equal(scopedCatalog.status,200,"Protected Buyer Owner sees approved Store product titles")
     assert.match(scopedCatalog.cache,/no-store/)

@@ -3,6 +3,7 @@ import {z} from "@medusajs/framework/zod"
 import {MercurModules} from "@mercurjs/types"
 import {access,enabled,sessionToken} from "../security"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
+import {nativeSellerTradingAt} from "../../../modules/dogruadres-access/native-seller-trading"
 import {nativeDirectTryListPrice,type DirectTryListPrice} from "./native-try-list-price"
 import {nativeBuyerGroupTryReference,type BuyerGroupTryReference} from "./native-group-try-reference"
 
@@ -17,14 +18,6 @@ const productId=/^prod_[A-Za-z0-9_-]+$/
 const offerId=/^offer_[A-Za-z0-9_-]+$/
 
 /** Native scheduled closure and Foundation Owner pause are independent. */
-function sellerTradingNow(s:any):boolean{
-  if(s.status!=="open"||!s.approved_at)return false
-  const now=Date.now()
-  if(s.closed_from!=null && !(new Date(s.closed_from).getTime()>now))return false
-  if(s.closed_to!=null && !(new Date(s.closed_to).getTime()<now))return false
-  return true
-}
-
 
 /** B22 first positive discovery slice: no price, inventory, discount, cart or
  * global native Store route. All data is bound to a current BUYER Organization,
@@ -80,7 +73,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     const eligibleBySeller=new Map<string,string[]>()
     for(const candidate of candidates){
       if(!candidate||!sellerId.test(candidate.id)||
-         !sellerTradingNow(candidate)||typeof candidate.name!=="string")continue
+         !nativeSellerTradingAt(candidate)||typeof candidate.name!=="string")continue
       if(!await service.storeOwnerPauseAcceptingOrders([candidate.id]))continue
       // Foundation's current approved Org→Seller origin and explicit per-Store
       // Buyer Organization block are checked together, never via SellerMember.
@@ -154,7 +147,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
     for(const store of stores){
       const [native]=await seller.listSellers({id:store.id},{take:2})
       if(!native||native.id!==store.id||
-         !sellerTradingNow(native)||native.name!==store.name||
+         !nativeSellerTradingAt(native)||native.name!==store.name||
          !await service.storeOwnerPauseAcceptingOrders([store.id]))return denied()
       const fresh=await service.personalStoreBuyerBlockDecision(
         token,organizationId,[store.id])

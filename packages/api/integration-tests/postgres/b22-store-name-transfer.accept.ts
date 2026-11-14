@@ -70,6 +70,38 @@ export async function createB22CompletedSourceOrderFixture(input:{
     "Native workflow proof never enables visitor checkout")
   assert.equal(await authorize(cart.id),true,
     "Live Buyer/Store authority required before zero-total native Order")
+  // The real native workflow's B22 pre-Order hook must deny a Seller in
+  // its scheduled closed window, even when the Buyer/Store L snapshot is valid.
+  // Operate only on this disposable Seller and restore the exact native dates.
+  const [sellerBeforeWindow]=await q(
+    "select closed_from,closed_to from seller where id=$1",[sourceSellerId])
+  assert.ok(sellerBeforeWindow,"Task-owned native source Seller required")
+  const altered=await q(`update seller
+    set closed_from=clock_timestamp()-interval '1 hour',
+        closed_to=clock_timestamp()+interval '1 hour'
+    where id=$1 returning closed_from,closed_to`,[sourceSellerId])
+  assert.equal(altered.length,1)
+  try{
+    const blocked=await completeCartWithSplitOrdersWorkflow(container).run({
+      input:{cart_id:cart.id},throwOnError:false
+    }).then((result:any)=>result,(error:unknown)=>({errors:[error]}))
+    const messages=(blocked.errors??[]).map((entry:any)=>
+      String(entry.error?.message??entry.error??entry.message??"")).join("\n")
+    assert.match(messages,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
+      "Real native Cart hook must deny scheduled closure before Order write")
+    assert.equal((await q(
+      "select count(*)::int n from order_group where cart_id=$1",[cart.id]))[0].n,0)
+    assert.equal((await q(
+      "select completed_at from cart where id=$1",[cart.id]))[0].completed_at,null,
+      "Denied scheduled Cart must remain open for a later lawful attempt")
+  }finally{
+    const restored=await q(`update seller set closed_from=$2,closed_to=$3
+      where id=$1 returning closed_from,closed_to`,
+      [sourceSellerId,sellerBeforeWindow.closed_from,sellerBeforeWindow.closed_to])
+    assert.equal(restored.length,1)
+    assert.deepEqual(restored[0],sellerBeforeWindow,
+      "Native closed-window fixture must be restored, including null bounds")
+  }
   const result=await completeCartWithSplitOrdersWorkflow(container).run({
     input:{cart_id:cart.id},throwOnError:false
   })
@@ -80,6 +112,7 @@ export async function createB22CompletedSourceOrderFixture(input:{
     q,query,cartId:cart.id,customerId,
     organizationId:buyerOrgId,sourceSellerId
   })
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: native scheduled Seller closure denies actual zero-payment Cart before OrderGroup, preserves open Cart, and restores exact PG16 bounds; subsequent lawful native Order completes once\n")
   process.stdout.write("B22 task-only: pre-transfer source OrderGroup/Order from native zero-total workflow; no payment\n")
   return {query,cartId:cart.id,customerId,organizationId:buyerOrgId,
     sourceSellerId,snapshot}
