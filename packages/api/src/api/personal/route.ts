@@ -558,10 +558,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const policyWrite=path==='platform/store-application-policy'&&options.method==='POST';
     const storeApplicationWrite=path==='store-applications'&&options.method==='POST';
     const renameWrite=path==='store-rename-requests'&&options.method==='POST';
+    const ownerPauseWrite=path==='store-owner-pause'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
     const closingWrite=['store-owner-closing','store-platform-closing','store-platform-closing-final-review','platform/store-closings','platform/store-closing-reviews','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite;
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite;
     let data;
     try{
       data=await r.json();
@@ -3206,9 +3207,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       })});
       if(request!==organizationRequest||epoch!==viewEpoch||
          org!==currentOrg||seller!==form.elements.namedItem('seller_id').value)return;
-      if(result.seller_id!==seller||
+      if(result.organization_id!==org||result.seller_id!==seller||
          result.status!==(action==='pause'?'paused':'resumed')||
-         !Number.isSafeInteger(result.version))throw Error('Sonuç doğrulanamadı');
+         !Number.isSafeInteger(result.version)||result.version<0||
+         typeof result.replayed!=='boolean'){
+        const error=Error('Sonuç doğrulanamadı');
+        error.uncertain=true;throw error;
+      }
       ownerPauseUncertain=false;
       // A fresh read, not a duplicate mutation, determines the displayed state.
       await refreshOwnerPause(org,request);
