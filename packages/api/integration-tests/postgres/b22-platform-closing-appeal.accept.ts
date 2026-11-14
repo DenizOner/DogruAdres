@@ -719,10 +719,13 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(newlyProtected.body?.protected_owner_count,2)
   assert.equal(newlyProtected.body?.private_receipt_count,1,
     "Only the initial Owner may hold the original closure audit receipt")
+  // The first Owner's native proof was deliberately soft-deleted in the earlier
+  // negative acceptance. Keep it revoked; the second Owner must obtain their
+  // own proof without changing the first Owner's state.
   // The SECOND protected Owner must acquire their OWN native Medusa email
   // verification, not inherit the first Owner's proof. This test uses the
   // existing real Chrome HTTPS route and disposable Medusa Auth/PG16 state.
-  assert.equal(newlyProtected.body?.verified_email_identity_count,1,
+  assert.equal(newlyProtected.body?.verified_email_identity_count,0,
     "New protected Owner cannot inherit another Person's verified email")
   const secondaryBindings=await q("select auth_identity_id from da_login_binding "+
     "where person_id=$1 and actor_type='user' and revoked_at is null "+
@@ -770,8 +773,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
     const twoVerified=await read(staff,mailPath)
     assert.equal(twoVerified.status,200)
     assert.equal(twoVerified.body?.protected_owner_count,2)
-    assert.equal(twoVerified.body?.verified_email_identity_count,2,
-      "Staff readiness must count BOTH independently verified protected Owners")
+    assert.equal(twoVerified.body?.verified_email_identity_count,1,
+      "Staff readiness must count only the second Owner while the first is revoked")
     assert.equal(twoVerified.body?.private_receipt_count,1,
       "Verification may not invent another Owner's original closing receipt")
     assert.equal(twoVerified.body?.mailbox_delivery_verified_count,0)
@@ -790,10 +793,10 @@ export async function verifyB22PlatformClosingAppeal(input:{
   }
   const restoredVerification=await read(staff,mailPath)
   assert.equal(restoredVerification.status,200)
-  assert.equal(restoredVerification.body?.verified_email_identity_count,1)
+  assert.equal(restoredVerification.body?.verified_email_identity_count,0)
   assert.equal(restoredVerification.body?.protected_owner_count,2)
   assert.equal(restoredVerification.body?.private_receipt_count,1)
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: second protected Owner native email verification from pending through real GET/POST to consumed; readiness 1-to-2 then revoked proof restores 1; private receipts immutable, no mailbox delivery or finalizer\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: second protected Owner native email verification from pending through real GET/POST to consumed; first Owner revoked proof unchanged, readiness 0-to-1 then cleanup restores 0; private receipts immutable, no mailbox delivery or finalizer\n")
   // The existing Owner A already has the genuine native SellerMember link.
   // B receives its native Member linkage only later in B22; do NOT invent it.
   // Grant A the same real platform task temporarily in this disposable DB,
