@@ -975,6 +975,16 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       JSON.stringify(ownerStoreId)+";choice.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
     await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık') && "+
       "!document.querySelector('#store-owner-pause-form button[value=pause]').disabled")
+    // Put the selected Store second in the task-only chooser so a
+    // programmatic list rebuild selecting index 0 would expose the bug.
+    assert.equal(await browser.eval("(()=>{const c=document.querySelector("+
+      "'#store-owner-pause-form select[name=seller_id]');"+
+      "const other=Array.from(c.options).find(o=>o.value==="+
+      JSON.stringify(secondOwnerStoreId)+");"+
+      "if(!other)return false;c.prepend(other);c.value="+
+      JSON.stringify(ownerStoreId)+";return c.selectedIndex>0})()"),true,
+      "Owner's second Store choice must not fall back to the first option")
+    await browser.wait("!document.getElementById('org-stores-refresh').disabled")
     // Real HTTPS POST must execute and persist; only its *browser-visible*
     // HTTP 200 response body is corrupted in this disposable Chrome profile.
     // Never proxy a synthetic response in place of the actual server write.
@@ -1031,6 +1041,18 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
         "A GET started during POST could later erase the uncertain-result lock")
       assert.equal(await browser.eval("Array.from(document.querySelectorAll("+
         "'#store-owner-pause-form button[type=submit]')).every(b=>b.disabled)"),true)
+      // A *different* control may refresh the entire Store list during POST.
+      // It must not reset the disabled chooser to the first Store.
+      await browser.click('#org-stores-refresh')
+      await browser.wait("!document.getElementById('org-stores-refresh').disabled && "+
+        "document.getElementById('org-stores-status').textContent.includes('güncellendi')")
+      assert.equal(await browser.eval("document.querySelector("+
+        "'#store-owner-pause-form select[name=seller_id]').value"),ownerStoreId,
+        "A concurrent full Store list refresh must not rebind the Owner's pending pause")
+      assert.equal(await browser.eval("window.__b22PauseWire?.getCount"),0,
+        "Store list refresh must not start a stale Owner pause GET mid-write")
+      assert.equal(await browser.eval("document.querySelector("+
+        "'#store-owner-pause-form select[name=seller_id]').disabled"),true)
       assert.equal(await releaseOwnerPauseReadback(),true)
       await browser.wait("(()=>{const p=document.getElementById('store-owner-pause-status');"+
         "const f=document.getElementById('store-owner-pause-form');"+
@@ -1182,6 +1204,7 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       "After Owner resume with native platform OPEN, final L authorization is restored")
     assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]}))
       .items?.length,2,"Neither pause nor resume changes preexisting cart lines")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: concurrent full Store-list refresh during committed pending Owner pause preserves second selected Seller and starts zero premature pause GET; uncertain response keeps both actions locked until authorized readback\n")
     process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Owner refresh during real committed pause POST with HTTP200 response held starts zero premature GET, keeps Store selector and both buttons locked; release gives uncertain, only post-settle authorized GET reopens controls\n")
     process.stdout.write("PASS B22 Chrome/HTTPS/PG16: actual Owner pause/resume each persisted once but client HTTP200 truncated JSON or mismatched Organization response remained uncertain; both buttons disabled until fresh authorized GET, no replay and two durable audit/outbox\n")
     process.stdout.write("PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed\n")
