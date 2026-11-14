@@ -70,6 +70,10 @@ let injectOutboxFailure=false
 const syntheticEmail="owner@example.invalid"
 const syntheticIdentity="auth_b22_mail_pg"
 const syntheticActor="user_b22_mail_pg"
+// A second synthetic native actor; never an external recipient or production user.
+const retryActor="user_b22_mail_pg_second_owner"
+const retryIdentity="auth_b22_mail_pg_second_owner"
+const retryEmail="recovered-owner@example.invalid"
 let testSmtp:{enabled:boolean;host:string;port:number;
   security:"none";from_email:string}|null=null
 type TestBarrier={entered:Promise<void>;proceed:Promise<void>;
@@ -144,17 +148,27 @@ const container:any={resolve:(name:string)=>{
       }))
   }
   if(name===ContainerRegistrationKeys.QUERY)return {
-    graph:async()=>({data:[{id:syntheticActor,email:syntheticEmail}]})
+    graph:async(input:{filters?:{id?:string}})=>{
+      const id=input.filters?.id
+      return {data:id===syntheticActor?[{id,email:syntheticEmail}]:
+        id===retryActor?[{id,email:retryEmail}]:[]}
+    }
   }
   if(name===Modules.AUTH)return {
-    listAuthIdentities:async()=>[{
-      id:syntheticIdentity,
-      provider_identities:[{provider:"emailpass",entity_id:syntheticEmail}]
-    }],
-    listAuthVerifications:async()=>[{
-      entity_type:"email",entity_id:syntheticEmail,
-      verified_at:new Date(),deleted_at:null
-    }]
+    listAuthIdentities:async(input:{id?:string[]})=>{
+      const id=input.id?.[0]
+      const email=id===syntheticIdentity?syntheticEmail:
+        id===retryIdentity?retryEmail:null
+      return email?[{id,provider_identities:[
+        {provider:"emailpass",entity_id:email}]}]:[]
+    },
+    listAuthVerifications:async(input:{auth_identity_id?:string})=>{
+      const id=input.auth_identity_id
+      const email=id===syntheticIdentity?syntheticEmail:
+        id===retryIdentity?retryEmail:null
+      return email?[{entity_type:"email",entity_id:email,
+        verified_at:new Date(),deleted_at:null}]:[]
+    }
   }
   if(name==="dogruadresAccess")return {
     getActiveSmtpConfig:async()=>{
@@ -556,7 +570,7 @@ async function main(){
       "values ($1,$2,'user',$3)",["damap_b22_mail_pg",owner,syntheticActor])
     const observed={acceptedRecipient:false,secureLink:false,
       ownerSafeLink:false,acceptedData:false,dataMessages:0,
-      messageIds:[] as string[]}
+      messageIds:[] as string[],recipients:[] as string[]}
     let refuseRecipient=false,dropAfterData=false
     let holdSmtpDataAck:TestBarrier|null=null
     const mock=createServer(socket=>{
@@ -603,9 +617,12 @@ async function main(){
           }else if(line.startsWith("MAIL FROM:")){
             socket.write("250 sender accepted\r\n")
           }else if(line.startsWith("RCPT TO:")){
-            assert.equal(line,"RCPT TO:<"+syntheticEmail+">",
-              "Test SMTP must never send to a real recipient")
+            assert.ok(
+              line==="RCPT TO:<"+syntheticEmail+">"||
+              line==="RCPT TO:<"+retryEmail+">",
+              "Task-local SMTP may only send to two synthetic .invalid recipients")
             observed.acceptedRecipient=true
+            observed.recipients.push(line.slice("RCPT TO:<".length,-1))
             socket.write(refuseRecipient?"550 recipient rejected\r\n":"250 recipient accepted\r\n")
           }else if(line==="DATA"){
             receivingData=true
@@ -919,6 +936,77 @@ async function main(){
         ]),mixed.map((r:any)=>[
           r.person_id,r.attempts,r.last_result
         ]),"A second tick must preserve both independent Owner outcomes")
+      // Positive recovery for the SAME canonical event: the second Owner
+      // later gains a verified native email actor. Only their lawful +24h
+      // retry slot is advanced in this disposable PG16 fixture. No clock,
+      // protected data, SMTP provider or production policy is modified.
+      await q("insert into da_login_binding "+
+        "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+        "values ($1,'user',$2,$3,clock_timestamp())",
+        [unverifiedOwner,retryActor,retryIdentity])
+      await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
+        "values ($1,$2,'user',$3)",[
+          "damap_"+uuid(),unverifiedOwner,retryActor
+        ])
+      const retryDue=await q("update da_store_owner_closing_email "+
+        "set next_attempt_at=clock_timestamp()-interval '1 second' "+
+        "where audit_event_id=$1 and person_id=$2 and attempts=1 "+
+        "and last_result='unverified_identity' "+
+        "returning person_id",[multiOwnerEvent,unverifiedOwner])
+      assert.equal(retryDue.length,1,
+        "Only the previously unverified Owner may receive their due retry")
+      const beforeRecoveredData=observed.dataMessages
+      const recipientBeforeRecovered=observed.recipients.length
+      await runOwnerClosingEmailTick(container)
+      assert.deepEqual(observed.recipients.slice(recipientBeforeRecovered),
+        [retryEmail],"Retry must target ONLY the newly verified Owner's email")
+      assert.equal(observed.dataMessages,beforeRecoveredData+1,
+        "Newly verified Owner must receive exactly one task-local SMTP DATA")
+      const recovered=await q("select person_id,attempts,last_result,"+
+        "message_id,accepted_at,next_attempt_at from "+
+        "da_store_owner_closing_email where audit_event_id=$1 "+
+        "order by person_id",[multiOwnerEvent])
+      assert.equal(recovered.length,2)
+      const updatedByPerson=new Map(recovered.map((x:any)=>[x.person_id,x]))
+      const firstFinal=updatedByPerson.get(owner) as any
+      const secondFinal=updatedByPerson.get(unverifiedOwner) as any
+      assert.ok(firstFinal&&secondFinal)
+      assert.equal(firstFinal.attempts,1,
+        "First Owner may not be resent after second Owner identity verified")
+      assert.equal(firstFinal.last_result,"accepted")
+      assert.equal(firstFinal.message_id,original.message_id,
+        "Original accepted SMTP evidence must not be overwritten")
+      assert.equal(new Date(firstFinal.accepted_at).getTime(),
+        new Date(original.accepted_at).getTime(),
+        "Original Owner accepted timestamp must remain immutable")
+      assert.equal(secondFinal.attempts,2)
+      assert.equal(secondFinal.last_result,"accepted")
+      assert.ok(secondFinal.message_id&&secondFinal.accepted_at)
+      assert.notEqual(secondFinal.message_id,firstFinal.message_id,
+        "Second Owner requires an independent SMTP Message-ID")
+      assert.equal(new Date(secondFinal.next_attempt_at).getTime()-
+        new Date(multiSource.occurred_at).getTime(),2*86400000,
+        "Recovered Owner's next slot must remain original T0 +48h")
+      assert.equal((await q("select count(*)::int n "+
+        "from da_notification_receipt where audit_event_id=$1",
+        [multiOwnerEvent]))[0].n,2,
+        "Identity recovery may not duplicate or erase canonical in-account receipts")
+      await runOwnerClosingEmailTick(container)
+      assert.equal(observed.dataMessages,beforeRecoveredData+1,
+        "Immediate replay cannot resend any Owner security message")
+      assert.deepEqual((await q("select person_id,attempts,last_result,"+
+        "message_id from da_store_owner_closing_email "+
+        "where audit_event_id=$1 order by person_id",
+        [multiOwnerEvent])).map((x:any)=>[
+          x.person_id,x.attempts,x.last_result,x.message_id
+        ]),recovered.map((x:any)=>[
+          x.person_id,x.attempts,x.last_result,x.message_id
+        ]),"Retry after recovery must preserve independent durable Owner records")
+      process.stdout.write(
+        "PASS B22 PG16+loopback SMTP: second protected Owner verified before "+
+        "their own scheduled retry; exactly one new DATA, separate accepted "+
+        "Message-IDs and durable receipts, first Owner unchanged, replay safe\\n")
+
       // Scope the extra synthetic membership to this single mixed test.
       await q("update da_organization_membership set status='revoked',"+
         "revoked_at=clock_timestamp() where person_id=$1",[unverifiedOwner])
