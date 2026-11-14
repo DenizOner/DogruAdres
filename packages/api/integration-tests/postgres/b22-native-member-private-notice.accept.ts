@@ -105,8 +105,17 @@ export async function verifyB22CoownerNativeMemberReadback(input:{
       "document.getElementById('store-owner-closing-status').getAttribute('role')"),
       "status")
     const firstAfter=await privateClosing(browser,orgA)
-    assert.deepEqual(firstAfter.body,firstNotice.body,
-      "Second protected Owner reading their own receipt must not change A's result")
+    assert.equal(firstAfter.status,200)
+    assert.deepEqual(firstAfter.body.email_notice,firstNotice.body.email_notice,
+      "A's individual SMTP status/attempts remain unchanged by B's Owner read")
+    assert.equal(firstAfter.body.state,firstNotice.body.state)
+    assert.equal(firstAfter.body.seller_id,firstNotice.body.seller_id)
+    assert.equal(firstAfter.body.permanent_finalization_enabled,false)
+    assert.deepEqual(firstAfter.body.notification_coverage,{
+      protected_owners:2,personal_receipts:2,mailbox_delivery_verified:false
+    },"Aggregate count must reflect newly protected B, never reveal B's private attempts")
+    assert.equal(JSON.stringify(firstAfter.body).includes(emailA),false)
+    assert.equal(JSON.stringify(firstAfter.body).includes("message_id"),false)
   }finally{
     const restoredRole=await q("update da_organization_membership "+
       "set role=$2,protected_owner=$3,revoked_at=$4,"+
