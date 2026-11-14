@@ -477,7 +477,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   }
   assert.equal(mailReadiness.body?.terminal_preflight.financial_legal_clearance_verified,false,
     "A native payment/refund graph can never imply complete legal clearance")
-  process.stdout.write("PASS B22 real PG16 native finance graph: Seller-scoped OrderGroup and Order payment/refund relations queried read-only; financial/legal clearance stays false, no payment/return execution\\n")
+  process.stdout.write("PASS B22 real PG16 native finance graph: Seller-scoped OrderGroup and Order payment/refund relations queried read-only; financial/legal clearance stays false, no payment/return execution\n")
   assert.equal(JSON.stringify(mailReadiness.body).includes("og_"),false,
     "Native OrderGroup IDs are not exposed to Staff")
   assert.deepEqual(mailReadiness.body?.terminal_preflight,{
