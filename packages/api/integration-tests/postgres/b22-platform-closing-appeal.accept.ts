@@ -464,7 +464,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
     "Native Seller OrderGroup must retain real Seller Order links")
   for(const order of linkedOrders){
     assert.match(order?.id??"",/^order_[A-Za-z0-9_-]+$/)
-    assert.ok(Object.hasOwn(order,"payment_collections"),
+    assert.ok(Object.prototype.hasOwnProperty.call(order,"payment_collections"),
       "Native Medusa must explicitly project the payment collection relation")
     assert.ok(Array.isArray(order.payment_collections),
       "An empty native payment collection list is not financial clearance")
