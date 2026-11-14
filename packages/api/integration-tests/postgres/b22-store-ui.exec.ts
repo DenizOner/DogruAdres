@@ -4417,6 +4417,142 @@ async function verifyInvisibleStoreNameRejection(
   process.stdout.write("PASS B22 PG16/Chrome: invisible Store names HTTP400; zero application, native Seller, audit/outbox effects\n")
 }
 
+
+/** Isolated B22/DA-FIN-001 proof. A Seller-filtered Mercur OrderGroup
+ * contains Orders for *other* Sellers. Use each canonical native Order→Seller
+ * link; never infer Store financial scope from a group-level seller filter.
+ * No production writer, payment provider, balance or finalizer is enabled.
+ */
+async function verifyB22NativeSellerOrderAttribution(input:{
+  container:any;cartService:any;nativeCustomer:{id:string};
+  region:{id:string};market:{id:string};b22Profile:{id:string};
+  member:{id:string};rand:string;ownerStoreId:string;
+  secondaryVariant:{id:string};hookProbeOffer:{id:string};
+  variant:{id:string};gammaSellerId:string;
+  q:(sql:string,args?:any[])=>Promise<any[]>;query:any;
+  claimCart:(organizationId:string,cartId:string)=>Promise<any>;
+  buyerOrganizationId:string;foundation:any;native:any;
+  secondOwnerStoreId:string;
+}){
+  const {container,cartService,nativeCustomer,region,market,b22Profile,
+    member,rand,ownerStoreId,secondaryVariant,hookProbeOffer,variant,
+    gammaSellerId,q,query,claimCart,buyerOrganizationId,foundation,native,
+    secondOwnerStoreId}=input
+  // Test-only B22 DA-FIN-001: Mercur's seller_id OrderGroup filter
+  // selects GROUPS via EXISTS. It does NOT narrow the Orders inside a
+  // multi-Seller group. Prove the native per-Order Seller links before
+  // any future Staff finance projection. No production finance API here.
+  const attributionSku="B22-SELLER-ORDER-ATTRIBUTION-"+rand
+  const {result:[alphaZeroOffer]}=await createOffersWorkflow(container).run({
+    input:{offers:[{
+      seller_id:ownerStoreId,created_by:member.id,sku:attributionSku,
+      variant_id:secondaryVariant.id,shipping_profile_id:b22Profile.id,
+      inventory_items:[{sku:attributionSku,stock_levels:[]}],
+      prices:[{amount:0,currency_code:"eur"}],
+      manage_inventory:false,allow_backorder:true
+    }]}
+  })
+  assert.equal(alphaZeroOffer.seller_id,ownerStoreId)
+  const multiSellerZeroCart=await cartService.createCarts({
+    currency_code:"eur",customer_id:nativeCustomer.id
+  })
+  await cartService.updateCarts(multiSellerZeroCart.id,{
+    region_id:region.id,sales_channel_id:market.id
+  })
+  for(const offer of [
+    {id:alphaZeroOffer.id,variant_id:secondaryVariant.id},
+    {id:hookProbeOffer.id,variant_id:variant.id}
+  ]){
+    await addToCartWorkflow(container).run({input:{
+      cart_id:multiSellerZeroCart.id,
+      items:[{variant_id:offer.variant_id,offer_id:offer.id,
+        quantity:1,requires_shipping:false,
+        metadata:{offer_id:offer.id}} as any]
+    }})
+  }
+  const {data:multiBefore}=await query.graph({
+    entity:"cart",filters:{id:multiSellerZeroCart.id},
+    fields:["id","total","completed_at","customer.id",
+      "items.id","items.offer.seller_id"]
+  })
+  assert.equal(multiBefore.length,1)
+  assert.equal(Number(multiBefore[0].total),0)
+  assert.equal(multiBefore[0].completed_at,null)
+  assert.equal(multiBefore[0].customer?.id,nativeCustomer.id)
+  assert.equal(multiBefore[0].items.length,2)
+  assert.deepEqual(new Set(multiBefore[0].items.map((item:any)=>
+    item.offer?.seller_id)),new Set([ownerStoreId,gammaSellerId]))
+  const multiClaim=await claimCart(buyerOrganizationId,multiSellerZeroCart.id)
+  assert.equal(multiClaim.status,200)
+  assert.equal(multiClaim.body.checkout_ready,false,
+    "This isolated native checkout test never exposes a visitor writer")
+  assert.equal(await foundation.authorizeBuyerCheckout(
+    multiSellerZeroCart.id,nativeCustomer.id,[ownerStoreId,gammaSellerId]
+  ),true,"Both Seller entitlements must pass the same fresh Buyer L")
+  const multiRun=await completeCartWithSplitOrdersWorkflow(container).run({
+    input:{cart_id:multiSellerZeroCart.id},throwOnError:false
+  })
+  assert.equal(multiRun.errors?.length??0,0,
+    "Native split-order must complete the two-Seller zero-value Cart")
+  const groupRows=await q(
+    "select id from order_group where cart_id=$1",[multiSellerZeroCart.id])
+  assert.equal(groupRows.length,1)
+  assert.equal(groupRows[0].id,multiRun.result?.order_group_id)
+  const multiGroupId=groupRows[0].id as string
+  const {data:multiGroups}=await query.graph({
+    entity:"order_group",filters:{id:multiGroupId},
+    fields:["id","orders.id","orders.payment_collections.id"]
+  })
+  assert.equal(multiGroups.length,1)
+  assert.equal(multiGroups[0].id,multiGroupId)
+  assert.equal(multiGroups[0].orders?.length,2,
+    "Graph of the whole OrderGroup contains both Sellers' Orders")
+  const perOrderSeller=await q(`select ogo.order_id,s.seller_id
+    from order_group_order ogo
+    join "order" o on o.id=ogo.order_id and o.deleted_at is null
+    join order_order_seller_seller s on s.order_id=o.id
+      and s.deleted_at is null
+    where ogo.order_group_id=$1 and ogo.deleted_at is null
+    order by s.seller_id,ogo.order_id`,[multiGroupId])
+  assert.equal(perOrderSeller.length,2,
+    "Each split Order needs exactly one live native Seller binding")
+  assert.deepEqual(new Set(perOrderSeller.map((x:any)=>x.seller_id)),
+    new Set([ownerStoreId,gammaSellerId]))
+  assert.equal(new Set(perOrderSeller.map((x:any)=>x.order_id)).size,2)
+  assert.deepEqual(
+    new Set(multiGroups[0].orders.map((x:any)=>x.id)),
+    new Set(perOrderSeller.map((x:any)=>x.order_id)),
+    "Every Graph Order must have an exact native Seller attribution")
+  for(const sellerId of [ownerStoreId,gammaSellerId]){
+    const matched=await native.listOrderGroups({
+      id:multiGroupId,seller_id:sellerId
+    },{take:2})
+    assert.deepEqual(matched.map((x:any)=>x.id),[multiGroupId],
+      "Seller group filter matches shared group, not isolated Orders")
+    assert.equal(perOrderSeller.filter((x:any)=>
+      x.seller_id===sellerId).length,1,
+    "Each Seller must be entitled to only its own linked Order")
+  }
+  assert.deepEqual(await native.listOrderGroups({
+    id:multiGroupId,seller_id:secondOwnerStoreId
+  },{take:2}),[],"A third Seller must not match this shared group")
+  const {data:multiPayments}=await query.graph({
+    entity:"cart_payment_collection",filters:{cart_id:multiSellerZeroCart.id},
+    fields:["payment_collection_id"]
+  })
+  assert.equal(multiPayments.length,0,
+    "Zero-value multi-Seller probe must not create payment or capture")
+  assert.ok((await cartService.retrieveCart(multiSellerZeroCart.id)).completed_at)
+  const multiAttribution=await q(
+    "select organization_id,customer_id from da_buyer_cart_attribution where cart_id=$1",
+    [multiSellerZeroCart.id])
+  assert.equal(multiAttribution.length,1)
+  assert.equal(multiAttribution[0].organization_id,buyerOrganizationId)
+  assert.equal(multiAttribution[0].customer_id,nativeCustomer.id)
+  process.stdout.write("PASS B22 real PG16 native multi-Seller OrderGroup: two Seller-bound Orders share one Group; seller_id group filters include foreign Order, exact native per-Order attribution verified, no payment or finance clearance\n")
+
+}
+
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   const preparing=process.env.B22_UI_PREPARE==="true"
@@ -9205,6 +9341,14 @@ export default async function({container}:any){
       orderGroupId:zeroOrderGroupId as string,cartId:zeroOrderCart.id,
       nativeCustomerId:nativeCustomer.id,q
     })
+
+    await verifyB22NativeSellerOrderAttribution({
+      container,cartService,nativeCustomer,region,market,b22Profile,member,rand,
+      ownerStoreId,secondaryVariant,hookProbeOffer,variant,gammaSellerId,
+      q,query,claimCart,buyerOrganizationId:organizations[1].id,
+      foundation,native,secondOwnerStoreId
+    })
+
     // Native Medusa system provider is an in-memory simulator. All writes
     // are in this preauthorized random disposable CI database; no external
     // payment, HTTP checkout route, provider configuration or payout.
