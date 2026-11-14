@@ -570,7 +570,7 @@ async function main(){
       "values ($1,$2,'user',$3)",["damap_b22_mail_pg",owner,syntheticActor])
     const observed={acceptedRecipient:false,secureLink:false,
       ownerSafeLink:false,acceptedData:false,dataMessages:0,
-      messageIds:[] as string[]}
+      messageIds:[] as string[],recipients:[] as string[]}
     let refuseRecipient=false,dropAfterData=false
     let holdSmtpDataAck:TestBarrier|null=null
     const mock=createServer(socket=>{
@@ -622,6 +622,7 @@ async function main(){
               line==="RCPT TO:<"+retryEmail+">",
               "Task-local SMTP may only send to two synthetic .invalid recipients")
             observed.acceptedRecipient=true
+            observed.recipients.push(line.slice("RCPT TO:<".length,-1))
             socket.write(refuseRecipient?"550 recipient rejected\r\n":"250 recipient accepted\r\n")
           }else if(line==="DATA"){
             receivingData=true
@@ -955,7 +956,10 @@ async function main(){
       assert.equal(retryDue.length,1,
         "Only the previously unverified Owner may receive their due retry")
       const beforeRecoveredData=observed.dataMessages
+      const recipientBeforeRecovered=observed.recipients.length
       await runOwnerClosingEmailTick(container)
+      assert.deepEqual(observed.recipients.slice(recipientBeforeRecovered),
+        [retryEmail],"Retry must target ONLY the newly verified Owner's email")
       assert.equal(observed.dataMessages,beforeRecoveredData+1,
         "Newly verified Owner must receive exactly one task-local SMTP DATA")
       const recovered=await q("select person_id,attempts,last_result,"+
