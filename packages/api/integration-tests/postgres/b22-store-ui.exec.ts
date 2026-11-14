@@ -560,7 +560,8 @@ async function verifyOwnerClosingBrowser(input:{
     browser,coOwner:reviewer,container,q,firstPersonId:ownerPersonId,
     secondPersonId:coOwnerPersonId,eventId:closed.audit_event_id,
     firstEmail,secondEmail
-  })  // #252 post-real-SMTP readback: the first Owner's private UI previously
+  })
+  // #252 post-real-SMTP readback: the first Owner's private UI previously
   // used a synthetic accepted row. After the other Owner's ACTUAL loopback
   // SMTP 250, the server and UI must still show ONLY this Owner's own state.
   const postNativeSmtpOwner=await readOwnClosing(
@@ -598,7 +599,7 @@ async function verifyOwnerClosingBrowser(input:{
   assert.deepEqual((await q("select id,name,handle,status,approved_at,"+
     "closed_from,closed_to from seller where id=$1",[ownerStoreId]))[0],
     nativeBefore,"A second SMTP acceptance cannot close or rename a Seller")
-  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: after second Owner native SMTP 250, first Owner HTTPS/UI keeps own accepted-not-delivered status; unlinked second Owner and foreign Org HTTP403; canonical receipts remain 2, no terminal finalization\\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: after second Owner native SMTP 250, first Owner HTTPS/UI keeps own accepted-not-delivered status; unlinked second Owner and foreign Org HTTP403; canonical receipts remain 2, no terminal finalization\n")
 
   assert.equal(closed.outbox_count,1)
   assert.equal(closed.notices,2,"Every protected Owner must receive one closing notice")
