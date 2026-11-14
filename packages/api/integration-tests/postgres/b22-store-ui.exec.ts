@@ -9275,13 +9275,13 @@ export default async function({container}:any){
     assert.equal(multiGroups[0].id,multiGroupId)
     assert.equal(multiGroups[0].orders?.length,2,
       "Graph of the whole OrderGroup contains both Sellers' Orders")
-    const perOrderSeller=await q(\`select ogo.order_id,s.seller_id
+    const perOrderSeller=await q(`select ogo.order_id,s.seller_id
       from order_group_order ogo
       join "order" o on o.id=ogo.order_id and o.deleted_at is null
       join order_order_seller_seller s on s.order_id=o.id
         and s.deleted_at is null
       where ogo.order_group_id=$1 and ogo.deleted_at is null
-      order by s.seller_id,ogo.order_id\`,[multiGroupId])
+      order by s.seller_id,ogo.order_id`,[multiGroupId])
     assert.equal(perOrderSeller.length,2,
       "Each split Order needs exactly one live native Seller binding")
     assert.deepEqual(new Set(perOrderSeller.map((x:any)=>x.seller_id)),
