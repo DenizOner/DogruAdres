@@ -3111,6 +3111,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     panel.hidden=true;el('store-owner-pause-status').textContent='';
     const select=form?.elements&&typeof form.elements.namedItem==='function'?
       form.elements.namedItem('seller_id'):null;
+    if(select)select.disabled=false; // Clear an in-flight mutation's UI lock.
     if(select?.replaceChildren)select.replaceChildren();
     if(typeof form?.querySelectorAll==='function')
       for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
@@ -3120,6 +3121,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   function ownerPauseButtons(){
     const form=el('store-owner-pause-form');
     if(!form||typeof form.querySelectorAll!=='function')return;
+    // A different Store selected mid-write would defer its GET until the
+    // old mutation settles, leaving a misleading stale panel. Keep selection
+    // stable for this short, pending-only window.
+    const select=form.elements&&typeof form.elements.namedItem==='function'?
+      form.elements.namedItem('seller_id'):null;
+    if(select)select.disabled=ownerPausePending;
     for(const b of form.querySelectorAll('button[type=submit]')){
       b.disabled=ownerPausePending||ownerPauseUncertain||
         !ownerPauseState||ownerPauseState.platform_closed!==false||
