@@ -983,19 +983,24 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
         "if(window.__b22PauseWire)return false;"+
         "window.__b22PauseWire={original:window.fetch,count:0};"+
         "const wire=window.__b22PauseWire;"+
-        "window.fetch=async(...args)=>{const actual=await wire.original(...args);"+
-        "if(wire.count===0&&args[0]==='/personal/store-owner-pause'&&"+
-        "args[1]?.method==='POST'){wire.count++;"+
+        "window.fetch=async(...args)=>{"+
+        "const actual=await wire.original.apply(window,args);"+
+        "const raw=args[0];"+
+        "const method=String(args[1]?.method||raw?.method||'GET').toUpperCase();"+
+        "const path=new URL(typeof raw==='string'?raw:raw?.url,location.href).pathname;"+
+        "if(wire.count===0&&path==='/personal/store-owner-pause'&&"+
+        "method==='POST'){wire.count++;wire.status=actual.status;"+
         "return new Response("+JSON.stringify(body)+",{status:actual.status,"+
         "headers:{'content-type':'application/json'}})}return actual};"+
         "return true})()"),true)
     }
     const restoreOwnerPauseReadback=async()=>{
-      const count=await browser.eval("window.__b22PauseWire?.count")
+      const result=await browser.eval("({count:window.__b22PauseWire?.count,"+
+        "status:window.__b22PauseWire?.status??null})")
       assert.equal(await browser.eval("(()=>{if(!window.__b22PauseWire)return false;"+
         "window.fetch=window.__b22PauseWire.original;"+
         "delete window.__b22PauseWire;return true})()"),true)
-      return count
+      return result
     }
     const ownerPausePostCount=()=>browser.http.filter((item:any)=>
       item.path==="/personal/store-owner-pause"&&item.method==="POST").length
@@ -1012,8 +1017,8 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
         "Array.from(f.querySelectorAll('button[type=submit]')).every(b=>b.disabled)})()")
     }finally{
       await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
-      assert.equal(await restoreOwnerPauseReadback(),1,
-        "Exactly one real HTTPS pause was sent before its body was truncated")
+      assert.deepEqual(await restoreOwnerPauseReadback(),{count:1,status:200},
+        "One real HTTP200 pause must commit before its body is truncated")
     }
     assert.equal(ownerPausePostCount(),firstPosts+1,
       "Unknown HTTP200 response must not automatically replay Owner pause")
@@ -1117,8 +1122,8 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
         "Array.from(f.querySelectorAll('button[type=submit]')).every(b=>b.disabled)})()")
     }finally{
       await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
-      assert.equal(await restoreOwnerPauseReadback(),1,
-        "One real HTTPS resume was committed before an invalid response schema")
+      assert.deepEqual(await restoreOwnerPauseReadback(),{count:1,status:200},
+        "One real HTTP200 resume must commit before its invalid response schema")
     }
     assert.equal(ownerPausePostCount(),resumePosts+1)
     assert.deepEqual((await q(
