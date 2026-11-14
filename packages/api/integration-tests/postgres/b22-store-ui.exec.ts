@@ -588,7 +588,12 @@ async function verifyOwnerClosingBrowser(input:{
     "Another Organization must not read either Owner's SMTP result")
   await browser.send("Page.bringToFront")
   await browser.wait("document.visibilityState==='visible'")
+  const oldReadCount=browser.http.filter((x:any)=>
+    x.path==="/personal/store-owner-closing"&&x.method==="GET").length
   await browser.click("#store-owner-closing-refresh")
+  await until(async()=>browser.http.filter((x:any)=>
+    x.path==="/personal/store-owner-closing"&&x.method==="GET"&&x.status===200
+  ).length>oldReadCount,19000,"B22 Owner real SMTP post-result HTTPS GET")
   await browser.wait("document.getElementById('store-owner-closing-status')."+
     "textContent.includes('SMTP sunucusu e-postayı kabul etti; posta kutusuna teslim doğrulanmadı.') && "+
     "document.getElementById('store-owner-closing-status').textContent.includes('Korunan Owner bildirim kayıtları: 2/2')")
