@@ -10289,6 +10289,14 @@ export default async function({container}:any){
     }finally{
       await q("update da_organization_membership set role='member',protected_owner=false,updated_at=clock_timestamp() where id=$1",
         [alphaMember.id])
+      // This real private UI intentionally stops refreshing while backgrounded.
+      // The preceding independent Staff/Buyer browser can own the foreground;
+      // restore this Owner's actual visible Chrome tab, then demand the live
+      // membership picker. Never force hidden DOM open or bypass server auth.
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'&&"+
+        "!document.getElementById('workspace').hidden&&"+
+        "document.querySelector('#memberships-refresh')?.getClientRects().length>0")
       await browser.click('#memberships-refresh')
       await browser.wait("Array.from(document.querySelector('#product-grants-form select[name=membership_id]').options).some(o=>o.value==="+JSON.stringify(alphaMember.id)+")")
     }
