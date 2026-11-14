@@ -3534,20 +3534,36 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               const pauseChoice=pauseForm?.elements&&
                 typeof pauseForm.elements.namedItem==='function'?
                 pauseForm.elements.namedItem('seller_id'):null;
-              if(pauseChoice&&typeof pauseChoice.replaceChildren==='function'){
-              pauseChoice.replaceChildren();
-              for(const store of renameData.stores){
-                const opt=document.createElement('option');
-                opt.value=store.id;
-                opt.textContent=store.name+(store.status==='suspended'?' — platform askısında':'');
-                pauseChoice.append(opt);
-              }
-              el('store-owner-pause-panel').hidden=renameData.stores.length===0;
-              if(renameData.stores.length){
-                 void refreshOwnerPause(org,request);
-                 void refreshOwnerClosing(org,request);
-                 void refreshPlatformClosingOwner(org,request);
-               }
+              if(pauseChoice&&typeof pauseChoice.replaceChildren==='function'&&
+                 !ownerPausePending){
+                // Native disabled selectors may still be changed by code.
+                // Never rebind an in-flight pause to the first listed Store.
+                const previousSeller=pauseChoice.value;
+                pauseChoice.replaceChildren();
+                for(const store of renameData.stores){
+                  const opt=document.createElement('option');
+                  opt.value=store.id;
+                  opt.textContent=store.name+
+                    (store.status==='suspended'?' — platform askısında':'');
+                  pauseChoice.append(opt);
+                }
+                if(previousSeller&&renameData.stores.some(s=>s.id===previousSeller))
+                  pauseChoice.value=previousSeller;
+                else if(previousSeller){
+                  const placeholder=document.createElement('option');
+                  placeholder.value='';placeholder.textContent='Mağazayı yeniden seçin';
+                  pauseChoice.prepend(placeholder);pauseChoice.value='';
+                  ownerPauseRead++;ownerPauseVersion=null;ownerPauseState=null;
+                  ownerPauseUncertain=true;ownerPauseButtons();ownerClosingButtons();
+                  el('store-owner-pause-status').textContent=
+                    'Önceki mağaza artık yetkili listede yok. Yeniden seçim ve durum doğrulaması gerekli.';
+                }
+                el('store-owner-pause-panel').hidden=renameData.stores.length===0;
+                if(renameData.stores.length&&pauseChoice.value){
+                  void refreshOwnerPause(org,request);
+                  void refreshOwnerClosing(org,request);
+                  void refreshPlatformClosingOwner(org,request);
+                }
               }
 
             }catch{
