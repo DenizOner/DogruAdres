@@ -168,6 +168,24 @@ async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unveri
         limit 2`,[claim.seller_id,claim.person_id])
       if(proof.length!==1||!proof[0].delivered_at)
         throw new Error("B22 mail result not committed")
+      // The authenticated link visit intentionally clears the in-flight
+      // claim. A real SMTP 250 can arrive *after* that commit. Preserve its
+      // private acceptance proof without changing the Owner's delivered
+      // status, the deadline, or the remaining retry schedule.
+      // The same attempt number and cleared claim are required; a stale
+      // worker may never overwrite a newer pending claim or invent delivery.
+      if(outcome==="accepted"&&messageId){
+        const accepted=await em.execute(`update da_store_platform_closing_email
+          set message_id=coalesce(message_id,?),
+            updated_at=clock_timestamp()
+          where seller_id=? and person_id=? and delivered_at is not null
+            and claim_id is null and last_result='delivered' and attempts=?
+          returning seller_id`,[
+          messageId,claim.seller_id,claim.person_id,claim.attempts
+        ])
+        if(accepted.length!==1)
+          throw new Error("B22 delivered mail acceptance not committed")
+      }
     }
   })
 }
