@@ -644,6 +644,18 @@ async function main(){
       assert.equal(Number((await q("select count(*)::int n "+
         "from da_store_platform_closing_email_link "+
         "where seller_id=$1",[mailSeller]))[0].n),1)
+      // Isolate this new race from the previous SMTP-accepted fixture:
+      // that older synthetic closing started 73 hours ago, so its scheduled
+      // +24h retry is already due. Move only its task-owned next attempt
+      // into the future, without changing its proven SMTP 250 result.
+      const olderQueued=await q(
+        "update da_store_platform_closing_email "+
+        "set next_attempt_at=clock_timestamp()+interval '24 hours' "+
+        "where seller_id=$1 and person_id=$2 and attempts=1 "+
+        "and last_result='accepted' and delivered_at is null "+
+        "returning seller_id",[mailSeller,owner])
+      assert.equal(olderQueued.length,1,
+        "Only the previous synthetic SMTP row is deferred in this fixture")
       // #311 P2: a verified Owner can visit the link while SMTP has
       // submitted DATA but the 250 ACK has not yet reached the worker.
       // This isolated SQL transition mirrors the *already authorized* link
