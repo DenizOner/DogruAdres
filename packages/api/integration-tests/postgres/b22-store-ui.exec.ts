@@ -1022,6 +1022,9 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       // The real server has committed, but the caller is still waiting for
       // HTTP200. A user refresh during this window MUST NOT start another GET.
       await browser.wait("window.__b22PauseWire?.postHeld===true")
+      assert.equal(await browser.eval("document.querySelector("+
+        "'#store-owner-pause-form select[name=seller_id]').disabled"),true,
+        "Switching to a second Store must be disabled while Owner pause is pending")
       assert.equal(await browser.eval("window.__b22PauseWire?.getCount"),0)
       await browser.click('#store-owner-pause-refresh')
       assert.equal(await browser.eval("window.__b22PauseWire?.getCount"),0,
@@ -1040,6 +1043,11 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       assert.deepEqual(await restoreOwnerPauseReadback(),{count:1,status:200},
         "One real HTTP200 pause must commit before its body is truncated")
     }
+    await browser.wait("document.querySelector("+
+      "'#store-owner-pause-form select[name=seller_id]').disabled===false")
+    assert.equal(await browser.eval("document.querySelector("+
+      "'#store-owner-pause-form select[name=seller_id]').value"),ownerStoreId,
+      "Store selection remains stable until the Owner pause result settles")
     assert.equal(ownerPausePostCount(),firstPosts+1,
       "Unknown HTTP200 response must not automatically replay Owner pause")
     const firstSaved=(await q(
@@ -1174,7 +1182,7 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       "After Owner resume with native platform OPEN, final L authorization is restored")
     assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]}))
       .items?.length,2,"Neither pause nor resume changes preexisting cart lines")
-    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Owner refresh during real committed pause POST with HTTP200 response held starts zero premature GET, keeps both buttons locked; release gives uncertain, only post-settle authorized GET reopens controls\n")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Owner refresh during real committed pause POST with HTTP200 response held starts zero premature GET, keeps Store selector and both buttons locked; release gives uncertain, only post-settle authorized GET reopens controls\n")
     process.stdout.write("PASS B22 Chrome/HTTPS/PG16: actual Owner pause/resume each persisted once but client HTTP200 truncated JSON or mismatched Organization response remained uncertain; both buttons disabled until fresh authorized GET, no replay and two durable audit/outbox\n")
     process.stdout.write("PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed\n")
 
