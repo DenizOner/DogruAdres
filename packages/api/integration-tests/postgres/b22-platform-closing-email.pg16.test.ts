@@ -555,7 +555,8 @@ async function main(){
     await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
       "values ($1,$2,'user',$3)",["damap_b22_mail_pg",owner,syntheticActor])
     const observed={acceptedRecipient:false,secureLink:false,
-      ownerSafeLink:false,acceptedData:false,dataMessages:0}
+      ownerSafeLink:false,acceptedData:false,dataMessages:0,
+      messageIds:[] as string[]}
     let refuseRecipient=false,dropAfterData=false
     let holdSmtpDataAck:TestBarrier|null=null
     const mock=createServer(socket=>{
@@ -587,6 +588,11 @@ async function main(){
                   })
                 }else socket.write("250 message queued on isolated loopback\r\n")
               }
+            }else if(line.startsWith("Message-ID: ")){
+              const id=line.slice("Message-ID: ".length)
+              assert.match(id,/^<\d+\.[a-f0-9]{16}@127\.0\.0\.1>$/,
+                "Only task-local generated SMTP Message-ID is observed")
+              observed.messageIds.push(id)
             }else if(line.includes("/personal#closing_notice=")){
               observed.secureLink=true
             }else if(/(?:^|\s)https:\/\/example\.invalid\/personal(?:\s|$)/.test(line)){
@@ -634,6 +640,8 @@ async function main(){
       assert.equal(accepted.attempts,1)
       assert.equal(accepted.last_result,"accepted")
       assert.ok(accepted.message_id,"SMTP 250 must persist a private Message-ID")
+      assert.equal(accepted.message_id,observed.messageIds.at(-1),
+        "First SMTP 250 must persist the exact private DATA Message-ID")
       assert.equal(accepted.delivered_at,null,
         "SMTP 250 is never mailbox-delivery proof")
       assert.equal(accepted.delivery_source,null)
@@ -644,6 +652,185 @@ async function main(){
       assert.equal(Number((await q("select count(*)::int n "+
         "from da_store_platform_closing_email_link "+
         "where seller_id=$1",[mailSeller]))[0].n),1)
+      // Isolate this new race from the previous SMTP-accepted fixture:
+      // that older synthetic closing started 73 hours ago, so its scheduled
+      // +24h retry is already due. Move only its task-owned next attempt
+      // into the future, without changing its proven SMTP 250 result.
+      const olderQueued=await q(
+        "update da_store_platform_closing_email "+
+        "set next_attempt_at=clock_timestamp()+interval '24 hours' "+
+        "where seller_id=$1 and person_id=$2 and attempts=1 "+
+        "and last_result='accepted' and delivered_at is null "+
+        "returning seller_id",[mailSeller,owner])
+      assert.equal(olderQueued.length,1,
+        "Only the previous synthetic SMTP row is deferred in this fixture")
+      // #311 P2: a verified Owner can visit the link while SMTP has
+      // submitted DATA but the 250 ACK has not yet reached the worker.
+      // This isolated SQL transition mirrors the *already authorized* link
+      // visit's row update; the HTTPS authentication boundary is exercised
+      // by the separate existing Chrome acceptance test.
+      const visitRaceSeller="sel_b22_mail_pg_smtp_link_race"
+      await seed(visitRaceSeller)
+      // The prior accepted SMTP test's next +24h slot is already past
+      // because that synthetic closure began 73h ago. Make only this new
+      // task-owned row the earliest due claim; otherwise the held DATA ACK
+      // can belong to the previous fixture, not this race.
+      const focusedQueue=await q(
+        "update da_store_platform_closing_email "+
+        "set next_attempt_at=clock_timestamp()-interval '72 hours' "+
+        "where seller_id=$1 and person_id=$2 and attempts=0 "+
+        "returning seller_id",[visitRaceSeller,owner])
+      assert.equal(focusedQueue.length,1,
+        "Only the new synthetic race queue may be prioritized")
+      const visitRaceGate=testBarrier()
+      const beforeRaceMessages=observed.dataMessages
+      holdSmtpDataAck=visitRaceGate
+      const visitRaceWorker=runPlatformClosingEmailTick(container)
+      try{
+        await waitForBarrier(visitRaceGate.entered,
+          "platform SMTP DATA before Owner link visit")
+        assert.equal(observed.dataMessages,beforeRaceMessages+1)
+        const [inflight]=await q(
+          "select attempts,claim_id,last_result,message_id,delivered_at "+
+          "from da_store_platform_closing_email where seller_id=$1 and person_id=$2",
+          [visitRaceSeller,owner])
+        assert.equal(inflight.attempts,1)
+        assert.ok(inflight.claim_id)
+        assert.equal(inflight.last_result,"inflight")
+        assert.equal(inflight.message_id,null)
+        assert.equal(inflight.delivered_at,null)
+        const [link]=await q(
+          "select attempt from da_store_platform_closing_email_link "+
+          "where seller_id=$1 and person_id=$2",[visitRaceSeller,owner])
+        assert.equal(link.attempt,1,
+          "Link and in-flight SMTP acceptance must concern the same attempt")
+        const recorded=await q(
+          "update da_store_platform_closing_email set "+
+          "delivered_at=clock_timestamp(),delivery_source='authenticated_owner',"+
+          "email_link_visited_at=clock_timestamp(),"+
+          "account_viewed_at=clock_timestamp(),last_result='delivered',"+
+          "claim_id=null,lease_until=null,updated_at=clock_timestamp() "+
+          "where seller_id=$1 and person_id=$2 and claim_id=$3::uuid "+
+          "and last_result='inflight' returning seller_id",
+          [visitRaceSeller,owner,inflight.claim_id])
+        assert.equal(recorded.length,1,
+          "Owner visit must commit while SMTP acceptance is still pending")
+      }finally{
+        visitRaceGate.release()
+        holdSmtpDataAck=null
+        await Promise.allSettled([visitRaceWorker])
+      }
+      await visitRaceWorker
+      const [visitRaceProof]=await q(
+        "select attempts,last_result,message_id,delivered_at,delivery_source,"+
+        "claim_id,lease_until from da_store_platform_closing_email "+
+        "where seller_id=$1 and person_id=$2",[visitRaceSeller,owner])
+      assert.equal(visitRaceProof.attempts,1)
+      assert.equal(visitRaceProof.last_result,"delivered",
+        "A late worker may not overwrite authenticated Owner delivery")
+      assert.equal(visitRaceProof.delivery_source,"authenticated_owner")
+      assert.ok(visitRaceProof.delivered_at)
+      assert.ok(visitRaceProof.message_id,
+        "SMTP 250 message ID must survive the concurrent link visit")
+      assert.equal(visitRaceProof.claim_id,null)
+      assert.equal(visitRaceProof.lease_until,null)
+      assert.equal((await row(visitRaceSeller)).deadline_started_at,null,
+        "SMTP settlement alone must never start a new appeal deadline")
+      const messagesAfterVisit=observed.dataMessages
+      await runPlatformClosingEmailTick(container)
+      assert.equal(observed.dataMessages,messagesAfterVisit,
+        "Settled authenticated delivery must never send a second email")
+      process.stdout.write("PASS B22 PG16+loopback SMTP: Owner-link committed between DATA and 250 ACK retains private acceptance Message-ID, one attempt, no resend and no clock change from SMTP settlement\n")
+
+      // #311 follow-up P2: a previous accepted SMTP attempt (M1) does not
+      // confirm mailbox delivery. A lawful +24h retry has its own M2 even
+      // when the Owner visits the link between DATA and the second 250 ACK.
+      // Reuse the first real SMTP recipient; do not forge either Message-ID.
+      const firstAcceptedId=accepted.message_id as string
+      assert.equal((await row(mailSeller)).deadline_started_at,null)
+      const enableRetry=await q(
+        "update da_store_platform_closing_email "+
+        "set next_attempt_at=clock_timestamp()-interval '72 hours' "+
+        "where seller_id=$1 and person_id=$2 and attempts=1 "+
+        "and last_result='accepted' and message_id=$3 "+
+        "and delivered_at is null returning seller_id",
+        [mailSeller,owner,firstAcceptedId])
+      assert.equal(enableRetry.length,1,
+        "Only the original synthetic SMTP recipient is due for attempt two")
+      const retryGate=testBarrier()
+      const beforeRetryMessages=observed.dataMessages
+      const beforeRetryIds=observed.messageIds.length
+      holdSmtpDataAck=retryGate
+      const retryWorker=runPlatformClosingEmailTick(container)
+      let secondAcceptedId=""
+      try{
+        await waitForBarrier(retryGate.entered,
+          "second SMTP DATA before Owner authenticated link state")
+        assert.equal(observed.dataMessages,beforeRetryMessages+1)
+        assert.equal(observed.messageIds.length,beforeRetryIds+1)
+        secondAcceptedId=observed.messageIds.at(-1)!
+        assert.notEqual(secondAcceptedId,firstAcceptedId,
+          "Two genuine SMTP DATA submissions must have distinct IDs")
+        const [secondClaim]=await q(
+          "select attempts,claim_id,last_result,message_id,delivered_at "+
+          "from da_store_platform_closing_email "+
+          "where seller_id=$1 and person_id=$2",[mailSeller,owner])
+        assert.equal(secondClaim.attempts,2)
+        assert.ok(secondClaim.claim_id)
+        assert.equal(secondClaim.last_result,"inflight")
+        assert.equal(secondClaim.message_id,firstAcceptedId,
+          "First attempt's accepted proof is present before second 250")
+        assert.equal(secondClaim.delivered_at,null)
+        const linkAttempts=await q(
+          "select attempt from da_store_platform_closing_email_link "+
+          "where seller_id=$1 and person_id=$2 order by attempt",
+          [mailSeller,owner])
+        assert.deepEqual(linkAttempts.map(x=>x.attempt),[1,2],
+          "Both genuine attempts must have distinct native link records")
+        // Existing authorized visit's DB state transition is reproduced
+        // only in this disposable PG16 fixture. The separate HTTPS Owner
+        // access and CSRF tests are unchanged.
+        const ownerVisit=await q(
+          "update da_store_platform_closing_email set "+
+          "delivered_at=clock_timestamp(),delivery_source='authenticated_owner',"+
+          "email_link_visited_at=clock_timestamp(),"+
+          "account_viewed_at=clock_timestamp(),last_result='delivered',"+
+          "claim_id=null,lease_until=null,updated_at=clock_timestamp() "+
+          "where seller_id=$1 and person_id=$2 and claim_id=$3::uuid "+
+          "and attempts=2 and last_result='inflight' returning seller_id",
+          [mailSeller,owner,secondClaim.claim_id])
+        assert.equal(ownerVisit.length,1)
+      }finally{
+        retryGate.release()
+        holdSmtpDataAck=null
+        await Promise.allSettled([retryWorker])
+      }
+      await retryWorker
+      const [afterSecond250]=await q(
+        "select attempts,last_result,message_id,delivered_at,delivery_source,"+
+        "claim_id,lease_until from da_store_platform_closing_email "+
+        "where seller_id=$1 and person_id=$2",[mailSeller,owner])
+      assert.equal(afterSecond250.attempts,2)
+      assert.equal(afterSecond250.last_result,"delivered")
+      assert.equal(afterSecond250.delivery_source,"authenticated_owner")
+      assert.ok(afterSecond250.delivered_at)
+      assert.equal(afterSecond250.claim_id,null)
+      assert.equal(afterSecond250.lease_until,null)
+      assert.equal(afterSecond250.message_id,secondAcceptedId,
+        "Latest SMTP 250 must replace M1 with the exact second DATA Message-ID")
+      assert.notEqual(afterSecond250.message_id,firstAcceptedId)
+      assert.equal((await row(mailSeller)).deadline_started_at,null,
+        "SMTP 250 settlement cannot change the 10+20 appeal clock")
+      const afterRetryMessages=observed.dataMessages
+      await runPlatformClosingEmailTick(container)
+      assert.equal(observed.dataMessages,afterRetryMessages,
+        "Replaying a delivered attempt must never send another SMTP DATA")
+      assert.equal((await q(
+        "select message_id from da_store_platform_closing_email "+
+        "where seller_id=$1 and person_id=$2",[mailSeller,owner]))[0].message_id,
+        secondAcceptedId,"Replay must not replace the newest accepted proof")
+      process.stdout.write("PASS B22 PG16+loopback SMTP: two distinct real DATA Message-IDs, second 250 after Owner visit replaces first acceptance proof for attempt two; no resend or SMTP clock change\n")
+
       // Owner 30-day closing: reuse the exact same native SMTP provider,
       // verified Person email and scheduler with its NEW event/recipient ledger.
       // Concurrent ticks may commit ONLY ONE claim per Owner/source event.
