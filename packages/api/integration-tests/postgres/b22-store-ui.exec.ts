@@ -589,7 +589,7 @@ async function verifyOwnerClosingBrowser(input:{
   await browser.send("Page.bringToFront")
   await browser.wait("document.visibilityState==='visible'")
   const oldReadCount=browser.http.filter((x:any)=>
-    x.path==="/personal/store-owner-closing"&&x.method==="GET").length
+    x.path==="/personal/store-owner-closing"&&x.method==="GET"&&x.status===200).length
   await browser.click("#store-owner-closing-refresh")
   await until(async()=>browser.http.filter((x:any)=>
     x.path==="/personal/store-owner-closing"&&x.method==="GET"&&x.status===200
