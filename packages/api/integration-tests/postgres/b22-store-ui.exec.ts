@@ -975,14 +975,118 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       JSON.stringify(ownerStoreId)+";choice.dispatchEvent(new Event('change',{bubbles:true}));return true})()")
     await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık') && "+
       "!document.querySelector('#store-owner-pause-form button[value=pause]').disabled")
+    // Put the selected Store second in the task-only chooser so a
+    // programmatic list rebuild selecting index 0 would expose the bug.
+    assert.equal(await browser.eval("(()=>{const c=document.querySelector("+
+      "'#store-owner-pause-form select[name=seller_id]');"+
+      "const other=Array.from(c.options).find(o=>o.value==="+
+      JSON.stringify(secondOwnerStoreId)+");"+
+      "if(!other)return false;c.prepend(other);c.value="+
+      JSON.stringify(ownerStoreId)+";return c.selectedIndex>0})()"),true,
+      "Owner's second Store choice must not fall back to the first option")
+    await browser.wait("!document.getElementById('org-stores-refresh').disabled")
+    // Real HTTPS POST must execute and persist; only its *browser-visible*
+    // HTTP 200 response body is corrupted in this disposable Chrome profile.
+    // Never proxy a synthetic response in place of the actual server write.
+    const corruptOwnerPauseReadback=async(body:string,holdResponse=false)=>{
+      assert.equal(await browser.eval("(()=>{"+
+        "if(window.__b22PauseWire)return false;"+
+        "window.__b22PauseWire={original:window.fetch,count:0,getCount:0,"+
+        "holdPost:"+String(holdResponse)+"};"+
+        "const wire=window.__b22PauseWire;"+
+        "window.fetch=async(...args)=>{"+
+        "const raw=args[0];"+
+        "const method=String(args[1]?.method||raw?.method||'GET').toUpperCase();"+
+        "const path=new URL(typeof raw==='string'?raw:raw?.url,location.href).pathname;"+
+        "if(path==='/personal/store-owner-pause'&&method==='GET')wire.getCount++;"+
+        "const actual=await wire.original.apply(window,args);"+
+        "if(wire.count===0&&path==='/personal/store-owner-pause'&&"+
+        "method==='POST'){wire.count++;wire.status=actual.status;"+
+        "if(wire.holdPost){wire.postHeld=true;"+
+        "await new Promise(resolve=>{wire.releasePost=resolve})}"+
+        "return new Response("+JSON.stringify(body)+",{status:actual.status,"+
+        "headers:{'content-type':'application/json'}})}return actual};"+
+        "return true})()"),true)
+    }
+    const releaseOwnerPauseReadback=async()=>browser.eval(
+      "(()=>{const wire=window.__b22PauseWire;"+
+      "if(!wire||typeof wire.releasePost!=='function')return false;"+
+      "wire.releasePost();wire.releasePost=null;return true})()")
+    const restoreOwnerPauseReadback=async()=>{
+      const result=await browser.eval("({count:window.__b22PauseWire?.count,"+
+        "status:window.__b22PauseWire?.status??null})")
+      assert.equal(await browser.eval("(()=>{if(!window.__b22PauseWire)return false;"+
+        "window.fetch=window.__b22PauseWire.original;"+
+        "delete window.__b22PauseWire;return true})()"),true)
+      return result
+    }
+    const ownerPausePostCount=()=>browser.http.filter((item:any)=>
+      item.path==="/personal/store-owner-pause"&&item.method==="POST").length
     await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
     assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-pause-form button[value=pause]');b.focus();return document.activeElement===b})()"),true)
-    await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
-    await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
-    await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
-    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('geçici arada')")
+    const firstPosts=ownerPausePostCount()
+    await corruptOwnerPauseReadback("{",true)
+    try{
+      await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
+      await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
+      // The real server has committed, but the caller is still waiting for
+      // HTTP200. A user refresh during this window MUST NOT start another GET.
+      await browser.wait("window.__b22PauseWire?.postHeld===true")
+      assert.equal(await browser.eval("document.querySelector("+
+        "'#store-owner-pause-form select[name=seller_id]').disabled"),true,
+        "Switching to a second Store must be disabled while Owner pause is pending")
+      assert.equal(await browser.eval("window.__b22PauseWire?.getCount"),0)
+      await browser.click('#store-owner-pause-refresh')
+      assert.equal(await browser.eval("window.__b22PauseWire?.getCount"),0,
+        "A GET started during POST could later erase the uncertain-result lock")
+      assert.equal(await browser.eval("Array.from(document.querySelectorAll("+
+        "'#store-owner-pause-form button[type=submit]')).every(b=>b.disabled)"),true)
+      // A *different* control may refresh the entire Store list during POST.
+      // It must not reset the disabled chooser to the first Store.
+      await browser.click('#org-stores-refresh')
+      await browser.wait("!document.getElementById('org-stores-refresh').disabled && "+
+        "document.getElementById('org-stores-status').textContent.includes('güncellendi')")
+      assert.equal(await browser.eval("document.querySelector("+
+        "'#store-owner-pause-form select[name=seller_id]').value"),ownerStoreId,
+        "A concurrent full Store list refresh must not rebind the Owner's pending pause")
+      assert.equal(await browser.eval("window.__b22PauseWire?.getCount"),0,
+        "Store list refresh must not start a stale Owner pause GET mid-write")
+      assert.equal(await browser.eval("document.querySelector("+
+        "'#store-owner-pause-form select[name=seller_id]').disabled"),true)
+      assert.equal(await releaseOwnerPauseReadback(),true)
+      await browser.wait("(()=>{const p=document.getElementById('store-owner-pause-status');"+
+        "const f=document.getElementById('store-owner-pause-form');"+
+        "return p.textContent.includes('Sonuç belirsiz')&&p.getAttribute('role')==='status'&&"+
+        "Array.from(f.querySelectorAll('button[type=submit]')).every(b=>b.disabled)})()")
+    }finally{
+      // Avoid stranding a browser fetch promise if any race assertion fails.
+      await releaseOwnerPauseReadback()
+      await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
+      assert.deepEqual(await restoreOwnerPauseReadback(),{count:1,status:200},
+        "One real HTTP200 pause must commit before its body is truncated")
+    }
+    await browser.wait("document.querySelector("+
+      "'#store-owner-pause-form select[name=seller_id]').disabled===false")
+    assert.equal(await browser.eval("document.querySelector("+
+      "'#store-owner-pause-form select[name=seller_id]').value"),ownerStoreId,
+      "Store selection remains stable until the Owner pause result settles")
+    assert.equal(ownerPausePostCount(),firstPosts+1,
+      "Unknown HTTP200 response must not automatically replay Owner pause")
+    const firstSaved=(await q(
+      "select paused,version from da_store_owner_pause where seller_id=$1",[ownerStoreId]))[0]
+    assert.deepEqual(firstSaved,{paused:true,version:1},
+      "Server committed pause despite unreadable HTTP200 body")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_audit_event where target_id=$1 "+
+      "and resource='store-owner-pause'",[ownerStoreId]))[0].n),pauseAuditStart+1,
+      "Uncertain response must never duplicate a committed pause audit")
+    await browser.click('#store-owner-pause-refresh')
+    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('geçici arada')&&"+
+      "!document.querySelector('#store-owner-pause-form button[value=resume]').disabled")
+    assert.equal(ownerPausePostCount(),firstPosts+1,
+      "Authoritative refresh must only GET, never repeat the write")
     assert.ok(browser.http.some((x:any)=>x.path==="/personal/store-owner-pause"&&
-      x.method==="POST"&&x.status===200),"Visible Owner pause must send real HTTPS 200")
+      x.method==="POST"&&x.status===200),"Owner pause must reach actual HTTPS server")
     const pausedRows=await q(
       "select p.paused,p.version,p.request_id,p.source_audit_event_id,"+
       "e.action,e.actor_person_id,e.organization_id,"+
@@ -1054,10 +1158,32 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       "!document.querySelector('#store-owner-pause-form button[value=resume]').disabled")
     await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
     assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-pause-form button[value=resume]');b.focus();return document.activeElement===b})()"),true)
-    await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
-    await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
-    await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
-    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık')")
+    const resumePosts=ownerPausePostCount()
+    await corruptOwnerPauseReadback(JSON.stringify({
+      organization_id:"daorg_wrong",seller_id:ownerStoreId,
+      status:"resumed",version:2,replayed:false
+    }))
+    try{
+      await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
+      await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
+      await browser.wait("(()=>{const p=document.getElementById('store-owner-pause-status');"+
+        "const f=document.getElementById('store-owner-pause-form');"+
+        "return p.textContent.includes('Sonuç belirsiz')&&"+
+        "Array.from(f.querySelectorAll('button[type=submit]')).every(b=>b.disabled)})()")
+    }finally{
+      await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
+      assert.deepEqual(await restoreOwnerPauseReadback(),{count:1,status:200},
+        "One real HTTP200 resume must commit before its invalid response schema")
+    }
+    assert.equal(ownerPausePostCount(),resumePosts+1)
+    assert.deepEqual((await q(
+      "select paused,version from da_store_owner_pause where seller_id=$1",[ownerStoreId]))[0],
+      {paused:false,version:2},"Invalid HTTP200 body must not disguise committed resume")
+    await browser.click('#store-owner-pause-refresh')
+    await browser.wait("document.getElementById('store-owner-pause-status').textContent.includes('satışa açık')&&"+
+      "!document.querySelector('#store-owner-pause-form button[value=pause]').disabled")
+    assert.equal(ownerPausePostCount(),resumePosts+1,
+      "Owner must reconcile invalid response by GET, never by a second mutation")
     const resumedRows=await q(
       "select p.paused,p.version,e.action,"+
       "(select count(*)::int from da_audit_outbox o where o.source_audit_event_id=e.id) as outbox_count "+
@@ -1078,6 +1204,9 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       "After Owner resume with native platform OPEN, final L authorization is restored")
     assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]}))
       .items?.length,2,"Neither pause nor resume changes preexisting cart lines")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: concurrent full Store-list refresh during committed pending Owner pause preserves second selected Seller and starts zero premature pause GET; uncertain response keeps both actions locked until authorized readback\n")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Owner refresh during real committed pause POST with HTTP200 response held starts zero premature GET, keeps Store selector and both buttons locked; release gives uncertain, only post-settle authorized GET reopens controls\n")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: actual Owner pause/resume each persisted once but client HTTP200 truncated JSON or mismatched Organization response remained uncertain; both buttons disabled until fresh authorized GET, no replay and two durable audit/outbox\n")
     process.stdout.write("PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed\n")
 
     // Bound accessibility check: real Chrome keyboard Enter activates both

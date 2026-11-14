@@ -558,10 +558,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const policyWrite=path==='platform/store-application-policy'&&options.method==='POST';
     const storeApplicationWrite=path==='store-applications'&&options.method==='POST';
     const renameWrite=path==='store-rename-requests'&&options.method==='POST';
+    const ownerPauseWrite=path==='store-owner-pause'&&options.method==='POST';
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
     const closingWrite=['store-owner-closing','store-platform-closing','store-platform-closing-final-review','platform/store-closings','platform/store-closing-reviews','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite;
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite;
     let data;
     try{
       data=await r.json();
@@ -3110,6 +3111,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     panel.hidden=true;el('store-owner-pause-status').textContent='';
     const select=form?.elements&&typeof form.elements.namedItem==='function'?
       form.elements.namedItem('seller_id'):null;
+    if(select)select.disabled=false; // Clear an in-flight mutation's UI lock.
     if(select?.replaceChildren)select.replaceChildren();
     if(typeof form?.querySelectorAll==='function')
       for(const b of form.querySelectorAll('button[type=submit]'))b.disabled=true;
@@ -3119,6 +3121,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   function ownerPauseButtons(){
     const form=el('store-owner-pause-form');
     if(!form||typeof form.querySelectorAll!=='function')return;
+    // A different Store selected mid-write would defer its GET until the
+    // old mutation settles, leaving a misleading stale panel. Keep selection
+    // stable for this short, pending-only window.
+    const select=form.elements&&typeof form.elements.namedItem==='function'?
+      form.elements.namedItem('seller_id'):null;
+    if(select)select.disabled=ownerPausePending;
     for(const b of form.querySelectorAll('button[type=submit]')){
       b.disabled=ownerPausePending||ownerPauseUncertain||
         !ownerPauseState||ownerPauseState.platform_closed!==false||
@@ -3131,7 +3139,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const form=el('store-owner-pause-form');
     const seller=form?.elements&&typeof form.elements.namedItem==='function'?
       form.elements.namedItem('seller_id')?.value:null;
-    if(!org||!seller||!selectedStoreOwner||document.hidden||
+    // A GET begun during a POST cannot reconcile its eventual outcome.
+    if(!org||!seller||!selectedStoreOwner||document.hidden||ownerPausePending||
        el('store-owner-pause-panel').hidden)return;
     const seq=++ownerPauseRead,epoch=viewEpoch,st=el('store-owner-pause-status');
     ownerPauseVersion=null;ownerPauseState=null;ownerPauseButtons();ownerClosingButtons();
@@ -3195,22 +3204,31 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!confirm(action==='pause'?
       'Bu mağazanın yeni satışlarını hemen durdurmak istiyor musunuz? Mevcut sepetler satın alınamaz.':
       'Bu mağazadaki size ait geçici arayı kaldırmak istiyor musunuz?'))return;
-    ownerPausePending=true;ownerPauseButtons();
+    const expectedVersion=ownerPauseVersion;
+    ownerPausePending=true;
+    // Cancel prior GET continuations and discard the pre-write version/state.
+    ownerPauseRead++;ownerPauseVersion=null;ownerPauseState=null;
+    ownerPauseButtons();
     const st=el('store-owner-pause-status');
     st.textContent='İşlem yetki ve mağaza durumuyla birlikte kaydediliyor…';
     const id='dasp_'+crypto.randomUUID().replace(/-/g,'');
     try{
       const result=await api('store-owner-pause',{method:'POST',body:JSON.stringify({
         action,organization_id:org,seller_id:seller,request_id:id,
-        expected_version:ownerPauseVersion
+        expected_version:expectedVersion
       })});
       if(request!==organizationRequest||epoch!==viewEpoch||
          org!==currentOrg||seller!==form.elements.namedItem('seller_id').value)return;
-      if(result.seller_id!==seller||
+      if(result.organization_id!==org||result.seller_id!==seller||
          result.status!==(action==='pause'?'paused':'resumed')||
-         !Number.isSafeInteger(result.version))throw Error('Sonuç doğrulanamadı');
-      ownerPauseUncertain=false;
-      // A fresh read, not a duplicate mutation, determines the displayed state.
+         !Number.isSafeInteger(result.version)||result.version<0||
+         typeof result.replayed!=='boolean'){
+        const error=Error('Sonuç doğrulanamadı');
+        error.uncertain=true;throw error;
+      }
+      // Release the mutation gate only once settled. Keep controls locked
+      // until a NEW authorized GET returns a valid post-write state.
+      ownerPauseUncertain=true;ownerPausePending=false;
       await refreshOwnerPause(org,request);
       if(request===organizationRequest&&org===currentOrg)
         void organizationStores(org,request);
@@ -3516,20 +3534,36 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
               const pauseChoice=pauseForm?.elements&&
                 typeof pauseForm.elements.namedItem==='function'?
                 pauseForm.elements.namedItem('seller_id'):null;
-              if(pauseChoice&&typeof pauseChoice.replaceChildren==='function'){
-              pauseChoice.replaceChildren();
-              for(const store of renameData.stores){
-                const opt=document.createElement('option');
-                opt.value=store.id;
-                opt.textContent=store.name+(store.status==='suspended'?' — platform askısında':'');
-                pauseChoice.append(opt);
-              }
-              el('store-owner-pause-panel').hidden=renameData.stores.length===0;
-              if(renameData.stores.length){
-                 void refreshOwnerPause(org,request);
-                 void refreshOwnerClosing(org,request);
-                 void refreshPlatformClosingOwner(org,request);
-               }
+              if(pauseChoice&&typeof pauseChoice.replaceChildren==='function'&&
+                 !ownerPausePending){
+                // Native disabled selectors may still be changed by code.
+                // Never rebind an in-flight pause to the first listed Store.
+                const previousSeller=pauseChoice.value;
+                pauseChoice.replaceChildren();
+                for(const store of renameData.stores){
+                  const opt=document.createElement('option');
+                  opt.value=store.id;
+                  opt.textContent=store.name+
+                    (store.status==='suspended'?' — platform askısında':'');
+                  pauseChoice.append(opt);
+                }
+                if(previousSeller&&renameData.stores.some(s=>s.id===previousSeller))
+                  pauseChoice.value=previousSeller;
+                else if(previousSeller){
+                  const placeholder=document.createElement('option');
+                  placeholder.value='';placeholder.textContent='Mağazayı yeniden seçin';
+                  pauseChoice.prepend(placeholder);pauseChoice.value='';
+                  ownerPauseRead++;ownerPauseVersion=null;ownerPauseState=null;
+                  ownerPauseUncertain=true;ownerPauseButtons();ownerClosingButtons();
+                  el('store-owner-pause-status').textContent=
+                    'Önceki mağaza artık yetkili listede yok. Yeniden seçim ve durum doğrulaması gerekli.';
+                }
+                el('store-owner-pause-panel').hidden=renameData.stores.length===0;
+                if(renameData.stores.length&&pauseChoice.value){
+                  void refreshOwnerPause(org,request);
+                  void refreshOwnerClosing(org,request);
+                  void refreshPlatformClosingOwner(org,request);
+                }
               }
 
             }catch{
