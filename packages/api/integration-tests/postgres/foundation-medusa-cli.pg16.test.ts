@@ -290,6 +290,7 @@ async function run(){
         const dualRoleLockMarker="PASS B22 Chrome/HTTPS/PG16: same strong Person dual Staff/Owner, Owner Seller-lock wait before Staff session wait; HTTP403+409, no deadlock/503, closing/audit/outbox unchanged"
         const legacyPlatformClosingMarker="PASS B22 Chrome/HTTPS/PG16: legacy approved Store association with native Seller and strong Staff; revoked and foreign Origin HTTP403; single closing/audit/outbox and Owner notice durable; original application proof restored"
         const ownerPlatformClosedUiMarker="PASS B22 Chrome/HTTPS/PG16: platform-closed native-open Seller Owner sale-status accessible and consistent, pause/resume/second closing disabled, direct HTTP403+409, zero voluntary audit/outbox"
+        const nativeMultiSellerOrderMarker="PASS B22 real PG16 native multi-Seller OrderGroup: two Seller-bound Orders share one Group; seller_id group filters include foreign Order, exact native per-Order attribution verified, no payment or finance clearance"
         const nativeFinanceGraphMarker="PASS B22 real PG16 native finance graph: Seller-scoped OrderGroup and Order payment/refund relations queried read-only; financial/legal clearance stays false, no payment/return execution"
         const platformClosingAppealMarker="PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, canonical 10+20 clock started on authenticated Owner link before first appeal; external mailbox delivery unverified and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no external mailbox delivery claim; one immutable clock, foreign denied"
         const platformStaffReviewMarker="PASS B22 Chrome/HTTPS/PG16: independent third Person strong Staff review decision, original Staff self-review denied, private Owner reason/notice, immutable clock and sales block; repeat idempotent, first-stage parallel single decision, revoked grant denied"
@@ -373,7 +374,7 @@ async function run(){
               x===postHoldRecipientMarker || x===independentStaffRaceMarker ||
               x===historicalCartMarker || x===completedSourceOrderMarker ||
               (x===ownerPlatformClosedUiMarker || x===legacyPlatformClosingMarker || x===dualRoleLockMarker || x===platformCrossSessionMarker ||
-               x===platformClosingAppealMarker || x===nativeFinanceGraphMarker || x===platformClosingEmailLinkMarker ||
+               x===platformClosingAppealMarker || x===nativeFinanceGraphMarker || x===nativeMultiSellerOrderMarker || x===platformClosingEmailLinkMarker ||
                x===platformFinalReviewMarker || x===platformStaffReviewMarker ||
                x===platformPreflightBoundaryMarker)).join("\n")
           if(child.error||child.status!==0){
@@ -457,6 +458,8 @@ async function run(){
           "Missing real platform-closed native-open Owner UI/HTTP403+409 and zero-side-effect evidence")
         assert.ok(result.split("\n").includes(platformCrossSessionMarker),
           "Missing same-page two native Person logins, private DOM clear and foreign 403")
+        assert.ok(result.split("\n").includes(nativeMultiSellerOrderMarker),
+          "Missing real two-Seller OrderGroup, per-Order native Seller links and group filter non-isolation proof")
         assert.ok(result.split("\n").includes(nativeFinanceGraphMarker),
           "Missing exact real PostgreSQL 16 Seller OrderGroup/Order payment/refund graph read-only proof; no financial clearance claim")
         assert.ok(result.split("\n").includes(platformClosingAppealMarker),
