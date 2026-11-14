@@ -3132,7 +3132,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const form=el('store-owner-pause-form');
     const seller=form?.elements&&typeof form.elements.namedItem==='function'?
       form.elements.namedItem('seller_id')?.value:null;
-    if(!org||!seller||!selectedStoreOwner||document.hidden||
+    // A GET begun during a POST cannot reconcile its eventual outcome.
+    if(!org||!seller||!selectedStoreOwner||document.hidden||ownerPausePending||
        el('store-owner-pause-panel').hidden)return;
     const seq=++ownerPauseRead,epoch=viewEpoch,st=el('store-owner-pause-status');
     ownerPauseVersion=null;ownerPauseState=null;ownerPauseButtons();ownerClosingButtons();
@@ -3196,14 +3197,18 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     if(!confirm(action==='pause'?
       'Bu mağazanın yeni satışlarını hemen durdurmak istiyor musunuz? Mevcut sepetler satın alınamaz.':
       'Bu mağazadaki size ait geçici arayı kaldırmak istiyor musunuz?'))return;
-    ownerPausePending=true;ownerPauseButtons();
+    const expectedVersion=ownerPauseVersion;
+    ownerPausePending=true;
+    // Cancel prior GET continuations and discard the pre-write version/state.
+    ownerPauseRead++;ownerPauseVersion=null;ownerPauseState=null;
+    ownerPauseButtons();
     const st=el('store-owner-pause-status');
     st.textContent='İşlem yetki ve mağaza durumuyla birlikte kaydediliyor…';
     const id='dasp_'+crypto.randomUUID().replace(/-/g,'');
     try{
       const result=await api('store-owner-pause',{method:'POST',body:JSON.stringify({
         action,organization_id:org,seller_id:seller,request_id:id,
-        expected_version:ownerPauseVersion
+        expected_version:expectedVersion
       })});
       if(request!==organizationRequest||epoch!==viewEpoch||
          org!==currentOrg||seller!==form.elements.namedItem('seller_id').value)return;
@@ -3214,8 +3219,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         const error=Error('Sonuç doğrulanamadı');
         error.uncertain=true;throw error;
       }
-      ownerPauseUncertain=false;
-      // A fresh read, not a duplicate mutation, determines the displayed state.
+      // Release the mutation gate only once settled. Keep controls locked
+      // until a NEW authorized GET returns a valid post-write state.
+      ownerPauseUncertain=true;ownerPausePending=false;
       await refreshOwnerPause(org,request);
       if(request===organizationRequest&&org===currentOrg)
         void organizationStores(org,request);
