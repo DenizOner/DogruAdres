@@ -651,6 +651,17 @@ async function main(){
       // by the separate existing Chrome acceptance test.
       const visitRaceSeller="sel_b22_mail_pg_smtp_link_race"
       await seed(visitRaceSeller)
+      // The prior accepted SMTP test's next +24h slot is already past
+      // because that synthetic closure began 73h ago. Make only this new
+      // task-owned row the earliest due claim; otherwise the held DATA ACK
+      // can belong to the previous fixture, not this race.
+      const focusedQueue=await q(
+        "update da_store_platform_closing_email "+
+        "set next_attempt_at=clock_timestamp()-interval '72 hours' "+
+        "where seller_id=$1 and person_id=$2 and attempts=0 "+
+        "returning seller_id",[visitRaceSeller,owner])
+      assert.equal(focusedQueue.length,1,
+        "Only the new synthetic race queue may be prioritized")
       const visitRaceGate=testBarrier()
       const beforeRaceMessages=observed.dataMessages
       holdSmtpDataAck=visitRaceGate
