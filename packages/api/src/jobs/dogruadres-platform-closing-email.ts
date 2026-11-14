@@ -174,9 +174,11 @@ async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unveri
       // status, the deadline, or the remaining retry schedule.
       // The same attempt number and cleared claim are required; a stale
       // worker may never overwrite a newer pending claim or invent delivery.
+      // A new SMTP 250 belongs to this attempt, not to an earlier accepted
+      // attempt whose Message-ID may still be present on the recipient row.
       if(outcome==="accepted"&&messageId){
         const accepted=await em.execute(`update da_store_platform_closing_email
-          set message_id=coalesce(message_id,?),
+          set message_id=?,
             updated_at=clock_timestamp()
           where seller_id=? and person_id=? and delivered_at is not null
             and claim_id is null and last_result='delivered' and attempts=?
