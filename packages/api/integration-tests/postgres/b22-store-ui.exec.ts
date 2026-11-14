@@ -586,6 +586,8 @@ async function verifyOwnerClosingBrowser(input:{
   assert.equal((await readOwnClosing(reviewer,
     organizations[1].id,ownerStoreId)).status,403,
     "Another Organization must not read either Owner's SMTP result")
+  await browser.send("Page.bringToFront")
+  await browser.wait("document.visibilityState==='visible'")
   await browser.click("#store-owner-closing-refresh")
   await browser.wait("document.getElementById('store-owner-closing-status')."+
     "textContent.includes('SMTP sunucusu e-postayı kabul etti; posta kutusuna teslim doğrulanmadı.') && "+
