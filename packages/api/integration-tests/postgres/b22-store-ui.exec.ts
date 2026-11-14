@@ -11290,6 +11290,115 @@ export default async function({container}:any){
         [organizations[0].id,ownerStoreId,B.person]))[0].n,1,
         "Idempotent native link must not duplicate canonical audit")
       process.stdout.write("PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged\n")
+      // #252 second Owner after REAL native SellerMember association:
+      // the approved Owner UI above established B's actual Member/Seller
+      // link. At this point B remains an ordinary Organization Member. This
+      // task-owned PG16 role fixture is NOT an Owner-promotion product API.
+      const privateClosing=async(actor:B06Chrome,orgId:string)=>
+        actor.callFunction("async function(org,seller){"+
+          "const r=await fetch('/personal/store-owner-closing?'+new URLSearchParams("+
+          "{organization_id:org,seller_id:seller}),{cache:'no-store'});"+
+          "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}}",
+          orgId,ownerStoreId)
+      const ownerMembership=await q("select id,role,status,protected_owner,revoked_at "+
+        "from da_organization_membership where id=$1 and person_id=$2 "+
+        "and organization_id=$3 and deleted_at is null",
+        [alphaMember.id,B.person,organizations[0].id])
+      assert.equal(ownerMembership.length,1)
+      assert.equal(ownerMembership[0].role,"member")
+      assert.equal(ownerMembership[0].protected_owner,false)
+      assert.equal(ownerMembership[0].status,"active")
+      assert.equal(ownerMembership[0].revoked_at,null)
+      const firstNotice=await privateClosing(browser,organizations[0].id)
+      assert.equal(firstNotice.status,200)
+      assert.equal(firstNotice.body.state,"withdrawn",
+        "Read the latest canonical withdrawal, not the older SMTP-accepted event")
+      assert.equal(firstNotice.body.permanent_finalization_enabled,false)
+      const latestEvent=await q("select source_audit_event_id from da_store_owner_closing "+
+        "where seller_id=$1 and organization_id=$2 and state='withdrawn'",
+        [ownerStoreId,organizations[0].id])
+      assert.equal(latestEvent.length,1)
+      const receipts=await q("select person_id from da_notification_receipt "+
+        "where audit_event_id=$1 order by person_id",[latestEvent[0].source_audit_event_id])
+      assert.deepEqual(receipts.map((r:any)=>r.person_id).sort(),
+        [A.person,B.person].sort())
+      // Native SellerMember alone never grants Owner-private notification access.
+      const memberOnly=await privateClosing(reviewer,organizations[0].id)
+      assert.deepEqual({status:memberOnly.status,body:memberOnly.body},
+        {status:403,body:{message:"Access denied"}})
+      assert.equal((await privateClosing(reviewer,organizations[1].id)).status,403)
+      const elevated=await q("update da_organization_membership "+
+        "set role='owner',protected_owner=true,updated_at=clock_timestamp() "+
+        "where id=$1 and person_id=$2 and role='member' "+
+        "and protected_owner=false and status='active' and revoked_at is null "+
+        "returning id",[alphaMember.id,B.person])
+      assert.deepEqual(elevated,[{id:alphaMember.id}])
+      try{
+        const own=await privateClosing(reviewer,organizations[0].id)
+        assert.equal(own.status,200,
+          "Live protected Owner AND real native SellerMember must authorize own state")
+        assert.deepEqual(own.body.email_notice,{
+          status:"queued",attempts:0,smtp_accepted:false,
+          mailbox_delivery_verified:false
+        },"B must see only the latest own queued receipt, not A's older synthetic accepted SMTP result")
+        assert.deepEqual(own.body.notification_coverage,{
+          protected_owners:2,personal_receipts:2,mailbox_delivery_verified:false
+        })
+        assert.equal(own.body.state,"withdrawn")
+        assert.equal(own.body.permanent_finalization_enabled,false)
+        assert.equal(own.body.can_withdraw,false)
+        assert.ok(String(own.cache).includes("no-store"))
+        assert.equal(JSON.stringify(own.body).includes(A.email),false)
+        assert.equal(JSON.stringify(own.body).includes("message_id"),false)
+        assert.equal(JSON.stringify(own.body).includes("person_id"),false)
+        assert.equal((await privateClosing(reviewer,organizations[1].id)).status,403,
+          "Cross-Organization Store-private result must stay denied after promotion")
+        // Real authenticated Chrome UI, not a helper-forged Owner response.
+        await reviewer.send("Page.bringToFront")
+        await reviewer.send("Page.reload",{ignoreCache:true})
+        await reviewer.wait("!document.getElementById('workspace').hidden")
+        await reviewer.select(organizations[0].name,"owner")
+        await reviewer.wait("!document.getElementById('store-owner-closing-panel').hidden && "+
+          "Array.from(document.querySelectorAll("+
+          "'#store-owner-pause-form select[name=seller_id] option')).some("+
+          "o=>o.value==="+JSON.stringify(ownerStoreId)+")")
+        await reviewer.eval("(()=>{const s=document.querySelector("+
+          "'#store-owner-pause-form select[name=seller_id]');s.value="+
+          JSON.stringify(ownerStoreId)+";s.dispatchEvent(new Event('change',"+
+          "{bubbles:true}));return true})()")
+        await reviewer.wait("document.getElementById('store-owner-closing-status')."+
+          "textContent.includes('Kapatma talebi geri çekildi.') && "+
+          "document.getElementById('store-owner-closing-status')."+
+          "textContent.includes('Korunan Owner bildirim kayıtları: 2/2') && "+
+          "document.getElementById('store-owner-closing-status')."+
+          "textContent.includes('Kişisel bildirim kaydedildi; e-posta denemesi sırada.')")
+        const textShown=await reviewer.eval(
+          "document.getElementById('store-owner-closing-status').textContent")
+        assert.equal(textShown.includes(A.email),false)
+        assert.equal(textShown.includes("Message-ID"),false)
+        assert.equal(await reviewer.eval(
+          "document.getElementById('store-owner-closing-status').getAttribute('role')"),
+          "status")
+        const firstAfter=await privateClosing(browser,organizations[0].id)
+        assert.deepEqual(firstAfter.body,firstNotice.body,
+          "Second protected Owner reading their own receipt must not change A's result")
+      }finally{
+        const restoredRole=await q("update da_organization_membership "+
+          "set role=$2,protected_owner=$3,revoked_at=$4,"+
+          "updated_at=clock_timestamp() where id=$1 returning id",
+          [alphaMember.id,ownerMembership[0].role,
+            ownerMembership[0].protected_owner,ownerMembership[0].revoked_at])
+        assert.deepEqual(restoredRole,[{id:alphaMember.id}])
+        const revokedRead=await privateClosing(reviewer,organizations[0].id)
+        assert.deepEqual({status:revokedRead.status,body:revokedRead.body},
+          {status:403,body:{message:"Access denied"}},
+          "Loss of protected Owner membership instantly denies a live SellerMember")
+        await reviewer.send("Page.bringToFront")
+        await reviewer.send("Page.reload",{ignoreCache:true})
+        await reviewer.wait("!document.getElementById('workspace').hidden")
+        await reviewer.select(organizations[0].name,"member")
+      }
+      process.stdout.write("PASS B22 Chrome/HTTPS/PG16: second Person native SellerMember linked through Owner UI; member GET403, test-only protected Owner GET200 own queued receipt and 2/2 coverage, foreign Org403, reversible role removal GET403 and no mailbox delivery/finalizer\n")
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       await reviewer.click("#product-draft-refresh")
