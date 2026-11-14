@@ -1174,6 +1174,7 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
       "After Owner resume with native platform OPEN, final L authorization is restored")
     assert.equal((await cartService.retrieveCart(customerCart.id,{relations:["items"]}))
       .items?.length,2,"Neither pause nor resume changes preexisting cart lines")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: Owner refresh during real committed pause POST with HTTP200 response held starts zero premature GET, keeps both buttons locked; release gives uncertain, only post-settle authorized GET reopens controls\\n")
     process.stdout.write("PASS B22 Chrome/HTTPS/PG16: actual Owner pause/resume each persisted once but client HTTP200 truncated JSON or mismatched Organization response remained uncertain; both buttons disabled until fresh authorized GET, no replay and two durable audit/outbox\n")
     process.stdout.write("PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed\n")
 
