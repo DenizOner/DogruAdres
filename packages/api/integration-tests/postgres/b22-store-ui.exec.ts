@@ -978,22 +978,30 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
     // Real HTTPS POST must execute and persist; only its *browser-visible*
     // HTTP 200 response body is corrupted in this disposable Chrome profile.
     // Never proxy a synthetic response in place of the actual server write.
-    const corruptOwnerPauseReadback=async(body:string)=>{
+    const corruptOwnerPauseReadback=async(body:string,holdResponse=false)=>{
       assert.equal(await browser.eval("(()=>{"+
         "if(window.__b22PauseWire)return false;"+
-        "window.__b22PauseWire={original:window.fetch,count:0};"+
+        "window.__b22PauseWire={original:window.fetch,count:0,getCount:0,"+
+        "holdPost:"+String(holdResponse)+"};"+
         "const wire=window.__b22PauseWire;"+
         "window.fetch=async(...args)=>{"+
-        "const actual=await wire.original.apply(window,args);"+
         "const raw=args[0];"+
         "const method=String(args[1]?.method||raw?.method||'GET').toUpperCase();"+
         "const path=new URL(typeof raw==='string'?raw:raw?.url,location.href).pathname;"+
+        "if(path==='/personal/store-owner-pause'&&method==='GET')wire.getCount++;"+
+        "const actual=await wire.original.apply(window,args);"+
         "if(wire.count===0&&path==='/personal/store-owner-pause'&&"+
         "method==='POST'){wire.count++;wire.status=actual.status;"+
+        "if(wire.holdPost){wire.postHeld=true;"+
+        "await new Promise(resolve=>{wire.releasePost=resolve})}"+
         "return new Response("+JSON.stringify(body)+",{status:actual.status,"+
         "headers:{'content-type':'application/json'}})}return actual};"+
         "return true})()"),true)
     }
+    const releaseOwnerPauseReadback=async()=>browser.eval(
+      "(()=>{const wire=window.__b22PauseWire;"+
+      "if(!wire||typeof wire.releasePost!=='function')return false;"+
+      "wire.releasePost();wire.releasePost=null;return true})()")
     const restoreOwnerPauseReadback=async()=>{
       const result=await browser.eval("({count:window.__b22PauseWire?.count,"+
         "status:window.__b22PauseWire?.status??null})")
@@ -1007,15 +1015,27 @@ async function verifyOwnerTemporaryPauseBrowser(input:{
     await browser.eval("window.__b22PreviousConfirm=window.confirm;window.confirm=()=>true")
     assert.equal(await browser.eval("(()=>{const b=document.querySelector('#store-owner-pause-form button[value=pause]');b.focus();return document.activeElement===b})()"),true)
     const firstPosts=ownerPausePostCount()
-    await corruptOwnerPauseReadback("{")
+    await corruptOwnerPauseReadback("{",true)
     try{
       await browser.send("Input.dispatchKeyEvent",{type:"keyDown",key:" ",code:"Space",text:" ",windowsVirtualKeyCode:32})
       await browser.send("Input.dispatchKeyEvent",{type:"keyUp",key:" ",code:"Space",windowsVirtualKeyCode:32})
+      // The real server has committed, but the caller is still waiting for
+      // HTTP200. A user refresh during this window MUST NOT start another GET.
+      await browser.wait("window.__b22PauseWire?.postHeld===true")
+      assert.equal(await browser.eval("window.__b22PauseWire?.getCount"),0)
+      await browser.click('#store-owner-pause-refresh')
+      assert.equal(await browser.eval("window.__b22PauseWire?.getCount"),0,
+        "A GET started during POST could later erase the uncertain-result lock")
+      assert.equal(await browser.eval("Array.from(document.querySelectorAll("+
+        "'#store-owner-pause-form button[type=submit]')).every(b=>b.disabled)"),true)
+      assert.equal(await releaseOwnerPauseReadback(),true)
       await browser.wait("(()=>{const p=document.getElementById('store-owner-pause-status');"+
         "const f=document.getElementById('store-owner-pause-form');"+
         "return p.textContent.includes('Sonuç belirsiz')&&p.getAttribute('role')==='status'&&"+
         "Array.from(f.querySelectorAll('button[type=submit]')).every(b=>b.disabled)})()")
     }finally{
+      // Avoid stranding a browser fetch promise if any race assertion fails.
+      await releaseOwnerPauseReadback()
       await browser.eval("window.confirm=window.__b22PreviousConfirm;delete window.__b22PreviousConfirm")
       assert.deepEqual(await restoreOwnerPauseReadback(),{count:1,status:200},
         "One real HTTP200 pause must commit before its body is truncated")
