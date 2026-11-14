@@ -5026,6 +5026,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
            typeof x?.smtp_accepted!=='boolean'||
            !Object.hasOwn(closingMailLabel,x?.status))||
          data.permanent_finalization_enabled!==false||
+         typeof data.native_order_history_observed!=='boolean'||
          !data.terminal_preflight||
          !['appeal_window_elapsed','appeal_review_pending',
            'appeal_accepted','notification_exception_review_required',
@@ -5061,6 +5062,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
         blockers.push('itiraz kabul edildi; ayrıca kapatma uygulanamaz');
       if(safety.notification_exception_review_required)
         blockers.push('bildirim başarısızlığı istisnası ayrıca incelenmeli');
+      if(data.native_order_history_observed)
+        blockers.push('bu mağazaya bağlı gerçek geçmiş sipariş kaydı saptandı; ödeme, iade ve uyuşmazlıklar ayrıca doğrulanmalı');
+      else
+        blockers.push('bu sorguda geçmiş sipariş kaydı saptanmadı; bu sonuç borç veya yükümlülük bulunmadığını kanıtlamaz');
       blockers.push('mali ve hukuki yükümlülüklerin temizlendiği doğrulanmadı');
       target.textContent+=' Kesin kapatma engelleri: '+blockers.join('; ')+
         '. Mağaza kimliği, geçmiş işlemler ve ad hakkı korunur; geri dönüşsüz kapatma kapalıdır.';

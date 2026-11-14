@@ -50,6 +50,21 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       })
       if(nativeEmail)verified++
     }
+    // Reuse Mercur 2.4.1's native Seller-linked OrderGroup filter.
+    // A match proves historical order presence only. An empty response cannot
+    // prove absence of returns, refunds, debt or external legal obligations.
+    const native=req.scope.resolve<{
+      listOrderGroups(filter:{seller_id:string},config:{take:number}):
+        Promise<Array<{id:string}>>
+    }>("seller")
+    const observed=await native.listOrderGroups(
+      {seller_id:parsed.data.seller_id},{take:1})
+    if(!Array.isArray(observed)||observed.length>1||
+      observed.some(g=>!g||typeof g.id!=="string"||
+        !/^og_[A-Za-z0-9_-]{1,123}$/.test(g.id)))
+      throw new Error("Native OrderGroup evidence unavailable")
+    // Revalidate Staff and Seller scope AFTER the native read. No stale
+    // pre-query authorization may expose even aggregate order evidence.
     const progress=await access(req).personalPlatformStoreClosingEmailProgress(
       sessionToken(req),parsed.data.organization_id,parsed.data.seller_id)
     if(!progress)return res.status(403).json({message:"Access denied"})
@@ -72,6 +87,7 @@ export const GET=async(req:MedusaRequest,res:MedusaResponse)=>{
       admin_alert_at:progress.admin_alert_at,
       email_statuses:progress.owners,
       terminal_preflight:progress.terminal_preflight,
+      native_order_history_observed:observed.length===1,
       permanent_finalization_enabled:false
     })
   }catch(error){
