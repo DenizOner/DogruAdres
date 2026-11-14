@@ -644,6 +644,73 @@ async function main(){
       assert.equal(Number((await q("select count(*)::int n "+
         "from da_store_platform_closing_email_link "+
         "where seller_id=$1",[mailSeller]))[0].n),1)
+      // #311 P2: a verified Owner can visit the link while SMTP has
+      // submitted DATA but the 250 ACK has not yet reached the worker.
+      // This isolated SQL transition mirrors the *already authorized* link
+      // visit's row update; the HTTPS authentication boundary is exercised
+      // by the separate existing Chrome acceptance test.
+      const visitRaceSeller="sel_b22_mail_pg_smtp_link_race"
+      await seed(visitRaceSeller)
+      const visitRaceGate=testBarrier()
+      const beforeRaceMessages=observed.dataMessages
+      holdSmtpDataAck=visitRaceGate
+      const visitRaceWorker=runPlatformClosingEmailTick(container)
+      try{
+        await waitForBarrier(visitRaceGate.entered,
+          "platform SMTP DATA before Owner link visit")
+        assert.equal(observed.dataMessages,beforeRaceMessages+1)
+        const [inflight]=await q(
+          "select attempts,claim_id,last_result,message_id,delivered_at "+
+          "from da_store_platform_closing_email where seller_id=$1 and person_id=$2",
+          [visitRaceSeller,owner])
+        assert.equal(inflight.attempts,1)
+        assert.ok(inflight.claim_id)
+        assert.equal(inflight.last_result,"inflight")
+        assert.equal(inflight.message_id,null)
+        assert.equal(inflight.delivered_at,null)
+        const [link]=await q(
+          "select attempt from da_store_platform_closing_email_link "+
+          "where seller_id=$1 and person_id=$2",[visitRaceSeller,owner])
+        assert.equal(link.attempt,1,
+          "Link and in-flight SMTP acceptance must concern the same attempt")
+        const recorded=await q(
+          "update da_store_platform_closing_email set "+
+          "delivered_at=clock_timestamp(),delivery_source='authenticated_owner',"+
+          "email_link_visited_at=clock_timestamp(),"+
+          "account_viewed_at=clock_timestamp(),last_result='delivered',"+
+          "claim_id=null,lease_until=null,updated_at=clock_timestamp() "+
+          "where seller_id=$1 and person_id=$2 and claim_id=$3::uuid "+
+          "and last_result='inflight' returning seller_id",
+          [visitRaceSeller,owner,inflight.claim_id])
+        assert.equal(recorded.length,1,
+          "Owner visit must commit while SMTP acceptance is still pending")
+      }finally{
+        visitRaceGate.release()
+        holdSmtpDataAck=null
+        await Promise.allSettled([visitRaceWorker])
+      }
+      await visitRaceWorker
+      const [visitRaceProof]=await q(
+        "select attempts,last_result,message_id,delivered_at,delivery_source,"+
+        "claim_id,lease_until from da_store_platform_closing_email "+
+        "where seller_id=$1 and person_id=$2",[visitRaceSeller,owner])
+      assert.equal(visitRaceProof.attempts,1)
+      assert.equal(visitRaceProof.last_result,"delivered",
+        "A late worker may not overwrite authenticated Owner delivery")
+      assert.equal(visitRaceProof.delivery_source,"authenticated_owner")
+      assert.ok(visitRaceProof.delivered_at)
+      assert.ok(visitRaceProof.message_id,
+        "SMTP 250 message ID must survive the concurrent link visit")
+      assert.equal(visitRaceProof.claim_id,null)
+      assert.equal(visitRaceProof.lease_until,null)
+      assert.equal((await row(visitRaceSeller)).deadline_started_at,null,
+        "SMTP settlement alone must never start a new appeal deadline")
+      const messagesAfterVisit=observed.dataMessages
+      await runPlatformClosingEmailTick(container)
+      assert.equal(observed.dataMessages,messagesAfterVisit,
+        "Settled authenticated delivery must never send a second email")
+      process.stdout.write("PASS B22 PG16+loopback SMTP: Owner-link committed between DATA and 250 ACK retains private acceptance Message-ID, one attempt, no resend and no clock change from SMTP settlement\\n")
+
       // Owner 30-day closing: reuse the exact same native SMTP provider,
       // verified Person email and scheduler with its NEW event/recipient ledger.
       // Concurrent ticks may commit ONLY ONE claim per Owner/source event.
