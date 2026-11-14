@@ -131,6 +131,13 @@ export async function verifyB22CoownerNativeMemberReadback(input:{
     await reviewer.send("Page.reload",{ignoreCache:true})
     await reviewer.wait("!document.getElementById('workspace').hidden")
     await reviewer.select(orgName,"member")
+    // Restore the visible ordinary-Member product workspace before the
+    // existing downstream UI acceptance clicks its native draft refresh.
+    // A role label alone does not establish that the real panel has rendered.
+    await reviewer.wait("!document.getElementById('product-draft-panel').hidden && "+
+      "(()=>{const b=document.getElementById('product-draft-refresh');"+
+      "if(!b)return false;const r=b.getBoundingClientRect();"+
+      "return r.width>0&&r.height>0})()")
   }
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: second Person native SellerMember linked through Owner UI; member GET403, test-only protected Owner GET200 own queued receipt and 2/2 coverage, foreign Org403, reversible role removal GET403 and no mailbox delivery/finalizer\n")
 }
