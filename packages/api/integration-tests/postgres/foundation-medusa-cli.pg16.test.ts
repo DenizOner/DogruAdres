@@ -299,6 +299,7 @@ async function run(){
         const historicalCartMarker="PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED"
         const ownerClosingNegativeMarker="PASS B22 real closing security: concurrent HTTP 200+409 one commit; revoked Owner/stale session HTTP403 no writes; expired 30-day withdraw HTTP409 no writes; both active Owners read private notices, two receipts each; native Seller unchanged"
         const ownerClosingMarker="PASS B22 real Owner 30-day closing intent/withdraw: Chrome/HTTPS/PG16, exact server deadline, protected Owner notices, whole-Cart L deny then restore, CSRF/foreign/replay denied; native Seller unchanged; irreversible finalization disabled"
+        const ownerPauseRefreshRaceMarker="PASS B22 Chrome/HTTPS/PG16: Owner refresh during real committed pause POST with HTTP200 response held starts zero premature GET, keeps both buttons locked; release gives uncertain, only post-settle authorized GET reopens controls"
         const ownerPauseUncertainMarker="PASS B22 Chrome/HTTPS/PG16: actual Owner pause/resume each persisted once but client HTTP200 truncated JSON or mismatched Organization response remained uncertain; both buttons disabled until fresh authorized GET, no replay and two durable audit/outbox"
         const ownerPauseAcceptanceMarker="PASS B22 real Owner temporary pause/resume: Chrome/HTTPS/PG16 UI, same native Seller ID/name and existing Cart, two audit/outbox, CSRF/foreign/replay/platform-suspend denied, two-Store final L blocked then restored; checkout remains closed"
         const storeDraftNegativeMarkers=[
@@ -360,6 +361,7 @@ async function run(){
               storeDraftNegativeMarkers.includes(x as (typeof storeDraftNegativeMarkers)[number]) ||
               x===ownerPauseAcceptanceMarker || x===ownerPauseConcurrentMarker ||
               x===ownerPauseUncertainMarker ||
+              x===ownerPauseRefreshRaceMarker ||
               x===ownerPauseIndexMarker || x===ownerClosingNegativeMarker ||
               x===exceptionalStoreTransferMarker || x===exceptionalRecipientMarker ||
               x===scheduledCatalogMarker || x===scheduledNativeCartMarker ||
@@ -476,6 +478,8 @@ async function run(){
           "Missing real Owner temporary pause/resume Chrome/HTTPS/PG16 acceptance proof")
         assert.ok(result.split("\n").includes(ownerPauseUncertainMarker),
           "Missing real HTTP200 corrupted pause/resume readback, durable state and no-retry acceptance")
+        assert.ok(result.split("\n").includes(ownerPauseRefreshRaceMarker),
+          "Missing real pending Owner POST refresh race: no GET before result settled")
         assert.ok(result.split("\n").includes(ownerClosingMarker),
           "Missing real Owner 30-day closing, sale gate, withdrawal and security acceptance proof")
         assert.ok(result.split("\n").includes(ownerClosingNegativeMarker),
