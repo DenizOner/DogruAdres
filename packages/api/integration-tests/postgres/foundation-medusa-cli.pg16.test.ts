@@ -295,6 +295,7 @@ async function run(){
         const platformClosingAppealMarker="PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, canonical 10+20 clock started on authenticated Owner link before first appeal; external mailbox delivery unverified and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no external mailbox delivery claim; one immutable clock, foreign denied"
         const platformStaffReviewMarker="PASS B22 Chrome/HTTPS/PG16: independent third Person strong Staff review decision, original Staff self-review denied, private Owner reason/notice, immutable clock and sales block; repeat idempotent, first-stage parallel single decision, revoked grant denied"
         const platformFinalReviewMarker="PASS B22 Chrome/HTTPS/PG16: synthetic T0+11d second-stage Owner request, real protected Owner/foreign Staff/CSRF/replay, one durable audit/outbox and private notice; Store stays closed, original 10+20 clock unchanged; stage time fixture is synthetic, real Owner Chrome form submitted and confirmed"
+        const ownerNativeProofMarker="PASS B22 Chrome/HTTPS/PG16: second protected Owner native email verification from pending through real GET/POST to consumed; first Owner revoked proof unchanged, readiness 0-to-1 then cleanup restores 0; private receipts immutable, no mailbox delivery or finalizer"
         const platformClosingEmailLinkMarker="PASS B22 Chrome/HTTPS/PG16: synthetic hashed email link strong Owner POST, foreign/forged CSRF/scanner GET denied, 10+20 server clock starts once, no finalizer or sales reopening"
         const platformPreflightBoundaryMarker="PASS B22 Chrome/HTTPS/PG16: 720-hour Staff preflight false/true, pending first appeal and SMTP admin exception; permanent finalizer denied"
         const completedSourceOrderMarker="PASS B22 Chrome/HTTPS/PG16: completed native source OrderGroup/Order IDs, Order-Cart FK, source Seller/Offer and immutable Buyer attribution unchanged across A→B transfer, A same-ID recovery and B name adoption; zero payment"
@@ -375,7 +376,7 @@ async function run(){
               x===historicalCartMarker || x===completedSourceOrderMarker ||
               (x===ownerPlatformClosedUiMarker || x===legacyPlatformClosingMarker || x===dualRoleLockMarker || x===platformCrossSessionMarker ||
                x===platformClosingAppealMarker || x===nativeFinanceGraphMarker || x===nativeMultiSellerOrderMarker || x===platformClosingEmailLinkMarker ||
-               x===platformFinalReviewMarker || x===platformStaffReviewMarker ||
+               x===ownerNativeProofMarker || x===platformFinalReviewMarker || x===platformStaffReviewMarker ||
                x===platformPreflightBoundaryMarker)).join("\n")
           if(child.error||child.status!==0){
             // The long B22 child can legitimately fail at the still-blocked
@@ -464,6 +465,8 @@ async function run(){
           "Missing exact real PostgreSQL 16 Seller OrderGroup/Order payment/refund graph read-only proof; no financial clearance claim")
         assert.ok(result.split("\n").includes(platformClosingAppealMarker),
           "Missing real independent strong Staff and protected Owner platform closing/appeal HTTPS+PG16 proof")
+        assert.ok(result.split("\n").includes(ownerNativeProofMarker),
+          "Missing real second protected Owner native email confirmation, HTTPS replay denial and isolated restoration proof")
         assert.ok(result.split("\n").includes(platformClosingEmailLinkMarker),
           "Missing real authenticated Owner email-link HTTPS/PG16, foreign/CSRF/scanner GET denials, one 10+20 clock and sales-block proof")
         assert.ok(result.split("\n").includes(platformFinalReviewMarker),

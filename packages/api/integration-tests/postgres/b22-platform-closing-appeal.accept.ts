@@ -719,6 +719,84 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(newlyProtected.body?.protected_owner_count,2)
   assert.equal(newlyProtected.body?.private_receipt_count,1,
     "Only the initial Owner may hold the original closure audit receipt")
+  // The first Owner's native proof was deliberately soft-deleted in the earlier
+  // negative acceptance. Keep it revoked; the second Owner must obtain their
+  // own proof without changing the first Owner's state.
+  // The SECOND protected Owner must acquire their OWN native Medusa email
+  // verification, not inherit the first Owner's proof. This test uses the
+  // existing real Chrome HTTPS route and disposable Medusa Auth/PG16 state.
+  assert.equal(newlyProtected.body?.verified_email_identity_count,0,
+    "New protected Owner cannot inherit another Person's verified email")
+  const secondaryBindings=await q("select auth_identity_id from da_login_binding "+
+    "where person_id=$1 and actor_type='user' and revoked_at is null "+
+    "and verified_at is not null",[staffPersonId])
+  assert.equal(secondaryBindings.length,1)
+  const secondaryAuthId=secondaryBindings[0].auth_identity_id
+  assert.notEqual(secondaryAuthId,authId,
+    "Two protected Owners must use independent native Auth identities")
+  const priorSecond=await auth.listAuthVerifications({
+    auth_identity_id:secondaryAuthId,entity_type:"email"
+  },{take:null})
+  assert.equal(priorSecond.some((v:any)=>!!v.verified_at),false,
+    "The second Owner starts with no native verified email proof")
+  const secondaryChallenge=await auth.requestAuthVerification({
+    auth_identity_id:secondaryAuthId,entity_id:foreignEmail,
+    entity_type:"email",code_provider:"token"
+  })
+  assert.ok(typeof secondaryChallenge.code==="string"&&
+    secondaryChallenge.code.length>=16)
+  try{
+    const result=await staff.callFunction(
+      "async function(code){const send=async(method)=>{"+
+      "const r=await fetch('/auth/verify-email'+(method==='GET'?"+
+      "'?token='+encodeURIComponent(code):''),{method,"+
+      "headers:method==='POST'?{'content-type':'application/json'}:{},"+
+      "body:method==='POST'?JSON.stringify({token:code}):undefined,"+
+      "cache:'no-store'});const b=await r.json();"+
+      "return {http:r.status,ok:b.ok,state:b.status}};"+
+      "return {before:await send('GET'),confirmed:await send('POST'),"+
+      "after:await send('GET'),replay:await send('POST')}}",
+      secondaryChallenge.code)
+    assert.deepEqual(result.before,{http:200,ok:true,state:"pending"},
+      "Real Chrome GET must never consume the native verification code")
+    assert.deepEqual(result.confirmed,{http:200,ok:true,state:"confirmed"},
+      "Explicit real Chrome POST must consume the native verification code")
+    assert.deepEqual(result.after,{http:200,ok:true,state:"consumed"},
+      "Real Chrome GET must reflect the consumed native email proof")
+    assert.ok([400,409].includes(result.replay.http)&&result.replay.ok===false,
+      "Native email confirmation token must deny a second POST")
+    const proof=await auth.listAuthVerifications({
+      auth_identity_id:secondaryAuthId,entity_type:"email"
+    },{take:null})
+    assert.equal(proof.some((v:any)=>v.id===secondaryChallenge.id&&!!v.verified_at),
+      true,"The second Person's real Medusa proof must persist in PostgreSQL")
+    const twoVerified=await read(staff,mailPath)
+    assert.equal(twoVerified.status,200)
+    assert.equal(twoVerified.body?.protected_owner_count,2)
+    assert.equal(twoVerified.body?.verified_email_identity_count,1,
+      "Staff readiness must count only the second Owner while the first is revoked")
+    assert.equal(twoVerified.body?.private_receipt_count,1,
+      "Verification may not invent another Owner's original closing receipt")
+    assert.equal(twoVerified.body?.mailbox_delivery_verified_count,0)
+    assert.equal(twoVerified.body?.deadline_started,false)
+    assert.equal(twoVerified.body?.permanent_finalization_enabled,false)
+    assert.equal(JSON.stringify(twoVerified.body).includes(foreignEmail),false,
+      "Aggregate Staff readiness must not expose the second Owner's email")
+  }finally{
+    // The second proof belongs only to this disposable test. Restore the
+    // original unverified identity before subsequent B22 acceptance checks.
+    const retired=await q("update auth_verification set "+
+      "deleted_at=clock_timestamp() where id=$1 and auth_identity_id=$2 "+
+      "and deleted_at is null returning id",
+      [secondaryChallenge.id,secondaryAuthId])
+    assert.deepEqual(retired,[{id:secondaryChallenge.id}])
+  }
+  const restoredVerification=await read(staff,mailPath)
+  assert.equal(restoredVerification.status,200)
+  assert.equal(restoredVerification.body?.verified_email_identity_count,0)
+  assert.equal(restoredVerification.body?.protected_owner_count,2)
+  assert.equal(restoredVerification.body?.private_receipt_count,1)
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: second protected Owner native email verification from pending through real GET/POST to consumed; first Owner revoked proof unchanged, readiness 0-to-1 then cleanup restores 0; private receipts immutable, no mailbox delivery or finalizer\n")
   // The existing Owner A already has the genuine native SellerMember link.
   // B receives its native Member linkage only later in B22; do NOT invent it.
   // Grant A the same real platform task temporarily in this disposable DB,
