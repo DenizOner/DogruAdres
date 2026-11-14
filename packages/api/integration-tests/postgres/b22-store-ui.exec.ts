@@ -32,6 +32,7 @@ import {verifyB22PlatformClosingAppeal,
   verifyB22IndependentStaffClosingDecision} from "./b22-platform-closing-appeal.accept"
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
+import {verifyB22NativeOwnerMailRetry} from "./b22-native-owner-mail-retry.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {assertWcag22AxeInChrome} from "./wcag22-axe-chrome"
 import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
@@ -386,10 +387,12 @@ async function verifyOwnerClosingBrowser(input:{
   nativeCustomer:any;customerCart:any;cartStoreIds:string[];foundation:any;cartService:any;
   q:(sql:string,params?:any[])=>Promise<any[]>;
   get:(url:string)=>Promise<any>;catalogUrl:(org:string)=>string;
+  container:any;firstEmail:string;secondEmail:string;
 }):Promise<void>{
   const {browser,reviewer,coOwnerPersonId,ownerPersonId,connectionString,
     organizations,ownerStoreId,secondOwnerStoreId,
-    nativeCustomer,customerCart,cartStoreIds,foundation,cartService,q,get,catalogUrl}=input
+    nativeCustomer,customerCart,cartStoreIds,foundation,cartService,q,get,catalogUrl,
+    container,firstEmail,secondEmail}=input
   // Isolated synthetic Store. Never turn on public checkout or payments.
   const nativeBefore=(await q(
     "select id,name,handle,status,approved_at,closed_from,closed_to from seller where id=$1",
@@ -553,6 +556,11 @@ async function verifyOwnerClosingBrowser(input:{
   assert.ok(Number.isSafeInteger(clockView.body.remaining_seconds)&&
     clockView.body.remaining_seconds>0&&clockView.body.remaining_seconds<=2592000,
     "Owner's status includes a bounded canonical server-clock countdown")
+  await verifyB22NativeOwnerMailRetry({
+    browser,coOwner:reviewer,container,q,firstPersonId:ownerPersonId,
+    secondPersonId:coOwnerPersonId,eventId:closed.audit_event_id,
+    firstEmail,secondEmail
+  })
   assert.equal(closed.outbox_count,1)
   assert.equal(closed.notices,2,"Every protected Owner must receive one closing notice")
   await assertNotifiedOwners(closed.audit_event_id,
@@ -8580,7 +8588,8 @@ export default async function({container}:any){
     await verifyOwnerClosingBrowser({browser,reviewer,coOwnerPersonId:B.person,
       ownerPersonId:A.person,connectionString:u.toString(),
       organizations,ownerStoreId,secondOwnerStoreId,nativeCustomer,
-      customerCart,cartStoreIds,foundation,cartService,q,get,catalogUrl})
+      customerCart,cartStoreIds,foundation,cartService,q,get,catalogUrl,
+      container,firstEmail:A.email,secondEmail:B.email})
     // One native Seller suspended means NO partially authorized two-Store
     // scope. The native workflow restores the task's prior approved state.
     await suspendSellerWorkflow(container).run({input:{
