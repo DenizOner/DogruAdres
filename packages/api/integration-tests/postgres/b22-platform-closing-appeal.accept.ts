@@ -436,6 +436,48 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(mailReadiness.body?.deadline_started,false)
   assert.equal(mailReadiness.body?.native_order_history_observed,true,
     "Real prior Mercur OrderGroup is observed, not financially cleared")
+  // B22 terminal-finance prerequisite: prove that the actual installed
+  // Mercur/Medusa query graph can expose a Seller-linked native Order's
+  // payment/refund relations. The checkout fixture uses zero external money;
+  // observing no payment here proves NOTHING about Seller-wide debt or legal
+  // clearance. Do not wire this probe into a production authorization gate.
+  const nativeSeller=container.resolve("seller") as {
+    listOrderGroups(filter:{seller_id:string},config:{take:number}):
+      Promise<Array<{id:string}>>
+  }
+  const nativeSellerGroups=await nativeSeller.listOrderGroups(
+    {seller_id:sellerId},{take:2})
+  assert.ok(Array.isArray(nativeSellerGroups)&&nativeSellerGroups.length>0,
+    "The authorized Store has a real native Seller-linked OrderGroup")
+  const groupId=nativeSellerGroups[0]?.id
+  assert.match(groupId??"",/^og_[A-Za-z0-9_-]{1,123}$/)
+  const nativeFinance=await query.graph({
+    entity:"order_group",filters:{id:groupId},
+    fields:["id","orders.id","orders.payment_collections.id",
+      "orders.payment_collections.payments.id",
+      "orders.payment_collections.payments.refunds.id"]
+  })
+  assert.ok(Array.isArray(nativeFinance.data)&&nativeFinance.data.length===1)
+  assert.equal(nativeFinance.data[0]?.id,groupId)
+  const linkedOrders=nativeFinance.data[0]?.orders
+  assert.ok(Array.isArray(linkedOrders)&&linkedOrders.length>0,
+    "Native Seller OrderGroup must retain real Seller Order links")
+  for(const order of linkedOrders){
+    assert.match(order?.id??"",/^order_[A-Za-z0-9_-]+$/)
+    assert.ok(Object.hasOwn(order,"payment_collections"),
+      "Native Medusa must explicitly project the payment collection relation")
+    assert.ok(Array.isArray(order.payment_collections),
+      "An empty native payment collection list is not financial clearance")
+    for(const collection of order.payment_collections){
+      assert.ok(Array.isArray(collection.payments))
+      for(const payment of collection.payments)
+        assert.ok(Array.isArray(payment.refunds),
+          "Native refund relation must be queryable, even when empty")
+    }
+  }
+  assert.equal(mailReadiness.body?.terminal_preflight.financial_legal_clearance_verified,false,
+    "A native payment/refund graph can never imply complete legal clearance")
+  process.stdout.write("PASS B22 real PG16 native finance graph: Seller-scoped OrderGroup and Order payment/refund relations queried read-only; financial/legal clearance stays false, no payment/return execution\\n")
   assert.equal(JSON.stringify(mailReadiness.body).includes("og_"),false,
     "Native OrderGroup IDs are not exposed to Staff")
   assert.deepEqual(mailReadiness.body?.terminal_preflight,{
