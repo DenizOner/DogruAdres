@@ -8,6 +8,7 @@ import assert from "node:assert/strict"
 import {randomBytes} from "node:crypto"
 import {createServer} from "node:net"
 import {runOwnerClosingEmailTick} from "../../src/jobs/dogruadres-platform-closing-email"
+import {until} from "./b19-browser"
 import type {B06Chrome} from "./b06-ui-browser"
 
 export async function verifyB22CoownerNativeMemberReadback(input:{
@@ -498,14 +499,55 @@ export async function verifyB22LateProtectedOwnerClosingNotice(input:{
     "from da_audit_event e join da_audit_outbox x "+
     "on x.source_audit_event_id=e.id where e.id=$1",[eventId])
   assert.equal(beforeAudit.length,1)
-  const promoted=await q("update da_organization_membership "+
-    "set role='owner',protected_owner=true,updated_at=clock_timestamp() "+
-    "where id=$1 and person_id=$2 and role='member' and protected_owner=false "+
-    "and status='active' and revoked_at is null returning id",[
-      memberMembershipId,personB])
-  assert.deepEqual(promoted,[{id:memberMembershipId}])
+  // The B07 protected Owner promotion route and real Owner membership UI
+  // already exist. A task-only SQL role UPDATE would skip the exact B22
+  // business transition this late-recipient test must now cover.
+  const beforePromotion=await q("select e.id,e.actor_person_id,"+
+    "(select count(*)::int from da_audit_outbox x "+
+    "where x.source_audit_event_id=e.id) as outboxes "+
+    "from da_audit_event e where e.action='organization.membership_changed' "+
+    "and e.organization_id=$1 and e.target_id=$2 order by e.id",
+    [organizationId,memberMembershipId])
+  const [org]=await q("select name from da_organization "+
+    "where id=$1 and status='active' and deleted_at is null",[organizationId])
+  assert.ok(typeof org?.name==="string"&&org.name.length>0)
   let withdrawn=false
   try{
+    await browser.send("Page.bringToFront")
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("!document.getElementById('workspace').hidden")
+    await browser.select(org.name,"owner")
+    await browser.ready()
+    const postBefore=browser.http.filter((item:any)=>
+      item.method==="POST"&&item.path==="/personal/memberships").length
+    await browser.button("Korumalı Owner yap "+memberMembershipId)
+    await until(async()=>{
+      const rows=await q("select role,protected_owner,status from "+
+        "da_organization_membership where id=$1 and person_id=$2",
+        [memberMembershipId,personB])
+      return rows.length===1&&rows[0].role==="owner"&&
+        rows[0].protected_owner===true&&rows[0].status==="active"
+    },20000,"real Owner HTTPS promotion before late closing notice")
+    await until(async()=>browser.http.filter((item:any)=>
+      item.method==="POST"&&item.path==="/personal/memberships"&&
+      item.status===200).length>=postBefore+1,
+    20000,"real protected Owner promotion POST 200")
+    const promotion=await q("select e.id,e.actor_person_id,"+
+      "(select count(*)::int from da_audit_outbox x "+
+      "where x.source_audit_event_id=e.id) as outboxes "+
+      "from da_audit_event e where e.action='organization.membership_changed' "+
+      "and e.organization_id=$1 and e.target_id=$2 order by e.id",
+      [organizationId,memberMembershipId])
+    assert.equal(promotion.length,beforePromotion.length+1,
+      "Real Owner promotion must commit one NEW canonical audit")
+    assert.deepEqual(promotion.slice(0,-1),beforePromotion,
+      "Existing membership history must remain unchanged")
+    assert.equal(promotion.at(-1)?.actor_person_id,personA)
+    assert.equal(promotion.at(-1)?.outboxes,1)
+    // B's real active browser must refresh its changed Organization role.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.send("Page.reload",{ignoreCache:true})
+    await reviewer.wait("!document.getElementById('workspace').hidden")
     const missing=await get(reviewer)
     assert.equal(missing.status,200,
       "Already-linked native SellerMember with new protected Owner grant can read")
@@ -601,18 +643,30 @@ export async function verifyB22LateProtectedOwnerClosingNotice(input:{
       // Never silently discard an active closure if the test failed.
       // Its disposable DB remains isolated and CI must report FAIL.
     }
-    const restored=await q("update da_organization_membership "+
-      "set role=$2,protected_owner=$3,revoked_at=$4,"+
-      "updated_at=clock_timestamp() where id=$1 returning id",[
-        memberMembershipId,member[0].role,member[0].protected_owner,
-        member[0].revoked_at])
-    assert.deepEqual(restored,[{id:memberMembershipId}])
+    // B22 fixture teardown only: never use the forbidden Owner->Admin
+    // product path. Restore the old Member in the disposable task DB, even
+    // when a post-commit UI/assertion failed; audit history stays append-only.
+    const roleNow=await q("select role,protected_owner,status,revoked_at "+
+      "from da_organization_membership where id=$1 and person_id=$2",
+      [memberMembershipId,personB])
+    assert.equal(roleNow.length,1)
+    if(roleNow[0].role==="owner"&&roleNow[0].protected_owner===true){
+      const restored=await q("update da_organization_membership "+
+        "set role=$2,protected_owner=$3,revoked_at=$4,"+
+        "updated_at=clock_timestamp() where id=$1 returning id",[
+          memberMembershipId,member[0].role,member[0].protected_owner,
+          member[0].revoked_at])
+      assert.deepEqual(restored,[{id:memberMembershipId}])
+    }else assert.deepEqual(roleNow,[{
+      role:member[0].role,protected_owner:member[0].protected_owner,
+      status:member[0].status,revoked_at:member[0].revoked_at
+    }],"Failed role-change request cannot mutate the Member")
     assert.equal((await get(reviewer)).status,403,
       "Lost protected Owner grant revokes access to their former private notice")
   }
   process.stdout.write(
     "PASS B22 Chrome/HTTPS/PG16: new protected Owner after actual closing "+
-    "gets source-bound private receipt and independent +24h mail retry; "+
+    "via real Owner UI/HTTPS audit gets own receipt and +24h retry; "+
     "first Owner original clock unchanged, replay safe, revoked access 403, "+
     "source audit/outbox intact, no SMTP/delivery/finalizer\n")
 }
