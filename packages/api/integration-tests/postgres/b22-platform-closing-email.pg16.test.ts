@@ -31,6 +31,9 @@ if(process.env.CI!=="true" || process.env.GITHUB_ACTIONS!=="true" ||
 const SQL=(globalThis as any).Bun?.SQL
 if(typeof SQL!=="function")throw Error("Bun native PG driver unavailable")
 const db=new SQL(url.toString())
+// CI-only worker-pool override; the fixture's independent q() remains free
+// to observe locks while the 2-slot worker pool is fully occupied.
+let activeWorkerPool=db
 const q=(statement:string,params:unknown[]=[])=>db.unsafe(statement,params)
 function bind(tx:Pg,statement:string,params:unknown[]=[]){
   let n=0
@@ -74,6 +77,19 @@ const syntheticActor="user_b22_mail_pg"
 const retryActor="user_b22_mail_pg_second_owner"
 const retryIdentity="auth_b22_mail_pg_second_owner"
 const retryEmail="recovered-owner@example.invalid"
+const linkedMemberActor="mem_b22_mail_extra_verified"
+const linkedMemberIdentity="auth_b22_mail_extra_verified"
+const linkedMemberEmail="another-owned-email@example.invalid"
+// Separate actor IDs for the real concurrency fixture; no cross-Person alias.
+const raceMemberActor="mem_b22_mail_race_member"
+const raceMemberIdentity="auth_b22_mail_race_member"
+const raceMemberEmail="race-member@example.invalid"
+const otherPerson="daprs_b22_mail_unrelated"
+const otherActor="user_b22_mail_unrelated"
+const otherIdentity="auth_b22_mail_unrelated"
+const otherEmail="unrelated@example.invalid"
+const otherProof="b22_unrelated_proof"
+const ownerProofId="b22_owner_mail_verified_primary"
 let testSmtp:{enabled:boolean;host:string;port:number;
   security:"none";from_email:string}|null=null
 type TestBarrier={entered:Promise<void>;proceed:Promise<void>;
@@ -93,6 +109,8 @@ async function waitForBarrier(p:Promise<void>,label:string){
   }finally{if(timeout)clearTimeout(timeout)}
 }
 let beforeOwnerSmtpConfig:TestBarrier|null=null
+// Only the disposable PG16 fixture can override a native verification result.
+let ownerProofFromPg=false
 
 function serviceFor(tx:Pg){
   const service=Object.create(AccessService.prototype) as any
@@ -143,7 +161,7 @@ const manager={
 const container:any={resolve:(name:string)=>{
   if(name===ContainerRegistrationKeys.PG_CONNECTION)return {
     transaction:<T>(work:(t:{raw:(s:string,p:unknown[])=>Promise<{rows:any[]}>})=>Promise<T>)=>
-      db.begin(async (tx:Pg)=>work({
+      activeWorkerPool.begin(async (tx:Pg)=>work({
         raw:async (s:string,p:unknown[]=[])=>({rows:await bind(tx,s,p)})
       }))
   }
@@ -151,21 +169,31 @@ const container:any={resolve:(name:string)=>{
     graph:async(input:{filters?:{id?:string}})=>{
       const id=input.filters?.id
       return {data:id===syntheticActor?[{id,email:syntheticEmail}]:
-        id===retryActor?[{id,email:retryEmail}]:[]}
+        id===retryActor?[{id,email:retryEmail}]:
+        id===linkedMemberActor?[{id,email:linkedMemberEmail}]:
+        id===raceMemberActor?[{id,email:raceMemberEmail}]:[]}
     }
   }
   if(name===Modules.AUTH)return {
     listAuthIdentities:async(input:{id?:string[]})=>{
       const id=input.id?.[0]
       const email=id===syntheticIdentity?syntheticEmail:
-        id===retryIdentity?retryEmail:null
+        id===retryIdentity?retryEmail:
+        id===linkedMemberIdentity?linkedMemberEmail:
+        id===raceMemberIdentity?raceMemberEmail:null
       return email?[{id,provider_identities:[
         {provider:"emailpass",entity_id:email}]}]:[]
     },
     listAuthVerifications:async(input:{auth_identity_id?:string})=>{
       const id=input.auth_identity_id
       const email=id===syntheticIdentity?syntheticEmail:
-        id===retryIdentity?retryEmail:null
+        id===retryIdentity?retryEmail:
+        id===linkedMemberIdentity?linkedMemberEmail:
+        id===raceMemberIdentity?raceMemberEmail:null
+      if(ownerProofFromPg&&id===syntheticIdentity){
+        return q("select entity_type,entity_id,verified_at,deleted_at "+
+          "from auth_verification where auth_identity_id=$1",[id])
+      }
       return email?[{entity_type:"email",entity_id:email,
         verified_at:new Date(),deleted_at:null}]:[]
     }
@@ -190,6 +218,52 @@ async function setup(){
   // Nothing from this isolated test touches real/production data.
   await q("drop schema if exists public cascade")
   await q("create schema public")
+  // This worker's SQL fence also covers native Auth/actor tables. Minimal
+  // test-only table shapes make real PostgreSQL ACCESS SHARE/ROW EXCLUSIVE
+  // conflicts measurable without inventing production email ownership.
+  for(const native of ['"user"',"member","customer"]){
+    await q("create table public."+native+" (id text primary key,email text,deleted_at timestamptz)")
+  }
+  await q("create table auth_identity (id text primary key,deleted_at timestamptz)")
+  await q("create table provider_identity (id text primary key,entity_id text,"+
+    "auth_identity_id text not null references auth_identity(id),"+
+    "provider text not null,deleted_at timestamptz)")
+  await q("create table auth_verification (id text primary key,"+
+    "auth_identity_id text references auth_identity(id),entity_type text,entity_id text,"+
+    "verified_at timestamptz,deleted_at timestamptz)")
+  await q("insert into public.\"user\"(id,email) values ($1,$2),($3,$4),($5,$6)",[
+    syntheticActor,syntheticEmail,retryActor,retryEmail,otherActor,otherEmail])
+  await q("insert into public.member(id,email) values ($1,$2),($3,$4),($5,$6)",[
+    linkedMemberActor,linkedMemberEmail,raceMemberActor,raceMemberEmail,
+    "mem_b22_unverified_extra","missing-proof@example.invalid"])
+  await q("insert into auth_identity(id) values ($1),($2),($3),($4),($5),($6)",[
+    syntheticIdentity,retryIdentity,linkedMemberIdentity,raceMemberIdentity,
+    otherIdentity,"auth_b22_unverified_extra"])
+  // Medusa v2.22.3 native auth provider/verification facts are queried
+  // through the SAME worker transaction, never via an injected Query/Auth
+  // service borrowing a second connection during SMTP.
+  for(const [identity,email] of [
+    [syntheticIdentity,syntheticEmail],
+    [retryIdentity,retryEmail],
+    [linkedMemberIdentity,linkedMemberEmail],
+    [raceMemberIdentity,raceMemberEmail],
+    ["auth_b22_unverified_extra","missing-proof@example.invalid"]
+  ]){
+    await q("insert into provider_identity "+
+      "(id,auth_identity_id,provider,entity_id) values ($1,$2,'emailpass',$3)",
+      ["prov_"+uuid(),identity,email])
+  }
+  for(const [identity,email] of [
+    [syntheticIdentity,syntheticEmail],
+    [retryIdentity,retryEmail],
+    [linkedMemberIdentity,linkedMemberEmail],
+    [raceMemberIdentity,raceMemberEmail]
+  ]){
+    await q("insert into auth_verification "+
+      "(id,auth_identity_id,entity_type,entity_id,verified_at) "+
+      "values ($1,$2,'email',$3,clock_timestamp())",
+      [identity===syntheticIdentity?ownerProofId:"proof_"+uuid(),identity,email])
+  }
   await q("create table da_person (id text primary key,disabled_at timestamptz,deleted_at timestamptz)")
   await q("create table da_organization (id text primary key)")
   await q("create table da_organization_membership (id text primary key,"+
@@ -215,9 +289,9 @@ async function setup(){
   await q("create table da_notification_receipt (id text primary key,"+
     "person_id text,audit_event_id text,read_at timestamptz,"+
     "unique(audit_event_id,person_id))")
-  await q("create table da_login_binding (person_id text,actor_type text,"+
+  await q("create table da_login_binding (person_id text references da_person(id),actor_type text,"+
     "actor_id text,auth_identity_id text,revoked_at timestamptz,verified_at timestamptz)")
-  await q("create table da_actor_mapping (id text,person_id text,actor_type text,"+
+  await q("create table da_actor_mapping (id text,person_id text references da_person(id),actor_type text,"+
     "actor_id text,deleted_at timestamptz)")
   await migrate(Migration20261111170000)
   await migrate(Migration20261112100000)
@@ -225,7 +299,15 @@ async function setup(){
   await migrate(Migration20261110120000)
   await migrate(Migration20261112130000)
   await q("insert into da_organization(id) values ($1)",[org])
-  await q("insert into da_person(id) values ($1),($2)",[owner,staff])
+  await q("insert into da_person(id) values ($1),($2),($3)",[owner,staff,otherPerson])
+  await q("insert into da_login_binding "+
+    "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+    "values ($1,'user',$2,$3,clock_timestamp())",
+    [otherPerson,otherActor,otherIdentity])
+  await q("insert into auth_verification "+
+    "(id,auth_identity_id,entity_type,entity_id,verified_at) "+
+    "values ($1,$2,'email',$3,clock_timestamp())",
+    [otherProof,otherIdentity,otherEmail])
   await q("insert into da_organization_membership"+
     "(id,organization_id,person_id,role,status,protected_owner)"+
     "values ($1,$2,$3,'owner','active',true)",
@@ -573,6 +655,7 @@ async function main(){
       messageIds:[] as string[],recipients:[] as string[]}
     let refuseRecipient=false,dropAfterData=false
     let holdSmtpDataAck:TestBarrier|null=null
+    let holdAllSmtpDataAcks:TestBarrier|null=null
     const mock=createServer(socket=>{
       socket.setEncoding("utf8")
       socket.write("220 smtp.loopback.test ESMTP\r\n")
@@ -592,8 +675,8 @@ async function main(){
                 socket.destroy()
               }else{
                 observed.acceptedData=true
-                const gate=holdSmtpDataAck
-                holdSmtpDataAck=null
+                const gate=holdAllSmtpDataAcks??holdSmtpDataAck
+                if(!holdAllSmtpDataAcks)holdSmtpDataAck=null
                 if(gate){
                   gate.arrive()
                   void gate.proceed.then(()=>{
@@ -948,6 +1031,17 @@ async function main(){
         "values ($1,$2,'user',$3)",[
           "damap_"+uuid(),unverifiedOwner,retryActor
         ])
+      // The same canonical Person has an additional native Member binding.
+      // That Member has NO native verified email, while the User actor does.
+      // A non-mail identity must not suppress the uniquely verified address.
+      await q("insert into da_login_binding "+
+        "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+        "values ($1,'member',$2,$3,clock_timestamp())",
+        [unverifiedOwner,"mem_b22_unverified_extra","auth_b22_unverified_extra"])
+      await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
+        "values ($1,$2,'member',$3)",[
+          "damap_"+uuid(),unverifiedOwner,"mem_b22_unverified_extra"
+        ])
       const retryDue=await q("update da_store_owner_closing_email "+
         "set next_attempt_at=clock_timestamp()-interval '1 second' "+
         "where audit_event_id=$1 and person_id=$2 and attempts=1 "+
@@ -1006,6 +1100,115 @@ async function main(){
         "PASS B22 PG16+loopback SMTP: second protected Owner verified before "+
         "their own scheduled retry; exactly one new DATA, separate accepted "+
         "Message-IDs and durable receipts, first Owner unchanged, replay safe\\n")
+
+      // P2 pool-starvation regression: each of TWO simultaneous Owner sends
+      // holds one PG_CONNECTION transaction while loopback SMTP DATA waits.
+      // This worker pool has max=2, so borrowing a nested connection from
+      // either Medusa Query/Auth or currentActorCandidates cannot finish both.
+      // Observer queries use the independent task-only fixture connection.
+      const twoSlotPool=new SQL(url.toString(),{
+        max:2,connectionTimeout:2
+      })
+      const poolEvent=await seedOwnerClosingMail(
+        "sel_b22_owner_mail_two_slot_pool_parallel")
+      await q("insert into da_notification_receipt "+
+        "(id,person_id,audit_event_id) values ($1,$2,$3)",[
+          "danot_"+uuid(),unverifiedOwner,poolEvent
+        ])
+      const poolAck=testBarrier()
+      const poolDataStart=observed.dataMessages
+      activeWorkerPool=twoSlotPool
+      holdAllSmtpDataAcks=poolAck
+      const tickA=runOwnerClosingEmailTick(container)
+      const tickB=runOwnerClosingEmailTick(container)
+      try{
+        await waitForBarrier(poolAck.entered,"first two-slot SMTP DATA")
+        let bothAtData=false
+        for(let i=0;i<120;i++){
+          if(observed.dataMessages===poolDataStart+2){bothAtData=true;break}
+          await new Promise<void>(resolve=>setTimeout(resolve,50))
+        }
+        assert.equal(bothAtData,true,
+          "Both Owner SMTP DATA submissions must progress with pool max=2")
+        const waiting=await q("select count(*)::int n from "+
+          "da_store_owner_closing_email where audit_event_id=$1 "+
+          "and last_result='inflight'",[poolEvent])
+        assert.equal(waiting[0].n,2,
+          "Both independent protected Owner claims remain inflight at DATA")
+      }finally{
+        poolAck.release()
+        holdAllSmtpDataAcks=null
+        await Promise.allSettled([tickA,tickB])
+        activeWorkerPool=db
+        await twoSlotPool.close()
+      }
+      await Promise.all([tickA,tickB])
+      const completedPool=await q("select person_id,last_result,message_id,"+
+        "accepted_at,attempts from da_store_owner_closing_email "+
+        "where audit_event_id=$1 order by person_id",[poolEvent])
+      assert.equal(completedPool.length,2)
+      assert.deepEqual(completedPool.map((x:any)=>x.last_result),
+        ["accepted","accepted"])
+      assert.equal(new Set(completedPool.map((x:any)=>x.message_id)).size,2)
+      for(const item of completedPool){
+        assert.equal(item.attempts,1)
+        assert.ok(item.accepted_at)
+      }
+      assert.equal(observed.dataMessages,poolDataStart+2)
+      process.stdout.write("PASS B22 PG16/loopback SMTP: pool max=2 "+
+        "two parallel Owner sends each hold exactly one DB connection, "+
+        "both reach DATA before ACK, two independent accepted receipts\\n")
+
+      // Distinct SECOND verified email for the SAME Person is ambiguous.
+      // Deny the second Owner's SMTP claim instead of selecting an address
+      // by native actor order. The first Owner's mail remains independently
+      // deliverable; no foreign/private email is disclosed in job logs.
+      await q("insert into da_login_binding "+
+        "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+        "values ($1,'member',$2,$3,clock_timestamp())",
+        [unverifiedOwner,linkedMemberActor,linkedMemberIdentity])
+      await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
+        "values ($1,$2,'member',$3)",[
+          "damap_"+uuid(),unverifiedOwner,linkedMemberActor
+        ])
+      const ambiguousEvent=await seedOwnerClosingMail(
+        "sel_b22_owner_closing_ambiguous_native_email")
+      await q("insert into da_notification_receipt "+
+        "(id,person_id,audit_event_id) values ($1,$2,$3)",[
+          "danot_"+uuid(),unverifiedOwner,ambiguousEvent
+        ])
+      const beforeAmbiguousData=observed.dataMessages
+      await runOwnerClosingEmailTick(container)
+      const ambiguous=await q("select person_id,attempts,last_result,"+
+        "message_id,accepted_at from da_store_owner_closing_email "+
+        "where audit_event_id=$1",[ambiguousEvent])
+      assert.equal(ambiguous.length,2)
+      const byAmbiguous=new Map<string,any>(ambiguous.map((r:any)=>[r.person_id,r]))
+      assert.equal(byAmbiguous.get(owner)?.last_result,"accepted")
+      assert.equal(byAmbiguous.get(unverifiedOwner)?.last_result,
+        "unverified_identity","Two distinct verified native emails must fail closed")
+      assert.equal(byAmbiguous.get(unverifiedOwner)?.message_id,null)
+      assert.equal(byAmbiguous.get(unverifiedOwner)?.accepted_at,null)
+      assert.equal(observed.dataMessages,beforeAmbiguousData+1,
+        "Only the unrelated verified first Owner may send SMTP DATA")
+      assert.equal(observed.recipients.includes(linkedMemberEmail),false)
+      // Revoking the conflicting binding restores a unique proved recipient.
+      await q("update da_login_binding set revoked_at=clock_timestamp() "+
+        "where person_id=$1 and actor_type='member' and actor_id=$2",
+        [unverifiedOwner,linkedMemberActor])
+      const recoverAmbiguous=await q("update da_store_owner_closing_email "+
+        "set next_attempt_at=clock_timestamp()-interval '1 second' "+
+        "where audit_event_id=$1 and person_id=$2 and attempts=1 "+
+        "and last_result='unverified_identity' returning person_id",
+        [ambiguousEvent,unverifiedOwner])
+      assert.equal(recoverAmbiguous.length,1)
+      const beforeUniqueRetry=observed.dataMessages
+      await runOwnerClosingEmailTick(container)
+      assert.equal(observed.dataMessages,beforeUniqueRetry+1)
+      assert.equal((await q("select last_result from "+
+        "da_store_owner_closing_email where audit_event_id=$1 and person_id=$2",
+        [ambiguousEvent,unverifiedOwner]))[0].last_result,"accepted")
+      process.stdout.write("PASS B22 PG16/loopback SMTP: linked native actors use only one uniquely verified Person email; distinct verified email collision fails closed, revocation enables exact one retry, no cross-Owner delivery\\n")
 
       // Scope the extra synthetic membership to this single mixed test.
       await q("update da_organization_membership set status='revoked',"+
@@ -1069,6 +1272,190 @@ async function main(){
       assert.equal(ownerMaybe.last_result,"uncertain")
       assert.equal(ownerMaybe.accepted_at,null)
       dropAfterData=false
+
+
+      // Reviewer #5909982797: actual SQL barrier AFTER claim and BEFORE the
+      // recipient fence. A second distinct verified native actor commits first.
+      // No SMTP may be sent for that Person, even though the selected actor
+      // was uniquely verified before this new link existed.
+      const lateBindingEvent=await seedOwnerClosingMail(
+        "sel_b22_owner_mail_race_actor_insert_before_fence")
+      const linkBeforeSend=testBarrier()
+      const beforeLateBindingData=observed.dataMessages
+      beforeOwnerSmtpConfig=linkBeforeSend
+      const linkWorker=runOwnerClosingEmailTick(container)
+      try{
+        await waitForBarrier(linkBeforeSend.entered,"after Owner mail claim before native binding insert")
+        await q("insert into da_login_binding "+
+          "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+          "values ($1,'member',$2,$3,clock_timestamp())",
+          [owner,raceMemberActor,raceMemberIdentity])
+        await q("insert into da_actor_mapping "+
+          "(id,person_id,actor_type,actor_id) values ($1,$2,'member',$3)",
+          ["damap_"+uuid(),owner,raceMemberActor])
+      }finally{
+        linkBeforeSend.release();beforeOwnerSmtpConfig=null
+        await Promise.allSettled([linkWorker])
+      }
+      await linkWorker
+      assert.equal(observed.dataMessages,beforeLateBindingData,
+        "A committed second native verified address BEFORE send must suppress all SMTP DATA")
+      const [deniedLateBinding]=await q("select last_result,accepted_at,attempts "+
+        "from da_store_owner_closing_email where audit_event_id=$1 and person_id=$2",
+        [lateBindingEvent,owner])
+      assert.equal(deniedLateBinding.last_result,"unverified_identity")
+      assert.equal(deniedLateBinding.accepted_at,null)
+      assert.equal(deniedLateBinding.attempts,1)
+      // Removing the conflicting actor restores the original verified email.
+      await q("update da_login_binding set revoked_at=clock_timestamp() "+
+        "where person_id=$1 and actor_id=$2",[owner,raceMemberActor])
+      await q("update da_store_owner_closing_email "+
+        "set next_attempt_at=clock_timestamp()-interval '1 second' "+
+        "where audit_event_id=$1 and person_id=$2",[lateBindingEvent,owner])
+      await runOwnerClosingEmailTick(container)
+      assert.equal(observed.dataMessages,beforeLateBindingData+1)
+      assert.equal((await q("select last_result from da_store_owner_closing_email "+
+        "where audit_event_id=$1 and person_id=$2",
+        [lateBindingEvent,owner]))[0].last_result,"accepted")
+
+      // Medusa's native auth_verification is a separate table/API. This
+      // test-only override reads the disposable PG16 proof row instead of the
+      // default synthetic always-verified stub; no real email is touched.
+      const proofId=ownerProofId // Same real native proof used by earlier sends
+      ownerProofFromPg=true
+      try{
+        // Native proof revocation COMMIT before the new send fence is acquired.
+        const proofBeforeEvent=await seedOwnerClosingMail(
+          "sel_b22_owner_mail_race_proof_revoked_before_fence")
+        const proofBeforeGate=testBarrier()
+        const beforeProofRevokeData=observed.dataMessages
+        beforeOwnerSmtpConfig=proofBeforeGate
+        const revokedProofWorker=runOwnerClosingEmailTick(container)
+        try{
+          await waitForBarrier(proofBeforeGate.entered,"after claim before native proof revocation")
+          const revoked=await q("update auth_verification "+
+            "set deleted_at=clock_timestamp() where id=$1 returning id",[proofId])
+          assert.deepEqual(revoked.map((r:any)=>r.id),[proofId])
+        }finally{
+          proofBeforeGate.release();beforeOwnerSmtpConfig=null
+          await Promise.allSettled([revokedProofWorker])
+        }
+        await revokedProofWorker
+        assert.equal(observed.dataMessages,beforeProofRevokeData,
+          "Native email proof committed revoked BEFORE SMTP fence: zero DATA")
+        assert.equal((await q("select last_result from da_store_owner_closing_email "+
+          "where audit_event_id=$1",[proofBeforeEvent]))[0].last_result,
+          "unverified_identity")
+        // A later native proof must be restored explicitly and only in PG16.
+        await q("update auth_verification set deleted_at=null "+
+          "where id=$1",[proofId])
+        await q("update da_store_owner_closing_email "+
+          "set next_attempt_at=clock_timestamp()-interval '1 second' "+
+          "where audit_event_id=$1 and person_id=$2",[proofBeforeEvent,owner])
+        await runOwnerClosingEmailTick(container)
+        assert.equal(observed.dataMessages,beforeProofRevokeData+1)
+
+        // Opposite COMMIT ordering: SMTP has reached DATA and its ACK is
+        // held. New native link, native email UPDATE and proof revocation
+        // must all wait on real PostgreSQL locks until SMTP result commits.
+        const proofAfterEvent=await seedOwnerClosingMail(
+          "sel_b22_owner_mail_race_native_proof_after_data")
+        const nativeAck=testBarrier()
+        holdSmtpDataAck=nativeAck
+        const beforeNativeAckData=observed.dataMessages
+        const nativeWorker=runOwnerClosingEmailTick(container)
+        let blockedInsert:Promise<unknown>|null=null
+        let blockedBinding:Promise<unknown>|null=null
+        let blockedProof:Promise<unknown>|null=null
+        let blockedActorEmail:Promise<unknown>|null=null
+        try{
+          await waitForBarrier(nativeAck.entered,"Owner SMTP DATA before native edits")
+          assert.equal(observed.dataMessages,beforeNativeAckData+1)
+          blockedBinding=q("update da_login_binding set revoked_at=null "+
+            "where person_id=$1 and actor_id=$2 returning actor_id",
+            [owner,raceMemberActor]).then(x=>x)
+          void blockedBinding?.catch(()=>{})
+          await assertRealPgLockWait("update da_login_binding")
+          // A brand-new Foundation binding is blocked by the locked Person
+          // parent FK, without blocking an unrelated Person's INSERT.
+          blockedInsert=q("insert into da_login_binding "+
+            "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+            "values ($1,'customer',$2,$3,clock_timestamp()) returning person_id",
+            [owner,"cus_b22_mail_phantom_after_data","auth_b22_mail_phantom_after_data"])
+            .then(x=>x)
+          void blockedInsert?.catch(()=>{})
+          await assertRealPgLockWait("insert into da_login_binding")
+          blockedProof=q("update auth_verification set deleted_at=clock_timestamp() "+
+            "where id=$1 returning id",[proofId]).then(x=>x)
+          void blockedProof?.catch(()=>{})
+          await assertRealPgLockWait("update auth_verification")
+          blockedActorEmail=q('update public."user" set email=$2 '+
+            'where id=$1 returning id',[syntheticActor,"new-b22@example.invalid"])
+            .then(x=>x)
+          void blockedActorEmail?.catch(()=>{})
+          await assertRealPgLockWait('update public."user"')
+          // P1 regression: no global table lock may stall a DIFFERENT
+          // Person's registration, actor email or native verification write.
+          const independent=await q("insert into da_login_binding "+
+            "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+            "values ($1,'member',$2,$3,clock_timestamp()) returning person_id",
+            [otherPerson,"mem_b22_other_person_extra","auth_b22_other_person_extra"])
+          assert.equal(independent.length,1)
+          assert.equal(independent[0].person_id,otherPerson)
+          const otherNative=await q('update public."user" set email=$2 '+
+            'where id=$1 returning id',[otherActor,"unrelated-updated@example.invalid"])
+          assert.equal(otherNative.length,1)
+          const otherVer=await q("update auth_verification "+
+            "set deleted_at=clock_timestamp() where id=$1 returning id",
+            [otherProof])
+          assert.equal(otherVer.length,1)
+          assert.equal(observed.dataMessages,beforeNativeAckData+1,
+            "Other Person writes must commit BEFORE our SMTP DATA ACK")
+
+        }finally{
+          nativeAck.release();holdSmtpDataAck=null
+          await Promise.allSettled([
+            nativeWorker,
+            ...(blockedInsert?[blockedInsert]:[]),
+            ...(blockedBinding?[blockedBinding]:[]),
+            ...(blockedProof?[blockedProof]:[]),
+            ...(blockedActorEmail?[blockedActorEmail]:[])
+          ])
+        }
+        await nativeWorker
+        if(blockedInsert)await blockedInsert
+        if(blockedBinding)await blockedBinding
+        if(blockedProof)await blockedProof
+        if(blockedActorEmail)await blockedActorEmail
+        const [sentNativeFirst]=await q("select last_result,accepted_at "+
+          "from da_store_owner_closing_email where audit_event_id=$1",
+          [proofAfterEvent])
+        assert.equal(sentNativeFirst.last_result,"accepted")
+        assert.ok(sentNativeFirst.accepted_at)
+        assert.equal((await q("select deleted_at from auth_verification "+
+          "where id=$1",[proofId]))[0].deleted_at!==null,true)
+        assert.equal((await q("select revoked_at from da_login_binding "+
+          "where actor_id=$1",[raceMemberActor]))[0].revoked_at,null)
+        assert.equal((await q('select email from public."user" where id=$1',
+          [syntheticActor]))[0].email,"new-b22@example.invalid")
+        process.stdout.write(
+          "PASS B22 PG16/loopback SMTP: after-claim native binding INSERT and "+
+          "proof revocation COMMIT before fence suppress DATA; after DATA "+
+          "new binding, native actor email change, native proof revoke "+
+          "all wait on real PostgreSQL lock until SMTP outcome commit; "+
+          "unrelated Person registration and proof changes commit during DATA\n")
+      }finally{
+        ownerProofFromPg=false
+        // The preceding race intentionally revoked the single real native
+        // proof. Restore only this disposable fixture before independent
+        // withdrawal/revocation checks (no fallback to mocked proof).
+        await q("update auth_verification set deleted_at=null "+
+          "where id=$1",[ownerProofId])
+        await q("update da_login_binding set revoked_at=clock_timestamp() "+
+          "where person_id=$1 and actor_id=$2",[owner,raceMemberActor])
+        await q('update public."user" set email=$2 where id=$1',
+          [syntheticActor,syntheticEmail])
+      }
 
       // Revoked protected Owner must not receive a newly claimed SMTP notice.
       const ownerRevoked=await seedOwnerClosingMail(

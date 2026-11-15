@@ -3,6 +3,7 @@ import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { sendSmtpEmail, SmtpAcceptanceUncertainError } from "../modules/dogruadres-access/smtp-client"
 import { verifiedEmailForActorContext } from "../api/dogruadres/invitations/accept/route"
+import { normalizeEmail, verifiedEmailForActor } from "../modules/dogruadres-access/security"
 
 /**
  * B22: the native Medusa scheduler, Notification Module and our already
@@ -125,8 +126,7 @@ async function claimDue(db: Db, seen: Array<{seller_id:string;person_id:string}>
   })
 }
 
-async function currentActor(db: Db, claim: Pick<Claim, "organization_id"|"person_id">) {
-  return db.transactional(async em => {
+async function readCurrentActorCandidates(em:Sql, claim: Pick<Claim, "organization_id"|"person_id">) {
     const rows = await em.execute(`select b.actor_type,b.actor_id,
       b.auth_identity_id
       from da_login_binding b
@@ -141,12 +141,25 @@ async function currentActor(db: Db, claim: Pick<Claim, "organization_id"|"person
         and p.deleted_at is null
       where b.person_id=? and b.revoked_at is null
         and b.verified_at is not null
-      limit 2`,[claim.organization_id,claim.person_id])
-    if(rows.length!==1||!["user","member","customer"].includes(rows[0].actor_type))
-      return null
-    return rows[0] as {actor_type:"user"|"member"|"customer";
-      actor_id:string;auth_identity_id:string}
-  })
+      limit 9`,[claim.organization_id,claim.person_id])
+    // More than eight valid native bindings is not safe to disambiguate.
+    if(rows.length>8||rows.some(r=>
+      !["user","member","customer"].includes(r.actor_type)||
+      typeof r.actor_id!=="string"||typeof r.auth_identity_id!=="string"))
+      return []
+    return rows as Array<{actor_type:"user"|"member"|"customer";
+      actor_id:string;auth_identity_id:string}>
+}
+
+
+async function currentActorCandidates(db:Db,claim:Pick<Claim,"organization_id"|"person_id">){
+  return db.transactional(sql=>readCurrentActorCandidates(sql,claim))
+}
+
+async function currentActor(db:Db,claim:Pick<Claim,"organization_id"|"person_id">){
+  const candidates=await currentActorCandidates(db,claim)
+  // Platform-closing's existing strict identity rule is unchanged.
+  return candidates.length===1?candidates[0]:null
 }
 
 async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unverified_identity"|"uncertain",messageId:string|null) {
@@ -386,6 +399,51 @@ type OwnerMailOutcome="accepted"|"failed"|"unverified_identity"|"uncertain"|"inv
 type OwnerMailActor={actor_type:"user"|"member"|"customer";
   actor_id:string;auth_identity_id:string}
 
+/** One Person may legitimately link User and Member native actors. Send a
+ * mandatory Owner notice only when their LIVE native email proofs resolve to
+ * one unambiguous address; never select an email from actor order or UI data.
+ * A second different verified address is a fail-closed identity ambiguity.
+ */
+async function verifiedOwnerMailRecipient(sql:Sql,
+  claim:OwnerMailClaim):Promise<{actor:OwnerMailActor;email:string}|null>{
+  const candidates=await readCurrentActorCandidates(sql,claim)
+  let selected:{actor:OwnerMailActor;email:string}|null=null
+  const bindings=new Set<string>()
+  for(const actor of candidates){
+    const key=JSON.stringify([actor.actor_type,actor.actor_id,actor.auth_identity_id])
+    if(bindings.has(key))return null // ambiguous duplicated source rows
+    bindings.add(key)
+    // The worker must not call Medusa Query/Auth while a PG_CONNECTION trx
+    // holds the Person/identity locks: those services borrow another pooled
+    // connection. Read the SAME native facts using this exact trx instead.
+    const table=actor.actor_type==="user"?'public."user"':
+      actor.actor_type==="member"?"public.member":"public.customer"
+    const native=await sql.execute(`select email from ${table}
+      where id=? and deleted_at is null limit 2`,[actor.actor_id])
+    if(native.length!==1||typeof native[0].email!=="string")continue
+    const provider=await sql.execute(`select entity_id from provider_identity
+      where auth_identity_id=? and provider='emailpass'
+        and deleted_at is null limit 2`,[actor.auth_identity_id])
+    if(provider.length!==1||typeof provider[0].entity_id!=="string")continue
+    const verification=await sql.execute(`select entity_type,entity_id,
+      verified_at,deleted_at from auth_verification
+      where auth_identity_id=? and entity_type='email'
+        and deleted_at is null`,[actor.auth_identity_id])
+    const email=verifiedEmailForActor({
+      actorType:actor.actor_type,actorId:actor.actor_id,
+      authIdentityId:actor.auth_identity_id,authProvider:"emailpass",
+      authenticatedEmail:native[0].email,
+      providerIdentityEmail:provider[0].entity_id,
+      verifications:verification
+    })
+    if(!email)continue
+    if(selected&&normalizeEmail(selected.email)!==normalizeEmail(email))
+      return null
+    if(!selected)selected={actor,email}
+  }
+  return selected
+}
+
 async function persistOwnerMailResult(sql:Sql,claim:OwnerMailClaim,
   outcome:OwnerMailOutcome,messageId:string|null){
   const rows=await sql.execute(`update da_store_owner_closing_email
@@ -407,6 +465,61 @@ async function settleOwnerClosingMail(db:Db,claim:OwnerMailClaim,
 }
 
 /**
+ * Lock only the canonical Person and THEIR current native identity/proof rows.
+ * da_login_binding/da_actor_mapping have mandatory person FKs; Medusa's
+ * provider_identity/auth_verification belong to auth_identity. FOR UPDATE
+ * on the respective parent prevents NEW child rows (FK KEY SHARE conflict),
+ * while FOR SHARE on every existing child prevents proof revival/revocation.
+ * This avoids the global identity-table write outage of a SHARE TABLE lock.
+ */
+async function lockOwnerMailProofRows(sql:Sql,claim:OwnerMailClaim){
+  // Fail closed if a migration ever removes an FK required to prevent
+  // phantom identity or proof insertion. No trust in advisory-lock writers.
+  const fk=await sql.execute(`select
+    (select count(*)::int from pg_constraint where contype='f'
+      and conrelid='da_login_binding'::regclass
+      and confrelid='da_person'::regclass and not condeferrable) as login_fk,
+    (select count(*)::int from pg_constraint where contype='f'
+      and conrelid='da_actor_mapping'::regclass
+      and confrelid='da_person'::regclass and not condeferrable) as map_fk,
+    (select count(*)::int from pg_constraint where contype='f'
+      and conrelid='provider_identity'::regclass
+      and confrelid='auth_identity'::regclass and not condeferrable) as provider_fk,
+    (select count(*)::int from pg_constraint where contype='f'
+      and conrelid='auth_verification'::regclass
+      and confrelid='auth_identity'::regclass and not condeferrable) as proof_fk`)
+  if(fk.length!==1||["login_fk","map_fk","provider_fk","proof_fk"].some(
+    k=>Number(fk[0][k])<1))throw new Error("Native mail identity FK fence unavailable")
+  const person=await sql.execute(`select id from da_person
+    where id=? and deleted_at is null and disabled_at is null
+    for update`,[claim.person_id])
+  if(person.length!==1)return false
+  // Lock ALL current and revoked rows: an old binding must not reactivate
+  // or switch Person during the SMTP attempt. New rows require the locked
+  // Person parent FK and cannot commit until our transaction finishes.
+  await sql.execute(`select auth_identity_id from da_login_binding
+    where person_id=? for share`,[claim.person_id])
+  await sql.execute(`select id from da_actor_mapping
+    where person_id=? for share`,[claim.person_id])
+  const candidates=await readCurrentActorCandidates(sql,claim)
+  for(const actor of candidates){
+    // Table names come ONLY from this fixed server-side enum, never input.
+    const table=actor.actor_type==="user"?'public."user"':
+      actor.actor_type==="member"?"public.member":"public.customer"
+    const native=await sql.execute(`select id from ${table}
+      where id=? for share`,[actor.actor_id])
+    const identity=await sql.execute(`select id from auth_identity
+      where id=? and deleted_at is null for update`,[actor.auth_identity_id])
+    if(native.length!==1||identity.length!==1)return false
+    await sql.execute(`select id from provider_identity
+      where auth_identity_id=? for share`,[actor.auth_identity_id])
+    await sql.execute(`select id from auth_verification
+      where auth_identity_id=? for share`,[actor.auth_identity_id])
+  }
+  return true
+}
+
+/**
  * The claim is NOT send authorization. Serialize SMTP DATA and the outcome
  * with LIVE Owner membership, actor binding and the current closing source.
  * FOR SHARE blocks a simultaneous UPDATE/DELETE of those actual rows:
@@ -416,10 +529,28 @@ async function settleOwnerClosingMail(db:Db,claim:OwnerMailClaim,
  * transaction; the existing SMTP transport enforces its own timeout.
  */
 async function sendOwnerMailFenced(db:Db,claim:OwnerMailClaim,
-  actor:OwnerMailActor,
-  send:()=>Promise<{messageId:string}>){
+  send:(email:string)=>Promise<{messageId:string}>){
   await db.transactional(async sql=>{
-    // Consistent lock order: current Owner identity first, closing row next.
+    const proofLocked=await lockOwnerMailProofRows(sql,claim)
+    const recipient=proofLocked?
+      await verifiedOwnerMailRecipient(sql,claim):null
+    if(!recipient){
+      // An Owner revoked between the claim and the send fence is not merely
+      // missing email proof. Preserve the existing invalidated terminal state.
+      const live=await sql.execute(`select m.id from da_organization_membership m
+        join da_person p on p.id=m.person_id and p.disabled_at is null
+          and p.deleted_at is null
+        where m.person_id=? and m.organization_id=?
+          and m.role='owner' and m.protected_owner=true
+          and m.status='active' and m.revoked_at is null
+          and m.deleted_at is null
+        limit 2 for share of m,p`,[claim.person_id,claim.organization_id])
+      await persistOwnerMailResult(sql,claim,
+        live.length===1?"unverified_identity":"invalidated",null)
+      return
+    }
+    const {actor,email}=recipient
+    // Existing Owner, actor, Store and claim row fences are unchanged.
     const eligible=await sql.execute(`select m.id
       from da_organization_membership m
       join da_person p on p.id=m.person_id and p.disabled_at is null
@@ -476,7 +607,7 @@ async function sendOwnerMailFenced(db:Db,claim:OwnerMailClaim,
     }
     let outcome:OwnerMailOutcome="uncertain",messageId:string|null=null
     try{
-      const transport=await send()
+      const transport=await send(email)
       messageId=transport.messageId
       outcome="accepted" // not mailbox delivery
     }catch(error){
@@ -505,13 +636,7 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
     let result:OwnerMailOutcome="unverified_identity"
     let fenced=false,sendFenceStarted=false
     try{
-      const actor=await currentActor(db,claim)
-      if(actor){
-        const email=await verifiedEmailForActorContext(
-          {scope:container} as any,{
-            ...actor,auth_provider:"emailpass",user_metadata:{}
-          })
-        if(email){
+      {
           const origin=process.env.DOGRUADRES_PUBLIC_ORIGIN
           if(!origin||new URL(origin).protocol!=="https:")
             throw new Error("Missing secure first-party notification origin")
@@ -526,7 +651,7 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
           if(!smtp?.enabled)throw new Error("Mandatory mail transport unavailable")
           const started=claim.action==="organization.store_owner_closing_started"
           sendFenceStarted=true
-          await sendOwnerMailFenced(db,claim,actor,()=>sendSmtpEmail({
+          await sendOwnerMailFenced(db,claim,email=>sendSmtpEmail({
             to:email,
             subject:started?
               "DoğruAdres mağaza kapatma süreci güvenlik bildirimi":
@@ -546,7 +671,6 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
             fromEmail:smtp.from_email,fromName:smtp.from_name??undefined
           }))
           fenced=true
-        }
       }
     }catch(error){
       // A configuration/identity failure is a definite unsuccessful attempt.
