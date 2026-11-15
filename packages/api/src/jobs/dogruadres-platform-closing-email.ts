@@ -451,10 +451,26 @@ async function settleOwnerClosingMail(db:Db,claim:OwnerMailClaim,
  * transaction; the existing SMTP transport enforces its own timeout.
  */
 async function sendOwnerMailFenced(db:Db,claim:OwnerMailClaim,
-  actor:OwnerMailActor,
-  send:()=>Promise<{messageId:string}>){
+  container:MedusaContainer,
+  send:(email:string)=>Promise<{messageId:string}>){
   await db.transactional(async sql=>{
-    // Consistent lock order: current Owner identity first, closing row next.
+    // Native Medusa email/proof writes do not acquire a Foundation Person
+    // advisory lock. A SELECT or locking only the chosen binding leaves a
+    // phantom binding and verification INSERT/DELETE window before SMTP DATA.
+    // The bounded SMTP fence therefore freezes every table read by the native
+    // verifiedEmailForActorContext adapter, including future rows, until DATA
+    // and the canonical outcome commit. NOWAIT fails closed during contention.
+    // These are the installed Medusa/Mercur 2.x tables, not new shadow data.
+    await sql.execute(`lock table da_login_binding,da_actor_mapping,
+      public."user",public.member,public.customer,auth_identity,
+      provider_identity,auth_verification in share mode nowait`)
+    const recipient=await verifiedOwnerMailRecipient(db,container,claim)
+    if(!recipient){
+      await persistOwnerMailResult(sql,claim,"unverified_identity",null)
+      return
+    }
+    const {actor,email}=recipient
+    // Existing Owner, actor, Store and claim row fences are unchanged.
     const eligible=await sql.execute(`select m.id
       from da_organization_membership m
       join da_person p on p.id=m.person_id and p.disabled_at is null
@@ -511,7 +527,7 @@ async function sendOwnerMailFenced(db:Db,claim:OwnerMailClaim,
     }
     let outcome:OwnerMailOutcome="uncertain",messageId:string|null=null
     try{
-      const transport=await send()
+      const transport=await send(email)
       messageId=transport.messageId
       outcome="accepted" // not mailbox delivery
     }catch(error){
@@ -540,10 +556,7 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
     let result:OwnerMailOutcome="unverified_identity"
     let fenced=false,sendFenceStarted=false
     try{
-      const recipient=await verifiedOwnerMailRecipient(db,container,claim)
-      if(recipient){
-        const {actor,email}=recipient
-        {
+      {
           const origin=process.env.DOGRUADRES_PUBLIC_ORIGIN
           if(!origin||new URL(origin).protocol!=="https:")
             throw new Error("Missing secure first-party notification origin")
@@ -558,7 +571,7 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
           if(!smtp?.enabled)throw new Error("Mandatory mail transport unavailable")
           const started=claim.action==="organization.store_owner_closing_started"
           sendFenceStarted=true
-          await sendOwnerMailFenced(db,claim,actor,()=>sendSmtpEmail({
+          await sendOwnerMailFenced(db,claim,container,email=>sendSmtpEmail({
             to:email,
             subject:started?
               "DoğruAdres mağaza kapatma süreci güvenlik bildirimi":
@@ -578,7 +591,6 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
             fromEmail:smtp.from_email,fromName:smtp.from_name??undefined
           }))
           fenced=true
-        }
       }
     }catch(error){
       // A configuration/identity failure is a definite unsuccessful attempt.
