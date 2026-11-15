@@ -1048,7 +1048,7 @@ async function main(){
         "message_id,accepted_at from da_store_owner_closing_email "+
         "where audit_event_id=$1",[ambiguousEvent])
       assert.equal(ambiguous.length,2)
-      const byAmbiguous=new Map(ambiguous.map((r:any)=>[r.person_id,r]))
+      const byAmbiguous=new Map<string,any>(ambiguous.map((r:any)=>[r.person_id,r]))
       assert.equal(byAmbiguous.get(owner)?.last_result,"accepted")
       assert.equal(byAmbiguous.get(unverifiedOwner)?.last_result,
         "unverified_identity","Two distinct verified native emails must fail closed")
