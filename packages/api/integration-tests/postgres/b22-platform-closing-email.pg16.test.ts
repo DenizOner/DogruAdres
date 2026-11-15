@@ -1272,16 +1272,16 @@ async function main(){
           blockedBinding=q("update da_login_binding set revoked_at=null "+
             "where person_id=$1 and actor_id=$2 returning actor_id",
             [owner,raceMemberActor]).then(x=>x)
-          void blockedBinding.catch(()=>{})
+          void blockedBinding?.catch(()=>{})
           await assertRealPgLockWait("update da_login_binding")
           blockedProof=q("update auth_verification set deleted_at=clock_timestamp() "+
             "where id=$1 returning id",[proofId]).then(x=>x)
-          void blockedProof.catch(()=>{})
+          void blockedProof?.catch(()=>{})
           await assertRealPgLockWait("update auth_verification")
           blockedActorEmail=q('update public."user" set email=$2 '+
             'where id=$1 returning id',[syntheticActor,"new-b22@example.invalid"])
             .then(x=>x)
-          void blockedActorEmail.catch(()=>{})
+          void blockedActorEmail?.catch(()=>{})
           await assertRealPgLockWait('update public."user"')
         }finally{
           nativeAck.release();holdSmtpDataAck=null
