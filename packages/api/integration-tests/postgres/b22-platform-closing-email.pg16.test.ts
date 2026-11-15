@@ -92,8 +92,6 @@ const otherIdentity="auth_b22_mail_unrelated"
 const otherEmail="unrelated@example.invalid"
 const otherProof="b22_unrelated_proof"
 const ownerProofId="b22_owner_mail_verified_primary"
-const nativeOwnerMember="mem_b22_owner_mail_native"
-const nativeOwnerIdentity="auth_b22_owner_mail_native"
 let testSmtp:{enabled:boolean;host:string;port:number;
   security:"none";from_email:string}|null=null
 type TestBarrier={entered:Promise<void>;proceed:Promise<void>;
@@ -228,11 +226,8 @@ async function setup(){
   for(const native of ['"user"',"member","customer"]){
     await q("create table public."+native+" (id text primary key,email text,deleted_at timestamptz)")
   }
-  await q("alter table public.member add column is_active boolean not null default true")
   await q("create table seller(id text primary key,status text not null default 'open',"+
     "approved_at timestamptz,deleted_at timestamptz)")
-  await q("create table seller_member(id text primary key,seller_id text references seller(id),"+
-    "member_id text references public.member(id),deleted_at timestamptz)")
   await q("create table auth_identity (id text primary key,deleted_at timestamptz)")
   await q("create table provider_identity (id text primary key,entity_id text,"+
     "auth_identity_id text not null references auth_identity(id),"+
@@ -428,13 +423,6 @@ async function seedOwnerClosingMail(seller:string,
     "(id,organization_id,seller_id,verification_audit_event_id,verified_at) "+
     "values ($1,$2,$3,$4,clock_timestamp())",
     ["dasown_"+uuid(),org,seller,ownershipEvent])
-  const nativeMembers=await q("select b.actor_id from da_login_binding b "+
-    "join da_organization_membership m on m.person_id=b.person_id "+
-    "and m.organization_id=$1 and m.status='active' and m.role='owner' "+
-    "where b.actor_type='member' and b.revoked_at is null",[org])
-  for(const native of nativeMembers)await q("insert into seller_member "+
-    "(id,seller_id,member_id) values ($1,$2,$3)",
-    ["selmem_"+uuid(),seller,native.actor_id])
 
   await q("insert into da_store_owner_closing "+
     "(seller_id,organization_id,state,version,request_id,"+
@@ -983,21 +971,6 @@ async function main(){
       // Owner 30-day closing: reuse the exact same native SMTP provider,
       // verified Person email and scheduler with its NEW event/recipient ledger.
       // Concurrent ticks may commit ONLY ONE claim per Owner/source event.
-      // The native Member relationship belongs to the existing legal Owner;
-      // creating only a User login would make this worker fixture bypass the
-      // real private HTTP/Store authorization it is intended to preserve.
-      await q("insert into public.member(id,email) values ($1,$2)",
-        [nativeOwnerMember,syntheticEmail])
-      await q("insert into auth_identity(id) values ($1)",[nativeOwnerIdentity])
-      // This native membership grants Store relationship, not a second
-      // verified mailbox. Existing User proof revocation must still deny DATA.
-      await q("insert into da_login_binding "+
-        "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
-        "values ($1,'member',$2,$3,clock_timestamp())",
-        [owner,nativeOwnerMember,nativeOwnerIdentity])
-      await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
-        "values ($1,$2,'member',$3)",
-        ["damap_"+uuid(),owner,nativeOwnerMember])
 
       const ownerMailSeller="sel_b22_owner_closing_smtp_accepted"
       const ownerMailEvent=await seedOwnerClosingMail(ownerMailSeller)
@@ -1107,9 +1080,6 @@ async function main(){
         "values ($1,$2,'member',$3)",[
           "damap_"+uuid(),unverifiedOwner,"mem_b22_unverified_extra"
         ])
-      await q("insert into seller_member (id,seller_id,member_id) "+
-        "values ($1,$2,$3)",["selmem_"+uuid(),
-          "sel_b22_owner_closing_mixed_recipient_status","mem_b22_unverified_extra"])
       const retryDue=await q("update da_store_owner_closing_email "+
         "set next_attempt_at=clock_timestamp()-interval '1 second' "+
         "where audit_event_id=$1 and person_id=$2 and attempts=1 "+
@@ -1553,34 +1523,33 @@ async function main(){
       assert.equal(oldOriginMail.last_result,"invalidated")
       assert.equal(oldOriginMail.accepted_at,null)
 
-      // Even with legal ownership active, the native SellerMember must
-      // still be current. A deleted native mapping is not Owner authority.
-      const lostMemberSeller="sel_b22_owner_mail_native_member_deleted"
-      const lostMemberEvent=await seedOwnerClosingMail(lostMemberSeller)
-      const lostMemberGate=testBarrier()
-      const lostMemberData=observed.dataMessages
-      beforeOwnerSmtpConfig=lostMemberGate
-      const lostMemberWorker=runOwnerClosingEmailTick(container)
+      // The audited association alone must never authorize an unapproved
+      // native Seller. Losing approved_at BEFORE the final SMTP fence denies
+      // the generic mandatory Owner notice without changing its audit source.
+      const unapprovedSeller="sel_b22_owner_mail_store_approval_removed"
+      const unapprovedEvent=await seedOwnerClosingMail(unapprovedSeller)
+      const unapprovedGate=testBarrier()
+      const unapprovedData=observed.dataMessages
+      beforeOwnerSmtpConfig=unapprovedGate
+      const unapprovedWorker=runOwnerClosingEmailTick(container)
       try{
-        await waitForBarrier(lostMemberGate.entered,"Owner claim before native Store unlink")
-        const unlinked=await q("update seller_member "+
-          "set deleted_at=clock_timestamp() where seller_id=$1 "+
-          "and member_id=$2 and deleted_at is null returning id",
-          [lostMemberSeller,nativeOwnerMember])
-        assert.equal(unlinked.length,1)
+        await waitForBarrier(unapprovedGate.entered,"Owner claim before native Seller approval revoke")
+        const altered=await q("update seller set approved_at=null "+
+          "where id=$1 and approved_at is not null returning id",[unapprovedSeller])
+        assert.equal(altered.length,1)
       }finally{
-        lostMemberGate.release();beforeOwnerSmtpConfig=null
-        await Promise.allSettled([lostMemberWorker])
+        unapprovedGate.release();beforeOwnerSmtpConfig=null
+        await Promise.allSettled([unapprovedWorker])
       }
-      await lostMemberWorker
-      assert.equal(observed.dataMessages,lostMemberData,
-        "Lost native SellerMember before fence must send zero SMTP DATA")
-      const [lostMemberMail]=await q("select attempts,last_result,accepted_at "+
+      await unapprovedWorker
+      assert.equal(observed.dataMessages,unapprovedData,
+        "Native Seller approval revoked before fence must suppress SMTP DATA")
+      const [unapprovedMail]=await q("select attempts,last_result,accepted_at "+
         "from da_store_owner_closing_email where audit_event_id=$1",
-        [lostMemberEvent])
-      assert.equal(lostMemberMail.attempts,1)
-      assert.equal(lostMemberMail.last_result,"invalidated")
-      assert.equal(lostMemberMail.accepted_at,null)
+        [unapprovedEvent])
+      assert.equal(unapprovedMail.attempts,1)
+      assert.equal(unapprovedMail.last_result,"invalidated")
+      assert.equal(unapprovedMail.accepted_at,null)
 
       // Opposite ordering: this real SMTP DATA is already in flight.
       // Legal-Origin revocation must wait for the locked send transaction.
@@ -1616,8 +1585,8 @@ async function main(){
       assert.equal(observed.dataMessages,liveOriginData+1)
       assert.ok((await q("select revoked_at from da_organization_seller_ownership "+
         "where seller_id=$1",[liveOriginSeller]))[0].revoked_at)
-      process.stdout.write("PASS B22 PG16/loopback SMTP: revoked legal Store Origin "+
-        "or native SellerMember before fence sends zero DATA and invalidates; "+
+      process.stdout.write("PASS B22 PG16/loopback SMTP: revoked audited Store Origin "+
+        "or unapproved native Seller before send fence sends zero DATA; "+
         "Origin revoked after DATA waits for real PostgreSQL lock until acceptance\n")
 
       // Revoked protected Owner must not receive a newly claimed SMTP notice.
@@ -1777,15 +1746,6 @@ async function main(){
         "not delivered, 550 failed, lost DATA ACK uncertain, 24h slot, "+
         "concurrent single claim, revoked Owner denied; finalizer remains off\\n")
 
-      // Platform closing has a deliberately stricter single-actor mail
-      // transport test. Retire only the Owner-specific task fixture binding
-      // after its complete native-Store SMTP race suite, leaving the single
-      // original User actor for the unrelated platform-mail scenarios.
-      const nativeFixtureEnd=await q("update da_login_binding "+
-        "set revoked_at=clock_timestamp() where person_id=$1 "+
-        "and actor_type='member' and actor_id=$2 and revoked_at is null "+
-        "returning actor_id",[owner,nativeOwnerMember])
-      assert.equal(nativeFixtureEnd.length,1)
 
       // The same job must handle a real SMTP 550 without delivery or a clock.
       refuseRecipient=true
