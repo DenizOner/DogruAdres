@@ -1777,6 +1777,16 @@ async function main(){
         "not delivered, 550 failed, lost DATA ACK uncertain, 24h slot, "+
         "concurrent single claim, revoked Owner denied; finalizer remains off\\n")
 
+      // Platform closing has a deliberately stricter single-actor mail
+      // transport test. Retire only the Owner-specific task fixture binding
+      // after its complete native-Store SMTP race suite, leaving the single
+      // original User actor for the unrelated platform-mail scenarios.
+      const nativeFixtureEnd=await q("update da_login_binding "+
+        "set revoked_at=clock_timestamp() where person_id=$1 "+
+        "and actor_type='member' and actor_id=$2 and revoked_at is null "+
+        "returning actor_id",[owner,nativeOwnerMember])
+      assert.equal(nativeFixtureEnd.length,1)
+
       // The same job must handle a real SMTP 550 without delivery or a clock.
       refuseRecipient=true
       await seed(rejectedSeller)
