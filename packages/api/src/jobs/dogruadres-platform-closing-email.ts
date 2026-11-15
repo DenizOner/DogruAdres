@@ -337,6 +337,42 @@ async function refreshOwnerClosingAudience(db:Db){
       join da_person p on p.id=n.person_id and p.disabled_at is null
         and p.deleted_at is null
       on conflict (audit_event_id,person_id) do nothing`)
+    // A new protected Owner may join AFTER a closing started. An old receipt
+    // list is not the current audience: attach each newly eligible Person
+    // to the verified active source, atomically with a fresh retry anchor.
+    // No audit history is rewritten and no external message is sent here.
+    await sql.execute(`with newly_protected as (
+      insert into da_notification_receipt(id,person_id,audit_event_id)
+      select 'danot_'||gen_random_uuid()::text,m.person_id,e.id
+      from da_store_owner_closing c
+      join da_audit_event e on e.id=c.source_audit_event_id
+        and e.deleted_at is null and e.module='dogruadres-access'
+        and e.resource='store-owner-closing' and e.role_context='owner'
+        and e.organization_id=c.organization_id and e.target_id=c.seller_id
+        and e.action='organization.store_owner_closing_started'
+        and e.new_values->>'request_id'=c.request_id
+        and e.new_values->>'state'=c.state
+        and e.new_values->>'version'=c.version::text
+        and (e.new_values->>'started_at')::timestamptz=c.started_at
+        and (e.new_values->>'due_at')::timestamptz=c.due_at
+      join da_audit_outbox x on x.source_audit_event_id=e.id
+        and x.source_module='dogruadres-access' and x.deleted_at is null
+      join da_organization_membership m on m.organization_id=c.organization_id
+        and m.role='owner' and m.protected_owner=true
+        and m.status='active' and m.revoked_at is null and m.deleted_at is null
+      join da_person p on p.id=m.person_id
+        and p.disabled_at is null and p.deleted_at is null
+      where c.state='closing'
+        and not exists(select 1 from da_notification_receipt n
+          where n.audit_event_id=e.id and n.person_id=m.person_id)
+      on conflict(audit_event_id,person_id) do nothing
+      returning audit_event_id,person_id
+    )
+    insert into da_store_owner_closing_email
+      (audit_event_id,person_id,next_attempt_at,late_schedule_at)
+      select audit_event_id,person_id,statement_timestamp(),statement_timestamp()
+      from newly_protected
+      on conflict(audit_event_id,person_id) do nothing`)
   })
 }
 
@@ -380,7 +416,10 @@ async function claimOwnerClosingMail(db:Db,seen:OwnerMailClaim[]){
     update da_store_owner_closing_email d
     set attempts=d.attempts+1,claim_id=?::uuid,
       last_result='inflight',last_attempt_at=clock_timestamp(),
-      next_attempt_at=e.occurred_at+((d.attempts+1)*interval '24 hours'),
+      // Original recipients retain source-time +24h/+48h/+72h slots.
+      // Newly protected Owners use their own immutable enrollment anchor.
+      next_attempt_at=coalesce(d.late_schedule_at,e.occurred_at)+
+        ((d.attempts+1)*interval '24 hours'),
       lease_until=clock_timestamp()+interval '10 minutes',
       updated_at=clock_timestamp()
     from due,da_audit_event e
