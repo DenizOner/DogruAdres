@@ -1446,6 +1446,11 @@ async function main(){
           "unrelated Person registration and proof changes commit during DATA\n")
       }finally{
         ownerProofFromPg=false
+        // The preceding race intentionally revoked the single real native
+        // proof. Restore only this disposable fixture before independent
+        // withdrawal/revocation checks (no fallback to mocked proof).
+        await q("update auth_verification set deleted_at=null "+
+          "where id=$1",[ownerProofId])
         await q("update da_login_binding set revoked_at=clock_timestamp() "+
           "where person_id=$1 and actor_id=$2",[owner,raceMemberActor])
         await q('update public."user" set email=$2 where id=$1',
