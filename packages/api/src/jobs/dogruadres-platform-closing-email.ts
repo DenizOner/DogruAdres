@@ -559,13 +559,15 @@ async function lockOwnerMailProofRows(sql:Sql,claim:OwnerMailClaim){
 }
 
 /**
- * An Owner membership alone does not authorize a Store notice. Reuse the
- * Foundation audited legal Store Origin and Mercur's current native
- * SellerMember relationship, exactly as the private Owner HTTP gate does.
- * Every mutable prerequisite is SHARE-locked through SMTP DATA/settle:
- * revocation committed first denies mail; revocation begun after the fence
- * waits for this bounded transaction. Never treat a historical receipt as
- * a fresh Store permission.
+ * An Owner's mandatory generic security notice is Organization-scoped:
+ * it must reach every current protected Owner, including a Person who has
+ * not yet linked a Mercur SellerMember. The private Store/Owner HTTP route
+ * separately requires native Member/SellerMember authorization.
+ *
+ * For outbound notices, verify and SHARE-lock the Organization's CURRENT
+ * audited Store Origin and approved native Seller throughout SMTP DATA and
+ * settlement. An Origin revoked before this fence suppresses the send;
+ * revocation initiated after DATA waits until the transaction commits.
  */
 async function currentOwnerMailStoreAuthority(sql:Sql,claim:OwnerMailClaim){
   const rows=await sql.execute(`select o.id
@@ -580,15 +582,6 @@ async function currentOwnerMailStoreAuthority(sql:Sql,claim:OwnerMailClaim){
     join seller s on s.id=o.seller_id and s.deleted_at is null
       and s.approved_at is not null
       and s.status in ('open','suspended','terminated')
-    join da_login_binding b on b.person_id=? and b.actor_type='member'
-      and b.revoked_at is null and b.verified_at is not null
-    join da_actor_mapping map on map.person_id=b.person_id
-      and map.actor_type='member' and map.actor_id=b.actor_id
-      and map.deleted_at is null
-    join member native_member on native_member.id=b.actor_id
-      and native_member.deleted_at is null and native_member.is_active=true
-    join seller_member sm on sm.member_id=native_member.id
-      and sm.seller_id=s.id and sm.deleted_at is null
     where o.organization_id=? and o.seller_id=? and o.revoked_at is null
       and ((e.action='organization.store_application_created'
         and e.resource='store-application'
@@ -599,10 +592,11 @@ async function currentOwnerMailStoreAuthority(sql:Sql,claim:OwnerMailClaim){
             and a.person_id=e.actor_person_id))
         or (e.action='organization.store_association_approved'
           and e.resource='store-association'))
-    limit 2 for share of o,org,e,x,s,b,map,native_member,sm`,
-    [claim.person_id,claim.organization_id,claim.seller_id])
+    limit 2 for share of o,org,e,x,s`,
+    [claim.organization_id,claim.seller_id])
   return rows.length===1
 }
+
 /**
  * The claim is NOT send authorization. Serialize SMTP DATA and the outcome
  * with LIVE Owner membership, actor binding and the current closing source.
