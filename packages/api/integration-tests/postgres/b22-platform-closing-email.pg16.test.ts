@@ -1279,6 +1279,7 @@ async function main(){
         holdSmtpDataAck=nativeAck
         const beforeNativeAckData=observed.dataMessages
         const nativeWorker=runOwnerClosingEmailTick(container)
+        let blockedInsert:Promise<unknown>|null=null
         let blockedBinding:Promise<unknown>|null=null
         let blockedProof:Promise<unknown>|null=null
         let blockedActorEmail:Promise<unknown>|null=null
@@ -1290,6 +1291,15 @@ async function main(){
             [owner,raceMemberActor]).then(x=>x)
           void blockedBinding?.catch(()=>{})
           await assertRealPgLockWait("update da_login_binding")
+          // A brand-new Foundation binding is blocked by the locked Person
+          // parent FK, without blocking an unrelated Person's INSERT.
+          blockedInsert=q("insert into da_login_binding "+
+            "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+            "values ($1,'customer',$2,$3,clock_timestamp()) returning person_id",
+            [owner,"cus_b22_mail_phantom_after_data","auth_b22_mail_phantom_after_data"])
+            .then(x=>x)
+          void blockedInsert?.catch(()=>{})
+          await assertRealPgLockWait("insert into da_login_binding")
           blockedProof=q("update auth_verification set deleted_at=clock_timestamp() "+
             "where id=$1 returning id",[proofId]).then(x=>x)
           void blockedProof?.catch(()=>{})
@@ -1321,12 +1331,14 @@ async function main(){
           nativeAck.release();holdSmtpDataAck=null
           await Promise.allSettled([
             nativeWorker,
+            ...(blockedInsert?[blockedInsert]:[]),
             ...(blockedBinding?[blockedBinding]:[]),
             ...(blockedProof?[blockedProof]:[]),
             ...(blockedActorEmail?[blockedActorEmail]:[])
           ])
         }
         await nativeWorker
+        if(blockedInsert)await blockedInsert
         if(blockedBinding)await blockedBinding
         if(blockedProof)await blockedProof
         if(blockedActorEmail)await blockedActorEmail
