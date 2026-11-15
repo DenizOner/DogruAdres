@@ -416,8 +416,8 @@ async function claimOwnerClosingMail(db:Db,seen:OwnerMailClaim[]){
     update da_store_owner_closing_email d
     set attempts=d.attempts+1,claim_id=?::uuid,
       last_result='inflight',last_attempt_at=clock_timestamp(),
-      // Original recipients retain source-time +24h/+48h/+72h slots.
-      // Newly protected Owners use their own immutable enrollment anchor.
+      -- Original recipients keep source-time +24h/+48h/+72h slots.
+      -- Newly protected Owners use their own immutable enrollment anchor.
       next_attempt_at=coalesce(d.late_schedule_at,e.occurred_at)+
         ((d.attempts+1)*interval '24 hours'),
       lease_until=clock_timestamp()+interval '10 minutes',
