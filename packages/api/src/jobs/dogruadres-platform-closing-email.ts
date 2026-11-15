@@ -3,7 +3,7 @@ import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { sendSmtpEmail, SmtpAcceptanceUncertainError } from "../modules/dogruadres-access/smtp-client"
 import { verifiedEmailForActorContext } from "../api/dogruadres/invitations/accept/route"
-import { normalizeEmail } from "../modules/dogruadres-access/security"
+import { normalizeEmail, verifiedEmailForActor } from "../modules/dogruadres-access/security"
 
 /**
  * B22: the native Medusa scheduler, Notification Module and our already
@@ -126,8 +126,7 @@ async function claimDue(db: Db, seen: Array<{seller_id:string;person_id:string}>
   })
 }
 
-async function currentActorCandidates(db: Db, claim: Pick<Claim, "organization_id"|"person_id">) {
-  return db.transactional(async em => {
+async function readCurrentActorCandidates(em:Sql, claim: Pick<Claim, "organization_id"|"person_id">) {
     const rows = await em.execute(`select b.actor_type,b.actor_id,
       b.auth_identity_id
       from da_login_binding b
@@ -151,6 +150,11 @@ async function currentActorCandidates(db: Db, claim: Pick<Claim, "organization_i
     return rows as Array<{actor_type:"user"|"member"|"customer";
       actor_id:string;auth_identity_id:string}>
   })
+}
+
+
+async function currentActorCandidates(db:Db,claim:Pick<Claim,"organization_id"|"person_id">){
+  return db.transactional(sql=>readCurrentActorCandidates(sql,claim))
 }
 
 async function currentActor(db:Db,claim:Pick<Claim,"organization_id"|"person_id">){
@@ -401,17 +405,37 @@ type OwnerMailActor={actor_type:"user"|"member"|"customer";
  * one unambiguous address; never select an email from actor order or UI data.
  * A second different verified address is a fail-closed identity ambiguity.
  */
-async function verifiedOwnerMailRecipient(db:Db,container:MedusaContainer,
+async function verifiedOwnerMailRecipient(sql:Sql,
   claim:OwnerMailClaim):Promise<{actor:OwnerMailActor;email:string}|null>{
-  const candidates=await currentActorCandidates(db,claim)
+  const candidates=await readCurrentActorCandidates(sql,claim)
   let selected:{actor:OwnerMailActor;email:string}|null=null
   const bindings=new Set<string>()
   for(const actor of candidates){
     const key=JSON.stringify([actor.actor_type,actor.actor_id,actor.auth_identity_id])
     if(bindings.has(key))return null // ambiguous duplicated source rows
     bindings.add(key)
-    const email=await verifiedEmailForActorContext({scope:container} as any,{
-      ...actor,auth_provider:"emailpass",user_metadata:{}
+    // The worker must not call Medusa Query/Auth while a PG_CONNECTION trx
+    // holds the Person/identity locks: those services borrow another pooled
+    // connection. Read the SAME native facts using this exact trx instead.
+    const table=actor.actor_type==="user"?'public."user"':
+      actor.actor_type==="member"?"public.member":"public.customer"
+    const native=await sql.execute(`select email from ${table}
+      where id=? and deleted_at is null limit 2`,[actor.actor_id])
+    if(native.length!==1||typeof native[0].email!=="string")continue
+    const provider=await sql.execute(`select entity_id from provider_identity
+      where auth_identity_id=? and provider='emailpass'
+        and deleted_at is null limit 2`,[actor.auth_identity_id])
+    if(provider.length!==1||typeof provider[0].entity_id!=="string")continue
+    const verification=await sql.execute(`select entity_type,entity_id,
+      verified_at,deleted_at from auth_verification
+      where auth_identity_id=? and entity_type='email'
+        and deleted_at is null`,[actor.auth_identity_id])
+    const email=verifiedEmailForActor({
+      actorType:actor.actor_type,actorId:actor.actor_id,
+      authIdentityId:actor.auth_identity_id,authProvider:"emailpass",
+      authenticatedEmail:native[0].email,
+      providerIdentityEmail:provider[0].entity_id,
+      verifications:verification
     })
     if(!email)continue
     if(selected&&normalizeEmail(selected.email)!==normalizeEmail(email))
@@ -449,7 +473,7 @@ async function settleOwnerClosingMail(db:Db,claim:OwnerMailClaim,
  * while FOR SHARE on every existing child prevents proof revival/revocation.
  * This avoids the global identity-table write outage of a SHARE TABLE lock.
  */
-async function lockOwnerMailProofRows(sql:Sql,db:Db,claim:OwnerMailClaim){
+async function lockOwnerMailProofRows(sql:Sql,claim:OwnerMailClaim){
   // Fail closed if a migration ever removes an FK required to prevent
   // phantom identity or proof insertion. No trust in advisory-lock writers.
   const fk=await sql.execute(`select
@@ -478,7 +502,7 @@ async function lockOwnerMailProofRows(sql:Sql,db:Db,claim:OwnerMailClaim){
     where person_id=? for share`,[claim.person_id])
   await sql.execute(`select id from da_actor_mapping
     where person_id=? for share`,[claim.person_id])
-  const candidates=await currentActorCandidates(db,claim)
+  const candidates=await readCurrentActorCandidates(sql,claim)
   for(const actor of candidates){
     // Table names come ONLY from this fixed server-side enum, never input.
     const table=actor.actor_type==="user"?'public."user"':
@@ -506,12 +530,11 @@ async function lockOwnerMailProofRows(sql:Sql,db:Db,claim:OwnerMailClaim){
  * transaction; the existing SMTP transport enforces its own timeout.
  */
 async function sendOwnerMailFenced(db:Db,claim:OwnerMailClaim,
-  container:MedusaContainer,
   send:(email:string)=>Promise<{messageId:string}>){
   await db.transactional(async sql=>{
-    const proofLocked=await lockOwnerMailProofRows(sql,db,claim)
+    const proofLocked=await lockOwnerMailProofRows(sql,claim)
     const recipient=proofLocked?
-      await verifiedOwnerMailRecipient(db,container,claim):null
+      await verifiedOwnerMailRecipient(sql,claim):null
     if(!recipient){
       // An Owner revoked between the claim and the send fence is not merely
       // missing email proof. Preserve the existing invalidated terminal state.
@@ -629,7 +652,7 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
           if(!smtp?.enabled)throw new Error("Mandatory mail transport unavailable")
           const started=claim.action==="organization.store_owner_closing_started"
           sendFenceStarted=true
-          await sendOwnerMailFenced(db,claim,container,email=>sendSmtpEmail({
+          await sendOwnerMailFenced(db,claim,email=>sendSmtpEmail({
             to:email,
             subject:started?
               "DoğruAdres mağaza kapatma süreci güvenlik bildirimi":
