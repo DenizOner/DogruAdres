@@ -149,7 +149,6 @@ async function readCurrentActorCandidates(em:Sql, claim: Pick<Claim, "organizati
       return []
     return rows as Array<{actor_type:"user"|"member"|"customer";
       actor_id:string;auth_identity_id:string}>
-  })
 }
 
 
