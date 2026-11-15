@@ -74,6 +74,9 @@ const syntheticActor="user_b22_mail_pg"
 const retryActor="user_b22_mail_pg_second_owner"
 const retryIdentity="auth_b22_mail_pg_second_owner"
 const retryEmail="recovered-owner@example.invalid"
+const linkedMemberActor="mem_b22_mail_extra_verified"
+const linkedMemberIdentity="auth_b22_mail_extra_verified"
+const linkedMemberEmail="another-owned-email@example.invalid"
 let testSmtp:{enabled:boolean;host:string;port:number;
   security:"none";from_email:string}|null=null
 type TestBarrier={entered:Promise<void>;proceed:Promise<void>;
@@ -151,21 +154,24 @@ const container:any={resolve:(name:string)=>{
     graph:async(input:{filters?:{id?:string}})=>{
       const id=input.filters?.id
       return {data:id===syntheticActor?[{id,email:syntheticEmail}]:
-        id===retryActor?[{id,email:retryEmail}]:[]}
+        id===retryActor?[{id,email:retryEmail}]:
+        id===linkedMemberActor?[{id,email:linkedMemberEmail}]:[]}
     }
   }
   if(name===Modules.AUTH)return {
     listAuthIdentities:async(input:{id?:string[]})=>{
       const id=input.id?.[0]
       const email=id===syntheticIdentity?syntheticEmail:
-        id===retryIdentity?retryEmail:null
+        id===retryIdentity?retryEmail:
+        id===linkedMemberIdentity?linkedMemberEmail:null
       return email?[{id,provider_identities:[
         {provider:"emailpass",entity_id:email}]}]:[]
     },
     listAuthVerifications:async(input:{auth_identity_id?:string})=>{
       const id=input.auth_identity_id
       const email=id===syntheticIdentity?syntheticEmail:
-        id===retryIdentity?retryEmail:null
+        id===retryIdentity?retryEmail:
+        id===linkedMemberIdentity?linkedMemberEmail:null
       return email?[{entity_type:"email",entity_id:email,
         verified_at:new Date(),deleted_at:null}]:[]
     }
@@ -948,6 +954,17 @@ async function main(){
         "values ($1,$2,'user',$3)",[
           "damap_"+uuid(),unverifiedOwner,retryActor
         ])
+      // The same canonical Person has an additional native Member binding.
+      // That Member has NO native verified email, while the User actor does.
+      // A non-mail identity must not suppress the uniquely verified address.
+      await q("insert into da_login_binding "+
+        "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+        "values ($1,'member',$2,$3,clock_timestamp())",
+        [unverifiedOwner,"mem_b22_unverified_extra","auth_b22_unverified_extra"])
+      await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
+        "values ($1,$2,'member',$3)",[
+          "damap_"+uuid(),unverifiedOwner,"mem_b22_unverified_extra"
+        ])
       const retryDue=await q("update da_store_owner_closing_email "+
         "set next_attempt_at=clock_timestamp()-interval '1 second' "+
         "where audit_event_id=$1 and person_id=$2 and attempts=1 "+
@@ -1006,6 +1023,57 @@ async function main(){
         "PASS B22 PG16+loopback SMTP: second protected Owner verified before "+
         "their own scheduled retry; exactly one new DATA, separate accepted "+
         "Message-IDs and durable receipts, first Owner unchanged, replay safe\\n")
+
+      // Distinct SECOND verified email for the SAME Person is ambiguous.
+      // Deny the second Owner's SMTP claim instead of selecting an address
+      // by native actor order. The first Owner's mail remains independently
+      // deliverable; no foreign/private email is disclosed in job logs.
+      await q("insert into da_login_binding "+
+        "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+        "values ($1,'member',$2,$3,clock_timestamp())",
+        [unverifiedOwner,linkedMemberActor,linkedMemberIdentity])
+      await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
+        "values ($1,$2,'member',$3)",[
+          "damap_"+uuid(),unverifiedOwner,linkedMemberActor
+        ])
+      const ambiguousEvent=await seedOwnerClosingMail(
+        "sel_b22_owner_closing_ambiguous_native_email")
+      await q("insert into da_notification_receipt "+
+        "(id,person_id,audit_event_id) values ($1,$2,$3)",[
+          "danot_"+uuid(),unverifiedOwner,ambiguousEvent
+        ])
+      const beforeAmbiguousData=observed.dataMessages
+      await runOwnerClosingEmailTick(container)
+      const ambiguous=await q("select person_id,attempts,last_result,"+
+        "message_id,accepted_at from da_store_owner_closing_email "+
+        "where audit_event_id=$1",[ambiguousEvent])
+      assert.equal(ambiguous.length,2)
+      const byAmbiguous=new Map(ambiguous.map((r:any)=>[r.person_id,r]))
+      assert.equal(byAmbiguous.get(owner)?.last_result,"accepted")
+      assert.equal(byAmbiguous.get(unverifiedOwner)?.last_result,
+        "unverified_identity","Two distinct verified native emails must fail closed")
+      assert.equal(byAmbiguous.get(unverifiedOwner)?.message_id,null)
+      assert.equal(byAmbiguous.get(unverifiedOwner)?.accepted_at,null)
+      assert.equal(observed.dataMessages,beforeAmbiguousData+1,
+        "Only the unrelated verified first Owner may send SMTP DATA")
+      assert.equal(observed.recipients.includes(linkedMemberEmail),false)
+      // Revoking the conflicting binding restores a unique proved recipient.
+      await q("update da_login_binding set revoked_at=clock_timestamp() "+
+        "where person_id=$1 and actor_type='member' and actor_id=$2",
+        [unverifiedOwner,linkedMemberActor])
+      const recoverAmbiguous=await q("update da_store_owner_closing_email "+
+        "set next_attempt_at=clock_timestamp()-interval '1 second' "+
+        "where audit_event_id=$1 and person_id=$2 and attempts=1 "+
+        "and last_result='unverified_identity' returning person_id",
+        [ambiguousEvent,unverifiedOwner])
+      assert.equal(recoverAmbiguous.length,1)
+      const beforeUniqueRetry=observed.dataMessages
+      await runOwnerClosingEmailTick(container)
+      assert.equal(observed.dataMessages,beforeUniqueRetry+1)
+      assert.equal((await q("select last_result from "+
+        "da_store_owner_closing_email where audit_event_id=$1 and person_id=$2",
+        [ambiguousEvent,unverifiedOwner]))[0].last_result,"accepted")
+      process.stdout.write("PASS B22 PG16/loopback SMTP: linked native actors use only one uniquely verified Person email; distinct verified email collision fails closed, revocation enables exact one retry, no cross-Owner delivery\\n")
 
       // Scope the extra synthetic membership to this single mixed test.
       await q("update da_organization_membership set status='revoked',"+
