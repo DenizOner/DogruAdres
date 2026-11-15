@@ -1269,10 +1269,10 @@ export async function verifyB22PlatformClosingAppeal(input:{
     assert.equal((await q("select count(*)::int n from seller where id=$1",
       [syntheticSeller]))[0].n,0)
   }
-  // 30+ day REAL native Seller negative, unlike the above Seller-less edge
-  // fixtures. Do not create a finalizer or infer finance clearance from
-  // Medusa's payment/refund graph. Temporarily shift only the disposable closing deadline clock;
-  // do not alter the immutable Foundation event or outbox.
+  // REAL native Seller with OrderGroup: reject a forged elapsed +31d clock,
+  // then restore the audit-bound clock and prove finance/appeal blockers.
+  // Prior independent Seller-less source-backed fixtures prove the 720h edge.
+  // Never modify the append-only Foundation audit or outbox.
   // Restore the original closing row exactly before following test stages.
   const realClosingBefore=await q(
     "select * from da_store_platform_closing where seller_id=$1",[sellerId])
@@ -1315,28 +1315,15 @@ export async function verifyB22PlatformClosingAppeal(input:{
       realClosingBefore[0].deadline_audit_event_id])
     closingShifted=moved.length===1
     assert.equal(moved.length,1)
-    const matured=await read(staff,mailPath)
-    assert.equal(matured.status,200)
-    assert.equal(matured.body.native_order_history_observed,true,
-      "This is a REAL native Seller with historical Seller OrderGroup")
-    assert.equal(matured.body.terminal_preflight.appeal_window_elapsed,true,
-      "Task-only PostgreSQL +31d clock must be past the boundary")
-    assert.equal(matured.body.terminal_preflight.appeal_review_pending,true,
-      "Undecided first appeal must still block after day 30")
-    assert.equal(matured.body.terminal_preflight.appeal_accepted,false)
-    assert.equal(matured.body.terminal_preflight.financial_legal_clearance_verified,false,
-      "Native Order/payment/refund existence cannot prove total legal/finance clearance")
-    assert.equal(matured.body.terminal_preflight.permanent_finalization_enabled,false)
-    assert.equal(matured.body.permanent_finalization_enabled,false)
+    // The native Store has a real OrderGroup and an immutable accepted
+    // Owner-delivery audit. Tampering with only the stored deadline must
+    // FAIL CLOSED, never silently turn 30 elapsed days into finalization.
+    const tampered=await read(staff,mailPath)
+    assert.equal(tampered.status,403,
+      "An unaudited +31d clock must fail closed, not claim an elapsed window")
     assert.equal((await read(browser,mailPath)).status,403)
-    assert.equal(JSON.stringify(matured.body).includes("order_"),false,
-      "Staff aggregate preflight must not leak native Order identifiers")
-    assert.equal(JSON.stringify(matured.body).includes("og_"),false)
-    await assertStaffBlockers(staff,sellerId,
-      "sonuçlanmamış itiraz veya üst inceleme mevcut",
-      ["itiraz kabul edildi; ayrıca kapatma uygulanamaz"])
     assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false,
-      "30+ days cannot reopen a Store or make its Buyer checkout eligible")
+      "Forged elapsed time must not reopen the Seller or checkout")
     assert.deepEqual(await q(
       "select id,status,name,handle from seller where id=$1",[sellerId]),
       realSellerBefore,"Neither Seller identity nor name/handle may be released")
@@ -1349,7 +1336,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
       "Existing Seller Orders must not be deleted or detached after 30 days")
     assert.deepEqual(await q('select count(*)::int n from "order"'),
       realOrdersBefore,"Any historical Order must remain durable")
-    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: real native Seller and OrderGroup with test-only +31d clock, pending appeal and unknown financial/legal clearance deny finalizer, Store name/handle, name transfers and Orders unchanged; Staff live status and foreign 403\n")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: real native Seller with OrderGroup denies unaudited +31d clock HTTP403; Seller name/handle, name transfers and historic Orders unchanged\n")
   }finally{
     if(closingShifted){
       const restored=await q("update da_store_platform_closing "+
@@ -1371,6 +1358,20 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.deepEqual(await q(
     "select * from da_store_platform_closing where seller_id=$1",[sellerId]),
     realClosingBefore,"Temporary terminal time fixture must restore exactly")
+  const restoredPreflight=await read(staff,mailPath)
+  assert.equal(restoredPreflight.status,200,
+    "Only the original immutable deadline audit authorizes Staff preflight")
+  assert.equal(restoredPreflight.body.native_order_history_observed,true,
+    "Real Seller OrderGroup remains visible as historical evidence")
+  assert.equal(restoredPreflight.body.terminal_preflight.appeal_window_elapsed,false)
+  assert.equal(restoredPreflight.body.terminal_preflight.appeal_review_pending,true)
+  assert.equal(restoredPreflight.body.terminal_preflight.financial_legal_clearance_verified,false)
+  assert.equal(restoredPreflight.body.terminal_preflight.permanent_finalization_enabled,false)
+  assert.equal(restoredPreflight.body.permanent_finalization_enabled,false)
+  await assertStaffBlockers(staff,sellerId,
+    "sonuçlanmamış itiraz veya üst inceleme mevcut",
+    ["itiraz kabul edildi; ayrıca kapatma uygulanamaz"])
+
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: 720-hour Staff preflight false/true, pending first appeal and SMTP admin exception; permanent finalizer denied\n")
   return secondOwnerMembership.id
 }
