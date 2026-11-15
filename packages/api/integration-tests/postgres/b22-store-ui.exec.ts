@@ -11292,10 +11292,10 @@ export default async function({container}:any){
         "Idempotent native link must not duplicate canonical audit")
       process.stdout.write("PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged\n")
       await verifyB22CoownerNativeMemberReadback({
-        browser,reviewer,q,personA:A.person,personB:B.person,
+        browser,reviewer,container,q,personA:A.person,personB:B.person,
         memberMembershipId:alphaMember.id,orgA:organizations[0].id,
         orgB:organizations[1].id,orgName:organizations[0].name,
-        ownerStoreId,emailA:A.email
+        ownerStoreId,emailA:A.email,emailB:B.email
       })
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
