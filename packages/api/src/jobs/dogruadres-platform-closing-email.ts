@@ -559,6 +559,54 @@ async function lockOwnerMailProofRows(sql:Sql,claim:OwnerMailClaim){
 }
 
 /**
+ * An Owner membership alone does not authorize a Store notice. Reuse the
+ * Foundation audited legal Store Origin and Mercur's current native
+ * SellerMember relationship, exactly as the private Owner HTTP gate does.
+ * Every mutable prerequisite is SHARE-locked through SMTP DATA/settle:
+ * revocation committed first denies mail; revocation begun after the fence
+ * waits for this bounded transaction. Never treat a historical receipt as
+ * a fresh Store permission.
+ */
+async function currentOwnerMailStoreAuthority(sql:Sql,claim:OwnerMailClaim){
+  const rows=await sql.execute(`select o.id
+    from da_organization_seller_ownership o
+    join da_organization org on org.id=o.organization_id
+      and org.status='active' and org.deleted_at is null
+    join da_audit_event e on e.id=o.verification_audit_event_id
+      and e.deleted_at is null and e.organization_id=o.organization_id
+      and e.target_id=o.seller_id and e.module='dogruadres-access'
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+      and x.source_module='dogruadres-access' and x.deleted_at is null
+    join seller s on s.id=o.seller_id and s.deleted_at is null
+      and s.approved_at is not null
+      and s.status in ('open','suspended','terminated')
+    join da_login_binding b on b.person_id=? and b.actor_type='member'
+      and b.revoked_at is null and b.verified_at is not null
+    join da_actor_mapping map on map.person_id=b.person_id
+      and map.actor_type='member' and map.actor_id=b.actor_id
+      and map.deleted_at is null
+    join member native_member on native_member.id=b.actor_id
+      and native_member.deleted_at is null and native_member.is_active=true
+    join seller_member sm on sm.member_id=native_member.id
+      and sm.seller_id=s.id and sm.deleted_at is null
+    where o.organization_id=? and o.seller_id=? and o.revoked_at is null
+      and ((e.action='organization.store_application_created'
+        and e.resource='store-application'
+        and exists(select 1 from da_store_application a
+          where a.id=e.new_values->>'application_id'
+            and a.organization_id=o.organization_id
+            and a.seller_id=o.seller_id and a.status='created'
+            and a.person_id=e.actor_person_id))
+        or (e.action='organization.store_association_approved'
+          and e.resource='store-association'))
+    limit 2 for share of o,org,e,x,s,b,map,native_member,sm`,
+    [claim.person_id,claim.organization_id,
+      (await sql.execute(`select target_id from da_audit_event where id=?
+        and organization_id=? limit 2`,
+        [claim.audit_event_id,claim.organization_id]))[0]?.target_id])
+  return rows.length===1
+}
+/**
  * The claim is NOT send authorization. Serialize SMTP DATA and the outcome
  * with LIVE Owner membership, actor binding and the current closing source.
  * FOR SHARE blocks a simultaneous UPDATE/DELETE of those actual rows:
@@ -609,6 +657,11 @@ async function sendOwnerMailFenced(db:Db,claim:OwnerMailClaim,
       claim.person_id,claim.organization_id
     ])
     if(eligible.length!==1){
+      await persistOwnerMailResult(sql,claim,"invalidated",null)
+      return
+    }
+
+    if(!await currentOwnerMailStoreAuthority(sql,claim)){
       await persistOwnerMailResult(sql,claim,"invalidated",null)
       return
     }
