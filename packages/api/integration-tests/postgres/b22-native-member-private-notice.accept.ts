@@ -192,7 +192,7 @@ async function verifyLinkedNativeMemberOwnerMail(input:{
   },{take:null})
   assert.equal(proofs.some((x:any)=>x.verified_at&&!x.deleted_at),false)
   const sockets=new Set<import("node:net").Socket>()
-  const seen={recipients:[] as string[],ids:[] as string[],data:0}
+  const seen={recipients:[] as string[],ids:[] as string[],data:0,denied:0}
   const server=createServer(socket=>{
     sockets.add(socket)
     socket.on("close",()=>sockets.delete(socket))
@@ -217,10 +217,13 @@ async function verifyLinkedNativeMemberOwnerMail(input:{
         }else if(line.startsWith("MAIL FROM:")){
           socket.write("250 sender accepted\r\n")
         }else if(line.startsWith("RCPT TO:")){
-          assert.equal(line,"RCPT TO:<"+emailB+">",
-            "Only the correctly linked protected Owner may receive SMTP")
-          seen.recipients.push(emailB)
-          socket.write("250 recipient accepted\r\n")
+          if(line!=="RCPT TO:<"+emailB+">"){
+            seen.denied++
+            socket.write("550 other recipient denied\r\n")
+          }else{
+            seen.recipients.push(emailB)
+            socket.write("250 recipient accepted\r\n")
+          }
         }else if(line==="DATA"){data=true
           socket.write("354 send message data\r\n")
         }else if(line==="QUIT"){socket.write("221 goodbye\r\n");socket.end()}
@@ -295,6 +298,7 @@ async function verifyLinkedNativeMemberOwnerMail(input:{
     assert.equal(b[0].last_result,"accepted")
     assert.ok(b[0].accepted_at)
     assert.deepEqual(seen.recipients,[emailB])
+    assert.equal(seen.denied,0,"No unrelated Owner may be addressed")
     assert.equal(seen.data,1)
     assert.equal(seen.ids.length,1)
     assert.equal(b[0].message_id,seen.ids[0])
@@ -309,8 +313,8 @@ async function verifyLinkedNativeMemberOwnerMail(input:{
     assert.equal(seen.data,1,"Immediate worker replay must not resend")
     process.stdout.write(
       "PASS B22 Chrome/HTTPS/PG16: real SellerMember link then native "+
-      "Owner verification -> own withdrawal SMTP 250, 403 role boundary "+
-      "retained, foreign Owner no mail, 2-attempt persistence, replay-safe, "+
+      "Owner verification -> own withdrawal SMTP 250, "+
+      "unrelated Owner no mail, 2-attempt persistence, replay-safe, "+
       "no mailbox delivery claim\n")
   }finally{
     process.env.NODE_ENV=oldEnv
@@ -324,7 +328,7 @@ async function verifyLinkedNativeMemberOwnerMail(input:{
     if(aDeferred){
       await q("update da_store_owner_closing_email set next_attempt_at=$3 "+
         "where audit_event_id=$1 and person_id=$2",
-        [latestEvent,personA,aBefore[0].next_attempt_at])
+        [latestEvent,personA,new Date(aBefore[0].next_attempt_at).toISOString()])
     }
     for(const sock of sockets)sock.destroy()
     if(server.listening)
