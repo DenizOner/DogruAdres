@@ -14,6 +14,7 @@ import { Migration20261112100000 } from "../../src/modules/dogruadres-access/mig
 import { Migration20261112120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112120000"
 import { Migration20261110120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261110120000"
 import { Migration20261112130000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112130000"
+import { Migration20261115184500 } from "../../src/modules/dogruadres-access/migrations/Migration20261115184500"
 import { runPlatformClosingEmailTick, runOwnerClosingEmailTick } from "../../src/jobs/dogruadres-platform-closing-email"
 import { canonicalEventForOutbox } from "../../src/modules/dogruadres-access/audit-delivery-policy"
 import { projectFoundationAuditEvent } from "../../src/modules/dogruadres-audit-index/envelope"
@@ -298,6 +299,9 @@ async function setup(){
   await migrate(Migration20261112120000)
   await migrate(Migration20261110120000)
   await migrate(Migration20261112130000)
+  // The early isolated SMTP acceptance runs before Medusa's full migration
+  // stage. It must apply the same nullable late-recipient schedule field.
+  await migrate(Migration20261115184500)
   await q("insert into da_organization(id) values ($1)",[org])
   await q("insert into da_person(id) values ($1),($2),($3)",[owner,staff,otherPerson])
   await q("insert into da_login_binding "+
