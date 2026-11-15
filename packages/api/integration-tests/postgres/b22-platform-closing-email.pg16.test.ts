@@ -81,6 +81,11 @@ const linkedMemberEmail="another-owned-email@example.invalid"
 const raceMemberActor="mem_b22_mail_race_member"
 const raceMemberIdentity="auth_b22_mail_race_member"
 const raceMemberEmail="race-member@example.invalid"
+const otherPerson="daprs_b22_mail_unrelated"
+const otherActor="user_b22_mail_unrelated"
+const otherIdentity="auth_b22_mail_unrelated"
+const otherEmail="unrelated@example.invalid"
+const otherProof="b22_unrelated_proof"
 let testSmtp:{enabled:boolean;host:string;port:number;
   security:"none";from_email:string}|null=null
 type TestBarrier={entered:Promise<void>;proceed:Promise<void>;
@@ -216,16 +221,17 @@ async function setup(){
     await q("create table public."+native+" (id text primary key,email text)")
   }
   await q("create table auth_identity (id text primary key)")
-  await q("create table provider_identity (id text primary key,entity_id text)")
+  await q("create table provider_identity (id text primary key,entity_id text,"+
+    "auth_identity_id text not null references auth_identity(id))")
   await q("create table auth_verification (id text primary key,"+
-    "auth_identity_id text,entity_type text,entity_id text,"+
+    "auth_identity_id text references auth_identity(id),entity_type text,entity_id text,"+
     "verified_at timestamptz,deleted_at timestamptz)")
-  await q("insert into public.\"user\"(id,email) values ($1,$2),($3,$4)",[
-    syntheticActor,syntheticEmail,retryActor,retryEmail])
+  await q("insert into public.\"user\"(id,email) values ($1,$2),($3,$4),($5,$6)",[
+    syntheticActor,syntheticEmail,retryActor,retryEmail,otherActor,otherEmail])
   await q("insert into public.member(id,email) values ($1,$2),($3,$4)",[
     linkedMemberActor,linkedMemberEmail,raceMemberActor,raceMemberEmail])
-  await q("insert into auth_identity(id) values ($1),($2),($3),($4)",[
-    syntheticIdentity,retryIdentity,linkedMemberIdentity,raceMemberIdentity])
+  await q("insert into auth_identity(id) values ($1),($2),($3),($4),($5)",[
+    syntheticIdentity,retryIdentity,linkedMemberIdentity,raceMemberIdentity,otherIdentity])
   await q("create table da_person (id text primary key,disabled_at timestamptz,deleted_at timestamptz)")
   await q("create table da_organization (id text primary key)")
   await q("create table da_organization_membership (id text primary key,"+
@@ -251,9 +257,9 @@ async function setup(){
   await q("create table da_notification_receipt (id text primary key,"+
     "person_id text,audit_event_id text,read_at timestamptz,"+
     "unique(audit_event_id,person_id))")
-  await q("create table da_login_binding (person_id text,actor_type text,"+
+  await q("create table da_login_binding (person_id text references da_person(id),actor_type text,"+
     "actor_id text,auth_identity_id text,revoked_at timestamptz,verified_at timestamptz)")
-  await q("create table da_actor_mapping (id text,person_id text,actor_type text,"+
+  await q("create table da_actor_mapping (id text,person_id text references da_person(id),actor_type text,"+
     "actor_id text,deleted_at timestamptz)")
   await migrate(Migration20261111170000)
   await migrate(Migration20261112100000)
@@ -261,7 +267,15 @@ async function setup(){
   await migrate(Migration20261110120000)
   await migrate(Migration20261112130000)
   await q("insert into da_organization(id) values ($1)",[org])
-  await q("insert into da_person(id) values ($1),($2)",[owner,staff])
+  await q("insert into da_person(id) values ($1),($2),($3)",[owner,staff,otherPerson])
+  await q("insert into da_login_binding "+
+    "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+    "values ($1,'user',$2,$3,clock_timestamp())",
+    [otherPerson,otherActor,otherIdentity])
+  await q("insert into auth_verification "+
+    "(id,auth_identity_id,entity_type,entity_id,verified_at) "+
+    "values ($1,$2,'email',$3,clock_timestamp())",
+    [otherProof,otherIdentity,otherEmail])
   await q("insert into da_organization_membership"+
     "(id,organization_id,person_id,role,status,protected_owner)"+
     "values ($1,$2,$3,'owner','active',true)",
@@ -1283,6 +1297,24 @@ async function main(){
             .then(x=>x)
           void blockedActorEmail?.catch(()=>{})
           await assertRealPgLockWait('update public."user"')
+          // P1 regression: no global table lock may stall a DIFFERENT
+          // Person's registration, actor email or native verification write.
+          const independent=await q("insert into da_login_binding "+
+            "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+            "values ($1,'member',$2,$3,clock_timestamp()) returning person_id",
+            [otherPerson,"mem_b22_other_person_extra","auth_b22_other_person_extra"])
+          assert.equal(independent.length,1)
+          assert.equal(independent[0].person_id,otherPerson)
+          const otherNative=await q('update public."user" set email=$2 '+
+            'where id=$1 returning id',[otherActor,"unrelated-updated@example.invalid"])
+          assert.equal(otherNative.length,1)
+          const otherVer=await q("update auth_verification "+
+            "set deleted_at=clock_timestamp() where id=$1 returning id",
+            [otherProof])
+          assert.equal(otherVer.length,1)
+          assert.equal(observed.dataMessages,beforeNativeAckData+1,
+            "Other Person writes must commit BEFORE our SMTP DATA ACK")
+
         }finally{
           nativeAck.release();holdSmtpDataAck=null
           await Promise.allSettled([
@@ -1311,7 +1343,8 @@ async function main(){
           "PASS B22 PG16/loopback SMTP: after-claim native binding INSERT and "+
           "proof revocation COMMIT before fence suppress DATA; after DATA "+
           "new binding, native actor email change, native proof revoke "+
-          "all wait on real PostgreSQL lock until SMTP outcome commit\n")
+          "all wait on real PostgreSQL lock until SMTP outcome commit; "+
+          "unrelated Person registration and proof changes commit during DATA\n")
       }finally{
         ownerProofFromPg=false
         await q("update da_login_binding set revoked_at=clock_timestamp() "+
