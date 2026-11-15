@@ -510,7 +510,7 @@ async function lockOwnerMailProofRows(sql:Sql,claim:OwnerMailClaim){
     const native=await sql.execute(`select id from ${table}
       where id=? for share`,[actor.actor_id])
     const identity=await sql.execute(`select id from auth_identity
-      where id=? for update`,[actor.auth_identity_id])
+      where id=? and deleted_at is null for update`,[actor.auth_identity_id])
     if(native.length!==1||identity.length!==1)return false
     await sql.execute(`select id from provider_identity
       where auth_identity_id=? for share`,[actor.auth_identity_id])
