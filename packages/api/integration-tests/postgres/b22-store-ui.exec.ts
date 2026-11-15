@@ -29,6 +29,7 @@ import {verifyRepeatedApprovedStoreRenameHistory} from "./b22-repeated-rename-hi
 import {prepareRenameBeforeStoreReactivation,verifyReactivationClaimFreezesRenames} from "./b22-reactivation-rename-claim.accept"
 import {verifyB22PlatformClosingAppeal,
   verifyB22PlatformClosingSecondStageRequest,
+  verifyB22RealOrderedSellerDay31,
   verifyB22IndependentStaffClosingDecision} from "./b22-platform-closing-appeal.accept"
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
@@ -12708,6 +12709,15 @@ export default async function({container}:any){
           seller_id:ownerStoreId,reason:"B22 restore earlier native Seller suspension"
         }})
       }
+      // OwnerStore has a real native Order in a two-Seller OrderGroup. All
+      // other Store work above is finished; only this disposable PG16 case
+      // receives independent, internally consistent historical audit/outbox.
+      await verifyB22RealOrderedSellerDay31({
+        q,staff:reviewer,foreign:browser,foundation,
+        sellerId:ownerStoreId,organizationId:organizations[0].id,
+        sourceSellerId:gammaSellerId,ownerPersonId:A.person,
+        staffPersonId:B.person
+      })
       const positiveNativeBefore=await auth.listAuthMfa(
         {auth_identity_id:staffAIdentity.auth_identity_id,status:"enabled"},{take:2})
       assert.equal(positiveNativeBefore.length,1)
