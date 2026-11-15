@@ -77,6 +77,10 @@ const retryEmail="recovered-owner@example.invalid"
 const linkedMemberActor="mem_b22_mail_extra_verified"
 const linkedMemberIdentity="auth_b22_mail_extra_verified"
 const linkedMemberEmail="another-owned-email@example.invalid"
+// Separate actor IDs for the real concurrency fixture; no cross-Person alias.
+const raceMemberActor="mem_b22_mail_race_member"
+const raceMemberIdentity="auth_b22_mail_race_member"
+const raceMemberEmail="race-member@example.invalid"
 let testSmtp:{enabled:boolean;host:string;port:number;
   security:"none";from_email:string}|null=null
 type TestBarrier={entered:Promise<void>;proceed:Promise<void>;
@@ -157,7 +161,8 @@ const container:any={resolve:(name:string)=>{
       const id=input.filters?.id
       return {data:id===syntheticActor?[{id,email:syntheticEmail}]:
         id===retryActor?[{id,email:retryEmail}]:
-        id===linkedMemberActor?[{id,email:linkedMemberEmail}]:[]}
+        id===linkedMemberActor?[{id,email:linkedMemberEmail}]:
+        id===raceMemberActor?[{id,email:raceMemberEmail}]:[]}
     }
   }
   if(name===Modules.AUTH)return {
@@ -165,7 +170,8 @@ const container:any={resolve:(name:string)=>{
       const id=input.id?.[0]
       const email=id===syntheticIdentity?syntheticEmail:
         id===retryIdentity?retryEmail:
-        id===linkedMemberIdentity?linkedMemberEmail:null
+        id===linkedMemberIdentity?linkedMemberEmail:
+        id===raceMemberIdentity?raceMemberEmail:null
       return email?[{id,provider_identities:[
         {provider:"emailpass",entity_id:email}]}]:[]
     },
@@ -173,7 +179,8 @@ const container:any={resolve:(name:string)=>{
       const id=input.auth_identity_id
       const email=id===syntheticIdentity?syntheticEmail:
         id===retryIdentity?retryEmail:
-        id===linkedMemberIdentity?linkedMemberEmail:null
+        id===linkedMemberIdentity?linkedMemberEmail:
+        id===raceMemberIdentity?raceMemberEmail:null
       if(ownerProofFromPg&&id===syntheticIdentity){
         return q("select entity_type,entity_id,verified_at,deleted_at "+
           "from auth_verification where auth_identity_id=$1",[id])
@@ -215,10 +222,10 @@ async function setup(){
     "verified_at timestamptz,deleted_at timestamptz)")
   await q("insert into public.\"user\"(id,email) values ($1,$2),($3,$4)",[
     syntheticActor,syntheticEmail,retryActor,retryEmail])
-  await q("insert into public.member(id,email) values ($1,$2)",[
-    linkedMemberActor,linkedMemberEmail])
-  await q("insert into auth_identity(id) values ($1),($2),($3)",[
-    syntheticIdentity,retryIdentity,linkedMemberIdentity])
+  await q("insert into public.member(id,email) values ($1,$2),($3,$4)",[
+    linkedMemberActor,linkedMemberEmail,raceMemberActor,raceMemberEmail])
+  await q("insert into auth_identity(id) values ($1),($2),($3),($4)",[
+    syntheticIdentity,retryIdentity,linkedMemberIdentity,raceMemberIdentity])
   await q("create table da_person (id text primary key,disabled_at timestamptz,deleted_at timestamptz)")
   await q("create table da_organization (id text primary key)")
   await q("create table da_organization_membership (id text primary key,"+
@@ -1177,10 +1184,10 @@ async function main(){
         await q("insert into da_login_binding "+
           "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
           "values ($1,'member',$2,$3,clock_timestamp())",
-          [owner,linkedMemberActor,linkedMemberIdentity])
+          [owner,raceMemberActor,raceMemberIdentity])
         await q("insert into da_actor_mapping "+
           "(id,person_id,actor_type,actor_id) values ($1,$2,'member',$3)",
-          ["damap_"+uuid(),owner,linkedMemberActor])
+          ["damap_"+uuid(),owner,raceMemberActor])
       }finally{
         linkBeforeSend.release();beforeOwnerSmtpConfig=null
         await Promise.allSettled([linkWorker])
@@ -1196,7 +1203,7 @@ async function main(){
       assert.equal(deniedLateBinding.attempts,1)
       // Removing the conflicting actor restores the original verified email.
       await q("update da_login_binding set revoked_at=clock_timestamp() "+
-        "where person_id=$1 and actor_id=$2",[owner,linkedMemberActor])
+        "where person_id=$1 and actor_id=$2",[owner,raceMemberActor])
       await q("update da_store_owner_closing_email "+
         "set next_attempt_at=clock_timestamp()-interval '1 second' "+
         "where audit_event_id=$1 and person_id=$2",[lateBindingEvent,owner])
@@ -1264,7 +1271,7 @@ async function main(){
           assert.equal(observed.dataMessages,beforeNativeAckData+1)
           blockedBinding=q("update da_login_binding set revoked_at=null "+
             "where person_id=$1 and actor_id=$2 returning actor_id",
-            [owner,linkedMemberActor]).then(x=>x)
+            [owner,raceMemberActor]).then(x=>x)
           void blockedBinding.catch(()=>{})
           await assertRealPgLockWait("update da_login_binding")
           blockedProof=q("update auth_verification set deleted_at=clock_timestamp() "+
@@ -1297,7 +1304,7 @@ async function main(){
         assert.equal((await q("select deleted_at from auth_verification "+
           "where id=$1",[proofId]))[0].deleted_at!==null,true)
         assert.equal((await q("select revoked_at from da_login_binding "+
-          "where actor_id=$1",[linkedMemberActor]))[0].revoked_at,null)
+          "where actor_id=$1",[raceMemberActor]))[0].revoked_at,null)
         assert.equal((await q('select email from public."user" where id=$1',
           [syntheticActor]))[0].email,"new-b22@example.invalid")
         process.stdout.write(
@@ -1308,7 +1315,7 @@ async function main(){
       }finally{
         ownerProofFromPg=false
         await q("update da_login_binding set revoked_at=clock_timestamp() "+
-          "where person_id=$1 and actor_id=$2",[owner,linkedMemberActor])
+          "where person_id=$1 and actor_id=$2",[owner,raceMemberActor])
         await q('update public."user" set email=$2 where id=$1',
           [syntheticActor,syntheticEmail])
       }
