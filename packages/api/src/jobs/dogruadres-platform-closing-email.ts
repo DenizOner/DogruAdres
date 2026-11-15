@@ -466,7 +466,18 @@ async function sendOwnerMailFenced(db:Db,claim:OwnerMailClaim,
       provider_identity,auth_verification in share mode nowait`)
     const recipient=await verifiedOwnerMailRecipient(db,container,claim)
     if(!recipient){
-      await persistOwnerMailResult(sql,claim,"unverified_identity",null)
+      // An Owner revoked between the claim and the send fence is not merely
+      // missing email proof. Preserve the existing invalidated terminal state.
+      const live=await sql.execute(`select m.id from da_organization_membership m
+        join da_person p on p.id=m.person_id and p.disabled_at is null
+          and p.deleted_at is null
+        where m.person_id=? and m.organization_id=?
+          and m.role='owner' and m.protected_owner=true
+          and m.status='active' and m.revoked_at is null
+          and m.deleted_at is null
+        limit 2 for share of m,p`,[claim.person_id,claim.organization_id])
+      await persistOwnerMailResult(sql,claim,
+        live.length===1?"unverified_identity":"invalidated",null)
       return
     }
     const {actor,email}=recipient
