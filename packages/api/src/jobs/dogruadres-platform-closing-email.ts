@@ -304,7 +304,7 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
  */
 type OwnerMailClaim = {
   audit_event_id:string;person_id:string;organization_id:string;
-  action:"organization.store_owner_closing_started"|
+  seller_id:string;action:"organization.store_owner_closing_started"|
     "organization.store_owner_closing_withdrawn";
   claim_id:string;attempts:number
 }
@@ -425,7 +425,7 @@ async function claimOwnerClosingMail(db:Db,seen:OwnerMailClaim[]){
     from due,da_audit_event e
     where d.audit_event_id=due.audit_event_id
       and d.person_id=due.person_id and e.id=due.audit_event_id
-    returning d.audit_event_id,d.person_id,e.organization_id,e.action,
+    returning d.audit_event_id,d.person_id,e.organization_id,e.target_id as seller_id,e.action,
       d.claim_id::text as claim_id,d.attempts`,[
       ...seen.flatMap(x=>[x.audit_event_id,x.person_id]),claimId
     ])
@@ -559,6 +559,45 @@ async function lockOwnerMailProofRows(sql:Sql,claim:OwnerMailClaim){
 }
 
 /**
+ * An Owner's mandatory generic security notice is Organization-scoped:
+ * it must reach every current protected Owner, including a Person who has
+ * not yet linked a Mercur SellerMember. The private Store/Owner HTTP route
+ * separately requires native Member/SellerMember authorization.
+ *
+ * For outbound notices, verify and SHARE-lock the Organization's CURRENT
+ * audited Store Origin and approved native Seller throughout SMTP DATA and
+ * settlement. An Origin revoked before this fence suppresses the send;
+ * revocation initiated after DATA waits until the transaction commits.
+ */
+async function currentOwnerMailStoreAuthority(sql:Sql,claim:OwnerMailClaim){
+  const rows=await sql.execute(`select o.id
+    from da_organization_seller_ownership o
+    join da_organization org on org.id=o.organization_id
+      and org.status='active' and org.deleted_at is null
+    join da_audit_event e on e.id=o.verification_audit_event_id
+      and e.deleted_at is null and e.organization_id=o.organization_id
+      and e.target_id=o.seller_id and e.module='dogruadres-access'
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+      and x.source_module='dogruadres-access' and x.deleted_at is null
+    join seller s on s.id=o.seller_id and s.deleted_at is null
+      and s.approved_at is not null
+      and s.status in ('open','suspended','terminated')
+    where o.organization_id=? and o.seller_id=? and o.revoked_at is null
+      and ((e.action='organization.store_application_created'
+        and e.resource='store-application'
+        and exists(select 1 from da_store_application a
+          where a.id=e.new_values->>'application_id'
+            and a.organization_id=o.organization_id
+            and a.seller_id=o.seller_id and a.status='created'
+            and a.person_id=e.actor_person_id))
+        or (e.action='organization.store_association_approved'
+          and e.resource='store-association'))
+    limit 2 for share of o,org,e,x,s`,
+    [claim.organization_id,claim.seller_id])
+  return rows.length===1
+}
+
+/**
  * The claim is NOT send authorization. Serialize SMTP DATA and the outcome
  * with LIVE Owner membership, actor binding and the current closing source.
  * FOR SHARE blocks a simultaneous UPDATE/DELETE of those actual rows:
@@ -609,6 +648,11 @@ async function sendOwnerMailFenced(db:Db,claim:OwnerMailClaim,
       claim.person_id,claim.organization_id
     ])
     if(eligible.length!==1){
+      await persistOwnerMailResult(sql,claim,"invalidated",null)
+      return
+    }
+
+    if(!await currentOwnerMailStoreAuthority(sql,claim)){
       await persistOwnerMailResult(sql,claim,"invalidated",null)
       return
     }

@@ -9,6 +9,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { createServer } from "node:net"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import AccessService from "../../src/modules/dogruadres-access/service"
+import { Migration20261029120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261029120000"
 import { Migration20261111170000 } from "../../src/modules/dogruadres-access/migrations/Migration20261111170000"
 import { Migration20261112100000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112100000"
 import { Migration20261112120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112120000"
@@ -225,6 +226,8 @@ async function setup(){
   for(const native of ['"user"',"member","customer"]){
     await q("create table public."+native+" (id text primary key,email text,deleted_at timestamptz)")
   }
+  await q("create table seller(id text primary key,status text not null default 'open',"+
+    "approved_at timestamptz,deleted_at timestamptz)")
   await q("create table auth_identity (id text primary key,deleted_at timestamptz)")
   await q("create table provider_identity (id text primary key,entity_id text,"+
     "auth_identity_id text not null references auth_identity(id),"+
@@ -266,7 +269,10 @@ async function setup(){
       [identity===syntheticIdentity?ownerProofId:"proof_"+uuid(),identity,email])
   }
   await q("create table da_person (id text primary key,disabled_at timestamptz,deleted_at timestamptz)")
-  await q("create table da_organization (id text primary key)")
+  await q("create table da_organization (id text primary key,"+
+    "status text not null default 'active',deleted_at timestamptz)")
+  await q("create table da_store_application(id text primary key,"+
+    "organization_id text,seller_id text,person_id text,status text)")
   await q("create table da_organization_membership (id text primary key,"+
     "organization_id text,person_id text,role text,status text,"+
     "protected_owner boolean,revoked_at timestamptz,deleted_at timestamptz)")
@@ -294,6 +300,7 @@ async function setup(){
     "actor_id text,auth_identity_id text,revoked_at timestamptz,verified_at timestamptz)")
   await q("create table da_actor_mapping (id text,person_id text references da_person(id),actor_type text,"+
     "actor_id text,deleted_at timestamptz)")
+  await migrate(Migration20261029120000)
   await migrate(Migration20261111170000)
   await migrate(Migration20261112100000)
   await migrate(Migration20261112120000)
@@ -391,6 +398,32 @@ async function seedOwnerClosingMail(seller:string,
       target_id:seller,occurred_at:started
     }
   })
+  // Task-only audited legacy Store origin: live worker checks this same
+  // legal Organization/Seller association and native Mercur membership.
+  const ownershipEvent="daaud_"+uuid()
+  await q("insert into seller(id,approved_at) values ($1,clock_timestamp())",[seller])
+  await q("insert into da_audit_event "+
+    "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
+    "action,module,resource,target_id,new_values,occurred_at) "+
+    "values ($1,$2,'user',$3,'platform_staff',$4,"+
+    "'organization.store_association_approved','dogruadres-access',"+
+    "'store-association',$5,jsonb_build_object('seller_id',$5::text),"+
+    "clock_timestamp())",[ownershipEvent,staff,syntheticActor,org,seller])
+  await insertOutbox(db as Pg,"daaob_"+uuid(),{
+    source_audit_event_id:ownershipEvent,source_module:"dogruadres-access",
+    envelope_version:1,status:"pending",envelope:{
+      version:1,source_module:"dogruadres-access",
+      source_audit_event_id:ownershipEvent,organization_id:org,
+      actor:{person_id:staff,type:"user",id:syntheticActor,role_context:"platform_staff"},
+      action:"organization.store_association_approved",
+      resource:"store-association",target_id:seller,occurred_at:started
+    }
+  })
+  await q("insert into da_organization_seller_ownership "+
+    "(id,organization_id,seller_id,verification_audit_event_id,verified_at) "+
+    "values ($1,$2,$3,$4,clock_timestamp())",
+    ["dasown_"+uuid(),org,seller,ownershipEvent])
+
   await q("insert into da_store_owner_closing "+
     "(seller_id,organization_id,state,version,request_id,"+
     "source_audit_event_id,started_at,due_at) "+
@@ -938,6 +971,7 @@ async function main(){
       // Owner 30-day closing: reuse the exact same native SMTP provider,
       // verified Person email and scheduler with its NEW event/recipient ledger.
       // Concurrent ticks may commit ONLY ONE claim per Owner/source event.
+
       const ownerMailSeller="sel_b22_owner_closing_smtp_accepted"
       const ownerMailEvent=await seedOwnerClosingMail(ownerMailSeller)
       // Never tear down the disposable database while a concurrent worker
@@ -1461,6 +1495,100 @@ async function main(){
           [syntheticActor,syntheticEmail])
       }
 
+      // A completed legal Store-Origin revocation AFTER claim, BEFORE the
+      // final SMTP fence, must invalidate rather than mail the old Owner.
+      const oldOriginSeller="sel_b22_owner_mail_revoked_store_origin"
+      const oldOriginEvent=await seedOwnerClosingMail(oldOriginSeller)
+      const oldOriginGate=testBarrier()
+      const oldOriginData=observed.dataMessages
+      beforeOwnerSmtpConfig=oldOriginGate
+      const oldOriginWorker=runOwnerClosingEmailTick(container)
+      try{
+        await waitForBarrier(oldOriginGate.entered,"Owner claim before legal Origin revoke")
+        const revoked=await q("update da_organization_seller_ownership "+
+          "set revoked_at=clock_timestamp() where seller_id=$1 "+
+          "and revoked_at is null returning id",[oldOriginSeller])
+        assert.equal(revoked.length,1)
+      }finally{
+        oldOriginGate.release();beforeOwnerSmtpConfig=null
+        await Promise.allSettled([oldOriginWorker])
+      }
+      await oldOriginWorker
+      assert.equal(observed.dataMessages,oldOriginData,
+        "Lost legal Store association before fence must send zero SMTP DATA")
+      const [oldOriginMail]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",
+        [oldOriginEvent])
+      assert.equal(oldOriginMail.attempts,1)
+      assert.equal(oldOriginMail.last_result,"invalidated")
+      assert.equal(oldOriginMail.accepted_at,null)
+
+      // The audited association alone must never authorize an unapproved
+      // native Seller. Losing approved_at BEFORE the final SMTP fence denies
+      // the generic mandatory Owner notice without changing its audit source.
+      const unapprovedSeller="sel_b22_owner_mail_store_approval_removed"
+      const unapprovedEvent=await seedOwnerClosingMail(unapprovedSeller)
+      const unapprovedGate=testBarrier()
+      const unapprovedData=observed.dataMessages
+      beforeOwnerSmtpConfig=unapprovedGate
+      const unapprovedWorker=runOwnerClosingEmailTick(container)
+      try{
+        await waitForBarrier(unapprovedGate.entered,"Owner claim before native Seller approval revoke")
+        const altered=await q("update seller set approved_at=null "+
+          "where id=$1 and approved_at is not null returning id",[unapprovedSeller])
+        assert.equal(altered.length,1)
+      }finally{
+        unapprovedGate.release();beforeOwnerSmtpConfig=null
+        await Promise.allSettled([unapprovedWorker])
+      }
+      await unapprovedWorker
+      assert.equal(observed.dataMessages,unapprovedData,
+        "Native Seller approval revoked before fence must suppress SMTP DATA")
+      const [unapprovedMail]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",
+        [unapprovedEvent])
+      assert.equal(unapprovedMail.attempts,1)
+      assert.equal(unapprovedMail.last_result,"invalidated")
+      assert.equal(unapprovedMail.accepted_at,null)
+
+      // Opposite ordering: this real SMTP DATA is already in flight.
+      // Legal-Origin revocation must wait for the locked send transaction.
+      const liveOriginSeller="sel_b22_owner_mail_origin_revoke_after_data"
+      const liveOriginEvent=await seedOwnerClosingMail(liveOriginSeller)
+      const liveOriginGate=testBarrier()
+      const liveOriginData=observed.dataMessages
+      holdSmtpDataAck=liveOriginGate
+      const liveOriginWorker=runOwnerClosingEmailTick(container)
+      let pendingOriginRevoke:Promise<unknown>|null=null
+      try{
+        await waitForBarrier(liveOriginGate.entered,"Owner SMTP DATA before Origin revoke")
+        assert.equal(observed.dataMessages,liveOriginData+1)
+        const task=q("update da_organization_seller_ownership "+
+          "set revoked_at=clock_timestamp() where seller_id=$1 "+
+          "and revoked_at is null returning id",[liveOriginSeller]).then(x=>x)
+        pendingOriginRevoke=task
+        void task.catch(()=>{})
+        await assertRealPgLockWait("update da_organization_seller_ownership")
+      }finally{
+        liveOriginGate.release();holdSmtpDataAck=null
+        await Promise.allSettled([liveOriginWorker,
+          ...(pendingOriginRevoke?[pendingOriginRevoke]:[])])
+      }
+      await liveOriginWorker
+      if(pendingOriginRevoke)await pendingOriginRevoke
+      const [liveOriginMail]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",
+        [liveOriginEvent])
+      assert.equal(liveOriginMail.attempts,1)
+      assert.equal(liveOriginMail.last_result,"accepted")
+      assert.ok(liveOriginMail.accepted_at)
+      assert.equal(observed.dataMessages,liveOriginData+1)
+      assert.ok((await q("select revoked_at from da_organization_seller_ownership "+
+        "where seller_id=$1",[liveOriginSeller]))[0].revoked_at)
+      process.stdout.write("PASS B22 PG16/loopback SMTP: revoked audited Store Origin "+
+        "or unapproved native Seller before send fence sends zero DATA; "+
+        "Origin revoked after DATA waits for real PostgreSQL lock until acceptance\n")
+
       // Revoked protected Owner must not receive a newly claimed SMTP notice.
       const ownerRevoked=await seedOwnerClosingMail(
         "sel_b22_owner_closing_smtp_revoked")
@@ -1617,6 +1745,7 @@ async function main(){
         "PASS B22 PG16+loopback SMTP: Owner closing event/recipient 250 accepted "+
         "not delivered, 550 failed, lost DATA ACK uncertain, 24h slot, "+
         "concurrent single claim, revoked Owner denied; finalizer remains off\\n")
+
 
       // The same job must handle a real SMTP 550 without delivery or a clock.
       refuseRecipient=true

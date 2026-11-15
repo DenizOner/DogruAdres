@@ -564,6 +564,31 @@ export async function verifyB22LateProtectedOwnerClosingNotice(input:{
       "from da_audit_event e join da_audit_outbox x "+
       "on x.source_audit_event_id=e.id where e.id=$1",[eventId]),beforeAudit,
       "New recipient never rewrites source audit/outbox")
+    // The same authenticated private HTTP route must also fail closed if
+    // the Organization's audited Store association is revoked AFTER closing.
+    // This is disposable PG16 only; always restore before real Owner withdraw.
+    const origin=await q("select id from da_organization_seller_ownership "+
+      "where organization_id=$1 and seller_id=$2 and revoked_at is null",
+      [organizationId,sellerId])
+    assert.equal(origin.length,1)
+    const revokedOrigin=await q("update da_organization_seller_ownership "+
+      "set revoked_at=clock_timestamp() where id=$1 and revoked_at is null "+
+      "returning id",[origin[0].id])
+    assert.equal(revokedOrigin.length,1)
+    try{
+      assert.equal((await get(browser)).status,403,
+        "Original Owner cannot read Store notice after legal Origin revocation")
+      assert.equal((await get(reviewer)).status,403,
+        "Late Owner cannot read Store notice after legal Origin revocation")
+    }finally{
+      const restoredOrigin=await q("update da_organization_seller_ownership "+
+        "set revoked_at=null where id=$1 and revoked_at is not null "+
+        "returning id",[origin[0].id])
+      assert.equal(restoredOrigin.length,1)
+    }
+    assert.equal((await get(browser)).status,200,
+      "Restored current audited Store Origin reauthorizes the Owner read")
+
     const stop=await write("withdraw",start.body.version)
     assert.equal(stop.status,200)
     assert.equal(stop.body.status,"withdrawn")
