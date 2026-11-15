@@ -784,14 +784,14 @@ async function verifyOwnerClosingBrowser(input:{
     " where seller_id=$1",[ownerStoreId]))[0],
     {state:"closing",version:3,source_audit_event_id:raceRow.source_audit_event_id})
 
-  // EXPIRY FIXTURE: do not mutate the append-only canonical audit.
-  // Create one entirely NEW historical closing record for a second already
-  // approved synthetic Seller using the real Foundation audit/outbox schema.
-  // The disposable task DB is destroyed by the enclosing PG16 job.
+  // DAY-30 BOUNDARY FIXTURE: never change an append-only audit timestamp.
+  // A fresh, isolated closing starts almost 30 days ago and expires in 22s.
+  // The SAME source/Store is read by Chrome HTTPS before AND after the real
+  // PostgreSQL wall-clock boundary. No synthetic time or finalizer is used.
   const [{now_at:serverNow}]=await q("select clock_timestamp() as now_at")
-  const justExpiredDue=new Date(new Date(serverNow).getTime()-100).toISOString()
-  const justExpiredStart=new Date(
-    new Date(justExpiredDue).getTime()-2592000000).toISOString()
+  const boundaryDue=new Date(new Date(serverNow).getTime()+22000).toISOString()
+  const boundaryStart=new Date(
+    new Date(boundaryDue).getTime()-2592000000).toISOString()
   const expiredKey="dasc_"+randomBytes(16).toString("hex")
   // Record the real approved Seller and name claim before the synthetic
   // expired Owner intent. Elapsed time alone must never release either.
@@ -824,7 +824,7 @@ async function verifyOwnerClosingBrowser(input:{
           'fixture_source','b22_expiry_probe'),$4::timestamptz
       from da_audit_event e where e.id=$1 returning id`,
       [raceRow.source_audit_event_id,secondOwnerStoreId,expiredKey,
-        justExpiredStart,justExpiredDue])
+        boundaryStart,boundaryDue])
     assert.ok(fixtureEvent?.id)
     expiryFixtureAuditId=fixtureEvent.id
     const [realSource]=await q(
@@ -834,7 +834,7 @@ async function verifyOwnerClosingBrowser(input:{
     assert.ok(realSource?.envelope)
     const fixtureEnvelope={...realSource.envelope,
       source_audit_event_id:expiryFixtureAuditId,
-      target_id:secondOwnerStoreId,occurred_at:justExpiredStart}
+      target_id:secondOwnerStoreId,occurred_at:boundaryStart}
     // CHECK da_audit_outbox_delivery_state permits a future retry only when
     // attempt_count>=1. This task-only synthetic history event is deliberately
     // excluded from today's relay; all FOUR actual Chrome events remain queued.
@@ -848,12 +848,38 @@ async function verifyOwnerClosingBrowser(input:{
        source_audit_event_id,started_at,due_at)
       values($1,$2,'closing',1,$3,$4,$5,$6) returning seller_id`,
       [secondOwnerStoreId,organizations[0].id,expiredKey,
-        expiryFixtureAuditId,justExpiredStart,justExpiredDue])).length,1)
+        expiryFixtureAuditId,boundaryStart,boundaryDue])).length,1)
     await q("commit")
   }catch(error){await q("rollback");throw error}
   try{
+    // Observe the real first-party HTTP response just BEFORE this same
+    // audited closing's 30-day deadline, with an unchanged PG16 source.
+    const preBoundary=await browser.callFunction(
+      "async function(org,seller){const r=await fetch('/personal/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}),{cache:'no-store'});return {status:r.status,body:await r.json()}}",
+      organizations[0].id,secondOwnerStoreId)
+    const [preClock]=await q("select clock_timestamp() as now_at")
+    assert.equal(preBoundary.status,200)
+    assert.equal(preBoundary.body.state,"closing")
+    assert.equal(preBoundary.body.can_withdraw,true,
+      "Current authorized Owner can withdraw before the exact day-30 cutoff")
+    assert.ok(preBoundary.body.remaining_seconds>0&&
+      preBoundary.body.remaining_seconds<=22,
+      "Server countdown stays positive just before day 30")
+    assert.equal(preBoundary.body.permanent_finalization_enabled,false)
+    assert.ok(new Date(preClock.now_at).getTime()<new Date(boundaryDue).getTime(),
+      "The actual PostgreSQL clock has not crossed the deadline yet")
+    assert.equal((await q("select count(*)::int n from da_notification_receipt "+
+      "where audit_event_id=$1",[expiryFixtureAuditId]))[0].n,0)
+    // Wait for real PostgreSQL time to cross day 30, not a mocked clock
+    // or mutating the append-only source. The post-expiry HTTP409 and
+    // Seller/name/Cart/audit negative checks below use the SAME closure.
+    await until(async()=>{
+      const [time]=await q("select clock_timestamp() >= $1::timestamptz as reached",
+        [boundaryDue])
+      return time?.reached===true
+    },30000,"real PostgreSQL Owner 30-day deadline crossing")
     const expired=await browser.callFunction(
-      "async function(org,seller){const r=await fetch('/personal/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}));return {status:r.status,body:await r.json()}}",
+      "async function(org,seller){const r=await fetch('/personal/store-owner-closing?'+new URLSearchParams({organization_id:org,seller_id:seller}),{cache:'no-store'});return {status:r.status,body:await r.json()}}",
       organizations[0].id,secondOwnerStoreId)
     assert.equal(expired.status,200)
     assert.equal(expired.body.state,"closing")
