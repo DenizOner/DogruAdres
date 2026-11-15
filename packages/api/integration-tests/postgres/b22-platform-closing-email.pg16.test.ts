@@ -9,6 +9,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { createServer } from "node:net"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import AccessService from "../../src/modules/dogruadres-access/service"
+import { Migration20261029120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261029120000"
 import { Migration20261111170000 } from "../../src/modules/dogruadres-access/migrations/Migration20261111170000"
 import { Migration20261112100000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112100000"
 import { Migration20261112120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112120000"
@@ -91,6 +92,8 @@ const otherIdentity="auth_b22_mail_unrelated"
 const otherEmail="unrelated@example.invalid"
 const otherProof="b22_unrelated_proof"
 const ownerProofId="b22_owner_mail_verified_primary"
+const nativeOwnerMember="mem_b22_owner_mail_native"
+const nativeOwnerIdentity="auth_b22_owner_mail_native"
 let testSmtp:{enabled:boolean;host:string;port:number;
   security:"none";from_email:string}|null=null
 type TestBarrier={entered:Promise<void>;proceed:Promise<void>;
@@ -225,6 +228,11 @@ async function setup(){
   for(const native of ['"user"',"member","customer"]){
     await q("create table public."+native+" (id text primary key,email text,deleted_at timestamptz)")
   }
+  await q("alter table public.member add column is_active boolean not null default true")
+  await q("create table seller(id text primary key,status text not null default 'open',"+
+    "approved_at timestamptz,deleted_at timestamptz)")
+  await q("create table seller_member(id text primary key,seller_id text references seller(id),"+
+    "member_id text references public.member(id),deleted_at timestamptz)")
   await q("create table auth_identity (id text primary key,deleted_at timestamptz)")
   await q("create table provider_identity (id text primary key,entity_id text,"+
     "auth_identity_id text not null references auth_identity(id),"+
@@ -266,7 +274,10 @@ async function setup(){
       [identity===syntheticIdentity?ownerProofId:"proof_"+uuid(),identity,email])
   }
   await q("create table da_person (id text primary key,disabled_at timestamptz,deleted_at timestamptz)")
-  await q("create table da_organization (id text primary key)")
+  await q("create table da_organization (id text primary key,"+
+    "status text not null default 'active',deleted_at timestamptz)")
+  await q("create table da_store_application(id text primary key,"+
+    "organization_id text,seller_id text,person_id text,status text)")
   await q("create table da_organization_membership (id text primary key,"+
     "organization_id text,person_id text,role text,status text,"+
     "protected_owner boolean,revoked_at timestamptz,deleted_at timestamptz)")
@@ -294,6 +305,7 @@ async function setup(){
     "actor_id text,auth_identity_id text,revoked_at timestamptz,verified_at timestamptz)")
   await q("create table da_actor_mapping (id text,person_id text references da_person(id),actor_type text,"+
     "actor_id text,deleted_at timestamptz)")
+  await migrate(Migration20261029120000)
   await migrate(Migration20261111170000)
   await migrate(Migration20261112100000)
   await migrate(Migration20261112120000)
@@ -391,6 +403,39 @@ async function seedOwnerClosingMail(seller:string,
       target_id:seller,occurred_at:started
     }
   })
+  // Task-only audited legacy Store origin: live worker checks this same
+  // legal Organization/Seller association and native Mercur membership.
+  const ownershipEvent="daaud_"+uuid()
+  await q("insert into seller(id,approved_at) values ($1,clock_timestamp())",[seller])
+  await q("insert into da_audit_event "+
+    "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
+    "action,module,resource,target_id,new_values,occurred_at) "+
+    "values ($1,$2,'user',$3,'platform_staff',$4,"+
+    "'organization.store_association_approved','dogruadres-access',"+
+    "'store-association',$5,jsonb_build_object('seller_id',$5::text),"+
+    "clock_timestamp())",[ownershipEvent,staff,syntheticActor,org,seller])
+  await insertOutbox(db as Pg,"daaob_"+uuid(),{
+    source_audit_event_id:ownershipEvent,source_module:"dogruadres-access",
+    envelope_version:1,status:"pending",envelope:{
+      version:1,source_module:"dogruadres-access",
+      source_audit_event_id:ownershipEvent,organization_id:org,
+      actor:{person_id:staff,type:"user",id:syntheticActor,role_context:"platform_staff"},
+      action:"organization.store_association_approved",
+      resource:"store-association",target_id:seller,occurred_at:started
+    }
+  })
+  await q("insert into da_organization_seller_ownership "+
+    "(id,organization_id,seller_id,verification_audit_event_id,verified_at) "+
+    "values ($1,$2,$3,$4,clock_timestamp())",
+    ["dasown_"+uuid(),org,seller,ownershipEvent])
+  const nativeMembers=await q("select b.actor_id from da_login_binding b "+
+    "join da_organization_membership m on m.person_id=b.person_id "+
+    "and m.organization_id=$1 and m.status='active' and m.role='owner' "+
+    "where b.actor_type='member' and b.revoked_at is null",[org])
+  for(const native of nativeMembers)await q("insert into seller_member "+
+    "(id,seller_id,member_id) values ($1,$2,$3)",
+    ["selmem_"+uuid(),seller,native.actor_id])
+
   await q("insert into da_store_owner_closing "+
     "(seller_id,organization_id,state,version,request_id,"+
     "source_audit_event_id,started_at,due_at) "+
@@ -938,6 +983,28 @@ async function main(){
       // Owner 30-day closing: reuse the exact same native SMTP provider,
       // verified Person email and scheduler with its NEW event/recipient ledger.
       // Concurrent ticks may commit ONLY ONE claim per Owner/source event.
+      // The native Member relationship belongs to the existing legal Owner;
+      // creating only a User login would make this worker fixture bypass the
+      // real private HTTP/Store authorization it is intended to preserve.
+      await q("insert into public.member(id,email) values ($1,$2)",
+        [nativeOwnerMember,syntheticEmail])
+      await q("insert into auth_identity(id) values ($1)",[nativeOwnerIdentity])
+      await q("insert into provider_identity "+
+        "(id,auth_identity_id,provider,entity_id) "+
+        "values ($1,$2,'emailpass',$3)",
+        ["prov_"+uuid(),nativeOwnerIdentity,syntheticEmail])
+      await q("insert into auth_verification "+
+        "(id,auth_identity_id,entity_type,entity_id,verified_at) "+
+        "values ($1,$2,'email',$3,clock_timestamp())",
+        ["proof_"+uuid(),nativeOwnerIdentity,syntheticEmail])
+      await q("insert into da_login_binding "+
+        "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
+        "values ($1,'member',$2,$3,clock_timestamp())",
+        [owner,nativeOwnerMember,nativeOwnerIdentity])
+      await q("insert into da_actor_mapping(id,person_id,actor_type,actor_id) "+
+        "values ($1,$2,'member',$3)",
+        ["damap_"+uuid(),owner,nativeOwnerMember])
+
       const ownerMailSeller="sel_b22_owner_closing_smtp_accepted"
       const ownerMailEvent=await seedOwnerClosingMail(ownerMailSeller)
       // Never tear down the disposable database while a concurrent worker
@@ -1046,6 +1113,9 @@ async function main(){
         "values ($1,$2,'member',$3)",[
           "damap_"+uuid(),unverifiedOwner,"mem_b22_unverified_extra"
         ])
+      await q("insert into seller_member (id,seller_id,member_id) "+
+        "values ($1,$2,$3)",["selmem_"+uuid(),
+          "sel_b22_owner_closing_mixed_recipient_status","mem_b22_unverified_extra"])
       const retryDue=await q("update da_store_owner_closing_email "+
         "set next_attempt_at=clock_timestamp()-interval '1 second' "+
         "where audit_event_id=$1 and person_id=$2 and attempts=1 "+
