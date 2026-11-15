@@ -301,6 +301,9 @@ async function run(){
         const ownerNativeProofMarker="PASS B22 Chrome/HTTPS/PG16: second protected Owner native email verification from pending through real GET/POST to consumed; first Owner revoked proof unchanged, readiness 0-to-1 then cleanup restores 0; private receipts immutable, no mailbox delivery or finalizer"
         const platformClosingEmailLinkMarker="PASS B22 Chrome/HTTPS/PG16: synthetic hashed email link strong Owner POST, foreign/forged CSRF/scanner GET denied, 10+20 server clock starts once, no finalizer or sales reopening"
         const platformPreflightBoundaryMarker="PASS B22 Chrome/HTTPS/PG16: 720-hour Staff preflight false/true, pending first appeal and SMTP admin exception; permanent finalizer denied"
+        // Only a fixed, privacy-safe marker is exported from the child stage.
+        // Without its mandatory assertion, green CI would not prove +31d.
+        const nativeSellerDay31Marker="PASS B22 Chrome/HTTPS/PG16: native Seller-linked real Order and OrderGroup, independent canonical source+deadline+appeal/outbox fixture at +31d, Staff GET200 and accessible blockers, Owner GET403, appeal still pending, finance/legal unknown and finalizer false; Seller name/URL, native Orders and immutable audit/outbox retained; no external payment or finalization"
         const completedSourceOrderMarker="PASS B22 Chrome/HTTPS/PG16: completed native source OrderGroup/Order IDs, Order-Cart FK, source Seller/Offer and immutable Buyer attribution unchanged across A→B transfer, A same-ID recovery and B name adoption; zero payment"
         const historicalCartMarker="PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED"
         const ownerClosingNegativeMarker="PASS B22 real closing security: concurrent HTTP 200+409 one commit; revoked Owner/stale session HTTP403 no writes; expired 30-day withdraw HTTP409 no writes; both active Owners read private notices, two receipts each; native Seller unchanged"
@@ -380,7 +383,7 @@ async function run(){
               (x===ownerPlatformClosedUiMarker || x===legacyPlatformClosingMarker || x===dualRoleLockMarker || x===platformCrossSessionMarker ||
                x===platformClosingAppealMarker || x===nativeFinanceGraphMarker || x===nativeMultiSellerOrderMarker || x===platformClosingEmailLinkMarker ||
                x===ownerNativeProofMarker || x===ownerMailNativeRetryMarker || x===ownerRealSmtpReadbackMarker || x===ownerNativeMemberReadbackMarker || x===platformFinalReviewMarker || x===platformStaffReviewMarker ||
-               x===platformPreflightBoundaryMarker)).join("\n")
+               x===platformPreflightBoundaryMarker || x===nativeSellerDay31Marker)).join("\n")
           if(child.error||child.status!==0){
             // The long B22 child can legitimately fail at the still-blocked
             // tax-document approval. Do not bury *completed* earlier native
@@ -484,6 +487,8 @@ async function run(){
           "Missing separate strong Staff decision, independent reviewer and real private Owner outcome")
         assert.ok(result.split("\n").includes(platformPreflightBoundaryMarker),
           "Missing HTTP/PG16 boundary, pending appeals and Staff admin-fallback acceptance proof")
+        assert.ok(result.split("\n").includes(nativeSellerDay31Marker),
+          "Missing real native Seller OrderGroup with audited +31d Staff/foreign, appeal, finance and finalizer negative acceptance proof")
         // Both new B22 historical-reader negatives must be visible as full
         // redacted proof lines. Child success alone is not their evidence.
         for(const marker of [
