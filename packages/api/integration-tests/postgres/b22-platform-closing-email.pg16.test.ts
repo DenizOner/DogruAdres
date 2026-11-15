@@ -1101,6 +1101,64 @@ async function main(){
         "their own scheduled retry; exactly one new DATA, separate accepted "+
         "Message-IDs and durable receipts, first Owner unchanged, replay safe\\n")
 
+      // P2 pool-starvation regression: each of TWO simultaneous Owner sends
+      // holds one PG_CONNECTION transaction while loopback SMTP DATA waits.
+      // This worker pool has max=2, so borrowing a nested connection from
+      // either Medusa Query/Auth or currentActorCandidates cannot finish both.
+      // Observer queries use the independent task-only fixture connection.
+      const twoSlotPool=new SQL(url.toString(),{
+        max:2,connectionTimeout:2
+      })
+      const poolEvent=await seedOwnerClosingMail(
+        "sel_b22_owner_mail_two_slot_pool_parallel")
+      await q("insert into da_notification_receipt "+
+        "(id,person_id,audit_event_id) values ($1,$2,$3)",[
+          "danot_"+uuid(),unverifiedOwner,poolEvent
+        ])
+      const poolAck=testBarrier()
+      const poolDataStart=observed.dataMessages
+      activeWorkerPool=twoSlotPool
+      holdAllSmtpDataAcks=poolAck
+      const tickA=runOwnerClosingEmailTick(container)
+      const tickB=runOwnerClosingEmailTick(container)
+      try{
+        await waitForBarrier(poolAck.entered,"first two-slot SMTP DATA")
+        let bothAtData=false
+        for(let i=0;i<120;i++){
+          if(observed.dataMessages===poolDataStart+2){bothAtData=true;break}
+          await new Promise<void>(resolve=>setTimeout(resolve,50))
+        }
+        assert.equal(bothAtData,true,
+          "Both Owner SMTP DATA submissions must progress with pool max=2")
+        const waiting=await q("select count(*)::int n from "+
+          "da_store_owner_closing_email where audit_event_id=$1 "+
+          "and last_result='inflight'",[poolEvent])
+        assert.equal(waiting[0].n,2,
+          "Both independent protected Owner claims remain inflight at DATA")
+      }finally{
+        poolAck.release()
+        holdAllSmtpDataAcks=null
+        await Promise.allSettled([tickA,tickB])
+        activeWorkerPool=db
+        await twoSlotPool.close()
+      }
+      await Promise.all([tickA,tickB])
+      const completedPool=await q("select person_id,last_result,message_id,"+
+        "accepted_at,attempts from da_store_owner_closing_email "+
+        "where audit_event_id=$1 order by person_id",[poolEvent])
+      assert.equal(completedPool.length,2)
+      assert.deepEqual(completedPool.map((x:any)=>x.last_result),
+        ["accepted","accepted"])
+      assert.equal(new Set(completedPool.map((x:any)=>x.message_id)).size,2)
+      for(const item of completedPool){
+        assert.equal(item.attempts,1)
+        assert.ok(item.accepted_at)
+      }
+      assert.equal(observed.dataMessages,poolDataStart+2)
+      process.stdout.write("PASS B22 PG16/loopback SMTP: pool max=2 "+
+        "two parallel Owner sends each hold exactly one DB connection, "+
+        "both reach DATA before ACK, two independent accepted receipts\\n")
+
       // Distinct SECOND verified email for the SAME Person is ambiguous.
       // Deny the second Owner's SMTP claim instead of selecting an address
       // by native actor order. The first Owner's mail remains independently
