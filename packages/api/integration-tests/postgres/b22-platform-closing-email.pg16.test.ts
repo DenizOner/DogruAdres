@@ -1618,7 +1618,7 @@ async function main(){
         "where seller_id=$1",[liveOriginSeller]))[0].revoked_at)
       process.stdout.write("PASS B22 PG16/loopback SMTP: revoked legal Store Origin "+
         "or native SellerMember before fence sends zero DATA and invalidates; "+
-        "Origin revoked after DATA waits for real PostgreSQL lock until acceptance\\n")
+        "Origin revoked after DATA waits for real PostgreSQL lock until acceptance\n")
 
       // Revoked protected Owner must not receive a newly claimed SMTP notice.
       const ownerRevoked=await seedOwnerClosingMail(
