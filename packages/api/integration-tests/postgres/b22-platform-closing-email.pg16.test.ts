@@ -1525,6 +1525,101 @@ async function main(){
           [syntheticActor,syntheticEmail])
       }
 
+      // A completed legal Store-Origin revocation AFTER claim, BEFORE the
+      // final SMTP fence, must invalidate rather than mail the old Owner.
+      const oldOriginSeller="sel_b22_owner_mail_revoked_store_origin"
+      const oldOriginEvent=await seedOwnerClosingMail(oldOriginSeller)
+      const oldOriginGate=testBarrier()
+      const oldOriginData=observed.dataMessages
+      beforeOwnerSmtpConfig=oldOriginGate
+      const oldOriginWorker=runOwnerClosingEmailTick(container)
+      try{
+        await waitForBarrier(oldOriginGate.entered,"Owner claim before legal Origin revoke")
+        const revoked=await q("update da_organization_seller_ownership "+
+          "set revoked_at=clock_timestamp() where seller_id=$1 "+
+          "and revoked_at is null returning id",[oldOriginSeller])
+        assert.equal(revoked.length,1)
+      }finally{
+        oldOriginGate.release();beforeOwnerSmtpConfig=null
+        await Promise.allSettled([oldOriginWorker])
+      }
+      await oldOriginWorker
+      assert.equal(observed.dataMessages,oldOriginData,
+        "Lost legal Store association before fence must send zero SMTP DATA")
+      const [oldOriginMail]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",
+        [oldOriginEvent])
+      assert.equal(oldOriginMail.attempts,1)
+      assert.equal(oldOriginMail.last_result,"invalidated")
+      assert.equal(oldOriginMail.accepted_at,null)
+
+      // Even with legal ownership active, the native SellerMember must
+      // still be current. A deleted native mapping is not Owner authority.
+      const lostMemberSeller="sel_b22_owner_mail_native_member_deleted"
+      const lostMemberEvent=await seedOwnerClosingMail(lostMemberSeller)
+      const lostMemberGate=testBarrier()
+      const lostMemberData=observed.dataMessages
+      beforeOwnerSmtpConfig=lostMemberGate
+      const lostMemberWorker=runOwnerClosingEmailTick(container)
+      try{
+        await waitForBarrier(lostMemberGate.entered,"Owner claim before native Store unlink")
+        const unlinked=await q("update seller_member "+
+          "set deleted_at=clock_timestamp() where seller_id=$1 "+
+          "and member_id=$2 and deleted_at is null returning id",
+          [lostMemberSeller,nativeOwnerMember])
+        assert.equal(unlinked.length,1)
+      }finally{
+        lostMemberGate.release();beforeOwnerSmtpConfig=null
+        await Promise.allSettled([lostMemberWorker])
+      }
+      await lostMemberWorker
+      assert.equal(observed.dataMessages,lostMemberData,
+        "Lost native SellerMember before fence must send zero SMTP DATA")
+      const [lostMemberMail]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",
+        [lostMemberEvent])
+      assert.equal(lostMemberMail.attempts,1)
+      assert.equal(lostMemberMail.last_result,"invalidated")
+      assert.equal(lostMemberMail.accepted_at,null)
+
+      // Opposite ordering: this real SMTP DATA is already in flight.
+      // Legal-Origin revocation must wait for the locked send transaction.
+      const liveOriginSeller="sel_b22_owner_mail_origin_revoke_after_data"
+      const liveOriginEvent=await seedOwnerClosingMail(liveOriginSeller)
+      const liveOriginGate=testBarrier()
+      const liveOriginData=observed.dataMessages
+      holdSmtpDataAck=liveOriginGate
+      const liveOriginWorker=runOwnerClosingEmailTick(container)
+      let pendingOriginRevoke:Promise<unknown>|null=null
+      try{
+        await waitForBarrier(liveOriginGate.entered,"Owner SMTP DATA before Origin revoke")
+        assert.equal(observed.dataMessages,liveOriginData+1)
+        const task=q("update da_organization_seller_ownership "+
+          "set revoked_at=clock_timestamp() where seller_id=$1 "+
+          "and revoked_at is null returning id",[liveOriginSeller]).then(x=>x)
+        pendingOriginRevoke=task
+        void task.catch(()=>{})
+        await assertRealPgLockWait("update da_organization_seller_ownership")
+      }finally{
+        liveOriginGate.release();holdSmtpDataAck=null
+        await Promise.allSettled([liveOriginWorker,
+          ...(pendingOriginRevoke?[pendingOriginRevoke]:[])])
+      }
+      await liveOriginWorker
+      if(pendingOriginRevoke)await pendingOriginRevoke
+      const [liveOriginMail]=await q("select attempts,last_result,accepted_at "+
+        "from da_store_owner_closing_email where audit_event_id=$1",
+        [liveOriginEvent])
+      assert.equal(liveOriginMail.attempts,1)
+      assert.equal(liveOriginMail.last_result,"accepted")
+      assert.ok(liveOriginMail.accepted_at)
+      assert.equal(observed.dataMessages,liveOriginData+1)
+      assert.ok((await q("select revoked_at from da_organization_seller_ownership "+
+        "where seller_id=$1",[liveOriginSeller]))[0].revoked_at)
+      process.stdout.write("PASS B22 PG16/loopback SMTP: revoked legal Store Origin "+
+        "or native SellerMember before fence sends zero DATA and invalidates; "+
+        "Origin revoked after DATA waits for real PostgreSQL lock until acceptance\\n")
+
       // Revoked protected Owner must not receive a newly claimed SMTP notice.
       const ownerRevoked=await seedOwnerClosingMail(
         "sel_b22_owner_closing_smtp_revoked")
