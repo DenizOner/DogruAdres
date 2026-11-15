@@ -989,14 +989,8 @@ async function main(){
       await q("insert into public.member(id,email) values ($1,$2)",
         [nativeOwnerMember,syntheticEmail])
       await q("insert into auth_identity(id) values ($1)",[nativeOwnerIdentity])
-      await q("insert into provider_identity "+
-        "(id,auth_identity_id,provider,entity_id) "+
-        "values ($1,$2,'emailpass',$3)",
-        ["prov_"+uuid(),nativeOwnerIdentity,syntheticEmail])
-      await q("insert into auth_verification "+
-        "(id,auth_identity_id,entity_type,entity_id,verified_at) "+
-        "values ($1,$2,'email',$3,clock_timestamp())",
-        ["proof_"+uuid(),nativeOwnerIdentity,syntheticEmail])
+      // This native membership grants Store relationship, not a second
+      // verified mailbox. Existing User proof revocation must still deny DATA.
       await q("insert into da_login_binding "+
         "(person_id,actor_type,actor_id,auth_identity_id,verified_at) "+
         "values ($1,'member',$2,$3,clock_timestamp())",
