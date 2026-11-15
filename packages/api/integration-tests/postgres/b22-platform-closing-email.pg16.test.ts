@@ -228,10 +228,12 @@ async function setup(){
     "verified_at timestamptz,deleted_at timestamptz)")
   await q("insert into public.\"user\"(id,email) values ($1,$2),($3,$4),($5,$6)",[
     syntheticActor,syntheticEmail,retryActor,retryEmail,otherActor,otherEmail])
-  await q("insert into public.member(id,email) values ($1,$2),($3,$4)",[
-    linkedMemberActor,linkedMemberEmail,raceMemberActor,raceMemberEmail])
-  await q("insert into auth_identity(id) values ($1),($2),($3),($4),($5)",[
-    syntheticIdentity,retryIdentity,linkedMemberIdentity,raceMemberIdentity,otherIdentity])
+  await q("insert into public.member(id,email) values ($1,$2),($3,$4),($5,$6)",[
+    linkedMemberActor,linkedMemberEmail,raceMemberActor,raceMemberEmail,
+    "mem_b22_unverified_extra","missing-proof@example.invalid"])
+  await q("insert into auth_identity(id) values ($1),($2),($3),($4),($5),($6)",[
+    syntheticIdentity,retryIdentity,linkedMemberIdentity,raceMemberIdentity,
+    otherIdentity,"auth_b22_unverified_extra"])
   await q("create table da_person (id text primary key,disabled_at timestamptz,deleted_at timestamptz)")
   await q("create table da_organization (id text primary key)")
   await q("create table da_organization_membership (id text primary key,"+
