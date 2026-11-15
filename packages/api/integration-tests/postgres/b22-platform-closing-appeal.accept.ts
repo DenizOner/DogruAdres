@@ -1282,8 +1282,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
     "select * from da_store_name_transfer "+
     "where source_seller_id=$1 or target_seller_id=$1 order by id",[sellerId])
   const realOrderGroupsBefore=await q(
-    "select id,seller_id from order_group where seller_id=$1 order by id",
-    [sellerId])
+    "select id,cart_id from order_group where id=any($1::text[]) order by id",
+    [nativeSellerGroups.map(group=>group.id)])
   const realOrdersBefore=await q('select count(*)::int n from "order"')
   assert.equal(realClosingBefore.length,1)
   assert.equal(realSellerBefore.length,1)
@@ -1363,8 +1363,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
       "where source_seller_id=$1 or target_seller_id=$1 order by id",[sellerId]),
       realNameRightsBefore,"A matured clock must not transfer name rights")
     assert.deepEqual(await q(
-      "select id,seller_id from order_group where seller_id=$1 order by id",
-      [sellerId]),realOrderGroupsBefore,
+      "select id,cart_id from order_group where id=any($1::text[]) order by id",
+      [nativeSellerGroups.map(group=>group.id)]),realOrderGroupsBefore,
       "Existing Seller Orders must not be deleted or detached after 30 days")
     assert.deepEqual(await q('select count(*)::int n from "order"'),
       realOrdersBefore,"Any historical Order must remain durable")
