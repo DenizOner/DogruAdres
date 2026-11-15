@@ -1234,7 +1234,7 @@ async function main(){
           await waitForBarrier(proofBeforeGate.entered,"after claim before native proof revocation")
           const revoked=await q("update auth_verification "+
             "set deleted_at=clock_timestamp() where id=$1 returning id",[proofId])
-          assert.deepEqual(revoked,[{id:proofId}])
+          assert.deepEqual(revoked.map((r:any)=>r.id),[proofId])
         }finally{
           proofBeforeGate.release();beforeOwnerSmtpConfig=null
           await Promise.allSettled([revokedProofWorker])
