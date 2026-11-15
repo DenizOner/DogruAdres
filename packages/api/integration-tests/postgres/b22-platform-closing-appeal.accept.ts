@@ -1300,7 +1300,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const [historicalTick]=await q("select clock_timestamp() as now")
   const historicalDeadline=new Date(
     new Date(historicalTick.now).getTime()-31*86400000).toISOString()
-  const auditBefore=await q("select count(*)::int n from da_audit_event "+
+  const terminalAuditCountBefore=await q("select count(*)::int n from da_audit_event "+
     "where target_id=$1",[sellerId])
   const outboxBefore=await q("select count(*)::int n from da_audit_outbox x "+
     "join da_audit_event e on e.id=x.source_audit_event_id "+
@@ -1362,7 +1362,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
     }
   }
   assert.deepEqual(await q("select count(*)::int n from da_audit_event "+
-    "where target_id=$1",[sellerId]),auditBefore,
+    "where target_id=$1",[sellerId]),terminalAuditCountBefore,
     "Task-only clock must not create or modify append-only audit evidence")
   assert.deepEqual(await q("select count(*)::int n from da_audit_outbox x "+
     "join da_audit_event e on e.id=x.source_audit_event_id "+
