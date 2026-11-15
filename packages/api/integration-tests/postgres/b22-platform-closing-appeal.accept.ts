@@ -1269,8 +1269,312 @@ export async function verifyB22PlatformClosingAppeal(input:{
     assert.equal((await q("select count(*)::int n from seller where id=$1",
       [syntheticSeller]))[0].n,0)
   }
+  // REAL native Seller with OrderGroup: reject a forged elapsed +31d clock,
+  // then restore the audit-bound clock and prove finance/appeal blockers.
+  // Prior independent Seller-less source-backed fixtures prove the 720h edge.
+  // Never modify the append-only Foundation audit or outbox.
+  // Restore the original closing row exactly before following test stages.
+  const realClosingBefore=await q(
+    "select * from da_store_platform_closing where seller_id=$1",[sellerId])
+  const realSellerBefore=await q(
+    "select id,status,name,handle from seller where id=$1",[sellerId])
+  const realNameRightsBefore=await q(
+    "select * from da_store_name_transfer "+
+    "where source_seller_id=$1 or target_seller_id=$1 order by id",[sellerId])
+  const realOrderGroupsBefore=await q(
+    "select id,cart_id from order_group where id=any($1::text[]) order by id",
+    [nativeSellerGroups.map(group=>group.id)])
+  const realOrdersBefore=await q('select count(*)::int n from "order"')
+  assert.equal(realClosingBefore.length,1)
+  assert.equal(realSellerBefore.length,1)
+  assert.ok(realOrderGroupsBefore.length>0,
+    "30-day native terminal safety needs actual Seller-linked OrderGroup history")
+  assert.equal(realClosingBefore[0].deadline_basis,"owner_delivery")
+  assert.ok(realClosingBefore[0].deadline_audit_event_id)
+  assert.equal(realClosingBefore[0].review_decision,null,
+    "The real case must retain its pending appeal, not a silently cleared case")
+  // Only the disposable Store clock is fast-forwarded for this negative
+  // probe. The existing append-only Foundation audit/outbox are NEVER
+  // rewritten or deleted. Earlier source-backed 720-hour fixtures separately
+  // prove canonical audit chronology; this probe adds real native history.
+  const [historicalTick]=await q("select clock_timestamp() as now")
+  const historicalDeadline=new Date(
+    new Date(historicalTick.now).getTime()-31*86400000).toISOString()
+  const terminalAuditCountBefore=await q("select count(*)::int n from da_audit_event "+
+    "where target_id=$1",[sellerId])
+  const outboxBefore=await q("select count(*)::int n from da_audit_outbox x "+
+    "join da_audit_event e on e.id=x.source_audit_event_id "+
+    "where e.target_id=$1",[sellerId])
+  let closingShifted=false
+  try{
+    const moved=await q("update da_store_platform_closing "+
+      "set deadline_started_at=$2::timestamptz "+
+      "where seller_id=$1 and deadline_audit_event_id=$3 "+
+      "returning seller_id",[
+      sellerId,historicalDeadline,
+      realClosingBefore[0].deadline_audit_event_id])
+    closingShifted=moved.length===1
+    assert.equal(moved.length,1)
+    // The native Store has a real OrderGroup and an immutable accepted
+    // Owner-delivery audit. Tampering with only the stored deadline must
+    // FAIL CLOSED, never silently turn 30 elapsed days into finalization.
+    const tampered=await read(staff,mailPath)
+    assert.equal(tampered.status,403,
+      "An unaudited +31d clock must fail closed, not claim an elapsed window")
+    assert.equal((await read(browser,mailPath)).status,403)
+    await assert.rejects(
+      ()=>foundation.storeOwnerPauseAcceptingOrders([sellerId]),
+      {name:"IdentityAccessDenied",message:"Access denied"},
+      "A forged deadline must fail closed at the native Seller trading gate")
+    assert.deepEqual(await q(
+      "select id,status,name,handle from seller where id=$1",[sellerId]),
+      realSellerBefore,"Neither Seller identity nor name/handle may be released")
+    assert.deepEqual(await q("select * from da_store_name_transfer "+
+      "where source_seller_id=$1 or target_seller_id=$1 order by id",[sellerId]),
+      realNameRightsBefore,"A matured clock must not transfer name rights")
+    assert.deepEqual(await q(
+      "select id,cart_id from order_group where id=any($1::text[]) order by id",
+      [nativeSellerGroups.map(group=>group.id)]),realOrderGroupsBefore,
+      "Existing Seller Orders must not be deleted or detached after 30 days")
+    assert.deepEqual(await q('select count(*)::int n from "order"'),
+      realOrdersBefore,"Any historical Order must remain durable")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: real native Seller with OrderGroup denies unaudited +31d clock HTTP403; Seller name/handle, name transfers and historic Orders unchanged\n")
+  }finally{
+    if(closingShifted){
+      const restored=await q("update da_store_platform_closing "+
+        "set deadline_started_at=$2::timestamptz "+
+        "where seller_id=$1 and deadline_audit_event_id=$3 "+
+        "returning seller_id",[
+        sellerId,realClosingBefore[0].deadline_started_at,
+        realClosingBefore[0].deadline_audit_event_id])
+      assert.equal(restored.length,1)
+    }
+  }
+  assert.deepEqual(await q("select count(*)::int n from da_audit_event "+
+    "where target_id=$1",[sellerId]),terminalAuditCountBefore,
+    "Task-only clock must not create or modify append-only audit evidence")
+  assert.deepEqual(await q("select count(*)::int n from da_audit_outbox x "+
+    "join da_audit_event e on e.id=x.source_audit_event_id "+
+    "where e.target_id=$1",[sellerId]),outboxBefore,
+    "No task-only clock audit/outbox deletion or fabrication")
+  assert.deepEqual(await q(
+    "select * from da_store_platform_closing where seller_id=$1",[sellerId]),
+    realClosingBefore,"Temporary terminal time fixture must restore exactly")
+  const restoredPreflight=await read(staff,mailPath)
+  assert.equal(restoredPreflight.status,200,
+    "Only the original immutable deadline audit authorizes Staff preflight")
+  assert.equal(restoredPreflight.body.native_order_history_observed,true,
+    "Real Seller OrderGroup remains visible as historical evidence")
+  assert.equal(restoredPreflight.body.terminal_preflight.appeal_window_elapsed,false)
+  assert.equal(restoredPreflight.body.terminal_preflight.appeal_review_pending,true)
+  assert.equal(restoredPreflight.body.terminal_preflight.financial_legal_clearance_verified,false)
+  assert.equal(restoredPreflight.body.terminal_preflight.permanent_finalization_enabled,false)
+  assert.equal(restoredPreflight.body.permanent_finalization_enabled,false)
+  await assertStaffBlockers(staff,sellerId,
+    "sonuçlanmamış itiraz veya üst inceleme mevcut",
+    ["itiraz kabul edildi; ayrıca kapatma uygulanamaz"])
+
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: 720-hour Staff preflight false/true, pending first appeal and SMTP admin exception; permanent finalizer denied\n")
   return secondOwnerMembership.id
+}
+
+
+/**
+ * An independent, already ordered native Seller reaches canonical day 31.
+ * All dates, audit/outbox and the first appeal belong to this ONE disposable
+ * fixture. Existing append-only evidence is never edited or deleted.
+ * This is an elapsed-clock test, NOT 31 real days or financial clearance.
+ */
+export async function verifyB22RealOrderedSellerDay31(input:{
+  q:Db;staff:B06Chrome;foreign:B06Chrome;foundation:any;
+  sellerId:string;organizationId:string;sourceSellerId:string;
+  ownerPersonId:string;staffPersonId:string
+}):Promise<void>{
+  const {q,staff,foreign,foundation,sellerId,organizationId,
+    sourceSellerId,ownerPersonId,staffPersonId}=input
+  assert.equal((await q("select count(*)::int n from da_store_platform_closing "+
+    "where seller_id=$1",[sellerId]))[0].n,0,
+    "The independent native Seller needs a fresh and distinct closing case")
+  const sellerBefore=await q(
+    "select id,status,name,handle from seller where id=$1",[sellerId])
+  assert.equal(sellerBefore.length,1)
+  assert.ok(["open","suspended"].includes(sellerBefore[0].status))
+  const validOrigin=await q(
+    "select o.id from da_organization_seller_ownership o "+
+    "join da_audit_event e on e.id=o.verification_audit_event_id "+
+    "join da_audit_outbox x on x.source_audit_event_id=e.id "+
+    "where o.organization_id=$1 and o.seller_id=$2 "+
+    "and o.revoked_at is null and o.verified_at is not null "+
+    "and e.deleted_at is null and x.deleted_at is null",[
+      organizationId,sellerId])
+  assert.equal(validOrigin.length,1,
+    "Native Seller must have an independently approved Organization Origin")
+  const linkedOrders=await q(
+    "select os.order_id,ogo.order_group_id from order_order_seller_seller os "+
+    'join "order" o on o.id=os.order_id and o.deleted_at is null '+
+    "join order_group_order ogo on ogo.order_id=os.order_id "+
+    "and ogo.deleted_at is null where os.seller_id=$1 "+
+    "and os.deleted_at is null order by os.order_id",[sellerId])
+  assert.ok(linkedOrders.length>0,
+    "Day-31 fixture must have an actual native Order belonging to this Seller")
+  assert.equal(new Set(linkedOrders.map(x=>x.order_id)).size,linkedOrders.length)
+  const groupsBefore=await q(
+    "select id,cart_id from order_group where id=any($1::text[]) order by id",
+    [[...new Set(linkedOrders.map(x=>x.order_group_id))]])
+  assert.ok(groupsBefore.length>0)
+  const countOrdersBefore=await q('select count(*)::int n from "order"')
+  const transfersBefore=await q(
+    "select * from da_store_name_transfer where "+
+    "source_seller_id=$1 or target_seller_id=$1 order by id",[sellerId])
+  const actors=await q(
+    "select s.actor_person_id as staff_person,s.actor_type as staff_type,"+
+    "s.actor_id as staff_actor,d.actor_person_id as owner_person,"+
+    "d.actor_type as owner_type,d.actor_id as owner_actor "+
+    "from da_store_platform_closing c "+
+    "join da_audit_event s on s.id=c.source_audit_event_id "+
+    "join da_audit_event d on d.id=c.deadline_audit_event_id "+
+    "where c.seller_id=$1",[sourceSellerId])
+  assert.equal(actors.length,1)
+  assert.equal(actors[0].staff_person,staffPersonId)
+  assert.equal(actors[0].owner_person,ownerPersonId)
+  const [tick]=await q("select clock_timestamp() as now_at")
+  const now=new Date(tick.now_at).getTime()
+  const sourceAt=new Date(now-32*86400000).toISOString()
+  const deadlineAt=new Date(now-31*86400000).toISOString()
+  const appealedAt=new Date(now-30*86400000).toISOString()
+  const requestId="dascp_"+randomBytes(16).toString("hex")
+  const appealRequestId="dapa_"+randomBytes(16).toString("hex")
+  const reason="B22 sentetik geçmiş siparişli mağaza kapanış kararı"
+  const appealReason="B22 sentetik ilk on gün içinde Owner itirazı"
+  const events=[
+    {id:"daaud_"+randomBytes(16).toString("hex"),
+      person:staffPersonId,type:actors[0].staff_type,
+      actor:actors[0].staff_actor,role:"platform_staff",
+      action:"organization.store_platform_closing_started",
+      at:sourceAt,values:{request_id:requestId,
+        state:"notification_unverified",
+        reason_sha256:createHash("sha256").update(reason).digest("hex")}},
+    {id:"daaud_"+randomBytes(16).toString("hex"),
+      person:ownerPersonId,type:actors[0].owner_type,
+      actor:actors[0].owner_actor,role:"owner",
+      action:"organization.store_platform_closing_deadline_started",
+      at:deadlineAt,values:{basis:"owner_delivery",
+        deadline_started_at:deadlineAt}},
+    {id:"daaud_"+randomBytes(16).toString("hex"),
+      person:ownerPersonId,type:actors[0].owner_type,
+      actor:actors[0].owner_actor,role:"owner",
+      action:"organization.store_platform_closing_appealed",
+      at:appealedAt,values:{request_id:appealRequestId,
+        appeal_reason_sha256:createHash("sha256").update(appealReason).digest("hex")}}
+  ]
+  // These are immutable source-backed CI fixture events, not rewrites of
+  // any existing Seller's real event or an attempt to backdate production.
+  for(const event of events){
+    await q("insert into da_audit_event "+
+      "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
+      "action,module,resource,target_id,new_values,occurred_at) "+
+      "values ($1,$2,$3,$4,$5,$6,$7,'dogruadres-access',"+
+      "'store-platform-closing',$8,$9::jsonb,$10::timestamptz)",[
+      event.id,event.person,event.type,event.actor,event.role,organizationId,
+      event.action,sellerId,JSON.stringify(event.values),event.at])
+    const envelope={version:1,source_module:"dogruadres-access",
+      source_audit_event_id:event.id,organization_id:organizationId,
+      actor:{person_id:event.person,type:event.type,id:event.actor,
+        role_context:event.role},action:event.action,
+      resource:"store-platform-closing",target_id:sellerId,
+      occurred_at:event.at}
+    await q("insert into da_audit_outbox "+
+      "(id,source_audit_event_id,source_module,envelope_version,envelope,status) "+
+      "values ($1,$2,'dogruadres-access',1,$3::jsonb,'pending')",[
+      "daaob_"+randomBytes(16).toString("hex"),event.id,
+      JSON.stringify(envelope)])
+  }
+  await q("insert into da_store_platform_closing "+
+    "(seller_id,organization_id,state,version,request_id,reason,"+
+    "source_audit_event_id,started_at,deadline_started_at,deadline_basis,"+
+    "deadline_audit_event_id,appeal_request_id,appeal_reason,"+
+    "appeal_audit_event_id,appealed_at) values "+
+    "($1,$2,'appealed',2,$3,$4,$5,$6::timestamptz,$7::timestamptz,"+
+    "'owner_delivery',$8,$9,$10,$11,$12::timestamptz)",[
+    sellerId,organizationId,requestId,reason,events[0].id,sourceAt,
+    deadlineAt,events[1].id,appealRequestId,appealReason,events[2].id,appealedAt])
+  const path="/personal/platform/store-closing-email-readiness?"+
+    new URLSearchParams({organization_id:organizationId,seller_id:sellerId})
+  const matured=await read(staff,path)
+  assert.equal(matured.status,200,
+    "Source-backed +31d native Seller must give authorized Staff a real status")
+  assert.equal(matured.body.native_order_history_observed,true)
+  assert.equal(matured.body.terminal_preflight.appeal_window_elapsed,true)
+  assert.equal(matured.body.terminal_preflight.appeal_review_pending,true)
+  assert.equal(matured.body.terminal_preflight.appeal_accepted,false)
+  assert.equal(matured.body.terminal_preflight.financial_legal_clearance_verified,false)
+  assert.equal(matured.body.terminal_preflight.permanent_finalization_enabled,false)
+  assert.equal(matured.body.permanent_finalization_enabled,false)
+  assert.equal((await read(foreign,path)).status,403,
+    "An Owner without the platform task cannot inspect private Staff preflight")
+  for(const order of linkedOrders){
+    assert.equal(JSON.stringify(matured.body).includes(order.order_id),false,
+      "Staff aggregate state must not expose native Order identifiers")
+  }
+  await assertStaffBlockers(staff,sellerId,
+    "sonuçlanmamış itiraz veya üst inceleme mevcut")
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false)
+  assert.deepEqual(await q(
+    "select id,status,name,handle from seller where id=$1",[sellerId]),
+    sellerBefore,"Elapsed clock never terminates or renames the native Seller")
+  assert.deepEqual(await q(
+    "select * from da_store_name_transfer where "+
+    "source_seller_id=$1 or target_seller_id=$1 order by id",[sellerId]),
+    transfersBefore,"No store name/URL is released by the elapsed clock")
+  assert.deepEqual(await q(
+    "select id,cart_id from order_group where id=any($1::text[]) order by id",
+    [[...new Set(linkedOrders.map(x=>x.order_group_id))]]),
+    groupsBefore,"Existing native OrderGroups remain intact")
+  assert.deepEqual(await q(
+    "select os.order_id,ogo.order_group_id from order_order_seller_seller os "+
+    'join "order" o on o.id=os.order_id and o.deleted_at is null '+
+    "join order_group_order ogo on ogo.order_id=os.order_id "+
+    "and ogo.deleted_at is null where os.seller_id=$1 "+
+    "and os.deleted_at is null order by os.order_id",[sellerId]),
+    linkedOrders,"Existing per-Seller native Order attribution remains intact")
+  assert.deepEqual(await q('select count(*)::int n from "order"'),countOrdersBefore)
+  for(const event of events){
+    assert.equal((await q("select count(*)::int n from da_audit_event "+
+      "where id=$1",[event.id]))[0].n,1)
+    assert.equal((await q("select count(*)::int n from da_audit_outbox "+
+      "where source_audit_event_id=$1",[event.id]))[0].n,1)
+  }
+  process.stdout.write(
+    "PASS B22 Chrome/HTTPS/PG16: native Seller-linked real Order and OrderGroup, "+
+    "independent canonical source+deadline+appeal/outbox fixture at +31d, "+
+    "Staff GET200 and accessible blockers, Owner GET403, appeal still pending, "+
+    "finance/legal unknown and finalizer false; Seller name/URL, native Orders "+
+    "and immutable audit/outbox retained; no external payment or finalization\n")
+}
+
+/** Keep the huge existing B22 browser runner within the TS control-flow limit.
+ * This one disposable Staff task grant is created for the already-strong,
+ * independently signed-in reviewer Person and revoked even on failure.
+ */
+export async function verifyB22RealOrderedSellerDay31WithGrant(
+  input:Parameters<typeof verifyB22RealOrderedSellerDay31>[0] & {
+    authorizedStaffPersonId:string
+  }
+):Promise<void>{
+  const {authorizedStaffPersonId,q,...scenario}=input
+  const grantId="da_staff_day31_"+randomBytes(8).toString("hex")
+  await q("insert into da_platform_staff_grant "+
+    "(id,person_id,task,resource,granted_by_person_id,reason) "+
+    "values ($1,$2,'store.closing.manage','platform',$2,"+
+    "'B22 disposable real Order day-31 Staff status probe')",[
+      grantId,authorizedStaffPersonId])
+  try{
+    await verifyB22RealOrderedSellerDay31({...scenario,q})
+  }finally{
+    await q("update da_platform_staff_grant "+
+      "set revoked_at=clock_timestamp() "+
+      "where id=$1 and revoked_at is null",[grantId])
+  }
 }
 
 /** The ordinary first appeal is already accepted above. This second and

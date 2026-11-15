@@ -29,6 +29,7 @@ import {verifyRepeatedApprovedStoreRenameHistory} from "./b22-repeated-rename-hi
 import {prepareRenameBeforeStoreReactivation,verifyReactivationClaimFreezesRenames} from "./b22-reactivation-rename-claim.accept"
 import {verifyB22PlatformClosingAppeal,
   verifyB22PlatformClosingSecondStageRequest,
+  verifyB22RealOrderedSellerDay31WithGrant,
   verifyB22IndependentStaffClosingDecision} from "./b22-platform-closing-appeal.accept"
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
@@ -11251,11 +11252,28 @@ export default async function({container}:any){
       process.stdout.write("\nPASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit\n")
       // Complete the EXISTING native Member association through the real
       // Owner browser UI; never let a test-only service call stand in for
-      // a user-facing product operation.
+      // a user-facing product operation. The prior cross-Organization draft
+      // test can leave this tab on a concealed/stale workspace: re-enter the
+      // authorized Owner context through a genuine reload and selection.
       await browser.send("Page.bringToFront")
-      await browser.wait("document.visibilityState==='visible'")
+      await browser.send("Page.reload",{ignoreCache:true})
+      await browser.wait("document.readyState==='complete' && "+
+        "document.visibilityState==='visible' && "+
+        "!document.getElementById('workspace').hidden")
+      await browser.select(organizations[0].name,"owner")
+      await browser.wait("!document.getElementById('product-grants-panel').hidden && "+
+        "!document.getElementById('product-grants-refresh').hidden")
       await browser.click("#product-grants-refresh")
-      await browser.wait("!!document.querySelector('#product-grants-list button.store-member-connect')")
+      // productPermissions hides the panel while its real HTTPS refresh is
+      // in flight. A stale button can still exist in the hidden DOM: wait
+      // for the completed, visible Owner UI before a genuine Chrome click.
+      await browser.wait("!document.hidden && "+
+        "!document.getElementById('workspace').hidden && "+
+        "!document.getElementById('product-grants-panel').hidden && "+
+        "(()=>{const b=document.querySelector("+
+        "'#product-grants-list button.store-member-connect');"+
+        "if(!b)return false;const r=b.getBoundingClientRect();"+
+        "return r.width>0&&r.height>0})()")
       await browser.click("#product-grants-list button.store-member-connect")
       await browser.wait("document.getElementById('product-grants-status').textContent.includes('Mağaza çalışanı bağlantısı tamamlandı')")
       const nativeLinks=await native.listSellerMembers({
@@ -14820,6 +14838,16 @@ export default async function({container}:any){
     } finally {
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
     }
+
+    // B's strong session is revoked by the native MFA acceptance above.
+    // The independent reviewer has a fresh strong session; its disposable
+    // Store-closing grant is scoped and revoked in this existing helper.
+    await verifyB22RealOrderedSellerDay31WithGrant({
+      q,staff:reviewChrome,foreign:signupChrome,foundation,
+      sellerId:ownerStoreId,organizationId:organizations[0].id,
+      sourceSellerId:gammaSellerId,ownerPersonId:A.person,
+      staffPersonId:B.person,authorizedStaffPersonId:reviewerPersonId
+    })
 
     process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner\n")
 
