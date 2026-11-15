@@ -1552,6 +1552,31 @@ export async function verifyB22RealOrderedSellerDay31(input:{
     "and immutable audit/outbox retained; no external payment or finalization\n")
 }
 
+/** Keep the huge existing B22 browser runner within the TS control-flow limit.
+ * This one disposable Staff task grant is created for the already-strong,
+ * independently signed-in reviewer Person and revoked even on failure.
+ */
+export async function verifyB22RealOrderedSellerDay31WithGrant(
+  input:Parameters<typeof verifyB22RealOrderedSellerDay31>[0] & {
+    authorizedStaffPersonId:string
+  }
+):Promise<void>{
+  const {authorizedStaffPersonId,q,...scenario}=input
+  const grantId="da_staff_day31_"+randomBytes(8).toString("hex")
+  await q("insert into da_platform_staff_grant "+
+    "(id,person_id,task,resource,granted_by_person_id,reason) "+
+    "values ($1,$2,'store.closing.manage','platform',$2,"+
+    "'B22 disposable real Order day-31 Staff status probe')",[
+      grantId,authorizedStaffPersonId])
+  try{
+    await verifyB22RealOrderedSellerDay31({...scenario,q})
+  }finally{
+    await q("update da_platform_staff_grant "+
+      "set revoked_at=clock_timestamp() "+
+      "where id=$1 and revoked_at is null",[grantId])
+  }
+}
+
 /** The ordinary first appeal is already accepted above. This second and
  * independent disposable Seller has NOT appealed during the first ten days.
  * Its synthetic, canonical T0+11d source/clock is historical fixture data;
