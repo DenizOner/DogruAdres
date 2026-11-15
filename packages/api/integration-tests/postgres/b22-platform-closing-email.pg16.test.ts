@@ -213,7 +213,7 @@ async function setup(){
   await q("create table auth_verification (id text primary key,"+
     "auth_identity_id text,entity_type text,entity_id text,"+
     "verified_at timestamptz,deleted_at timestamptz)")
-  await q("insert into public.\\"user\\"(id,email) values ($1,$2),($3,$4)",[
+  await q("insert into public.\"user\"(id,email) values ($1,$2),($3,$4)",[
     syntheticActor,syntheticEmail,retryActor,retryEmail])
   await q("insert into public.member(id,email) values ($1,$2)",[
     linkedMemberActor,linkedMemberEmail])
