@@ -1322,8 +1322,10 @@ export async function verifyB22PlatformClosingAppeal(input:{
     assert.equal(tampered.status,403,
       "An unaudited +31d clock must fail closed, not claim an elapsed window")
     assert.equal((await read(browser,mailPath)).status,403)
-    assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false,
-      "Forged elapsed time must not reopen the Seller or checkout")
+    await assert.rejects(
+      ()=>foundation.storeOwnerPauseAcceptingOrders([sellerId]),
+      {name:"IdentityAccessDenied",message:"Access denied"},
+      "A forged deadline must fail closed at the native Seller trading gate")
     assert.deepEqual(await q(
       "select id,status,name,handle from seller where id=$1",[sellerId]),
       realSellerBefore,"Neither Seller identity nor name/handle may be released")
