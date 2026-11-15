@@ -29,7 +29,7 @@ import {verifyRepeatedApprovedStoreRenameHistory} from "./b22-repeated-rename-hi
 import {prepareRenameBeforeStoreReactivation,verifyReactivationClaimFreezesRenames} from "./b22-reactivation-rename-claim.accept"
 import {verifyB22PlatformClosingAppeal,
   verifyB22PlatformClosingSecondStageRequest,
-  verifyB22RealOrderedSellerDay31,
+  verifyB22RealOrderedSellerDay31WithGrant,
   verifyB22IndependentStaffClosingDecision} from "./b22-platform-closing-appeal.accept"
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
@@ -14822,29 +14822,15 @@ export default async function({container}:any){
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
     }
 
-    // B's prior strong session is intentionally revoked by the native MFA
-    // disable acceptance. Use the separately authenticated reviewer Person
-    // after its review work completes; a new explicit Store-closing task grant
-    // is required even though it had organization.review. No stale session
-    // or direct source-proof bypass can grant the Staff status read.
-    const day31StaffGrant="da_staff_day31_"+randomBytes(8).toString("hex")
-    await q("insert into da_platform_staff_grant "+
-      "(id,person_id,task,resource,granted_by_person_id,reason) "+
-      "values ($1,$2,'store.closing.manage','platform',$2,"+
-      "'B22 disposable real Order day-31 Staff status probe')",[
-        day31StaffGrant,reviewerPersonId])
-    try{
-      await verifyB22RealOrderedSellerDay31({
-        q,staff:reviewChrome,foreign:signupChrome,foundation,
-        sellerId:ownerStoreId,organizationId:organizations[0].id,
-        sourceSellerId:gammaSellerId,ownerPersonId:A.person,
-        staffPersonId:B.person
-      })
-    }finally{
-      await q("update da_platform_staff_grant "+
-        "set revoked_at=clock_timestamp() "+
-        "where id=$1 and revoked_at is null",[day31StaffGrant])
-    }
+    // B's strong session is revoked by the native MFA acceptance above.
+    // The independent reviewer has a fresh strong session; its disposable
+    // Store-closing grant is scoped and revoked in this existing helper.
+    await verifyB22RealOrderedSellerDay31WithGrant({
+      q,staff:reviewChrome,foreign:signupChrome,foundation,
+      sellerId:ownerStoreId,organizationId:organizations[0].id,
+      sourceSellerId:gammaSellerId,ownerPersonId:A.person,
+      staffPersonId:B.person,authorizedStaffPersonId:reviewerPersonId
+    })
 
     process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner\n")
 
