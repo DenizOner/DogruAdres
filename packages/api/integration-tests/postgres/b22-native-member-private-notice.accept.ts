@@ -118,15 +118,39 @@ export async function verifyB22CoownerNativeMemberReadback(input:{
     },"Aggregate count must reflect newly protected B, never reveal B's private attempts")
     assert.equal(JSON.stringify(firstAfter.body).includes(emailA),false)
     assert.equal(JSON.stringify(firstAfter.body).includes("message_id"),false)
+    // Snapshot ALL first-Owner durable SMTP outcomes (including the
+    // earlier accepted source), not only B's latest withdrawal receipt.
+    // The helper may prepare and remove one task-only attempt row for A.
+    const firstMailSnapshot=()=>q("select audit_event_id,attempts,"+
+      "last_result,message_id,accepted_at,last_attempt_at,claim_id,lease_until "+
+      "from da_store_owner_closing_email where person_id=$1 "+
+      "order by audit_event_id",[personA])
+    const firstSqlBefore=await firstMailSnapshot()
     // Last missing native integration edge after #354: this person became
     // a real Mercur SellerMember BEFORE their protected Owner SMTP retry.
     // Exercise the SAME worker on the latest canonical withdrawal event;
     // do not infer SMTP acceptance from the earlier private GET 200.
     await verifyLinkedNativeMemberOwnerMail({
-      reviewer,container,q,personA,personB,
+      reviewer,container,q,personA,personB,orgName,ownerStoreId,
       latestEvent:latestEvent[0].source_audit_event_id,
       emailB,privateClosing:()=>privateClosing(reviewer,orgA)
     })
+    assert.deepEqual(await firstMailSnapshot(),firstSqlBefore,
+      "B SMTP DATA and helper cleanup must preserve ALL A audit-event "+
+      "SMTP attempts, acceptance status and private Message-IDs")
+    const firstAfterB=await privateClosing(browser,orgA)
+    assert.equal(firstAfterB.status,200)
+    assert.deepEqual(firstAfterB.body.email_notice,firstAfter.body.email_notice,
+      "A's private HTTPS email status after B's SMTP must stay unchanged")
+    assert.deepEqual(firstAfterB.body.notification_coverage,
+      firstAfter.body.notification_coverage)
+    assert.equal(firstAfterB.body.state,firstAfter.body.state)
+    assert.equal(firstAfterB.body.seller_id,firstAfter.body.seller_id)
+    assert.equal(firstAfterB.body.permanent_finalization_enabled,false)
+    assert.ok(String(firstAfterB.cache).includes("no-store"))
+    assert.equal(JSON.stringify(firstAfterB.body).includes(emailB),false)
+    assert.equal(JSON.stringify(firstAfterB.body).includes("message_id"),false)
+    assert.equal(JSON.stringify(firstAfterB.body).includes("person_id"),false)
   }finally{
     const restoredRole=await q("update da_organization_membership "+
       "set role=$2,protected_owner=$3,revoked_at=$4,"+
@@ -163,9 +187,11 @@ async function verifyLinkedNativeMemberOwnerMail(input:{
   reviewer:B06Chrome;container:any;
   q:(sql:string,params?:any[])=>Promise<any[]>;
   personA:string;personB:string;latestEvent:string;emailB:string;
+  orgName:string;ownerStoreId:string;
   privateClosing:()=>Promise<any>;
 }){
-  const {reviewer,container,q,personA,personB,latestEvent,emailB,privateClosing}=input
+  const {reviewer,container,q,personA,personB,latestEvent,emailB,
+    orgName,ownerStoreId,privateClosing}=input
   assert.equal(process.env.CI,"true")
   assert.equal(process.env.GITHUB_ACTIONS,"true")
   assert.equal(process.env.PG_MFA_TEST_SCOPE,"b22-ui")
@@ -335,6 +361,41 @@ async function verifyLinkedNativeMemberOwnerMail(input:{
       mailbox_delivery_verified:false
     })
     assert.equal(JSON.stringify(visible.body).includes("message_id"),false)
+    // P2 end-to-end acceptance: JSON is not enough. After SMTP 250,
+    // reload B's REAL authenticated Chrome page, restore the same
+    // Organization/Store selection and inspect the actual visible text.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.send("Page.reload",{ignoreCache:true})
+    await reviewer.wait("!document.getElementById('workspace').hidden")
+    await reviewer.select(orgName,"owner")
+    await reviewer.wait("!document.getElementById('store-owner-closing-panel').hidden && "+
+      "Array.from(document.querySelectorAll("+
+      "'#store-owner-pause-form select[name=seller_id] option')).some("+
+      "o=>o.value==="+JSON.stringify(ownerStoreId)+")")
+    await reviewer.eval("(()=>{const s=document.querySelector("+
+      "'#store-owner-pause-form select[name=seller_id]');s.value="+
+      JSON.stringify(ownerStoreId)+";s.dispatchEvent(new Event('change',"+
+      "{bubbles:true}));return true})()")
+    await reviewer.click("#store-owner-closing-refresh")
+    await reviewer.wait("!document.getElementById('store-owner-closing-status')."+
+      "closest('[hidden]') && "+
+      "document.getElementById('store-owner-closing-status')."+
+      "textContent.includes('SMTP sunucusu e-postayı kabul etti; posta kutusuna teslim doğrulanmadı.') && "+
+      "document.getElementById('store-owner-closing-status')."+
+      "textContent.includes('Deneme sayısı: 2.') && "+
+      "document.getElementById('store-owner-closing-status')."+
+      "textContent.includes('Korunan Owner bildirim kayıtları: 2/2')")
+    const rendered=await reviewer.eval(
+      "document.getElementById('store-owner-closing-status').textContent")
+    assert.ok(rendered.includes("E-posta teslimi veya okunma bu sayılardan doğrulanmaz."))
+    assert.equal(rendered.includes("Kişisel bildirim kaydedildi; e-posta denemesi sırada."),false,
+      "Old queued label must disappear after SMTP acceptance")
+    assert.equal(rendered.includes(emailB),false)
+    assert.equal(rendered.includes("Message-ID"),false)
+    assert.equal(rendered.includes("message_id"),false)
+    assert.equal(await reviewer.eval(
+      "document.getElementById('store-owner-closing-status').getAttribute('role')"),
+      "status","Live status must remain accessible")
     await runOwnerClosingEmailTick(scoped as any)
     assert.equal(seen.data,1,"Immediate worker replay must not resend")
     process.stdout.write(
