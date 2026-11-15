@@ -295,6 +295,7 @@ async function run(){
         const platformClosingAppealMarker="PASS B22 Chrome/HTTPS/PG16: independent strong platform closing Staff stops sales, protected Owner sees private reason and submits real UI appeal; wrong Staff/Owner/CSRF/replay rejected, audit/outbox and Owner receipt durable, canonical 10+20 clock started on authenticated Owner link before first appeal; external mailbox delivery unverified and no finalization/native Order changes; Beta Buyer HTTPS catalogue Gamma visible-to-hidden, read-only Cart mapping unchanged, final L false, no OrderGroup/Order/payment; closing and appeal notification texts verified; two separate protected Owner Person sessions show actor-neutral appeal receipts in HTTPS/Chrome, no private reason; platform Staff Chrome verified Owner email 1, native ambiguous mapping 0/restored 1/revoked proof 0, 1-to-2 Owners during scheduled receipt reconciliation, no external mailbox delivery claim; one immutable clock, foreign denied"
         const platformStaffReviewMarker="PASS B22 Chrome/HTTPS/PG16: independent third Person strong Staff review decision, original Staff self-review denied, private Owner reason/notice, immutable clock and sales block; repeat idempotent, first-stage parallel single decision, revoked grant denied"
         const platformFinalReviewMarker="PASS B22 Chrome/HTTPS/PG16: synthetic T0+11d second-stage Owner request, real protected Owner/foreign Staff/CSRF/replay, one durable audit/outbox and private notice; Store stays closed, original 10+20 clock unchanged; stage time fixture is synthetic, real Owner Chrome form submitted and confirmed"
+        const ownerLateClosingRecipientMarker="PASS B22 Chrome/HTTPS/PG16: new protected Owner after actual closing gets source-bound private receipt and independent +24h mail retry; first Owner original clock unchanged, replay safe, revoked access 403, source audit/outbox intact, no SMTP/delivery/finalizer"
         const ownerNativeMemberReadbackMarker="PASS B22 Chrome/HTTPS/PG16: second Person native SellerMember linked through Owner UI; member GET403, test-only protected Owner GET200 own queued receipt and 2/2 coverage, foreign Org403, reversible role removal GET403 and no mailbox delivery/finalizer"
         const ownerRealSmtpReadbackMarker="PASS B22 Chrome/HTTPS/PG16: after second Owner native SMTP 250, first Owner HTTPS/UI keeps own accepted-not-delivered status; unlinked second Owner and foreign Org HTTP403; canonical receipts remain 2, no terminal finalization"
         const ownerMailNativeRetryMarker="PASS B22 Chrome/HTTPS/PG16: second protected Owner native Medusa verification then own +24h retry, one loopback SMTP 250, first Owner record unchanged, two receipts, replay safe, mailbox delivery unverified"
@@ -383,7 +384,7 @@ async function run(){
               x===historicalCartMarker || x===completedSourceOrderMarker ||
               (x===ownerPlatformClosedUiMarker || x===legacyPlatformClosingMarker || x===dualRoleLockMarker || x===platformCrossSessionMarker ||
                x===platformClosingAppealMarker || x===nativeFinanceGraphMarker || x===nativeMultiSellerOrderMarker || x===platformClosingEmailLinkMarker ||
-               x===ownerNativeProofMarker || x===ownerMailNativeRetryMarker || x===ownerRealSmtpReadbackMarker || x===ownerNativeMemberReadbackMarker || x===platformFinalReviewMarker || x===platformStaffReviewMarker ||
+               x===ownerNativeProofMarker || x===ownerMailNativeRetryMarker || x===ownerRealSmtpReadbackMarker || x===ownerNativeMemberReadbackMarker || x===ownerLateClosingRecipientMarker || x===platformFinalReviewMarker || x===platformStaffReviewMarker ||
                x===platformPreflightBoundaryMarker || x===nativeSellerDay31Marker ||
                x===day31RejectedReviewMarker)).join("\n")
           if(child.error||child.status!==0){
@@ -475,6 +476,8 @@ async function run(){
           "Missing real independent strong Staff and protected Owner platform closing/appeal HTTPS+PG16 proof")
         assert.ok(result.split("\n").includes(ownerNativeMemberReadbackMarker),
           "Missing real native SellerMember connection followed by protected Owner B private HTTPS/UI status and loss-of-Owner 403")
+        assert.ok(result.split("\n").includes(ownerLateClosingRecipientMarker),
+          "Missing active-closing late protected Owner receipt and own retry clock, canonical audit/Owner access negative acceptance")
         assert.ok(result.split("\n").includes(ownerRealSmtpReadbackMarker),
           "Missing real post-native-SMTP first Owner private HTTPS/UI, second Owner 403 and finalizer-off acceptance")
         assert.ok(result.split("\n").includes(ownerMailNativeRetryMarker),
