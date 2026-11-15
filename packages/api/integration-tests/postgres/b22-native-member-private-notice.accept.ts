@@ -170,6 +170,32 @@ async function verifyLinkedNativeMemberOwnerMail(input:{
   assert.equal(process.env.GITHUB_ACTIONS,"true")
   assert.equal(process.env.PG_MFA_TEST_SCOPE,"b22-ui")
   assert.equal(process.env.PG_MFA_TEST_SENTINEL,"mfa-pg16-disposable-ci-v1")
+  // Private receipts exist before the scheduler creates SMTP attempt
+  // rows. Prove the immutable canonical withdrawal/outbox and each receipt
+  // first; seed ONLY these task-owned attempt rows for B's targeted SMTP
+  // scenario so the test does not send A's unrelated pending mail.
+  const source=await q("select e.id from da_store_owner_closing c "+
+    "join da_audit_event e on e.id=c.source_audit_event_id "+
+    "join da_audit_outbox x on x.source_audit_event_id=e.id "+
+    "and x.source_module='dogruadres-access' and x.deleted_at is null "+
+    "where e.id=$1 and c.state='withdrawn' and e.deleted_at is null",
+    [latestEvent])
+  assert.equal(source.length,1)
+  const receipts=await q("select person_id from da_notification_receipt "+
+    "where audit_event_id=$1 order by person_id",[latestEvent])
+  assert.deepEqual(receipts.map((x:any)=>x.person_id).sort(),
+    [personA,personB].sort())
+  const insertedA=await q("insert into da_store_owner_closing_email "+
+    "(audit_event_id,person_id,next_attempt_at) "+
+    "values ($1,$2,clock_timestamp()+interval '24 hours') "+
+    "on conflict (audit_event_id,person_id) do nothing returning person_id",
+    [latestEvent,personA])
+  const insertedB=await q("insert into da_store_owner_closing_email "+
+    "(audit_event_id,person_id,next_attempt_at) "+
+    "values ($1,$2,clock_timestamp()) "+
+    "on conflict (audit_event_id,person_id) do nothing returning person_id",
+    [latestEvent,personB])
+  assert.ok(insertedA.length<=1&&insertedB.length<=1)
   const [aBefore,bBefore]=await Promise.all([
     q("select * from da_store_owner_closing_email "+
       "where audit_event_id=$1 and person_id=$2",[latestEvent,personA]),
@@ -326,9 +352,17 @@ async function verifyLinkedNativeMemberOwnerMail(input:{
       assert.equal(removed.length,1)
     }
     if(aDeferred){
-      await q("update da_store_owner_closing_email set next_attempt_at=$3 "+
-        "where audit_event_id=$1 and person_id=$2",
-        [latestEvent,personA,new Date(aBefore[0].next_attempt_at).toISOString()])
+      if(insertedA.length){
+        const deleted=await q("delete from da_store_owner_closing_email "+
+          "where audit_event_id=$1 and person_id=$2 and attempts=0 "+
+          "returning person_id",[latestEvent,personA])
+        assert.equal(deleted.length,1,
+          "Synthetic first-Owner attempt row must be cleaned without sending")
+      }else{
+        await q("update da_store_owner_closing_email set next_attempt_at=$3 "+
+          "where audit_event_id=$1 and person_id=$2",
+          [latestEvent,personA,new Date(aBefore[0].next_attempt_at).toISOString()])
+      }
     }
     for(const sock of sockets)sock.destroy()
     if(server.listening)
