@@ -11252,9 +11252,17 @@ export default async function({container}:any){
       process.stdout.write("\nPASS B22 Chrome: native Store member connection unauthorized/foreign/CSRF/forged denied, no SellerMember or audit\n")
       // Complete the EXISTING native Member association through the real
       // Owner browser UI; never let a test-only service call stand in for
-      // a user-facing product operation.
+      // a user-facing product operation. The prior cross-Organization draft
+      // test can leave this tab on a concealed/stale workspace: re-enter the
+      // authorized Owner context through a genuine reload and selection.
       await browser.send("Page.bringToFront")
-      await browser.wait("document.visibilityState==='visible'")
+      await browser.send("Page.reload",{ignoreCache:true})
+      await browser.wait("document.readyState==='complete' && "+
+        "document.visibilityState==='visible' && "+
+        "!document.getElementById('workspace').hidden")
+      await browser.select(organizations[0].name,"owner")
+      await browser.wait("!document.getElementById('product-grants-panel').hidden && "+
+        "!document.getElementById('product-grants-refresh').hidden")
       await browser.click("#product-grants-refresh")
       await browser.wait("!!document.querySelector('#product-grants-list button.store-member-connect')")
       await browser.click("#product-grants-list button.store-member-connect")
