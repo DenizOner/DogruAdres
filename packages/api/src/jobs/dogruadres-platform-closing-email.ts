@@ -304,7 +304,7 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
  */
 type OwnerMailClaim = {
   audit_event_id:string;person_id:string;organization_id:string;
-  action:"organization.store_owner_closing_started"|
+  seller_id:string;action:"organization.store_owner_closing_started"|
     "organization.store_owner_closing_withdrawn";
   claim_id:string;attempts:number
 }
@@ -425,7 +425,7 @@ async function claimOwnerClosingMail(db:Db,seen:OwnerMailClaim[]){
     from due,da_audit_event e
     where d.audit_event_id=due.audit_event_id
       and d.person_id=due.person_id and e.id=due.audit_event_id
-    returning d.audit_event_id,d.person_id,e.organization_id,e.action,
+    returning d.audit_event_id,d.person_id,e.organization_id,e.target_id as seller_id,e.action,
       d.claim_id::text as claim_id,d.attempts`,[
       ...seen.flatMap(x=>[x.audit_event_id,x.person_id]),claimId
     ])
@@ -600,10 +600,7 @@ async function currentOwnerMailStoreAuthority(sql:Sql,claim:OwnerMailClaim){
         or (e.action='organization.store_association_approved'
           and e.resource='store-association'))
     limit 2 for share of o,org,e,x,s,b,map,native_member,sm`,
-    [claim.person_id,claim.organization_id,
-      (await sql.execute(`select target_id from da_audit_event where id=?
-        and organization_id=? limit 2`,
-        [claim.audit_event_id,claim.organization_id]))[0]?.target_id])
+    [claim.person_id,claim.organization_id,claim.seller_id]
   return rows.length===1
 }
 /**
