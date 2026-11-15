@@ -12709,15 +12709,6 @@ export default async function({container}:any){
           seller_id:ownerStoreId,reason:"B22 restore earlier native Seller suspension"
         }})
       }
-      // OwnerStore has a real native Order in a two-Seller OrderGroup. All
-      // other Store work above is finished; only this disposable PG16 case
-      // receives independent, internally consistent historical audit/outbox.
-      await verifyB22RealOrderedSellerDay31({
-        q,staff:reviewer,foreign:browser,foundation,
-        sellerId:ownerStoreId,organizationId:organizations[0].id,
-        sourceSellerId:gammaSellerId,ownerPersonId:A.person,
-        staffPersonId:B.person
-      })
       const positiveNativeBefore=await auth.listAuthMfa(
         {auth_identity_id:staffAIdentity.auth_identity_id,status:"enabled"},{take:2})
       assert.equal(positiveNativeBefore.length,1)
@@ -14829,6 +14820,30 @@ export default async function({container}:any){
       process.stdout.write("PASS B22 Chrome/HTTP/PG16: individual business PNG two retained versions, independent staff approval, one Person two protected Owner Organizations, foreign denied\n")
     } finally {
       await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[reviewGrantId])
+    }
+
+    // B's prior strong session is intentionally revoked by the native MFA
+    // disable acceptance. Use the separately authenticated reviewer Person
+    // after its review work completes; a new explicit Store-closing task grant
+    // is required even though it had organization.review. No stale session
+    // or direct source-proof bypass can grant the Staff status read.
+    const day31StaffGrant="da_staff_day31_"+randomBytes(8).toString("hex")
+    await q("insert into da_platform_staff_grant "+
+      "(id,person_id,task,resource,granted_by_person_id,reason) "+
+      "values ($1,$2,'store.closing.manage','platform',$2,"+
+      "'B22 disposable real Order day-31 Staff status probe')",[
+        day31StaffGrant,reviewerPersonId])
+    try{
+      await verifyB22RealOrderedSellerDay31({
+        q,staff:reviewChrome,foreign:signupChrome,foundation,
+        sellerId:ownerStoreId,organizationId:organizations[0].id,
+        sourceSellerId:gammaSellerId,ownerPersonId:A.person,
+        staffPersonId:B.person
+      })
+    }finally{
+      await q("update da_platform_staff_grant "+
+        "set revoked_at=clock_timestamp() "+
+        "where id=$1 and revoked_at is null",[day31StaffGrant])
     }
 
     process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner\n")
