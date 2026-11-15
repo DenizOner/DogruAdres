@@ -519,7 +519,8 @@ export async function verifyB22LateProtectedOwnerClosingNotice(input:{
     await browser.select(org.name,"owner")
     await browser.ready()
     const postBefore=browser.http.filter((item:any)=>
-      item.method==="POST"&&item.path==="/personal/memberships").length
+      item.method==="POST"&&item.path==="/personal/memberships"&&
+      item.status===200).length
     await browser.button("Korumalı Owner yap "+memberMembershipId)
     await until(async()=>{
       const rows=await q("select role,protected_owner,status from "+
@@ -666,7 +667,7 @@ export async function verifyB22LateProtectedOwnerClosingNotice(input:{
   }
   process.stdout.write(
     "PASS B22 Chrome/HTTPS/PG16: new protected Owner after actual closing "+
-    "via real Owner UI/HTTPS audit gets own receipt and +24h retry; "+
+    "gets source-bound private receipt and independent +24h mail retry; "+
     "first Owner original clock unchanged, replay safe, revoked access 403, "+
     "source audit/outbox intact, no SMTP/delivery/finalizer\n")
 }
