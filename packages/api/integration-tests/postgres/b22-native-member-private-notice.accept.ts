@@ -541,10 +541,14 @@ export async function verifyB22LateProtectedOwnerClosingNotice(input:{
       [organizationId,memberMembershipId])
     assert.equal(promotion.length,beforePromotion.length+1,
       "Real Owner promotion must commit one NEW canonical audit")
-    assert.deepEqual(promotion.slice(0,-1),beforePromotion,
-      "Existing membership history must remain unchanged")
-    assert.equal(promotion.at(-1)?.actor_person_id,personA)
-    assert.equal(promotion.at(-1)?.outboxes,1)
+    for(const historical of beforePromotion)
+      assert.deepEqual(promotion.find((x:any)=>x.id===historical.id),historical,
+        "Existing membership audit/outbox must remain unchanged")
+    const added=promotion.filter((x:any)=>
+      !beforePromotion.some((prev:any)=>prev.id===x.id))
+    assert.equal(added.length,1)
+    assert.equal(added[0].actor_person_id,personA)
+    assert.equal(added[0].outboxes,1)
     // B's real active browser must refresh its changed Organization role.
     await reviewer.send("Page.bringToFront")
     await reviewer.send("Page.reload",{ignoreCache:true})
