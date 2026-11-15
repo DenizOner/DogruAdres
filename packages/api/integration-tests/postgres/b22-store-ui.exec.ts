@@ -11264,7 +11264,16 @@ export default async function({container}:any){
       await browser.wait("!document.getElementById('product-grants-panel').hidden && "+
         "!document.getElementById('product-grants-refresh').hidden")
       await browser.click("#product-grants-refresh")
-      await browser.wait("!!document.querySelector('#product-grants-list button.store-member-connect')")
+      // productPermissions hides the panel while its real HTTPS refresh is
+      // in flight. A stale button can still exist in the hidden DOM: wait
+      // for the completed, visible Owner UI before a genuine Chrome click.
+      await browser.wait("!document.hidden && "+
+        "!document.getElementById('workspace').hidden && "+
+        "!document.getElementById('product-grants-panel').hidden && "+
+        "(()=>{const b=document.querySelector("+
+        "'#product-grants-list button.store-member-connect');"+
+        "if(!b)return false;const r=b.getBoundingClientRect();"+
+        "return r.width>0&&r.height>0})()")
       await browser.click("#product-grants-list button.store-member-connect")
       await browser.wait("document.getElementById('product-grants-status').textContent.includes('Mağaza çalışanı bağlantısı tamamlandı')")
       const nativeLinks=await native.listSellerMembers({
