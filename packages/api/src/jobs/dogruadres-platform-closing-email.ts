@@ -3,6 +3,7 @@ import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { sendSmtpEmail, SmtpAcceptanceUncertainError } from "../modules/dogruadres-access/smtp-client"
 import { verifiedEmailForActorContext } from "../api/dogruadres/invitations/accept/route"
+import { normalizeEmail } from "../modules/dogruadres-access/security"
 
 /**
  * B22: the native Medusa scheduler, Notification Module and our already
@@ -125,7 +126,7 @@ async function claimDue(db: Db, seen: Array<{seller_id:string;person_id:string}>
   })
 }
 
-async function currentActor(db: Db, claim: Pick<Claim, "organization_id"|"person_id">) {
+async function currentActorCandidates(db: Db, claim: Pick<Claim, "organization_id"|"person_id">) {
   return db.transactional(async em => {
     const rows = await em.execute(`select b.actor_type,b.actor_id,
       b.auth_identity_id
@@ -141,12 +142,21 @@ async function currentActor(db: Db, claim: Pick<Claim, "organization_id"|"person
         and p.deleted_at is null
       where b.person_id=? and b.revoked_at is null
         and b.verified_at is not null
-      limit 2`,[claim.organization_id,claim.person_id])
-    if(rows.length!==1||!["user","member","customer"].includes(rows[0].actor_type))
-      return null
-    return rows[0] as {actor_type:"user"|"member"|"customer";
-      actor_id:string;auth_identity_id:string}
+      limit 9`,[claim.organization_id,claim.person_id])
+    // More than eight valid native bindings is not safe to disambiguate.
+    if(rows.length>8||rows.some(r=>
+      !["user","member","customer"].includes(r.actor_type)||
+      typeof r.actor_id!=="string"||typeof r.auth_identity_id!=="string"))
+      return []
+    return rows as Array<{actor_type:"user"|"member"|"customer";
+      actor_id:string;auth_identity_id:string}>
   })
+}
+
+async function currentActor(db:Db,claim:Pick<Claim,"organization_id"|"person_id">){
+  const candidates=await currentActorCandidates(db,claim)
+  // Platform-closing's existing strict identity rule is unchanged.
+  return candidates.length===1?candidates[0]:null
 }
 
 async function settle(db: Db, claim: Claim, outcome: "accepted"|"failed"|"unverified_identity"|"uncertain",messageId:string|null) {
@@ -235,13 +245,10 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
     let result: "accepted"|"failed"|"unverified_identity"|"uncertain"="unverified_identity"
     let messageId:string|null=null
     try{
-      const actor=await currentActor(db,claim)
-      if(actor){
-        const email=await verifiedEmailForActorContext(
-          {scope:container} as any,{
-            ...actor,auth_provider:"emailpass",user_metadata:{}
-          })
-        if(email){
+      const recipient=await verifiedOwnerMailRecipient(db,container,claim)
+      if(recipient){
+        const {actor,email}=recipient
+        {
           const origin=process.env.DOGRUADRES_PUBLIC_ORIGIN
           if(!origin || new URL(origin).protocol!=="https:")
             throw new Error("Missing secure first-party notification origin")
@@ -385,6 +392,31 @@ async function claimOwnerClosingMail(db:Db,seen:OwnerMailClaim[]){
 type OwnerMailOutcome="accepted"|"failed"|"unverified_identity"|"uncertain"|"invalidated"
 type OwnerMailActor={actor_type:"user"|"member"|"customer";
   actor_id:string;auth_identity_id:string}
+
+/** One Person may legitimately link User and Member native actors. Send a
+ * mandatory Owner notice only when their LIVE native email proofs resolve to
+ * one unambiguous address; never select an email from actor order or UI data.
+ * A second different verified address is a fail-closed identity ambiguity.
+ */
+async function verifiedOwnerMailRecipient(db:Db,container:MedusaContainer,
+  claim:OwnerMailClaim):Promise<{actor:OwnerMailActor;email:string}|null>{
+  const candidates=await currentActorCandidates(db,claim)
+  let selected:{actor:OwnerMailActor;email:string}|null=null
+  const bindings=new Set<string>()
+  for(const actor of candidates){
+    const key=JSON.stringify([actor.actor_type,actor.actor_id,actor.auth_identity_id])
+    if(bindings.has(key))return null // ambiguous duplicated source rows
+    bindings.add(key)
+    const email=await verifiedEmailForActorContext({scope:container} as any,{
+      ...actor,auth_provider:"emailpass",user_metadata:{}
+    })
+    if(!email)continue
+    if(selected&&normalizeEmail(selected.email)!==normalizeEmail(email))
+      return null
+    if(!selected)selected={actor,email}
+  }
+  return selected
+}
 
 async function persistOwnerMailResult(sql:Sql,claim:OwnerMailClaim,
   outcome:OwnerMailOutcome,messageId:string|null){
