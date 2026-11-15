@@ -442,6 +442,61 @@ async function settleOwnerClosingMail(db:Db,claim:OwnerMailClaim,
 }
 
 /**
+ * Lock only the canonical Person and THEIR current native identity/proof rows.
+ * da_login_binding/da_actor_mapping have mandatory person FKs; Medusa's
+ * provider_identity/auth_verification belong to auth_identity. FOR UPDATE
+ * on the respective parent prevents NEW child rows (FK KEY SHARE conflict),
+ * while FOR SHARE on every existing child prevents proof revival/revocation.
+ * This avoids the global identity-table write outage of a SHARE TABLE lock.
+ */
+async function lockOwnerMailProofRows(sql:Sql,db:Db,claim:OwnerMailClaim){
+  // Fail closed if a migration ever removes an FK required to prevent
+  // phantom identity or proof insertion. No trust in advisory-lock writers.
+  const fk=await sql.execute(`select
+    (select count(*)::int from pg_constraint where contype='f'
+      and conrelid='da_login_binding'::regclass
+      and confrelid='da_person'::regclass and not condeferrable) as login_fk,
+    (select count(*)::int from pg_constraint where contype='f'
+      and conrelid='da_actor_mapping'::regclass
+      and confrelid='da_person'::regclass and not condeferrable) as map_fk,
+    (select count(*)::int from pg_constraint where contype='f'
+      and conrelid='provider_identity'::regclass
+      and confrelid='auth_identity'::regclass and not condeferrable) as provider_fk,
+    (select count(*)::int from pg_constraint where contype='f'
+      and conrelid='auth_verification'::regclass
+      and confrelid='auth_identity'::regclass and not condeferrable) as proof_fk`)
+  if(fk.length!==1||["login_fk","map_fk","provider_fk","proof_fk"].some(
+    k=>Number(fk[0][k])<1))throw new Error("Native mail identity FK fence unavailable")
+  const person=await sql.execute(`select id from da_person
+    where id=? and deleted_at is null and disabled_at is null
+    for update`,[claim.person_id])
+  if(person.length!==1)return false
+  // Lock ALL current and revoked rows: an old binding must not reactivate
+  // or switch Person during the SMTP attempt. New rows require the locked
+  // Person parent FK and cannot commit until our transaction finishes.
+  await sql.execute(`select auth_identity_id from da_login_binding
+    where person_id=? for share`,[claim.person_id])
+  await sql.execute(`select id from da_actor_mapping
+    where person_id=? for share`,[claim.person_id])
+  const candidates=await currentActorCandidates(db,claim)
+  for(const actor of candidates){
+    // Table names come ONLY from this fixed server-side enum, never input.
+    const table=actor.actor_type==="user"?'public."user"':
+      actor.actor_type==="member"?"public.member":"public.customer"
+    const native=await sql.execute(`select id from ${table}
+      where id=? for share`,[actor.actor_id])
+    const identity=await sql.execute(`select id from auth_identity
+      where id=? for update`,[actor.auth_identity_id])
+    if(native.length!==1||identity.length!==1)return false
+    await sql.execute(`select id from provider_identity
+      where auth_identity_id=? for share`,[actor.auth_identity_id])
+    await sql.execute(`select id from auth_verification
+      where auth_identity_id=? for share`,[actor.auth_identity_id])
+  }
+  return true
+}
+
+/**
  * The claim is NOT send authorization. Serialize SMTP DATA and the outcome
  * with LIVE Owner membership, actor binding and the current closing source.
  * FOR SHARE blocks a simultaneous UPDATE/DELETE of those actual rows:
@@ -454,17 +509,9 @@ async function sendOwnerMailFenced(db:Db,claim:OwnerMailClaim,
   container:MedusaContainer,
   send:(email:string)=>Promise<{messageId:string}>){
   await db.transactional(async sql=>{
-    // Native Medusa email/proof writes do not acquire a Foundation Person
-    // advisory lock. A SELECT or locking only the chosen binding leaves a
-    // phantom binding and verification INSERT/DELETE window before SMTP DATA.
-    // The bounded SMTP fence therefore freezes every table read by the native
-    // verifiedEmailForActorContext adapter, including future rows, until DATA
-    // and the canonical outcome commit. NOWAIT fails closed during contention.
-    // These are the installed Medusa/Mercur 2.x tables, not new shadow data.
-    await sql.execute(`lock table da_login_binding,da_actor_mapping,
-      public."user",public.member,public.customer,auth_identity,
-      provider_identity,auth_verification in share mode nowait`)
-    const recipient=await verifiedOwnerMailRecipient(db,container,claim)
+    const proofLocked=await lockOwnerMailProofRows(sql,db,claim)
+    const recipient=proofLocked?
+      await verifiedOwnerMailRecipient(db,container,claim):null
     if(!recipient){
       // An Owner revoked between the claim and the send fence is not merely
       // missing email proof. Preserve the existing invalidated terminal state.
