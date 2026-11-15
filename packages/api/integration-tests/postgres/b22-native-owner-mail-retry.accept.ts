@@ -183,6 +183,39 @@ export async function verifyB22NativeOwnerMailRetry(input:{
       x.id===challengeId&&x.verified_at&&!x.deleted_at),true,
       "Actual Medusa proof must persist BEFORE the next mail job")
 
+    // Important 24h negative acceptance: even though B now has a REAL
+    // native Medusa proof, verification itself must not pull the security
+    // notification forward. The immutable audit clock controls eligibility.
+    // No wall-clock fast-forward, no test-specific worker override.
+    const clockRows=await q("select clock_timestamp() as now")
+    assert.equal(clockRows.length,1)
+    assert.ok(new Date(initialSecond.next_attempt_at).getTime()>
+      new Date(clockRows[0].now).getTime(),
+      "The +24h retry must still be in the future during the early probe")
+    const beforeEarly=await q("select person_id,attempts,last_result,"+
+      "message_id,accepted_at,last_attempt_at,next_attempt_at,claim_id,"+
+      "lease_until from da_store_owner_closing_email "+
+      "where audit_event_id=$1 order by person_id",[eventId])
+    assert.equal(beforeEarly.length,2)
+    assert.equal(observed.dataMessages,0)
+    await runOwnerClosingEmailTick(scopedContainer as any)
+    const afterEarly=await q("select person_id,attempts,last_result,"+
+      "message_id,accepted_at,last_attempt_at,next_attempt_at,claim_id,"+
+      "lease_until from da_store_owner_closing_email "+
+      "where audit_event_id=$1 order by person_id",[eventId])
+    assert.deepEqual(afterEarly,beforeEarly,
+      "Verified B must NOT be retried before the canonical +24h boundary; "+
+      "both Owners' durable attempts and leases must remain unchanged")
+    assert.deepEqual(observed.recipients,[],
+      "Early verified proof must not trigger even an SMTP RCPT")
+    assert.equal(observed.dataMessages,0,
+      "Early verified proof must not trigger SMTP DATA")
+    assert.equal(observed.messageIds.length,0)
+    assert.equal(observed.invalidRecipients,0)
+    assert.equal((await q("select count(*)::int n from da_notification_receipt "+
+      "where audit_event_id=$1",[eventId]))[0].n,2,
+      "Premature tick must not mutate canonical Owner receipts")
+
     // No global clock alteration, just the SECOND task-owned recipient slot.
     const due=await q("update da_store_owner_closing_email "+
       "set next_attempt_at=clock_timestamp()-interval '1 second' "+
