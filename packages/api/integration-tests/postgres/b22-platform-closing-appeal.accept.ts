@@ -1271,8 +1271,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
   }
   // 30+ day REAL native Seller negative, unlike the above Seller-less edge
   // fixtures. Do not create a finalizer or infer finance clearance from
-  // Medusa's payment/refund graph. Backdate only a task-owned canonical
-  // deadline audit and briefly point the disposable closing row to it.
+  // Medusa's payment/refund graph. Temporarily shift only the disposable closing deadline clock;
+  // do not alter the immutable Foundation event or outbox.
   // Restore the original closing row exactly before following test stages.
   const realClosingBefore=await q(
     "select * from da_store_platform_closing where seller_id=$1",[sellerId])
@@ -1293,53 +1293,34 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.ok(realClosingBefore[0].deadline_audit_event_id)
   assert.equal(realClosingBefore[0].review_decision,null,
     "The real case must retain its pending appeal, not a silently cleared case")
-  const historicalDeadlineId="daaud_"+randomBytes(16).toString("hex")
+  // Only the disposable Store clock is fast-forwarded for this negative
+  // probe. The existing append-only Foundation audit/outbox are NEVER
+  // rewritten or deleted. Earlier source-backed 720-hour fixtures separately
+  // prove canonical audit chronology; this probe adds real native history.
   const [historicalTick]=await q("select clock_timestamp() as now")
   const historicalDeadline=new Date(
     new Date(historicalTick.now).getTime()-31*86400000).toISOString()
-  const canonicalActor=ownerActors[0]
-  const historicalEnvelope={
-    version:1,source_module:"dogruadres-access",
-    source_audit_event_id:historicalDeadlineId,organization_id:ownerOrgId,
-    actor:{person_id:canonicalActor.actor_person_id,
-      type:canonicalActor.actor_type,id:canonicalActor.actor_id,
-      role_context:"owner"},
-    action:"organization.store_platform_closing_deadline_started",
-    resource:"store-platform-closing",target_id:sellerId,
-    occurred_at:historicalDeadline
-  }
-  let deadlineInserted=false, outboxInserted=false, closingRepointed=false
+  const auditBefore=await q("select count(*)::int n from da_audit_event "+
+    "where target_id=$1",[sellerId])
+  const outboxBefore=await q("select count(*)::int n from da_audit_outbox x "+
+    "join da_audit_event e on e.id=x.source_audit_event_id "+
+    "where e.target_id=$1",[sellerId])
+  let closingShifted=false
   try{
-    await q("insert into da_audit_event "+
-      "(id,actor_person_id,actor_type,actor_id,role_context,organization_id,"+
-      "action,module,resource,target_id,new_values,occurred_at) "+
-      "values ($1,$2,$3,$4,'owner',$5,"+
-      "'organization.store_platform_closing_deadline_started',"+
-      "'dogruadres-access','store-platform-closing',$6,$7::jsonb,$8::timestamptz)",[
-      historicalDeadlineId,canonicalActor.actor_person_id,
-      canonicalActor.actor_type,canonicalActor.actor_id,ownerOrgId,sellerId,
-      JSON.stringify({basis:"owner_delivery",
-        deadline_started_at:historicalDeadline}),historicalDeadline])
-    deadlineInserted=true
-    await q("insert into da_audit_outbox "+
-      "(id,source_audit_event_id,source_module,envelope_version,envelope,status) "+
-      "values ($1,$2,'dogruadres-access',1,$3::jsonb,'pending')",[
-      "daaob_"+randomBytes(16).toString("hex"),
-      historicalDeadlineId,JSON.stringify(historicalEnvelope)])
-    outboxInserted=true
     const moved=await q("update da_store_platform_closing "+
-      "set deadline_started_at=$2::timestamptz,deadline_audit_event_id=$3 "+
-      "where seller_id=$1 and deadline_audit_event_id=$4 returning seller_id",[
-      sellerId,historicalDeadline,historicalDeadlineId,
+      "set deadline_started_at=$2::timestamptz "+
+      "where seller_id=$1 and deadline_audit_event_id=$3 "+
+      "returning seller_id",[
+      sellerId,historicalDeadline,
       realClosingBefore[0].deadline_audit_event_id])
+    closingShifted=moved.length===1
     assert.equal(moved.length,1)
-    closingRepointed=true
     const matured=await read(staff,mailPath)
     assert.equal(matured.status,200)
     assert.equal(matured.body.native_order_history_observed,true,
       "This is a REAL native Seller with historical Seller OrderGroup")
     assert.equal(matured.body.terminal_preflight.appeal_window_elapsed,true,
-      "Native Seller's canonical task-only 31-day audit must be past the boundary")
+      "Task-only PostgreSQL +31d clock must be past the boundary")
     assert.equal(matured.body.terminal_preflight.appeal_review_pending,true,
       "Undecided first appeal must still block after day 30")
     assert.equal(matured.body.terminal_preflight.appeal_accepted,false)
@@ -1368,23 +1349,25 @@ export async function verifyB22PlatformClosingAppeal(input:{
       "Existing Seller Orders must not be deleted or detached after 30 days")
     assert.deepEqual(await q('select count(*)::int n from "order"'),
       realOrdersBefore,"Any historical Order must remain durable")
-    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: real native Seller and OrderGroup at task-only +31d clock, pending appeal and unknown financial/legal clearance deny finalizer, Store name/handle, name transfers and Orders unchanged; Staff live status and foreign 403\n")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: real native Seller and OrderGroup with test-only +31d clock, pending appeal and unknown financial/legal clearance deny finalizer, Store name/handle, name transfers and Orders unchanged; Staff live status and foreign 403\n")
   }finally{
-    if(closingRepointed){
+    if(closingShifted){
       const restored=await q("update da_store_platform_closing "+
-        "set deadline_started_at=$2::timestamptz,deadline_audit_event_id=$3 "+
-        "where seller_id=$1 and deadline_audit_event_id=$4 returning seller_id",[
+        "set deadline_started_at=$2::timestamptz "+
+        "where seller_id=$1 and deadline_audit_event_id=$3 "+
+        "returning seller_id",[
         sellerId,realClosingBefore[0].deadline_started_at,
-        realClosingBefore[0].deadline_audit_event_id,historicalDeadlineId])
+        realClosingBefore[0].deadline_audit_event_id])
       assert.equal(restored.length,1)
     }
-    if(outboxInserted)
-      await q("delete from da_audit_outbox where source_audit_event_id=$1",
-        [historicalDeadlineId])
-    if(deadlineInserted)
-      await q("delete from da_audit_event where id=$1",
-        [historicalDeadlineId])
   }
+  assert.deepEqual(await q("select count(*)::int n from da_audit_event "+
+    "where target_id=$1",[sellerId]),auditBefore,
+    "Task-only clock must not create or modify append-only audit evidence")
+  assert.deepEqual(await q("select count(*)::int n from da_audit_outbox x "+
+    "join da_audit_event e on e.id=x.source_audit_event_id "+
+    "where e.target_id=$1",[sellerId]),outboxBefore,
+    "No task-only clock audit/outbox deletion or fabrication")
   assert.deepEqual(await q(
     "select * from da_store_platform_closing where seller_id=$1",[sellerId]),
     realClosingBefore,"Temporary terminal time fixture must restore exactly")
