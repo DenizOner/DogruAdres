@@ -600,7 +600,7 @@ async function currentOwnerMailStoreAuthority(sql:Sql,claim:OwnerMailClaim){
         or (e.action='organization.store_association_approved'
           and e.resource='store-association'))
     limit 2 for share of o,org,e,x,s,b,map,native_member,sm`,
-    [claim.person_id,claim.organization_id,claim.seller_id]
+    [claim.person_id,claim.organization_id,claim.seller_id])
   return rows.length===1
 }
 /**
