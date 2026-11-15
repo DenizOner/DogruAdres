@@ -33,6 +33,7 @@ import {verifyB22PlatformClosingAppeal,
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {verifyB22NativeOwnerMailRetry} from "./b22-native-owner-mail-retry.accept"
+import {verifyB22CoownerNativeMemberReadback} from "./b22-native-member-private-notice.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {assertWcag22AxeInChrome} from "./wcag22-axe-chrome"
 import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
@@ -11290,6 +11291,12 @@ export default async function({container}:any){
         [organizations[0].id,ownerStoreId,B.person]))[0].n,1,
         "Idempotent native link must not duplicate canonical audit")
       process.stdout.write("PASS B22 Chrome: native Store member connection via Owner UI persisted one SellerMember and one canonical audit; replay unchanged\n")
+      await verifyB22CoownerNativeMemberReadback({
+        browser,reviewer,q,personA:A.person,personB:B.person,
+        memberMembershipId:alphaMember.id,orgA:organizations[0].id,
+        orgB:organizations[1].id,orgName:organizations[0].name,
+        ownerStoreId,emailA:A.email
+      })
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")
       await reviewer.click("#product-draft-refresh")
