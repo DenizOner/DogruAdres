@@ -31,6 +31,9 @@ if(process.env.CI!=="true" || process.env.GITHUB_ACTIONS!=="true" ||
 const SQL=(globalThis as any).Bun?.SQL
 if(typeof SQL!=="function")throw Error("Bun native PG driver unavailable")
 const db=new SQL(url.toString())
+// CI-only worker-pool override; the fixture's independent q() remains free
+// to observe locks while the 2-slot worker pool is fully occupied.
+let activeWorkerPool=db
 const q=(statement:string,params:unknown[]=[])=>db.unsafe(statement,params)
 function bind(tx:Pg,statement:string,params:unknown[]=[]){
   let n=0
@@ -86,6 +89,7 @@ const otherActor="user_b22_mail_unrelated"
 const otherIdentity="auth_b22_mail_unrelated"
 const otherEmail="unrelated@example.invalid"
 const otherProof="b22_unrelated_proof"
+const ownerProofId="b22_owner_mail_verified_primary"
 let testSmtp:{enabled:boolean;host:string;port:number;
   security:"none";from_email:string}|null=null
 type TestBarrier={entered:Promise<void>;proceed:Promise<void>;
@@ -157,7 +161,7 @@ const manager={
 const container:any={resolve:(name:string)=>{
   if(name===ContainerRegistrationKeys.PG_CONNECTION)return {
     transaction:<T>(work:(t:{raw:(s:string,p:unknown[])=>Promise<{rows:any[]}>})=>Promise<T>)=>
-      db.begin(async (tx:Pg)=>work({
+      activeWorkerPool.begin(async (tx:Pg)=>work({
         raw:async (s:string,p:unknown[]=[])=>({rows:await bind(tx,s,p)})
       }))
   }
@@ -218,11 +222,12 @@ async function setup(){
   // test-only table shapes make real PostgreSQL ACCESS SHARE/ROW EXCLUSIVE
   // conflicts measurable without inventing production email ownership.
   for(const native of ['"user"',"member","customer"]){
-    await q("create table public."+native+" (id text primary key,email text)")
+    await q("create table public."+native+" (id text primary key,email text,deleted_at timestamptz)")
   }
-  await q("create table auth_identity (id text primary key)")
+  await q("create table auth_identity (id text primary key,deleted_at timestamptz)")
   await q("create table provider_identity (id text primary key,entity_id text,"+
-    "auth_identity_id text not null references auth_identity(id))")
+    "auth_identity_id text not null references auth_identity(id),"+
+    "provider text not null,deleted_at timestamptz)")
   await q("create table auth_verification (id text primary key,"+
     "auth_identity_id text references auth_identity(id),entity_type text,entity_id text,"+
     "verified_at timestamptz,deleted_at timestamptz)")
@@ -234,6 +239,31 @@ async function setup(){
   await q("insert into auth_identity(id) values ($1),($2),($3),($4),($5),($6)",[
     syntheticIdentity,retryIdentity,linkedMemberIdentity,raceMemberIdentity,
     otherIdentity,"auth_b22_unverified_extra"])
+  // Medusa v2.22.3 native auth provider/verification facts are queried
+  // through the SAME worker transaction, never via an injected Query/Auth
+  // service borrowing a second connection during SMTP.
+  for(const [identity,email] of [
+    [syntheticIdentity,syntheticEmail],
+    [retryIdentity,retryEmail],
+    [linkedMemberIdentity,linkedMemberEmail],
+    [raceMemberIdentity,raceMemberEmail],
+    ["auth_b22_unverified_extra","missing-proof@example.invalid"]
+  ]){
+    await q("insert into provider_identity "+
+      "(id,auth_identity_id,provider,entity_id) values ($1,$2,'emailpass',$3)",
+      ["prov_"+uuid(),identity,email])
+  }
+  for(const [identity,email] of [
+    [syntheticIdentity,syntheticEmail],
+    [retryIdentity,retryEmail],
+    [linkedMemberIdentity,linkedMemberEmail],
+    [raceMemberIdentity,raceMemberEmail]
+  ]){
+    await q("insert into auth_verification "+
+      "(id,auth_identity_id,entity_type,entity_id,verified_at) "+
+      "values ($1,$2,'email',$3,clock_timestamp())",
+      [identity===syntheticIdentity?ownerProofId:"proof_"+uuid(),identity,email])
+  }
   await q("create table da_person (id text primary key,disabled_at timestamptz,deleted_at timestamptz)")
   await q("create table da_organization (id text primary key)")
   await q("create table da_organization_membership (id text primary key,"+
@@ -625,6 +655,7 @@ async function main(){
       messageIds:[] as string[],recipients:[] as string[]}
     let refuseRecipient=false,dropAfterData=false
     let holdSmtpDataAck:TestBarrier|null=null
+    let holdAllSmtpDataAcks:TestBarrier|null=null
     const mock=createServer(socket=>{
       socket.setEncoding("utf8")
       socket.write("220 smtp.loopback.test ESMTP\r\n")
@@ -644,8 +675,8 @@ async function main(){
                 socket.destroy()
               }else{
                 observed.acceptedData=true
-                const gate=holdSmtpDataAck
-                holdSmtpDataAck=null
+                const gate=holdAllSmtpDataAcks??holdSmtpDataAck
+                if(!holdAllSmtpDataAcks)holdSmtpDataAck=null
                 if(gate){
                   gate.arrive()
                   void gate.proceed.then(()=>{
@@ -1232,11 +1263,7 @@ async function main(){
       // Medusa's native auth_verification is a separate table/API. This
       // test-only override reads the disposable PG16 proof row instead of the
       // default synthetic always-verified stub; no real email is touched.
-      const proofId="b22_owned_mail_proof_"+uuid()
-      await q("insert into auth_verification "+
-        "(id,auth_identity_id,entity_type,entity_id,verified_at) "+
-        "values ($1,$2,'email',$3,clock_timestamp())",
-        [proofId,syntheticIdentity,syntheticEmail])
+      const proofId=ownerProofId // Same real native proof used by earlier sends
       ownerProofFromPg=true
       try{
         // Native proof revocation COMMIT before the new send fence is acquired.
