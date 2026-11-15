@@ -34,7 +34,7 @@ import {verifyB22PlatformClosingAppeal,
 import {verifyTwoIndependentStaffNameRightRace} from "./b22-store-name-transfer-staff-race.accept"
 import {verifyB22OwnedHistoricalOrder,verifyB22ForeignHistoricalOrder,verifyB22AuthorizedForeignHistoricalOrder} from "./b22-order-history.accept"
 import {verifyB22NativeOwnerMailRetry} from "./b22-native-owner-mail-retry.accept"
-import {verifyB22CoownerNativeMemberReadback} from "./b22-native-member-private-notice.accept"
+import {verifyB22CoownerNativeMemberReadback,verifyB22LateProtectedOwnerClosingNotice} from "./b22-native-member-private-notice.accept"
 import {SmtpResponsePrivacyGuard} from "./smtp-response-privacy-guard"
 import {assertWcag22AxeInChrome} from "./wcag22-axe-chrome"
 import {getFreePort,until as waitForLoopback,killProcess} from "./native-verification-browser"
@@ -11314,6 +11314,11 @@ export default async function({container}:any){
         memberMembershipId:alphaMember.id,orgA:organizations[0].id,
         orgB:organizations[1].id,orgName:organizations[0].name,
         ownerStoreId,emailA:A.email,emailB:B.email
+      })
+      await verifyB22LateProtectedOwnerClosingNotice({
+        browser,reviewer,container,q,personA:A.person,personB:B.person,
+        memberMembershipId:alphaMember.id,
+        organizationId:organizations[0].id,sellerId:ownerStoreId
       })
       await reviewer.send("Page.bringToFront")
       await reviewer.wait("document.visibilityState==='visible'")

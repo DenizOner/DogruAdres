@@ -14,6 +14,7 @@ import { Migration20261112100000 } from "../../src/modules/dogruadres-access/mig
 import { Migration20261112120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112120000"
 import { Migration20261110120000 } from "../../src/modules/dogruadres-access/migrations/Migration20261110120000"
 import { Migration20261112130000 } from "../../src/modules/dogruadres-access/migrations/Migration20261112130000"
+import { Migration20261115184500 } from "../../src/modules/dogruadres-access/migrations/Migration20261115184500"
 import { runPlatformClosingEmailTick, runOwnerClosingEmailTick } from "../../src/jobs/dogruadres-platform-closing-email"
 import { canonicalEventForOutbox } from "../../src/modules/dogruadres-access/audit-delivery-policy"
 import { projectFoundationAuditEvent } from "../../src/modules/dogruadres-audit-index/envelope"
@@ -298,6 +299,9 @@ async function setup(){
   await migrate(Migration20261112120000)
   await migrate(Migration20261110120000)
   await migrate(Migration20261112130000)
+  // The early isolated SMTP acceptance runs before Medusa's full migration
+  // stage. It must apply the same nullable late-recipient schedule field.
+  await migrate(Migration20261115184500)
   await q("insert into da_organization(id) values ($1)",[org])
   await q("insert into da_person(id) values ($1),($2),($3)",[owner,staff,otherPerson])
   await q("insert into da_login_binding "+
@@ -1220,18 +1224,18 @@ async function main(){
 
       await runOwnerClosingEmailTick(container)
       assert.equal((await q("select attempts from da_store_owner_closing_email "+
-        "where audit_event_id=$1",[ownerMailEvent]))[0].attempts,1,
+        "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner]))[0].attempts,1,
         "Immediate rerun cannot send before the next scheduled slot")
       // Time moves ONLY in disposable PG16 mail scheduling data. Every
       // retry remains anchored to the immutable original event time.
       for(let slot=2;slot<=4;slot++){
         await q("update da_store_owner_closing_email "+
           "set next_attempt_at=clock_timestamp()-interval '1 second' "+
-          "where audit_event_id=$1",[ownerMailEvent])
+          "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner])
         await runOwnerClosingEmailTick(container)
         const [attempt]=await q("select attempts,next_attempt_at "+
-          "from da_store_owner_closing_email where audit_event_id=$1",
-          [ownerMailEvent])
+          "from da_store_owner_closing_email where audit_event_id=$1 and person_id=$2",
+          [ownerMailEvent,owner])
         assert.equal(attempt.attempts,slot)
         assert.equal(new Date(attempt.next_attempt_at).getTime()-
           new Date(ownerSource.occurred_at).getTime(),slot*86400000,
@@ -1239,10 +1243,10 @@ async function main(){
       }
       await q("update da_store_owner_closing_email "+
         "set next_attempt_at=clock_timestamp()-interval '1 second' "+
-        "where audit_event_id=$1",[ownerMailEvent])
+        "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner])
       await runOwnerClosingEmailTick(container)
       assert.equal((await q("select attempts from da_store_owner_closing_email "+
-        "where audit_event_id=$1",[ownerMailEvent]))[0].attempts,4,
+        "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner]))[0].attempts,4,
         "Mandatory Owner notice may never exceed four SMTP attempts")
       // Nothing in the Owner mail worker can mark mailbox delivery or
       // enable the irreversible Seller/name transition.

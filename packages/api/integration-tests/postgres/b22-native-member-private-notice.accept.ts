@@ -5,6 +5,7 @@
  * full runner under TypeScript's control-flow source-size limit.
  */
 import assert from "node:assert/strict"
+import {randomBytes} from "node:crypto"
 import {createServer} from "node:net"
 import {runOwnerClosingEmailTick} from "../../src/jobs/dogruadres-platform-closing-email"
 import type {B06Chrome} from "./b06-ui-browser"
@@ -430,4 +431,163 @@ async function verifyLinkedNativeMemberOwnerMail(input:{
       await new Promise<void>((resolve,reject)=>
         server.close(e=>e?reject(e):resolve()))
   }
+}
+
+
+/**
+ * Approved #252 late protected-Owner notice: the Owner was an ordinary
+ * Member when the real closing START event committed. Promotion is task-only
+ * PG16 fixture state, NOT a product promotion API or production data update.
+ * The existing worker must now attach B to the authenticated source, without
+ * changing A's original schedule or claiming external mailbox delivery.
+ */
+export async function verifyB22LateProtectedOwnerClosingNotice(input:{
+  browser:B06Chrome;reviewer:B06Chrome;container:any;
+  q:(sql:string,params?:any[])=>Promise<any[]>;
+  personA:string;personB:string;memberMembershipId:string;
+  organizationId:string;sellerId:string
+}):Promise<void>{
+  const {browser,reviewer,container,q,personA,personB,
+    memberMembershipId,organizationId,sellerId}=input
+  assert.equal(process.env.CI,"true")
+  assert.equal(process.env.PG_MFA_TEST_SENTINEL,"mfa-pg16-disposable-ci-v1")
+  assert.notEqual(personA,personB)
+  const path="/personal/store-owner-closing?"+
+    new URLSearchParams({organization_id:organizationId,seller_id:sellerId})
+  const get=(b:B06Chrome)=>b.callFunction(
+    "async function(path){const r=await fetch(path,{cache:'no-store'});"+
+    "return {status:r.status,body:await r.json()}}",path)
+  const write=async(action:"start"|"withdraw",version:number)=>
+    browser.callFunction(
+      "async function(args){const x=JSON.parse(args);"+
+      "const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-owner-closing',"+
+      "{method:'POST',headers:{'content-type':'application/json',"+
+      "'x-csrf-token':s.csrf_token},body:JSON.stringify(x)});"+
+      "return {status:r.status,body:await r.json()}}",
+      JSON.stringify({organization_id:organizationId,seller_id:sellerId,
+        action,request_id:"dasc_"+randomBytes(16).toString("hex"),
+        expected_version:version,
+        ...(action==="start"?{consequences_acknowledged:true}:{})}))
+  const member=await q("select role,protected_owner,status,revoked_at "+
+    "from da_organization_membership where id=$1 and person_id=$2",[
+      memberMembershipId,personB])
+  assert.equal(member.length,1)
+  assert.equal(member[0].role,"member")
+  assert.equal(member[0].protected_owner,false)
+  assert.equal(member[0].status,"active")
+  const original=await get(browser)
+  assert.equal(original.status,200)
+  assert.equal(original.body.state,"withdrawn")
+  assert.equal((await get(reviewer)).status,403,
+    "Ordinary Member cannot inspect a protected Owner notice")
+  const start=await write("start",original.body.version)
+  assert.equal(start.status,200)
+  assert.equal(start.body.status,"closing")
+  assert.equal(start.body.version,original.body.version+1)
+  const source=await q("select source_audit_event_id from da_store_owner_closing "+
+    "where seller_id=$1 and state='closing' and version=$2",[
+      sellerId,start.body.version])
+  assert.equal(source.length,1)
+  const eventId=source[0].source_audit_event_id
+  const beforeRecipients=await q("select person_id from da_notification_receipt "+
+    "where audit_event_id=$1 order by person_id",[eventId])
+  assert.deepEqual(beforeRecipients.map((r:any)=>r.person_id),[personA],
+    "The later Owner must not already have a historical creation-time receipt")
+  const beforeAudit=await q("select e.id,e.occurred_at,x.id as outbox_id "+
+    "from da_audit_event e join da_audit_outbox x "+
+    "on x.source_audit_event_id=e.id where e.id=$1",[eventId])
+  assert.equal(beforeAudit.length,1)
+  const promoted=await q("update da_organization_membership "+
+    "set role='owner',protected_owner=true,updated_at=clock_timestamp() "+
+    "where id=$1 and person_id=$2 and role='member' and protected_owner=false "+
+    "and status='active' and revoked_at is null returning id",[
+      memberMembershipId,personB])
+  assert.deepEqual(promoted,[{id:memberMembershipId}])
+  let withdrawn=false
+  try{
+    const missing=await get(reviewer)
+    assert.equal(missing.status,200,
+      "Already-linked native SellerMember with new protected Owner grant can read")
+    assert.deepEqual(missing.body.notification_coverage,{
+      protected_owners:2,personal_receipts:1,mailbox_delivery_verified:false})
+    assert.equal(missing.body.email_notice.status,"not_applicable")
+    // No outside SMTP: the already installed worker is invoked with an
+    // explicitly unavailable transport. This proves recipient enrollment,
+    // claim failure and canonical retry time, NOT SMTP 250 or delivery.
+    const scoped={resolve:(key:string)=>key==="dogruadresAccess"?
+      {getActiveSmtpConfig:async()=>null}:container.resolve(key)}
+    await runOwnerClosingEmailTick(scoped as any)
+    const receipts=await q("select person_id from da_notification_receipt "+
+      "where audit_event_id=$1 order by person_id",[eventId])
+    assert.deepEqual(receipts.map((r:any)=>r.person_id).sort(),
+      [personA,personB].sort())
+    const rows=await q("select person_id,attempts,last_result,next_attempt_at,"+
+      "late_schedule_at,message_id,accepted_at from da_store_owner_closing_email "+
+      "where audit_event_id=$1 order by person_id",[eventId])
+    assert.equal(rows.length,2)
+    const byPerson=new Map(rows.map((r:any)=>[r.person_id,r]))
+    const a=byPerson.get(personA) as any
+    const b=byPerson.get(personB) as any
+    assert.ok(a&&b)
+    assert.equal(a.late_schedule_at,null)
+    assert.equal(new Date(a.next_attempt_at).getTime()-
+      new Date(beforeAudit[0].occurred_at).getTime(),86400000,
+      "Original Owner keeps exact original +24h slot")
+    assert.ok(b.late_schedule_at,"Only the later Owner gets a new schedule")
+    assert.equal(new Date(b.next_attempt_at).getTime()-
+      new Date(b.late_schedule_at).getTime(),86400000,
+      "Later Owner's next retry is +24h after enrollment, not the old event")
+    for(const x of [a,b]){
+      assert.equal(x.attempts,1)
+      assert.equal(x.last_result,"failed")
+      assert.equal(x.message_id,null)
+      assert.equal(x.accepted_at,null)
+    }
+    const current=await get(reviewer)
+    assert.equal(current.status,200)
+    assert.deepEqual(current.body.notification_coverage,{
+      protected_owners:2,personal_receipts:2,mailbox_delivery_verified:false})
+    assert.equal(current.body.email_notice.status,"failed")
+    assert.equal(current.body.permanent_finalization_enabled,false)
+    assert.equal(JSON.stringify(current.body).includes("person_id"),false)
+    assert.equal(JSON.stringify(current.body).includes("message_id"),false)
+    const beforeReplay=await q("select person_id,attempts,last_result,"+
+      "next_attempt_at,late_schedule_at from da_store_owner_closing_email "+
+      "where audit_event_id=$1 order by person_id",[eventId])
+    await runOwnerClosingEmailTick(scoped as any)
+    assert.deepEqual(await q("select person_id,attempts,last_result,"+
+      "next_attempt_at,late_schedule_at from da_store_owner_closing_email "+
+      "where audit_event_id=$1 order by person_id",[eventId]),beforeReplay,
+      "Immediate scheduler replay must not duplicate notices or claims")
+    assert.deepEqual(await q("select e.id,e.occurred_at,x.id as outbox_id "+
+      "from da_audit_event e join da_audit_outbox x "+
+      "on x.source_audit_event_id=e.id where e.id=$1",[eventId]),beforeAudit,
+      "New recipient never rewrites source audit/outbox")
+    const stop=await write("withdraw",start.body.version)
+    assert.equal(stop.status,200)
+    assert.equal(stop.body.status,"withdrawn")
+    withdrawn=true
+    const ended=await get(browser)
+    assert.equal(ended.status,200)
+    assert.equal(ended.body.permanent_finalization_enabled,false)
+  }finally{
+    if(!withdrawn){
+      // Never silently discard an active closure if the test failed.
+      // Its disposable DB remains isolated and CI must report FAIL.
+    }
+    const restored=await q("update da_organization_membership "+
+      "set role=$2,protected_owner=$3,revoked_at=$4,"+
+      "updated_at=clock_timestamp() where id=$1 returning id",[
+        memberMembershipId,member[0].role,member[0].protected_owner,
+        member[0].revoked_at])
+    assert.deepEqual(restored,[{id:memberMembershipId}])
+    assert.equal((await get(reviewer)).status,403,
+      "Lost protected Owner grant revokes access to their former private notice")
+  }
+  process.stdout.write(
+    "PASS B22 Chrome/HTTPS/PG16: new protected Owner after actual closing "+
+    "gets source-bound private receipt and independent +24h mail retry; "+
+    "first Owner original clock unchanged, replay safe, revoked access 403, "+
+    "source audit/outbox intact, no SMTP/delivery/finalizer\n")
 }
