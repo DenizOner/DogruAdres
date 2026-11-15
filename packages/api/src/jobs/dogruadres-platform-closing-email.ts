@@ -245,10 +245,13 @@ export async function runPlatformClosingEmailTick(container: MedusaContainer) {
     let result: "accepted"|"failed"|"unverified_identity"|"uncertain"="unverified_identity"
     let messageId:string|null=null
     try{
-      const recipient=await verifiedOwnerMailRecipient(db,container,claim)
-      if(recipient){
-        const {actor,email}=recipient
-        {
+      const actor=await currentActor(db,claim)
+      if(actor){
+        const email=await verifiedEmailForActorContext(
+          {scope:container} as any,{
+            ...actor,auth_provider:"emailpass",user_metadata:{}
+          })
+        if(email){
           const origin=process.env.DOGRUADRES_PUBLIC_ORIGIN
           if(!origin || new URL(origin).protocol!=="https:")
             throw new Error("Missing secure first-party notification origin")
@@ -537,13 +540,10 @@ export async function runOwnerClosingEmailTick(container:MedusaContainer){
     let result:OwnerMailOutcome="unverified_identity"
     let fenced=false,sendFenceStarted=false
     try{
-      const actor=await currentActor(db,claim)
-      if(actor){
-        const email=await verifiedEmailForActorContext(
-          {scope:container} as any,{
-            ...actor,auth_provider:"emailpass",user_metadata:{}
-          })
-        if(email){
+      const recipient=await verifiedOwnerMailRecipient(db,container,claim)
+      if(recipient){
+        const {actor,email}=recipient
+        {
           const origin=process.env.DOGRUADRES_PUBLIC_ORIGIN
           if(!origin||new URL(origin).protocol!=="https:")
             throw new Error("Missing secure first-party notification origin")
