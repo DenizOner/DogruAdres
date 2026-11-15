@@ -96,6 +96,8 @@ async function waitForBarrier(p:Promise<void>,label:string){
   }finally{if(timeout)clearTimeout(timeout)}
 }
 let beforeOwnerSmtpConfig:TestBarrier|null=null
+// Only the disposable PG16 fixture can override a native verification result.
+let ownerProofFromPg=false
 
 function serviceFor(tx:Pg){
   const service=Object.create(AccessService.prototype) as any
@@ -172,6 +174,10 @@ const container:any={resolve:(name:string)=>{
       const email=id===syntheticIdentity?syntheticEmail:
         id===retryIdentity?retryEmail:
         id===linkedMemberIdentity?linkedMemberEmail:null
+      if(ownerProofFromPg&&id===syntheticIdentity){
+        return q("select entity_type,entity_id,verified_at,deleted_at "+
+          "from auth_verification where auth_identity_id=$1",[id])
+      }
       return email?[{entity_type:"email",entity_id:email,
         verified_at:new Date(),deleted_at:null}]:[]
     }
@@ -196,6 +202,23 @@ async function setup(){
   // Nothing from this isolated test touches real/production data.
   await q("drop schema if exists public cascade")
   await q("create schema public")
+  // This worker's SQL fence also covers native Auth/actor tables. Minimal
+  // test-only table shapes make real PostgreSQL ACCESS SHARE/ROW EXCLUSIVE
+  // conflicts measurable without inventing production email ownership.
+  for(const native of ['"user"',"member","customer"]){
+    await q("create table public."+native+" (id text primary key,email text)")
+  }
+  await q("create table auth_identity (id text primary key)")
+  await q("create table provider_identity (id text primary key,entity_id text)")
+  await q("create table auth_verification (id text primary key,"+
+    "auth_identity_id text,entity_type text,entity_id text,"+
+    "verified_at timestamptz,deleted_at timestamptz)")
+  await q("insert into public.\\\"user\\\"(id,email) values ($1,$2),($3,$4)",[
+    syntheticActor,syntheticEmail,retryActor,retryEmail])
+  await q("insert into public.member(id,email) values ($1,$2)",[
+    linkedMemberActor,linkedMemberEmail])
+  await q("insert into auth_identity(id) values ($1),($2),($3)",[
+    syntheticIdentity,retryIdentity,linkedMemberIdentity])
   await q("create table da_person (id text primary key,disabled_at timestamptz,deleted_at timestamptz)")
   await q("create table da_organization (id text primary key)")
   await q("create table da_organization_membership (id text primary key,"+
