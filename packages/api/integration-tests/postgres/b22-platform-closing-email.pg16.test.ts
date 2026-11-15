@@ -1224,18 +1224,18 @@ async function main(){
 
       await runOwnerClosingEmailTick(container)
       assert.equal((await q("select attempts from da_store_owner_closing_email "+
-        "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner])[0].attempts,1,
+        "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner]))[0].attempts,1,
         "Immediate rerun cannot send before the next scheduled slot")
       // Time moves ONLY in disposable PG16 mail scheduling data. Every
       // retry remains anchored to the immutable original event time.
       for(let slot=2;slot<=4;slot++){
         await q("update da_store_owner_closing_email "+
           "set next_attempt_at=clock_timestamp()-interval '1 second' "+
-          "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner]
+          "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner])
         await runOwnerClosingEmailTick(container)
         const [attempt]=await q("select attempts,next_attempt_at "+
           "from da_store_owner_closing_email where audit_event_id=$1 and person_id=$2",
-          [ownerMailEvent,owner]
+          [ownerMailEvent,owner])
         assert.equal(attempt.attempts,slot)
         assert.equal(new Date(attempt.next_attempt_at).getTime()-
           new Date(ownerSource.occurred_at).getTime(),slot*86400000,
@@ -1243,10 +1243,10 @@ async function main(){
       }
       await q("update da_store_owner_closing_email "+
         "set next_attempt_at=clock_timestamp()-interval '1 second' "+
-        "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner]
+        "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner])
       await runOwnerClosingEmailTick(container)
       assert.equal((await q("select attempts from da_store_owner_closing_email "+
-        "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner])[0].attempts,4,
+        "where audit_event_id=$1 and person_id=$2",[ownerMailEvent,owner]))[0].attempts,4,
         "Mandatory Owner notice may never exceed four SMTP attempts")
       // Nothing in the Owner mail worker can mark mailbox delivery or
       // enable the irreversible Seller/name transition.
