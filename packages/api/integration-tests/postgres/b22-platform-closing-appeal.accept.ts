@@ -1550,6 +1550,105 @@ export async function verifyB22RealOrderedSellerDay31(input:{
     "Staff GET200 and accessible blockers, Owner GET403, appeal still pending, "+
     "finance/legal unknown and finalizer false; Seller name/URL, native Orders "+
     "and immutable audit/outbox retained; no external payment or finalization\n")
+
+  // A different, strongly authenticated platform Staff decides the pending
+  // first appeal through the real HTTPS route after day 30. A rejected appeal
+  // is NEVER proof that the Seller has no unsettled payment/legal obligations.
+  const reviewPath="/personal/platform/store-closing-reviews"
+  const reviewReason="B22 bağımsız görevli ilk itiraz incelemesi; başvuru reddedildi"
+  const reviewRequestId="dasdr_"+randomBytes(16).toString("hex")
+  const decision={organization_id:organizationId,seller_id:sellerId,
+    source_request_id:appealRequestId,request_id:reviewRequestId,
+    decision:"rejected",reason:reviewReason}
+  assert.equal((await write(foreign,reviewPath,decision)).status,403,
+    "Foreign Person must not decide a platform appeal even after day 30")
+  assert.equal((await write(staff,reviewPath,decision,true)).status,403,
+    "Staff review without a genuine first-party CSRF token is denied")
+  const beforeDecision=await q("select review_decision_request_id from "+
+    "da_store_platform_closing where seller_id=$1",[sellerId])
+  assert.equal(beforeDecision[0].review_decision_request_id,null,
+    "Negative review attempts must not persist a decision")
+  const reviewed=await write(staff,reviewPath,decision)
+  assert.equal(reviewed.status,200,
+    "Independently granted Staff must decide the first appeal via HTTPS")
+  assert.equal(reviewed.body?.decision,"rejected")
+  assert.equal(reviewed.body?.replayed,false)
+  const decided=await q("select review_decision,review_decision_request_id,"+
+    "review_decision_source_request_id,review_decision_audit_event_id,"+
+    "review_decided_by_person_id,appeal_request_id,deadline_started_at,"+
+    "state from da_store_platform_closing where seller_id=$1",[sellerId])
+  assert.equal(decided.length,1)
+  assert.equal(decided[0].review_decision,"rejected")
+  assert.equal(decided[0].review_decision_request_id,reviewRequestId)
+  assert.equal(decided[0].review_decision_source_request_id,appealRequestId)
+  assert.equal(decided[0].review_decided_by_person_id!==staffPersonId,true,
+    "Original closing Staff must never review their own closing")
+  assert.equal(decided[0].state,"appealed")
+  assert.equal(new Date(decided[0].deadline_started_at).toISOString(),deadlineAt,
+    "Independent review cannot reset the source-backed 30-day deadline")
+  const decisionEvidence=await q(
+    "select e.new_values,e.role_context,x.id as outbox_id "+
+    "from da_audit_event e join da_audit_outbox x "+
+    "on x.source_audit_event_id=e.id and x.deleted_at is null "+
+    "where e.id=$1 and e.deleted_at is null",[
+      decided[0].review_decision_audit_event_id])
+  assert.equal(decisionEvidence.length,1)
+  assert.equal(decisionEvidence[0].role_context,"platform_staff")
+  assert.equal(decisionEvidence[0].new_values.request_id,reviewRequestId)
+  assert.equal(decisionEvidence[0].new_values.source_request_id,appealRequestId)
+  assert.equal(decisionEvidence[0].new_values.decision,"rejected")
+  assert.equal(decisionEvidence[0].new_values.reason_sha256,
+    createHash("sha256").update(reviewReason).digest("hex"))
+  assert.ok((await q("select count(*)::int n from da_notification_receipt "+
+    "where audit_event_id=$1",[
+      decided[0].review_decision_audit_event_id]))[0].n>=1,
+    "The independent reasoned decision must have a durable Owner notice")
+  const afterDecision=await read(staff,path)
+  assert.equal(afterDecision.status,200)
+  assert.equal(afterDecision.body.native_order_history_observed,true)
+  assert.equal(afterDecision.body.terminal_preflight.appeal_window_elapsed,true)
+  assert.equal(afterDecision.body.terminal_preflight.appeal_review_pending,false)
+  assert.equal(afterDecision.body.terminal_preflight.appeal_accepted,false)
+  assert.equal(afterDecision.body.terminal_preflight.financial_legal_clearance_verified,false)
+  assert.equal(afterDecision.body.terminal_preflight.permanent_finalization_enabled,false)
+  assert.equal(afterDecision.body.permanent_finalization_enabled,false)
+  assert.equal((await read(foreign,path)).status,403)
+  await assertStaffBlockers(staff,sellerId,
+    "mali ve hukuki yükümlülüklerin temizlendiği doğrulanmadı",
+    ["sonuçlanmamış itiraz veya üst inceleme mevcut",
+      "itiraz kabul edildi; ayrıca kapatma uygulanamaz"])
+  assert.equal(await foundation.storeOwnerPauseAcceptingOrders([sellerId]),false)
+  const same=await write(staff,reviewPath,decision)
+  assert.equal(same.status,200)
+  assert.equal(same.body?.replayed,true,
+    "Exact review replay is read-only")
+  assert.equal((await write(staff,reviewPath,{...decision,
+    request_id:"dasdr_"+randomBytes(16).toString("hex")})).status,409,
+    "A new request cannot rewrite the first independent review decision")
+  assert.deepEqual(await q("select id,status,name,handle from seller where id=$1",
+    [sellerId]),sellerBefore)
+  assert.deepEqual(await q(
+    "select os.order_id,ogo.order_group_id from order_order_seller_seller os "+
+    'join "order" o on o.id=os.order_id and o.deleted_at is null '+
+    "join order_group_order ogo on ogo.order_id=os.order_id "+
+    "and ogo.deleted_at is null where os.seller_id=$1 "+
+    "and os.deleted_at is null order by os.order_id",[sellerId]),linkedOrders)
+  assert.deepEqual(await q("select * from da_store_name_transfer where "+
+    "source_seller_id=$1 or target_seller_id=$1 order by id",[sellerId]),
+    transfersBefore)
+  assert.deepEqual(await q('select count(*)::int n from "order"'),countOrdersBefore)
+  for(const event of events){
+    assert.equal((await q("select count(*)::int n from da_audit_event where id=$1",
+      [event.id]))[0].n,1)
+    assert.equal((await q("select count(*)::int n from da_audit_outbox "+
+      "where source_audit_event_id=$1",[event.id]))[0].n,1)
+  }
+  process.stdout.write(
+    "PASS B22 Chrome/HTTPS/PG16: independent Staff rejected first appeal "+
+    "after canonical +31d on native Seller with real Order; HTTPS 200/403, "+
+    "CSRF and conflicting review denied, exact replay, decision audit/outbox "+
+    "and Owner notice retained; appeal pending false, finance/legal unknown "+
+    "and finalizer false, original clock, Seller name and Orders unchanged\n")
 }
 
 /** Keep the huge existing B22 browser runner within the TS control-flow limit.
@@ -1562,18 +1661,30 @@ export async function verifyB22RealOrderedSellerDay31WithGrant(
   }
 ):Promise<void>{
   const {authorizedStaffPersonId,q,...scenario}=input
+  assert.notEqual(authorizedStaffPersonId,scenario.ownerPersonId)
+  assert.notEqual(authorizedStaffPersonId,scenario.staffPersonId,
+    "The reviewer is separate from the platform closing initiator")
   const grantId="da_staff_day31_"+randomBytes(8).toString("hex")
+  const reviewGrantId="da_staff_day31_review_"+randomBytes(8).toString("hex")
   await q("insert into da_platform_staff_grant "+
     "(id,person_id,task,resource,granted_by_person_id,reason) "+
     "values ($1,$2,'store.closing.manage','platform',$2,"+
     "'B22 disposable real Order day-31 Staff status probe')",[
       grantId,authorizedStaffPersonId])
   try{
+    // Review is a different, explicitly granted task. The Staff browser still
+    // must pass native strong-auth and task authorization on every HTTPS call.
+    await q("insert into da_platform_staff_grant "+
+      "(id,person_id,task,resource,granted_by_person_id,reason) "+
+      "values ($1,$2,'store.closing.review','platform',$2,"+
+      "'B22 disposable independent day-31 first-appeal review')",[
+        reviewGrantId,authorizedStaffPersonId])
     await verifyB22RealOrderedSellerDay31({...scenario,q})
   }finally{
     await q("update da_platform_staff_grant "+
       "set revoked_at=clock_timestamp() "+
-      "where id=$1 and revoked_at is null",[grantId])
+      "where id=any($1::text[]) and revoked_at is null",[
+        [grantId,reviewGrantId]])
   }
 }
 

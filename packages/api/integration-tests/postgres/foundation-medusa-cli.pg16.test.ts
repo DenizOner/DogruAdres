@@ -303,6 +303,7 @@ async function run(){
         const platformPreflightBoundaryMarker="PASS B22 Chrome/HTTPS/PG16: 720-hour Staff preflight false/true, pending first appeal and SMTP admin exception; permanent finalizer denied"
         // Only a fixed, privacy-safe marker is exported from the child stage.
         // Without its mandatory assertion, green CI would not prove +31d.
+        const day31RejectedReviewMarker="PASS B22 Chrome/HTTPS/PG16: independent Staff rejected first appeal after canonical +31d on native Seller with real Order; HTTPS 200/403, CSRF and conflicting review denied, exact replay, decision audit/outbox and Owner notice retained; appeal pending false, finance/legal unknown and finalizer false, original clock, Seller name and Orders unchanged"
         const nativeSellerDay31Marker="PASS B22 Chrome/HTTPS/PG16: native Seller-linked real Order and OrderGroup, independent canonical source+deadline+appeal/outbox fixture at +31d, Staff GET200 and accessible blockers, Owner GET403, appeal still pending, finance/legal unknown and finalizer false; Seller name/URL, native Orders and immutable audit/outbox retained; no external payment or finalization"
         const completedSourceOrderMarker="PASS B22 Chrome/HTTPS/PG16: completed native source OrderGroup/Order IDs, Order-Cart FK, source Seller/Offer and immutable Buyer attribution unchanged across A→B transfer, A same-ID recovery and B name adoption; zero payment"
         const historicalCartMarker="PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED"
@@ -383,7 +384,8 @@ async function run(){
               (x===ownerPlatformClosedUiMarker || x===legacyPlatformClosingMarker || x===dualRoleLockMarker || x===platformCrossSessionMarker ||
                x===platformClosingAppealMarker || x===nativeFinanceGraphMarker || x===nativeMultiSellerOrderMarker || x===platformClosingEmailLinkMarker ||
                x===ownerNativeProofMarker || x===ownerMailNativeRetryMarker || x===ownerRealSmtpReadbackMarker || x===ownerNativeMemberReadbackMarker || x===platformFinalReviewMarker || x===platformStaffReviewMarker ||
-               x===platformPreflightBoundaryMarker || x===nativeSellerDay31Marker)).join("\n")
+               x===platformPreflightBoundaryMarker || x===nativeSellerDay31Marker ||
+               x===day31RejectedReviewMarker)).join("\n")
           if(child.error||child.status!==0){
             // The long B22 child can legitimately fail at the still-blocked
             // tax-document approval. Do not bury *completed* earlier native
@@ -489,6 +491,8 @@ async function run(){
           "Missing HTTP/PG16 boundary, pending appeals and Staff admin-fallback acceptance proof")
         assert.ok(result.split("\n").includes(nativeSellerDay31Marker),
           "Missing real native Seller OrderGroup with audited +31d Staff/foreign, appeal, finance and finalizer negative acceptance proof")
+        assert.ok(result.split("\n").includes(day31RejectedReviewMarker),
+          "Missing HTTPS independent first-appeal rejection at +31d with finance/finalizer fail-closed, immutable Orders and audit proof")
         // Both new B22 historical-reader negatives must be visible as full
         // redacted proof lines. Child success alone is not their evidence.
         for(const marker of [
