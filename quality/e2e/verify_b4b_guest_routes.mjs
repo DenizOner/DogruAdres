@@ -93,7 +93,7 @@ try {
     NEXT_TELEMETRY_DISABLED: "1",
     MEDUSA_BACKEND_URL: "http://127.0.0.1:" + backendPort,
     NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY: "pk_task_only_243",
-    NEXT_PUBLIC_DEFAULT_REGION: "tr",
+    NEXT_PUBLIC_DEFAULT_REGION: "us", // intentionally absent from backend regions
     NEXT_PUBLIC_BASE_URL: "http://127.0.0.1",
     NEXT_PUBLIC_SITE_NAME: "DoğruAdres",
   };
@@ -135,8 +135,10 @@ try {
   assert.ok(ready, "Next production startup/guest gate failed: " + startLog.slice(-1000));
 
   const blocked = [
-    "/", "/tr", "/tr/", "/us", "/tr/products/task-only",
-    "/tr/categories", "/tr/categories/task-only", "/tr/collections/task-only",
+    "/", "/tr", "/tr/", "/us", "/us/products/task-only",
+    "/tr/products/task-only", "/%74r/products/synthetic.jpg",
+    "/%74r/products/task-only", "/tr/categories", "/tr/categories/task-only",
+    "/tr/collections/task-only",
     "/tr/cart", "/tr/checkout", "/tr/order/task-only/confirmed",
     "/tr/products/synthetic.jpg", "/tr/products/task-only?token=not-a-real-token"
   ];
@@ -149,7 +151,9 @@ try {
       assert.equal(canonical.protocol, "http:");
       assert.equal(canonical.port, String(port));
       assert.ok(["localhost", "127.0.0.1"].includes(canonical.hostname));
-      assert.equal(canonical.pathname, path.replace(/\/$/, "") || "/");
+      const expected = path.replace(/\/$/, "") || "/";
+      assert.ok([expected, decodeURIComponent(expected)].includes(canonical.pathname),
+        "Next 308 only canonicalizes the path, never bypasses its B4B guard");
       assert.doesNotMatch(await response.text(), /Mercur B2C|Snag your style|trending listings/i);
       response = await fetchLocal(origin, canonical.pathname + canonical.search);
     }
@@ -161,7 +165,7 @@ try {
     assert.equal(location.port, String(port));
     assert.ok(["127.0.0.1", "localhost"].includes(location.hostname),
       "Redirect escaped the task-only loopback origin");
-    assert.equal(location.pathname, path === "/us" ? "/us/login" : "/tr/login");
+    assert.equal(location.pathname, "/tr/login", "Use supported region when default is absent");
     assert.equal(location.search, "", "No query or bearer token copied to login");
     assert.match(response.headers.get("cache-control") ?? "", /no-store/);
     assert.match(response.headers.get("x-robots-tag") ?? "", /noindex/);
