@@ -318,7 +318,8 @@ async function verifyStaffMailRealHttpSelectionRace(
   assert.equal(await staff.callFunction(
     "function(a,b){if(globalThis.__daMailHttpRace)return false;"+
     "const native=globalThis.fetch;const state={original:native,oldHeld:false,"+
-    "oldStatus:null,newStatus:null,taken:false,release:null};"+
+    "oldStatus:null,newStatus:null,taken:false,release:null,"+
+    "oldBodyConsumed:false,oldContinuationFlushed:false};"+
     "globalThis.__daMailHttpRace=state;"+
     "globalThis.fetch=function(input,init){"+
       "const url=new URL(typeof input==='string'?input:input.url,location.href);"+
@@ -328,6 +329,11 @@ async function verifyStaffMailRealHttpSelectionRace(
       "if(mail&&seller===a&&!state.taken){state.taken=true;"+
         "return real.then(response=>new Promise(resolve=>{"+
           "state.oldStatus=response.status;state.oldHeld=true;"+
+    "const nativeJson=response.json.bind(response);"+
+    "response.json=(...args)=>nativeJson(...args).then(body=>{"+
+      "state.oldBodyConsumed=true;"+
+      "setTimeout(()=>{state.oldContinuationFlushed=true},0);"+
+      "return body});"+
           "state.release=()=>{state.release=null;resolve(response)};"+
         "}))}"+
       "if(mail&&seller===b)return real.then(response=>{"+
@@ -353,13 +359,16 @@ async function verifyStaffMailRealHttpSelectionRace(
     assert.deepEqual(before,{sellerIsB:true,
       message:"Bu mağaza için henüz kapatma kaydı yok."})
     await staff.eval("(()=>{globalThis.__daMailHttpRace.release();return true})()")
-    // Drain the actual fetch/response-body promise continuation on Chrome.
-    await staff.eval("new Promise(resolve=>setTimeout(resolve,60))")
+    // A native Response.json() must fully consume A's real HTTP body. Its
+    // promise continuation (including async api()/UI handling) runs before the
+    // next event-loop task. This marker proves completion without a time guess.
+    await staff.wait("globalThis.__daMailHttpRace?.oldBodyConsumed===true && "+
+      "globalThis.__daMailHttpRace?.oldContinuationFlushed===true")
     assert.deepEqual(await staff.eval(view),before,
       "Late real Store A HTTP200 must not replace selected Store B's 403 state")
     process.stdout.write("PASS B22 Staff real Chrome/HTTPS: delayed Store A "+
       "HTTP200 after Store B HTTP403 preserves selected Store and private "+
-      "fail-closed status; no mocked response or authorization bypass\\n")
+      "fail-closed status; no mocked response or authorization bypass\n")
   }finally{
     // Never leave a network Promise suspended or alter later test requests.
     await staff.eval("(()=>{const state=globalThis.__daMailHttpRace;"+
