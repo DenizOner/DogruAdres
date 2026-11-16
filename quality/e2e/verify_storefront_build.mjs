@@ -1,0 +1,76 @@
+// Scoped existing-runner Storefront diagnostics for #374 / PR #388.
+// No new workflow, service, DB, worktree, paid tool, or persistent artifact.
+import { spawnSync } from "node:child_process";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const api = join(repo, "packages", "api");
+const storefront = join(repo, "apps", "storefront");
+if (
+  process.env.GITHUB_ACTIONS !== "true" ||
+  process.env.GITHUB_EVENT_NAME !== "pull_request" ||
+  process.env.GITHUB_HEAD_REF !== "fix/baris-374-chip-keyboard-filters" ||
+  !process.env.RUNNER_TEMP
+) {
+  throw new Error("Refuse Storefront diagnostics outside the exact task-owned GitHub PR runner");
+}
+
+const env = {
+  ...process.env,
+  CI: "1",
+  NEXT_TELEMETRY_DISABLED: "1",
+};
+const checks = [
+  {
+    label: "Mercur existing route codegen (disposable runner)",
+    exe: "bun",
+    args: ["run", "codegen"],
+    cwd: api,
+    timeout: 180000,
+  },
+  {
+    label: "Storefront TypeScript --noEmit",
+    exe: "node",
+    args: ["../../node_modules/typescript/bin/tsc", "--noEmit", "--incremental", "false", "-p", "tsconfig.json"],
+    cwd: storefront,
+    timeout: 180000,
+  },
+  {
+    label: "Storefront ESLint zero warnings",
+    exe: "node",
+    args: ["../../node_modules/eslint/bin/eslint.js", ".", "--max-warnings", "0"],
+    cwd: storefront,
+    timeout: 180000,
+  },
+  {
+    label: "Storefront Next.js production build",
+    exe: "bun",
+    args: ["run", "build"],
+    cwd: storefront,
+    timeout: 360000,
+  },
+];
+
+for (const check of checks) {
+  console.log("STORE374 START: " + check.label);
+  const result = spawnSync(check.exe, check.args, {
+    cwd: check.cwd,
+    env,
+    encoding: "utf8",
+    timeout: check.timeout,
+    maxBuffer: 12 * 1024 * 1024,
+    windowsHide: true,
+  });
+  const passed = !result.error && result.status === 0;
+  console.log("STORE374 " + (passed ? "PASS" : "FAIL") + ": " + check.label + " exit=" + String(result.status));
+  if (!passed) {
+    // Print only a bounded excerpt of diagnostic output from the disposable test runner.
+    // There must be no real-user data or production credentials in this synthetic CI job.
+    const output = [result.stdout ?? "", result.stderr ?? ""].join("\n");
+    console.error(output.slice(-16000));
+    if (result.error) console.error("STORE374 process error: " + String(result.error.message));
+    throw new Error("STORE374 test failed: " + check.label);
+  }
+}
+console.log("STORE374 PASS: codegen, TypeScript, zero-warning ESLint and Next.js production build");
