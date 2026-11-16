@@ -132,6 +132,21 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
         self.assertFalse(self.tls.is_checked())
         self.assertEqual(self.page.locator("#smtp-port").input_value(), "465")
 
+    def test_radio_group_has_one_tab_stop_and_preserves_logical_focus_order(self):
+        # From port, native radio group gets one Tab stop; the next Tab
+        # moves to SMTP username rather than trapping focus in the group.
+        port = self.page.locator("#smtp-port")
+        port.focus()
+        self.page.keyboard.press("Tab")
+        self.assertTrue(self.ssl.evaluate("(el) => document.activeElement === el"))
+        self.page.keyboard.press("Tab")
+        self.assertEqual(
+            self.page.evaluate("document.activeElement.id"), "smtp-user"
+        )
+        self.page.keyboard.press("Shift+Tab")
+        self.assertTrue(self.ssl.evaluate("(el) => document.activeElement === el"))
+        self.assertEqual(port.input_value(), "465")
+
     def test_space_selects_unchecked_radio_with_default_port(self):
         self.tls.focus()
         self.page.keyboard.press("Space")
