@@ -6,6 +6,7 @@ interface ChipProps {
   disabled?: boolean;
   color?: boolean;
   onSelect?: () => void;
+  ariaLabel?: string;
   className?: string;
   "data-testid"?: string;
 }
@@ -16,6 +17,7 @@ export function Chip({
   disabled,
   color,
   onSelect,
+  ariaLabel,
   className,
   "data-testid": dataTestId,
 }: ChipProps) {
@@ -31,23 +33,27 @@ export function Chip({
     : '';
 
   return (
-    <div
+    <button
+      type="button"
+      disabled={disabled}
       data-disabled={disabled}
+      aria-label={ariaLabel ?? (color && typeof value === 'string' ? value : undefined)}
+      aria-pressed={selected === undefined ? undefined : selected}
       className={cn(
         baseClasses,
         colorClasses,
         selectedClasses,
         hoverClasses,
         disabledClasses,
+        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
         className
       )}
-      onClick={!disabled ? onSelect : undefined}
-      role='button'
-      tabIndex={disabled ? -1 : 0}
+      onClick={onSelect}
       data-testid={dataTestId ?? 'chip'}
     >
       {color ? (
         <span
+          aria-hidden="true"
           className={cn(
             'w-[32px] h-[32px] bg-action absolute top-[3px] left-[3px] rounded-xs',
             disabled && 'bg-disabled'
@@ -59,6 +65,6 @@ export function Chip({
       ) : (
         value
       )}
-    </div>
+    </button>
   );
 }
