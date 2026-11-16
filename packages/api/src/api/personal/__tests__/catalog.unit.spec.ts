@@ -136,7 +136,7 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
     expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
   })
   it("hides a native open Seller with invalid approval metadata but keeps an approved Store visible",async()=>{
-    const badApprovals:unknown[]=["not-a-timestamp",true,42,new Date(NaN),{},null]
+    const badApprovals:unknown[]=["not-a-timestamp","1","2026-02-30","11/02/2026",true,42,new Date(NaN),{},null]
     for(const approved_at of badApprovals){
       stores[0]={...stores[0],approved_at}
       offerRead.mockClear()
@@ -148,6 +148,8 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
     const now=Date.now()
     expect(nativeSellerTradingAt({status:"open",approved_at:new Date(now-1000)},now)).toBe(true)
     expect(nativeSellerTradingAt({status:"open",approved_at:"2026-11-02"},now)).toBe(true)
+    expect(nativeSellerTradingAt({status:"open",approved_at:"2026-11-02T12:34:56.123Z"},now)).toBe(true)
+    expect(nativeSellerTradingAt({status:"open",approved_at:"2026-11-02 12:34:56+00"},now)).toBe(true)
     for(const approved_at of badApprovals){
       expect(nativeSellerTradingAt({status:"open",approved_at},now)).toBe(false)
     }
