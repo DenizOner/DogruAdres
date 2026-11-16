@@ -34,6 +34,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   if (Object.keys(req.query || {}).length) return res.status(400).json({message:"Invalid input"})
   const service = access(req)
   const token = sessionToken(req)
+  // An absent or malformed opaque cookie is an unauthorized visitor, not a
+  // backend outage. Deny before any session/Person/Medusa factor lookup.
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token))
+    return res.status(403).json({message:"Access denied"})
   // Factor listing is tied ONLY to the exact AuthIdentity from the live
   // server-side browser session, never an ID supplied by the caller.
   let session
