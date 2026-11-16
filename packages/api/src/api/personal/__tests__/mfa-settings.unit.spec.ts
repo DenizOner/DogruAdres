@@ -1,3 +1,4 @@
+import { createServer } from "node:http"
 import { GET, POST } from "../mfa/route"
 import { GET as PersonalPageGET } from "../route"
 import { access, csrf, enabled, sessionToken } from "../security"
@@ -16,12 +17,13 @@ describe("M0 MFA platform and personal settings ingress", () => {
   const nativeAuth = { listAuthMfa: jest.fn() }
   const platform = { platform_mode:"optional",version:4 }
   const personal = { person_id:"daprs_1",user_enabled:false,version:2 }
+  const opaqueSession = "S".repeat(43) // matches server-side browser token format
   beforeEach(()=>{
     jest.resetAllMocks()
     process.env.DOGRUADRES_MFA_SETTINGS_ENABLED="true"
     ;(enabled as jest.Mock).mockReturnValue(true)
     ;(csrf as jest.Mock).mockResolvedValue(true)
-    ;(sessionToken as jest.Mock).mockReturnValue("server-cookie-session")
+    ;(sessionToken as jest.Mock).mockReturnValue(opaqueSession)
     ;(access as jest.Mock).mockReturnValue(store)
     store.personalSession.mockResolvedValue({ person_id:"daprs_1", auth_identity_id:"auth_self" })
     nativeAuth.listAuthMfa.mockResolvedValue([{
@@ -42,12 +44,55 @@ describe("M0 MFA platform and personal settings ingress", () => {
   })
   const invoke=async(method:"GET"|"POST",body?:unknown,query={})=>{
     const res:any={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),json:jest.fn().mockReturnThis()}
-    const req:any={body,query,headers:{cookie:"da_session=server-cookie-session"},
+    const req:any={body,query,headers:{cookie:"da_session="+opaqueSession},
       scope:{resolve:jest.fn().mockReturnValue(nativeAuth)}}
     if(method==="GET")await GET(req,res);else await POST(req,res)
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","no-store")
     return res
   }
+  it.each([undefined,"not-an-opaque-session"])("real loopback HTTP denies invalid cookie %s before any Person lookup",async cookie=>{
+    // This exercises the actual route handler on a real HTTP socket. The
+    // Medusa API loader and PostgreSQL remain mocked, not E2E acceptance.
+    ;(sessionToken as jest.Mock).mockImplementation((request:any)=>{
+      const fields=String(request.headers.cookie??"").split(";")
+        .map((value:string)=>value.trim()).filter((value:string)=>value.startsWith("da_session="))
+      return fields.length===1?fields[0].slice("da_session=".length):""
+    })
+    const server=createServer(async(request,response)=>{
+      const out:any={
+        setHeader:(name:string,value:string)=>{response.setHeader(name,value);return out},
+        status:(status:number)=>{response.statusCode=status;return out},
+        json:(value:unknown)=>{
+          response.setHeader("content-type","application/json")
+          response.end(JSON.stringify(value));return out
+        },
+      }
+      try {
+        // IncomingMessage exposes headers through its prototype; spreading it
+        // into a plain object silently drops that getter.
+        await GET(Object.assign(request,{query:{}}) as any,out)
+      } catch {
+        // Never leave a real HTTP client hanging on a test-adapter failure.
+        response.statusCode=500
+        response.end("Test adapter failed")
+      }
+    })
+    await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve))
+    try{
+      const address=server.address()
+      if(!address || typeof address==="string")throw Error("Missing isolated HTTP port")
+      const response=await fetch("http://127.0.0.1:"+address.port+"/personal/mfa",
+        cookie?{headers:{cookie:"da_session="+cookie}}:{})
+      expect(response.status).toBe(403)
+      expect(response.headers.get("cache-control")).toBe("no-store")
+      expect(await response.json()).toEqual({message:"Access denied"})
+      expect(store.personalSession).not.toHaveBeenCalled()
+      expect(store.personalMfaSettings).not.toHaveBeenCalled()
+      expect(nativeAuth.listAuthMfa).not.toHaveBeenCalled()
+    }finally{
+      await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()))
+    }
+  })
   it.each(["disabled","no global identity"])("never touches persistence when %s",async cause=>{
     if(cause==="disabled")delete process.env.DOGRUADRES_MFA_SETTINGS_ENABLED
     else (enabled as jest.Mock).mockReturnValue(false)
@@ -57,7 +102,7 @@ describe("M0 MFA platform and personal settings ingress", () => {
   })
   it("reads only current server session without user id query",async()=>{
     const r=await invoke("GET")
-    expect(store.personalMfaSettings).toHaveBeenCalledWith("server-cookie-session")
+    expect(store.personalMfaSettings).toHaveBeenCalledWith(opaqueSession)
     expect(nativeAuth.listAuthMfa).toHaveBeenCalledWith(
       {auth_identity_id:"auth_self"},{take:101,skip:0}
     )
@@ -230,7 +275,7 @@ describe("M0 MFA platform and personal settings ingress", () => {
   })
   it("persists ONLY server-selected Person preference; flags native state as unverified",async()=>{
     const r=await invoke("POST",{action:"personal",user_enabled:true,expected_version:2})
-    expect(store.personalSetMfaPreference).toHaveBeenCalledWith("server-cookie-session",true,2)
+    expect(store.personalSetMfaPreference).toHaveBeenCalledWith(opaqueSession,true,2)
     expect(r.json).toHaveBeenCalledWith(expect.objectContaining({native_factor_state:"unverified"}))
     expect(store.personalSetPlatformMfaMode).not.toHaveBeenCalled()
   })
@@ -242,7 +287,7 @@ describe("M0 MFA platform and personal settings ingress", () => {
   })
   it("records platform mode with explicit pending native factor reconciliation",async()=>{
     const r=await invoke("POST",{action:"platform",platform_mode:"required",expected_version:4})
-    expect(store.personalSetPlatformMfaMode).toHaveBeenCalledWith("server-cookie-session","required",4)
+    expect(store.personalSetPlatformMfaMode).toHaveBeenCalledWith(opaqueSession,"required",4)
     expect(r.json).toHaveBeenCalledWith(expect.objectContaining({native_factor_transition:"pending_reconciliation"}))
   })
   it("denies stale client version with 409, not a blind overwrite",async()=>{
