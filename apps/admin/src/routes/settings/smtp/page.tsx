@@ -441,7 +441,7 @@ export default function PlatformSmtpSettingsPage() {
               </Label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label
-                  onClick={() => { setSecurity("ssl"); if (port === 587) setPort(465) }}
+                  
                   className={`min-h-[48px] p-4 rounded-lg border-2 cursor-pointer transition-all flex items-start gap-3 ${
                     security === "ssl"
                       ? "border-[#0e66c2] bg-blue-50/50 dark:bg-blue-950/20"
@@ -452,7 +452,7 @@ export default function PlatformSmtpSettingsPage() {
                     type="radio"
                     name="security-mode"
                     checked={security === "ssl"}
-                    onChange={() => {}}
+                    onChange={() => { setSecurity("ssl"); if (port === 587) setPort(465) }}
                     className="mt-1 text-[#0e66c2]"
                   />
                   <div>
@@ -467,7 +467,7 @@ export default function PlatformSmtpSettingsPage() {
                 </label>
 
                 <label
-                  onClick={() => { setSecurity("tls"); if (port === 465) setPort(587) }}
+                  
                   className={`min-h-[48px] p-4 rounded-lg border-2 cursor-pointer transition-all flex items-start gap-3 ${
                     security === "tls"
                       ? "border-[#0e66c2] bg-blue-50/50 dark:bg-blue-950/20"
@@ -478,7 +478,7 @@ export default function PlatformSmtpSettingsPage() {
                     type="radio"
                     name="security-mode"
                     checked={security === "tls"}
-                    onChange={() => {}}
+                    onChange={() => { setSecurity("tls"); if (port === 465) setPort(587) }}
                     className="mt-1 text-[#0e66c2]"
                   />
                   <div>
