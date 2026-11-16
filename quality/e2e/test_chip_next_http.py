@@ -223,10 +223,34 @@ class NextFilterHttpTest(unittest.TestCase):
         # in the still-open real ProductSearchSidebar modal.
         self.page.wait_for_function(
             "() => { const m=document.querySelector('[data-testid=modal]');"
-            " return m && m.contains(document.activeElement)"
-            " && document.activeElement?.tagName !== 'BODY'; }"
+            " return m && m.querySelector('.heading-md') === document.activeElement; }"
+        )
+        self.assertTrue(modal.locator(".heading-md").is_visible())
+        self.assertTrue(modal.is_visible())
+
+    def test_actual_next_mobile_last_color_focuses_visible_modal_heading(self):
+        # With no selected size, its accordion remains collapsed but still
+        # contains DOM buttons. Those hidden buttons must not receive focus.
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.goto(PATH + "?color=Red&sortBy=recent")
+        self.page.get_by_role("button", name="Filters", exact=True).click()
+        modal = self.page.get_by_test_id("modal")
+        modal.wait_for(state="visible")
+        action = modal.get_by_role("button", name="Filtreyi kaldır: Color — Red")
+        action.focus()
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_url("**?sortBy=recent")
+        heading = modal.locator(".heading-md")
+        heading.wait_for(state="visible")
+        self.page.wait_for_function(
+            "() => { const m=document.querySelector('[data-testid=modal]');"
+            " return m && document.activeElement === m.querySelector('.heading-md'); }"
         )
         self.assertTrue(modal.is_visible())
+        self.assertEqual(
+            modal.get_by_role("button", name="Filtreyi kaldır: Color — Red").count(),
+            0,
+        )
 
     def test_actual_next_localized_filter_labels(self):
         # URL prefix is a country code, not a language code.
