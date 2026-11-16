@@ -82,6 +82,14 @@ export default async function({container}:ExecArgs){
     const own=await mfaGet(c,'/personal/mfa','include')
     assert.equal(own.status,200,'Authenticated native MFA user must read own settings')
     assert.equal(own.cacheControl,'no-store')
+    // Explicit response envelopes are safer than a blacklist: a newly added
+    // identity, factor or credential field must fail this privacy acceptance.
+    assert.deepEqual(Object.keys(own.body??{}).sort(),
+      ['platform','personal','can_manage_platform','native_factor_state','effective_mfa_target','runtime_enforcement'].sort())
+    assert.deepEqual(Object.keys(own.body?.platform??{}).sort(),['platform_mode','version'])
+    assert.deepEqual(Object.keys(own.body?.personal??{}).sort(),['person_id','user_enabled','version'])
+    assert.deepEqual(Object.keys(own.body?.effective_mfa_target??{}).sort(),
+      ['next_step','required','user_control_allowed'])
     assert.equal(own.body?.personal?.person_id,actors[i].person,'MFA Person binding must match the live native session')
     assert.equal(own.body?.personal?.user_enabled,false,'A fresh unrelated Person must retain the default OFF preference')
     assert.equal(own.body?.personal?.version,0)
