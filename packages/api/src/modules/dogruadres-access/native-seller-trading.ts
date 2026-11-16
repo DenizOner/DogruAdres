@@ -15,9 +15,19 @@ export function nativeSellerTradingAt(s:{
   if(s.status!=="open"||!Number.isFinite(now))return false
   // Native approval is a timestamp, not a truthy marker. Corrupt or missing
   // approval metadata must never unlock private discovery or checkout.
-  const approvedAt=s.approved_at instanceof Date?s.approved_at.getTime():
-    typeof s.approved_at==="string"?new Date(s.approved_at).getTime():NaN
+  const approval=s.approved_at
+  if(!(approval instanceof Date)&&
+     (typeof approval!=="string"||
+      !/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?$/.test(approval)))return false
+  const approvedAt=new Date(approval).getTime()
   if(!Number.isFinite(approvedAt))return false
+  // Date.parse normalizes some impossible calendar dates instead of rejecting.
+  if(typeof approval==="string"){
+    const day=approval.slice(0,10)
+    const calendar=new Date(day+"T00:00:00Z")
+    if(!Number.isFinite(calendar.getTime())||calendar.toISOString().slice(0,10)!==day)
+      return false
+  }
   const from=s.closed_from==null?null:new Date(s.closed_from).getTime()
   const to=s.closed_to==null?null:new Date(s.closed_to).getTime()
   if(from===null&&to===null)return true
