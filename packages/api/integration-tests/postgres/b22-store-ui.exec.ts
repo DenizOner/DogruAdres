@@ -4619,6 +4619,49 @@ async function verifyB22NativeSellerOrderAttribution(input:{
   assert.deepEqual(await native.listOrderGroups({
     id:multiGroupId,seller_id:secondOwnerStoreId
   },{take:2}),[],"A third Seller must not match this shared group")
+  // A Seller-scoped OrderGroup is a SHARED container, not that Seller's
+  // Order or financial ledger. Reuse the already verified native per-Order
+  // Seller attribution BEFORE reading native returns, fulfilments and
+  // transactions; never aggregate another Seller's liability by Group ID.
+  // These task-owned zero-total Orders show queryability, NOT debt clearance.
+  const liabilityOrderBySeller=new Map<string,string>()
+  for(const bound of perOrderSeller){
+    const {data:liabilityRows}=await query.graph({
+      entity:"order",filters:{id:bound.order_id},
+      fields:["id","returns.id","returns.status","transactions.id",
+        "transactions.reference","transactions.reference_id",
+        "fulfillments.id","payment_collections.id",
+        "payment_collections.payments.id",
+        "payment_collections.payments.refunds.id"]
+    })
+    assert.ok(Array.isArray(liabilityRows)&&liabilityRows.length===1,
+      "Each exact Seller-bound Order must have one native liability graph")
+    const order=liabilityRows[0]
+    assert.equal(order.id,bound.order_id)
+    for(const name of ["returns","transactions","fulfillments",
+      "payment_collections"])
+      assert.ok(Array.isArray(order[name]),
+        "Native "+name+" relation must be readable, even when empty")
+    for(const collection of order.payment_collections){
+      assert.ok(Array.isArray(collection.payments))
+      for(const payment of collection.payments)
+        assert.ok(Array.isArray(payment.refunds))
+    }
+    assert.equal(liabilityOrderBySeller.has(bound.seller_id),false,
+      "Every Seller's Order evidence must remain separately attributed")
+    liabilityOrderBySeller.set(bound.seller_id,order.id)
+  }
+  assert.deepEqual(new Set(liabilityOrderBySeller.keys()),
+    new Set([ownerStoreId,gammaSellerId]))
+  assert.notEqual(liabilityOrderBySeller.get(ownerStoreId),
+    liabilityOrderBySeller.get(gammaSellerId),
+    "A shared Group must never make another Seller's Order a local liability")
+  assert.deepEqual(new Set(liabilityOrderBySeller.values()),
+    new Set(perOrderSeller.map((x:any)=>x.order_id)))
+  process.stdout.write("PASS B22 real PG16 native per-Order liability graph: "+
+    "returns, fulfilments, transactions and payment/refunds readable via "+
+    "verified Seller-bound Orders, shared Group cannot transfer liability; "+
+    "zero-value fixture is NOT financial or legal clearance\\n")
   const {data:multiPayments}=await query.graph({
     entity:"cart_payment_collection",filters:{cart_id:multiSellerZeroCart.id},
     fields:["payment_collection_id"]
