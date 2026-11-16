@@ -1,6 +1,7 @@
 // Scoped existing-runner Storefront diagnostics for #374 / PR #388.
 // No new workflow, service, DB, worktree, paid tool, or persistent artifact.
 import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +22,39 @@ const env = {
   CI: "1",
   NEXT_TELEMETRY_DISABLED: "1",
 };
+// Test-only route compiled into this PR runner's production build; never committed.
+// The special auth/verify-email path uses the application's existing public
+// middleware exception, without touching Medusa, users, stores or shared DB.
+const fixtureDir = join(storefront, "src/app/[locale]/auth/verify-email/ci-only-374");
+const fixtureFile = join(fixtureDir, "page.tsx");
+const fixtureMarker = join(fixtureDir, ".owned-ci374");
+const marker = "PR388-ephemeral-next-http-fixture-374";
+if (existsSync(fixtureDir)) {
+  throw new Error("REFUSE: CI fixture target already exists; no overwrite or cleanup");
+}
+mkdirSync(fixtureDir, { recursive: true });
+writeFileSync(fixtureMarker, marker);
+writeFileSync(fixtureFile, [
+  '"use client";',
+  'import { Suspense } from "react";',
+  'import { useSearchParams } from "next/navigation";',
+  'import { SizeFilter } from "@/components/cells/SizeFilter/SizeFilter";',
+  'import { ActiveFilterElement } from "@/components/cells/ActiveFilterElement/ActiveFilterElement";',
+  'function LiveFilters() {',
+  '  const search = useSearchParams();',
+  '  const size = search.get("size");',
+  '  return <main data-testid="ci374-real-next-route">',
+  '    <h1>Isolated keyboard filter fixture — not a catalog page</h1>',
+  '    <SizeFilter />',
+  '    {size ? <ActiveFilterElement filter={["size", size]} /> : null}',
+  '  </main>;',
+  '}',
+  'export default function Page() {',
+  '  return <Suspense fallback={<div>Loading synthetic filters</div>}><LiveFilters /></Suspense>;',
+  '}'
+].join("\n"), { flag: "wx" });
+console.log("STORE374 FIXTURE: temporary Next route, never checked in; no Medusa, identity, DB or payment");
+
 const checks = [
   {
     label: "Mercur existing route codegen (disposable runner)",
@@ -52,7 +86,8 @@ const checks = [
   },
 ];
 
-for (const check of checks) {
+try {
+  for (const check of checks) {
   console.log("STORE374 START: " + check.label);
   const result = spawnSync(check.exe, check.args, {
     cwd: check.cwd,
@@ -74,3 +109,13 @@ for (const check of checks) {
   }
 }
 console.log("STORE374 PASS: codegen, TypeScript, zero-warning ESLint and Next.js production build");
+} finally {
+  // Only remove the directory created by this single CI runner and only when
+  // its ownership marker exactly matches. Never touch existing user files.
+  if (existsSync(fixtureMarker) && readFileSync(fixtureMarker, "utf8") === marker) {
+    rmSync(fixtureDir, { recursive: true, force: false });
+    console.log("STORE374 FIXTURE REMOVED: CI-only route source");
+  } else {
+    throw new Error("REFUSE: fixture ownership marker changed; do not delete");
+  }
+}
