@@ -5,7 +5,7 @@ interface ChipProps {
   selected?: boolean;
   disabled?: boolean;
   color?: boolean;
-  onSelect?: () => void;
+  onSelect?: React.MouseEventHandler<HTMLButtonElement>;
   ariaLabel?: string;
   className?: string;
   "data-testid"?: string;
