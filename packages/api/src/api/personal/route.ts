@@ -1645,6 +1645,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       data.collapsed_ids.every(id=>data.app_ids.includes(id));
   }
   async function loadCompanyLauncher(org,orgRequest){
+    // Older isolated UI harnesses exercise Organization selection without the
+    // full personal page's viewEpoch; only the real full page has B20 context.
+    if(typeof viewEpoch!=='number'||typeof currentPersonId!=='string')return;
     const seq=++companyLauncherRequest,epoch=viewEpoch,person=currentPersonId;
     companyLauncherData=null;companyLauncherBusy=false;
     el('company-launcher-panel').hidden=true;
