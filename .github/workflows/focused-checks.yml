@@ -1,0 +1,135 @@
+# #391: advisory, manually selectable tests. Never a replacement for required PR CI.
+name: Focused checks — advisory only
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Approved fast test group; full PR checks remain mandatory
+        required: true
+        type: choice
+        options:
+          - session-policy
+          - organization-authz
+          - smtp-privacy
+  # Exercise every selector on this workflow's PR without running it on unrelated PRs.
+  # workflow_dispatch becomes available from the Actions UI after default-branch merge.
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/focused-checks.yml']
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: focused-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused:
+    name: Focused test groups (non-gating)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      # PR changes test all selectors; dispatch runs only the selected group.
+      TEST_SCOPE: ${{ github.event_name == 'pull_request' && 'all-pilot' || inputs.scope }}
+    steps:
+      - name: Checkout selected ref without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate scope and rejection of invalid selectors
+        shell: bash
+        run: |
+          set -euo pipefail
+          valid_scope() {
+            case "$1" in
+              session-policy|organization-authz|smtp-privacy|all-pilot) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if valid_scope '__unapproved__' || valid_scope ''; then
+            echo 'FAIL: scope allowlist accepts unsupported input'
+            exit 1
+          fi
+          if ! valid_scope "$TEST_SCOPE"; then
+            echo 'FAIL: unsupported focused test scope'
+            exit 2
+          fi
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) test "$TEST_SCOPE" = 'all-pilot' ;;
+            workflow_dispatch) test "$TEST_SCOPE" != 'all-pilot' ;;
+            *) echo 'FAIL: unsupported trigger'; exit 2 ;;
+          esac
+          echo "Selected focused scope: $TEST_SCOPE"
+          echo 'ADVISORY ONLY: a focused PASS never replaces required PR CI or independent review.'
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - name: Setup Bun
+        id: setup_bun
+        continue-on-error: true
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+          no-cache: true
+      - name: Fallback to official pinned Bun from npm
+        if: steps.setup_bun.outcome == 'failure'
+        run: npm install -g --no-audit --no-fund bun@1.4.2
+      - name: Install exact locked dependencies
+        run: |
+          test "$(bun --version)" = '1.4.2'
+          bun install --frozen-lockfile
+      - name: Run approved focused tests
+        working-directory: packages/api
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_group() {
+            echo "RUN FOCUSED GROUP: $1"
+            case "$1" in
+              session-policy)
+                bun test src/modules/dogruadres-access/__tests__/session-policy.unit.spec.ts src/api/dogruadres/__tests__/session-policy-contract.unit.spec.ts
+                ;;
+              organization-authz)
+                bun test src/modules/dogruadres-access/__tests__/security.unit.spec.ts src/utils/__tests__/organization-authorization.unit.spec.ts
+                ;;
+              smtp-privacy)
+                node --test integration-tests/postgres/smtp-response-privacy-guard.test.mjs
+                bun test integration-tests/postgres/smtp-response-privacy-guard.test.mjs
+                ;;
+              *) echo 'FAIL: unexpected test group'; exit 2 ;;
+            esac
+          }
+          if [ "$TEST_SCOPE" = 'all-pilot' ]; then
+            for group in session-policy organization-authz smtp-privacy; do
+              run_group "$group"
+            done
+          else
+            run_group "$TEST_SCOPE"
+          fi
+      - name: Verify deliberately failing Bun test is rejected (PR smoke only)
+        if: github.event_name == 'pull_request'
+        working-directory: packages/api
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Disposable runner-only probe. Never modify real tests, DB or repository source.
+          probe="$RUNNER_TEMP/intentional-failure.test.ts"
+          printf '%s\n' \
+            'import { test, expect } from "bun:test";' \
+            'test("intentional negative proof", () => { expect(1).toBe(2); });' \
+            > "$probe"
+          if bun test "$probe" > "$RUNNER_TEMP/focused-negative.log" 2>&1; then
+            echo 'FAIL: a deliberately broken Bun test incorrectly returned success'
+            exit 1
+          fi
+          if ! grep -Eq '(^|[[:space:]])1 fail([[:space:]]|$)' "$RUNNER_TEMP/focused-negative.log"; then
+            echo 'FAIL: Bun did not report an actual failing assertion'
+            sed -n '1,20p' "$RUNNER_TEMP/focused-negative.log"
+            exit 1
+          fi
+          echo 'PASS: deliberately failing Bun assertion returned nonzero as required'
