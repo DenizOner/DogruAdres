@@ -1,6 +1,6 @@
 import { GET, POST } from "../platform/smtp/route"
 import { access, csrf, enabled, sessionToken } from "../security"
-import { SmtpConcurrentUpdateError } from "../../../modules/dogruadres-access/smtp-settings"
+import { SmtpConcurrentUpdateError, SmtpCredentialScopeChanged } from "../../../modules/dogruadres-access/smtp-settings"
 
 jest.mock("../security", () => ({
   access: jest.fn(),
@@ -241,6 +241,26 @@ describe("personal platform smtp route unit tests", () => {
         message: "Target recipient email is required for test email dispatch",
       })
       expect(mockService.personalTestPlatformSmtpSettings).not.toHaveBeenCalled()
+    })
+
+
+    it("reports a safe actionable error when a changed SMTP endpoint tries to reuse a stored credential", async () => {
+      mockService.personalTestPlatformSmtpSettings.mockRejectedValue(
+        new SmtpCredentialScopeChanged()
+      )
+      const req = createMockReq({
+        action: "test",
+        target_recipient: "recipient@example.invalid",
+        candidate_settings: { host: "different-relay.example.invalid", port: 587, security: "tls" },
+      })
+      const res = createMockRes()
+      await POST(req, res)
+      expect(res.status).toHaveBeenCalledWith(400)
+      const response = JSON.stringify(res.json.mock.calls)
+      expect(response).toContain("Explicit SMTP password required")
+      expect(response).not.toContain("different-relay.example.invalid")
+      expect(response).not.toContain("recipient@example.invalid")
+      expect(response).not.toContain("synthetic-password")
     })
 
     it("never reflects SMTP provider errors containing addresses or secrets", async () => {
