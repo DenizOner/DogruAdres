@@ -144,7 +144,12 @@ try {
     const response = await fetchLocal(origin, path);
     assert.equal(response.status, 307, "Closed commerce route must redirect: " + path);
     const location = new URL(response.headers.get("location"), origin);
-    assert.equal(location.origin, origin);
+    // Next production normalizes its own loopback Host to "localhost".
+    // Accept ONLY same-port loopback aliases, never a remote/open redirect.
+    assert.equal(location.protocol, "http:");
+    assert.equal(location.port, String(port));
+    assert.ok(["127.0.0.1", "localhost"].includes(location.hostname),
+      "Redirect escaped the task-only loopback origin");
     assert.equal(location.pathname, path === "/us" ? "/us/login" : "/tr/login");
     assert.equal(location.search, "", "No query or bearer token copied to login");
     assert.match(response.headers.get("cache-control") ?? "", /no-store/);
