@@ -11,7 +11,7 @@ const storefront = join(repo, "apps", "storefront");
 if (
   process.env.GITHUB_ACTIONS !== "true" ||
   process.env.GITHUB_EVENT_NAME !== "pull_request" ||
-  process.env.GITHUB_HEAD_REF !== "fix/baris-374-chip-keyboard-filters" ||
+  !["fix/baris-374-chip-keyboard-filters", "fix/baris-374-filter-dialog-keyboard"].includes(process.env.GITHUB_HEAD_REF) ||
   !process.env.RUNNER_TEMP
 ) {
   throw new Error("Refuse Storefront diagnostics outside the exact task-owned GitHub PR runner");
