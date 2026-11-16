@@ -2,7 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { z } from "@medusajs/framework/zod"
 import { access, csrf, enabled, sessionToken } from "../../security"
 import { IdentityAccessDenied } from "../../../../modules/dogruadres-access/identity-session"
-import { SmtpConcurrentUpdateError, InvalidSmtpSettingsState } from "../../../../modules/dogruadres-access/smtp-settings"
+import { SmtpConcurrentUpdateError, InvalidSmtpSettingsState, SmtpCredentialScopeChanged } from "../../../../modules/dogruadres-access/smtp-settings"
 import { isPrivateIp } from "../../../../modules/dogruadres-access/smtp-client"
 
 export const AUTHENTICATE = false
@@ -156,6 +156,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     } catch (err) {
       if (err instanceof IdentityAccessDenied) {
         return res.status(403).json({ message: "Access denied or strong authentication required" })
+      }
+      if (err instanceof SmtpCredentialScopeChanged) {
+        // This fixed server-defined message contains no remote host or secret.
+        return res.status(400).json({ ok: false, message: err.message })
       }
       // Provider errors may contain addresses or credentials in short fragments.
       // Never reflect them into an HTTP response.
