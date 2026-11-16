@@ -1,3 +1,4 @@
+import { createServer } from "node:http"
 import { GET, POST } from "../mfa/route"
 import { GET as PersonalPageGET } from "../route"
 import { access, csrf, enabled, sessionToken } from "../security"
@@ -49,6 +50,41 @@ describe("M0 MFA platform and personal settings ingress", () => {
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","no-store")
     return res
   }
+  it.each([undefined,"not-an-opaque-session"])("real loopback HTTP denies invalid cookie %s before any Person lookup",async cookie=>{
+    // This exercises the actual route handler on a real HTTP socket. The
+    // Medusa API loader and PostgreSQL remain mocked, not E2E acceptance.
+    ;(sessionToken as jest.Mock).mockImplementation((request:any)=>{
+      const fields=String(request.headers.cookie??"").split(";")
+        .map((value:string)=>value.trim()).filter((value:string)=>value.startsWith("da_session="))
+      return fields.length===1?fields[0].slice("da_session=".length):""
+    })
+    const server=createServer(async(request,response)=>{
+      const out:any={
+        setHeader:(name:string,value:string)=>{response.setHeader(name,value);return out},
+        status:(status:number)=>{response.statusCode=status;return out},
+        json:(value:unknown)=>{
+          response.setHeader("content-type","application/json")
+          response.end(JSON.stringify(value));return out
+        },
+      }
+      await GET({...request,query:{}} as any,out)
+    })
+    await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve))
+    try{
+      const address=server.address()
+      if(!address || typeof address==="string")throw Error("Missing isolated HTTP port")
+      const response=await fetch("http://127.0.0.1:"+address.port+"/personal/mfa",
+        cookie?{headers:{cookie:"da_session="+cookie}}:{})
+      expect(response.status).toBe(403)
+      expect(response.headers.get("cache-control")).toBe("no-store")
+      expect(await response.json()).toEqual({message:"Access denied"})
+      expect(store.personalSession).not.toHaveBeenCalled()
+      expect(store.personalMfaSettings).not.toHaveBeenCalled()
+      expect(nativeAuth.listAuthMfa).not.toHaveBeenCalled()
+    }finally{
+      await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()))
+    }
+  })
   it.each(["disabled","no global identity"])("never touches persistence when %s",async cause=>{
     if(cause==="disabled")delete process.env.DOGRUADRES_MFA_SETTINGS_ENABLED
     else (enabled as jest.Mock).mockReturnValue(false)
