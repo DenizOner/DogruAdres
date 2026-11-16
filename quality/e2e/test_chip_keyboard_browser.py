@@ -1,7 +1,8 @@
 """Actual Chip/ActiveFilterElement React behavior in Chromium on a synthetic mount.
 
-Only navigation/useFilters/icon dependencies are mocked. No real Next.js page,
-API, authentication, database, or complete WCAG 2.2 acceptance is asserted.
+The real useFilters and useUpdateSearchParams hooks run against an isolated
+synthetic Next.js router. No real Next.js page, HTTP, authentication, database,
+or complete WCAG 2.2 acceptance is asserted.
 """
 import os
 import unittest
@@ -98,12 +99,31 @@ class ChipKeyboardChromiumTest(unittest.TestCase):
         self.assertEqual(second.count(), 1)
         first.focus()
         self.page.keyboard.press("Enter")
+        self.assertEqual(
+            self.page.evaluate("window.__daRoutes"),
+            [{"target": "/tr/catalog?size=L&sortBy=recent", "options": {"scroll": False}}],
+        )
+        # Simulate the parent re-render after actual Next router navigation.
+        self.render_filters("tr", "L")
+        second = self.page.get_by_role("button", name="Filtreyi kaldır: Size — L")
         second.focus()
         self.page.keyboard.press("Space")
         self.assertEqual(
-            self.page.evaluate("window.__daFilterEvents"),
-            [{"key": "size", "value": "M"}, {"key": "size", "value": "L"}],
+            self.page.evaluate("window.__daRoutes"),
+            [{"target": "/tr/catalog?sortBy=recent", "options": {"scroll": False}}],
         )
+
+    def test_real_filter_hooks_preserve_unrelated_query_and_encode_values(self):
+        self.render_filters("tr", "M&XL,L")
+        control = self.page.get_by_role("button", name="Filtreyi kaldır: Size — M&XL")
+        self.assertEqual(control.count(), 1)
+        control.focus()
+        self.page.keyboard.press("Enter")
+        routes = self.page.evaluate("window.__daRoutes")
+        self.assertEqual(len(routes), 1)
+        self.assertEqual(routes[0]["target"], "/tr/catalog?size=L&sortBy=recent")
+        self.assertEqual(routes[0]["options"], {"scroll": False})
+        self.assertEqual(self.page.evaluate("window.__daSearchQuery"), "size=L&sortBy=recent")
 
     def test_filter_names_are_localized_without_nested_controls(self):
         for locale, name in [
@@ -119,8 +139,8 @@ class ChipKeyboardChromiumTest(unittest.TestCase):
                 control.focus()
                 self.page.keyboard.press("Space")
                 self.assertEqual(
-                    self.page.evaluate("window.__daFilterEvents"),
-                    [{"key": "size", "value": "M"}],
+                    self.page.evaluate("window.__daRoutes"),
+                    [{"target": "/tr/catalog?sortBy=recent", "options": {"scroll": False}}],
                 )
 
 
