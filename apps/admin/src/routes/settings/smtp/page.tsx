@@ -246,8 +246,8 @@ export default function PlatformSmtpSettingsPage() {
 
   // Live Test Dispatch handler
   async function handleTest() {
-    // The recipient shares the settings form but is required ONLY for the
-    // separate "Test" action, not for "Save settings".
+    // The test recipient is outside the Save settings form; validate it only
+    // for the separate Test action, leaving Save constraints unaffected.
     const recipientInput = testRecipientRef.current
     if (!recipientInput) return
     if (!recipientInput.value.trim()) {
