@@ -264,6 +264,120 @@ async function assertStaffBlockers(staff:B06Chrome,sellerId:string,
     "Irrelevant blocker must not be shown")
 }
 
+
+/**
+ * #363/#395 real Chrome/HTTPS test: a genuine Staff HTTP200 readiness response
+ * for Store A is held at the browser Promise boundary until the Store B's
+ * genuine HTTP403 has rendered. Neither response body nor server authorization
+ * is mocked. This tests the already-shipped UI's stale-response rejection.
+ */
+async function verifyStaffMailRealHttpSelectionRace(
+  staff:B06Chrome,sellerId:string,sellerPage:number):Promise<void>{
+  await staff.send("Page.bringToFront")
+  await staff.wait("document.visibilityState==='visible' && "+
+    "!document.getElementById('platform-closing-panel').hidden")
+  // Find a genuine second Staff-visible Store without a closing record.
+  const list=await read(staff,"/personal/platform/store-closings?page=0")
+  assert.equal(list.status,200)
+  assert.ok(Array.isArray(list.body?.candidates))
+  let other:{seller_id:string;organization_id:string}|undefined
+  for(const candidate of list.body.candidates){
+    if(candidate.seller_id===sellerId)continue
+    const response=await read(staff,
+      "/personal/platform/store-closing-email-readiness?"+
+      new URLSearchParams({organization_id:candidate.organization_id,
+        seller_id:candidate.seller_id}))
+    if(response.status===403){other=candidate;break}
+  }
+  assert.ok(other,"Two independent authorized Store rows needed for real Chrome race")
+  const otherSellerId=other.seller_id
+  const selected=(id:string)=>staff.callFunction(
+    "function(seller){const select=document.querySelector("+
+      "'#platform-closing-form select[name=seller_id]');"+
+      "if(!select||!Array.from(select.options).some(o=>o.value===seller))return false;"+
+      "select.value=seller;select.dispatchEvent(new Event('change',{bubbles:true}));"+
+      "return select.value===seller}",id)
+  const listReady="document.getElementById('platform-closing-status')."+
+    "textContent.startsWith('Gerekçe ile yeni satışları')"
+  const gotoSellerPage=async()=>{
+    await staff.click("#platform-closing-refresh")
+    await staff.wait(listReady)
+    for(let page=0;page<sellerPage;page++){
+      assert.equal(await staff.eval(
+        "!document.getElementById('platform-closing-more').hidden"),true)
+      await staff.click("#platform-closing-more")
+      await staff.wait(listReady)
+    }
+    assert.equal(await selected(sellerId),true)
+    await staff.wait("document.getElementById('platform-closing-mail-status')."+
+      "textContent.includes('Korunan Owner 1')")
+  }
+  await gotoSellerPage()
+  // A temporary page-only fetch wrapper calls the native Chrome fetch. It
+  // delays only promise delivery of A's *actual* successful HTTP response.
+  assert.equal(await staff.callFunction(
+    "function(a,b){if(globalThis.__daMailHttpRace)return false;"+
+    "const native=globalThis.fetch;const state={original:native,oldHeld:false,"+
+    "oldStatus:null,newStatus:null,taken:false,release:null,"+
+    "oldBodyConsumed:false,oldContinuationFlushed:false};"+
+    "globalThis.__daMailHttpRace=state;"+
+    "globalThis.fetch=function(input,init){"+
+      "const url=new URL(typeof input==='string'?input:input.url,location.href);"+
+      "const mail=url.pathname==='/personal/platform/store-closing-email-readiness';"+
+      "const seller=url.searchParams.get('seller_id');"+
+      "const real=native.call(globalThis,input,init);"+
+      "if(mail&&seller===a&&!state.taken){state.taken=true;"+
+        "return real.then(response=>new Promise(resolve=>{"+
+          "state.oldStatus=response.status;state.oldHeld=true;"+
+    "const nativeJson=response.json.bind(response);"+
+    "response.json=(...args)=>nativeJson(...args).then(body=>{"+
+      "state.oldBodyConsumed=true;"+
+      "setTimeout(()=>{state.oldContinuationFlushed=true},0);"+
+      "return body});"+
+          "state.release=()=>{state.release=null;resolve(response)};"+
+        "}))}"+
+      "if(mail&&seller===b)return real.then(response=>{"+
+        "state.newStatus=response.status;return response});"+
+      "return real};return true}",sellerId,otherSellerId),true)
+  try{
+    assert.equal(await selected(sellerId),true)
+    await staff.wait("globalThis.__daMailHttpRace?.oldHeld===true")
+    assert.equal(await staff.eval("globalThis.__daMailHttpRace.oldStatus"),200,
+      "Old Store A must be a real authenticated HTTPS 200 response")
+    // Going back to the first page is a real UI refresh and selects B.
+    await staff.click("#platform-closing-refresh")
+    await staff.wait(listReady)
+    assert.equal(await selected(otherSellerId),true)
+    await staff.wait("globalThis.__daMailHttpRace?.newStatus===403 && "+
+      "document.getElementById('platform-closing-mail-status').textContent==="+
+      JSON.stringify("Bu mağaza için henüz kapatma kaydı yok."))
+    const view="(()=>{const choice=document.querySelector("+
+      "'#platform-closing-form select[name=seller_id]');"+
+      "return {sellerIsB:choice?.value==="+JSON.stringify(otherSellerId)+","+
+      "message:document.getElementById('platform-closing-mail-status').textContent}})()"
+    const before=await staff.eval(view)
+    assert.deepEqual(before,{sellerIsB:true,
+      message:"Bu mağaza için henüz kapatma kaydı yok."})
+    await staff.eval("(()=>{globalThis.__daMailHttpRace.release();return true})()")
+    // A native Response.json() must fully consume A's real HTTP body. Its
+    // promise continuation (including async api()/UI handling) runs before the
+    // next event-loop task. This marker proves completion without a time guess.
+    await staff.wait("globalThis.__daMailHttpRace?.oldBodyConsumed===true && "+
+      "globalThis.__daMailHttpRace?.oldContinuationFlushed===true")
+    assert.deepEqual(await staff.eval(view),before,
+      "Late real Store A HTTP200 must not replace selected Store B's 403 state")
+    process.stdout.write("PASS B22 Staff real Chrome/HTTPS: delayed Store A "+
+      "HTTP200 after Store B HTTP403 preserves selected Store and private "+
+      "fail-closed status; no mocked response or authorization bypass\n")
+  }finally{
+    // Never leave a network Promise suspended or alter later test requests.
+    await staff.eval("(()=>{const state=globalThis.__daMailHttpRace;"+
+      "if(state){state.release?.();globalThis.fetch=state.original;"+
+      "delete globalThis.__daMailHttpRace}return true})()")
+    await gotoSellerPage()
+  }
+}
+
 export async function verifyB22PlatformClosingAppeal(input:{
   browser:B06Chrome;staff:B06Chrome;q:Db;foundation:any;
   ownerPersonId:string;staffPersonId:string;
@@ -447,6 +561,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.match(mailUi.text,/geri dönüşsüz kapatma kapalıdır/)
   assert.equal(mailUi.role,"status")
   assert.equal(mailUi.live,"polite")
+  await verifyStaffMailRealHttpSelectionRace(staff,sellerId,foundPage)
   const createdRows=await q("select request_id,state,version from da_store_platform_closing where seller_id=$1 and organization_id=$2",[sellerId,ownerOrgId])
   assert.equal(createdRows.length,1)
   assert.equal(createdRows[0].state,"notification_unverified")
