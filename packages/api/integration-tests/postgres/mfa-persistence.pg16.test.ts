@@ -322,7 +322,10 @@ async function main() {
         )
         // Bun returns SQLResultArray with command/count metadata. Compare
         // its row values, not its driver-specific result wrapper.
-        assert.deepEqual(Array.from(rows, row => ({
+        // The selected columns have fixed PostgreSQL types; normalize the
+        // Bun-specific SQLResultArray to plain typed row values.
+        type PreferenceRow = { person_id: string; user_enabled: boolean; version: number }
+        assert.deepEqual(Array.from(rows as PreferenceRow[], row => ({
           person_id: row.person_id, user_enabled: row.user_enabled, version: row.version,
         })), [{
           person_id: actor.person_id, user_enabled: true, version: 1,
