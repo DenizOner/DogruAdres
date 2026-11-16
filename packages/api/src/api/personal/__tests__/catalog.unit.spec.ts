@@ -135,6 +135,35 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
     await GET(req,res)
     expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
   })
+  it("hides a native open Seller with invalid approval metadata but keeps an approved Store visible",async()=>{
+    const badApprovals:unknown[]=["not-a-timestamp",true,42,new Date(NaN),{},null]
+    for(const approved_at of badApprovals){
+      stores[0]={...stores[0],approved_at}
+      offerRead.mockClear()
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(200)
+      expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+      expect(offerRead.mock.calls.some(([filter]:[any])=>filter.seller_id==="sel_a")).toBe(false)
+    }
+    const now=Date.now()
+    expect(nativeSellerTradingAt({status:"open",approved_at:new Date(now-1000)},now)).toBe(true)
+    expect(nativeSellerTradingAt({status:"open",approved_at:"2026-11-02"},now)).toBe(true)
+    for(const approved_at of badApprovals){
+      expect(nativeSellerTradingAt({status:"open",approved_at},now)).toBe(false)
+    }
+  })
+  it("denies a catalog response if native approval is revoked or corrupted during final recheck",async()=>{
+    sellerRead.mockImplementation(async(filter:any,config:any={})=>{
+      if(filter.id==="sel_a")return [{...stores[0],approved_at:"invalid-date"}]
+      const found=filter.id?stores.filter(s=>s.id===filter.id):
+        stores.filter(s=>s.status===filter.status).sort((a,b)=>a.id.localeCompare(b.id))
+      const skip=config.skip??0,take=config.take??found.length
+      return found.slice(skip,skip+take)
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+  })
   it("rejects malformed or reversed native closure timestamps instead of allowing a sale",async()=>{
     const now=Date.now(),iso=(offset:number)=>new Date(now+offset).toISOString()
     for(const [from,to] of [
