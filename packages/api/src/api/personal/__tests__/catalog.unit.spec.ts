@@ -143,7 +143,7 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
       await GET(req,res)
       expect(res.status).toHaveBeenLastCalledWith(200)
       expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
-      expect(offerRead.mock.calls.some(([filter]:[any])=>filter.seller_id==="sel_a")).toBe(false)
+      expect(offerRead.mock.calls.some(([filter])=>filter.seller_id==="sel_a")).toBe(false)
     }
     const now=Date.now()
     expect(nativeSellerTradingAt({status:"open",approved_at:new Date(now-1000)},now)).toBe(true)
