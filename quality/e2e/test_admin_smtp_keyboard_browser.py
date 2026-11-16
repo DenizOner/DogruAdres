@@ -187,9 +187,8 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
         # This button is not a submit button. The page must explicitly
         # activate native constraint validation before posting a test email.
         button.click()
-        self.assertTrue(
-            recipient.evaluate("(el) => el.validity.valueMissing")
-        )
+        self.assertFalse(recipient.evaluate("(el) => el.required"))
+        self.assertTrue(recipient.is_focused())
         self.assertEqual(self.page.evaluate("window.__daSmtpPosts"), 0)
         recipient.fill("not-an-email")
         button.click()
@@ -197,6 +196,16 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
             recipient.evaluate("(el) => el.validity.typeMismatch")
         )
         self.assertEqual(self.page.evaluate("window.__daSmtpPosts"), 0)
+
+    def test_settings_save_is_allowed_without_test_recipient(self):
+        recipient = self.page.locator("#test-recipient")
+        self.assertEqual(recipient.input_value(), "")
+        self.assertFalse(recipient.evaluate("(el) => el.required"))
+        # The Test action has an independent required-recipient gate.
+        # The enclosing settings form must not inherit that requirement.
+        self.expected_posts = 1
+        self.page.get_by_role("button", name="Ayarları kaydet").click()
+        self.page.wait_for_function("window.__daSmtpPosts === 1")
 
     def test_valid_recipient_reaches_existing_smtp_test_post(self):
         recipient = self.page.locator("#test-recipient")
