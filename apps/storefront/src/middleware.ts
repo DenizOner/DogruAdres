@@ -135,6 +135,8 @@ export async function middleware(request: NextRequest) {
   // #243 closed B4B: these are unapproved Mercur B2C demo pages, not the
   // accepted Organization-scoped /personal/catalog reader. Deny their SSR,
   // metadata and external links before region lookup or the dot-path bypass.
+  // Preserve the independently accepted Seller rename 404/200 HTTP contract:
+  // /sellers/[handle] is excluded, with native /store/sellers still closed.
   // This is deliberately all-session until an approved Buyer-specific page
   // exists; a Medusa JWT alone is not Buyer Organization authorization.
   let demoPath: string;
@@ -149,7 +151,7 @@ export async function middleware(request: NextRequest) {
     });
   }
   if (demoPath === '' || demoPath === '/' ||
-      /^\/(?:products|sellers|categories|collections|cart|checkout|order)(?:\/|$)/.test(demoPath)) {
+      /^\/(?:products|categories|collections|cart|checkout|order)(?:\/|$)/.test(demoPath)) {
     const locale = looksLikeLocale ? urlSegment.toLowerCase() : DEFAULT_REGION;
     const response = NextResponse.redirect(new URL('/' + locale + '/login', request.url), 307);
     response.headers.set('Cache-Control', 'private, no-store');

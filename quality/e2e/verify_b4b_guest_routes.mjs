@@ -135,7 +135,7 @@ try {
   assert.ok(ready, "Next production startup/guest gate failed: " + startLog.slice(-1000));
 
   const blocked = [
-    "/", "/tr", "/tr/", "/us", "/tr/products/task-only", "/tr/sellers/task-only",
+    "/", "/tr", "/tr/", "/us", "/tr/products/task-only",
     "/tr/categories", "/tr/categories/task-only", "/tr/collections/task-only",
     "/tr/cart", "/tr/checkout", "/tr/order/task-only/confirmed",
     "/tr/products/synthetic.jpg", "/tr/products/task-only?token=not-a-real-token"
@@ -170,6 +170,14 @@ try {
     assert.doesNotMatch(html, /Mercur B2C|Snag your style|trending listings|Shop By Category/i);
   }
   console.log("B4B243 PASS: " + blocked.length + " production HTTP demo-route denials, noindex and no-store");
+
+  // #243 must not break the already accepted B22 Seller rename 404/200 path.
+  // The synthetic backend has no Seller, so a former/unknown handle is 404.
+  const sellerNotFound = await fetchLocal(origin, "/tr/sellers/task-only");
+  assert.equal(sellerNotFound.status, 404,
+    "Existing Seller handle route must keep 404 instead of login redirect");
+  assert.doesNotMatch(await sellerNotFound.text(), /Snag your style|trending listings/i);
+  console.log("B4B243 PASS: Seller old-handle 404 remains, no login redirect");
 
   const protectedUser = await fetchLocal(origin, "/tr/user/orders");
   assert.equal(protectedUser.status, 307);
