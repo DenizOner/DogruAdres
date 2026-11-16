@@ -126,10 +126,16 @@ class ChipKeyboardChromiumTest(unittest.TestCase):
         self.assertEqual(self.page.evaluate("window.__daSearchQuery"), "size=L&sortBy=recent")
 
     def test_filter_names_are_localized_without_nested_controls(self):
+        # Production routes use country codes: /us and /gb must be English,
+        # /ar is Argentina (not Arabic), while /sa and /ae are Arabic regions.
         for locale, name in [
-            ("en", "Remove filter: Size — M"),
-            ("ar", "إزالة عامل التصفية: Size — M"),
             ("tr", "Filtreyi kaldır: Size — M"),
+            ("us", "Remove filter: Size — M"),
+            ("gb", "Remove filter: Size — M"),
+            ("ar", "Remove filter: Size — M"),
+            ("sa", "إزالة عامل التصفية: Size — M"),
+            ("ae", "إزالة عامل التصفية: Size — M"),
+            ("eg", "إزالة عامل التصفية: Size — M"),
         ]:
             with self.subTest(locale=locale):
                 self.render_filters(locale, "M")
