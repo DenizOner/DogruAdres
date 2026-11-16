@@ -354,7 +354,7 @@ async function main() {
           const sql = {
             async execute(statement, params = []) {
               let n = 0
-              const pg = statement.replace(/\\?/g, () => "$" + ++n)
+              const pg = statement.replace(/\?/g, () => "$" + ++n)
               if (n !== params.length) throw Error("SQL placeholder mismatch")
               return db.unsafe(pg, params)
             },
