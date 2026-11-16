@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import {
   Container,
   Heading,
@@ -75,6 +75,7 @@ export default function PlatformSmtpSettingsPage() {
 
   // Live Test State
   const [testRecipient, setTestRecipient] = useState("")
+  const testRecipientRef = useRef<HTMLInputElement>(null)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
 
   const backendUrl = ""
@@ -245,10 +246,10 @@ export default function PlatformSmtpSettingsPage() {
 
   // Live Test Dispatch handler
   async function handleTest() {
-    if (!testRecipient) {
-      toast.error("Lütfen test e-postasının gönderileceği alıcı adresini giriniz.")
-      return
-    }
+    // A type="button" inside the settings form skips native submit validation.
+    // Check the real email input before any SMTP test POST; the server must
+    // independently validate its target recipient and authorization as before.
+    if (!testRecipientRef.current?.reportValidity()) return
 
     setTesting(true)
     setTestResult(null)
@@ -599,7 +600,9 @@ export default function PlatformSmtpSettingsPage() {
                 </Label>
                 <Input
                   id="test-recipient"
+                  ref={testRecipientRef}
                   type="email"
+                  required
                   value={testRecipient}
                   onChange={(e) => setTestRecipient(e.target.value)}
                   placeholder="yonetici@dogruadres.net"
