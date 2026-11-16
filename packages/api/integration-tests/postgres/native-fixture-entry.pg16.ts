@@ -57,6 +57,30 @@ async function main(){
       const origin='http://127.0.0.1:'+server.address().port
       const page=await fetch(origin+'/personal');assert.equal(page.status,200)
       const html=await page.text();assert.ok(html.includes('role="radiogroup"'));assert.ok(html.includes('mfa-management'))
+      // Real Medusa API loader + disposable PG16: an unrecognized browser
+      // cannot read or mutate another Person's MFA preference.
+      for(const cookie of [undefined,"da_session=not-an-opaque-session"]){
+        const response=await fetch(origin+'/personal/mfa',
+          cookie?{headers:{cookie}}:undefined)
+        assert.equal(response.status,403,"Missing/malformed MFA session must deny, not report a server outage")
+        assert.equal(response.headers.get("cache-control"),"no-store")
+        assert.deepEqual(await response.json(),{message:"Access denied"})
+      }
+      const selector=await fetch(origin+'/personal/mfa?person_id=daprs_other')
+      assert.equal(selector.status,400,"Client-supplied Person selector must not choose a different identity")
+      const unauthorizedPost=await fetch(origin+'/personal/mfa',{
+        method:"POST",
+        headers:{"content-type":"application/json",
+          origin:process.env.DOGRUADRES_PUBLIC_ORIGIN!,
+          cookie:"da_session="+"A".repeat(43),
+          "x-csrf-token":"B".repeat(43)},
+        body:JSON.stringify({action:"personal",person_id:"daprs_other",
+          user_enabled:true,expected_version:0}),
+      })
+      assert.equal(unauthorizedPost.status,403,
+        "A syntactically valid but unrecognized session cannot write a Person preference")
+      assert.equal(unauthorizedPost.headers.get("cache-control"),"no-store")
+      assert.deepEqual(await unauthorizedPost.json(),{message:"Access denied"})
       assert.equal((await fetch(origin+'/personal/session')).status,401)
       assert.equal((await fetch(origin+'/personal/session',{method:'POST',headers:{'content-type':'application/json',origin:process.env.DOGRUADRES_PUBLIC_ORIGIN!},body:JSON.stringify({email:'unknown@task.invalid',password:'synthetic-not-used'})})).status,503)
       assert.equal((await fetch(origin+'/personal/mfa/manage',{method:'POST',headers:{'content-type':'application/json',origin:'https://foreign.invalid'},body:'{"action":"recovery_codes"}'})).status,403)
