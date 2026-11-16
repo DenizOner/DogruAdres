@@ -16,12 +16,13 @@ describe("M0 MFA platform and personal settings ingress", () => {
   const nativeAuth = { listAuthMfa: jest.fn() }
   const platform = { platform_mode:"optional",version:4 }
   const personal = { person_id:"daprs_1",user_enabled:false,version:2 }
+  const opaqueSession = "S".repeat(43) // matches server-side browser token format
   beforeEach(()=>{
     jest.resetAllMocks()
     process.env.DOGRUADRES_MFA_SETTINGS_ENABLED="true"
     ;(enabled as jest.Mock).mockReturnValue(true)
     ;(csrf as jest.Mock).mockResolvedValue(true)
-    ;(sessionToken as jest.Mock).mockReturnValue("server-cookie-session")
+    ;(sessionToken as jest.Mock).mockReturnValue(opaqueSession)
     ;(access as jest.Mock).mockReturnValue(store)
     store.personalSession.mockResolvedValue({ person_id:"daprs_1", auth_identity_id:"auth_self" })
     nativeAuth.listAuthMfa.mockResolvedValue([{
@@ -42,7 +43,7 @@ describe("M0 MFA platform and personal settings ingress", () => {
   })
   const invoke=async(method:"GET"|"POST",body?:unknown,query={})=>{
     const res:any={setHeader:jest.fn(),status:jest.fn().mockReturnThis(),json:jest.fn().mockReturnThis()}
-    const req:any={body,query,headers:{cookie:"da_session=server-cookie-session"},
+    const req:any={body,query,headers:{cookie:"da_session="+opaqueSession},
       scope:{resolve:jest.fn().mockReturnValue(nativeAuth)}}
     if(method==="GET")await GET(req,res);else await POST(req,res)
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","no-store")
@@ -57,7 +58,7 @@ describe("M0 MFA platform and personal settings ingress", () => {
   })
   it("reads only current server session without user id query",async()=>{
     const r=await invoke("GET")
-    expect(store.personalMfaSettings).toHaveBeenCalledWith("server-cookie-session")
+    expect(store.personalMfaSettings).toHaveBeenCalledWith(opaqueSession)
     expect(nativeAuth.listAuthMfa).toHaveBeenCalledWith(
       {auth_identity_id:"auth_self"},{take:101,skip:0}
     )
@@ -230,7 +231,7 @@ describe("M0 MFA platform and personal settings ingress", () => {
   })
   it("persists ONLY server-selected Person preference; flags native state as unverified",async()=>{
     const r=await invoke("POST",{action:"personal",user_enabled:true,expected_version:2})
-    expect(store.personalSetMfaPreference).toHaveBeenCalledWith("server-cookie-session",true,2)
+    expect(store.personalSetMfaPreference).toHaveBeenCalledWith(opaqueSession,true,2)
     expect(r.json).toHaveBeenCalledWith(expect.objectContaining({native_factor_state:"unverified"}))
     expect(store.personalSetPlatformMfaMode).not.toHaveBeenCalled()
   })
@@ -242,7 +243,7 @@ describe("M0 MFA platform and personal settings ingress", () => {
   })
   it("records platform mode with explicit pending native factor reconciliation",async()=>{
     const r=await invoke("POST",{action:"platform",platform_mode:"required",expected_version:4})
-    expect(store.personalSetPlatformMfaMode).toHaveBeenCalledWith("server-cookie-session","required",4)
+    expect(store.personalSetPlatformMfaMode).toHaveBeenCalledWith(opaqueSession,"required",4)
     expect(r.json).toHaveBeenCalledWith(expect.objectContaining({native_factor_transition:"pending_reconciliation"}))
   })
   it("denies stale client version with 409, not a blind overwrite",async()=>{
