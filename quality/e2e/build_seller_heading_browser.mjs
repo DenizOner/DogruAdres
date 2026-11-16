@@ -73,3 +73,24 @@ console.log("SOURCE: apps/storefront/src/components/organisms/SellerHeading/Sell
 console.log("SANITIZER: " + physical + " (v" + packageJson.version + ")");
 console.log("BROWSER BUNDLE: " + output);
 console.log("SCOPE: Real SellerHeading component with synthetic SellerInfo/Chat; not full Next.js/HTTP acceptance");
+
+// Reuse this existing GitHub Chromium build step for the approved #374 component test.
+// Both bundles stay in the runner's task-owned temporary directory.
+await import("./build_chip_keyboard_browser.mjs");
+
+// Scope the full Storefront compile gate to #374 on its own disposable PR runner.
+// Do not impose extra work on main, unrelated PRs, or Ali/Cem runs.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-374-chip-keyboard-filters") {
+  await import("./verify_storefront_build.mjs");
+}
+
+// #243: a separate branch-scoped real Next.js production HTTP denial check.
+// Do not run this on main, Ali/Cem PRs or the previous #374 branch.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-243-anon-b4b-guest-deny") {
+  await import("./verify_b4b_guest_routes.mjs");
+}
+
