@@ -21,20 +21,38 @@ class ChipKeyboardChromiumTest(unittest.TestCase):
             self.fail("Actual component Chromium bundle was not built")
 
         self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=True)
-        self.page = self.browser.new_page(locale="tr-TR")
+        self.browser = None
+        self.page = None
         self.errors = []
-        self.page.on("pageerror", lambda error: self.errors.append(str(error)))
-        self.page.route("**/*", lambda route: route.abort())
-        self.page.set_content(
-            '<html lang="tr"><body><div id="chip"></div>'
-            '<div id="filters"></div></body></html>'
-        )
-        self.page.add_script_tag(path=str(bundle))
-        self.page.wait_for_function(
-            "typeof window.__daRenderChip === 'function' && "
-            "typeof window.__daRenderFilters === 'function'"
-        )
+        try:
+            self.browser = self.playwright.chromium.launch(headless=True)
+            self.page = self.browser.new_page(locale="tr-TR")
+            self.page.on("pageerror", lambda error: self.errors.append(str(error)))
+            self.page.route("**/*", lambda route: route.abort())
+            self.page.set_content(
+                '<html lang="tr"><body><div id="chip"></div>'
+                '<div id="filters"></div></body></html>'
+            )
+            self.page.add_script_tag(path=str(bundle))
+            self.page.wait_for_function(
+                "typeof window.__daRenderChip === 'function' && "
+                "typeof window.__daRenderFilters === 'function'",
+                timeout=5000,
+            )
+        except Exception as error:
+            # A setup failure must not leave the Playwright asyncio connection
+            # open and poison all unrelated Chromium tests in unittest discover.
+            if self.page is not None:
+                self.page.close()
+            if self.browser is not None:
+                self.browser.close()
+            self.playwright.stop()
+            raise AssertionError(
+                "Real Chip bundle did not initialize: "
+                + str(error)
+                + "; page errors: "
+                + repr(self.errors)
+            ) from error
 
     def tearDown(self):
         try:
