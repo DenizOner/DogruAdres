@@ -35,10 +35,17 @@ class NextFilterHttpTest(unittest.TestCase):
             raise unittest.SkipTest("Only the disposable #374 PR GitHub runner may serve this test")
         # The actual Next production build must contain the ephemeral fixture
         # even though its source was removed immediately after the build.
-        standalone = list((STOREFRONT / ".next" / "standalone").glob("**/server.js"))
+        # The monorepo traces a real app entry under apps/storefront.
+        # Never recurse into bundled node_modules: they contain unrelated
+        # server.js files that are not launchable application entrypoints.
+        candidates = [
+            STOREFRONT / ".next/standalone/apps/storefront/server.js",
+            STOREFRONT / ".next/standalone/server.js",
+        ]
+        standalone = [candidate for candidate in candidates if candidate.is_file()]
         if len(standalone) != 1:
             raise AssertionError(
-                "Expected exactly one built Next standalone server, not a dev or mock server: "
+                "Expected one generated Storefront standalone app entry: "
                 + str([str(p.relative_to(STOREFRONT)) for p in standalone])
             )
         entry = standalone[0]
