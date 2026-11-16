@@ -141,7 +141,18 @@ try {
     "/tr/products/synthetic.jpg", "/tr/products/task-only?token=not-a-real-token"
   ];
   for (const path of blocked) {
-    const response = await fetchLocal(origin, path);
+    let response = await fetchLocal(origin, path);
+    if (response.status === 308) {
+      // Next may first canonicalize a trailing slash. That response must
+      // still be local, body-free of commerce data and lead to the same gate.
+      const canonical = new URL(response.headers.get("location"), origin);
+      assert.equal(canonical.protocol, "http:");
+      assert.equal(canonical.port, String(port));
+      assert.ok(["localhost", "127.0.0.1"].includes(canonical.hostname));
+      assert.equal(canonical.pathname, path.replace(/\/$/, "") || "/");
+      assert.doesNotMatch(await response.text(), /Mercur B2C|Snag your style|trending listings/i);
+      response = await fetchLocal(origin, canonical.pathname + canonical.search);
+    }
     assert.equal(response.status, 307, "Closed commerce route must redirect: " + path);
     const location = new URL(response.headers.get("location"), origin);
     // Next production normalizes its own loopback Host to "localhost".
