@@ -191,6 +191,43 @@ class NextFilterHttpTest(unittest.TestCase):
             self.page.get_by_role("button", name="Filtreyi kaldır: Size — 1").count(), 1
         )
 
+    def test_actual_next_mobile_dialog_focus_stays_inside_when_filters_disappear(self):
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.goto(PATH + "?size=M&color=Red&sortBy=recent")
+        self.page.get_by_role("button", name="Filters", exact=True).click()
+        modal = self.page.get_by_test_id("modal")
+        modal.wait_for(state="visible")
+
+        # Removing the last chip in one group must move focus to the other
+        # group's removal action, never to the catalog heading behind modal.
+        size = modal.get_by_role("button", name="Filtreyi kaldır: Size — M")
+        size.focus()
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_url("**?color=Red&sortBy=recent")
+        color = modal.get_by_role("button", name="Filtreyi kaldır: Color — Red")
+        color.wait_for(state="visible")
+        self.assertEqual(
+            self.page.evaluate("document.activeElement.getAttribute('aria-label')"),
+            "Filtreyi kaldır: Color — Red",
+        )
+        self.assertTrue(modal.evaluate("(el) => el.contains(document.activeElement)"))
+
+        color.focus()
+        self.page.keyboard.press("Space")
+        self.page.wait_for_url("**?sortBy=recent")
+        self.assertEqual(
+            modal.get_by_role("button", name="Filtreyi kaldır: Color — Red").count(),
+            0,
+        )
+        # With no removal actions left, keep focus on a persistent control
+        # in the still-open real ProductSearchSidebar modal.
+        self.page.wait_for_function(
+            "() => { const m=document.querySelector('[data-testid=modal]');"
+            " return m && m.contains(document.activeElement)"
+            " && document.activeElement?.tagName !== 'BODY'; }"
+        )
+        self.assertTrue(modal.is_visible())
+
     def test_actual_next_localized_filter_labels(self):
         # URL prefix is a country code, not a language code.
         for loc, text in [
