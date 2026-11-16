@@ -99,7 +99,7 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
 
     @property
     def ssl(self):
-        return self.page.get_by_role("radio", name=re.compile(r"SSL / TLS"))
+        return self.page.get_by_role("radio", name=re.compile(r"^SSL"))
 
     @property
     def tls(self):
