@@ -79,6 +79,9 @@ await build({
   format: "iife",
   target: "chrome120",
   jsx: "automatic",
+  // Next inlines public compile-time env fields. Match this in the standalone
+  // real-component browser bundle so importing hreflang.ts is safe in Chrome.
+  define: { "process.env.NEXT_PUBLIC_DEFAULT_REGION": JSON.stringify("us") },
   plugins: [dependencies],
   logLevel: "warning"
 });
