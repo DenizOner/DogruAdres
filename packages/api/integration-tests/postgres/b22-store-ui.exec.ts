@@ -4661,7 +4661,7 @@ async function verifyB22NativeSellerOrderAttribution(input:{
   process.stdout.write("PASS B22 real PG16 native per-Order liability graph: "+
     "returns, fulfilments, transactions and payment/refunds readable via "+
     "verified Seller-bound Orders, shared Group cannot transfer liability; "+
-    "zero-value fixture is NOT financial or legal clearance\\n")
+    "zero-value fixture is NOT financial or legal clearance\n")
   const {data:multiPayments}=await query.graph({
     entity:"cart_payment_collection",filters:{cart_id:multiSellerZeroCart.id},
     fields:["payment_collection_id"]
