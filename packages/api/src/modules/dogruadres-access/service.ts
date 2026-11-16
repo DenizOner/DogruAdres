@@ -23,6 +23,7 @@ import { ActorDelegation } from './actor-delegation'
 import {AccountLinking,type VerifiedSecondary} from './account-linking'
 import {
   PlatformSmtpPersistence,
+  assertSmtpCredentialReuse,
   type UpdateSmtpSettingsInput,
   type SmtpAuditActor,
 } from "./smtp-settings"
@@ -1678,6 +1679,15 @@ export default class DogruAdresAccessModuleService extends MedusaService({
     const testPassword = candidateSettings?.password !== undefined ? candidateSettings.password : current.password
     const testFromEmail = candidateSettings?.from_email || current.from_email
     const testFromName = candidateSettings?.from_name !== undefined ? candidateSettings.from_name : current.from_name
+
+    // Never offer a stored, write-only password to a new SMTP server or AUTH
+    // identity merely because an authorized operator left Password blank.
+    assertSmtpCredentialReuse(
+      current,
+      { host: testHost, port: testPort, security: testSecurity, username: testUsername ?? null },
+      Boolean(current.password),
+      candidateSettings?.password
+    )
 
     return sendSmtpEmail(
       {
