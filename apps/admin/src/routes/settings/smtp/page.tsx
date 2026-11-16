@@ -380,7 +380,8 @@ export default function PlatformSmtpSettingsPage() {
           <Text className="text-sm text-ui-fg-muted">Yapılandırma yükleniyor...</Text>
         </Container>
       ) : canManage ? (
-        <form onSubmit={handleSave} className="space-y-6">
+        <div className="space-y-6">
+          <form onSubmit={handleSave}>
           {/* Main Configuration Card */}
           <Container className="p-6 space-y-6 rounded-xl border border-ui-border-base bg-ui-bg-base">
             {/* Service Toggle */}
@@ -579,6 +580,7 @@ export default function PlatformSmtpSettingsPage() {
               </Button>
             </div>
           </Container>
+          </form>
 
           {/* Live Connection Test Card */}
           <Container className="p-6 space-y-4 rounded-xl border border-ui-border-base bg-ui-bg-base">
@@ -626,7 +628,7 @@ export default function PlatformSmtpSettingsPage() {
               </Button>
             </div>
           </Container>
-        </form>
+        </div>
       ) : null}
     </div>
   )
