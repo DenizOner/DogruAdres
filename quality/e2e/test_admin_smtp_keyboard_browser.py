@@ -188,7 +188,7 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
         # activate native constraint validation before posting a test email.
         button.click()
         self.assertFalse(recipient.evaluate("(el) => el.required"))
-        self.assertTrue(recipient.is_focused())
+        self.assertTrue(recipient.evaluate("(el) => document.activeElement === el"))
         self.assertEqual(self.page.evaluate("window.__daSmtpPosts"), 0)
         recipient.fill("not-an-email")
         button.click()
