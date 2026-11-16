@@ -19,7 +19,19 @@ async function main(){
  // Only AFTER the non-protected CI target boundary. Generated key never leaves memory.
  const key=generateKeyPairSync('ed25519'),pem=key.publicKey.export({format:'pem',type:'spki'}).toString(),privatePem=key.privateKey.export({format:'pem',type:'pkcs8'}).toString(),fp=computePublicKeyFingerprint(pem)
  const control=new Client({connectionString:u.toString()});await control.connect();let facts:any
- try{facts=await readR1Readiness(control)}finally{await control.end()}
+ // A just-closed disposable Medusa fixture connection can still appear in
+ // pg_stat_activity. Wait only for actual zero other sessions *before* signing
+ // the manifest; never relax R1's own exclusive pre-write CAS guard.
+ try{
+   const until=Date.now()+10000
+   while(true){
+     facts=await readR1Readiness(control)
+     if(facts.other_sessions===0)break
+     if(Date.now()>=until)
+       throw Error('REFUSED: disposable R1 test database still has active sessions')
+     await new Promise(resolve=>setTimeout(resolve,200))
+   }
+ }finally{await control.end()}
  const now=new Date().toISOString(),expires=new Date(Date.now()+300000).toISOString(),runId='r1-b06-TEST_FIXTURE-'+randomBytes(12).toString('hex'),sid='S-1-5-21-111-222-333-444',sha='c'.repeat(40)
  const manifest:R1ActivationManifest['manifest'] & {testFixture:string}={manifestVersion:'1.1.0',runId,nonce:randomBytes(32).toString('hex'),taskEnvironmentId:'TEST_FIXTURE_NOT_AUTHORITY',targetDatabase:dbName,targetHost:'127.0.0.1',targetPort:'5432',targetContainerName:'TEST_FIXTURE',targetVolumeName:'NONE',authorizedOperator:{executorType:'automation_agent',operatorId:'TEST_FIXTURE_NOT_AUTHORITY',windowsSecurityPrincipal:sid,approvalReference:'https://github.com/DenizOner/DogruAdres/issues/238#issuecomment-6366377036'},targetCommitSha:sha,issuedAt:now,expiresAt:expires,actionScope:'ACTIVATE_MFA_DEPLOYMENT_LATCH',runtimeResourceBinding:{postgresSystemIdentifier:facts.cluster},expectedTransition:{from:false,to:true,fromVersion:1,toVersion:2},preconditions:facts,runtimeFlags:Object.fromEntries(MFA_RUNTIME_FLAGS.map(k=>[k,'true'])),testFixture:'NOT_AUTHORITY'}
  const signed:R1ActivationManifest={manifest,signerKeyFingerprint:fp,signatureBase64:sign(null,Buffer.from(canonical(manifest)),privatePem).toString('base64')}
