@@ -7,7 +7,8 @@ const page = (head) => `<!doctype html><html lang="en"><head>${head}<meta charse
 
 test('Vite head-prepend exact self-only policy is accepted', () => {
   assert.equal(hasSafeDashboardCsp(page(`\n  ${tag}\n  `)), true)
-  assert.equal(hasSafeDashboardCsp(page(tag.replace('>', ' />'))), true)
+  const selfClosed = '<meta http-equiv="Content-Security-Policy" content="connect-src &#39;self&#39;" />'
+  assert.equal(hasSafeDashboardCsp(page(selfClosed)), true)
 })
 
 test('rejects missing, commented and non-head policy lookalikes', () => {
