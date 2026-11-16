@@ -1703,6 +1703,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   function renderCompanyLauncher(){
     const list=el('company-launcher-list');
+    // Re-rendering after a keyboard action must not drop focus into <body>.
+    const active=document.activeElement;
+    const oldCard=active&&typeof active.closest==='function'?
+      active.closest('#company-launcher-list > li'):null;
+    const focusApp=oldCard&&oldCard.dataset.companyApp;
+    const focusAction=active&&active.dataset&&active.dataset.companyAction;
     list.replaceChildren();
     const data=companyLauncherData;
     if(!data)return;
@@ -1712,6 +1718,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(!meta)continue;
       const card=document.createElement('li'),row=document.createElement('div');
       card.draggable=!companyLauncherBusy;
+      card.dataset.companyApp=id;
       card.setAttribute('aria-label',meta.label);
       const heading=document.createElement('strong');
       heading.textContent=meta.label;
@@ -1719,6 +1726,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       for(const direction of [-1,1]){
         const control=document.createElement('button');
         control.type='button';
+        control.dataset.companyAction=direction<0?'up':'down';
         control.textContent=direction<0?'Yukarı':'Aşağı';
         control.setAttribute('aria-label',meta.label+' — '+control.textContent);
         control.disabled=companyLauncherBusy||idx+direction<0||
@@ -1732,6 +1740,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       const toggle=document.createElement('button');
       toggle.type='button';
+      toggle.dataset.companyAction='toggle';
       const hidden=data.collapsed_ids.includes(id);
       toggle.textContent=hidden?'Bölümü aç':'Bölümü katla';
       toggle.setAttribute('aria-expanded',String(!hidden));
@@ -1744,7 +1753,8 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       };
       row.append(toggle);card.append(row);
       const link=document.createElement('button');
-      link.type='button';link.textContent=meta.label+' bölümüne git';
+      link.type='button';link.dataset.companyAction='open';
+      link.textContent=meta.label+' bölümüne git';
       link.hidden=hidden;link.disabled=companyLauncherBusy;
       link.onclick=()=>{
         const target=document.getElementById(meta.target);
@@ -1775,6 +1785,17 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           'Sürükle-bırak sırası bu şirkette kaydedildi.');
       };
       list.append(card);
+    }
+    if(focusApp&&focusAction){
+      const matching=Array.from(list.children).find(item=>
+        item.dataset.companyApp===focusApp);
+      const buttons=matching&&Array.from(matching.querySelectorAll('button'));
+      const intended=buttons&&buttons.find(button=>
+        button.dataset.companyAction===focusAction && !button.disabled && !button.hidden);
+      const fallback=buttons&&buttons.find(button=>
+        button.dataset.companyAction==='toggle' && !button.disabled);
+      const target=intended||fallback;
+      if(target&&typeof target.focus==='function')target.focus();
     }
   }
   el('company-launcher-reset').onclick=()=>{

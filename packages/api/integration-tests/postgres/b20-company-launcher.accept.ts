@@ -111,6 +111,9 @@ export async function verifyB20CompanyLauncher(input:{
     const ordered=await get(owner,organizationId)
     assert.deepEqual(ordered.body.app_ids,
       ["organization","memberships","store-applications"])
+    assert.equal(await owner.eval("document.activeElement?.getAttribute('aria-label')"),
+      "Üyelik yönetimi — Yukarı",
+      "Keyboard/accessible reorder must return focus to the same app control")
     await owner.click("#company-launcher-list > li:nth-child(2) button[aria-expanded='true']")
     await until(async()=> {
       const result=await get(owner,organizationId)
@@ -118,6 +121,8 @@ export async function verifyB20CompanyLauncher(input:{
     },15000,"Real Chrome B20 collapse persisted")
     const folded=await get(owner,organizationId)
     assert.deepEqual(folded.body.collapsed_ids,["memberships"])
+    assert.equal(await owner.eval("document.activeElement?.getAttribute('aria-expanded')"),
+      "false","Collapse re-render must keep keyboard focus on the same toggle")
     assert.equal((await post(owner,{
       organization:organizationId,app_ids:defaults,
       collapsed_ids:[],expected_version:1
