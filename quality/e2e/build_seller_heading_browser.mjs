@@ -77,3 +77,11 @@ console.log("SCOPE: Real SellerHeading component with synthetic SellerInfo/Chat;
 // Reuse this existing GitHub Chromium build step for the approved #374 component test.
 // Both bundles stay in the runner's task-owned temporary directory.
 await import("./build_chip_keyboard_browser.mjs");
+
+// Scope the full Storefront compile gate to #374 on its own disposable PR runner.
+// Do not impose extra work on main, unrelated PRs, or Ali/Cem runs.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-374-chip-keyboard-filters") {
+  await import("./verify_storefront_build.mjs");
+}
