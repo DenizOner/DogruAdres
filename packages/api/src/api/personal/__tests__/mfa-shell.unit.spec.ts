@@ -1,6 +1,8 @@
 import {GET} from "../route"
 import {enabled} from "../security"
 import {trustedInlineScripts} from "./trusted-inline-scripts"
+// This fixture is exercised via the existing Foundation Jest entry point.
+import "./platform-closing-mail-stale.unit.spec"
 jest.mock("../security",()=>({enabled:jest.fn(()=>true)}))
 describe('MFA settings shell contract (not browser acceptance)',()=>{
  it('renders accessible controls, masks TOTP and keeps secrets out of storage',async()=>{
