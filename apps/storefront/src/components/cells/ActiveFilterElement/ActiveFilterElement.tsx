@@ -44,16 +44,39 @@ export const ActiveFilterElement = ({ filter }: { filter: string[] }) => {
     // Mouse clicks retain their existing focus and visual behavior.
     if (event.detail === 0) {
       const current = event.currentTarget
-      const buttons = Array.from(current.parentElement?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+      // Include removal actions from sibling filter groups, not only this
+      // group's buttons. The aria-label prefix excludes regular size/variant
+      // controls in the same form and stays locale-aware.
+      const scope = current.parentElement?.parentElement
+      const buttons = Array.from(scope?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+        .filter((button) => button.getAttribute("aria-label")?.startsWith(`${removeLabel}:`))
       const index = buttons.indexOf(current)
       const neighbor = buttons[index + 1] ?? buttons[index - 1]
       if (neighbor && !neighbor.disabled) {
         neighbor.focus()
       } else {
-        const heading = current.closest("main")?.querySelector<HTMLElement>("h1")
-        if (heading) {
-          heading.tabIndex = -1
-          heading.focus()
+        const modal = current.closest<HTMLElement>('[data-testid="modal"]')
+        if (modal) {
+          // Never send focus behind an open mobile filter dialog.
+          // Choose a persistent enabled control, or its own heading when
+          // no other focusable control exists in the dialog.
+          const control = Array.from(modal.querySelectorAll<HTMLButtonElement>("button:not([disabled])"))
+            .find((button) => !buttons.includes(button))
+          const fallback = control ?? modal.querySelector<HTMLElement>(".heading-md")
+          if (fallback) {
+            if (fallback === control) {
+              fallback.focus()
+            } else {
+              fallback.tabIndex = -1
+              fallback.focus()
+            }
+          }
+        } else {
+          const heading = current.closest("main")?.querySelector<HTMLElement>("h1")
+          if (heading) {
+            heading.tabIndex = -1
+            heading.focus()
+          }
         }
       }
     }
