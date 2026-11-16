@@ -68,6 +68,49 @@ export default async function({container}:ExecArgs){
   for(const [i,label]of ['A','B'].entries()){const c=new B06Chrome(origin,label as 'A'|'B');browsers.push(c);await c.start(cert);await c.login(process.env['B06_EMAIL_'+label]!,process.env['B06_PASSWORD_'+label]!,actors[i].person);await strong(c)}
   const [a,b]=browsers
   const domain=async()=>{const result:any={};for(const t of ['da_organization_membership','da_audit_event','da_audit_outbox','da_security_outbox'])result[t]=(await q(`select count(*)::int n,md5(coalesce(string_agg(to_jsonb(r)::text,E'\\n' order by to_jsonb(r)::text),'')) hash from "${t}" r`))[0];return result}
+  // #366: Read the real Medusa MFA endpoint in both independently authenticated
+  // task-only Chrome profiles. No platform mutation or native-factor bypass.
+  const mfaGet=async(c:B06Chrome,path:string,credentials:'include'|'omit')=>
+    c.callFunction(
+      "async function(path, credentials) { const response = await fetch(path, {method:'GET', credentials, headers:{Accept:'application/json'}}); return {status:response.status, cacheControl:response.headers.get('cache-control'), body:await response.json()}; }",
+      path,credentials
+    )
+  const mfaBefore=await domain()
+  for(const [i,c] of [a,b].entries()){
+    c.phase='mfa-settings-get-own-person'
+    await strong(c)
+    const own=await mfaGet(c,'/personal/mfa','include')
+    assert.equal(own.status,200,'Authenticated native MFA user must read own settings')
+    assert.equal(own.cacheControl,'no-store')
+    assert.equal(own.body?.personal?.person_id,actors[i].person,'MFA Person binding must match the live native session')
+    assert.equal(own.body?.personal?.user_enabled,false,'A fresh unrelated Person must retain the default OFF preference')
+    assert.equal(own.body?.personal?.version,0)
+    assert.equal(own.body?.platform?.platform_mode,'required')
+    assert.equal(own.body?.platform?.version,0)
+    assert.equal(own.body?.native_factor_state,'enabled','The verified native TOTP factor must not appear absent')
+    assert.equal(own.body?.effective_mfa_target?.required,true)
+    assert.equal(own.body?.effective_mfa_target?.user_control_allowed,false)
+    assert.equal(own.body?.can_manage_platform,false,'Ordinary Person has no platform MFA task grant')
+    assert.equal(own.body?.runtime_enforcement,'enforced')
+    assert.equal(/"(?:auth_identity_id|factor_id|factor_ids|secret|seed|token|recovery_codes)"\s*:/.test(JSON.stringify(own.body)),false,
+      'MFA read response must not disclose native factor identifiers or secrets')
+    c.phase='mfa-settings-get-no-cookie'
+    const anonymous=await mfaGet(c,'/personal/mfa','omit')
+    assert.equal(anonymous.status,403,'Missing browser session must be denied before Person lookup')
+    assert.equal(anonymous.cacheControl,'no-store')
+    assert.deepEqual(anonymous.body,{message:'Access denied'})
+    c.phase='mfa-settings-get-foreign-person-query'
+    const foreign=await mfaGet(c,'/personal/mfa?person_id='+encodeURIComponent(actors[1-i].person),'include')
+    assert.equal(foreign.status,400,'Client-selected foreign Person must not become an authority')
+    assert.equal(foreign.cacheControl,'no-store')
+    assert.deepEqual(foreign.body,{message:'Invalid input'})
+    report.checks.push({phase:'mfa-settings-real-https-person-readback',actor:c.actor,
+      ownHttp:200,missingCookieHttp:403,foreignPersonQueryHttp:400,
+      exactPersonBinding:true,defaultPreferenceReadOnly:true,nativeFactorEnabled:true,
+      policyRequired:true,noStore:true,secretFree:true})
+  }
+  assert.deepEqual(await domain(),mfaBefore,'MFA GET and denied requests must not mutate domain audit/outbox')
+
   const denied=async(c:B06Chrome,name:string,body:object,status:number,bad=false)=>{c.phase=name;await strong(c);const before=await domain();assert.equal((await c.post(body,bad)).status,status);assert.deepEqual(await domain(),before);report.checks.push({phase:name,actor:c.actor,http:status,zeroDomainAuditOutbox:true,evidence:'REAL CHROME FETCH / NATIVE HTTP / SQL; denied POST, not a visible role control'})}
   await b.select(orgs[0].name,'member');await b.wait("document.getElementById('memberships-status').textContent==='Üyelik listesini görüntüleme izniniz yok.'&&document.querySelectorAll('#memberships select,#memberships button').length===0")
   await denied(b,'member-denied',{organization_id:orgs[0].id,membership_id:b1.id,role:'admin'},403)
