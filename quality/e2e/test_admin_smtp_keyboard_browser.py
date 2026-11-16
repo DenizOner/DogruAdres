@@ -207,6 +207,18 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
         self.page.get_by_role("button", name="Ayarları kaydet").click()
         self.page.wait_for_function("window.__daSmtpPosts === 1")
 
+    def test_malformed_test_recipient_cannot_block_settings_save(self):
+        recipient = self.page.locator("#test-recipient")
+        recipient.fill("malformed-email")
+        self.assertTrue(recipient.evaluate("(el) => el.validity.typeMismatch"))
+        # The Test and Save actions must have separate constraint domains:
+        # invalid Test recipient must never affect main settings form validity.
+        self.assertTrue(self.page.locator("form").evaluate("(el) => el.checkValidity()"))
+        self.assertTrue(recipient.evaluate("(el) => el.form === null"))
+        self.expected_posts = 1
+        self.page.get_by_role("button", name="Ayarları kaydet").click()
+        self.page.wait_for_function("window.__daSmtpPosts === 1")
+
     def test_valid_recipient_reaches_existing_smtp_test_post(self):
         recipient = self.page.locator("#test-recipient")
         recipient.fill("recipient@example.invalid")
