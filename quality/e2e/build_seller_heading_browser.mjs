@@ -73,3 +73,7 @@ console.log("SOURCE: apps/storefront/src/components/organisms/SellerHeading/Sell
 console.log("SANITIZER: " + physical + " (v" + packageJson.version + ")");
 console.log("BROWSER BUNDLE: " + output);
 console.log("SCOPE: Real SellerHeading component with synthetic SellerInfo/Chat; not full Next.js/HTTP acceptance");
+
+// Reuse this existing GitHub Chromium build step for the approved #374 component test.
+// Both bundles stay in the runner's task-owned temporary directory.
+await import("./build_chip_keyboard_browser.mjs");
