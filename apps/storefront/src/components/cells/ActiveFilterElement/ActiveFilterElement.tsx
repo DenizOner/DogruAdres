@@ -37,7 +37,26 @@ export const ActiveFilterElement = ({ filter }: { filter: string[] }) => {
     filtersLabels[filter[0] as keyof typeof filtersLabels] ??
     filter[0].charAt(0).toUpperCase() + filter[0].slice(1)
 
-  const removeFilterHandler = (value: string) => {
+  const removeFilterHandler = (value: string, event: React.MouseEvent<HTMLButtonElement>) => {
+    // Native Enter/Space generates a click with detail=0. Before the selected
+    // chip disappears after routing, move keyboard focus to the next/previous
+    // removal action or, for the final chip, the persistent results heading.
+    // Mouse clicks retain their existing focus and visual behavior.
+    if (event.detail === 0) {
+      const current = event.currentTarget
+      const buttons = Array.from(current.parentElement?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+      const index = buttons.indexOf(current)
+      const neighbor = buttons[index + 1] ?? buttons[index - 1]
+      if (neighbor && !neighbor.disabled) {
+        neighbor.focus()
+      } else {
+        const heading = current.closest("main")?.querySelector<HTMLElement>("h1")
+        if (heading) {
+          heading.tabIndex = -1
+          heading.focus()
+        }
+      }
+    }
     updateFilters(value)
   }
 
@@ -49,7 +68,7 @@ export const ActiveFilterElement = ({ filter }: { filter: string[] }) => {
       {activeFilters.map((element) => (
         <Chip
           key={element}
-          onSelect={() => removeFilterHandler(element)}
+          onSelect={(event) => removeFilterHandler(element, event)}
           ariaLabel={`${removeLabel}: ${filterLabel} — ${element}`}
           value={
             <span className="flex gap-2 items-center whitespace-nowrap">
