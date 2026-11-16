@@ -4983,10 +4983,11 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
 
   // B22 platform 10+20 first stage: separate platform closing grant and
   // protected Owner appeal. No browser-computed deadline or implicit authority.
-  let platformClosingPage=0,platformClosingRead=0;
+  let platformClosingPage=0,platformClosingRead=0,platformClosingMailRead=0;
   let platformClosingRows=[],platformClosingBusy=false,platformClosingUncertain=false;
   let platformClosingFocusSeller='';
   function clearPlatformClosings(){
+    platformClosingMailRead++;
     platformClosingRead++;platformClosingPage=0;platformClosingRows=[];
     platformClosingFocusSeller='';
     platformClosingBusy=false;platformClosingUncertain=false;
@@ -5008,6 +5009,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     delivered:'Alıcı teslimi doğrulandı'
   };
   async function refreshPlatformClosingMail(chosen,epoch=viewEpoch){
+    // A response from a previous Store/refresh must never replace the
+    // latest Staff-visible closing safety and email delivery status.
+    const mailRead=++platformClosingMailRead;
     const target=el('platform-closing-mail-status');
     if(!chosen){target.textContent='';return}
     target.textContent='Owner e-posta bildirimleri kontrol ediliyor…';
@@ -5015,7 +5019,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       const data=await api('platform/store-closing-email-readiness?'+
         new URLSearchParams({organization_id:chosen.organization_id,
           seller_id:chosen.seller_id}).toString());
-      if(epoch!==viewEpoch||document.hidden||
+      if(mailRead!==platformClosingMailRead||epoch!==viewEpoch||document.hidden||
          chosen.seller_id!==el('platform-closing-form').elements.namedItem('seller_id').value)return;
       if(!Array.isArray(data.email_statuses)||
          !Number.isSafeInteger(data.protected_owner_count)||
@@ -5070,9 +5074,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       target.textContent+=' Kesin kapatma engelleri: '+blockers.join('; ')+
         '. Mağaza kimliği, geçmiş işlemler ve ad hakkı korunur; geri dönüşsüz kapatma kapalıdır.';
     }catch(e){
-      if(epoch===viewEpoch)target.textContent=
-        e.httpStatus===403?'Bu mağaza için henüz kapatma kaydı yok.':
-        'E-posta durumları doğrulanamadı; sonuç iddia edilmiyor.';
+      if(mailRead===platformClosingMailRead&&epoch===viewEpoch&&
+         !document.hidden&&
+         chosen.seller_id===el('platform-closing-form').elements.namedItem('seller_id').value)
+        target.textContent=
+          e.httpStatus===403?'Bu mağaza için henüz kapatma kaydı yok.':
+          'E-posta durumları doğrulanamadı; sonuç iddia edilmiyor.';
     }
   }
 
