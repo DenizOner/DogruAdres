@@ -16,18 +16,17 @@ export function nativeSellerTradingAt(s:{
   // Native approval is a timestamp, not a truthy marker. Corrupt or missing
   // approval metadata must never unlock private discovery or checkout.
   const approval=s.approved_at
-  if(!(approval instanceof Date)&&
-     (typeof approval!=="string"||
-      !/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?$/.test(approval)))return false
-  const approvedAt=new Date(approval).getTime()
-  if(!Number.isFinite(approvedAt))return false
-  // Date.parse normalizes some impossible calendar dates instead of rejecting.
-  if(typeof approval==="string"){
-    const day=approval.slice(0,10)
-    const calendar=new Date(day+"T00:00:00Z")
+  let approvedAt=NaN
+  if(approval instanceof Date)approvedAt=approval.getTime()
+  else if(typeof approval==="string"&&
+      /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?$/.test(approval)){
+    // Date.parse can normalize impossible dates (e.g. February 30).
+    const day=approval.slice(0,10),calendar=new Date(day+"T00:00:00Z")
     if(!Number.isFinite(calendar.getTime())||calendar.toISOString().slice(0,10)!==day)
       return false
+    approvedAt=Date.parse(approval)
   }
+  if(!Number.isFinite(approvedAt))return false
   const from=s.closed_from==null?null:new Date(s.closed_from).getTime()
   const to=s.closed_to==null?null:new Date(s.closed_to).getTime()
   if(from===null&&to===null)return true
