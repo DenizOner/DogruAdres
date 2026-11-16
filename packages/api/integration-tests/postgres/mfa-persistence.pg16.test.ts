@@ -300,6 +300,35 @@ async function main() {
       }
       assert.equal(await rowCount(db,"da_security_outbox"),2)
     })
+    await check("committed MFA policy and Person preference survive an independent SQL connection", async () => {
+      // The second Person has no preference record. Reconnecting must not
+      // adopt the first Person's enabled preference or create a write.
+      const otherPersonId = "daprs_mfa_ci_other"
+      await db.unsafe("insert into da_person(id) values($1)", [otherPersonId])
+      const independentConnection = new SQL(url.toString())
+      try {
+        const reader = new MfaPersistence(sqlAdapter(independentConnection))
+        assert.deepEqual(await reader.readPlatformPolicy(), {
+          platform_mode: "optional", version: 1,
+        })
+        assert.deepEqual(await reader.readPersonPreference(actor.person_id), {
+          person_id: actor.person_id, user_enabled: true, version: 1,
+        })
+        assert.deepEqual(await reader.readPersonPreference(otherPersonId), {
+          person_id: otherPersonId, user_enabled: false, version: 0,
+        })
+        const rows = await independentConnection.unsafe(
+          "select person_id, user_enabled, version from da_person_mfa_preference"
+        )
+        assert.deepEqual(rows, [{
+          person_id: actor.person_id, user_enabled: true, version: 1,
+        }], "A missing Person preference must not inherit or persist another Person's setting")
+        assert.equal(await rowCount(independentConnection,"da_security_outbox"),2,
+          "Readback must have no audit or outbox side effects")
+      } finally {
+        await independentConnection.close()
+      }
+    })
     await check("two concurrent writers serialize and one stale version fails", async () => {
       let markReady!:()=>void
       const ready=new Promise<void>(resolve=>{markReady=resolve})
