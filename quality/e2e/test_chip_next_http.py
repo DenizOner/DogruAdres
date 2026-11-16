@@ -163,11 +163,20 @@ class NextFilterHttpTest(unittest.TestCase):
         self.assertEqual(
             self.page.get_by_role("button", name="Filtreyi kaldır: Size — M").count(), 0
         )
+        # Removing a keyboard-focused chip must not dump focus on document.body.
+        self.page.wait_for_function(
+            "() => document.activeElement?.getAttribute('aria-label') === 'Filtreyi kaldır: Size — L'"
+        )
         second = self.page.get_by_role("button", name="Filtreyi kaldır: Size — L")
         second.focus()
         self.page.keyboard.press("Space")
         self.page.wait_for_url("**?sortBy=recent")
         self.assertEqual(self.page.locator("button[aria-label^='Filtreyi kaldır']").count(), 0)
+        self.page.wait_for_function("() => document.activeElement?.tagName === 'H1'")
+        self.assertEqual(
+            self.page.evaluate("document.activeElement.textContent.includes('Isolated keyboard filter fixture')"),
+            True,
+        )
         self.assertEqual(self.page.evaluate("new URL(location.href).searchParams.has('size')"), False)
 
     def test_actual_next_size_chip_preserves_unrelated_query(self):
