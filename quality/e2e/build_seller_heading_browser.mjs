@@ -85,3 +85,12 @@ if (process.env.GITHUB_ACTIONS === "true" &&
     process.env.GITHUB_HEAD_REF === "fix/baris-374-chip-keyboard-filters") {
   await import("./verify_storefront_build.mjs");
 }
+
+// #243: a separate branch-scoped real Next.js production HTTP denial check.
+// Do not run this on main, Ali/Cem PRs or the previous #374 branch.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-243-anon-b4b-guest-deny") {
+  await import("./verify_b4b_guest_routes.mjs");
+}
+

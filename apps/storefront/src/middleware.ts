@@ -113,9 +113,20 @@ export async function middleware(request: NextRequest) {
 
   // Check protected pages BEFORE public URL exceptions: a dynamic order ID can
   // contain a dot or the words "verify-email" without becoming a public asset.
-  const urlSegment = pathname.split('/')[1];
+  // Resolve encoded country prefixes before splitting. A raw /%74r/
+  // otherwise bypasses the /tr/ closed-demo guard and can reach SSR.
+  let decodedPath: string;
+  try {
+    decodedPath = decodeURIComponent(pathname).replace(/\/{2,}/g, '/');
+  } catch {
+    return new NextResponse(null, {
+      status: 400,
+      headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow, noarchive' }
+    });
+  }
+  const urlSegment = decodedPath.split('/')[1];
   const looksLikeLocale = /^[a-z]{2}$/i.test(urlSegment || '');
-  const pathnameWithoutLocale = looksLikeLocale ? pathname.replace(/^\/[^/]+/, '') : pathname;
+  const pathnameWithoutLocale = looksLikeLocale ? decodedPath.replace(/^\/[^/]+/, '') : decodedPath;
   const isProtectedRoute = PROTECTED_ROUTES.some(route => pathnameWithoutLocale.startsWith(route));
 
   if (isProtectedRoute) {
@@ -132,6 +143,38 @@ export async function middleware(request: NextRequest) {
     }
   }
 
+  // #243 closed B4B: these are unapproved Mercur B2C demo pages, not the
+  // accepted Organization-scoped /personal/catalog reader. Deny their SSR,
+  // metadata and external links before region lookup or the dot-path bypass.
+  // Preserve the independently accepted Seller rename 404/200 HTTP contract:
+  // /sellers/[handle] is excluded, with native /store/sellers still closed.
+  // This is deliberately all-session until an approved Buyer-specific page
+  // exists; a Medusa JWT alone is not Buyer Organization authorization.
+  const demoPath = pathnameWithoutLocale.toLowerCase();
+  if (demoPath === '' || demoPath === '/' ||
+      /^\/(?:products|categories|collections|cart|checkout|order)(?:\/|$)/.test(demoPath)) {
+    // Default or URL-supplied country is not necessarily a configured region.
+    // Reuse the existing public region bootstrap, not a new auth mechanism.
+    let locale: string | undefined;
+    try {
+      const cacheId = request.cookies.get('_medusa_cache_id')?.value || crypto.randomUUID();
+      const regionMap = await getRegionMap(cacheId);
+      locale = looksLikeLocale && regionMap.has(urlSegment.toLowerCase())
+        ? urlSegment.toLowerCase()
+        : await getCountryCode(request, regionMap);
+    } catch {
+      // Region service failure never authorizes public B2C demo rendering.
+    }
+    if (!locale) return new NextResponse(null, {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow, noarchive' }
+    });
+    const response = NextResponse.redirect(new URL('/' + locale + '/login', request.url), 307);
+    response.headers.set('Cache-Control', 'private, no-store');
+    response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+    response.headers.set('Referrer-Policy', 'no-referrer');
+    return response;
+  }
   if (pathname.includes('.')) {
     return NextResponse.next();
   }
