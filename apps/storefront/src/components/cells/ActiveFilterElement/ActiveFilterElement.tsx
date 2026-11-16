@@ -3,6 +3,7 @@ import { Chip } from "@/components/atoms"
 import useFilters from "@/hooks/useFilters"
 import { CloseIcon } from "@/icons"
 import { useParams } from "next/navigation"
+import { toHreflang } from "@/lib/helpers/hreflang"
 
 const filtersLabels = {
   category: "Category",
@@ -19,13 +20,17 @@ const filtersLabels = {
 export const ActiveFilterElement = ({ filter }: { filter: string[] }) => {
   const { updateFilters } = useFilters(filter[0])
   const params = useParams()
-  const locale = params?.locale
-  const removeLabel =
-    locale === "ar"
-      ? "إزالة عامل التصفية"
-      : locale === "en"
-        ? "Remove filter"
-        : "Filtreyi kaldır"
+  // [locale] is the ISO-2 storefront COUNTRY, not the interface language.
+  // The existing hreflang map gives us en-US/en-GB/etc. Argentina ("ar")
+  // must not be mistaken for the Arabic language.
+  const countryCode = typeof params?.locale === "string" ? params.locale.toLowerCase() : ""
+  const language = toHreflang(countryCode).split("-")[0].toLowerCase()
+  const arabicRegion = ["sa", "ae", "eg"].includes(countryCode)
+  const removeLabel = arabicRegion
+    ? "إزالة عامل التصفية"
+    : language === "tr"
+      ? "Filtreyi kaldır"
+      : "Remove filter"
 
   const activeFilters = filter[1].split(",")
   const filterLabel =
