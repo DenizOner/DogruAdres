@@ -67,6 +67,37 @@ export type UpdateSmtpSettingsInput = Readonly<{
   expected_version: number
 }>
 
+/** An encrypted SMTP password is bound to the connection identity that received it. */
+export type SmtpCredentialEndpoint = Readonly<{
+  host: string
+  port: number
+  security: SmtpSecurityMode
+  username: string | null
+}>
+
+export class SmtpCredentialScopeChanged extends InvalidSmtpSettingsState {
+  constructor() {
+    super("Explicit SMTP password required when changing server, port, TLS mode, or username")
+    this.name = "SmtpCredentialScopeChanged"
+  }
+}
+
+/** Reusing a write-only secret for a new remote SMTP endpoint would disclose it. */
+export function assertSmtpCredentialReuse(
+  current: SmtpCredentialEndpoint,
+  next: SmtpCredentialEndpoint,
+  existingPassword: boolean,
+  explicitPassword: string | null | undefined
+): void {
+  if (!existingPassword || explicitPassword !== undefined) return
+  if (
+    current.host !== next.host ||
+    current.port !== next.port ||
+    current.security !== next.security ||
+    current.username !== next.username
+  ) throw new SmtpCredentialScopeChanged()
+}
+
 function assertActor(actor: SmtpAuditActor): void {
   if (!actor || !actor.person_id || !actor.actor_id || !actor.actor_type) {
     throw new InvalidSmtpSettingsState("Valid audit actor required")
@@ -229,6 +260,30 @@ export class PlatformSmtpPersistence {
     if (currentVersion !== input.expected_version) {
       throw new SmtpConcurrentUpdateError()
     }
+
+
+    // Fail before ANY settings/audit/outbox writes: a secret that cannot be
+    // read back must never be silently reused for a newly selected endpoint.
+    // With no DB row, the environment bootstrap password is equally protected.
+    const previousEndpoint: SmtpCredentialEndpoint = exists
+      ? {
+          host: String(existingRows[0].host),
+          port: Number(existingRows[0].port),
+          security: existingRows[0].security === "tls" ? "tls" : "ssl",
+          username: existingRows[0].username ? String(existingRows[0].username) : null,
+        }
+      : {
+          host: process.env.SMTP_HOST || "smtp.gmail.com",
+          port: parseInt(process.env.SMTP_PORT || "465", 10),
+          security: (process.env.SMTP_SECURITY || "ssl").toLowerCase() === "tls" ? "tls" : "ssl",
+          username: process.env.SMTP_USERNAME || null,
+        }
+    assertSmtpCredentialReuse(
+      previousEndpoint,
+      { host: input.host, port: input.port, security: input.security, username: input.username ?? null },
+      exists ? Boolean(existingRows[0].password_encrypted) : Boolean(process.env.SMTP_PASSWORD),
+      input.password
+    )
 
     const nextVersion = currentVersion + 1
 
