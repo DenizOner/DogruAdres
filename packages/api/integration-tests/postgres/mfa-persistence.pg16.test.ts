@@ -320,7 +320,11 @@ async function main() {
         const rows = await independentConnection.unsafe(
           "select person_id, user_enabled, version from da_person_mfa_preference"
         )
-        assert.deepEqual(rows, [{
+        // Bun returns SQLResultArray with command/count metadata. Compare
+        // its row values, not its driver-specific result wrapper.
+        assert.deepEqual(Array.from(rows, row => ({
+          person_id: row.person_id, user_enabled: row.user_enabled, version: row.version,
+        })), [{
           person_id: actor.person_id, user_enabled: true, version: 1,
         }], "A missing Person preference must not inherit or persist another Person's setting")
         assert.equal(await rowCount(independentConnection,"da_security_outbox"),2,
