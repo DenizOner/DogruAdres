@@ -45,6 +45,7 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
         self.browser = self.pw.chromium.launch(headless=True)
         self.page = self.browser.new_page(locale="tr-TR")
         self.errors = []
+        self.expected_posts = 0
         self.page.on("pageerror", lambda err: self.errors.append(str(err)))
         # Nothing from synthetic settings or the React mount may reach a network.
         self.page.route("**/*", lambda route: route.abort())
@@ -54,6 +55,7 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
         )
         self.page.evaluate("""() => {
           window.__daSmtpPosts = 0;
+          window.__daSmtpPostActions = [];
           window.__daSmtpGets = 0;
           window.fetch = async (url, options = {}) => {
             const path = String(url).split("?")[0];
@@ -76,7 +78,8 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
             }
             if (path === "/personal/platform/smtp" && method === "POST") {
               window.__daSmtpPosts++;
-              throw Error("Unsolicited SMTP write in a keyboard-only test");
+              window.__daSmtpPostActions.push(JSON.parse(String(options.body || "{}")).action);
+              throw Error("Synthetic SMTP POST intercepted; no network request");
             }
             throw Error("Unexpected synthetic HTTP request");
           };
@@ -90,7 +93,7 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
         try:
             self.assertEqual(self.errors, [], "React/Chromium page errors")
             self.assertEqual(
-                self.page.evaluate("window.__daSmtpPosts"), 0,
+                self.page.evaluate("window.__daSmtpPosts"), self.expected_posts,
                 "Keyboard-only UI interaction must not send SMTP settings",
             )
         finally:
@@ -176,6 +179,65 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
         self.page.get_by_text("SSL / TLS (Port 465)", exact=True).click()
         self.assertTrue(self.ssl.is_checked())
         self.assertEqual(self.page.locator("#smtp-port").input_value(), "465")
+
+
+    def test_missing_or_malformed_recipient_never_dispatches_test_email(self):
+        recipient = self.page.locator("#test-recipient")
+        button = self.page.get_by_role(
+            "button", name="Bağlantıyı ve E-posta Gönderimini Test Et"
+        )
+        # This button is not a submit button. The page must explicitly
+        # activate native constraint validation before posting a test email.
+        button.click()
+        self.assertFalse(recipient.evaluate("(el) => el.required"))
+        self.assertTrue(recipient.evaluate("(el) => document.activeElement === el"))
+        self.assertEqual(self.page.evaluate("window.__daSmtpPosts"), 0)
+        recipient.fill("not-an-email")
+        button.click()
+        self.assertTrue(
+            recipient.evaluate("(el) => el.validity.typeMismatch")
+        )
+        self.assertEqual(self.page.evaluate("window.__daSmtpPosts"), 0)
+
+    def test_settings_save_is_allowed_without_test_recipient(self):
+        recipient = self.page.locator("#test-recipient")
+        self.assertEqual(recipient.input_value(), "")
+        self.assertFalse(recipient.evaluate("(el) => el.required"))
+        # The Test action has an independent required-recipient gate.
+        # The enclosing settings form must not inherit that requirement.
+        self.expected_posts = 1
+        self.page.get_by_role("button", name="Ayarları kaydet").click()
+        self.page.wait_for_function("window.__daSmtpPosts === 1")
+        self.assertEqual(self.page.evaluate("window.__daSmtpPostActions"), ["save"])
+
+    def test_malformed_test_recipient_cannot_block_settings_save(self):
+        recipient = self.page.locator("#test-recipient")
+        recipient.fill("malformed-email")
+        self.assertTrue(recipient.evaluate("(el) => el.validity.typeMismatch"))
+        # The Test and Save actions must have separate constraint domains:
+        # invalid Test recipient must never affect main settings form validity.
+        self.assertTrue(self.page.locator("form").evaluate("(el) => el.checkValidity()"))
+        self.assertTrue(recipient.evaluate("(el) => el.form === null"))
+        self.expected_posts = 1
+        self.page.get_by_role("button", name="Ayarları kaydet").click()
+        self.page.wait_for_function("window.__daSmtpPosts === 1")
+        self.assertEqual(self.page.evaluate("window.__daSmtpPostActions"), ["save"])
+
+    def test_valid_recipient_reaches_existing_smtp_test_post(self):
+        recipient = self.page.locator("#test-recipient")
+        recipient.fill("recipient@example.invalid")
+        self.assertTrue(recipient.evaluate("(el) => el.checkValidity()"))
+        # This route is intercepted by a synthetic fetch handler. An actual
+        # SMTP message and external network request are never created.
+        self.expected_posts = 1
+        self.page.get_by_role(
+            "button", name="Bağlantıyı ve E-posta Gönderimini Test Et"
+        ).click()
+        self.page.wait_for_function("window.__daSmtpPosts === 1")
+        self.assertEqual(self.page.evaluate("window.__daSmtpPostActions"), ["test"])
+        self.assertFalse(
+            recipient.evaluate("(el) => el.validity.typeMismatch")
+        )
 
 
 if __name__ == "__main__":

@@ -204,7 +204,10 @@ async function assertStaffBlockers(staff:B06Chrome,sellerId:string,
   shown:string,absent:string[]=[]){
   await staff.send("Page.bringToFront")
   await staff.send("Page.reload",{ignoreCache:true})
-  await staff.wait("document.readyState==='complete' && "+
+  // The real workspace deliberately drops private async HTTP responses when
+  // its tab is hidden. Never dispatch the selection change before Chrome has
+  // actually made the Staff page visible after switching from another actor.
+  await staff.wait("document.readyState==='complete' && !document.hidden && "+
     "!document.getElementById('workspace').hidden && "+
     "!document.getElementById('platform-closing-panel').hidden")
   let found=false
@@ -223,8 +226,33 @@ async function assertStaffBlockers(staff:B06Chrome,sellerId:string,
       JSON.stringify("Yetkili mağazalar doğrulanıyor…"))
   }
   assert.equal(found,true,"Staff picker must contain the approved Seller")
-  await staff.wait("document.getElementById('platform-closing-mail-status')."+
-    "textContent.includes("+JSON.stringify(shown)+")")
+  try {
+    await staff.wait("document.getElementById('platform-closing-mail-status')."+
+      "textContent.includes("+JSON.stringify(shown)+")")
+  } catch(error) {
+    // No Seller/Person identifiers, visible message content, secrets or HTTP
+    // bodies in CI logs. Classify the fail-closed UI state without bypassing
+    // the expected text/authority assertion or increasing the timeout.
+    const facts=await staff.eval("(()=>{const form=document.getElementById("+
+      "'platform-closing-form');const choice=form?.elements.namedItem('seller_id');"+
+      "const status=document.getElementById('platform-closing-mail-status')?.textContent||'';"+
+      "return {tab_visible:!document.hidden,workspace_visible:"+
+      "!document.getElementById('workspace').hidden,panel_visible:"+
+      "!document.getElementById('platform-closing-panel').hidden,"+
+      "seller_selected:!!choice?.value,mail_pending:status.includes("+
+      JSON.stringify("Owner e-posta bildirimleri kontrol ediliyor…")+"),"+
+      "mail_failed_closed:status.includes("+
+      JSON.stringify("E-posta durumları doğrulanamadı")+"),"+
+      "mail_no_record:status.includes("+
+      JSON.stringify("Bu mağaza için henüz kapatma kaydı yok")+"),"+
+      "financial_blocker:status.includes("+
+      JSON.stringify("mali ve hukuki yükümlülüklerin temizlendiği doğrulanmadı")+"),"+
+      "finalizer_blocker:status.includes("+
+      JSON.stringify("geri dönüşsüz kapatma kapalıdır")+"),"+
+      "empty:status.length===0}})()").catch(()=>({evaluation_failed:true}))
+    console.error("B22_STAFF_BLOCKER_SAFE_FACTS "+JSON.stringify(facts))
+    throw error
+  }
   const result=await staff.eval("(()=>{const e=document.getElementById("+
     "'platform-closing-mail-status');return {text:e.textContent,"+
     "role:e.getAttribute('role'),live:e.getAttribute('aria-live')}})()")

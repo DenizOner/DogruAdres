@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import {
   Container,
   Heading,
@@ -75,6 +75,7 @@ export default function PlatformSmtpSettingsPage() {
 
   // Live Test State
   const [testRecipient, setTestRecipient] = useState("")
+  const testRecipientRef = useRef<HTMLInputElement>(null)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
 
   const backendUrl = ""
@@ -245,10 +246,17 @@ export default function PlatformSmtpSettingsPage() {
 
   // Live Test Dispatch handler
   async function handleTest() {
-    if (!testRecipient) {
-      toast.error("Lütfen test e-postasının gönderileceği alıcı adresini giriniz.")
+    // The test recipient is outside the Save settings form; validate it only
+    // for the separate Test action, leaving Save constraints unaffected.
+    const recipientInput = testRecipientRef.current
+    if (!recipientInput) return
+    if (!recipientInput.value.trim()) {
+      recipientInput.setCustomValidity("Test e-postası için bir alıcı adresi girin.")
+      recipientInput.reportValidity()
+      recipientInput.setCustomValidity("")
       return
     }
+    if (!recipientInput.reportValidity()) return
 
     setTesting(true)
     setTestResult(null)
@@ -372,7 +380,8 @@ export default function PlatformSmtpSettingsPage() {
           <Text className="text-sm text-ui-fg-muted">Yapılandırma yükleniyor...</Text>
         </Container>
       ) : canManage ? (
-        <form onSubmit={handleSave} className="space-y-6">
+        <div className="space-y-6">
+          <form onSubmit={handleSave}>
           {/* Main Configuration Card */}
           <Container className="p-6 space-y-6 rounded-xl border border-ui-border-base bg-ui-bg-base">
             {/* Service Toggle */}
@@ -571,6 +580,7 @@ export default function PlatformSmtpSettingsPage() {
               </Button>
             </div>
           </Container>
+          </form>
 
           {/* Live Connection Test Card */}
           <Container className="p-6 space-y-4 rounded-xl border border-ui-border-base bg-ui-bg-base">
@@ -599,6 +609,7 @@ export default function PlatformSmtpSettingsPage() {
                 </Label>
                 <Input
                   id="test-recipient"
+                  ref={testRecipientRef}
                   type="email"
                   value={testRecipient}
                   onChange={(e) => setTestRecipient(e.target.value)}
@@ -617,7 +628,7 @@ export default function PlatformSmtpSettingsPage() {
               </Button>
             </div>
           </Container>
-        </form>
+        </div>
       ) : null}
     </div>
   )
