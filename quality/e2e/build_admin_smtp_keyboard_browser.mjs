@@ -47,7 +47,7 @@ export const toast = { success: () => {}, error: () => {} };
 const isolatedPresentation = {
   name: "smtp-admin-real-source-synthetic-ui",
   setup(plugin) {
-    plugin.onResolve({ filter: /^@medusajs\\/ui$/ }, () => ({
+    plugin.onResolve({ filter: /^@medusajs\/ui$/ }, () => ({
       path: "isolated-admin-ui", namespace: "smtp-test-ui"
     }));
     plugin.onLoad({ filter: /.*/, namespace: "smtp-test-ui" }, () => ({
