@@ -49,10 +49,14 @@ export const Modal = ({
     }
     const first = focusable[0]
     const last = focusable[focusable.length - 1]
-    if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+    // A removed filter intentionally focuses the dialog heading (tabIndex=-1).
+    // It is inside the dialog but NOT a normal Tab stop; Shift+Tab from there
+    // must wrap to the last control rather than escape behind the overlay.
+    const onTabStop = focusable.some(element => element === document.activeElement)
+    if (event.shiftKey && (document.activeElement === first || !onTabStop)) {
       event.preventDefault()
       last.focus()
-    } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+    } else if (!event.shiftKey && (document.activeElement === last || !onTabStop)) {
       event.preventDefault()
       first.focus()
     }

@@ -251,6 +251,13 @@ class NextFilterHttpTest(unittest.TestCase):
             modal.get_by_role("button", name="Filtreyi kaldır: Color — Red").count(),
             0,
         )
+        # The active filter's focus fallback is the modal heading (tabIndex=-1).
+        # Shift+Tab from there must stay inside the dialog, never reach Filters
+        # or another background control.
+        self.page.keyboard.press("Shift+Tab")
+        self.assertTrue(modal.evaluate("(el) => el.contains(document.activeElement)"),
+                        "Shift+Tab from programmatically focused heading escaped dialog")
+        self.assertEqual(self.page.evaluate("document.activeElement.tagName"), "BUTTON")
 
     def test_actual_next_localized_filter_labels(self):
         # URL prefix is a country code, not a language code.
