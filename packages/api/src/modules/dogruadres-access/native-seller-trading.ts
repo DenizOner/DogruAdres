@@ -12,7 +12,12 @@ export function nativeSellerTradingAt(s:{
   closed_from?:Date|string|null;
   closed_to?:Date|string|null;
 },now=Date.now()):boolean{
-  if(s.status!=="open"||!s.approved_at||!Number.isFinite(now))return false
+  if(s.status!=="open"||!Number.isFinite(now))return false
+  // Native approval is a timestamp, not a truthy marker. Corrupt or missing
+  // approval metadata must never unlock private discovery or checkout.
+  const approvedAt=s.approved_at instanceof Date?s.approved_at.getTime():
+    typeof s.approved_at==="string"?new Date(s.approved_at).getTime():NaN
+  if(!Number.isFinite(approvedAt))return false
   const from=s.closed_from==null?null:new Date(s.closed_from).getTime()
   const to=s.closed_to==null?null:new Date(s.closed_to).getTime()
   if(from===null&&to===null)return true
