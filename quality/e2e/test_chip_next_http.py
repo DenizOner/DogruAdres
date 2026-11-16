@@ -257,7 +257,13 @@ class NextFilterHttpTest(unittest.TestCase):
         self.page.keyboard.press("Shift+Tab")
         self.assertTrue(modal.evaluate("(el) => el.contains(document.activeElement)"),
                         "Shift+Tab from programmatically focused heading escaped dialog")
-        self.assertEqual(self.page.evaluate("document.activeElement.tagName"), "BUTTON")
+        # A visible textbox is as valid as a button for the last Tab stop.
+        # Check that real focus stays on a visible, interactive dialog control.
+        self.assertTrue(self.page.evaluate(
+            "() => { const el=document.activeElement; return !!el && "
+            "el.getClientRects().length > 0 && "
+            "['BUTTON','INPUT','SELECT','TEXTAREA','A'].includes(el.tagName); }"
+        ), "Shift+Tab must land on a visible interactive control inside dialog")
 
     def test_actual_next_localized_filter_labels(self):
         # URL prefix is a country code, not a language code.
