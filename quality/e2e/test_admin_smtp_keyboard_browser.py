@@ -55,6 +55,7 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
         )
         self.page.evaluate("""() => {
           window.__daSmtpPosts = 0;
+          window.__daSmtpPostActions = [];
           window.__daSmtpGets = 0;
           window.fetch = async (url, options = {}) => {
             const path = String(url).split("?")[0];
@@ -77,7 +78,8 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
             }
             if (path === "/personal/platform/smtp" && method === "POST") {
               window.__daSmtpPosts++;
-              throw Error("Unsolicited SMTP write in a keyboard-only test");
+              window.__daSmtpPostActions.push(JSON.parse(String(options.body || "{}")).action);
+              throw Error("Synthetic SMTP POST intercepted; no network request");
             }
             throw Error("Unexpected synthetic HTTP request");
           };
@@ -206,6 +208,7 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
         self.expected_posts = 1
         self.page.get_by_role("button", name="Ayarları kaydet").click()
         self.page.wait_for_function("window.__daSmtpPosts === 1")
+        self.assertEqual(self.page.evaluate("window.__daSmtpPostActions"), ["save"])
 
     def test_malformed_test_recipient_cannot_block_settings_save(self):
         recipient = self.page.locator("#test-recipient")
@@ -218,6 +221,7 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
         self.expected_posts = 1
         self.page.get_by_role("button", name="Ayarları kaydet").click()
         self.page.wait_for_function("window.__daSmtpPosts === 1")
+        self.assertEqual(self.page.evaluate("window.__daSmtpPostActions"), ["save"])
 
     def test_valid_recipient_reaches_existing_smtp_test_post(self):
         recipient = self.page.locator("#test-recipient")
@@ -230,6 +234,7 @@ class AdminSmtpKeyboardChromiumTest(unittest.TestCase):
             "button", name="Bağlantıyı ve E-posta Gönderimini Test Et"
         ).click()
         self.page.wait_for_function("window.__daSmtpPosts === 1")
+        self.assertEqual(self.page.evaluate("window.__daSmtpPostActions"), ["test"])
         self.assertFalse(
             recipient.evaluate("(el) => el.validity.typeMismatch")
         )
