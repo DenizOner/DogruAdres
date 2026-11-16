@@ -240,6 +240,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="platform-closing-email-link-status" role="status" aria-live="polite"></p>
   </section>
   <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
+  <section id="company-launcher-panel" hidden style="grid-column:1/-1" aria-labelledby="company-launcher-title">
+    <h2 id="company-launcher-title">Şirket çalışma alanı başlatıcısı</h2>
+    <p>Yalnız mevcut, seçili kuruluşta yetkili olduğunuz işlevleri sıralayın ve katlayın. Bu tercih yeni yetki vermez.</p>
+    <p id="company-launcher-status" role="status" aria-live="polite"></p>
+    <ol id="company-launcher-list"></ol>
+    <button id="company-launcher-reset" type="button">Standart düzeni geri yükle</button>
+  </section>
 
   <section id="platform-closing-panel" hidden style="grid-column:1/-1" aria-labelledby="platform-closing-title">
     <h2 id="platform-closing-title">Platform mağaza kapatma süreci</h2>
@@ -562,7 +569,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const grantWrite=path==='store-draft-permissions'&&options.method==='POST';
     const platformStoreWrite=path==='platform/stores'&&options.method==='POST';
     const closingWrite=['store-owner-closing','store-platform-closing','store-platform-closing-final-review','platform/store-closings','platform/store-closing-reviews','store-platform-closing-email-visit'].includes(path)&&options.method==='POST';
-    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite;
+    const write=groupWrite||draftWrite||followWrite||policyWrite||storeApplicationWrite||grantWrite||platformStoreWrite||renameWrite||closingWrite||ownerPauseWrite||(path==='company-launcher'&&options.method==='POST');
     let data;
     try{
       data=await r.json();
@@ -1606,6 +1613,173 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   el('pending-invitations-refresh').onclick=async()=>{
     if(currentOrg)await pendingInvitations(currentOrg,organizationRequest);
   };
+  // B20 company launcher is navigation only; server remains the sole authority
+  // for both the Person x Organization pair and every destination API.
+  let companyLauncherData=null,companyLauncherRequest=0,companyLauncherBusy=false;
+  const companyLauncherTargets={
+    organization:{label:'Kuruluş bilgileri',target:'detail'},
+    'store-applications':{label:'Mağaza başvuruları',target:'store-application-panel'},
+    memberships:{label:'Üyelik yönetimi',target:'memberships'}
+  };
+  function clearCompanyLauncher(){
+    ++companyLauncherRequest;companyLauncherData=null;companyLauncherBusy=false;
+    el('company-launcher-panel').hidden=true;
+    el('company-launcher-list').replaceChildren();
+    el('company-launcher-status').textContent='';
+    el('company-launcher-reset').disabled=true;
+  }
+  function validCompanyLauncherResponse(data,org){
+    return data && data.organization_id===org &&
+      Number.isSafeInteger(data.version) && data.version>=0 &&
+      Array.isArray(data.available_ids) && data.available_ids.length>=1 &&
+      data.available_ids.length<=3 &&
+      Array.isArray(data.app_ids) &&
+      data.app_ids.length===data.available_ids.length &&
+      Array.isArray(data.collapsed_ids) &&
+      data.collapsed_ids.length<=data.app_ids.length &&
+      new Set(data.available_ids).size===data.available_ids.length &&
+      data.available_ids.every(id=>Object.hasOwn(companyLauncherTargets,id)) &&
+      new Set(data.app_ids).size===data.app_ids.length &&
+      data.app_ids.every(id=>data.available_ids.includes(id)) &&
+      new Set(data.collapsed_ids).size===data.collapsed_ids.length &&
+      data.collapsed_ids.every(id=>data.app_ids.includes(id));
+  }
+  async function loadCompanyLauncher(org,orgRequest){
+    const seq=++companyLauncherRequest,epoch=viewEpoch,person=currentPersonId;
+    companyLauncherData=null;companyLauncherBusy=false;
+    el('company-launcher-panel').hidden=true;
+    el('company-launcher-list').replaceChildren();
+    if(!person||!org||document.hidden)return;
+    try{
+      const data=await api('company-launcher?organization='+encodeURIComponent(org));
+      if(seq!==companyLauncherRequest||orgRequest!==organizationRequest||
+         epoch!==viewEpoch||person!==currentPersonId||currentOrg!==org||
+         document.hidden||el('workspace').hidden)return;
+      if(!validCompanyLauncherResponse(data,org))throw Error('Geçersiz şirket başlatıcısı');
+      companyLauncherData=data;el('company-launcher-panel').hidden=false;
+      el('company-launcher-status').textContent='Yalnız bu şirket için kayıtlı düzen.';
+      renderCompanyLauncher();
+    }catch{
+      if(seq!==companyLauncherRequest||orgRequest!==organizationRequest||
+         epoch!==viewEpoch||person!==currentPersonId||currentOrg!==org)return;
+      companyLauncherData=null;el('company-launcher-panel').hidden=true;
+      el('company-launcher-list').replaceChildren();
+    }
+  }
+  async function saveCompanyLauncher(apps,collapsed,notice){
+    const current=companyLauncherData,org=currentOrg,orgRequest=organizationRequest;
+    const epoch=viewEpoch,person=currentPersonId,seq=companyLauncherRequest;
+    if(!current||companyLauncherBusy||!org||document.hidden||
+       el('workspace').hidden)return;
+    companyLauncherBusy=true;
+    el('company-launcher-reset').disabled=true;
+    try{
+      const saved=await api('company-launcher',{method:'POST',body:JSON.stringify({
+        organization:org,app_ids:apps,collapsed_ids:collapsed,
+        expected_version:current.version
+      })});
+      if(seq!==companyLauncherRequest||epoch!==viewEpoch||
+         orgRequest!==organizationRequest||currentOrg!==org||
+         person!==currentPersonId||document.hidden||el('workspace').hidden)return;
+      if(!validCompanyLauncherResponse(saved,org))throw Error('Geçersiz kayıt yanıtı');
+      companyLauncherData=saved;
+      el('company-launcher-status').textContent=notice;
+    }catch(error){
+      if(seq!==companyLauncherRequest||epoch!==viewEpoch||
+         orgRequest!==organizationRequest||currentOrg!==org||
+         person!==currentPersonId)return;
+      el('company-launcher-status').textContent=error.uncertain
+        ?'Kayıt sonucu belirsiz. Yeniden göndermeden önce güncel düzeni okuyun.'
+        :'Düzen kaydedilemedi: '+error.message;
+    }finally{
+      if(seq===companyLauncherRequest&&epoch===viewEpoch&&
+         orgRequest===organizationRequest&&currentOrg===org){
+        companyLauncherBusy=false;renderCompanyLauncher();
+      }
+    }
+  }
+  function renderCompanyLauncher(){
+    const list=el('company-launcher-list');
+    list.replaceChildren();
+    const data=companyLauncherData;
+    if(!data)return;
+    el('company-launcher-reset').disabled=companyLauncherBusy;
+    for(let idx=0;idx<data.app_ids.length;idx++){
+      const id=data.app_ids[idx],meta=companyLauncherTargets[id];
+      if(!meta)continue;
+      const card=document.createElement('li'),row=document.createElement('div');
+      card.draggable=!companyLauncherBusy;
+      card.setAttribute('aria-label',meta.label);
+      const heading=document.createElement('strong');
+      heading.textContent=meta.label;
+      row.append(heading);
+      for(const direction of [-1,1]){
+        const control=document.createElement('button');
+        control.type='button';
+        control.textContent=direction<0?'Yukarı':'Aşağı';
+        control.setAttribute('aria-label',meta.label+' — '+control.textContent);
+        control.disabled=companyLauncherBusy||idx+direction<0||
+          idx+direction>=data.app_ids.length;
+        control.onclick=()=>{
+          const next=data.app_ids.slice(),other=idx+direction;
+          [next[idx],next[other]]=[next[other],next[idx]];
+          void saveCompanyLauncher(next,data.collapsed_ids,'Sıra bu şirkette kaydedildi.');
+        };
+        row.append(control);
+      }
+      const toggle=document.createElement('button');
+      toggle.type='button';
+      const hidden=data.collapsed_ids.includes(id);
+      toggle.textContent=hidden?'Bölümü aç':'Bölümü katla';
+      toggle.setAttribute('aria-expanded',String(!hidden));
+      toggle.setAttribute('aria-label',meta.label+' — '+toggle.textContent);
+      toggle.disabled=companyLauncherBusy;
+      toggle.onclick=()=>{
+        const next=hidden?data.collapsed_ids.filter(item=>item!==id):
+          [...data.collapsed_ids,id];
+        void saveCompanyLauncher(data.app_ids,next,'Görünüm bu şirkette kaydedildi.');
+      };
+      row.append(toggle);card.append(row);
+      const link=document.createElement('button');
+      link.type='button';link.textContent=meta.label+' bölümüne git';
+      link.hidden=hidden;link.disabled=companyLauncherBusy;
+      link.onclick=()=>{
+        const target=document.getElementById(meta.target);
+        if(!target||target.hidden){
+          el('company-launcher-status').textContent=
+            'Bu işlem şu anda kullanılamıyor. Güncel yetkinizi ve sayfayı yenileyin.';
+          return;
+        }
+        target.setAttribute('tabindex','-1');
+        if(typeof target.scrollIntoView==='function')target.scrollIntoView({block:'start'});
+        if(typeof target.focus==='function')target.focus();
+      };
+      card.append(link);
+      card.ondragstart=event=>{
+        if(companyLauncherBusy||!event.dataTransfer){event.preventDefault();return}
+        event.dataTransfer.setData('text/plain',id);
+        event.dataTransfer.effectAllowed='move';
+      };
+      card.ondragover=event=>{if(!companyLauncherBusy)event.preventDefault()};
+      card.ondrop=event=>{
+        event.preventDefault();
+        if(companyLauncherBusy||!event.dataTransfer)return;
+        const moving=event.dataTransfer.getData('text/plain');
+        if(!data.app_ids.includes(moving)||moving===id)return;
+        const next=data.app_ids.filter(item=>item!==moving);
+        next.splice(next.indexOf(id),0,moving);
+        void saveCompanyLauncher(next,data.collapsed_ids,
+          'Sürükle-bırak sırası bu şirkette kaydedildi.');
+      };
+      list.append(card);
+    }
+  }
+  el('company-launcher-reset').onclick=()=>{
+    const data=companyLauncherData;
+    if(!data||companyLauncherBusy)return;
+    void saveCompanyLauncher(data.available_ids.slice(),[],
+      'Standart düzen yalnız bu şirkette kaydedildi.');
+  };
   async function selectOrg(id){
     // Preserve an unread first-login email link, but never a displayed old
     // explanation when selecting the first/different Organization.
@@ -1614,10 +1788,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     // Never carry a verified role from the previously selected Organization.
     applicationRole='';
     clearNotifications();
+    clearCompanyLauncher();
     const request=++organizationRequest;currentOrg='';timelineCursor=null;timelineOrg='';++timelineRequest;el('audit-timeline-section').hidden=true;el('audit-timeline-entries').replaceChildren();el('audit-timeline-status').textContent='';el('invite-member').hidden=true;el('invite-result').textContent='';clearPendingInvitations();el('detail').textContent='';el('actor-result').textContent='';if(typeof el('seller').reset==='function')el('seller').reset();clearMemberships();clearOrganizationStores();history.replaceState(null,'','/personal');
     el('memberships').ariaBusy='true';el('memberships-status').textContent='Üyelikler yükleniyor…';
     try{const result=await api('organizations?id='+encodeURIComponent(id));if(request!==organizationRequest)return;
       currentOrg=id;el('detail').textContent=JSON.stringify(result.organizations[0],null,2);history.replaceState(null,'','/personal?organization='+encodeURIComponent(id));
+      void loadCompanyLauncher(id,request);
       el('notification-bell').hidden=false;void notifications();
       const managerRole=result.organizations[0]?.role;
       selectedStoreOwner=managerRole==='owner';
@@ -4474,7 +4650,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=false;el('invitation-mismatch-banner').hidden=true;el('invitation-result').textContent='';}
     else{el('invitation-section').hidden=true;}
-    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;if(currentPersonId)clearPrivateClosingEmailLink();clearNotifications();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('register-details').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPersonMobile();clearOrganizationDrafts();clearPendingInvitations();el('invite-result').textContent='';
+    const selected=new URLSearchParams(location.search).get('organization');if(selected)await selectOrg(selected)}catch{if(epoch!==viewEpoch)return;if(currentPersonId)clearPrivateClosingEmailLink();clearNotifications();clearCompanyLauncher();organizationRequest++;csrf='';currentOrg='';currentPersonId='';el('login').hidden=false;el('register-details').hidden=false;el('session-lock').hidden=true;el('workspace').hidden=true;el('mfa-enrollment').hidden=true;el('mfa-enroll-secret').textContent='';el('mfa-seed').value='';el('mfa-seed-region').hidden=true;mfaState=null;clearMfaCodes();el('mfa-management').hidden=true;el('mfa-person').hidden=true;el('mfa-platform').hidden=true;el('smtp-platform').hidden=true;smtpSettings=null;el('invite-member').hidden=true;clearPersonMobile();clearOrganizationDrafts();clearPendingInvitations();el('invite-result').textContent='';
     const inviteToken=invitationToken;
     if(inviteToken){el('invitation-section').hidden=false;el('invitation-card').hidden=true;el('invitation-mismatch-banner').hidden=false;el('invitation-mismatch-text').textContent='Bu bağlantıyla mevcut oturumda devam edilemiyor. Uygun hesapla giriş yapın veya yeni davet isteyin.';}
     else{el('invitation-section').hidden=true;}
@@ -4838,7 +5014,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // Conceal before browser history or hidden-page restoration; pending reads
   // belong to a view epoch and cannot repopulate a concealed private workspace.
   function concealPrivateView(preserveUnopenedClosingLink=false){
-    clearNotifications();
+    clearNotifications();clearCompanyLauncher();
     viewEpoch++;organizationRequest++;timelineRequest++;currentOrg='';linkIntent='';csrf='';loadedScope='';mfaState=null;smtpSettings=null;clearMfaCodes();timelineCursor=null;timelineOrg='';
     clearPlatformStorePolicy();
     clearPrivateClosingEmailLink(preserveUnopenedClosingLink);
