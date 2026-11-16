@@ -67,7 +67,15 @@ describe("M0 MFA platform and personal settings ingress", () => {
           response.end(JSON.stringify(value));return out
         },
       }
-      await GET({...request,query:{}} as any,out)
+      try {
+        // IncomingMessage exposes headers through its prototype; spreading it
+        // into a plain object silently drops that getter.
+        await GET(Object.assign(request,{query:{}}) as any,out)
+      } catch {
+        // Never leave a real HTTP client hanging on a test-adapter failure.
+        response.statusCode=500
+        response.end("Test adapter failed")
+      }
     })
     await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve))
     try{
