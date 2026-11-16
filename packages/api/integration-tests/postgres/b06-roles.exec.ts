@@ -52,6 +52,11 @@ export default async function({container}:ExecArgs){
   assert.equal((await q("select mfa_activated from da_session_policy where id='current'"))[0].mfa_activated,true)
   const actors:any[]=[]
   for(const label of ['A','B']){const rows=await q("select u.id actor,b.person_id person,b.auth_identity_id identity from public.user u join da_login_binding b on b.actor_id=u.id and b.actor_type='user' where u.email=$1 and b.verified_at is not null",[process.env['B06_EMAIL_'+label]]);assert.equal(rows.length,1);actors.push(rows[0])}
+  // A/B must represent genuinely distinct Person, native identity and actors;
+  // otherwise two successful GETs cannot prove cross-Person isolation.
+  assert.ok(actors.length===2&&actors[0].person!==actors[1].person&&
+    actors[0].identity!==actors[1].identity&&actors[0].actor!==actors[1].actor,
+    'B06 requires independent synthetic Person and AuthIdentity fixtures')
   const orgs=await f.createOrganizations([{name:'B06 Org1',status:'active'},{name:'B06 Org2',status:'active'}])
   const members=await f.createMemberships(orgs.flatMap(o=>actors.map((a,i)=>({organization_id:o.id,person_id:a.person,role:i===0?'owner' as const:'member' as const,status:'active' as const,protected_owner:i===0}))))
   const [owner1,b1,owner2,b2]=members
@@ -104,6 +109,8 @@ export default async function({container}:ExecArgs){
     assert.ok(own.body?.platform?.version===0,'MFA platform policy must be at revision 0')
     assert.ok(own.body?.native_factor_state==='enabled','Verified native TOTP must be enabled')
     assert.ok(own.body?.effective_mfa_target?.required===true,'Effective MFA must be required')
+    assert.ok(own.body?.effective_mfa_target?.next_step==='verify_mfa',
+      'Enrolled native factor must retain verification as its effective MFA step')
     assert.ok(own.body?.effective_mfa_target?.user_control_allowed===false,'Mandatory MFA cannot be disabled by Person')
     assert.ok(own.body?.can_manage_platform===false,'Ordinary Person must not receive platform grant')
     assert.ok(own.body?.runtime_enforcement==='enforced','MFA runtime must be enforced')
