@@ -300,6 +300,96 @@ async function main() {
       }
       assert.equal(await rowCount(db,"da_security_outbox"),2)
     })
+    await check("committed MFA policy and Person preference survive an independent SQL connection", async () => {
+      // The second Person has no preference record. Reconnecting must not
+      // adopt the first Person's enabled preference or create a write.
+      const otherPersonId = "daprs_mfa_ci_other"
+      await db.unsafe("insert into da_person(id) values($1)", [otherPersonId])
+      const independentConnection = new SQL(url.toString())
+      try {
+        const reader = new MfaPersistence(sqlAdapter(independentConnection))
+        assert.deepEqual(await reader.readPlatformPolicy(), {
+          platform_mode: "optional", version: 1,
+        })
+        assert.deepEqual(await reader.readPersonPreference(actor.person_id), {
+          person_id: actor.person_id, user_enabled: true, version: 1,
+        })
+        assert.deepEqual(await reader.readPersonPreference(otherPersonId), {
+          person_id: otherPersonId, user_enabled: false, version: 0,
+        })
+        const rows = await independentConnection.unsafe(
+          "select person_id, user_enabled, version from da_person_mfa_preference"
+        )
+        // Bun returns SQLResultArray with command/count metadata. Compare
+        // its row values, not its driver-specific result wrapper.
+        // The selected columns have fixed PostgreSQL types; normalize the
+        // Bun-specific SQLResultArray to plain typed row values.
+        type PreferenceRow = { person_id: string; user_enabled: boolean; version: number }
+        assert.deepEqual(Array.from(rows as PreferenceRow[], row => ({
+          person_id: row.person_id, user_enabled: row.user_enabled, version: row.version,
+        })), [{
+          person_id: actor.person_id, user_enabled: true, version: 1,
+        }], "A missing Person preference must not inherit or persist another Person's setting")
+        assert.equal(await rowCount(independentConnection,"da_security_outbox"),2,
+          "Readback must have no audit or outbox side effects")
+      } finally {
+        await independentConnection.close()
+      }
+    })
+    await check("committed MFA preferences survive a fresh Bun process without crossing Person boundaries", async () => {
+      // A fresh process has neither the writer's connection nor module memory.
+      // This is a process-level persistence test, NOT a Medusa HTTP/server
+      // restart or an authenticated browser-session acceptance test.
+      const code = String.raw`
+        import { MfaPersistence } from "./src/modules/dogruadres-access/mfa-persistence.ts"
+        const url = new URL(process.env.PG_MFA_TEST_URL ?? "postgres://bad/invalid")
+        if (process.env.CI !== "true" ||
+            process.env.PG_MFA_TEST_SENTINEL !== "mfa-pg16-disposable-ci-v1" ||
+            url.protocol !== "postgres:" || url.hostname !== "127.0.0.1" ||
+            url.port !== "5432" || url.username !== "mfa_test" ||
+            url.pathname !== "/mfa_ci_ephemeral")
+          throw Error("REFUSED: fresh process requires disposable CI PostgreSQL")
+        const db = new Bun.SQL(url.toString())
+        try {
+          const sql = {
+            async execute(statement, params = []) {
+              let n = 0
+              const pg = statement.replace(/\?/g, () => "$" + ++n)
+              if (n !== params.length) throw Error("SQL placeholder mismatch")
+              return db.unsafe(pg, params)
+            },
+          }
+          const reader = new MfaPersistence(sql)
+          console.log(JSON.stringify({
+            platform: await reader.readPlatformPolicy(),
+            first: await reader.readPersonPreference("daprs_mfa_ci_1"),
+            second: await reader.readPersonPreference("daprs_mfa_ci_other"),
+          }))
+        } finally {
+          await db.close()
+        }
+      `
+      const runtime = (globalThis as any).Bun
+      const child = runtime.spawn([process.execPath, "-e", code], {
+        cwd: process.cwd(),
+        env: {
+          CI: "true",
+          PG_MFA_TEST_SENTINEL: "mfa-pg16-disposable-ci-v1",
+          PG_MFA_TEST_URL: url.toString(),
+        },
+        stdin: "ignore", stdout: "pipe", stderr: "ignore",
+        timeout: 15000,
+      })
+      const [status, output] = await Promise.all([child.exited, child.stdout.text()])
+      assert.equal(status, 0, "Fresh process failed or exceeded the bounded CI timeout")
+      assert.deepEqual(JSON.parse(output.trim()), {
+        platform: { platform_mode: "optional", version: 1 },
+        first: { person_id: actor.person_id, user_enabled: true, version: 1 },
+        second: { person_id: "daprs_mfa_ci_other", user_enabled: false, version: 0 },
+      })
+      assert.equal(await rowCount(db, "da_security_outbox"), 2,
+        "Fresh process readback must not append an audit/outbox event")
+    })
     await check("two concurrent writers serialize and one stale version fails", async () => {
       let markReady!:()=>void
       const ready=new Promise<void>(resolve=>{markReady=resolve})
