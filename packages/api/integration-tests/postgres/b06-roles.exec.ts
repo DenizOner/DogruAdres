@@ -79,6 +79,7 @@ export default async function({container}:ExecArgs){
   for(const [i,c] of [a,b].entries()){
     c.phase='mfa-settings-get-own-person'
     await strong(c)
+    const mfaHttpStart=c.http.length
     const own=await mfaGet(c,'/personal/mfa','include')
     assert.equal(own.status,200,'Authenticated native MFA user must read own settings')
     assert.equal(own.cacheControl,'no-store')
@@ -112,6 +113,18 @@ export default async function({container}:ExecArgs){
     assert.equal(foreign.status,400,'Client-selected foreign Person must not become an authority')
     assert.equal(foreign.cacheControl,'no-store')
     assert.deepEqual(foreign.body,{message:'Invalid input'})
+    // CDP observes the actual three HTTPS network responses, not a stubbed
+    // window.fetch result or a cached synthetic response.
+    const expectedMfaNetwork=[
+      ['mfa-settings-get-own-person',200],
+      ['mfa-settings-get-no-cookie',403],
+      ['mfa-settings-get-foreign-person-query',400],
+    ] as const
+    await until(async()=>expectedMfaNetwork.every(([phase,status])=>
+      c.http.slice(mfaHttpStart).some((r:any)=>r.phase===phase&&r.method==='GET'&&
+        r.path==='/personal/mfa'&&r.status===status&&r.tls?.protocol)),
+      5000,'B06 real native Chrome TLS network evidence')
+
     report.checks.push({phase:'mfa-settings-real-https-person-readback',actor:c.actor,
       ownHttp:200,missingCookieHttp:403,foreignPersonQueryHttp:400,
       exactPersonBinding:true,defaultPreferenceReadOnly:true,nativeFactorEnabled:true,
