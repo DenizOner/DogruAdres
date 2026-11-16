@@ -246,10 +246,17 @@ export default function PlatformSmtpSettingsPage() {
 
   // Live Test Dispatch handler
   async function handleTest() {
-    // A type="button" inside the settings form skips native submit validation.
-    // Check the real email input before any SMTP test POST; the server must
-    // independently validate its target recipient and authorization as before.
-    if (!testRecipientRef.current?.reportValidity()) return
+    // The recipient shares the settings form but is required ONLY for the
+    // separate "Test" action, not for "Save settings".
+    const recipientInput = testRecipientRef.current
+    if (!recipientInput) return
+    if (!recipientInput.value.trim()) {
+      recipientInput.setCustomValidity("Test e-postası için bir alıcı adresi girin.")
+      recipientInput.reportValidity()
+      recipientInput.setCustomValidity("")
+      return
+    }
+    if (!recipientInput.reportValidity()) return
 
     setTesting(true)
     setTestResult(null)
@@ -602,7 +609,6 @@ export default function PlatformSmtpSettingsPage() {
                   id="test-recipient"
                   ref={testRecipientRef}
                   type="email"
-                  required
                   value={testRecipient}
                   onChange={(e) => setTestRecipient(e.target.value)}
                   placeholder="yonetici@dogruadres.net"
