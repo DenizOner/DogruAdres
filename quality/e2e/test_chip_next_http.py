@@ -176,10 +176,14 @@ class NextFilterHttpTest(unittest.TestCase):
         )
 
     def test_actual_next_localized_filter_labels(self):
+        # URL prefix is a country code, not a language code.
         for loc, text in [
             ("tr", "Filtreyi kaldır"),
-            ("en", "Remove filter"),
-            ("ar", "إزالة عامل التصفية"),
+            ("us", "Remove filter"),
+            ("gb", "Remove filter"),
+            ("ar", "Remove filter"),
+            ("sa", "إزالة عامل التصفية"),
+            ("ae", "إزالة عامل التصفية"),
         ]:
             with self.subTest(locale=loc):
                 self.goto(
