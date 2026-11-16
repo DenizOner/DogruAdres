@@ -1,5 +1,5 @@
 // Browser exercise of actual Chip and ActiveFilterElement components.
-// Next.js URL hook and app context are deliberately synthetic. Not full E2E.
+// Actual filter URL hooks are included; Next.js router is synthetic. Not full E2E.
 import { build } from "esbuild";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ if (!process.env.RUNNER_TEMP) {
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const storefront = join(repo, "apps", "storefront");
 const actualChip = join(storefront, "src/components/atoms/Chip/Chip.tsx");
+const actualFilters = join(storefront, "src/hooks/useFilters.tsx");
 const output = join(process.env.RUNNER_TEMP, "da-chip-keyboard-browser.js");
 
 const entry = [
@@ -20,14 +21,16 @@ const entry = [
   'const chipRoot = createRoot(document.getElementById("chip"));',
   'const filterRoot = createRoot(document.getElementById("filters"));',
   'window.__daChipClicks = 0;',
-  'window.__daFilterEvents = [];',
+  'window.__daRoutes = [];',
+  'window.__daSearchQuery = "";',
   'window.__daLocale = "tr";',
   'window.__daRenderChip = (props) => chipRoot.render(React.createElement(Chip, {',
   '  ...props, onSelect: () => { window.__daChipClicks += 1; }',
   '}));',
   'window.__daRenderFilters = (locale, values) => {',
   '  window.__daLocale = locale;',
-  '  window.__daFilterEvents = [];',
+  '  window.__daSearchQuery = new URLSearchParams({size:values, sortBy:"recent"}).toString();',
+  '  window.__daRoutes = [];',
   '  filterRoot.render(React.createElement(ActiveFilterElement, {filter: ["size", values]}));',
   '};'
 ].join("\n");
@@ -37,7 +40,7 @@ const dependencies = {
   setup(plugin) {
     plugin.onResolve({ filter: /^@\/components\/atoms$/ }, () => ({ path: actualChip }));
     plugin.onResolve({ filter: /^@\/hooks\/useFilters$/ }, () => ({
-      path: "synthetic-filters", namespace: "synthetic-ui"
+      path: actualFilters
     }));
     plugin.onResolve({ filter: /^next\/navigation$/ }, () => ({
       path: "synthetic-next", namespace: "synthetic-ui"
@@ -47,10 +50,16 @@ const dependencies = {
     }));
     plugin.onLoad({ filter: /.*/, namespace: "synthetic-ui" }, (args) => {
       const contents = args.path === "synthetic-next"
-        ? 'export const useParams = () => ({locale: window.__daLocale});'
-        : args.path === "synthetic-filters"
-          ? 'export default function useFilters(key) {return {updateFilters: value => window.__daFilterEvents.push({key, value})};}'
-          : 'import React from "react"; export const CloseIcon = (props) => React.createElement("svg", {"aria-hidden":"true", ...props});';
+        ? [
+            'export const useParams = () => ({locale: window.__daLocale});',
+            'export const useSearchParams = () => new URLSearchParams(window.__daSearchQuery);',
+            'export const usePathname = () => "/tr/catalog";',
+            'export const useRouter = () => ({push: (target, options) => {',
+            '  window.__daRoutes.push({target, options});',
+            '  window.__daSearchQuery = target.split("?")[1] ?? "";',
+            '}});'
+          ].join("\n")
+        : 'import React from "react"; export const CloseIcon = (props) => React.createElement("svg", {"aria-hidden":"true", ...props});';
       return { contents, loader: "js", resolveDir: storefront };
     });
   }
@@ -77,4 +86,5 @@ await build({
 console.log("CHIP SOURCE: apps/storefront/src/components/atoms/Chip/Chip.tsx");
 console.log("ACTIVE FILTER SOURCE: apps/storefront/src/components/cells/ActiveFilterElement/ActiveFilterElement.tsx");
 console.log("CHIP BROWSER BUNDLE: " + output);
-console.log("SCOPE: Real React components in Chromium, synthetic routing; NOT Next.js/HTTP/DB/authorization acceptance");
+console.log("FILTER HOOKS: real useFilters.tsx and useUpdateSearchParams.ts; router synthetic");
+console.log("SCOPE: Real React components + filter hooks in Chromium, synthetic Next router; NOT real page/HTTP/DB/authorization acceptance");
