@@ -134,6 +134,8 @@ class ChipKeyboardChromiumTest(unittest.TestCase):
             with self.subTest(locale=locale):
                 self.render_filters(locale, "M")
                 control = self.page.get_by_role("button", name=name)
+                # React root.render commits asynchronously; wait for the new locale label.
+                control.wait_for(state="visible")
                 self.assertEqual(control.count(), 1)
                 self.assertEqual(self.page.locator("#filters button button").count(), 0)
                 control.focus()
