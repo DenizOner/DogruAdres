@@ -82,37 +82,45 @@ export default async function({container}:ExecArgs){
     const mfaHttpStart=c.http.length
     const own=await mfaGet(c,'/personal/mfa','include')
     assert.equal(own.status,200,'Authenticated native MFA user must read own settings')
-    assert.equal(own.cacheControl,'no-store')
-    // Explicit response envelopes are safer than a blacklist: a newly added
-    // identity, factor or credential field must fail this privacy acceptance.
-    assert.deepEqual(Object.keys(own.body??{}).sort(),
-      ['platform','personal','can_manage_platform','native_factor_state','effective_mfa_target','runtime_enforcement'].sort())
-    assert.deepEqual(Object.keys(own.body?.platform??{}).sort(),['platform_mode','version'])
-    assert.deepEqual(Object.keys(own.body?.personal??{}).sort(),['person_id','user_enabled','version'])
-    assert.deepEqual(Object.keys(own.body?.effective_mfa_target??{}).sort(),
-      ['next_step','required','user_control_allowed'])
-    assert.equal(own.body?.personal?.person_id,actors[i].person,'MFA Person binding must match the live native session')
-    assert.equal(own.body?.personal?.user_enabled,false,'A fresh unrelated Person must retain the default OFF preference')
-    assert.equal(own.body?.personal?.version,0)
-    assert.equal(own.body?.platform?.platform_mode,'required')
-    assert.equal(own.body?.platform?.version,0)
-    assert.equal(own.body?.native_factor_state,'enabled','The verified native TOTP factor must not appear absent')
-    assert.equal(own.body?.effective_mfa_target?.required,true)
-    assert.equal(own.body?.effective_mfa_target?.user_control_allowed,false)
-    assert.equal(own.body?.can_manage_platform,false,'Ordinary Person has no platform MFA task grant')
-    assert.equal(own.body?.runtime_enforcement,'enforced')
-    assert.equal(/"(?:auth_identity_id|factor_id|factor_ids|secret|seed|token|recovery_codes)"\s*:/.test(JSON.stringify(own.body)),false,
-      'MFA read response must not disclose native factor identifiers or secrets')
+    // Keep assertion diagnostics fixed: never print Person IDs, native factor
+    // metadata or unexpected HTTP bodies to a public Actions failure log.
+    const keysOnly=(value:unknown,keys:readonly string[])=>
+      !!value&&typeof value==='object'&&!Array.isArray(value)&&
+      Object.keys(value).length===keys.length&&
+      keys.every(key=>Object.prototype.hasOwnProperty.call(value,key))
+    assert.ok(own.cacheControl==='no-store','MFA GET response must be non-cacheable')
+    // An unexpected field must fail the test WITHOUT echoing its name or value.
+    assert.ok(keysOnly(own.body,
+      ['platform','personal','can_manage_platform','native_factor_state','effective_mfa_target','runtime_enforcement']),
+      'MFA response must contain only the approved top-level fields')
+    assert.ok(keysOnly(own.body?.platform,['platform_mode','version']),'MFA platform response fields')
+    assert.ok(keysOnly(own.body?.personal,['person_id','user_enabled','version']),'MFA Person response fields')
+    assert.ok(keysOnly(own.body?.effective_mfa_target,['next_step','required','user_control_allowed']),
+      'MFA effective policy response fields')
+    assert.ok(own.body?.personal?.person_id===actors[i].person,'MFA Person ID must match the live session')
+    assert.ok(own.body?.personal?.user_enabled===false,'MFA Person default preference must be OFF')
+    assert.ok(own.body?.personal?.version===0,'MFA Person preference must be at revision 0')
+    assert.ok(own.body?.platform?.platform_mode==='required','MFA platform default must be required')
+    assert.ok(own.body?.platform?.version===0,'MFA platform policy must be at revision 0')
+    assert.ok(own.body?.native_factor_state==='enabled','Verified native TOTP must be enabled')
+    assert.ok(own.body?.effective_mfa_target?.required===true,'Effective MFA must be required')
+    assert.ok(own.body?.effective_mfa_target?.user_control_allowed===false,'Mandatory MFA cannot be disabled by Person')
+    assert.ok(own.body?.can_manage_platform===false,'Ordinary Person must not receive platform grant')
+    assert.ok(own.body?.runtime_enforcement==='enforced','MFA runtime must be enforced')
+    assert.ok(!/"(?:auth_identity_id|factor_id|factor_ids|secret|seed|token|recovery_codes)"\s*:/.test(JSON.stringify(own.body)),
+      'MFA response must not include native factor identifiers or secrets')
     c.phase='mfa-settings-get-no-cookie'
     const anonymous=await mfaGet(c,'/personal/mfa','omit')
     assert.equal(anonymous.status,403,'Missing browser session must be denied before Person lookup')
-    assert.equal(anonymous.cacheControl,'no-store')
-    assert.deepEqual(anonymous.body,{message:'Access denied'})
+    assert.ok(anonymous.cacheControl==='no-store','Rejected no-cookie GET must be non-cacheable')
+    assert.ok(keysOnly(anonymous.body,['message'])&&anonymous.body.message==='Access denied',
+      'Rejected no-cookie GET must return only the access-denied message')
     c.phase='mfa-settings-get-foreign-person-query'
     const foreign=await mfaGet(c,'/personal/mfa?person_id='+encodeURIComponent(actors[1-i].person),'include')
     assert.equal(foreign.status,400,'Client-selected foreign Person must not become an authority')
-    assert.equal(foreign.cacheControl,'no-store')
-    assert.deepEqual(foreign.body,{message:'Invalid input'})
+    assert.ok(foreign.cacheControl==='no-store','Rejected foreign selector must be non-cacheable')
+    assert.ok(keysOnly(foreign.body,['message'])&&foreign.body.message==='Invalid input',
+      'Rejected foreign selector must return only the invalid-input message')
     // CDP observes the actual three HTTPS network responses, not a stubbed
     // window.fetch result or a cached synthetic response.
     const expectedMfaNetwork=[
