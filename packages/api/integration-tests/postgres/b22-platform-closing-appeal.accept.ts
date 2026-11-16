@@ -119,7 +119,7 @@ async function verifySmtpTestCredentialScopeOverHttps(
       auditBefore,"Failed SMTP test may not write an audit event")
     assert.equal(Number((await q("select count(*)::int n from da_security_outbox"))[0].n),
       outboxBefore,"Failed SMTP test may not add an outbox event")
-    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: native Staff action=test changed SMTP credential endpoint safely HTTP400, Owner403, no SMTP TCP/AUTH/DATA, same encrypted settings/audit/outbox\\n")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: native Staff action=test changed SMTP credential endpoint safely HTTP400, Owner403, no SMTP TCP/AUTH/DATA, same encrypted settings/audit/outbox\n")
   }finally{
     // Remove ONLY our precisely-identified task-owned synthetic fixture.
     if(granted)await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[grantId])
