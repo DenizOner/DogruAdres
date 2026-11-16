@@ -57,19 +57,14 @@ export const ActiveFilterElement = ({ filter }: { filter: string[] }) => {
       } else {
         const modal = current.closest<HTMLElement>('[data-testid="modal"]')
         if (modal) {
-          // Never send focus behind an open mobile filter dialog.
-          // Choose a persistent enabled control, or its own heading when
-          // no other focusable control exists in the dialog.
-          const control = Array.from(modal.querySelectorAll<HTMLButtonElement>("button:not([disabled])"))
-            .find((button) => !buttons.includes(button))
-          const fallback = control ?? modal.querySelector<HTMLElement>(".heading-md")
-          if (fallback) {
-            if (fallback === control) {
-              fallback.focus()
-            } else {
-              fallback.tabIndex = -1
-              fallback.focus()
-            }
+          // Accordion controls can remain in the DOM but be clipped and
+          // invisible when their group is closed. For the final removal,
+          // focus the persistent, visible modal heading rather than guessing
+          // which other filter's controls are actually expanded.
+          const heading = modal.querySelector<HTMLElement>(".heading-md")
+          if (heading) {
+            heading.tabIndex = -1
+            heading.focus()
           }
         } else {
           const heading = current.closest("main")?.querySelector<HTMLElement>("h1")
