@@ -314,7 +314,11 @@ describe("Admin SMTP fail-closed loading", () => {
         return [states[index], (value: any) => { states[index] = value }]
       },
       useEffect: (callback: any) => { effect = callback },
-      useRef: (initial: any) => ({ current: initial }),
+      useRef: (initial: any) => {
+        const index = cursor++
+        if (!(index in states)) states[index] = { current: initial }
+        return states[index]
+      },
     }
     const ui = new Proxy({}, { get: (_, key) => key === "toast" ? { error: jest.fn(), success: jest.fn() } : String(key) })
     const fetchMock = jest.fn(async (url: string) => {
