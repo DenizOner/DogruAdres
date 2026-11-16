@@ -57,9 +57,9 @@ export async function verifyB20CompanyLauncher(input:{
     "Task acceptance must never overwrite an existing company preference")
   const defaults=["organization","store-applications","memberships"]
   try{
-    const [xGamma,xSecond,yGamma]=await Promise.all([
-      get(owner,organizationId),get(owner,secondOrg.id),get(other,organizationId)
-    ])
+    const xGamma=await get(owner,organizationId)
+    const xSecond=await get(owner,secondOrg.id)
+    const yGamma=await get(other,organizationId)
     for(const value of [xGamma,xSecond,yGamma]){
       assert.equal(value.status,200,"Only active protected Owner sees existing functions")
       assert.deepEqual(value.body.app_ids,defaults)
@@ -89,8 +89,11 @@ export async function verifyB20CompanyLauncher(input:{
       organizationId)
     assert.equal(anonymous,403,"No-cookie reader denied")
 
-    // A real Owner selects its Organization in the genuine Chrome UI, uses
-    // accessible reorder/collapse controls, then re-reads the persisted DB.
+    // A real Owner selects its Organization in the genuine Chrome UI. The
+    // Staff tab can otherwise keep this Chrome document.visibilityState hidden,
+    // which intentionally suppresses asynchronous private launcher rendering.
+    await owner.send("Page.bringToFront")
+    await owner.wait("document.visibilityState==='visible'")
     await owner.select(organizationName,"owner")
     await owner.wait("!document.getElementById('company-launcher-panel').hidden && "+
       "document.querySelectorAll('#company-launcher-list > li').length===3")
