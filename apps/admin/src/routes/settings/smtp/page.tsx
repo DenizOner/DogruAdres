@@ -435,13 +435,12 @@ export default function PlatformSmtpSettingsPage() {
             </div>
 
             {/* Security Protocol Options */}
-            <div className="space-y-2">
-              <Label className="text-xs font-semibold text-ui-fg-base">
+            <fieldset className="space-y-2">
+              <legend className="text-xs font-semibold text-ui-fg-base">
                 Güvenlik Protokolü *
-              </Label>
+              </legend>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label
-                  
                   className={`min-h-[48px] p-4 rounded-lg border-2 cursor-pointer transition-all flex items-start gap-3 ${
                     security === "ssl"
                       ? "border-[#0e66c2] bg-blue-50/50 dark:bg-blue-950/20"
@@ -467,7 +466,6 @@ export default function PlatformSmtpSettingsPage() {
                 </label>
 
                 <label
-                  
                   className={`min-h-[48px] p-4 rounded-lg border-2 cursor-pointer transition-all flex items-start gap-3 ${
                     security === "tls"
                       ? "border-[#0e66c2] bg-blue-50/50 dark:bg-blue-950/20"
@@ -491,7 +489,7 @@ export default function PlatformSmtpSettingsPage() {
                   </div>
                 </label>
               </div>
-            </div>
+            </fieldset>
 
             {/* Credentials Row */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
