@@ -8,7 +8,8 @@ import {
 const BASE = "a".repeat(40);
 const HEAD = "b".repeat(40);
 const changed = (filename, status = "modified") =>
-  ({ filename, status, changes: 1 });
+  ({ filename, status, changes: 1, additions: 1, deletions: 0,
+     patch: "@@ -0,0 +1 @@\\n+synthetic markdown content" });
 
 function event(files = [changed("AGENTS.md")]) {
   return {
@@ -88,6 +89,12 @@ test("fail closed on deletion, rename, incomplete, duplicate, malformed or too m
     { files: [{ ...changed("AGENTS.md"), previous_filename: "OTHER.md" }], n: 1 },
     { files: [changed("AGENTS.md")], n: 2 },
     { files: [changed("AGENTS.md"), changed("AGENTS.md")], n: 2 },
+    { files: [{ ...changed("AGENTS.md"), patch: undefined }], n: 1 },
+    { files: [{ ...changed("AGENTS.md"), patch: "" }], n: 1 },
+    { files: [{ ...changed("AGENTS.md"), changes: 0, additions: 0 }], n: 1 },
+    { files: [{ ...changed("AGENTS.md"), additions: undefined }], n: 1 },
+    { files: [{ ...changed("AGENTS.md"), deletions: -1 }], n: 1 },
+    { files: [{ ...changed("AGENTS.md"), changes: 2 }], n: 1 },
     { files: [{ filename: "AGENTS.md", status: "modified" }], n: 1 },
     { files: [], n: 0 },
     { files: null, n: 1 },
@@ -180,4 +187,14 @@ test("tampered event repository or a non-main PR base never enables docs-only", 
   wrongBase.pull_request.base.ref = "feature/unsafe";
   assert.equal((await classifyGithubPullRequest(wrongBase, args(api.request))).mode, "full");
   assert.equal(api.seen.length, 0);
+});
+
+
+test("binary or truncated Markdown changes cannot trigger lightweight CI", async () => {
+  for (const damaged of [{ ...changed("README.md"), patch: undefined },
+    { ...changed("docs/manual.md"), patch: "" },
+    { ...changed("AGENTS.md"), changes: 3 }]) {
+    const api = stubApi([damaged]);
+    assert.equal((await classifyGithubPullRequest(event([damaged]), args(api.request))).mode, "full");
+  }
 });
