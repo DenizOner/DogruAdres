@@ -43,3 +43,11 @@ test('rejects permissive or malformed CSP policies', () => {
   assert.equal(hasSafeDashboardCsp(page(tag.replace('http-equiv=', 'data-http-equiv='))), false)
   assert.equal(hasSafeDashboardCsp(page(tag.replace('content=', 'data-content='))), false)
 })
+
+test('rejects a fake head and CSP hidden before the real document', () => {
+  const fakeHead = '<!--<head>' + tag + '-->'
+  const realWithoutCsp = page('<script src="/dashboard/assets/app.js"></script>')
+  assert.equal(hasSafeDashboardCsp('<!doctype html>' + fakeHead + realWithoutCsp), false)
+  assert.equal(hasSafeDashboardCsp(fakeHead + realWithoutCsp), false)
+  assert.equal(hasSafeDashboardCsp('<!doctype html><html lang="en">' + fakeHead + '<head>' + tag + '</head></html>'), false)
+})
