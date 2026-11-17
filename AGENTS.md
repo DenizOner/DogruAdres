@@ -8,6 +8,16 @@ This repository implements DoğruAdres on the open-source Mercur marketplace sta
 
 **Installed documentation:** when available, start at `node_modules/@mercurjs/docs/llms.txt`, then read only relevant version-matched `node_modules/@mercurjs/docs/content/**/*.mdx` pages. Consult official Mercur and Medusa documentation for corresponding installed versions when needed. Do not infer behavior from memory alone.
 
+<!-- DA-KMS-V4-SIX-DEVELOPERS-OWNER-APPROVED-20261117 -->
+## Owner-approved sixth full-stack developer — Gökhan (17 November 2026)
+
+**Newer binding owner decision:** [#216 sixth developer approval and role boundaries](https://github.com/DenizOner/DogruAdres/issues/216#issuecomment-6953663414) supersedes only the *five-developer headcount and roster* in the historical DA-KMS v3 block below. The operational rules, protected sources, existing task owners, approval sequence, independent review and merge gates of DA-KMS v3 remain in force. Do not treat the historical five-person text as the current headcount.
+
+**Six equal end-to-end developers; no coordinator:** Ali — Foundation, Person, Organization and shared identity/authorization; Barış — Commerce, Vehicle and their native catalog/cart/order contracts; Cem — Meydan; Demir — personal/Organization workspaces, notifications and cross-surface UX contracts; Fikret — admin/operations dashboards and platform operations; **Gökhan — authorized buyer-facing Storefront experience, catalog visibility and freshness/reliability of displayed information**. Product stewardship is not exclusive code ownership or authority to change another developer's accepted Issue, branch, tests, database or contract. Cross-surface changes require the same DA-COORD-REQUEST/ACK/AGREEMENT/RESOLVED-v1 process and one writer per mutable resource.
+
+**Independent reviewer remains separate:** Denetçi is not a developer and is read-only; Gökhan, like the other five developers, cannot independently audit his own code. At each preflight, check **all six** developers' current claims and every open/draft PR. Existing writers' PRs and tasks remain theirs. The next candidate scoped Gökhan journey is [#171](https://github.com/DenizOner/DogruAdres/issues/171), Storefront cache freshness after missed invalidation: read current source and version-matched platform behavior first; the historical Issue requires separate bounded Product Owner authorization before product code changes. Barış's completed #170/#172 delivery contracts are not transferred. This addition grants no new product scope, paid services, local worktrees/DB/volumes, production access, deploy or security exceptions; #208, #229, free-only and M0 acceptance order remain binding.
+<!-- END DA-KMS-V4-SIX-DEVELOPERS-OWNER-APPROVED-20261117 -->
+
 <!-- DA-KMS-V3-OWNER-APPROVED-20261117 -->
 ## Owner-approved coordinated module stewardship (DA-KMS v3; 17 November 2026)
 
