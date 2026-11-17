@@ -5567,6 +5567,23 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   window.addEventListener('pageshow',event=>{if(event.persisted){concealPrivateView();load()}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)concealPrivateView(true);else load()});
   window.addEventListener('focus',()=>{if(el('workspace').hidden&&loadedScope==='')load();else observeAccess()});
+  // Native same-page links should retain meaningful keyboard focus even
+  // while the authenticated workspace has asynchronous private refreshes.
+  // This changes presentation focus only; all Organization access is checked
+  // by the existing server endpoint on each subsequent action.
+  el('personal-entry').addEventListener('click',event=>{
+    if(el('workspace').hidden)return;
+    const node=event.target;
+    const link=node instanceof Element?node.closest('a[href^="#"]'):null;
+    if(!link||!el('personal-entry').contains(link))return;
+    const hash=link.getAttribute('href');
+    if(hash!=='#organizations-title'&&hash!=='#organization-draft-title')return;
+    const heading=el(hash.slice(1));
+    requestAnimationFrame(()=>{
+      if(!el('workspace').hidden&&location.hash===hash)
+        heading.focus({preventScroll:true});
+    });
+  });
   window.addEventListener('popstate',()=>{concealPrivateView();load()});
   setInterval(observeAccess,5000);
   el('audit-timeline-refresh').onclick=async()=>{timelineCursor=null;await loadTimeline(currentOrg);};
