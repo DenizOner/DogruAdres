@@ -20,11 +20,13 @@ jest.mock("../../../../../apps/storefront/src/lib/data/regions", () => ({
   getRegion: jest.fn(),
 }));
 
-import { sdk } from "../../../../../apps/storefront/src/lib/client";
-import { getAuthHeaders } from "../../../../../apps/storefront/src/lib/data/cookies";
-import { getRegion } from "../../../../../apps/storefront/src/lib/data/regions";
-import { listOffers, retrieveOffer } from "../../../../../apps/storefront/src/lib/data/offers";
-import { CACHE_TAGS, getGlobalCacheOptions } from "../../../../../apps/storefront/src/lib/data/cache-tags";
+// Load the Storefront code only in Jest at runtime. A static TS import makes
+// API tsc pull a separate ESM Next application outside packages/api/rootDir.
+const { sdk } = require("../../../../../apps/storefront/src/lib/client");
+const { getAuthHeaders } = require("../../../../../apps/storefront/src/lib/data/cookies");
+const { getRegion } = require("../../../../../apps/storefront/src/lib/data/regions");
+const { listOffers, retrieveOffer } = require("../../../../../apps/storefront/src/lib/data/offers");
+const { CACHE_TAGS, getGlobalCacheOptions } = require("../../../../../apps/storefront/src/lib/data/cache-tags");
 
 const authHeaders = getAuthHeaders as jest.Mock;
 const region = getRegion as jest.Mock;
