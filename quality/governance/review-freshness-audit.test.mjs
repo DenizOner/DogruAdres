@@ -1,0 +1,23 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { assessReviewEvidence, allPages, auditLive } from './review-freshness-audit.mjs'
+const h='a'.repeat(40), b='b'.repeat(40), old='c'.repeat(40)
+const pr={number:418,state:'open',draft:false,head:{sha:h},base:{sha:b}}
+const comment=(type,head=h,base=b,id=3)=>({id,body:`<!-- DA-${type}-v2 -->\n## PR #418\n**Exact HEAD:** \`${head}\`; **exact base:** \`${base}\`\nKARAR: PASS (SCOPED)`})
+const rv=(head=h,base=b)=>({commit_id:head,body:`<!-- REVIEW-PROVENANCE-v1 -->\nExact HEAD: \`${head}\`\nbase: \`${base}\``})
+const check=(overrides={})=>assessReviewEvidence({pr,mainSha:b,queueComments:[comment('REVIEW-REQUEST'),comment('REVIEW-RESULT')],reviews:[rv()],...overrides})
+test('same metadata returns only RECORDED, never independent PASS or merge permission',()=>{const x=check();assert.equal(x.state,'RECORDED');assert.equal(x.disposition,'REPORTED_PASS');assert.equal(x.independentIdentity,'UNVERIFIED');assert.equal(x.mergePermitted,false);assert.equal(x.ci,'NOT_CHECKED')})
+test('main drift is STALE even with current-looking request',()=>assert.equal(check({mainSha:old}).state,'STALE'))
+test('old HEAD or base request is STALE',()=>assert.equal(check({queueComments:[comment('REVIEW-REQUEST',old),comment('REVIEW-RESULT')]}).state,'STALE'))
+test('missing ready record reports MISSING',()=>assert.equal(check({queueComments:[]}).state,'MISSING'))
+test('current ready with no result reports PENDING',()=>assert.equal(check({queueComments:[comment('REVIEW-REQUEST')]}).state,'PENDING'))
+test('result without GitHub review provenance is UNVERIFIED',()=>assert.equal(check({reviews:[]}).state,'UNVERIFIED'))
+test('old review commit does not qualify',()=>assert.equal(check({reviews:[rv(old)]}).state,'UNVERIFIED'))
+test('review body with wrong base does not qualify',()=>assert.equal(check({reviews:[rv(h,old)]}).state,'UNVERIFIED'))
+test('draft PR is NOT_READY',()=>assert.equal(check({pr:{...pr,draft:true}}).state,'NOT_READY'))
+test('invalid evidence fails closed',()=>assert.equal(check({pr:{...pr,head:{sha:'bad'}}}).state,'UNKNOWN'))
+test('unrelated PR record does not count',()=>assert.equal(check({queueComments:[{body:'<!-- DA-REVIEW-REQUEST-v2 --> PR #419'},comment('REVIEW-RESULT')]}).state,'MISSING'))
+test('pagination includes full pages',async()=>{let pages=0;const fetcher=async()=>({ok:true,json:async()=>++pages===1?Array.from({length:100},()=>({})):Array.from({length:2},()=>({}))});assert.equal((await allPages({fetcher,path:'/p',token:'x'})).length,102)})
+test('pagination errors fail closed',async()=>{await assert.rejects(allPages({fetcher:async()=>({ok:false,status:403}),path:'/p',token:'x'}),/HTTP 403/)})
+test('pagination never silently truncates',async()=>{await assert.rejects(allPages({fetcher:async()=>({ok:true,json:async()=>Array.from({length:100},()=>({}))}),path:'/p',token:'x',maxPages:2}),/Truncated/)})
+test('live snapshot main drift fails closed',async()=>{let ref=0;const fetcher=async u=>({ok:true,json:async()=>u.includes('/git/ref/')?{object:{sha:++ref===1?b:old}}:u.includes('/pulls/418/reviews')?[]:u.includes('/pulls/418')?pr:[]});const out=await auditLive({owner:'DenizOner',repo:'DogruAdres',prNumber:418,token:'dummy',fetcher});assert.equal(out.state,'UNKNOWN');assert.equal(out.reason,'main_changed_during_snapshot')})
