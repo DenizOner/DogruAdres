@@ -205,6 +205,165 @@ export default async function({container}:ExecArgs){
   assert.equal(challenges.length,2)
   const domainAudits=await q("select e.id,e.previous_values,e.new_values from da_audit_event e where action='organization.membership_changed'");assert.ok(domainAudits.length===1&&domainAudits.every(r=>r.previous_values.role===r.new_values.role)&&await count('da_audit_outbox')===1,'Only the authorized Owner revocation may write a membership audit/outbox')
   report.sql={counts:expected,final,domainMutations:1,roleChanges:0,retiredAdminDenied:true,auditActions:await q('select action,count(*)::int count from da_audit_event group by action order by action'),canonicalOutbox:await count('da_audit_outbox'),securityOutbox:await count('da_security_outbox')}
+
+  // #366: REAL personal MFA preference write and fresh-login readback.
+  // Only the already-authorized disposable B06 PG16 task DB is used.
+  // The platform mode below is TEST SETUP, not an Admin HTTP/permission PASS.
+  const mfaPost=async(c:B06Chrome,phase:string,payload:object,
+    csrfMode:'valid'|'missing'|'bad'='valid')=>{
+    c.phase=phase
+    return c.callFunction(
+      "async function(payload,mode){ const headers={'Content-Type':'application/json'}; if(mode==='valid'){const s=await fetch('/personal/session',{credentials:'include'}); if(!s.ok)return {preflight:s.status};headers['X-CSRF-Token']=(await s.json()).csrf_token;}else if(mode==='bad'){headers['X-CSRF-Token']='invalid';} const r=await fetch('/personal/mfa',{method:'POST',credentials:'include',headers,body:payload});return {status:r.status,cacheControl:r.headers.get('cache-control'),body:await r.json()};}",
+      JSON.stringify(payload),csrfMode
+    )
+  }
+  const prefBody=(version:number,enabled:boolean)=>({
+    action:'personal',user_enabled:enabled,expected_version:version
+  })
+  const assertDeniedNoMutation=async(c:B06Chrome,phase:string,payload:object,
+    status:number,mode:'valid'|'missing'|'bad'='valid')=>{
+    const previous=await domain()
+    const response=await mfaPost(c,phase,payload,mode)
+    assert.equal(response.status,status,'MFA negative HTTP status')
+    assert.equal(response.cacheControl,'no-store','Rejected MFA POST must not be cached')
+    assert.deepEqual(await domain(),previous,'MFA rejection must leave data, audit and outbox unchanged')
+    report.checks.push({phase,actor:c.actor,http:status,noMutation:true})
+  }
+  // A Person enrolled under mandatory MFA cannot edit personal opt-in.
+  await assertDeniedNoMutation(b,'mfa-required-blocks-personal-write',prefBody(0,true),403)
+  await assertDeniedNoMutation(b,'mfa-missing-csrf',prefBody(0,true),403,'missing')
+  await assertDeniedNoMutation(b,'mfa-invalid-csrf',prefBody(0,true),403,'bad')
+  await assertDeniedNoMutation(b,'mfa-foreign-person-selector',{
+    ...prefBody(0,true),person_id:actors[0].person
+  },400)
+  await assertDeniedNoMutation(a,'mfa-ungranted-platform-write',{
+    action:'platform',platform_mode:'optional',expected_version:0
+  },403)
+
+  // To accept a real Person write without forging a platform Staff identity,
+  // stage ONLY the approved optional-mode policy in this fresh disposable DB.
+  // This is a fixture mutation, intentionally NOT claimed as Admin HTTP/audit.
+  const optionalSetup=await q(
+    "update da_mfa_policy set platform_mode='optional',version=1 where id='current' and platform_mode='required' and version=0 returning id"
+  )
+  assert.equal(optionalSetup.length,1,'Disposable test policy switch must be uniquely bounded')
+  assert.equal((await q("select count(*)::int n from da_platform_staff_grant"))[0].n,0,
+    'No synthetic or forged Staff grant may be created')
+  const staleAfterMode=await mfaGet(b,'/personal/mfa','include')
+  assert.equal(staleAfterMode.status,403,'Old policy-stamped browser session must not survive mode change')
+
+  // Reauthenticate through the native password+TOTP HTML path in the SAME
+  // real Chrome profile; old cookies cannot be elevated to a new revision.
+  const reLogin=async(c:B06Chrome,label:'A'|'B',person:string,phase:string)=>{
+    c.phase=phase
+    await c.eval("(()=>{document.getElementById('workspace').hidden=true;document.getElementById('login').hidden=false;for(const el of document.querySelectorAll('#login input,#challenge input'))el.value='';})()")
+    await c.input('#login input[name=email]',process.env['B06_EMAIL_'+label]!)
+    await c.input('#login input[name=password]',process.env['B06_PASSWORD_'+label]!)
+    await c.click('#login button')
+    await c.wait("!document.getElementById('challenge').hidden")
+    const freshTotp=await c.nextLoginOtp()
+    await c.input('#challenge input[name=code]',freshTotp)
+    await c.click('#challenge button')
+    await c.wait("!document.getElementById('workspace').hidden&&document.getElementById('person').textContent==="+JSON.stringify('Person: '+person))
+    const token=await c.token()
+    assert.ok(token,'Fresh native login must issue a browser cookie')
+    await q('begin')
+    try{
+      const current=await new IdentitySessions(sql).current(token,true)
+      assert.ok(current&&current.person_id===person&&current.auth_identity_id===actors[label==='A'?0:1].identity&&current.mfa_purpose==='full',
+        'Fresh strong session must bind the original Person and native identity')
+      const nativeProofs=challenges.filter((proof:any)=>proof.identity===current.auth_identity_id)
+      assert.ok(nativeProofs.length>=2&&
+        new Date(current.last_strong_auth_at).getTime()===
+        new Date(nativeProofs[nativeProofs.length-1].completed).getTime(),
+        'Fresh session must follow a newly completed native TOTP challenge')
+      await q('commit')
+    }catch(error){await q('rollback');throw error}
+    report.checks.push({phase,actor:c.actor,nativeOtpChallenge:true,newStrongSession:true})
+  }
+  await reLogin(b,'B',actors[1].person,'mfa-optional-new-login-b')
+  b.phase='mfa-optional-own-read-before-save'
+  const beforePreference=await mfaGet(b,'/personal/mfa','include')
+  assert.equal(beforePreference.status,200)
+  assert.ok(beforePreference.body?.platform?.platform_mode==='optional'&&
+    beforePreference.body?.platform?.version===1&&
+    beforePreference.body?.personal?.person_id===actors[1].person&&
+    beforePreference.body?.personal?.user_enabled===false&&
+    beforePreference.body?.personal?.version===0&&
+    beforePreference.body?.native_factor_state==='enabled'&&
+    beforePreference.body?.effective_mfa_target?.user_control_allowed===true,
+    'Optional mode must preserve exact Person binding and native factor state')
+  const outboxBefore=await count('da_security_outbox')
+  const auditBefore=(await q("select count(*)::int n from da_audit_event where action='mfa.person_preference.set'"))[0].n
+  const saved=await mfaPost(b,'mfa-personal-optional-save',prefBody(0,true))
+  assert.equal(saved.status,200,'Optional preference must persist via real HTTPS POST')
+  assert.equal(saved.cacheControl,'no-store')
+  assert.ok(saved.body?.personal?.person_id===actors[1].person&&
+    saved.body?.personal?.user_enabled===true&&saved.body?.personal?.version===1&&
+    saved.body?.native_factor_state==='unverified',
+    'Preference POST must return only exact saved Person and unverified native state')
+  const rows=await q("select person_id,user_enabled,version from da_person_mfa_preference")
+  assert.ok(rows.length===1&&rows[0].person_id===actors[1].person&&
+    rows[0].user_enabled===true&&rows[0].version===1,
+    'Only Person B preference may have been written')
+  assert.equal(await count('da_security_outbox'),outboxBefore+1,
+    'Committed preference must publish one security outbox item')
+  const audits=await q(
+    "select actor_person_id,actor_id,target_id,previous_values,new_values from da_audit_event where action='mfa.person_preference.set'"
+  )
+  assert.equal(audits.length,auditBefore+1)
+  const audit=audits[audits.length-1]
+  const next=typeof audit.new_values==='string'?JSON.parse(audit.new_values):audit.new_values
+  assert.ok(audit.actor_person_id===actors[1].person&&audit.actor_id===actors[1].actor&&
+    audit.target_id===actors[1].person&&next.user_enabled===true,
+    'Audit must attribute the committed preference solely to Person B')
+  const staleAfterSave=await mfaGet(b,'/personal/mfa','include')
+  assert.equal(staleAfterSave.status,403,'Old preference-stamped session must become invalid')
+
+  await reLogin(b,'B',actors[1].person,'mfa-personal-new-login-readback')
+  b.phase='mfa-personal-readback-after-new-login'
+  const persisted=await mfaGet(b,'/personal/mfa','include')
+  assert.ok(persisted.status===200&&persisted.cacheControl==='no-store'&&
+    persisted.body?.personal?.person_id===actors[1].person&&
+    persisted.body?.personal?.user_enabled===true&&
+    persisted.body?.personal?.version===1&&
+    persisted.body?.native_factor_state==='enabled'&&
+    persisted.body?.platform?.platform_mode==='optional',
+    'New password+native TOTP login must observe committed preference')
+  await assertDeniedNoMutation(b,'mfa-stale-version-rejected',prefBody(0,true),409)
+  await assertDeniedNoMutation(b,'mfa-native-factor-disable-not-silent',prefBody(1,false),409)
+
+  await reLogin(a,'A',actors[0].person,'mfa-other-person-new-login')
+  a.phase='mfa-other-person-still-default'
+  const unrelated=await mfaGet(a,'/personal/mfa','include')
+  assert.ok(unrelated.status===200&&
+    unrelated.body?.personal?.person_id===actors[0].person&&
+    unrelated.body?.personal?.user_enabled===false&&
+    unrelated.body?.personal?.version===0,
+    'Other Person must not inherit changed MFA preference')
+  await assertDeniedNoMutation(a,'mfa-cross-person-post-rejected',{
+    ...prefBody(0,true),person_id:actors[1].person
+  },400)
+  await assertDeniedNoMutation(a,'mfa-owner-not-platform-staff',{
+    action:'platform',platform_mode:'disabled',expected_version:1
+  },403)
+  // All successful and failed POSTs came from real Chrome HTTPS; no mocked
+  // route handler, client-provided Person authority or native MFA bypass.
+  for(const c of [a,b]){
+    assert.ok(c.http.some((entry:any)=>entry.phase==='mfa-personal-optional-save'?
+      entry.method==='POST'&&entry.path==='/personal/mfa'&&entry.status===200&&entry.tls?.protocol:
+      entry.method==='POST'&&entry.path==='/personal/mfa'&&entry.tls?.protocol),
+      'B06 native HTTPS MFA POST traffic must be observed')
+  }
+  report.mfaPreferenceAcceptance={
+    modeSource:'DISPOSABLE SQL TEST FIXTURE; NOT PLATFORM ADMIN HTTP ACCEPTANCE',
+    personWriteHttp:200,staleRevisionHttp:409,rejectedByPolicyHttp:403,
+    crossPersonSelectorHttp:400,missingCsrfHttp:403,
+    oldSessionsRejected:true,newChromeTotpSessionReadback:true,
+    auditDelta:1,securityOutboxDelta:1,otherPersonUnaffected:true,
+    productionSettingsChanged:false
+  }
+
   report.status='PASS pending independent exact-HEAD acceptance'
  }catch(error){
   report.status='FAIL / no retry'
