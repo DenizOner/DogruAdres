@@ -4,7 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
-import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,6 +20,10 @@ const api = join(repo, "packages/api");
 const canary = "ci173_private_" + randomBytes(24).toString("hex");
 const sessionMarker = "ci173_auth_" + randomBytes(18).toString("hex");
 const logPath = join(process.env.RUNNER_TEMP, "ir15-cart-next-private.log");
+const fixtureDir = join(storefront, "src/app/[locale]/auth/verify-email/ci-only-173-cart");
+const fixture = join(fixtureDir, "page.tsx");
+const ownershipFile = join(fixtureDir, ".ci173-owned");
+const ownershipMarker = "IR15-phase2-ci-only-cart-root-layout";
 const carried = text => {
   const value = String(text).toLowerCase();
   return value.includes(canary.toLowerCase()) || value.includes(sessionMarker.toLowerCase());
@@ -77,6 +81,21 @@ const env = {
   NEXT_PUBLIC_SITE_NAME: "CI synthetic test",
   NEXT_PUBLIC_BASE_URL: "http://127.0.0.1",
 };
+// A task-owned disposable page exercises the genuine shared RootLayout without
+// introducing a login/Customer page dependency or a committed test route.
+if (existsSync(fixtureDir)) throw new Error("IR15 REFUSE overwrite existing fixture directory");
+mkdirSync(fixtureDir, { recursive: true });
+writeFileSync(ownershipFile, ownershipMarker, { flag: "wx" });
+writeFileSync(fixture,
+  'export default function Page() { return <main data-testid="ci173-cart-root">Synthetic RootLayout</main> }',
+  { flag: "wx" });
+function cleanupFixture() {
+  if (!existsSync(ownershipFile) ||
+      readFileSync(ownershipFile, "utf8") !== ownershipMarker) {
+    throw new Error("IR15 REFUSE cleanup unexpected temporary source ownership");
+  }
+  rmSync(fixtureDir, { recursive: true, force: false });
+}
 const commands = [
   ["Mercur installed codegen", "bun", ["run", "codegen"], api, 180000],
   ["Storefront TypeScript", process.execPath,
@@ -105,6 +124,7 @@ const cookieHead = "_medusa_cache_id=ci173_private_cache_id";
 const cookieCart = cookieHead + "; _medusa_cart_id=cart_ci173_synthetic" +
   "; _medusa_jwt=" + sessionMarker;
 try {
+  try {
   for (const [label, exe, args, cwd, timeout] of commands) {
     const run = spawnSync(exe, args, {
       cwd, env, encoding: "utf8", timeout, maxBuffer: 12 * 1024 * 1024,
@@ -115,6 +135,9 @@ try {
       throw new Error("IR15 FAIL build " + label + " status " + String(run.status));
     }
     console.log("IR15 PASS build " + label);
+  }
+  } finally {
+    cleanupFixture();
   }
   const entries = [
     join(storefront, ".next/standalone/apps/storefront/server.js"),
@@ -137,7 +160,7 @@ try {
     stdio: ["ignore", fd, fd],
   });
   closeSync(fd);
-  const url = "http://127.0.0.1:" + port + "/tr/login";
+  const url = "http://127.0.0.1:" + port + "/tr/auth/verify-email/ci-only-173-cart";
   async function get(cookie) {
     return fetch(url, {
       headers: { Cookie: cookie },
@@ -158,9 +181,9 @@ try {
     } catch { /* Next is not ready yet */ }
     await new Promise(ok => setTimeout(ok, 250));
   }
-  if (!ready) throw new Error("IR15 FAIL real Login RootLayout did not reach HTTP200");
+  if (!ready) throw new Error("IR15 FAIL synthetic Next RootLayout page did not reach HTTP200");
   if (cartRequests !== 0) throw new Error("IR15 FAIL no-cart-cookie path queried native Cart");
-  console.log("IR15 PASS real Next login with no Cart cookie, no native Cart request");
+  console.log("IR15 PASS genuine Next RootLayout with no Cart cookie, no native Cart request");
 
   for (const nextMode of ["401", "500", "socket"]) {
     mode = nextMode;
@@ -174,7 +197,6 @@ try {
   }
   if (cartRequests < 3) throw new Error("IR15 FAIL missing one or more native Cart requests");
   if (mutationRequests !== 0) throw new Error("IR15 FAIL synthetic test unexpectedly attempted native Cart mutation");
-  if (customerRequests < 1) throw new Error("IR15 FAIL Next login did not exercise native Customer check");
   const serverLog = readPrivateLog();
   if (carried(serverLog)) {
     throw new Error("IR15 FAIL: synthetic upstream private marker entered Next server logs");
