@@ -140,9 +140,11 @@ export async function verifyB20CompanyLauncher(input:{
       links:['#organizations-title','#organization-draft-title'],
       jobUnavailable:true,targetOrg:true,targetDraft:true,
     })
+    const initialEntryUrl=await owner.eval("location.href")
     await owner.eval(`document.querySelector('#personal-entry a[href="#organizations-title"]').focus()`)
     await key("Enter","Enter",13)
-    await owner.wait("location.hash==='#organizations-title'")
+    assert.equal(await owner.eval("location.href"),initialEntryUrl,
+      "Keyboard shortcut must not fire the security popstate navigation guard")
     const firstFocus=await owner.eval("({focused:document.activeElement?.id,"+
       "tag:document.activeElement?.tagName,workspaceHidden:document.getElementById('workspace').hidden})")
     assert.deepEqual(firstFocus,{focused:'organizations-title',tag:'H2',workspaceHidden:false},
@@ -151,7 +153,8 @@ export async function verifyB20CompanyLauncher(input:{
     await key("Tab","Tab",9)
     await owner.wait("document.activeElement?.getAttribute('href')==='#organization-draft-title'")
     await key("Enter","Enter",13)
-    await owner.wait("location.hash==='#organization-draft-title'")
+    assert.equal(await owner.eval("location.href"),initialEntryUrl,
+      "Second personal destination must preserve authenticated URL and scope")
     const draftFocus=await owner.eval("({focused:document.activeElement?.id,"+
       "tag:document.activeElement?.tagName,workspaceHidden:document.getElementById('workspace').hidden})")
     assert.deepEqual(draftFocus,{focused:'organization-draft-title',tag:'H2',workspaceHidden:false},

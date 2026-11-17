@@ -5578,9 +5578,12 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const hash=link.getAttribute('href');
     if(hash!=='#organizations-title'&&hash!=='#organization-draft-title')return;
     const heading=el(hash.slice(1));
+    // Browser fragment history triggers the existing security popstate guard,
+    // which must continue concealing private data on history traversal.
+    // Navigate visually and by focus without mutating the URL/history.
     event.preventDefault();
-    if(location.hash!==hash)location.hash=hash;
-    heading.focus({preventScroll:false});
+    heading.scrollIntoView({block:'start'});
+    heading.focus({preventScroll:true});
   };
   window.addEventListener('popstate',()=>{concealPrivateView();load()});
   setInterval(observeAccess,5000);
