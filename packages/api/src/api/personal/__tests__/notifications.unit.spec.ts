@@ -87,14 +87,17 @@ describe("notification bell workspace isolation (SQL contract; real PG/browser N
       expect((sql.match(/\?/g) || []).length).toBe(params.length)
       // No Organization = the personal bell. Company groups must be absent
       // instead of merging every company where the Person is also an Owner.
-      expect(companyGuards(sql)).toBe(4)
+      expect(companyGuards(sql)).toBe(3)
+      // A direct Person-recipient Staff security alert requires a live
+      // platform grant, not the selected company's membership.
+      expect(sql).toContain("g.person_id=n.person_id and g.task='store.closing.manage'")
+      expect(sql).toContain("g.resource='platform' and g.revoked_at is null")
       expect(sql).not.toContain("(?='' or")
       expect(sql).toContain("select (select count(*) from authorized where read_at is null)")
       expect(sql).toContain("from authorized")
       expect(params).toEqual([
         person, selected ?? "", selected ?? "", selected ?? "", selected ?? "",
-        person, selected ?? "", selected ?? "", person, selected ?? "",
-        selected ?? "", 0,
+        person, selected ?? "", selected ?? "", person, 0,
       ])
       // Revocation after membership exit is a personal notice in ALL
       // workspaces, with no former Organization name disclosed.
@@ -125,6 +128,25 @@ describe("notification bell workspace isolation (SQL contract; real PG/browser N
       ])
     },
   )
+
+  it("keeps direct-to-Staff critical security alert readable without selecting the paused Organization",async()=>{
+    const staffNotice="danal_"+"a".repeat(32)
+    const execute=jest.fn(async(sql:string)=>{
+      if(sql.includes("from da_store_platform_closing_admin_notice n"))
+        return [{id:staffNotice,read_at:new Date("2026-11-01T00:00:00Z")}]
+      return []
+    })
+    const notifications=new PersonalNotifications({execute} as any)
+    await expect(notifications.read(token,staffNotice)).resolves.toEqual({success:true})
+    expect(execute).toHaveBeenCalledTimes(2)
+    const [sql,params]=execute.mock.calls[1] as [string,unknown[]]
+    expect(params).toEqual([staffNotice,person])
+    expect((sql.match(/\?/g)||[]).length).toBe(params.length)
+    expect(sql).not.toContain("c.organization_id=?")
+    expect(sql).toContain("g.person_id=n.person_id and g.task='store.closing.manage'")
+    expect(sql).toContain("g.resource='platform' and g.revoked_at is null")
+    expect(sql).toContain("g.expires_at>clock_timestamp()")
+  })
 
   it("does not even query receipt data for an unrecognized Organization selector", async () => {
     jest.spyOn(IdentitySessions.prototype, "organizations").mockResolvedValue({
