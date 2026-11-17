@@ -126,3 +126,13 @@ if (process.env.GITHUB_ACTIONS === "true" &&
   console.log("IR12 PASS native Subscriber real 127.0.0.1 HTTP 204/401/403/413/429/500/503/transport/replay acceptance");
   console.log((run.stdout || "").slice(-800), (run.stderr || "").slice(-800));
 }
+
+
+// #173: synthetic private marker must never leave native Mercur SDK/Next error boundary.
+// Task-only real Next.js production HTTP test; never runs on main/other agents.
+// No Docker, protected DB/worktree, payment, production secrets or new workflow.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-173-medusa-error-redaction") {
+  await import("./verify_medusa_error_http.mjs");
+}
