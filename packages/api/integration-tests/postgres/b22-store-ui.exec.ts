@@ -4690,14 +4690,15 @@ async function verifyB22NativeSellerOrderAttribution(input:{
 /** B22-02 native HTTPS/CDP and PostgreSQL proof; same existing disposable CI. */
 async function verifyB22TwoStoreIndependentStaffApproval(input:{
   host:string;crt:string;A:{email:string;password:string;person:string};
+  memberEmail:string;memberPassword:string;memberMfaSecret:string;memberId:string;
   browsers:B06Chrome[];reviewChrome:B06Chrome;
   organizations:Array<{id:string;name:string}>;rand:string;
   native:any;reviewerPersonId:string;
   q:(sql:string,args?:unknown[])=>Promise<any[]>;
   selected:(org:string)=>string;
 }):Promise<void>{
-  const {host,crt,A,browsers,reviewChrome,organizations,rand,
-    native,reviewerPersonId,q,selected}=input
+  const {host,crt,A,memberEmail,memberPassword,memberMfaSecret,memberId,
+    browsers,reviewChrome,organizations,rand,native,reviewerPersonId,q,selected}=input
   // Earlier native MFA disable revoked every old A session. Reauthenticate
   // through the real public Chrome login, then re-enroll native TOTP via
   // the actual visible UI. Never reuse the revoked cookie or forge MFA proof.
@@ -4754,6 +4755,48 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
     const pairBefore=Number((await q(
       "select count(*)::int n from da_store_application where organization_id=$1",
       [pairOrg]))[0].n)
+    assert.deepEqual(await q(
+      "select status,store_application_enabled from da_organization where id=$1",
+      [pairOrg]),[{status:"active",store_application_enabled:true}],
+      "Current Organization must independently allow new Store applications")
+    // Earlier F-02 genuinely unlinked A's secondary Medusa Member. That
+    // revocation MUST deny Store creation even after a fresh strong login.
+    const beforeLink=await q(
+      "select id from da_verified_actor_binding where person_id=$1 "+
+      "and actor_type='member' and revoked_at is null",[A.person])
+    assert.equal(beforeLink.length,0,
+      "F-02 Member unlink must remain effective across Owner re-login")
+    const blockedWithoutMember=await browser.callFunction(
+      "async function(json){const input=JSON.parse(json);"+
+      "const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/store-applications',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify(input)});return r.status;}",
+      JSON.stringify({organization_id:pairOrg,application_id:pairIds[0],
+        name:pairNames[0],email:"b22-store-pair-0-"+rand+"@example.invalid",
+        currency_code:"try"}))
+    assert.equal(blockedWithoutMember,403,
+      "Fresh Owner MFA without live secondary Member must not create a Store")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_application where organization_id=$1",
+      [pairOrg]))[0].n),pairBefore,
+      "403 after revoked Member creates no Store application")
+    // Re-link ONLY through the supported password+native TOTP browser UI.
+    // No direct actor-binding INSERT, unrevocation or inherited Seller rights.
+    await browser.input("#link-account input[name=email]",memberEmail)
+    await browser.input("#link-account input[name=password]",memberPassword)
+    await browser.click("#link-account button")
+    await browser.wait("!document.getElementById('link-confirm').hidden")
+    await browser.input("#link-confirm input[name=code]",otp(memberMfaSecret))
+    await browser.click("#link-confirm button")
+    await browser.wait("document.getElementById('status').textContent==='Hesap bağlantısı tamamlandı'")
+    const relinked=await q(
+      "select actor_id,proof_reference from da_verified_actor_binding "+
+      "where person_id=$1 and actor_type='member' and revoked_at is null",
+      [A.person])
+    assert.equal(relinked.length,1)
+    assert.equal(relinked[0].actor_id,memberId)
+    assert.match(relinked[0].proof_reference,/^dual-proof:/)
     for(let i=0;i<2;i++){
       // This is a real same-origin HTTPS request from the authenticated Owner
       // Chrome, not a fabricated HTTP principal or a native Seller fixture.
@@ -15158,7 +15201,8 @@ export default async function({container}:any){
 
 
     await verifyB22TwoStoreIndependentStaffApproval({
-      host,crt,A,browsers,reviewChrome,organizations,rand,native,
+      host,crt,A,memberEmail,memberPassword,memberMfaSecret:secondaryMfa.secret,
+      memberId:member.id,browsers,reviewChrome,organizations,rand,native,
       reviewerPersonId,q,selected
     })
 
