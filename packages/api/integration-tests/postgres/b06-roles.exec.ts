@@ -349,12 +349,18 @@ export default async function({container}:ExecArgs){
   },403)
   // All successful and failed POSTs came from real Chrome HTTPS; no mocked
   // route handler, client-provided Person authority or native MFA bypass.
-  for(const c of [a,b]){
-    assert.ok(c.http.some((entry:any)=>entry.phase==='mfa-personal-optional-save'?
-      entry.method==='POST'&&entry.path==='/personal/mfa'&&entry.status===200&&entry.tls?.protocol:
-      entry.method==='POST'&&entry.path==='/personal/mfa'&&entry.tls?.protocol),
-      'B06 native HTTPS MFA POST traffic must be observed')
-  }
+  const expectedMfaPosts=[
+    [b,'mfa-personal-optional-save',200],
+    [b,'mfa-stale-version-rejected',409],
+    [b,'mfa-native-factor-disable-not-silent',409],
+    [a,'mfa-owner-not-platform-staff',403],
+    [a,'mfa-cross-person-post-rejected',400],
+  ] as const
+  await until(async()=>expectedMfaPosts.every(([chrome,phase,status])=>
+    chrome.http.some((entry:any)=>entry.phase===phase&&
+      entry.method==='POST'&&entry.path==='/personal/mfa'&&
+      entry.status===status&&entry.tls?.protocol)),
+    5000,'B06 real TLS CDP POST evidence')
   report.mfaPreferenceAcceptance={
     modeSource:'DISPOSABLE SQL TEST FIXTURE; NOT PLATFORM ADMIN HTTP ACCEPTANCE',
     personWriteHttp:200,staleRevisionHttp:409,rejectedByPolicyHttp:403,
