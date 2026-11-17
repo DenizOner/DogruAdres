@@ -51,6 +51,46 @@ export async function verifyB22CoownerNativeMemberReadback(input:{
     "where audit_event_id=$1 order by person_id",[latestEvent[0].source_audit_event_id])
   assert.deepEqual(receipts.map((r:any)=>r.person_id).sort(),
     [personA,personB].sort())
+  // #275: use this already-disposable real Owner A/Owner B fixture for
+  // the personal notification-bell security boundary, not an SQL mock.
+  const readBell=async(actor:B06Chrome,selectedOrg="")=>
+    actor.callFunction("async function(org){"+
+      "const suffix=org?'?organization='+encodeURIComponent(org):'';"+
+      "const r=await fetch('/personal/notifications'+suffix,{cache:'no-store'});"+
+      "return {status:r.status,body:await r.json(),cache:r.headers.get('cache-control')}}",
+      selectedOrg)
+  const [ownReceipt]=await q("select id,read_at from da_notification_receipt "+
+    "where person_id=$1 and audit_event_id=$2",
+    [personA,latestEvent[0].source_audit_event_id])
+  assert.ok(ownReceipt,"Task-owned Owner A must have a genuine company receipt")
+  const personalBell=await readBell(browser)
+  const companyBell=await readBell(browser,orgA)
+  assert.equal(personalBell.status,200)
+  assert.equal(companyBell.status,200)
+  assert.ok(String(personalBell.cache).includes("no-store"))
+  const withdrawnTitle="Mağaza kapatma talebi geri çekildi"
+  assert.equal(personalBell.body.notifications.some((n:any)=>
+    n.title===withdrawnTitle||n.context===orgName),false,
+    "Personal bell cannot expose company Store events or company names")
+  assert.equal(companyBell.body.notifications.some((n:any)=>
+    n.title===withdrawnTitle&&n.context===orgName),true,
+    "Verified Owner in selected Company must still read its own company notice")
+  assert.equal(companyBell.body.unread_count>=personalBell.body.unread_count+
+    (ownReceipt.read_at===null?1:0),true,
+    "Personal unread count cannot include selected Company private events")
+  const noOrgRead=await browser.callFunction("async function(id){"+
+    "const s=await fetch('/personal/session',{cache:'no-store'});"+
+    "const session=await s.json();"+
+    "const r=await fetch('/personal/notifications',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':session.csrf_token},"+
+      "body:JSON.stringify({id}),cache:'no-store'});"+
+    "return {status:r.status,body:await r.json()}}",ownReceipt.id)
+  assert.equal(noOrgRead.status,403,
+    "A company receipt cannot be marked read from personal context")
+  assert.deepEqual((await q("select read_at from da_notification_receipt "+
+    "where id=$1",[ownReceipt.id]))[0],{read_at:ownReceipt.read_at},
+    "Denied personal read must not write another workspace receipt")
+  process.stdout.write("PASS B19 Chrome/HTTPS/PG16: personal bell excludes company Store receipt and unread count; selected Owner workspace sees its own receipt; unscoped read denied without mutation\n")
   // Native SellerMember alone never grants Owner-private notification access.
   const memberOnly=await privateClosing(reviewer,orgA)
   assert.deepEqual({status:memberOnly.status,body:memberOnly.body},

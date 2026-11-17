@@ -16,10 +16,11 @@ export class PersonalNotifications {
 
   async list(token: string, offset = 0, organization?: string) {
     const s = await this.authorize(token, organization)
-    // Personal receipts remain scoped to the recipient. A membership-exit
-    // revocation notice remains readable after role removal, without returning
-    // the former company's name or any company resource. Normal company
-    // policy and draft notices still require live Organization membership.
+    // No Organization selector = personal bell: never mix in company events.
+    // With a verified selected Organization, include only that company's
+    // currently authorized events alongside per-Person security notices.
+    // Membership-exit is personal in EVERY workspace and masks the former
+    // company name after access is revoked.
     const rows = await this.db.execute(`with authorized as (
       select n.id,n.created_at,n.read_at,a.action,
         case when a.action='organization.store_draft_permission_revoked'
@@ -62,7 +63,7 @@ export class PersonalNotifications {
             or (a.action in ('organization.store_application_right_enabled',
                              'organization.store_application_right_disabled')
                 and a.resource='organization' and a.target_id=a.organization_id))
-          and (?='' or a.organization_id=?)
+          and (?<>'' and a.organization_id=?)
           and o.status='active' and o.deleted_at is null
           and exists(select 1 from da_organization_membership m
             where m.person_id=n.person_id and m.organization_id=a.organization_id
@@ -75,7 +76,7 @@ export class PersonalNotifications {
                       'organization.store_draft_permission_revoked')
           and a.resource='store-draft-permission'
           and a.target_id=n.person_id
-          and (?='' or a.organization_id=?)
+          and (?<>'' and a.organization_id=?)
           and o.status='active' and o.deleted_at is null
           and exists(select 1 from da_organization_membership m
             where m.person_id=n.person_id and m.organization_id=a.organization_id
@@ -88,7 +89,6 @@ export class PersonalNotifications {
           and a.resource='store-draft-permission'
           and a.role_context='owner' and a.target_id=n.person_id
           and a.new_values->>'source'='membership_exit'
-          and (?='' or a.organization_id=?)
           and a.previous_values->>'person_id'=n.person_id
           and exists(select 1 from da_organization_membership old_m
             where old_m.id=a.previous_values->>'membership_id'
@@ -116,7 +116,7 @@ export class PersonalNotifications {
       join da_audit_outbox x on x.source_audit_event_id=a.id
         and x.source_module='dogruadres-access' and x.deleted_at is null
       where d.person_id=? and d.late_notice_id is not null
-        and (?='' or c.organization_id=?)
+        and (?<>'' and c.organization_id=?)
         and not exists(select 1 from da_notification_receipt old_n
           where old_n.person_id=d.person_id
             and old_n.audit_event_id=c.source_audit_event_id)
@@ -124,6 +124,8 @@ export class PersonalNotifications {
           where m.person_id=d.person_id and m.organization_id=c.organization_id
             and m.role='owner' and m.protected_owner=true
             and m.status='active' and m.revoked_at is null and m.deleted_at is null)
+      -- Direct Person security alert. Require the live platform Staff grant
+      -- even if this Organization is suspended; never extend company receipts.
       union all
       select n.id,n.created_at,n.read_at,
         'organization.store_platform_closing_mail_admin_alert' as action,
@@ -134,7 +136,7 @@ export class PersonalNotifications {
         and c.deadline_basis='admin_alert'
       join da_organization o on o.id=c.organization_id
         and o.deleted_at is null
-      where n.person_id=? and (?='' or c.organization_id=?)
+      where n.person_id=?
         and exists(select 1 from da_platform_staff_grant g
           where g.person_id=n.person_id and g.task='store.closing.manage'
             and g.resource='platform' and g.revoked_at is null
@@ -147,9 +149,8 @@ export class PersonalNotifications {
       ) page),'[]'::json) as items`,
       [s.person_id, organization ?? '', organization ?? '',
        organization ?? '', organization ?? '',
-       organization ?? '', organization ?? '',
        s.person_id, organization ?? '', organization ?? '',
-       s.person_id, organization ?? '', organization ?? '', offset])
+       s.person_id, offset])
     // Exactly one SQL statement determines the list, unread count and page.
     // A stored reason, actor identifier or staff grant never crosses the API.
     return {
@@ -253,7 +254,7 @@ export class PersonalNotifications {
               or (a.action in ('organization.store_application_right_enabled',
                                'organization.store_application_right_disabled')
                   and a.resource='organization' and a.target_id=a.organization_id))
-            and (?='' or a.organization_id=?)
+            and (?<>'' and a.organization_id=?)
             and o.status='active' and o.deleted_at is null
             and exists(select 1 from da_organization_membership m
               where m.person_id=n.person_id and m.organization_id=a.organization_id
@@ -266,7 +267,7 @@ export class PersonalNotifications {
                         'organization.store_draft_permission_revoked')
             and a.resource='store-draft-permission'
             and a.target_id=n.person_id
-            and (?='' or a.organization_id=?)
+            and (?<>'' and a.organization_id=?)
             and o.status='active' and o.deleted_at is null
             and exists(select 1 from da_organization_membership m
               where m.person_id=n.person_id and m.organization_id=a.organization_id
@@ -279,7 +280,6 @@ export class PersonalNotifications {
           and a.resource='store-draft-permission'
           and a.role_context='owner' and a.target_id=n.person_id
           and a.new_values->>'source'='membership_exit'
-          and (?='' or a.organization_id=?)
           and a.previous_values->>'person_id'=n.person_id
           and exists(select 1 from da_organization_membership old_m
             where old_m.id=a.previous_values->>'membership_id'
@@ -291,7 +291,6 @@ export class PersonalNotifications {
               and x.deleted_at is null))
         ) for update of n`,
       [id,s.person_id,organization ?? '',organization ?? '',
-        organization ?? '',organization ?? '',
         organization ?? '',organization ?? ''])
     let admin=false
     let late=false
@@ -301,12 +300,11 @@ export class PersonalNotifications {
         join da_store_platform_closing c on c.seller_id=n.seller_id
           and c.deadline_basis='admin_alert' and c.admin_alert_at is not null
         where n.id=? and n.person_id=?
-          and (?='' or c.organization_id=?)
           and exists(select 1 from da_platform_staff_grant g
             where g.person_id=n.person_id and g.task='store.closing.manage'
               and g.resource='platform' and g.revoked_at is null
               and (g.expires_at is null or g.expires_at>clock_timestamp()))
-        for update of n`,[id,s.person_id,organization??'',organization??''])
+        for update of n`,[id,s.person_id])
       admin=rows.length===1
     }
     if(rows.length===0){
@@ -324,7 +322,7 @@ export class PersonalNotifications {
         join da_audit_outbox x on x.source_audit_event_id=a.id
           and x.source_module='dogruadres-access' and x.deleted_at is null
         where d.late_notice_id=? and d.person_id=?
-          and (?='' or c.organization_id=?)
+          and (?<>'' and c.organization_id=?)
           and not exists(select 1 from da_notification_receipt old_n
             where old_n.person_id=d.person_id
               and old_n.audit_event_id=c.source_audit_event_id)
