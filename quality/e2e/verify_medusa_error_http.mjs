@@ -24,6 +24,7 @@ const fixture = join(fixtureDir, "route.ts");
 const markerFile = join(fixtureDir, ".ci173-owned");
 const marker = "IR15-ephemeral-route-only-173";
 const canary = "ci173_" + randomBytes(20).toString("hex");
+const carriesCanary = text => String(text).toLowerCase().includes(canary.toLowerCase());
 const logPath = join(process.env.RUNNER_TEMP, "ir15-next-synthetic.log");
 let caseMode = "denied";
 let upstreamHits = 0;
@@ -71,9 +72,9 @@ const source = [
   '  const testCase = new URL(request.url).searchParams.get("case");',
   '  try {',
   '    if (testCase === "raw-response") {',
-  '      medusaError({ response: { status: 500, data: { message: process.env.CI173_CANARY }, headers: { authorization: process.env.CI173_CANARY } } });',
+  '      medusaError({ response: { status: 500, data: { message: "Synthetic private payload " + process.env.CI173_CANARY }, headers: { authorization: process.env.CI173_CANARY } } });',
   '    } else if (testCase === "string-response") {',
-  '      medusaError({ response: { status: 400, data: process.env.CI173_CANARY } });',
+  '      medusaError({ response: { status: 400, data: "Synthetic private payload " + process.env.CI173_CANARY } });',
   '    } else if (testCase === "setup") {',
   '      medusaError(new Error(process.env.CI173_CANARY));',
   '    } else if (testCase === "request") {',
@@ -193,7 +194,7 @@ async function check(name, shouldSucceed = false) {
     // For successful response, no error message is expected.
     throw new Error("IR15 unexpected synthetic Next payload shape " + name);
   }
-  if (!shouldSucceed && (!data.message || data.message.includes(canary))) {
+  if (!shouldSucceed && (!data.message || carriesCanary(data.message))) {
     throw new Error("IR15 FAIL: unsanitized upstream marker in caught Error for " + name);
   }
   const fixedMessages = {
@@ -229,7 +230,7 @@ try {
   await new Promise(ok => backend.close(ok));
 }
 // The test-only raw upstream header and body must never appear in Next logs.
-if (readFileSync(logPath, "utf8").includes(canary)) {
+if (carriesCanary(readFileSync(logPath, "utf8"))) {
   throw new Error("IR15 FAIL: synthetic upstream private marker entered Next server logs");
 }
 console.log("IR15 PASS: " + passed + " real Next/Mercur SDK/127.0.0.1 cases and sanitized server log; no protected data");
