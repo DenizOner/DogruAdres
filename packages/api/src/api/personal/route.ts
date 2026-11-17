@@ -1319,15 +1319,23 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   }
   async function notifications(offset=0){
     const request=++notificationRequest;
-    // The personal bell must not inherit a revoked/stale Organization URL.
-    // The backend authorizes each receipt by Person and live entitlement.
-    const notificationPath='notifications';
+    // currentOrg is set only after the selected Organization has been
+    // confirmed by the server. No selected Organization = personal inbox.
+    // The server independently validates membership for every GET and POST.
+    const org=currentOrg,orgRequest=organizationRequest;
+    const epoch=viewEpoch,person=currentPersonId;
+    const stillCurrent=()=>request===notificationRequest&&
+      org===currentOrg&&orgRequest===organizationRequest&&
+      epoch===viewEpoch&&person===currentPersonId&&
+      !document.hidden&&!el('workspace').hidden;
+    const notificationPath='notifications'+
+      (org?'?organization='+encodeURIComponent(org):'');
     el('notification-list').replaceChildren();el('notification-list').setAttribute('aria-busy','true');
     el('notification-status').textContent='Bildirimler yükleniyor…';el('notification-count').textContent='';
     el('notification-next').hidden=true;
     try{
-      const data=await api(notificationPath+'?offset='+offset);
-      if(request!==notificationRequest)return;
+      const data=await api(notificationPath+(org?'&':'?')+'offset='+offset);
+      if(!stillCurrent())return;
       notificationOffset=offset;notificationNext=data.next_offset;
       el('notification-count').textContent='('+data.unread_count+' okunmamış)';
       el('notification-next').hidden=notificationNext===null;
@@ -1340,13 +1348,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
           const button=document.createElement('button');button.type='button';button.textContent='Okundu işaretle';
           button.setAttribute('aria-label',item.title+' — okundu işaretle');
           button.onclick=async()=>{
-            if(request!==notificationRequest)return;button.disabled=true;
+            if(!stillCurrent())return;button.disabled=true;
             try{
               await api(notificationPath,{method:'POST',body:JSON.stringify({id:item.id})});
-              if(request!==notificationRequest)return;
+              if(!stillCurrent())return;
               el('notification-refresh').focus();await notifications(notificationOffset);
             }catch(e){
-              if(request!==notificationRequest)return;
+              if(!stillCurrent())return;
               if([401,403].includes(e.httpStatus)){concealPrivateView();el('login').hidden=false;status('Giriş gerekli');return}
               el('notification-status').textContent=e.uncertain?'Okundu sonucu belirsiz. Yenile ile sunucudaki durumu kontrol edin.':'Bildirim güncellenemedi. Yenileyin.';
               // Never automatically resubmit an uncertain mutation.
@@ -1357,10 +1365,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       }
       el('notification-status').textContent=data.notifications.length?'Bildirimler güncellendi.':'Henüz bildirim yok.';
     }catch(e){
-      if(request!==notificationRequest)return;
+      if(!stillCurrent())return;
       if([401,403].includes(e.httpStatus)){concealPrivateView();el('login').hidden=false;status('Giriş gerekli');return}
       el('notification-status').textContent='Bildirimler yüklenemedi. Yenileyin.';
-    }finally{if(request===notificationRequest)el('notification-list').setAttribute('aria-busy','false')}
+    }finally{if(stillCurrent())el('notification-list').setAttribute('aria-busy','false')}
   }
   function closeNotifications(){el('notification-panel').hidden=true;el('notification-bell').setAttribute('aria-expanded','false');el('notification-bell').focus()}
   el('notification-bell').onclick=()=>{
