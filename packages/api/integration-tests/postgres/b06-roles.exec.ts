@@ -52,6 +52,11 @@ export default async function({container}:ExecArgs){
   assert.equal((await q("select mfa_activated from da_session_policy where id='current'"))[0].mfa_activated,true)
   const actors:any[]=[]
   for(const label of ['A','B']){const rows=await q("select u.id actor,b.person_id person,b.auth_identity_id identity from public.user u join da_login_binding b on b.actor_id=u.id and b.actor_type='user' where u.email=$1 and b.verified_at is not null",[process.env['B06_EMAIL_'+label]]);assert.equal(rows.length,1);actors.push(rows[0])}
+  // A/B must represent genuinely distinct Person, native identity and actors;
+  // otherwise two successful GETs cannot prove cross-Person isolation.
+  assert.ok(actors.length===2&&actors[0].person!==actors[1].person&&
+    actors[0].identity!==actors[1].identity&&actors[0].actor!==actors[1].actor,
+    'B06 requires independent synthetic Person and AuthIdentity fixtures')
   const orgs=await f.createOrganizations([{name:'B06 Org1',status:'active'},{name:'B06 Org2',status:'active'}])
   const members=await f.createMemberships(orgs.flatMap(o=>actors.map((a,i)=>({organization_id:o.id,person_id:a.person,role:i===0?'owner' as const:'member' as const,status:'active' as const,protected_owner:i===0}))))
   const [owner1,b1,owner2,b2]=members
@@ -65,46 +70,141 @@ export default async function({container}:ExecArgs){
   report.tls={trustedCaAndIpSan:true,defaultUntrustedRejected:true,wrongHostnameRejected:true,certificateSha256:createHash('sha256').update(ca).digest('hex'),bypass:false}
   const sql={execute:async(s:string,args:any[]=[])=>{let i=0;return q(s.replace(/\?/g,()=>'$'+(++i)),args)}}
   const strong=async(c:B06Chrome)=>{const token=await c.token();assert.ok(token);await q('begin');try{const s=await new IdentitySessions(sql).current(token,true);assert.ok(s&&s.mfa_purpose==='full');const a=actors[c.actor==='A'?0:1];assert.equal(s!.person_id,a.person);assert.equal(s!.auth_identity_id,a.identity);assert.equal(s!.actor_id,a.actor);const ch=challenges.filter(r=>r.identity===a.identity);assert.equal(ch.length,1);assert.equal(new Date(s!.last_strong_auth_at).getTime(),new Date(ch[0].completed).getTime());await q('commit');report.checks.push({actor:c.actor,phase:c.phase,currentSensitive:true,nativeChallengeCompleted:true,sessionRef:createHash('sha256').update(s!.id).digest('hex').slice(0,16)});return s!}catch(e){await q('rollback');throw e}}
-  for(const [i,label]of ['A','B'].entries()){const c=new B06Chrome(origin,label as 'A'|'B');browsers.push(c);await c.start(cert);await c.login(process.env['B06_EMAIL_'+label]!,process.env['B06_PASSWORD_'+label]!,actors[i].person);await strong(c)}
+  for(const [i,label]of ['A','B'].entries()){const c=new B06Chrome(origin,label as 'A'|'B');browsers.push(c);await c.start(cert,45000);await c.login(process.env['B06_EMAIL_'+label]!,process.env['B06_PASSWORD_'+label]!,actors[i].person);await strong(c)}
   const [a,b]=browsers
-  const domain=async()=>{const result:any={};for(const t of ['da_organization_membership','da_audit_event','da_audit_outbox','da_security_outbox'])result[t]=(await q(`select count(*)::int n,md5(coalesce(string_agg(to_jsonb(r)::text,E'\\n' order by to_jsonb(r)::text),'')) hash from "${t}" r`))[0];return result}
+  const domain=async()=>{const result:any={};for(const t of ['da_organization_membership','da_mfa_policy','da_person_mfa_preference','auth_mfa_factor','da_audit_event','da_audit_outbox','da_security_outbox'])result[t]=(await q(`select count(*)::int n,md5(coalesce(string_agg(to_jsonb(r)::text,E'\\n' order by to_jsonb(r)::text),'')) hash from "${t}" r`))[0];return result}
+  // #366: Read the real Medusa MFA endpoint in both independently authenticated
+  // task-only Chrome profiles. No platform mutation or native-factor bypass.
+  const mfaGet=async(c:B06Chrome,path:string,credentials:'include'|'omit')=>
+    c.callFunction(
+      "async function(path, credentials) { const response = await fetch(path, {method:'GET', credentials, headers:{Accept:'application/json'}}); return {status:response.status, cacheControl:response.headers.get('cache-control'), body:await response.json()}; }",
+      path,credentials
+    )
+  const mfaBefore=await domain()
+  for(const [i,c] of [a,b].entries()){
+    c.phase='mfa-settings-get-own-person'
+    await strong(c)
+    const mfaHttpStart=c.http.length
+    const own=await mfaGet(c,'/personal/mfa','include')
+    assert.equal(own.status,200,'Authenticated native MFA user must read own settings')
+    // Keep assertion diagnostics fixed: never print Person IDs, native factor
+    // metadata or unexpected HTTP bodies to a public Actions failure log.
+    const keysOnly=(value:unknown,keys:readonly string[])=>
+      !!value&&typeof value==='object'&&!Array.isArray(value)&&
+      Object.keys(value).length===keys.length&&
+      keys.every(key=>Object.prototype.hasOwnProperty.call(value,key))
+    assert.ok(own.cacheControl==='no-store','MFA GET response must be non-cacheable')
+    // An unexpected field must fail the test WITHOUT echoing its name or value.
+    assert.ok(keysOnly(own.body,
+      ['platform','personal','can_manage_platform','native_factor_state','effective_mfa_target','runtime_enforcement']),
+      'MFA response must contain only the approved top-level fields')
+    assert.ok(keysOnly(own.body?.platform,['platform_mode','version']),'MFA platform response fields')
+    assert.ok(keysOnly(own.body?.personal,['person_id','user_enabled','version']),'MFA Person response fields')
+    assert.ok(keysOnly(own.body?.effective_mfa_target,['next_step','required','user_control_allowed']),
+      'MFA effective policy response fields')
+    assert.ok(own.body?.personal?.person_id===actors[i].person,'MFA Person ID must match the live session')
+    assert.ok(own.body?.personal?.user_enabled===false,'MFA Person default preference must be OFF')
+    assert.ok(own.body?.personal?.version===0,'MFA Person preference must be at revision 0')
+    assert.ok(own.body?.platform?.platform_mode==='required','MFA platform default must be required')
+    assert.ok(own.body?.platform?.version===0,'MFA platform policy must be at revision 0')
+    assert.ok(own.body?.native_factor_state==='enabled','Verified native TOTP must be enabled')
+    assert.ok(own.body?.effective_mfa_target?.required===true,'Effective MFA must be required')
+    assert.ok(own.body?.effective_mfa_target?.next_step==='verify_mfa',
+      'Enrolled native factor must retain verification as its effective MFA step')
+    assert.ok(own.body?.effective_mfa_target?.user_control_allowed===false,'Mandatory MFA cannot be disabled by Person')
+    assert.ok(own.body?.can_manage_platform===false,'Ordinary Person must not receive platform grant')
+    assert.ok(own.body?.runtime_enforcement==='enforced','MFA runtime must be enforced')
+    assert.ok(!/"(?:auth_identity_id|factor_id|factor_ids|secret|seed|token|recovery_codes)"\s*:/.test(JSON.stringify(own.body)),
+      'MFA response must not include native factor identifiers or secrets')
+    c.phase='mfa-settings-get-no-cookie'
+    const anonymous=await mfaGet(c,'/personal/mfa','omit')
+    assert.equal(anonymous.status,403,'Missing browser session must be denied before Person lookup')
+    assert.ok(anonymous.cacheControl==='no-store','Rejected no-cookie GET must be non-cacheable')
+    assert.ok(keysOnly(anonymous.body,['message'])&&anonymous.body.message==='Access denied',
+      'Rejected no-cookie GET must return only the access-denied message')
+    c.phase='mfa-settings-get-foreign-person-query'
+    const foreign=await mfaGet(c,'/personal/mfa?person_id='+encodeURIComponent(actors[1-i].person),'include')
+    assert.equal(foreign.status,400,'Client-selected foreign Person must not become an authority')
+    assert.ok(foreign.cacheControl==='no-store','Rejected foreign selector must be non-cacheable')
+    assert.ok(keysOnly(foreign.body,['message'])&&foreign.body.message==='Invalid input',
+      'Rejected foreign selector must return only the invalid-input message')
+    // CDP observes the actual three HTTPS network responses, not a stubbed
+    // window.fetch result or a cached synthetic response.
+    const expectedMfaNetwork=[
+      ['mfa-settings-get-own-person',200],
+      ['mfa-settings-get-no-cookie',403],
+      ['mfa-settings-get-foreign-person-query',400],
+    ] as const
+    await until(async()=>expectedMfaNetwork.every(([phase,status])=>
+      c.http.slice(mfaHttpStart).some((r:any)=>r.phase===phase&&r.method==='GET'&&
+        r.path==='/personal/mfa'&&r.status===status&&r.tls?.protocol)),
+      5000,'B06 real native Chrome TLS network evidence')
+
+    report.checks.push({phase:'mfa-settings-real-https-person-readback',actor:c.actor,
+      ownHttp:200,missingCookieHttp:403,foreignPersonQueryHttp:400,
+      exactPersonBinding:true,defaultPreferenceReadOnly:true,nativeFactorEnabled:true,
+      policyRequired:true,noStore:true,secretFree:true})
+  }
+  assert.deepEqual(await domain(),mfaBefore,'MFA GET and denied requests must not mutate domain audit/outbox')
+
   const denied=async(c:B06Chrome,name:string,body:object,status:number,bad=false)=>{c.phase=name;await strong(c);const before=await domain();assert.equal((await c.post(body,bad)).status,status);assert.deepEqual(await domain(),before);report.checks.push({phase:name,actor:c.actor,http:status,zeroDomainAuditOutbox:true,evidence:'REAL CHROME FETCH / NATIVE HTTP / SQL; denied POST, not a visible role control'})}
-  await b.select(orgs[0].name,'member');await b.wait("document.getElementById('memberships-status').textContent==='Üyelik listesini görüntüleme izniniz yok.'&&document.querySelectorAll('#memberships select,#memberships button').length===0")
-  await denied(b,'member-denied',{organization_id:orgs[0].id,membership_id:b1.id,role:'admin'},403)
+  // #253 approved: Organization Admin is retired; maintain meaningful denial,
+  // protected Owner, CSRF and actual Chrome/SQL Owner revocation acceptance.
+  await b.select(orgs[0].name,'member')
+  await b.wait("document.getElementById('memberships-status').textContent==='Uye listesi ve davet yonetimi icin yetki gerekli.'&&document.querySelectorAll('#memberships select,#memberships button').length===0")
+  await denied(b,'member-denied',{organization_id:orgs[0].id,membership_id:b1.id,role:'member'},403)
   await a.select(orgs[0].name,'owner');await a.ready()
-  await denied(a,'foreign-target',{organization_id:orgs[0].id,membership_id:b2.id,role:'admin'},404)
+  await denied(a,'foreign-target',{organization_id:orgs[0].id,membership_id:b2.id,role:'member'},404)
   await denied(a,'protected-owner',{organization_id:orgs[0].id,membership_id:owner1.id,role:'member'},403)
   await denied(a,'invalid-role',{organization_id:orgs[0].id,membership_id:b1.id,role:'owner'},400)
-  await denied(a,'invalid-csrf',{organization_id:orgs[0].id,membership_id:b1.id,role:'admin'},403,true)
-  const change=async(c:B06Chrome,name:string,target:any,role?:'member'|'admin')=>{
-   c.phase=name;await strong(c);const before=(await q('select role,status from da_organization_membership where id=$1',[target.id]))[0];const n=await count('da_audit_outbox')
-   if(role)await c.role(target.id,role);else await c.button('Üyeliği iptal et '+target.id)
-   await until(async()=>c.http.some(r=>r.phase===name&&r.method==='POST'&&r.path==='/personal/memberships'&&r.status===200)&&Number(await count('da_audit_outbox'))===n+1,20000,'B06 mutation response/commit')
-   const after=(await q('select role,status,revoked_at from da_organization_membership where id=$1',[target.id]))[0]
-   assert.equal(after.role,role??before.role);assert.equal(after.status,role?'active':'revoked');if(!role)assert.ok(after.revoked_at)
-   const audits=await q("select e.id,e.actor_id,e.actor_person_id,e.organization_id,e.previous_values,e.new_values,(select count(*)::int from da_audit_outbox o where o.source_audit_event_id=e.id) canonical,(select count(*)::int from da_security_outbox o where o.audit_event_id=e.id) security from da_audit_event e where e.target_id=$1 and e.action='organization.membership_changed' order by e.created_at",[target.id]);const e=audits[audits.length-1],actor=actors[c.actor==='A'?0:1]
-   assert.equal(e.actor_id,actor.actor);assert.equal(e.actor_person_id,actor.person);assert.equal(e.organization_id,target.organization_id);assert.equal(e.canonical,1);assert.equal(e.security,1);assert.equal(e.previous_values.role,before.role);assert.equal(e.new_values.role,after.role);assert.equal(e.new_values.status,after.status)
-   report.checks.push({phase:name,actor:c.actor,http:200,before,after:{role:after.role,status:after.status,revokedAtPresent:!!after.revoked_at},auditRef:e.id,canonical:1,security:1,evidence:'VISIBLE CHROME CLICK / NATIVE HTTP / SQL'})
+  await denied(a,'retired-admin-denied',{organization_id:orgs[0].id,membership_id:b1.id,role:'admin'},400)
+  await denied(a,'invalid-csrf',{organization_id:orgs[0].id,membership_id:b1.id,role:'member'},403,true)
+  const revoke=async(c:B06Chrome,name:string,target:any)=>{
+    c.phase=name;await strong(c)
+    const before=(await q('select role,status from da_organization_membership where id=$1',[target.id]))[0]
+    const n=await count('da_audit_outbox')
+    await c.button('Üyeliği iptal et '+target.id)
+    await until(async()=>c.http.some(r=>r.phase===name&&r.method==='POST'&&r.path==='/personal/memberships'&&r.status===200)&&Number(await count('da_audit_outbox'))===n+1,20000,'B06 Owner revoke response/commit')
+    const after=(await q('select role,status,revoked_at from da_organization_membership where id=$1',[target.id]))[0]
+    assert.ok(after.role===before.role&&after.status==='revoked'&&!!after.revoked_at,
+      'Owner revoke must preserve role and persist revocation')
+    const audits=await q("select e.id,e.actor_id,e.actor_person_id,e.organization_id,e.previous_values,e.new_values,(select count(*)::int from da_audit_outbox o where o.source_audit_event_id=e.id) canonical,(select count(*)::int from da_security_outbox o where o.audit_event_id=e.id) security from da_audit_event e where e.target_id=$1 and e.action='organization.membership_changed' order by e.created_at",[target.id])
+    const e=audits[audits.length-1],actor=actors[c.actor==='A'?0:1]
+    assert.ok(e&&e.actor_id===actor.actor&&e.actor_person_id===actor.person&&e.organization_id===target.organization_id,
+      'Owner revoke audit must identify the authorized Person and Organization')
+    assert.ok(e.canonical===1&&e.security===1,
+      'Owner revoke must publish canonical/security outbox exactly once')
+    assert.ok(e.previous_values.role===before.role&&e.new_values.role===after.role&&e.new_values.status===after.status,
+      'Owner revoke audit must preserve before/after role and revocation status')
+    report.checks.push({phase:name,actor:c.actor,http:200,before,after:{role:after.role,status:after.status,revokedAtPresent:true},
+      canonical:1,security:1,evidence:'VISIBLE CHROME OWNER REVOKE / NATIVE HTTP / SQL'})
   }
-  await a.select(orgs[1].name,'owner');await a.ready();await change(a,'single-revoke',b2)
-  await denied(a,'revoked-target',{organization_id:orgs[1].id,membership_id:b2.id,role:'admin'},403)
+  await a.select(orgs[1].name,'owner');await a.ready();await revoke(a,'single-revoke',b2)
+  await denied(a,'revoked-target',{organization_id:orgs[1].id,membership_id:b2.id,role:'member'},403)
   await denied(b,'revoked-actor',{organization_id:orgs[1].id,membership_id:owner2.id,role:'member'},403)
-  await a.select(orgs[0].name,'owner');await a.ready();await change(a,'owner-promotes',b1,'admin');await a.reload('owner');await a.ready()
-  await b.send('Page.reload',{ignoreCache:true});await b.wait("JSON.parse(document.getElementById('detail').textContent||'{}').role==='admin'");await b.ready()
-  await b.screenshot(join(output,'01-admin.png'))
-  await change(b,'admin-self-demotes',b1,'member');await b.reload('member')
-  await b.wait("document.querySelectorAll('#memberships select,#memberships button').length===0&&document.getElementById('memberships-status').textContent==='Üyelik listesini görüntüleme izniniz yok.'")
+  await a.select(orgs[0].name,'owner');await a.ready()
+  await a.wait("document.querySelectorAll('#memberships select').length===0&&!Array.from(document.querySelectorAll('#memberships button')).some(b=>b.textContent.startsWith('Rolü kaydet'))")
+  await a.screenshot(join(output,'01-owner-no-admin.png'))
+  await b.reload('member')
+  await b.wait("document.querySelectorAll('#memberships select,#memberships button').length===0&&document.getElementById('memberships-status').textContent==='Uye listesi ve davet yonetimi icin yetki gerekli.'")
   await b.screenshot(join(output,'02-member.png'))
-  assert.equal(await b.eval(`location.search==='?organization='+${JSON.stringify(orgs[0].id)}`),true)
-  assert.equal(await b.eval(`document.getElementById('memberships').textContent.includes(${JSON.stringify(actors[0].person)})`),false)
-  const final=await q('select role,status,protected_owner from da_organization_membership order by id');assert.equal(final.filter(r=>r.protected_owner&&r.role==='owner'&&r.status==='active').length,2);assert.equal(final.filter(r=>r.role==='member'&&r.status==='active').length,1);assert.equal(final.filter(r=>r.status==='revoked').length,1)
+  assert.ok(await b.eval("location.search==='?organization='+"+JSON.stringify(orgs[0].id)),
+    'Member must stay within the selected Organization')
+  assert.ok(!(await b.eval("document.getElementById('memberships').textContent.includes("+JSON.stringify(actors[0].person)+")")),
+    'Member cannot see a foreign Person in protected membership controls')
+  const final=await q('select role,status,protected_owner from da_organization_membership order by id')
+  assert.ok(final.filter(r=>r.protected_owner&&r.role==='owner'&&r.status==='active').length===2,
+    'Both protected Owners must remain active')
+  assert.ok(final.filter(r=>r.role==='member'&&r.status==='active').length===1&&
+    final.filter(r=>r.status==='revoked').length===1&&final.every(r=>r.role!=='admin'),
+    'Only approved Owner/Member fixtures, one revoke and no Admin grant may remain')
   const expected:any={da_person:2,user:2,auth_identity:2,provider_identity:2,da_actor_mapping:2,da_login_binding:2,da_organization:2,da_organization_membership:4,auth_mfa_factor:2,da_mfa_enrollment_intent:2,da_login_challenge:2,da_browser_session:6,da_native_credential:4,da_platform_staff_grant:0,da_organization_invitation:0,auth_verification:0,notification:0}
   for(const [t,n]of Object.entries(expected))assert.equal(await count(t),n,'Fixture limit '+t)
   assert.equal((await q('select count(*)::int n from da_mfa_enrollment_intent where consumed_at is not null'))[0].n,2)
   assert.equal((await q('select count(*)::int n from da_login_challenge where consumed_at is not null'))[0].n,2)
   assert.equal(challenges.length,2)
-  const domainAudits=await q("select e.id,e.previous_values,e.new_values from da_audit_event e where action='organization.membership_changed'");assert.equal(domainAudits.length,3);assert.equal(domainAudits.filter(r=>r.previous_values.role!==r.new_values.role).length,2);assert.equal(await count('da_audit_outbox'),3)
-  report.sql={counts:expected,final,domainMutations:3,roleChanges:2,auditActions:await q('select action,count(*)::int count from da_audit_event group by action order by action'),canonicalOutbox:await count('da_audit_outbox'),securityOutbox:await count('da_security_outbox')}
+  const domainAudits=await q("select e.id,e.previous_values,e.new_values from da_audit_event e where action='organization.membership_changed'");assert.ok(domainAudits.length===1&&domainAudits.every(r=>r.previous_values.role===r.new_values.role)&&await count('da_audit_outbox')===1,'Only the authorized Owner revocation may write a membership audit/outbox')
+  report.sql={counts:expected,final,domainMutations:1,roleChanges:0,retiredAdminDenied:true,auditActions:await q('select action,count(*)::int count from da_audit_event group by action order by action'),canonicalOutbox:await count('da_audit_outbox'),securityOutbox:await count('da_security_outbox')}
   report.status='PASS pending independent exact-HEAD acceptance'
  }catch(error){
   report.status='FAIL / no retry'
