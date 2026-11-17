@@ -125,6 +125,46 @@ export async function verifyB20CompanyLauncher(input:{
       }
       assert.fail("Real keyboard Tab did not reach the scoped company control")
     }
+    // #203 personal landing is authenticated, but never requires an Org selector.
+    // Reuse the real Owner Chrome session; verify native fragment links through
+    // actual CDP keyboard input. Zero-Org browser acceptance remains separately OPEN.
+    const entry=await owner.eval("(()=>{const root=document.getElementById('workspace');"+
+      "const nav=document.getElementById('personal-entry');"+
+      "return {authenticated:!root.hidden,inside:root.contains(nav),"+
+      "links:Array.from(nav.querySelectorAll('a')).map(a=>a.getAttribute('href')),"+
+      "jobUnavailable:nav.textContent.includes('İş İlanları Panosu — henüz kullanıma açık değil.'),"+
+      "targetOrg:!!document.getElementById('organizations-title'),"+
+      "targetDraft:!!document.getElementById('organization-draft-title')}})()")
+    assert.deepEqual(entry,{
+      authenticated:true,inside:true,
+      links:['#organizations-title','#organization-draft-title'],
+      jobUnavailable:true,targetOrg:true,targetDraft:true,
+    })
+    const initialEntryUrl=await owner.eval("location.href")
+    await owner.eval(`document.querySelector('#personal-entry a[href="#organizations-title"]').focus()`)
+    await key("Enter","Enter",13)
+    assert.equal(await owner.eval("location.href"),initialEntryUrl,
+      "Keyboard shortcut must not fire the security popstate navigation guard")
+    const firstFocus=await owner.eval("({focused:document.activeElement?.id,"+
+      "tag:document.activeElement?.tagName,workspaceHidden:document.getElementById('workspace').hidden})")
+    assert.deepEqual(firstFocus,{focused:'organizations-title',tag:'H2',workspaceHidden:false},
+      "Native Enter must move focus to the first personal workspace destination")
+    await owner.eval(`document.querySelector('#personal-entry a[href="#organizations-title"]').focus()`)
+    await key("Tab","Tab",9)
+    await owner.wait("document.activeElement?.getAttribute('href')==='#organization-draft-title'")
+    await key("Enter","Enter",13)
+    assert.equal(await owner.eval("location.href"),initialEntryUrl,
+      "Second personal destination must preserve authenticated URL and scope")
+    const draftFocus=await owner.eval("({focused:document.activeElement?.id,"+
+      "tag:document.activeElement?.tagName,workspaceHidden:document.getElementById('workspace').hidden})")
+    assert.deepEqual(draftFocus,{focused:'organization-draft-title',tag:'H2',workspaceHidden:false},
+      "Real Chrome second native link must retain heading focus")
+    assert.equal(await owner.eval(
+      "document.getElementById('organization-draft-panel').hidden"),false,
+      "Keyboard navigation opens the existing allowed company application form")
+    // Neither fragment navigation nor showing the missing Job Board adds authority.
+    assert.equal((await get(owner,organizationId)).status,200)
+
     await tabTo("#company-launcher-list > li:nth-child(3) button[data-company-action='up']")
     await key("Enter","Enter",13)
     await until(async()=> {
