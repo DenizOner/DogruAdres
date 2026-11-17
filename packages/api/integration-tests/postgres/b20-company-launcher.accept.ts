@@ -111,6 +111,9 @@ export async function verifyB20CompanyLauncher(input:{
         await owner.send("Input.dispatchKeyEvent",{
           type,key:keyName,code,windowsVirtualKeyCode:virtualKey,
           nativeVirtualKeyCode:virtualKey,
+          // CDP requires the Enter character with keyDown to activate a native button.
+          // Without it keyDown/keyUp only updates keyboard state, not onclick.
+          ...(type==="keyDown"&&keyName==="Enter"?{text:"\r"}:{}),
         })
     }
     const tabTo=async(selector:string)=>{
