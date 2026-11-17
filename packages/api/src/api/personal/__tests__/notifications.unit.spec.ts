@@ -71,7 +71,7 @@ describe("notification bell workspace isolation (SQL contract; real PG/browser N
       const [sql, params] = execute.mock.calls[0] as [string, unknown[]]
       // Executed SQL must have one bound parameter per placeholder; a mock
       // alone cannot prove PostgreSQL execution, but must not hide bind drift.
-      expect((sql.match(/\\?/g) || []).length).toBe(params.length)
+      expect((sql.match(/\?/g) || []).length).toBe(params.length)
       // No Organization = the personal bell. Company groups must be absent
       // instead of merging every company where the Person is also an Owner.
       expect(companyGuards(sql)).toBe(4)
@@ -102,7 +102,7 @@ describe("notification bell workspace isolation (SQL contract; real PG/browser N
       ).resolves.toEqual({ success: true })
       expect(execute).toHaveBeenCalledTimes(1)
       const [sql, params] = execute.mock.calls[0] as [string, unknown[]]
-      expect((sql.match(/\\?/g) || []).length).toBe(params.length)
+      expect((sql.match(/\?/g) || []).length).toBe(params.length)
       expect(companyGuards(sql)).toBe(2)
       expect(sql).not.toContain("(?='' or")
       expect(sql).toMatch(/source'='membership_exit'\s+and a\.previous_values->>'person_id'/)
