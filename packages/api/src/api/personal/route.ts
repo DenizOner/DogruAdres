@@ -111,6 +111,13 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       <button>Kurulumu doğrula ve oturumu aç</button></form>
   </section>
   <section id="workspace" hidden><p id="person"></p>
+  <nav id="personal-entry" aria-label="Kişisel çalışma alanı başlangıç">
+    <h2>Kişisel çalışma alanım</h2>
+    <p>Şirket üyeliğiniz olmasa da şirket başvurusuna başlayabilirsiniz. Mevcut şirketlere erişim her işlemde sunucuda yeniden doğrulanır.</p>
+    <p><a href="#organizations-title">Şirket çalışma alanlarına erişim</a></p>
+    <p><a href="#organization-draft-title">Yeni Şirket Oluştur</a></p>
+    <p>İş İlanları Panosu — henüz kullanıma açık değil.</p>
+  </nav>
   <form id="person-mobile-form" hidden>
     <h2>Kişisel cep telefonu</h2>
     <label>Cep telefonu (başında + olabilir; rakamlardan oluşur)
@@ -170,7 +177,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <p id="smtp-test-result" role="status" aria-live="polite"></p>
   </section>
   <section id="organization-draft-panel" style="grid-column:1/-1">
-    <h2>Yeni Şirket Oluştur — özel başvuru taslağı</h2>
+    <h2 id="organization-draft-title" tabindex="-1">Yeni Şirket Oluştur — özel başvuru taslağı</h2>
     <p>Gerçek kişi ticari işletmesi ve tüzel şirket aynı başvuru yolunu kullanır. Bu aşama yalnız taslaktır: vergi levhası henüz yüklenmez, başvuru gönderilmez ve işletme/Owner/alışveriş yetkisi oluşmaz.</p>
     <form id="organization-draft-form">
       <fieldset><legend>Faaliyet alanları (bir veya birkaçını seçin)</legend>
@@ -239,7 +246,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     <button type="button" id="platform-closing-email-link-open">Kapatma bildirimini güvenle aç</button>
     <p id="platform-closing-email-link-status" role="status" aria-live="polite"></p>
   </section>
-  <h2>Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
+  <h2 id="organizations-title" tabindex="-1">Kuruluşlarım</h2><div id="organizations"></div><form id="select-org"><label>Kuruluş kimliği<input name="organization" required></label><button>Kuruluş erişimini kontrol et</button></form><pre id="detail"></pre>
   <section id="company-launcher-panel" hidden style="grid-column:1/-1" aria-labelledby="company-launcher-title">
     <h2 id="company-launcher-title">Şirket çalışma alanı başlatıcısı</h2>
     <p>Yalnız mevcut, seçili kuruluşta yetkili olduğunuz işlevleri sıralayın ve katlayın. Bu tercih yeni yetki vermez.</p>
