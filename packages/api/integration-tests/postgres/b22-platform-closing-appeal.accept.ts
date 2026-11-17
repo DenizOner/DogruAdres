@@ -1097,7 +1097,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
     encodeURIComponent(ownerOrgId))).body.notifications.some((n:any)=>
       n.id===lateNotice.id),false,
     "Other Owner must not read a newly promoted person's private notice")
-  const readLate=await write(staff,"/personal/notifications",{id:lateNotice.id})
+  const readLate=await write(staff,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId),{id:lateNotice.id})
   assert.equal(readLate.status,200)
   const afterRead=await read(staff,"/personal/notifications?organization="+
     encodeURIComponent(ownerOrgId))
