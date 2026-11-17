@@ -4687,6 +4687,178 @@ async function verifyB22NativeSellerOrderAttribution(input:{
 
 }
 
+/** B22-02 native HTTPS/CDP and PostgreSQL proof; same existing disposable CI. */
+async function verifyB22TwoStoreIndependentStaffApproval(input:{
+  browser:B06Chrome;reviewChrome:B06Chrome;
+  organizations:Array<{id:string;name:string}>;rand:string;
+  native:any;reviewerPersonId:string;
+  q:(sql:string,args?:unknown[])=>Promise<any[]>;
+  get:(path:string)=>Promise<any>;selected:(org:string)=>string;
+}):Promise<void>{
+  const {browser,reviewChrome,organizations,rand,native,reviewerPersonId,
+    q,get,selected}=input
+    // #361 B22-02: TWO real new native Sellers, one currently authorized
+    // Organization and two independent platform Staff decisions. All actors,
+    // Store names, audit and outbox records are task-only disposable CI data.
+    // Earlier Store tests exercise race/revoke; this pair checks that a
+    // successfully approved Store cannot approve its sibling implicitly.
+    const pairOrg=organizations[0].id
+    const pairNames=["B22 two Stores A "+rand,"B22 two Stores B "+rand]
+    const pairIds=[
+      "daapp_"+randomBytes(16).toString("hex"),
+      "daapp_"+randomBytes(16).toString("hex")
+    ]
+    const pair:Array<{application_id:string;seller_id:string;name:string}>=[]
+    await browser.send("Page.bringToFront")
+    await browser.send("Page.reload",{ignoreCache:true})
+    await browser.wait("document.visibilityState==='visible' && "+
+      "!document.getElementById('workspace').hidden")
+    await browser.select(organizations[0].name,"owner")
+    const pairBefore=Number((await q(
+      "select count(*)::int n from da_store_application where organization_id=$1",
+      [pairOrg]))[0].n)
+    for(let i=0;i<2;i++){
+      // This is a real same-origin HTTPS request from the authenticated Owner
+      // Chrome, not a fabricated HTTP principal or a native Seller fixture.
+      const result=await browser.callFunction(
+        "async function(json){const input=JSON.parse(json);"+
+        "const s=await (await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/store-applications',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify(input)});"+
+        "return {status:r.status,body:await r.json()};}",
+        JSON.stringify({organization_id:pairOrg,application_id:pairIds[i],
+          name:pairNames[i],email:"b22-store-pair-"+i+"-"+rand+"@example.invalid",
+          currency_code:"try"}))
+      assert.equal(result.status,201,"Only the native new Store creation is success")
+      assert.equal(result.body.application_id,pairIds[i])
+      assert.equal(result.body.status,"pending_approval")
+      assert.match(result.body.seller_id,/^sel_[A-Za-z0-9_-]+$/)
+      pair.push({application_id:pairIds[i],
+        seller_id:result.body.seller_id,name:pairNames[i]})
+      const seller=(await native.listSellers({id:result.body.seller_id}))[0]
+      assert.equal(seller.status,"pending_approval")
+      assert.equal(seller.approved_at,null)
+    }
+    assert.notEqual(pair[0].seller_id,pair[1].seller_id,
+      "Each new Store must have an independent Mercur Seller identity")
+    const pairPendingRows=await q(
+      "select id,organization_id,seller_id,status from da_store_application where id=any($1::text[])",
+      [pairIds])
+    assert.equal(pairPendingRows.length,2)
+    assert.ok(pairPendingRows.every((row:any)=>
+      row.organization_id===pairOrg&&row.status==="created"&&
+      pair.some(item=>item.application_id===row.id&&item.seller_id===row.seller_id)))
+    const ownerPairDenied=await browser.callFunction(
+      "async function(app,seller){"+
+      "const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body:JSON.stringify({application_id:app,seller_id:seller})});"+
+      "return r.status;}",pair[0].application_id,pair[0].seller_id)
+    assert.equal(ownerPairDenied,403,"Organization Owner cannot self-approve Store")
+    // Independent real, native-MFA Customer Person already completed the
+    // platform Organization review above. A new scoped grant must still be
+    // explicit; an Organization review grant never implies Store approval.
+    const pairGrantId="da_staff_pair_"+rand
+    await q("insert into da_platform_staff_grant "+
+      "(id,person_id,task,resource,granted_by_person_id,reason) "+
+      "values($1,$2,'store.approve','platform',$2,'B22 independent Store approval pair')",
+      [pairGrantId,reviewerPersonId])
+    try{
+      await reviewChrome.send("Page.bringToFront")
+      await reviewChrome.send("Page.reload",{ignoreCache:true})
+      await reviewChrome.wait("document.visibilityState==='visible' && "+
+        "!document.getElementById('workspace').hidden && "+
+        "!document.getElementById('store-approval-panel').hidden")
+      await reviewChrome.click("#store-approval-refresh")
+      await reviewChrome.wait("Array.from(document.querySelectorAll('#store-approval-list p')).some(p=>p.textContent.includes('B22 two Stores A ')) && "+
+        "Array.from(document.querySelectorAll('#store-approval-list p')).some(p=>p.textContent.includes('B22 two Stores B '))")
+      // An authorized Staff must not pair application A with Seller B.
+      const mismatch=await reviewChrome.callFunction(
+        "async function(app,seller){"+
+        "const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({application_id:app,seller_id:seller})});"+
+        "return r.status;}",pair[0].application_id,pair[1].seller_id)
+      assert.equal(mismatch,403,"Cross-Store Staff selector must fail closed")
+      for(let i=0;i<2;i++){
+        await reviewChrome.click("#store-approval-refresh")
+        await reviewChrome.wait(
+          "Array.from(document.querySelectorAll('#store-approval-list p')).some(p=>p.textContent.includes("+JSON.stringify(pairNames[i])+"))")
+        const index=Number(await reviewChrome.eval(
+          "Array.from(document.querySelectorAll('#store-approval-list p')).findIndex(p=>p.textContent.includes("+JSON.stringify(pairNames[i])+"))"))
+        assert.ok(index>=0)
+        const postsBefore=reviewChrome.http.filter(
+          (h:any)=>h.path==="/personal/platform/stores"&&h.method==="POST").length
+        // Native CDP click, not direct DOM.click or crafted Authorization.
+        await reviewChrome.click("#store-approval-list p:nth-child("+
+          (index+1)+") button:not([data-store-reject])")
+        await until(async()=>{
+          const sellers=await native.listSellers({id:pair[i].seller_id})
+          const posts=reviewChrome.http.filter((h:any)=>
+            h.path==="/personal/platform/stores"&&h.method==="POST")
+          return sellers.length===1&&sellers[0].status==="open"&&
+            !!sellers[0].approved_at&&posts.length>postsBefore&&
+            posts[posts.length-1].status===200
+        },19000,"Real Staff Chrome approval and committed Seller "+(i+1))
+        if(i===0){
+          const sibling=(await native.listSellers({id:pair[1].seller_id}))[0]
+          assert.equal(sibling.status,"pending_approval",
+            "First Staff approval may not automatically open second Store")
+          assert.equal(sibling.approved_at,null)
+        }
+      }
+      const replay=await reviewChrome.callFunction(
+        "async function(app,seller){"+
+        "const s=await(await fetch('/personal/session')).json();"+
+        "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+        "body:JSON.stringify({application_id:app,seller_id:seller})});"+
+        "return r.status;}",pair[0].application_id,pair[0].seller_id)
+      assert.equal(replay,409,"Repeated Staff approval must not run native Mercur twice")
+    }finally{
+      await q("update da_platform_staff_grant set revoked_at=clock_timestamp() "+
+        "where id=$1 and revoked_at is null",[pairGrantId])
+    }
+    const pairLinks=await q(
+      "select organization_id,seller_id from da_organization_seller_ownership "+
+      "where seller_id=any($1::text[]) and revoked_at is null",
+      [pair.map(x=>x.seller_id)])
+    assert.equal(pairLinks.length,2)
+    assert.ok(pairLinks.every((row:any)=>
+      row.organization_id===pairOrg&&pair.some(x=>x.seller_id===row.seller_id)))
+    const pairOutbox=await q(
+      "select e.target_id,count(*)::int n from da_audit_event e "+
+      "join da_audit_outbox o on o.source_audit_event_id=e.id "+
+      "where e.organization_id=$1 and e.action='organization.store_application_created' "+
+      "and e.target_id=any($2::text[]) group by e.target_id",
+      [pairOrg,pair.map(x=>x.seller_id)])
+    assert.equal(pairOutbox.length,2)
+    assert.ok(pairOutbox.every((row:any)=>row.n===1),
+      "Each Store association must have one canonical creation audit/outbox")
+    assert.equal(Number((await q(
+      "select count(*)::int n from da_store_application where organization_id=$1",
+      [pairOrg]))[0].n),pairBefore+2,
+      "Two new approved Stores must correspond to exactly two new applications")
+    await browser.send("Page.bringToFront")
+    await browser.wait("document.visibilityState==='visible'")
+    await browser.select(organizations[0].name,"owner")
+    await browser.wait("document.getElementById('org-stores').textContent.includes("+JSON.stringify(pairNames[0])+") && "+
+      "document.getElementById('org-stores').textContent.includes("+JSON.stringify(pairNames[1])+")")
+    const ownerStores=(await get(selected(pairOrg))).body.stores
+    assert.ok(pair.every(x=>ownerStores.some((item:any)=>
+      item.id===x.seller_id)),"Both approved Stores visible only in their authorized Organization")
+    await reviewChrome.send("Page.bringToFront")
+    await reviewChrome.wait("document.visibilityState==='visible'")
+    assert.equal(await reviewChrome.eval(
+      "(async()=> (await fetch('/personal/platform/stores')).status)()"),403,
+      "Revoked platform Staff grant must deny further Store decisions")
+    process.stdout.write("PASS B22-02 real Chrome/HTTPS/PG16: one authorized Organization creates two distinct native pending Sellers, actual independent Staff UI clicks open A then B; cross-target 403, Owner 403, replay 409, grant revoke 403, two current Organization links and canonical audit/outbox, Owner UI sees both\n")
+
+}
+
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   const preparing=process.env.B22_UI_PREPARE==="true"
@@ -14934,165 +15106,9 @@ export default async function({container}:any){
     process.stdout.write("PASS B22 Chrome/HTTP/PG16: 10 MiB tax cert upload, 10 MiB+1 rejection, private download, corrupt-file submit denial, duplicate-tax confidential flag, staff correction, applicant withdrawal, staff approval/protected Owner\n")
 
 
-    // #361 B22-02: TWO real new native Sellers, one currently authorized
-    // Organization and two independent platform Staff decisions. All actors,
-    // Store names, audit and outbox records are task-only disposable CI data.
-    // Earlier Store tests exercise race/revoke; this pair checks that a
-    // successfully approved Store cannot approve its sibling implicitly.
-    const pairOrg=organizations[0].id
-    const pairNames=["B22 two Stores A "+rand,"B22 two Stores B "+rand]
-    const pairIds=[
-      "daapp_"+randomBytes(16).toString("hex"),
-      "daapp_"+randomBytes(16).toString("hex")
-    ]
-    const pair:Array<{application_id:string;seller_id:string;name:string}>=[]
-    await browser.send("Page.bringToFront")
-    await browser.send("Page.reload",{ignoreCache:true})
-    await browser.wait("document.visibilityState==='visible' && "+
-      "!document.getElementById('workspace').hidden")
-    await browser.select(organizations[0].name,"owner")
-    const pairBefore=Number((await q(
-      "select count(*)::int n from da_store_application where organization_id=$1",
-      [pairOrg]))[0].n)
-    for(let i=0;i<2;i++){
-      // This is a real same-origin HTTPS request from the authenticated Owner
-      // Chrome, not a fabricated HTTP principal or a native Seller fixture.
-      const result=await browser.callFunction(
-        "async function(input){"+
-        "const s=await (await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/store-applications',{method:'POST',"+
-        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-        "body:JSON.stringify(input)});"+
-        "return {status:r.status,body:await r.json()};}",
-        {organization_id:pairOrg,application_id:pairIds[i],
-          name:pairNames[i],email:"b22-store-pair-"+i+"-"+rand+"@example.invalid",
-          currency_code:"try"})
-      assert.equal(result.status,201,"Only the native new Store creation is success")
-      assert.equal(result.body.application_id,pairIds[i])
-      assert.equal(result.body.status,"pending_approval")
-      assert.match(result.body.seller_id,/^sel_[A-Za-z0-9_-]+$/)
-      pair.push({application_id:pairIds[i],
-        seller_id:result.body.seller_id,name:pairNames[i]})
-      const seller=(await native.listSellers({id:result.body.seller_id}))[0]
-      assert.equal(seller.status,"pending_approval")
-      assert.equal(seller.approved_at,null)
-    }
-    assert.notEqual(pair[0].seller_id,pair[1].seller_id,
-      "Each new Store must have an independent Mercur Seller identity")
-    const pairPendingRows=await q(
-      "select id,organization_id,seller_id,status from da_store_application where id=any($1::text[])",
-      [pairIds])
-    assert.equal(pairPendingRows.length,2)
-    assert.ok(pairPendingRows.every((row:any)=>
-      row.organization_id===pairOrg&&row.status==="created"&&
-      pair.some(item=>item.application_id===row.id&&item.seller_id===row.seller_id)))
-    const ownerPairDenied=await browser.callFunction(
-      "async function(app,seller){"+
-      "const s=await(await fetch('/personal/session')).json();"+
-      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
-      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-      "body:JSON.stringify({application_id:app,seller_id:seller})});"+
-      "return r.status;}",pair[0].application_id,pair[0].seller_id)
-    assert.equal(ownerPairDenied,403,"Organization Owner cannot self-approve Store")
-    // Independent real, native-MFA Customer Person already completed the
-    // platform Organization review above. A new scoped grant must still be
-    // explicit; an Organization review grant never implies Store approval.
-    const pairGrantId="da_staff_pair_"+rand
-    await q("insert into da_platform_staff_grant "+
-      "(id,person_id,task,resource,granted_by_person_id,reason) "+
-      "values($1,$2,'store.approve','platform',$2,'B22 independent Store approval pair')",
-      [pairGrantId,reviewerPersonId])
-    try{
-      await reviewChrome.send("Page.bringToFront")
-      await reviewChrome.send("Page.reload",{ignoreCache:true})
-      await reviewChrome.wait("document.visibilityState==='visible' && "+
-        "!document.getElementById('workspace').hidden && "+
-        "!document.getElementById('store-approval-panel').hidden")
-      await reviewChrome.click("#store-approval-refresh")
-      await reviewChrome.wait("Array.from(document.querySelectorAll('#store-approval-list p')).some(p=>p.textContent.includes('B22 two Stores A ')) && "+
-        "Array.from(document.querySelectorAll('#store-approval-list p')).some(p=>p.textContent.includes('B22 two Stores B '))")
-      // An authorized Staff must not pair application A with Seller B.
-      const mismatch=await reviewChrome.callFunction(
-        "async function(app,seller){"+
-        "const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/platform/stores',{method:'POST',"+
-        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-        "body:JSON.stringify({application_id:app,seller_id:seller})});"+
-        "return r.status;}",pair[0].application_id,pair[1].seller_id)
-      assert.equal(mismatch,403,"Cross-Store Staff selector must fail closed")
-      for(let i=0;i<2;i++){
-        await reviewChrome.click("#store-approval-refresh")
-        await reviewChrome.wait(
-          "Array.from(document.querySelectorAll('#store-approval-list p')).some(p=>p.textContent.includes("+JSON.stringify(pairNames[i])+"))")
-        const index=Number(await reviewChrome.eval(
-          "Array.from(document.querySelectorAll('#store-approval-list p')).findIndex(p=>p.textContent.includes("+JSON.stringify(pairNames[i])+"))"))
-        assert.ok(index>=0)
-        const postsBefore=reviewChrome.http.filter(
-          (h:any)=>h.path==="/personal/platform/stores"&&h.method==="POST").length
-        // Native CDP click, not direct DOM.click or crafted Authorization.
-        await reviewChrome.click("#store-approval-list p:nth-child("+
-          (index+1)+") button:not([data-store-reject])")
-        await until(async()=>{
-          const sellers=await native.listSellers({id:pair[i].seller_id})
-          const posts=reviewChrome.http.filter((h:any)=>
-            h.path==="/personal/platform/stores"&&h.method==="POST")
-          return sellers.length===1&&sellers[0].status==="open"&&
-            !!sellers[0].approved_at&&posts.length>postsBefore&&
-            posts[posts.length-1].status===200
-        },19000,"Real Staff Chrome approval and committed Seller "+(i+1))
-        if(i===0){
-          const sibling=(await native.listSellers({id:pair[1].seller_id}))[0]
-          assert.equal(sibling.status,"pending_approval",
-            "First Staff approval may not automatically open second Store")
-          assert.equal(sibling.approved_at,null)
-        }
-      }
-      const replay=await reviewChrome.callFunction(
-        "async function(app,seller){"+
-        "const s=await(await fetch('/personal/session')).json();"+
-        "const r=await fetch('/personal/platform/stores',{method:'POST',"+
-        "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
-        "body:JSON.stringify({application_id:app,seller_id:seller})});"+
-        "return r.status;}",pair[0].application_id,pair[0].seller_id)
-      assert.equal(replay,409,"Repeated Staff approval must not run native Mercur twice")
-    }finally{
-      await q("update da_platform_staff_grant set revoked_at=clock_timestamp() "+
-        "where id=$1 and revoked_at is null",[pairGrantId])
-    }
-    const pairLinks=await q(
-      "select organization_id,seller_id from da_organization_seller_ownership "+
-      "where seller_id=any($1::text[]) and revoked_at is null",
-      [pair.map(x=>x.seller_id)])
-    assert.equal(pairLinks.length,2)
-    assert.ok(pairLinks.every((row:any)=>
-      row.organization_id===pairOrg&&pair.some(x=>x.seller_id===row.seller_id)))
-    const pairOutbox=await q(
-      "select e.target_id,count(*)::int n from da_audit_event e "+
-      "join da_audit_outbox o on o.source_audit_event_id=e.id "+
-      "where e.organization_id=$1 and e.action='organization.store_application_created' "+
-      "and e.target_id=any($2::text[]) group by e.target_id",
-      [pairOrg,pair.map(x=>x.seller_id)])
-    assert.equal(pairOutbox.length,2)
-    assert.ok(pairOutbox.every((row:any)=>row.n===1),
-      "Each Store association must have one canonical creation audit/outbox")
-    assert.equal(Number((await q(
-      "select count(*)::int n from da_store_application where organization_id=$1",
-      [pairOrg]))[0].n),pairBefore+2,
-      "Two new approved Stores must correspond to exactly two new applications")
-    await browser.send("Page.bringToFront")
-    await browser.wait("document.visibilityState==='visible'")
-    await browser.select(organizations[0].name,"owner")
-    await browser.wait("document.getElementById('org-stores').textContent.includes("+JSON.stringify(pairNames[0])+") && "+
-      "document.getElementById('org-stores').textContent.includes("+JSON.stringify(pairNames[1])+")")
-    const ownerStores=(await get(selected(pairOrg))).body.stores
-    assert.ok(pair.every(x=>ownerStores.some((item:any)=>
-      item.id===x.seller_id)),"Both approved Stores visible only in their authorized Organization")
-    await reviewChrome.send("Page.bringToFront")
-    await reviewChrome.wait("document.visibilityState==='visible'")
-    assert.equal(await reviewChrome.eval(
-      "(async()=> (await fetch('/personal/platform/stores')).status)()"),403,
-      "Revoked platform Staff grant must deny further Store decisions")
-    process.stdout.write("PASS B22-02 real Chrome/HTTPS/PG16: one authorized Organization creates two distinct native pending Sellers, actual independent Staff UI clicks open A then B; cross-target 403, Owner 403, replay 409, grant revoke 403, two current Organization links and canonical audit/outbox, Owner UI sees both\n")
+    await verifyB22TwoStoreIndependentStaffApproval({
+      browser,reviewChrome,organizations,rand,native,reviewerPersonId,q,get,selected
+    })
 
     // The earlier primary Customer browser is deliberately untouched by the
     // independent review-status acceptance above.
