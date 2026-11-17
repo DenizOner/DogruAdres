@@ -136,3 +136,12 @@ if (process.env.GITHUB_ACTIONS === "true" &&
     process.env.GITHUB_HEAD_REF === "fix/baris-173-medusa-error-redaction") {
   await import("./verify_medusa_error_http.mjs");
 }
+
+
+// #173 phase 2: scoped live Next RootLayout Cart SDK error-log redaction.
+// This pre-existing free Governance job only runs the check for this PR head.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-173-cart-raw-error-log") {
+  await import("./verify_cart_error_log_http.mjs");
+}

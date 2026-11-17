@@ -4689,14 +4689,52 @@ async function verifyB22NativeSellerOrderAttribution(input:{
 
 /** B22-02 native HTTPS/CDP and PostgreSQL proof; same existing disposable CI. */
 async function verifyB22TwoStoreIndependentStaffApproval(input:{
-  browser:B06Chrome;reviewChrome:B06Chrome;
+  host:string;crt:string;A:{email:string;password:string;person:string};
+  browsers:B06Chrome[];reviewChrome:B06Chrome;
   organizations:Array<{id:string;name:string}>;rand:string;
   native:any;reviewerPersonId:string;
   q:(sql:string,args?:unknown[])=>Promise<any[]>;
-  get:(path:string)=>Promise<any>;selected:(org:string)=>string;
+  selected:(org:string)=>string;
 }):Promise<void>{
-  const {browser,reviewChrome,organizations,rand,native,reviewerPersonId,
-    q,get,selected}=input
+  const {host,crt,A,browsers,reviewChrome,organizations,rand,
+    native,reviewerPersonId,q,selected}=input
+  // Earlier native MFA disable revoked every old A session. Reauthenticate
+  // through the real public Chrome login, then re-enroll native TOTP via
+  // the actual visible UI. Never reuse the revoked cookie or forge MFA proof.
+  const browser=new B06Chrome(host,"A");browsers.push(browser)
+  await browser.start(crt)
+  await browser.input("#login input[name=email]",A.email)
+  await browser.input("#login input[name=password]",A.password)
+  await browser.click("#login button")
+  await browser.wait("!document.getElementById('workspace').hidden || "+
+    "!document.getElementById('mfa-enrollment').hidden")
+  if(await browser.eval("!document.getElementById('workspace').hidden")){
+    await browser.wait("!document.getElementById('mfa-person').hidden && "+
+      "!document.getElementById('mfa-enroll-launch').hidden")
+    await browser.click("#mfa-enroll-launch")
+  }
+  await browser.input("#mfa-enroll-start input[name=email]",A.email)
+  await browser.input("#mfa-enroll-start input[name=password]",A.password)
+  await browser.click("#mfa-enroll-start button")
+  await browser.wait("!document.getElementById('mfa-enroll-verify').hidden && "+
+    "document.getElementById('mfa-seed').value.length>0")
+  const seedValue=await browser.eval("document.getElementById('mfa-seed').value")
+  const seed=seedValue.startsWith("otpauth:")?
+    new URL(seedValue).searchParams.get("secret"):seedValue
+  assert.ok(seed,"Owner must get a real native TOTP enrollment seed")
+  await browser.input("#mfa-enroll-verify input[name=code]",otp(seed))
+  await browser.click("#mfa-enroll-verify button")
+  await browser.wait("!document.getElementById('workspace').hidden")
+  const currentToken=await browser.token()
+  assert.match(currentToken??"",/^[A-Za-z0-9_-]{43}$/)
+  const [currentStrong]=await q(
+    "select person_id,status,last_strong_auth_at from da_browser_session where id=$1",
+    [createHash("sha256").update(currentToken!).digest("hex")])
+  assert.equal(currentStrong?.person_id,A.person)
+  assert.equal(currentStrong.status,"active")
+  assert.ok(currentStrong.last_strong_auth_at,"Owner needs real native MFA")
+  const get=async(path:string)=>browser.callFunction(
+    "async function(path){const r=await fetch(path);return {status:r.status,body:await r.json()}}",path)
     // #361 B22-02: TWO real new native Sellers, one currently authorized
     // Organization and two independent platform Staff decisions. All actors,
     // Store names, audit and outbox records are task-only disposable CI data.
@@ -4710,7 +4748,6 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
     ]
     const pair:Array<{application_id:string;seller_id:string;name:string}>=[]
     await browser.send("Page.bringToFront")
-    await browser.send("Page.reload",{ignoreCache:true})
     await browser.wait("document.visibilityState==='visible' && "+
       "!document.getElementById('workspace').hidden")
     await browser.select(organizations[0].name,"owner")
@@ -4785,16 +4822,30 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
       assert.equal(mismatch,403,"Cross-Store Staff selector must fail closed")
       for(let i=0;i<2;i++){
         await reviewChrome.click("#store-approval-refresh")
+        // A stale row stays visible while the async response is pending.
+        // Require fresh list completion and B without A after first approval.
         await reviewChrome.wait(
-          "Array.from(document.querySelectorAll('#store-approval-list p')).some(p=>p.textContent.includes("+JSON.stringify(pairNames[i])+"))")
-        const index=Number(await reviewChrome.eval(
-          "Array.from(document.querySelectorAll('#store-approval-list p')).findIndex(p=>p.textContent.includes("+JSON.stringify(pairNames[i])+"))"))
-        assert.ok(index>=0)
+          "!document.getElementById('store-approval-status').textContent.includes('kontrol ediliyor') && "+
+          "Array.from(document.querySelectorAll('#store-approval-list p')).some(p=>p.textContent.includes("+JSON.stringify(pairNames[i])+")) && "+
+          (i===0?"true":
+          "!Array.from(document.querySelectorAll('#store-approval-list p')).some(p=>p.textContent.includes("+JSON.stringify(pairNames[0])+"))"))
         const postsBefore=reviewChrome.http.filter(
           (h:any)=>h.path==="/personal/platform/stores"&&h.method==="POST").length
-        // Native CDP click, not direct DOM.click or crafted Authorization.
-        await reviewChrome.click("#store-approval-list p:nth-child("+
-          (index+1)+") button:not([data-store-reject])")
+        // Resolve the CURRENT row by Store name immediately before native CDP
+        // click; never carry an old nth-child index across async refreshes.
+        const point=await reviewChrome.eval(`(()=>{
+          const row=Array.from(document.querySelectorAll('#store-approval-list p'))
+            .find(p=>p.textContent.includes(${JSON.stringify(pairNames[i])}));
+          const button=row?.querySelector('button:not([data-store-reject])');
+          if(!button||button.disabled)return null;
+          button.scrollIntoView();const r=button.getBoundingClientRect();
+          return r.width&&r.height?{x:r.x+r.width/2,y:r.y+r.height/2}:null;
+        })()`)
+        assert.ok(point,"Current authorized Store decision must be visible")
+        for(const type of ["mousePressed","mouseReleased"])
+          await reviewChrome.send("Input.dispatchMouseEvent",{
+            type,...point,button:"left",clickCount:1
+          })
         await until(async()=>{
           const sellers=await native.listSellers({id:pair[i].seller_id})
           const posts=reviewChrome.http.filter((h:any)=>
@@ -15107,7 +15158,8 @@ export default async function({container}:any){
 
 
     await verifyB22TwoStoreIndependentStaffApproval({
-      browser,reviewChrome,organizations,rand,native,reviewerPersonId,q,get,selected
+      host,crt,A,browsers,reviewChrome,organizations,rand,native,
+      reviewerPersonId,q,selected
     })
 
     // The earlier primary Customer browser is deliberately untouched by the
