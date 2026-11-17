@@ -281,7 +281,7 @@ class OfferNextHttp(unittest.TestCase):
 
     @classmethod
     def get_html(cls, path, cookie=None):
-        headers = {"cache-control": "no-cache"}
+        headers = {}  # Do not force cache bypass; test the normal Next fetch path
         if cookie:
             headers["cookie"] = cookie
         request = Request(cls.base + path, headers=headers)
@@ -297,6 +297,25 @@ class OfferNextHttp(unittest.TestCase):
     def assert_price(self, html, price, stock="5"):
         self.assertIn('data-ci171-price="' + str(price) + '"', html)
         self.assertIn('data-ci171-stock="' + str(stock) + '"', html)
+
+    def test_existing_api_jest_unit_contract(self):
+        run = subprocess.run(
+            [
+                "bun", "run", "jest", "--runInBand", "--runTestsByPath",
+                "src/api/__tests__/storefront-offer-cache.unit.spec.ts",
+            ],
+            cwd=API,
+            env={**self.env, "TEST_TYPE": "unit"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=130,
+            check=False,
+        )
+        if run.returncode != 0:
+            # The probe uses only synthetic data; never dump raw secrets or logs.
+            raise AssertionError("CI171 targeted Storefront SDK mock Jest failed")
+        print("CI171 PASS targeted five-case Jest SDK cache/header contract")
 
     def test_missed_webhook_never_keeps_stale_offer_price(self):
         code, first = self.get_html(ROUTE)
