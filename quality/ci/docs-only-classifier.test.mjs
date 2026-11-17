@@ -9,6 +9,7 @@ const BASE = "a".repeat(40);
 const HEAD = "b".repeat(40);
 const changed = (filename, status = "modified") =>
   ({ filename, status, changes: 1, additions: 1, deletions: 0,
+     sha: "c".repeat(40),
      patch: "@@ -0,0 +1 @@\\n+synthetic markdown content" });
 
 function event(files = [changed("AGENTS.md")]) {
@@ -23,7 +24,8 @@ function event(files = [changed("AGENTS.md")]) {
 }
 
 function stubApi(files, { mainSha = BASE, headSha = HEAD, fail = false,
-  changeAfterFirstMeta = false } = {}) {
+  changeAfterFirstMeta = false, treeMode = "100644",
+  treeTruncated = false, treeMissing = false, treeSha = "c".repeat(40) } = {}) {
   let metaCalls = 0;
   const seen = [];
   const request = async (url, options) => {
@@ -39,6 +41,13 @@ function stubApi(files, { mainSha = BASE, headSha = HEAD, fail = false,
       };
     } else if (path.endsWith("/git/ref/heads/main")) {
       data = { object: { sha: mainSha } };
+    } else if (path.includes("/git/trees/")) {
+      data = {
+        truncated: treeTruncated,
+        tree: (treeMissing ? files.slice(1) : files).map(f => ({
+          path: f.filename, type: "blob", mode: treeMode, sha: treeSha
+        }))
+      };
     } else if (path.endsWith("/pulls/414/files")) {
       const page = Number(new URL(url).searchParams.get("page"));
       data = files.slice((page - 1) * 100, page * 100);
@@ -111,6 +120,7 @@ test("live GitHub PR files and both SHA snapshots permit docs-only", async () =>
   assert.equal(result.mode, "docs-only");
   assert.equal(api.seen.filter(s => s.url.endsWith("/pulls/414")).length, 2);
   assert.equal(api.seen.filter(s => s.url.endsWith("/git/ref/heads/main")).length, 2);
+  assert.equal(api.seen.filter(s => s.url.includes("/git/trees/")).length, 1);
   assert.ok(api.seen.every(s => s.url.startsWith("https://api.github.com/repos/" + REPOSITORY)));
   assert.ok(api.seen.every(s => s.headers.Authorization.startsWith("Bearer ")));
 });
@@ -197,4 +207,27 @@ test("binary or truncated Markdown changes cannot trigger lightweight CI", async
     const api = stubApi([damaged]);
     assert.equal((await classifyGithubPullRequest(event([damaged]), args(api.request))).mode, "full");
   }
+});
+
+
+test("docs-only refuses symlinks, executable blobs, incomplete trees and mismatched SHA", async () => {
+  const files = [changed("AGENTS.md")];
+  for (const config of [
+    { treeMode: "120000" }, // symlink
+    { treeMode: "100755" }, // executable
+    { treeTruncated: true },
+    { treeMissing: true },
+    { treeSha: "f".repeat(40) }
+  ]) {
+    const api = stubApi(files, config);
+    const result = await classifyGithubPullRequest(event(files), args(api.request));
+    assert.equal(result.mode, "full", JSON.stringify(config));
+  }
+});
+
+test("code changes never require a Git tree read to decide full CI", async () => {
+  const files = [changed("packages/api/src/api/personal/route.ts")];
+  const api = stubApi(files);
+  assert.equal((await classifyGithubPullRequest(event(files), args(api.request))).mode, "full");
+  assert.equal(api.seen.filter(s => s.url.includes("/git/trees/")).length, 0);
 });
