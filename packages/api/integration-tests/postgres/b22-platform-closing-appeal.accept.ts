@@ -731,7 +731,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   catch(e){fallback=e instanceof Error?e.message:"non-error failure"}
   assert.equal(fallback,prefix+'{"diagnostics":"unavailable"}',
     "Failed Chrome inspection must expose only the fixed unavailable enum")
-  process.stdout.write("PASS B22 test-only controlled Staff wait rejection: real Chrome anonymous DOM/HTTP classes, private ID excluded, fallback unavailable; genuine 20s timeout NOT REPRODUCED\n")
+  process.stdout.write("PASS B22 Chrome: test-only controlled Staff wait rejection: real Chrome anonymous DOM/HTTP classes, private ID excluded, fallback unavailable; genuine 20s timeout NOT REPRODUCED\n")
   await verifyStaffMailRealHttpSelectionRace(staff,sellerId,foundPage)
   const createdRows=await q("select request_id,state,version from da_store_platform_closing where seller_id=$1 and organization_id=$2",[sellerId,ownerOrgId])
   assert.equal(createdRows.length,1)
