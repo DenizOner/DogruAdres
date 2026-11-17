@@ -77,13 +77,13 @@ export async function createB22CompletedSourceOrderFixture(input:{
     "select approved_at from seller where id=$1",[sourceSellerId])
   assert.ok(sellerBeforeApproval?.approved_at,
     "Task-owned source Seller must already have a native approval")
-  const futureApproval=await q(`update seller
-    set approved_at=clock_timestamp()+interval '1 day'
-    where id=$1 returning approved_at`,[sourceSellerId])
-  assert.equal(futureApproval.length,1)
-  assert.ok(new Date(futureApproval[0].approved_at).getTime()>Date.now(),
-    "Test must actually move native approval into the future")
   try{
+    const futureApproval=await q(`update seller
+      set approved_at=clock_timestamp()+interval '1 day'
+      where id=$1 returning approved_at`,[sourceSellerId])
+    assert.equal(futureApproval.length,1)
+    assert.ok(new Date(futureApproval[0].approved_at).getTime()>Date.now(),
+      "Test must actually move native approval into the future")
     const blocked=await completeCartWithSplitOrdersWorkflow(container).run({
       input:{cart_id:cart.id},throwOnError:false
     }).then((result:any)=>result,(error:unknown)=>({errors:[error]}))
