@@ -94,3 +94,11 @@ if (process.env.GITHUB_ACTIONS === "true" &&
   await import("./verify_b4b_guest_routes.mjs");
 }
 
+// #172: one isolated synthetic-secret Next.js production HTTP regression.
+// Runs ONLY on Barış's approved PR branch inside this existing free runner.
+// No new workflow, shared DB, local worktree, external network, or deploy.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-172-revalidate-bounded-tags") {
+  await import("./verify_revalidate_http.mjs");
+}
