@@ -92,11 +92,30 @@ export async function classifyGithubPullRequest(event, {
       files.push(...batch);
       if (files.length > count) return full("file_count_changed");
     }
+    const classification = classifyChangedFiles(files, count);
+    if (classification.docsOnly) {
+      // A textual patch is not enough: an allowed .md path could be a symlink
+      // or executable file. The Git tree exposes the actual blob mode.
+      const tree = await get("/git/trees/" + pr.head.sha + "?recursive=1");
+      if (!tree || tree.truncated !== false || !Array.isArray(tree.tree))
+        return full("incomplete_git_tree");
+      const eligible = new Map(files.map(file => [file.filename, file.sha]));
+      const seen = new Set();
+      for (const entry of tree.tree) {
+        if (!eligible.has(entry.path)) continue;
+        if (seen.has(entry.path) || entry.type !== "blob" ||
+            entry.mode !== "100644" || !validSha(entry.sha) ||
+            entry.sha !== eligible.get(entry.path))
+          return full("unsafe_document_blob");
+        seen.add(entry.path);
+      }
+      if (seen.size !== files.length) return full("missing_document_blob");
+    }
     if (!(await matchesSnapshot())) return full("pr_version_changed");
-    // Fail closed if main changed during pagination too.
+    // Fail closed if main changed during pagination or tree inspection.
     const mainAfter = await get("/git/ref/heads/main");
     if (mainAfter?.object?.sha !== pr.base.sha) return full("main_version_changed");
-    return classifyChangedFiles(files, count);
+    return classification;
   } catch {
     // API errors, rate limits, missing permissions, bad JSON and network failures
     // can never turn off a required security or integration test.
