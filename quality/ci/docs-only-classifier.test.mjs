@@ -38,7 +38,7 @@ function stubApi(files, { mainSha = BASE, headSha = HEAD, fail = false,
       };
     } else if (path.endsWith("/git/ref/heads/main")) {
       data = { object: { sha: mainSha } };
-    } else if (path.includes("/pulls/414/files?")) {
+    } else if (path.endsWith("/pulls/414/files")) {
       const page = Number(new URL(url).searchParams.get("page"));
       data = files.slice((page - 1) * 100, page * 100);
     } else {
