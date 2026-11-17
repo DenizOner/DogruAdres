@@ -70,6 +70,41 @@ export async function createB22CompletedSourceOrderFixture(input:{
     "Native workflow proof never enables visitor checkout")
   assert.equal(await authorize(cart.id),true,
     "Live Buyer/Store authority required before zero-total native Order")
+  // A future approval timestamp cannot authorize a native Order even if
+  // the Seller is marked OPEN and the Buyer/Store permission snapshot is valid.
+  // Only the disposable task-owned Seller is changed, with exact restoration.
+  const [sellerBeforeApproval]=await q(
+    "select approved_at from seller where id=$1",[sourceSellerId])
+  assert.ok(sellerBeforeApproval?.approved_at,
+    "Task-owned source Seller must already have a native approval")
+  const futureApproval=await q(`update seller
+    set approved_at=clock_timestamp()+interval '1 day'
+    where id=$1 returning approved_at`,[sourceSellerId])
+  assert.equal(futureApproval.length,1)
+  assert.ok(new Date(futureApproval[0].approved_at).getTime()>Date.now(),
+    "Test must actually move native approval into the future")
+  try{
+    const blocked=await completeCartWithSplitOrdersWorkflow(container).run({
+      input:{cart_id:cart.id},throwOnError:false
+    }).then((result:any)=>result,(error:unknown)=>({errors:[error]}))
+    const messages=(blocked.errors??[]).map((entry:any)=>
+      String(entry.error?.message??entry.error??entry.message??"")).join("\n")
+    assert.match(messages,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
+      "Real native pre-Order hook must reject future Seller approval")
+    assert.equal((await q(
+      "select count(*)::int n from order_group where cart_id=$1",[cart.id]))[0].n,0)
+    assert.equal((await q(
+      "select completed_at from cart where id=$1",[cart.id]))[0].completed_at,null,
+      "Future approval must not consume or complete the native Cart")
+  }finally{
+    const restored=await q(`update seller set approved_at=$2
+      where id=$1 returning approved_at`,
+      [sourceSellerId,sellerBeforeApproval.approved_at])
+    assert.equal(restored.length,1)
+    assert.deepEqual(restored[0],sellerBeforeApproval,
+      "Restore the exact task-owned Seller approval timestamp")
+  }
+  process.stdout.write("PASS B22 PG16: future native Seller approval denies real zero-payment pre-Order hook; no OrderGroup/Cart mutation; approval timestamp restored\n")
   // The real native workflow's B22 pre-Order hook must deny a Seller in
   // its scheduled closed window, even when the Buyer/Store L snapshot is valid.
   // Operate only on this disposable Seller and restore the exact native dates.
