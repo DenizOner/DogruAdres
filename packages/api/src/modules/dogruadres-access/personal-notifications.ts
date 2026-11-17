@@ -124,9 +124,8 @@ export class PersonalNotifications {
           where m.person_id=d.person_id and m.organization_id=c.organization_id
             and m.role='owner' and m.protected_owner=true
             and m.status='active' and m.revoked_at is null and m.deleted_at is null)
-      // This is a Person-addressed critical Staff security alert, NOT a
-      // company operational receipt. Its direct recipient and live platform
-      // grant are the authorization boundary even when the company is paused.
+      -- Direct Person security alert. Require the live platform Staff grant
+      -- even if this Organization is suspended; never extend company receipts.
       union all
       select n.id,n.created_at,n.read_at,
         'organization.store_platform_closing_mail_admin_alert' as action,
