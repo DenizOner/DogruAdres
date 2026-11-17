@@ -4,6 +4,8 @@
  */
 import assert from "node:assert/strict"
 import {createHash,randomBytes} from "node:crypto"
+import {createServer as createSmtpConnectTrap} from "node:net"
+import {encryptSmtpPassword} from "../../src/modules/dogruadres-access/smtp-crypto"
 import {Client} from "@medusajs/framework/pg"
 import {until} from "./b19-browser"
 import {B06Chrome} from "./b06-ui-browser"
@@ -23,6 +25,115 @@ const write=async(browser:B06Chrome,path:string,payload:unknown,badCsrf=false)=>
   JSON.stringify({path,payload,bad:badCsrf}))
 
 
+
+/**
+ * #241 / #376 independent-review BLOCKED follow-up.
+ * Exercise the REAL strong-Staff HTTPS action=test route, not a mocked service.
+ * The task-owned PostgreSQL SMTP fixture binds a synthetic encrypted password
+ * to an isolated loopback TCP connect trap. No public server or mail is used.
+ * No shared B22 runner/workflow/Medusa source is changed.
+ */
+async function verifySmtpTestCredentialScopeOverHttps(
+  staff:B06Chrome,unprivileged:B06Chrome,staffPersonId:string,q:Db
+):Promise<void>{
+  assert.equal(process.env.CI,"true","This SMTP fixture is CI task-only")
+  assert.equal(process.env.NODE_ENV,"test","Never use this fixture in production")
+  assert.equal(process.env.B22_UI_AUTO_SCOPE,"b22-ui","Require existing B22 isolated runner")
+  const existing=await q("select id from da_platform_smtp_settings")
+  assert.equal(existing.length,0,"B22 SMTP negative requires empty task-owned settings table")
+  let tcpAttempts=0
+  const trap=createSmtpConnectTrap(socket=>{tcpAttempts++;socket.destroy()})
+  await new Promise<void>((resolve,reject)=>{
+    trap.once("error",reject)
+    trap.listen(0,"127.0.0.1",resolve)
+  })
+  const address=trap.address()
+  assert.ok(address&&typeof address!=="string","Synthetic SMTP port unavailable")
+  const port=address.port
+  const keyBefore=process.env.DOGRUADRES_SMTP_ENCRYPTION_KEY
+  // Task-owned random AES-GCM key, never printed or placed in GitHub.
+  process.env.DOGRUADRES_SMTP_ENCRYPTION_KEY=randomBytes(32).toString("hex")
+  const secret=randomBytes(32).toString("hex")
+  const encrypted=encryptSmtpPassword(secret)
+  const grantId="da_staff_smtp_scope_"+randomBytes(12).toString("hex")
+  let inserted=false,granted=false
+  try{
+    await q(`insert into da_platform_smtp_settings
+      (id,enabled,host,port,security,username,password_encrypted,from_email,from_name,version)
+      values ('current',true,'127.0.0.1',$1,'ssl','smtp-original-user',$2,
+              'sender@example.invalid','B22 task-only negative',1)`,[port,encrypted])
+    inserted=true
+    await q(`insert into da_platform_staff_grant
+      (id,person_id,task,resource,granted_by_person_id,reason)
+      values ($1,$2,'platform.smtp.manage','platform',$2,
+              'B22 task-only credential endpoint negative')`,[grantId,staffPersonId])
+    granted=true
+    const path="/personal/platform/smtp"
+    const settings=await read(staff,path)
+    assert.equal(settings.status,200,"Strong platform Staff must reach real SMTP GET")
+    assert.equal(settings.body?.settings?.has_password,true)
+    assert.equal(settings.body?.settings?.version,1)
+    assert.equal(JSON.stringify(settings).includes(secret),false,"GET must not reveal SMTP secret")
+    assert.equal((await read(unprivileged,path)).status,403,
+      "A protected Owner without SMTP task grant cannot read SMTP settings")
+
+    const before=await q(`select id,enabled,host,port,security,username,password_encrypted,
+      from_email,from_name,version from da_platform_smtp_settings where id='current'`)
+    assert.equal(before.length,1)
+    const auditBefore=Number((await q("select count(*)::int n from da_audit_event"))[0].n)
+    const outboxBefore=Number((await q("select count(*)::int n from da_security_outbox"))[0].n)
+    const candidateCases=[
+      {host:"smtp-other.example.invalid"},
+      {port:port===65535?port-1:port+1},
+      {security:"tls"},
+      {username:"smtp-other-user"},
+    ]
+    for(const candidate_settings of candidateCases){
+      const payload={action:"test",target_recipient:"recipient@example.invalid",
+        candidate_settings}
+      const result=await write(staff,path,payload)
+      assert.equal(result.status,400,
+        "Real Staff HTTPS test must reject changed SMTP endpoint before network")
+      assert.equal(result.body?.ok,false)
+      assert.equal(result.body?.message,
+        "Explicit SMTP password required when changing server, port, TLS mode, or username",
+        "Only the exact safe credential-scope rejection proves service preflight")
+      const visible=JSON.stringify(result.body)
+      for(const privateValue of [secret,encrypted,"recipient@example.invalid",
+        "smtp-other.example.invalid","smtp-original-user"])
+        assert.equal(visible.includes(privateValue),false,"Private SMTP data in response")
+    }
+    const denied=await write(unprivileged,path,{
+      action:"test",target_recipient:"recipient@example.invalid",
+      candidate_settings:{username:"smtp-other-user"}
+    })
+    assert.equal(denied.status,403,"Non-Staff Person must not send SMTP test")
+    await new Promise<void>(resolve=>setImmediate(resolve))
+    assert.equal(tcpAttempts,0,
+      "SMTP TLS socket/AUTH/DATA must not start for rejected old secret reuse")
+    const after=await q(`select id,enabled,host,port,security,username,password_encrypted,
+      from_email,from_name,version from da_platform_smtp_settings where id='current'`)
+    assert.equal(JSON.stringify(after),JSON.stringify(before),
+      "Failed HTTPS SMTP test must not modify encrypted settings or version")
+    assert.equal(Number((await q("select count(*)::int n from da_audit_event"))[0].n),
+      auditBefore,"Failed SMTP test may not write an audit event")
+    assert.equal(Number((await q("select count(*)::int n from da_security_outbox"))[0].n),
+      outboxBefore,"Failed SMTP test may not add an outbox event")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: native Staff action=test changed SMTP credential endpoint safely HTTP400, Owner403, no SMTP TCP/AUTH/DATA, same encrypted settings/audit/outbox\n")
+  }finally{
+    // Remove ONLY our precisely-identified task-owned synthetic fixture.
+    if(granted)await q("update da_platform_staff_grant set revoked_at=clock_timestamp() where id=$1",[grantId])
+    if(inserted){
+      const rows=await q(`delete from da_platform_smtp_settings
+        where id='current' and host='127.0.0.1' and port=$1
+        and version=1 and password_encrypted=$2 returning id`,[port,encrypted])
+      assert.equal(rows.length,1,"Precise synthetic SMTP fixture cleanup failed")
+    }
+    if(keyBefore===undefined)delete process.env.DOGRUADRES_SMTP_ENCRYPTION_KEY
+    else process.env.DOGRUADRES_SMTP_ENCRYPTION_KEY=keyBefore
+    await new Promise<void>((resolve,reject)=>trap.close(e=>e?reject(e):resolve()))
+  }
+}
 
 /** #311 P1: same Chrome page, two separately authenticated native Persons.
  * The email-result DOM canary is intentionally synthetic; the protected
@@ -391,6 +502,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
     ownerOrgId,ownerOrgName,sellerId,buyer,buyerScopePath,
     buyerOrganizationId,checkoutCartId,customerId,query,auth,ownerEmail,
     ownerPassword,foreignEmail,foreignPassword,foreignPersonId,foreignOrgName,container}=input
+  await verifySmtpTestCredentialScopeOverHttps(staff,browser,staffPersonId,q)
   const path="/personal/platform/store-closings"
   const privatePath="/personal/store-platform-closing"
   const mailPath="/personal/platform/store-closing-email-readiness?"+

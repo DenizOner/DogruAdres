@@ -10,6 +10,7 @@ import { randomBytes } from "node:crypto"
 import assert from "node:assert/strict"
 import subscriber from "../../src/subscribers/auth-verification-requested"
 import { encryptSmtpPassword } from "../../src/modules/dogruadres-access/smtp-crypto"
+import { PlatformSmtpPersistence, SmtpCredentialScopeChanged } from "../../src/modules/dogruadres-access/smtp-settings"
 import type DogruAdresAccessModuleService from "../../src/modules/dogruadres-access/service"
 import { verificationBoundarySnapshot, verifyNativeHttp } from "./native-verification-http"
 import { verifyNativePasswordResetHttp } from "./native-password-reset-http"
@@ -96,6 +97,38 @@ export default async function({ container }: ExecArgs) {
     await pg("da_platform_smtp_settings").insert({ id: "current", enabled: true, host: "127.0.0.1", port, security: "ssl", username: "synthetic", password_encrypted: encryptSmtpPassword(secret), from_email: "first@example.invalid", from_name: "Synthetic SMTP", version: 1 })
     const runtime = await access.getActiveSmtpConfig()
     assert.ok(runtime.password === secret && runtime.port === port, "Runtime settings must decrypt in native Access module")
+    // Security negative on the actual task-owned PostgreSQL 16 settings row.
+    // A platform operator cannot silently forward a stored write-only secret
+    // to a newly selected SMTP destination when Password is left blank.
+    // This test performs no external SMTP connection and uses no real secret.
+    const configBefore = await pg("da_platform_smtp_settings").where({ id: "current" }).first()
+    const auditBefore = Number((await pg("da_audit_event").count("*").first())!.count)
+    const outboxBefore = Number((await pg("da_security_outbox").count("*").first())!.count)
+    const smtpSentBefore = messages.length
+    await pg.transaction(async (trx: any) => {
+      const syntheticSql = {
+        execute: async (sql: string, params: unknown[] = []) => {
+          const result = await trx.raw(sql, params)
+          return result.rows ?? []
+        },
+      }
+      const persistence = new PlatformSmtpPersistence(syntheticSql)
+      await assert.rejects(persistence.updateSettings({
+        enabled: true, host: "smtp-changed.example.invalid", port,
+        security: "ssl", username: "synthetic",
+        from_email: "first@example.invalid", expected_version: 1,
+      }, {
+        person_id: "daprs_synthetic_unprivileged_probe",
+        actor_type: "user", actor_id: "usr_synthetic_unprivileged_probe",
+      }), SmtpCredentialScopeChanged)
+    })
+    const configAfter = await pg("da_platform_smtp_settings").where({ id: "current" }).first()
+    assert.deepEqual(configAfter, configBefore, "Rejected connection change must preserve full SMTP row and encrypted password")
+    assert.equal(Number((await pg("da_audit_event").count("*").first())!.count), auditBefore)
+    assert.equal(Number((await pg("da_security_outbox").count("*").first())!.count), outboxBefore)
+    assert.equal(messages.length, smtpSentBefore, "No SMTP packet/message may be sent on rejected credential reuse")
+    process.stdout.write("PASS SMTP native PG16 credential scope: changed endpoint without new password rejected; stored secret, settings, audit/outbox and SMTP envelope unchanged\n")
+
     const auth: IAuthModuleService = container.resolve(Modules.AUTH)
     const domainBefore = await verificationBoundarySnapshot(pg)
     const identitiesBefore = Number((await pg("auth_identity").count("*").first())!.count)
