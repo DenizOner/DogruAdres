@@ -2,6 +2,9 @@ import { GET, POST } from '../notifications/route'
 import { access, csrf, enabled, sessionToken } from '../security'
 import { IdentityAccessDenied, IdentitySessions } from '../../../modules/dogruadres-access/identity-session'
 import { PersonalNotifications } from '../../../modules/dogruadres-access/personal-notifications'
+import { GET as personalPageGET } from '../route'
+import { trustedInlineScripts } from './trusted-inline-scripts'
+import { createContext, runInContext } from 'node:vm'
 jest.mock('../security',()=>({access:jest.fn(),csrf:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()}))
 
 describe('personal notification transport boundaries (not E2E)',()=>{
@@ -133,5 +136,89 @@ describe("notification bell workspace isolation (SQL contract; real PG/browser N
     ])
     await new PersonalNotifications({ execute } as any).list(token)
     expect(orgSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('notification context in shipped UI (VM scheduling, not browser/PG authority)',()=>{
+  async function harness(){
+    (enabled as jest.Mock).mockReturnValue(true)
+    const res:any={setHeader:jest.fn(),type:jest.fn().mockReturnThis(),send:jest.fn()}
+    await personalPageGET({} as any,res)
+    const code=trustedInlineScripts(res.send.mock.calls[0][0] as string).join('\n')
+    const start=code.indexOf('  function clearNotifications(){')
+    const end=code.indexOf('  function closeNotifications()',start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const nodes=new Map<string,any>()
+    const element=(tag='div')=>({
+      tag,textContent:'',hidden:false,children:[] as any[],
+      attributes:{} as Record<string,string>,disabled:false,
+      setAttribute(name:string,value:string){this.attributes[name]=value},
+      replaceChildren(){this.children=[];this.textContent=''},
+      append(...items:any[]){this.children.push(...items)},
+      focus(){},
+    })
+    const el=(id:string)=>{
+      if(!nodes.has(id))nodes.set(id,element(id))
+      return nodes.get(id)
+    }
+    const calls:Array<{path:string;options:any;resolve:(v:any)=>void}>=[]
+    const context=createContext({
+      el,document:{hidden:false,createElement:(tag:string)=>element(tag)},
+      api:(path:string,options?:unknown)=>new Promise(resolve=>calls.push({path,options,resolve})),
+      concealPrivateView:jest.fn(),status:jest.fn(),
+    })
+    runInContext(`let notificationRequest=0,notificationOffset=0,notificationNext=null;
+      let currentOrg='',currentPersonId='daprs_test',organizationRequest=0,viewEpoch=0;
+      `+code.slice(start,end),context)
+    el('workspace').hidden=false
+    return {calls,context,el,run:(source:string)=>runInContext(source,context)}
+  }
+  const empty={notifications:[],unread_count:0,next_offset:null}
+  const notice=(title:string)=>({
+    id:'danot_11111111-1111-4111-8111-111111111111',
+    title,context:'Company private',description:'Internal message',
+    created_at:'2026-11-17T00:00:00Z',read_at:null
+  })
+  it('keeps personal GET unselected and uses selected company for both GET and POST',async()=>{
+    const h=await harness()
+    const person=h.run('notifications(0)') as Promise<void>
+    expect(h.calls[0].path).toBe('notifications?offset=0')
+    h.calls[0].resolve(empty);await person
+    h.run("currentOrg='daorg_X';organizationRequest++")
+    const scoped=h.run('notifications(0)') as Promise<void>
+    expect(h.calls[1].path).toBe('notifications?organization=daorg_X&offset=0')
+    h.calls[1].resolve({...empty,notifications:[notice('X Store notice')],unread_count:1})
+    await scoped
+    expect(h.el('notification-list').children).toHaveLength(1)
+    const button=h.el('notification-list').children[0].children[4]
+    const mark=button.onclick() as Promise<void>
+    expect(h.calls[2].path).toBe('notifications?organization=daorg_X')
+    expect(h.calls[2].options).toMatchObject({method:'POST'})
+    h.calls[2].resolve({success:true})
+    await new Promise<void>(resolve=>setImmediate(resolve))
+    expect(h.calls[3].path).toBe('notifications?organization=daorg_X&offset=0')
+    h.calls[3].resolve(empty);await mark
+    expect(h.el('notification-list').children).toHaveLength(0)
+  })
+  it('drops a stale X reply and prevents detached X read buttons from posting after Y selection',async()=>{
+    const h=await harness()
+    h.run("currentOrg='daorg_X';organizationRequest++")
+    const x=h.run('notifications(0)') as Promise<void>
+    h.run("clearNotifications();currentOrg='daorg_Y';organizationRequest++")
+    const y=h.run('notifications(0)') as Promise<void>
+    expect(h.calls.map(c=>c.path)).toEqual([
+      'notifications?organization=daorg_X&offset=0',
+      'notifications?organization=daorg_Y&offset=0',
+    ])
+    h.calls[1].resolve({...empty,notifications:[notice('Y only')],unread_count:1});await y
+    h.calls[0].resolve({...empty,notifications:[notice('X private')],unread_count:1});await x
+    expect(h.el('notification-list').children).toHaveLength(1)
+    expect(h.el('notification-list').children[0].children[0].textContent).toBe('Y only')
+    const detached=h.el('notification-list').children[0].children[4]
+    h.run("clearNotifications();currentOrg='daorg_X';organizationRequest++")
+    await detached.onclick()
+    expect(h.calls).toHaveLength(2)
+    expect(h.el('notification-list').children).toHaveLength(0)
   })
 })
