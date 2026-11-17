@@ -6,12 +6,12 @@
  */
 export function hasSafeDashboardCsp(html) {
   if (typeof html !== 'string') return false
-  const head = /<head(?:\s[^>]*)?>/i.exec(html)
-  if (!head) return false
-  const beforeHead = html.slice(0, head.index)
-  // An early active resource must not execute before the policy is parsed.
-  if (/<\s*(?:script|link|meta|style|iframe|img)\b/i.test(beforeHead)) return false
-  const insideHead = html.slice(head.index + head[0].length)
+  // Require the expected document prelude, not the first substring that
+  // happens to look like <head> (including one inside an HTML comment).
+  // The Vite-built Admin and Vendor entrypoints have this exact structure.
+  const prefix = /^\s*<!doctype\s+html>\s*<html(?:\s[^>]*)?>\s*<head(?:\s[^>]*)?>\s*/i.exec(html)
+  if (!prefix) return false
+  const insideHead = html.slice(prefix[0].length)
   // Vite's head-prepend policy must be the FIRST element in <head>.
   // Exact contents reject appended origins, wildcards and comment lookalikes.
   return /^\s*<meta\s+http-equiv="Content-Security-Policy"\s+content="connect-src &#39;self&#39;"\s*\/?>/i.test(insideHead)
