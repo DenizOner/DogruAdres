@@ -1,4 +1,8 @@
 import { GET, POST } from "../launcher/route"
+// Keep approved B20 suites in the existing Foundation selected Jest gate.
+// The workflow owns its file selection; do not modify the shared #263 runner.
+import "./company-launcher.unit.spec"
+import "../../../modules/dogruadres-access/__tests__/company-launcher.unit.spec"
 
 describe("B22 personal launcher is disabled pending Organization-scoped B20", () => {
   it.each([["GET", GET], ["POST", POST]] as const)(
