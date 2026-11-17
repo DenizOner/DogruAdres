@@ -26,9 +26,11 @@ const carried = text => {
 };
 let cartRequests = 0;
 let customerRequests = 0;
+let mutationRequests = 0;
 let mode = "500";
 const backend = createHttpServer((req, res) => {
   const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+  if (pathname.startsWith("/store/carts") && req.method !== "GET") mutationRequests++;
   if (/^\/store\/carts\/cart_ci173_synthetic$/.test(pathname) && req.method === "GET") {
     cartRequests++;
     if (mode === "socket") {
@@ -171,6 +173,7 @@ try {
     console.log("IR15 PASS real Next RootLayout cart SDK " + nextMode + " denied without HTML leak");
   }
   if (cartRequests < 3) throw new Error("IR15 FAIL missing one or more native Cart requests");
+  if (mutationRequests !== 0) throw new Error("IR15 FAIL synthetic test unexpectedly attempted native Cart mutation");
   if (customerRequests < 1) throw new Error("IR15 FAIL Next login did not exercise native Customer check");
   const serverLog = readPrivateLog();
   if (carried(serverLog)) {
