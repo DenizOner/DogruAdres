@@ -4,7 +4,8 @@ This test is *only* enabled for Gökhan's own PR on the already existing free,
 disposable Governance Actions runner. It creates no persistent DB, volume,
 workflow, worktree, account, production API request or checkout/payment.
 It exercises the real storefront listOffers wrapper through a CI-only Next
-route. It is not SellerPage, full Person/Org/Store PG16 or production acceptance.
+route. It additionally checks the genuine public Seller page via synthetic native
+Mercur SDK responses; it is not Person/Org/Store PG16 or production acceptance.
 """
 import json
 import os
@@ -29,6 +30,7 @@ STOREFRONT = REPO / "apps" / "storefront"
 API = REPO / "packages" / "api"
 BRANCH = "fix/gokhan-171-seller-offers-no-store"
 ROUTE = "/tr/auth/verify-email/ci-only-171-offers"
+SELLER_ROUTE = "/tr/sellers/ci171"
 FIXTURE_DIR = STOREFRONT / "src/app/[locale]/auth/verify-email/ci-only-171-offers"
 MARKER = "ci171-exclusive-disposable-next-offer-fixture"
 PAGE = """import { listOffers } from '@/lib/data/offers'
@@ -100,6 +102,13 @@ class OfferBackendHandler(BaseHTTPRequestHandler):
                     "id": "offer_ci171",
                     "seller_id": "sel_ci171",
                     "product_id": "prod_ci171",
+                    "variant_id": "variant_ci171",
+                    "product": {
+                        "id": "prod_ci171",
+                        "handle": "ci171-product",
+                        "title": "Synthetic CI171 product",
+                        "thumbnail": None,
+                    },
                     "calculated_price": {
                         "calculated_amount": price,
                         "currency_code": "try",
@@ -108,6 +117,17 @@ class OfferBackendHandler(BaseHTTPRequestHandler):
                 }],
                 "count": 1,
             })
+            return
+        if path == "/store/sellers":
+            self.respond(200, {"sellers": [{
+                "id": "sel_ci171",
+                "name": "Synthetic CI171 seller",
+                "handle": "ci171",
+                "description": "Public synthetic seller only",
+                "created_at": "2026-10-01T00:00:00Z",
+                "logo": None,
+                "is_premium": False,
+            }], "count": 1})
             return
         if path == "/store/regions":
             self.respond(200, {"regions": [{
@@ -359,6 +379,51 @@ class OfferNextHttp(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assert_price(second, "unavailable", "unavailable")
         print("CI171 PASS genuine Next HTTP 503 does not re-serve old Offer")
+
+    def test_real_seller_page_returns_updated_price_without_event(self):
+        # Test the real SellerPage > SellerTabs > SellerOffersListing > OfferCard
+        # chain, not only the CI-only wrapper. Native Mercur data is synthetic.
+        code, first = self.get_html(SELLER_ROUTE)
+        self.assertEqual(code, 200)
+        self.assertIn('data-testid="seller-offers-listing"', first)
+        self.assertIn('data-offer-id="offer_ci171"', first)
+        before = re.findall(
+            r'<p[^>]*data-testid="offer-card-current-price"[^>]*>(.*?)</p>',
+            first,
+        )
+        self.assertTrue(before, "Actual SellerPage did not render a priced OfferCard")
+        with self.offer_state.lock:
+            self.offer_state.price = 222
+            self.offer_state.stock = 9
+        code, changed = self.get_html(SELLER_ROUTE)
+        self.assertEqual(code, 200)
+        self.assertIn('data-offer-id="offer_ci171"', changed)
+        after = re.findall(
+            r'<p[^>]*data-testid="offer-card-current-price"[^>]*>(.*?)</p>',
+            changed,
+        )
+        self.assertTrue(after, "Actual SellerPage lost OfferCard after update")
+        self.assertNotEqual(before[0], after[0], "Real SellerPage reused stale price")
+        with self.offer_state.lock:
+            self.assertGreaterEqual(len(self.offer_state.requests), 2)
+        print("CI171 PASS actual SellerPage/OfferCard refreshed price without webhook")
+
+    def test_real_seller_page_denied_actor_has_no_offer_from_other_actors(self):
+        code, first = self.get_html(SELLER_ROUTE, "_medusa_jwt=ci171_actor_a")
+        self.assertEqual(code, 200)
+        self.assertIn('data-offer-id="offer_ci171"', first)
+        code, denied = self.get_html(SELLER_ROUTE, "_medusa_jwt=ci171_denied")
+        self.assertEqual(code, 200)
+        self.assertNotIn('data-offer-id="offer_ci171"', denied)
+        self.assertNotIn("ci171_actor_a", denied)
+        code, anonymous = self.get_html(SELLER_ROUTE)
+        self.assertEqual(code, 200)
+        self.assertIn('data-offer-id="offer_ci171"', anonymous)
+        with self.offer_state.lock:
+            self.assertIn("Bearer ci171_actor_a", self.offer_state.requests)
+            self.assertIn("Bearer ci171_denied", self.offer_state.requests)
+            self.assertIn("", self.offer_state.requests)
+        print("CI171 PASS actual SellerPage denied 403 Offer is not cross-session cached")
 
     def test_real_chromium_renders_current_next_offer(self):
         with sync_playwright() as playwright:
