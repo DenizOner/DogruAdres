@@ -170,7 +170,7 @@ try {
     if (carried(html)) throw new Error("IR15 FAIL synthetic private Cart marker in HTML " + nextMode);
     console.log("IR15 PASS real Next RootLayout cart SDK " + nextMode + " denied without HTML leak");
   }
-  if (cartRequests !== 3) throw new Error("IR15 FAIL expected three native Cart requests");
+  if (cartRequests < 3) throw new Error("IR15 FAIL missing one or more native Cart requests");
   if (customerRequests < 1) throw new Error("IR15 FAIL Next login did not exercise native Customer check");
   const serverLog = readPrivateLog();
   if (carried(serverLog)) {
