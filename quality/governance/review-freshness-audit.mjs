@@ -11,8 +11,8 @@ const prMarker = (body, n) => new RegExp(`(?:PR\\s*#|/pull/)${n}\\b`, 'i').test(
 const headIn = (body) => /(?:exact\s+)?HEAD[^\n]{0,125}?([a-f0-9]{40})/i.exec(String(body || ''))?.[1]?.toLowerCase() || null
 const baseIn = (body) => /\bbase[^\n]{0,125}?([a-f0-9]{40})/i.exec(String(body || ''))?.[1]?.toLowerCase() || null
 
-export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, queueIssue = 216 }) {
-  if (!pr || !Number.isInteger(pr.number) || !SHA.test(pr.head?.sha || '') || !SHA.test(pr.base?.sha || '') || !SHA.test(mainSha || '') || !Array.isArray(queueComments) || !Array.isArray(reviews)) {
+export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prComments = [], queueIssue = 216 }) {
+  if (!pr || !Number.isInteger(pr.number) || !SHA.test(pr.head?.sha || '') || !SHA.test(pr.base?.sha || '') || !SHA.test(mainSha || '') || !Array.isArray(queueComments) || !Array.isArray(reviews) || !Array.isArray(prComments)) {
     return { state: 'UNKNOWN', reason: 'missing_or_invalid_metadata', independentIdentity: 'UNVERIFIED', ci: 'NOT_CHECKED', mergePermitted: false }
   }
   const head = pr.head.sha.toLowerCase(), base = pr.base.sha.toLowerCase(), main = mainSha.toLowerCase()
@@ -26,7 +26,11 @@ export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, queu
   if (!requests.some(exact)) return { ...evidence, state: requests.length ? 'STALE' : 'MISSING', reason: requests.length ? 'ready_record_for_different_sha' : 'no_ready_record' }
   const currentResults = results.filter(exact)
   if (!currentResults.length) return { ...evidence, state: 'PENDING', reason: 'no_matching_result', resultCount: 0 }
-  const provenance = reviews.filter(r => r.commit_id?.toLowerCase() === head && /REVIEW-PROVENANCE-v1/.test(r.body || '') && headIn(r.body) === head && baseIn(r.body) === base)
+  const provenance = [
+    ...reviews.filter(r => r.commit_id?.toLowerCase() === head),
+    // PR Conversation issue comments have no commit_id; check exact SHA in their body.
+    ...prComments
+  ].filter(r => /REVIEW-PROVENANCE-v1/.test(String(r.body || '').slice(0, 300)) && headIn(r.body) === head && baseIn(r.body) === base)
   if (!provenance.length) return { ...evidence, state: 'UNVERIFIED', reason: 'no_matching_review_provenance', resultCount: currentResults.length }
   const latest = [...currentResults].sort((a,b) => (a.id || 0) - (b.id || 0)).at(-1)
   const body = String(latest.body || '')
@@ -68,9 +72,12 @@ export async function auditLive({ owner, repo, prNumber, queueIssue = 216, token
   const pr = await githubPage({ fetcher, endpoint: `${path}/pulls/${prNumber}`, token })
   const queueComments = await allPages({ fetcher, path: `${path}/issues/${queueIssue}/comments`, token })
   const reviews = await allPages({ fetcher, path: `${path}/pulls/${prNumber}/reviews`, token })
+  const prComments = await allPages({ fetcher, path: `${path}/issues/${prNumber}/comments`, token })
+  const prAfter = await githubPage({ fetcher, endpoint: `${path}/pulls/${prNumber}`, token })
   const mainAfter = await ref()
   if (mainBefore !== mainAfter) return { state: 'UNKNOWN', reason: 'main_changed_during_snapshot', independentIdentity: 'UNVERIFIED', mergePermitted: false }
-  return assessReviewEvidence({ pr, mainSha: mainAfter, queueComments, reviews, queueIssue })
+  if (pr.head?.sha !== prAfter.head?.sha || pr.base?.sha !== prAfter.base?.sha || pr.state !== prAfter.state || pr.draft !== prAfter.draft) return { state: 'UNKNOWN', reason: 'pr_changed_during_snapshot', independentIdentity: 'UNVERIFIED', mergePermitted: false }
+  return assessReviewEvidence({ pr: prAfter, mainSha: mainAfter, queueComments, reviews, prComments, queueIssue })
 }
 
 async function cli() {
