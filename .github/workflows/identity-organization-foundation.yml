@@ -28,7 +28,8 @@ jobs:
   # SARIF and retain precise findings in this job's real CI log.
   codeql-javascript-typescript:
     needs: static
-    if: ${{ !cancelled() && needs.static.result == 'success' && needs.static.outputs.docs_only != 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft == false }}
+    # Preserve full scanning when Foundation itself fails; a failure must not conceal security jobs.
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.draft == false && (needs.static.result != 'success' || needs.static.outputs.docs_only != 'true') }}
     name: CodeQL — JavaScript/TypeScript (local SARIF)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -92,7 +93,7 @@ jobs:
 
   r1-windows-authz:
     needs: static
-    if: ${{ !cancelled() && needs.static.result == 'success' && needs.static.outputs.docs_only != 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft == false }}
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.draft == false && (needs.static.result != 'success' || needs.static.outputs.docs_only != 'true') }}
     name: R1 Windows native Authz — synthetic token/ACL only
     runs-on: windows-2025
     timeout-minutes: 6
@@ -221,14 +222,16 @@ jobs:
             echo 'classification=full' >> "$GITHUB_OUTPUT"
             echo 'Trusted base has no approved classifier; full checks remain mandatory.'
           fi
-      - name: Verify Markdown diff and trusted classifier tests (document-only)
+      - name: Run trusted classifier contract tests on real Actions Node
+        if: ${{ hashFiles('.ci_trusted_base/quality/ci/docs-only-classifier.test.mjs') != '' }}
+        run: node --test .ci_trusted_base/quality/ci/docs-only-classifier.test.mjs
+      - name: Verify Markdown diff (document-only)
         if: steps.docs_classify.outputs.docs_only == 'true'
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          node --test .ci_trusted_base/quality/ci/docs-only-classifier.test.mjs
           git fetch --no-tags --depth=1 origin "$PR_BASE_SHA"
           git diff --check "$PR_BASE_SHA" "$GITHUB_SHA"
           echo 'Document-only: exact SHA/tree/patch checks, trusted Node negative tests, and Markdown diff whitespace passed. No Bun, Medusa, API build, Chrome, Windows or local CodeQL claimed.' >> "$GITHUB_STEP_SUMMARY"
@@ -548,7 +551,7 @@ jobs:
   mfa-postgres16:
     # Preserve isolated workflow_dispatch even though static intentionally skips on dispatch.
     needs: static
-    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.static.result == 'success' && needs.static.outputs.docs_only != 'true')) }}
+    if: ${{ always() && !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && (needs.static.result != 'success' || needs.static.outputs.docs_only != 'true'))) }}
     name: MFA migration and transaction — isolated PostgreSQL 16
     runs-on: ubuntu-24.04
     timeout-minutes: 20
