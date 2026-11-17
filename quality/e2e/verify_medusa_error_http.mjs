@@ -85,8 +85,14 @@ const source = [
   '    return Response.json({ unexpected: true }, { status: 500 });',
   '  } catch (error) {',
   '    let message = "Request failed";',
-  '    try { medusaError(error); } catch (safeError) {',
-  '      message = safeError instanceof Error ? safeError.message : "Request failed";',
+  '    if (["raw-response", "string-response", "setup", "request"].includes(testCase || "")) {',
+  '      // For direct helper inputs inspect its first thrown Error, without wrapping twice.',
+  '      message = error instanceof Error ? error.message : "Request failed";',
+  '    } else {',
+  '      // SDK failures are passed to the actual project helper exactly once.',
+  '      try { medusaError(error); } catch (safeError) {',
+  '        message = safeError instanceof Error ? safeError.message : "Request failed";',
+  '      }',
   '    }',
   '    // This synthetic route intentionally exposes the caught Error message',
   '    // to ASSERT that it has already been sanitized by the actual helper.',
@@ -189,6 +195,16 @@ async function check(name, shouldSucceed = false) {
   }
   if (!shouldSucceed && (!data.message || data.message.includes(canary))) {
     throw new Error("IR15 FAIL: unsanitized upstream marker in caught Error for " + name);
+  }
+  const fixedMessages = {
+    "raw-response": "Request failed",
+    "string-response": "Request failed",
+    "setup": "Error setting up the request",
+    "request": "No response received",
+  };
+  if (Object.prototype.hasOwnProperty.call(fixedMessages, name) &&
+      data.message !== fixedMessages[name]) {
+    throw new Error("IR15 FAIL: unexpected normalized error type for " + name);
   }
   passed++;
   console.log("IR15 PASS real Next production HTTP: " + name);
