@@ -173,7 +173,7 @@ class RealDashboardCspBundleTest(unittest.TestCase):
             cwd=ROOT, text=True, capture_output=True, timeout=45, check=False,
         )
         self.assertEqual(result.returncode, 0, (result.stdout + result.stderr)[-1600:])
-        self.assertRegex(result.stdout, r"# pass 5\b")
+        self.assertRegex(result.stdout, r"(?m)^(?:#|ℹ)\s+pass 5\b")
         print("PASS #378 dashboard-csp.unit.test.mjs: 5/5 Node exact checkout")
 
     def test_02_real_vite_production_bundle_accepts_both(self):
