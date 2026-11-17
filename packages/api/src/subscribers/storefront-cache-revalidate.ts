@@ -82,6 +82,25 @@ export default async function storefrontCacheRevalidateHandler({
     return
   }
 
+  // #172: all product requests already carry the broad "products" tag,
+  // and all offer requests also carry "offers". If a legitimate large Medusa
+  // event batch exceeds the bounded Storefront HTTP route, these existing
+  // broad tags invalidate every affected cache entry without dropping an event.
+  // Keep the exact specific tags for ordinary small events.
+  const tags = [...tagSet]
+  const catalogSuffix = /^[\p{L}\p{N}][\p{L}\p{N}._~-]*$/u
+  const canonical = (tag: string) => {
+    if (tag === "products" || tag === "offers") return true
+    const prefix = ["product-offers-", "product-", "offer-"].find((part) => tag.startsWith(part))
+    return !!prefix && catalogSuffix.test(tag.slice(prefix.length))
+  }
+  const oversized = tags.length > 128 ||
+    Buffer.byteLength(JSON.stringify({ tags }), "utf8") > 32 * 1024 ||
+    tags.some((tag) => Buffer.byteLength(tag, "utf8") > 256 || !canonical(tag))
+  const deliveryTags = oversized
+    ? event.name.startsWith("offer.") ? ["products", "offers"] : ["products"]
+    : tags
+
   try {
     await fetch(url, {
       method: "POST",
@@ -89,7 +108,7 @@ export default async function storefrontCacheRevalidateHandler({
         "Content-Type": "application/json",
         "x-revalidate-secret": secret,
       },
-      body: JSON.stringify({ tags: [...tagSet] }),
+      body: JSON.stringify({ tags: deliveryTags }),
     })
   } catch (error) {
     console.error("[storefront-cache-revalidate] revalidation failed:", error)
