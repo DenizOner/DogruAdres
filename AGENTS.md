@@ -8,6 +8,33 @@ This repository implements DoğruAdres on the open-source Mercur marketplace sta
 
 **Installed documentation:** when available, start at `node_modules/@mercurjs/docs/llms.txt`, then read only relevant version-matched `node_modules/@mercurjs/docs/content/**/*.mdx` pages. Consult official Mercur and Medusa documentation for corresponding installed versions when needed. Do not infer behavior from memory alone.
 
+<!-- DA-KMS-V5-TEN-DEVELOPERS-OWNER-APPROVED-20261117 -->
+## Current owner-approved roster: ten equal full-stack developers (17 November 2026)
+
+**Binding newer Product Owner decision:** [#216 DA-KMS v5 — Can, Hakan, İsmail and Kerem](https://github.com/DenizOner/DogruAdres/issues/216#issuecomment-6955195152), following the earlier [sixth developer approval](https://github.com/DenizOner/DogruAdres/issues/216#issuecomment-6953663414) and [Gökhan buyer module/backend assignment](https://github.com/DenizOner/DogruAdres/issues/216#issuecomment-6954102154). **Ten equal end-to-end developers plus one independent read-only Denetçi = eleven agents total.** The v3 five-person and v4 six-person paragraphs below are historical superseded roster snapshots, not the current headcount. Their safety, coordination and one-writer principles remain binding unless explicitly superseded here. Neither a new roster nor a new agent session transfers another author's active Issue, branch, PR, writable database, worktree or protected test environment.
+
+| Developer | Product area / end-to-end contract stewardship |
+| --- | --- |
+| Ali | Foundation, Person, Organization/Store identity, membership and shared authorization |
+| Barış | Commerce and Vehicle; native catalog/Offer pricing, stock, Cart, Checkout and Order |
+| Can | Protected-data integrity and lossless recovery; safe development/test-environment evidence (#229, #219, #228), in coordination with Fikret; no implicit access to protected data |
+| Cem | Meydan and its approved social user journeys |
+| Demir | Personal/Organization workspaces, notifications and shared UX contracts |
+| Fikret | Admin/Vendor and platform operations |
+| Gökhan | Buyer-facing Alıcı (Storefront) module: approved UI **and DoğruAdres-owned backend** API/server/data/cache-freshness and its end-to-end acceptance; respect Ali's auth and Barış's Commerce contracts |
+| Hakan | Cross-module integrated **user-journey implementation and acceptance** (#365, #252, #147); uses real UI/HTTP/isolated DB, authorization, negative and concurrency evidence; **not** an independent reviewer |
+| İsmail | Accessible multilingual and RTL user experience (#242, #371–375), including necessary approved UI/API/backend/data/tests; coordinate shared UX contracts with Demir |
+| Kerem | Approved finance, commission, immutable financial records and reconciliation user journeys (#183, #81–95); coordinate checkout/price contracts with Barış; no real payment activation |
+
+**Naming and identity:** Can and Cem remain separate established C-named agents; Hakan (H), İsmail (İ/I), and Kerem (K) are the newly approved names. Do not rename established agents to fill missing alphabetical letters or assume a GitHub account proves which agent authored a change. The distinct **Denetçi** remains a genuinely independent **read-only** reviewer; developers cannot independently review their own output. There is no coordinator, tier, veto right, permanent frontend/backend specialist or write monopoly. Every developer owns **one currently approved main task** end-to-end through UI/API/server/permissions/data/tests/CI/PR and correction. Task ownership is not permission to bypass the approved M0/module order or other writers' claims.
+
+**Mandatory coordination and evidence:** Preflight must cover **all ten** active writers, the latest #216 decisions and DA-WRITER-CLAIM-v2 records, *all* open/draft PRs, live `main`, this AGENTS.md and relevant ADRs. Check shared paths, SDK/types, API/auth/middleware, workflows/outbox, DB/migrations, protected data, browser/CI runners, writable databases/volumes/ports, branches/worktrees and user-visible contracts. On overlap, pause only the risky mutation and use `DA-COORD-REQUEST-v1`, `DA-COORD-ACK-v1`, `DA-COORD-AGREEMENT-v1` (one writer, boundaries, sequence, backwards compatibility, combined tests and owner) and `DA-COORD-RESOLVED-v1` with exact evidence. A comment is not a lock; silence is not consent. Use #216 as the **single** exact-HEAD/base independent review queue; #208 remains the merge gate, #229 remains protected-data/restore isolation, #211 free-only, and no upstream Mercur/Medusa core changes, paid service, production deploy or payments without separate authorization. CI and merge do not prove product acceptance.
+
+**Live known blockers and ownership (not resolved merely by adding agents):** #229/#219 lossless restore is blocked until authorized isolation (Can and Fikret); #254 / draft #263 native Redis crash/checkout remains FAIL/PARK (Barış, Hakan as agreed test consumer); #378 CSP / #275 Staff Chrome timeout needs the Demir single-writer diagnostic and Fikret integration checks (draft #415); #361 / PR #413 old-base review is stale until Ali refreshes; #365/#252 combined two-Person/two-Organization/two-Store acceptance still needs Hakan with agreed single-writer integration; #242/#371–375 WCAG/RTL work needs İsmail and Demir and separate approval for redesign; #183 finance requires Kerem's approved narrow scope with Barış and **no live payment**; #171 stale Storefront catalog cache and #243/#244 access/security require Gökhan with Ali/Barış contracts and separate bounded #171 implementation authorization. This list does not grant permissions or waive independent tests.
+
+**Transition of this documentation:** Existing PR [#414](https://github.com/DenizOner/DogruAdres/pull/414) and its exclusive `AGENTS.md` writer **Gökhan** integrate this v5 decision; other authors do not edit that PR/branch. After base/main drift, refresh the exact branch and CI, reopen only a current READY request to the separate Denetçi, and merge normally only if #208 and all current gates pass. No new user feature or backend code is introduced by this roster-only documentation change.
+<!-- END DA-KMS-V5-TEN-DEVELOPERS-OWNER-APPROVED-20261117 -->
+
 <!-- DA-KMS-V4-SIX-DEVELOPERS-OWNER-APPROVED-20261117 -->
 ## Owner-approved sixth full-stack developer — Gökhan (17 November 2026)
 
