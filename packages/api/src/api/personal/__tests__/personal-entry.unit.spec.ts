@@ -32,7 +32,7 @@ describe("B20 personal workspace first-entry navigation", () => {
     expect(html).toContain('href="#organization-draft-title"')
     expect(html).toContain('id="organizations-title" tabindex="-1"')
     expect(html).toContain('id="organization-draft-title" tabindex="-1"')
-    expect(html).toContain("el('personal-entry').addEventListener('click',event=>")
+    expect(html).toContain("el('personal-entry').onclick=event=>")
     expect(html).toContain("hash!=='#organizations-title'&&hash!=='#organization-draft-title'")
     expect(html).toContain('heading.focus({preventScroll:true})')
     expect(html).toContain('İş İlanları Panosu — henüz kullanıma açık değil.')

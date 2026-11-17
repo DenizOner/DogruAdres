@@ -102,3 +102,27 @@ if (process.env.GITHUB_ACTIONS === "true" &&
     process.env.GITHUB_HEAD_REF === "fix/baris-172-revalidate-bounded-tags") {
   await import("./verify_revalidate_http.mjs");
 }
+
+
+// #170: branch-owned real native Subscriber HTTP delivery regression.
+// Reuse the current free Governance runner; no workflow, DB, or external host.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-170-cache-revalidate-http-failure") {
+  const { spawnSync } = await import("node:child_process");
+  const run = spawnSync("bun", [
+    "run", "jest", "--runInBand", "--runTestsByPath",
+    "src/subscribers/__tests__/storefront-cache-revalidate.unit.spec.ts",
+  ], {
+    cwd: join(repo, "packages/api"),
+    env: { ...process.env, TEST_TYPE: "unit" },
+    encoding: "utf8", timeout: 120000, maxBuffer: 12 * 1024 * 1024,
+  });
+  if (run.error || run.status !== 0) {
+    console.error((run.stdout || "").slice(-8000), (run.stderr || "").slice(-8000));
+    throw new Error("IR12 FAIL native real HTTP delivery acceptance " +
+      (run.error?.message || run.status));
+  }
+  console.log("IR12 PASS native Subscriber real 127.0.0.1 HTTP 204/401/403/413/429/500/503/transport/replay acceptance");
+  console.log((run.stdout || "").slice(-800), (run.stderr || "").slice(-800));
+}

@@ -5571,7 +5571,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   // while the authenticated workspace has asynchronous private refreshes.
   // This changes presentation focus only; all Organization access is checked
   // by the existing server endpoint on each subsequent action.
-  el('personal-entry').addEventListener('click',event=>{
+  el('personal-entry').onclick=event=>{
     if(el('workspace').hidden)return;
     const node=event.target;
     const link=node instanceof Element?node.closest('a[href^="#"]'):null;
@@ -5583,7 +5583,7 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
       if(!el('workspace').hidden&&location.hash===hash)
         heading.focus({preventScroll:true});
     });
-  });
+  };
   window.addEventListener('popstate',()=>{concealPrivateView();load()});
   setInterval(observeAccess,5000);
   el('audit-timeline-refresh').onclick=async()=>{timelineCursor=null;await loadTimeline(currentOrg);};
