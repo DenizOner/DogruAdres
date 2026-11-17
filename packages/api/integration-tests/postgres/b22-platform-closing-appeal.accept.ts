@@ -13,6 +13,31 @@ import {otp} from "./b19-browser"
 import {verifyB20CompanyLauncher} from "./b20-company-launcher.accept"
 import {runPlatformClosingEmailTick} from "../../src/jobs/dogruadres-platform-closing-email"
 
+type StaffFinalBrowser = Pick<B06Chrome,"wait"|"eval">
+async function waitForStaffFinalState(staff:StaffFinalBrowser,sellerId:string):Promise<void>{
+  // Diagnostic-only: timeout observations must never expose private UI text,
+  // IDs, request URLs, notification content, tokens or transport payloads.
+  // Keep the authorized Staff final-state condition unchanged.
+  try {
+    await staff.wait("document.getElementById('platform-closing-status').textContent.includes('Gerekçe ile yeni satışları derhal durdurabilirsiniz.')&&"+
+      "document.getElementById('platform-closing-mail-status').textContent.includes('doğrulanmış e-posta kimliği 1')")
+  } catch {
+    let diagnostic: unknown = {diagnostics:"unavailable"}
+    try {
+      diagnostic=await staff.eval("(()=>{"+
+        "const text=id=>document.getElementById(id)?.textContent||'';"+
+        "const classify=(value,parts)=>{for(const [token,label] of parts)if(value.includes(token))return label;return value?'other':'empty'};"+
+        "const status=classify(text('platform-closing-status'),[['Yetkili mağazalar doğrulanıyor','list_loading'],['Gerekçe ile yeni satışları','list_ready'],['Gerekçeli karar güvenli biçimde','post_loading'],['Yeni satışlar derhal durdu','post_accepted'],['Mağaza listesi doğrulanamadı','list_error'],['Sonuç belirsiz','post_uncertain'],['Yetki veya mağaza kararı','post_rejected']]);"+
+        "const mail=classify(text('platform-closing-mail-status'),[['Owner e-posta bildirimleri kontrol ediliyor','mail_loading'],['doğrulanmış e-posta kimliği 1','verified_one'],['Korunan Owner','verified_other'],['Bu mağaza için henüz kapatma kaydı','missing_closure'],['E-posta durumları doğrulanamadı','mail_error']]);"+
+        "const http=path=>{const entries=performance.getEntriesByType('resource').filter(item=>{try{const url=new URL(item.name);return url.origin===location.origin&&url.pathname.endsWith(path)}catch{return false}});const code=Number(entries.at(-1)?.responseStatus||0);return code>=200&&code<300?'2xx':code>=300&&code<400?'3xx':code>=400&&code<500?'4xx':code>=500&&code<600?'5xx':'unknown'};"+
+        "const selected=document.querySelector('#platform-closing-form select[name=seller_id]')?.value;"+
+        "return {document_hidden:document.hidden,workspace_hidden:!!document.getElementById('workspace')?.hidden,panel_hidden:!!document.getElementById('platform-closing-panel')?.hidden,selected_matches:selected==="+JSON.stringify(sellerId)+",status,mail,closing_http:http('/platform/store-closings'),mail_http:http('/platform/store-closing-email-readiness')};"+
+        "})()")
+    } catch { /* Browser inspection may be unavailable after a timeout. */ }
+    throw Error("B22 Staff final-state wait failed; sanitized diagnostics: "+JSON.stringify(diagnostic))
+  }
+}
+
 type Db=(sql:string,params?:unknown[])=>Promise<any[]>
 const read=async(browser:B06Chrome,path:string)=>browser.callFunction(
   "async function(path){const r=await fetch(path,{cache:'no-store'});return {status:r.status,body:await r.json()}}",
@@ -661,27 +686,7 @@ export async function verifyB22PlatformClosingAppeal(input:{
   // The POST's first mail-read is followed by a live Store-list refresh,
   // which starts a second authorized mail-read. Assert the FINAL refresh,
   // not its transient first result while the second displays "loading".
-  // Diagnostic-only: timeout observations must never expose private UI text,
-  // IDs, request URLs, notification content, tokens or transport payloads.
-  // Keep the authorized Staff final-state condition unchanged.
-  try {
-    await staff.wait("document.getElementById('platform-closing-status').textContent.includes('Gerekçe ile yeni satışları derhal durdurabilirsiniz.')&&"+
-      "document.getElementById('platform-closing-mail-status').textContent.includes('doğrulanmış e-posta kimliği 1')")
-  } catch {
-    let diagnostic: unknown = {diagnostics:"unavailable"}
-    try {
-      diagnostic=await staff.eval("(()=>{"+
-        "const text=id=>document.getElementById(id)?.textContent||'';"+
-        "const classify=(value,parts)=>{for(const [token,label] of parts)if(value.includes(token))return label;return value?'other':'empty'};"+
-        "const status=classify(text('platform-closing-status'),[['Yetkili mağazalar doğrulanıyor','list_loading'],['Gerekçe ile yeni satışları','list_ready'],['Gerekçeli karar güvenli biçimde','post_loading'],['Yeni satışlar derhal durdu','post_accepted'],['Mağaza listesi doğrulanamadı','list_error'],['Sonuç belirsiz','post_uncertain'],['Yetki veya mağaza kararı','post_rejected']]);"+
-        "const mail=classify(text('platform-closing-mail-status'),[['Owner e-posta bildirimleri kontrol ediliyor','mail_loading'],['doğrulanmış e-posta kimliği 1','verified_one'],['Korunan Owner','verified_other'],['Bu mağaza için henüz kapatma kaydı','missing_closure'],['E-posta durumları doğrulanamadı','mail_error']]);"+
-        "const http=path=>{const entries=performance.getEntriesByType('resource').filter(item=>{try{const url=new URL(item.name);return url.origin===location.origin&&url.pathname.endsWith(path)}catch{return false}});const code=Number(entries.at(-1)?.responseStatus||0);return code>=200&&code<300?'2xx':code>=300&&code<400?'3xx':code>=400&&code<500?'4xx':code>=500&&code<600?'5xx':'unknown'};"+
-        "const selected=document.querySelector('#platform-closing-form select[name=seller_id]')?.value;"+
-        "return {document_hidden:document.hidden,workspace_hidden:!!document.getElementById('workspace')?.hidden,panel_hidden:!!document.getElementById('platform-closing-panel')?.hidden,selected_matches:selected==="+JSON.stringify(sellerId)+",status,mail,closing_http:http('/platform/store-closings'),mail_http:http('/platform/store-closing-email-readiness')};"+
-        "})()")
-    } catch { /* Browser inspection may be unavailable after a timeout. */ }
-    throw Error("B22 Staff final-state wait failed; sanitized diagnostics: "+JSON.stringify(diagnostic))
-  }
+  await waitForStaffFinalState(staff,sellerId)
   const mailUi=await staff.eval("(()=>{const e=document.getElementById('platform-closing-mail-status');return {text:e.textContent,role:e.getAttribute('role'),live:e.getAttribute('aria-live')}})()")
   assert.match(mailUi.text,/Korunan Owner 1, doğrulanmış e-posta kimliği 1/)
   assert.match(mailUi.text,/Owner 1: .*deneme [0-4]\/4/)
@@ -693,6 +698,40 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.match(mailUi.text,/geri dönüşsüz kapatma kapalıdır/)
   assert.equal(mailUi.role,"status")
   assert.equal(mailUi.live,"polite")
+  // Controlled, test-only rejection exercises the SAME fail-only diagnostic
+  // on live read-only Chrome DOM; the real 20s Staff wait remains unchanged.
+  const privateProbe="B22_PRIVATE_SENTINEL_NEVER_LOG"
+  const controlled={wait:async(_expression:string):Promise<void>=>{throw Error(privateProbe)},
+    eval:(expression:string)=>staff.eval(expression)}
+  let proof=""
+  try {await waitForStaffFinalState(controlled,sellerId)}
+  catch(e){proof=e instanceof Error?e.message:"non-error failure"}
+  const prefix="B22 Staff final-state wait failed; sanitized diagnostics: "
+  assert.equal(proof.startsWith(prefix),true,"Controlled Staff failure must be classified")
+  assert.equal(proof.includes(privateProbe)||proof.includes(sellerId),false,
+    "Sanitized Staff diagnostic must not contain original error or Seller ID")
+  const safe=JSON.parse(proof.slice(prefix.length))
+  const allowedStatus=["list_loading","list_ready","post_loading","post_accepted",
+    "list_error","post_uncertain","post_rejected","other","empty"]
+  const allowedMail=["mail_loading","verified_one","verified_other",
+    "missing_closure","mail_error","other","empty"]
+  const allowedHttp=["2xx","3xx","4xx","5xx","unknown"]
+  assert.equal(allowedStatus.includes(safe.status),true)
+  assert.equal(allowedMail.includes(safe.mail),true)
+  assert.equal(allowedHttp.includes(safe.closing_http),true)
+  assert.equal(allowedHttp.includes(safe.mail_http),true)
+  for(const field of ["document_hidden","workspace_hidden","panel_hidden",
+    "selected_matches"])assert.equal(typeof safe[field],"boolean")
+  assert.deepEqual(Object.keys(safe).sort(),
+    ["document_hidden","workspace_hidden","panel_hidden","selected_matches",
+      "status","mail","closing_http","mail_http"].sort())
+  let fallback=""
+  try {await waitForStaffFinalState({wait:controlled.wait,
+    eval:async(_expression:string)=>{throw Error(privateProbe)}},sellerId)}
+  catch(e){fallback=e instanceof Error?e.message:"non-error failure"}
+  assert.equal(fallback,prefix+'{"diagnostics":"unavailable"}',
+    "Failed Chrome inspection must expose only the fixed unavailable enum")
+  process.stdout.write("PASS B22 test-only controlled Staff wait rejection: real Chrome anonymous DOM/HTTP classes, private ID excluded, fallback unavailable; genuine 20s timeout NOT REPRODUCED\n")
   await verifyStaffMailRealHttpSelectionRace(staff,sellerId,foundPage)
   const createdRows=await q("select request_id,state,version from da_store_platform_closing where seller_id=$1 and organization_id=$2",[sellerId,ownerOrgId])
   assert.equal(createdRows.length,1)
