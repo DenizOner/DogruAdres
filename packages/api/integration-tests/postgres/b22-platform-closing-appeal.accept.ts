@@ -10,6 +10,7 @@ import {Client} from "@medusajs/framework/pg"
 import {until} from "./b19-browser"
 import {B06Chrome} from "./b06-ui-browser"
 import {otp} from "./b19-browser"
+import {verifyB20CompanyLauncher} from "./b20-company-launcher.accept"
 import {runPlatformClosingEmailTick} from "../../src/jobs/dogruadres-platform-closing-email"
 
 type Db=(sql:string,params?:unknown[])=>Promise<any[]>
@@ -1629,6 +1630,14 @@ export async function verifyB22PlatformClosingAppeal(input:{
     "sonuçlanmamış itiraz veya üst inceleme mevcut",
     ["itiraz kabul edildi; ayrıca kapatma uygulanamaz"])
 
+  // The two real strong browser Persons now share this verified Owner Org.
+  // Reuse the task's existing isolated PG16 and native Chrome sessions for B20,
+  // without editing the shared #263 B22 runner or creating a second test DB.
+  await verifyB20CompanyLauncher({
+    owner:browser,other:staff,q,
+    ownerPersonId,otherPersonId:staffPersonId,
+    organizationId:ownerOrgId,organizationName:ownerOrgName,
+  })
   process.stdout.write("PASS B22 Chrome/HTTPS/PG16: 720-hour Staff preflight false/true, pending first appeal and SMTP admin exception; permanent finalizer denied\n")
   return secondOwnerMembership.id
 }
