@@ -295,8 +295,24 @@ export default async function({container}:ExecArgs){
     'Optional mode must preserve exact Person binding and native factor state')
   const outboxBefore=await count('da_security_outbox')
   const auditBefore=(await q("select count(*)::int n from da_audit_event where action='mfa.person_preference.set'"))[0].n
-  const saved=await mfaPost(b,'mfa-personal-optional-save',prefBody(0,true))
-  assert.equal(saved.status,200,'Optional preference must persist via real HTTPS POST')
+  // Two simultaneous REAL HTTPS requests with the same strong session and
+  // expected revision must not commit two preferences/outbox events. Depending
+  // on lock ordering, the losing request is a version conflict (409) or an
+  // invalidated old session (403); both are safe fail-closed outcomes.
+  b.phase='mfa-personal-optional-save'
+  const concurrent=await b.callFunction(
+    "async function(payload){const s=await fetch('/personal/session',{credentials:'include'});if(!s.ok)return [{preflight:s.status}];const csrf=(await s.json()).csrf_token;const send=()=>fetch('/personal/mfa',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:payload});return Promise.all([send(),send()]).then(async results=>Promise.all(results.map(async r=>({status:r.status,cacheControl:r.headers.get('cache-control'),body:await r.json()}))));}",
+    JSON.stringify(prefBody(0,true))
+  )
+  assert.ok(Array.isArray(concurrent)&&concurrent.length===2,
+    'Two concurrent Chrome requests must both reach the real server')
+  const outcomes=concurrent.map((reply:any)=>reply.status).sort((x:number,y:number)=>x-y)
+  assert.ok(outcomes[0]===200&&[403,409].includes(outcomes[1]),
+    'Only one concurrent preference request may commit')
+  assert.ok(concurrent.every((reply:any)=>reply.cacheControl==='no-store'),
+    'All concurrent MFA responses must be non-cacheable')
+  const saved=concurrent.find((reply:any)=>reply.status===200)
+  assert.ok(saved,'Optional preference must persist via real HTTPS POST')
   assert.equal(saved.cacheControl,'no-store')
   assert.ok(saved.body?.personal?.person_id===actors[1].person&&
     saved.body?.personal?.user_enabled===true&&saved.body?.personal?.version===1&&
@@ -363,7 +379,8 @@ export default async function({container}:ExecArgs){
     5000,'B06 real TLS CDP POST evidence')
   report.mfaPreferenceAcceptance={
     modeSource:'DISPOSABLE SQL TEST FIXTURE; NOT PLATFORM ADMIN HTTP ACCEPTANCE',
-    personWriteHttp:200,staleRevisionHttp:409,rejectedByPolicyHttp:403,
+    personWriteHttp:200,concurrentLoserHttp:outcomes[1],oneCommitAcrossTwoHttpsPosts:true,
+    staleRevisionHttp:409,rejectedByPolicyHttp:403,
     crossPersonSelectorHttp:400,missingCsrfHttp:403,
     oldSessionsRejected:true,newChromeTotpSessionReadback:true,
     auditDelta:1,securityOutboxDelta:1,otherPersonUnaffected:true,
