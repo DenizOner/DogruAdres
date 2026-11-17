@@ -4,7 +4,6 @@ import { OfferDTO } from '@mercurjs/types';
 
 import { sdk } from '../client';
 import { getAuthHeaders } from './cookies';
-import { CACHE_TAGS, getGlobalCacheOptions } from './cache-tags';
 import { getRegion } from './regions';
 
 // All fields are `+`-prefixed so they MERGE with the route defaults instead of
@@ -38,11 +37,6 @@ export const listOffers = async ({
       ? await getRegion(countryCode)
       : null;
 
-  const next = getGlobalCacheOptions(
-    CACHE_TAGS.offers,
-    productId ? CACHE_TAGS.productOffers(productId) : undefined
-  );
-
   return (
     sdk.store.offers.query({
       product_id: productId,
@@ -54,8 +48,9 @@ export const listOffers = async ({
       fields: OFFER_FIELDS,
       fetchOptions: {
         headers: { ...(await getAuthHeaders()) },
-        cache: 'force-cache',
-        next,
+        // Price/stock and permissions may vary by actor, region and Seller.
+        // Public/tenant equivalence has not been proven: never globally cache.
+        cache: 'no-store',
       },
     } as never) as unknown as Promise<{ offers: OfferDTO[]; count: number }>
   )
@@ -81,8 +76,8 @@ export const retrieveOffer = async (
       fields: OFFER_FIELDS,
       fetchOptions: {
         headers: { ...(await getAuthHeaders()) },
-        cache: 'force-cache',
-        next: getGlobalCacheOptions(CACHE_TAGS.offers, CACHE_TAGS.offer(id)),
+        // A single Offer may be session or Store-price-group sensitive.
+        cache: 'no-store',
       },
     } as never) as unknown as Promise<{ offer: OfferDTO }>
   )
