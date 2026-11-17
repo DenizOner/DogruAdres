@@ -231,3 +231,34 @@ test("code changes never require a Git tree read to decide full CI", async () =>
   assert.equal((await classifyGithubPullRequest(event(files), args(api.request))).mode, "full");
   assert.equal(api.seen.filter(s => s.url.includes("/git/trees/")).length, 0);
 });
+
+test("actual Node CLI writes a safe full result for malformed event", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, dirname } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const dir = mkdtempSync(join(tmpdir(), "da-ci416-"));
+  try {
+    const eventFile = join(dir, "event.json");
+    const outputFile = join(dir, "github-output.txt");
+    writeFileSync(eventFile, "{invalid JSON", "utf8");
+    const cli = join(dirname(fileURLToPath(import.meta.url)), "docs-only-classifier.mjs");
+    const env = { ...process.env,
+      GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_REPOSITORY: REPOSITORY, GITHUB_EVENT_PATH: eventFile,
+      GITHUB_OUTPUT: outputFile, GITHUB_TOKEN: "" };
+    const result = spawnSync(process.execPath, [cli], { env, encoding: "utf8" });
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /CI file-classification: full \(invalid_event\)/);
+    assert.equal(readFileSync(outputFile, "utf8"),
+      "docs_only=false\nclassification=full\n");
+
+    delete env.GITHUB_OUTPUT;
+    const noOutput = spawnSync(process.execPath, [cli], { env, encoding: "utf8" });
+    assert.equal(noOutput.status, 1);
+    assert.match(noOutput.stderr, /GITHUB_OUTPUT missing/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
