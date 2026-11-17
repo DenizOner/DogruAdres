@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { assessReviewEvidence, allPages, auditLive } from './review-freshness-audit.mjs'
 const h='a'.repeat(40), b='b'.repeat(40), old='c'.repeat(40)
 const pr={number:418,state:'open',draft:false,head:{sha:h},base:{sha:b}}
-const comment=(type,head=h,base=b,id=3)=>({id,body:`<!-- DA-${type}-v2 -->\n## PR #418\n**Exact HEAD:** \`${head}\`; **exact base:** \`${base}\`\nKARAR: PASS (SCOPED)`})
+const comment=(type,head=h,base=b,id=type==='REVIEW-REQUEST'?2:3)=>({id,body:`<!-- DA-${type}-v2 -->\n## PR #418\n**Exact HEAD:** \`${head}\`; **exact base:** \`${base}\`\nKARAR: PASS (SCOPED)`})
 const rv=(head=h,base=b)=>({commit_id:head,body:`<!-- REVIEW-PROVENANCE-v1 -->\nExact HEAD: \`${head}\`\nbase: \`${base}\``})
 const check=(overrides={})=>assessReviewEvidence({pr,mainSha:b,queueComments:[comment('REVIEW-REQUEST'),comment('REVIEW-RESULT')],reviews:[rv()],...overrides})
 test('same metadata returns only RECORDED, never independent PASS or merge permission',()=>{const x=check();assert.equal(x.state,'RECORDED');assert.equal(x.disposition,'REPORTED_PASS');assert.equal(x.independentIdentity,'UNVERIFIED');assert.equal(x.mergePermitted,false);assert.equal(x.ci,'NOT_CHECKED')})
@@ -25,3 +25,4 @@ test('reported PASS ignores failure-related narrative and is never a verified ve
 test('top-level PR Conversation provenance is accepted as metadata but never verifies identity',()=>{const x=check({reviews:[],prComments:[{body:rv().body}]});assert.equal(x.state,'RECORDED');assert.equal(x.independentIdentity,'UNVERIFIED');assert.equal(x.mergePermitted,false)})
 test('a PR changing during pagination is UNKNOWN',async()=>{let count=0;const fetcher=async u=>({ok:true,json:async()=>u.includes('/git/ref/')?{object:{sha:b}}:u.includes('/pulls/418')&&!u.includes('/reviews')?(++count===1?pr:{...pr,head:{sha:old}}):[]});const x=await auditLive({owner:'DenizOner',repo:'DogruAdres',prNumber:418,token:'dummy',fetcher});assert.equal(x.state,'UNKNOWN');assert.equal(x.reason,'pr_changed_during_snapshot')})
 test('unsupported reviewer decision remains unclassified',()=>{const result=comment('REVIEW-RESULT');result.body='<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418\nExact HEAD: `'+h+'`\nbase: `'+b+'`\nKARAR: CHANGES REQUIRED; old tests PASS';const x=check({queueComments:[comment('REVIEW-REQUEST'),result]});assert.equal(x.disposition,'UNCLASSIFIED')})
+test('new READY on same SHA invalidates an older review result until a newer result',()=>{const x=check({queueComments:[comment('REVIEW-REQUEST'),comment('REVIEW-RESULT'),comment('REVIEW-REQUEST',h,b,4)]});assert.equal(x.state,'PENDING')})
