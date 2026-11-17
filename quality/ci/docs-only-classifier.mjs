@@ -26,7 +26,11 @@ export function classifyChangedFiles(files, declaredCount) {
   const names = new Set();
   for (const file of files) {
     if (!file || typeof file !== "object" || typeof file.filename !== "string" ||
-        !Number.isSafeInteger(file.changes) || file.changes < 0 ||
+        !Number.isSafeInteger(file.changes) || file.changes < 1 ||
+        !Number.isSafeInteger(file.additions) || file.additions < 0 ||
+        !Number.isSafeInteger(file.deletions) || file.deletions < 0 ||
+        file.changes !== file.additions + file.deletions ||
+        typeof file.patch !== "string" || file.patch.length === 0 ||
         !["added", "modified"].includes(file.status) ||
         Object.hasOwn(file, "previous_filename") ||
         !isAllowedDocumentPath(file.filename) || names.has(file.filename))
