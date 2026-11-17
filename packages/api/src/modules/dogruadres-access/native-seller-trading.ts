@@ -26,7 +26,9 @@ export function nativeSellerTradingAt(s:{
       return false
     approvedAt=Date.parse(approval)
   }
-  if(!Number.isFinite(approvedAt))return false
+  // Approval must have happened already; future-dated approvals are not
+  // authoritative even when their native ISO/Date representation is valid.
+  if(!Number.isFinite(approvedAt)||approvedAt>now)return false
   const from=s.closed_from==null?null:new Date(s.closed_from).getTime()
   const to=s.closed_to==null?null:new Date(s.closed_to).getTime()
   if(from===null&&to===null)return true
