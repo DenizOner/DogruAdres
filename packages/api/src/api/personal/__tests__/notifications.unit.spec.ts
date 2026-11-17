@@ -20,6 +20,16 @@ describe('personal notification transport boundaries (not E2E)',()=>{
     expect(res.status).toHaveBeenCalledWith(400);expect(service.readPersonalNotification).not.toHaveBeenCalled()
     req.query={person_id:'other-person'};await GET(req,res);expect(service.personalNotifications).not.toHaveBeenCalled()
   })
+  it('forwards explicit selected-company context on both receipt listing and read',async()=>{
+    req.query={organization:'daorg_X',offset:'12'}
+    await GET(req,res)
+    expect(service.personalNotifications).toHaveBeenCalledWith('t'.repeat(43),12,'daorg_X')
+    req.query={organization:'daorg_X'}
+    await POST(req,res)
+    expect(service.readPersonalNotification).toHaveBeenCalledWith(
+      't'.repeat(43),'danot_11111111-1111-4111-8111-111111111111','daorg_X')
+    expect(csrf).toHaveBeenCalled()
+  })
   it('requires current session and CSRF before any receipt write',async()=>{
     ;(csrf as jest.Mock).mockResolvedValue(false);await POST(req,res)
     expect(res.status).toHaveBeenCalledWith(403);expect(service.readPersonalNotification).not.toHaveBeenCalled()
