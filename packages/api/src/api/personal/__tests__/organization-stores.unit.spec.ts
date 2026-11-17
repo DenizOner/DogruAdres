@@ -44,6 +44,64 @@ describe("B22 platform-approved Organization Store read (route boundary, mock-on
     expect(res.json).toHaveBeenCalledWith({organization_id:organization,stores:[{id:"sel_A",name:"A Store"}]})
   })
 
+  it("returns two independently approved Stores for the same authorized Organization without private fields",async()=>{
+    svc.personalLegalSellerIds.mockResolvedValue(permit(["sel_A","sel_B"]))
+    native.listSellerMembers.mockImplementation(async ({member_id,seller_id}:any)=>
+      [{member_id,seller_id}])
+    native.listSellers.mockImplementation(async ({id}:any)=>[{
+      id,name:id==="sel_A"?"A Store":"B Store",status:"open",
+      approved_at:"2026-10-29T00:00:00Z",email:"private@example.invalid"
+    }])
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(native.listSellerMembers).toHaveBeenCalledWith({member_id:member,seller_id:"sel_A"})
+    expect(native.listSellerMembers).toHaveBeenCalledWith({member_id:member,seller_id:"sel_B"})
+    expect(svc.personalLegalSellerIds).toHaveBeenCalledTimes(2)
+    expect(res.json).toHaveBeenCalledWith({
+      organization_id:organization,
+      stores:[{id:"sel_A",name:"A Store"},{id:"sel_B",name:"B Store"}]
+    })
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("private@example.invalid")
+  })
+
+  it("keeps the first approved Store visible but hides a second pending Seller",async()=>{
+    svc.personalLegalSellerIds.mockResolvedValue(permit(["sel_A","sel_B"]))
+    native.listSellerMembers.mockImplementation(async ({member_id,seller_id}:any)=>
+      [{member_id,seller_id}])
+    native.listSellers.mockImplementation(async ({id}:any)=>[{
+      id,name:id==="sel_A"?"A Store":"Pending B Store",
+      status:id==="sel_A"?"open":"pending_approval",
+      approved_at:id==="sel_A"?"2026-10-29T00:00:00Z":null
+    }])
+    await GET(req,res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(native.listSellers).toHaveBeenCalledWith({id:"sel_B"})
+    expect(res.json).toHaveBeenCalledWith({
+      organization_id:organization,stores:[{id:"sel_A",name:"A Store"}]
+    })
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("Pending B Store")
+  })
+
+  it("denies the entire two-Store response if the second SellerMember is revoked at final read",async()=>{
+    svc.personalLegalSellerIds.mockResolvedValue(permit(["sel_A","sel_B"]))
+    const reads=new Map<string,number>()
+    native.listSellerMembers.mockImplementation(async ({member_id,seller_id}:any)=>{
+      const count=(reads.get(seller_id)??0)+1
+      reads.set(seller_id,count)
+      return seller_id==="sel_B"&&count===2?[]:[{member_id,seller_id}]
+    })
+    native.listSellers.mockImplementation(async ({id}:any)=>[{
+      id,name:id==="sel_A"?"A Store":"B Store",
+      status:"open",approved_at:"2026-10-29T00:00:00Z"
+    }])
+    await GET(req,res)
+    expect(native.listSellerMembers).toHaveBeenCalledWith({member_id:member,seller_id:"sel_B"})
+    expect(reads.get("sel_B")).toBe(2)
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(res.json).toHaveBeenCalledWith({message:"Access denied"})
+    expect(res.json).not.toHaveBeenCalledWith(expect.objectContaining({stores:expect.any(Array)}))
+  })
+
   it.each([
     {query:{organization,extra:"true"},headers:{}},
     {query:{organization,purpose:"products"},headers:{}},
