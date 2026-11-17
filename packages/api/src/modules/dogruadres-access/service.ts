@@ -29,6 +29,7 @@ import {
 } from "./smtp-settings"
 import { sendSmtpEmail } from "./smtp-client"
 import { PersonalNotifications } from "./personal-notifications"
+import { CompanyLauncherConflict, companyLauncherAvailable, companyLauncherProject, companyLauncherValidate } from "./company-launcher"
 import { authorizedLegalSellerIds, authorizedProductEditScope, platformApprovedSellerIds, verifiedStoreProductEditGrant } from "./legal-store-ownership"
 import {authorizedBuyerOrganization,verifiedBuyerPurchaseGrant} from "./buyer-permission"
 import { organizationActionAllowed, ownerRoleAllows } from "./role-action-policy"
@@ -6819,6 +6820,83 @@ export default class DogruAdresAccessModuleService extends MedusaService({
       [productId,event.id,input.request_id])
     if(changed.length!==1)throw new IdentityAccessDenied()
     return {status:"created" as const,product_id:productId}
+  }
+
+  // ---------------------------------------------------------------------------
+  // B20: explicit Company workspace navigation only; NOT a permission source.
+  // Recheck session, active Organization and current protected Owner on every
+  // read/write. The membership/Organization SHARE locks serialize with revoke.
+  // ---------------------------------------------------------------------------
+  private async companyLauncherActor_(
+    token: string, org: string, context: Context
+  ): Promise<{person_id:string;role:string}|null> {
+    if (!/^daorg_[A-Za-z0-9_-]{1,80}$/.test(org)) throw new IdentityAccessDenied()
+    const decision = await this.readablePersonalOrganizations_(token,org,true,context)
+    if (!decision || decision.organizations.length !== 1) return null
+    const candidate=decision.organizations[0]
+    const db=securitySql(context.transactionManager)
+    const rows=await db.execute(`select m.id,m.role from da_organization_membership m
+      join da_organization o on o.id=m.organization_id
+      join da_person p on p.id=m.person_id
+      where m.id=? and m.person_id=? and m.organization_id=? and
+        m.status='active' and m.revoked_at is null and m.deleted_at is null and
+        o.status='active' and o.deleted_at is null and
+        p.disabled_at is null and p.deleted_at is null
+      for share of m,o`,
+      [candidate.membership_id,decision.person_id,org])
+    if (rows.length !== 1 || rows[0].role !== candidate.role) return null
+    if (candidate.role==="owner" &&
+       !await isCurrentProtectedOwner(db,decision.person_id,org))return null
+    return {person_id:decision.person_id,role:candidate.role}
+  }
+
+  @InjectTransactionManager()
+  async personalCompanyLauncher(
+    token:string,org:string,@MedusaContext() context:Context={}
+  ){
+    const actor=await this.companyLauncherActor_(token,org,context)
+    if(!actor)return null
+    const db=securitySql(context.transactionManager)
+    const rows=await db.execute(`select app_ids,collapsed_ids,version from da_company_launcher_preference
+      where person_id=? and organization_id=?`,
+      [actor.person_id,org]) as Array<{app_ids:unknown;collapsed_ids:unknown;version:unknown}>
+    if (rows.length>1)throw new IdentityAccessDenied()
+    return {organization_id:org,...companyLauncherProject(
+      rows[0]??null,companyLauncherAvailable(actor.role))}
+  }
+
+  @InjectTransactionManager()
+  async personalSaveCompanyLauncher(
+    token:string,input:{organization:string;app_ids:string[];
+      collapsed_ids:string[];expected_version:number},
+    @MedusaContext() context:Context={}
+  ){
+    const actor=await this.companyLauncherActor_(token,input.organization,context)
+    if(!actor)return null
+    const db=securitySql(context.transactionManager)
+    const allowed=companyLauncherAvailable(actor.role)
+    const preference=companyLauncherValidate(
+      input.app_ids,input.collapsed_ids,input.expected_version,allowed)
+    let saved: Array<{app_ids:unknown;collapsed_ids:unknown;version:unknown}>
+    if (preference.expected_version===0) {
+      saved=await db.execute(`insert into da_company_launcher_preference
+        (id,person_id,organization_id,app_ids,collapsed_ids,version,updated_at)
+        values(?,?,?,?,?,1,clock_timestamp())
+        on conflict(person_id,organization_id) do nothing
+        returning app_ids,collapsed_ids,version`,
+        [randomUUID(),actor.person_id,input.organization,
+          JSON.stringify(preference.app_ids),JSON.stringify(preference.collapsed_ids)])
+    } else {
+      saved=await db.execute(`update da_company_launcher_preference
+        set app_ids=?,collapsed_ids=?,version=version+1,updated_at=clock_timestamp()
+        where person_id=? and organization_id=? and version=?
+        returning app_ids,collapsed_ids,version`,
+        [JSON.stringify(preference.app_ids),JSON.stringify(preference.collapsed_ids),
+          actor.person_id,input.organization,preference.expected_version])
+    }
+    if(saved.length!==1)throw new CompanyLauncherConflict()
+    return {organization_id:input.organization,
+      ...companyLauncherProject(saved[0],allowed)}
   }
 
   // ---------------------------------------------------------------------------
