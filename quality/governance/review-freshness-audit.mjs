@@ -24,7 +24,8 @@ export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prCo
   const results = relevant.filter(c => marker(c.body, 'REVIEW-RESULT'))
   const exact = c => headIn(c.body) === head && baseIn(c.body) === base
   if (!requests.some(exact)) return { ...evidence, state: requests.length ? 'STALE' : 'MISSING', reason: requests.length ? 'ready_record_for_different_sha' : 'no_ready_record' }
-  const currentResults = results.filter(exact)
+  const latestRequest = requests.filter(exact).sort((a,b) => (a.id || 0) - (b.id || 0)).at(-1)
+  const currentResults = results.filter(c => exact(c) && Number.isSafeInteger(c.id) && Number.isSafeInteger(latestRequest.id) && c.id > latestRequest.id)
   if (!currentResults.length) return { ...evidence, state: 'PENDING', reason: 'no_matching_result', resultCount: 0 }
   const provenance = [
     ...reviews.filter(r => r.commit_id?.toLowerCase() === head),
