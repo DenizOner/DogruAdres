@@ -41,6 +41,19 @@ for (const [label, exe, args, cwd, timeout] of compile) {
   }
 }
 
+const sender = spawnSync("bun", [
+  "run", "jest", "--runInBand", "--runTestsByPath",
+  "src/subscribers/__tests__/storefront-cache-revalidate.unit.spec.ts"
+], {
+  cwd: api, env: { ...env, TEST_TYPE: "unit" }, encoding: "utf8",
+  timeout: 120000, maxBuffer: 10 * 1024 * 1024
+});
+if (sender.error || sender.status !== 0) {
+  console.error((sender.stdout || "").slice(-8000), (sender.stderr || "").slice(-8000));
+  throw new Error("IR14 native subscriber compatibility Jest FAILED: " + (sender.error?.message || sender.status));
+}
+console.log("IR14 PASS: native Medusa/Mercur subscriber normal and large-batch Jest acceptance");
+
 const candidates = [
   join(storefront, ".next/standalone/apps/storefront/server.js"),
   join(storefront, ".next/standalone/server.js"),
