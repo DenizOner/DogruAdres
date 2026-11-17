@@ -88,7 +88,7 @@ describe("notification bell workspace isolation (SQL contract; real PG/browser N
       // No Organization = the personal bell. Company groups must be absent
       // instead of merging every company where the Person is also an Owner.
       expect(companyGuards(sql)).toBe(3)
-      expect(sql).not.toMatch(/^\\s*\/\//m)
+      expect(sql).not.toMatch(/^\s*\/\//m)
       // A direct Person-recipient Staff security alert requires a live
       // platform grant, not the selected company's membership.
       expect(sql).toContain("g.person_id=n.person_id and g.task='store.closing.manage'")
