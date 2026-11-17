@@ -103,26 +103,72 @@ export async function verifyB20CompanyLauncher(input:{
       "controls:Array.from(list.querySelectorAll('button')).filter(b=>"+
       "b.textContent==='Yukarı'||b.textContent==='Aşağı').length}})()")
     assert.deepEqual(accessible,{list:true,role:"status",controls:6})
-    await owner.click("#company-launcher-list > li:nth-child(3) button[aria-label*='Yukarı']")
+    // Real CDP keyboard activation rather than a mouse click: traverse the
+    // actual tab order, activate the app control, and retain usable focus.
+    // This guards WCAG 2.2 focus after re-rendering the saved arrangement.
+    const key=async(keyName:string,code:string,virtualKey:number)=>{
+      for(const type of ["keyDown","keyUp"] as const)
+        await owner.send("Input.dispatchKeyEvent",{
+          type,key:keyName,code,windowsVirtualKeyCode:virtualKey,
+          nativeVirtualKeyCode:virtualKey,
+        })
+    }
+    const tabTo=async(selector:string)=>{
+      await owner.eval("document.querySelector('#select-org button').focus()")
+      for(let n=0;n<20;n++){
+        await key("Tab","Tab",9)
+        if(await owner.eval("document.activeElement?.matches("+
+          JSON.stringify(selector)+")===true"))return
+      }
+      assert.fail("Real keyboard Tab did not reach the scoped company control")
+    }
+    await tabTo("#company-launcher-list > li:nth-child(3) button[data-company-action='up']")
+    await key("Enter","Enter",13)
     await until(async()=> {
       const result=await get(owner,organizationId)
       return result.status===200 && result.body.version===1
-    },15000,"Real Chrome B20 accessible reorder persisted")
+    },15000,"Real Chrome B20 keyboard reorder persisted")
     const ordered=await get(owner,organizationId)
     assert.deepEqual(ordered.body.app_ids,
       ["organization","memberships","store-applications"])
-    assert.equal(await owner.eval("document.activeElement?.getAttribute('aria-label')"),
-      "Üyelik yönetimi — Yukarı",
-      "Keyboard/accessible reorder must return focus to the same app control")
-    await owner.click("#company-launcher-list > li:nth-child(2) button[aria-expanded='true']")
+    await owner.wait("document.activeElement?.closest('#company-launcher-list > li')?."+
+      "dataset.companyApp==='memberships' && document.activeElement?."+
+      "dataset.companyAction==='up' && !document.activeElement?.disabled")
+    await tabTo("#company-launcher-list > li:nth-child(2) button[data-company-action='toggle']")
+    await key(" ","Space",32)
     await until(async()=> {
       const result=await get(owner,organizationId)
       return result.status===200 && result.body.version===2
-    },15000,"Real Chrome B20 collapse persisted")
-    const folded=await get(owner,organizationId)
+    },15000,"Real Chrome B20 keyboard collapse persisted")
+    let folded=await get(owner,organizationId)
     assert.deepEqual(folded.body.collapsed_ids,["memberships"])
-    assert.equal(await owner.eval("document.activeElement?.getAttribute('aria-expanded')"),
-      "false","Collapse re-render must keep keyboard focus on the same toggle")
+    await owner.wait("document.activeElement?.closest('#company-launcher-list > li')?."+
+      "dataset.companyApp==='memberships' && document.activeElement?."+
+      "dataset.companyAction==='toggle' && document.activeElement?."+
+      "getAttribute('aria-expanded')==='false'")
+    // No additional Tab: the same focused control must accept repeated Space.
+    await key(" ","Space",32)
+    await until(async()=> {
+      const result=await get(owner,organizationId)
+      return result.status===200 && result.body.version===3
+    },15000,"Same focused toggle can expand using keyboard again")
+    folded=await get(owner,organizationId)
+    assert.deepEqual(folded.body.collapsed_ids,[])
+    await owner.wait("document.activeElement?.closest('#company-launcher-list > li')?."+
+      "dataset.companyApp==='memberships' && document.activeElement?."+
+      "dataset.companyAction==='toggle' && document.activeElement?."+
+      "getAttribute('aria-expanded')==='true'")
+    await key(" ","Space",32)
+    await until(async()=> {
+      const result=await get(owner,organizationId)
+      return result.status===200 && result.body.version===4
+    },15000,"Keyboard collapses again without losing focus")
+    folded=await get(owner,organizationId)
+    assert.deepEqual(folded.body.collapsed_ids,["memberships"])
+    await owner.wait("document.activeElement?.closest('#company-launcher-list > li')?."+
+      "dataset.companyApp==='memberships' && document.activeElement?."+
+      "dataset.companyAction==='toggle' && document.activeElement?."+
+      "getAttribute('aria-expanded')==='false'")
     assert.equal((await post(owner,{
       organization:organizationId,app_ids:defaults,
       collapsed_ids:[],expected_version:1
@@ -145,7 +191,7 @@ export async function verifyB20CompanyLauncher(input:{
       "and organization_id in ($2,$3) order by organization_id",
       [ownerPersonId,organizationId,secondOrg.id])
     assert.equal(stored.length,2,"Person X has exactly two separate DB preferences")
-    assert.deepEqual(stored.map(x=>Number(x.version)).sort(),[1,2])
+    assert.deepEqual(stored.map(x=>Number(x.version)).sort(),[1,4])
     assert.equal((await q(
       "select count(*)::int n from da_company_launcher_preference "+
       "where person_id=$1 and organization_id=$2",
