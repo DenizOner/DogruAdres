@@ -82,7 +82,7 @@ await import("./build_chip_keyboard_browser.mjs");
 // Do not impose extra work on main, unrelated PRs, or Ali/Cem runs.
 if (process.env.GITHUB_ACTIONS === "true" &&
     process.env.GITHUB_EVENT_NAME === "pull_request" &&
-    process.env.GITHUB_HEAD_REF === "fix/baris-374-chip-keyboard-filters") {
+    ["fix/baris-374-chip-keyboard-filters", "fix/baris-374-filter-dialog-keyboard"].includes(process.env.GITHUB_HEAD_REF)) {
   await import("./verify_storefront_build.mjs");
 }
 

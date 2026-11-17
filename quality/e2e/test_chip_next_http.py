@@ -29,7 +29,7 @@ class NextFilterHttpTest(unittest.TestCase):
         if (
             os.environ.get("GITHUB_ACTIONS") != "true"
             or os.environ.get("GITHUB_EVENT_NAME") != "pull_request"
-            or os.environ.get("GITHUB_HEAD_REF") != "fix/baris-374-chip-keyboard-filters"
+            or os.environ.get("GITHUB_HEAD_REF") not in ("fix/baris-374-chip-keyboard-filters", "fix/baris-374-filter-dialog-keyboard")
             or not os.environ.get("RUNNER_TEMP")
         ):
             raise unittest.SkipTest("Only the disposable #374 PR GitHub runner may serve this test")
@@ -251,6 +251,19 @@ class NextFilterHttpTest(unittest.TestCase):
             modal.get_by_role("button", name="Filtreyi kaldır: Color — Red").count(),
             0,
         )
+        # The active filter's focus fallback is the modal heading (tabIndex=-1).
+        # Shift+Tab from there must stay inside the dialog, never reach Filters
+        # or another background control.
+        self.page.keyboard.press("Shift+Tab")
+        self.assertTrue(modal.evaluate("(el) => el.contains(document.activeElement)"),
+                        "Shift+Tab from programmatically focused heading escaped dialog")
+        # A visible textbox is as valid as a button for the last Tab stop.
+        # Check that real focus stays on a visible, interactive dialog control.
+        self.assertTrue(self.page.evaluate(
+            "() => { const el=document.activeElement; return !!el && "
+            "el.getClientRects().length > 0 && "
+            "['BUTTON','INPUT','SELECT','TEXTAREA','A'].includes(el.tagName); }"
+        ), "Shift+Tab must land on a visible interactive control inside dialog")
 
     def test_actual_next_localized_filter_labels(self):
         # URL prefix is a country code, not a language code.
@@ -271,6 +284,59 @@ class NextFilterHttpTest(unittest.TestCase):
                 )
                 control.wait_for(state="visible")
                 self.assertEqual(control.count(), 1)
+
+
+    def test_filter_accordion_keyboard_and_hidden_tab_order(self):
+        self.goto(PATH + "?sortBy=recent")
+        accordion = self.page.get_by_role("button", name="Size", exact=True).first
+        accordion.wait_for(state="visible")
+        panel_id = accordion.get_attribute("aria-controls")
+        self.assertTrue(panel_id, "Accordion button must control a named panel")
+        panel = self.page.locator("[id='" + panel_id + "']")
+        self.assertEqual(accordion.get_attribute("aria-expanded"), "true")
+        self.assertTrue(panel.get_by_role("button", name="1", exact=True).is_visible())
+
+        accordion.focus()
+        self.page.keyboard.press("Space")
+        self.assertEqual(accordion.get_attribute("aria-expanded"), "false")
+        self.assertTrue(panel.is_hidden(), "Closed accordion must hide controls from tab order")
+        self.assertEqual(panel.get_by_role("button", name="1", exact=True).count(), 0)
+        accordion.focus()
+        self.page.keyboard.press("Tab")
+        self.assertFalse(panel.evaluate("(el) => el.contains(document.activeElement)"),
+                         "Keyboard focus must not enter collapsed filters")
+        accordion.focus()
+        self.page.keyboard.press("Enter")
+        self.assertEqual(accordion.get_attribute("aria-expanded"), "true")
+        self.assertTrue(panel.get_by_role("button", name="1", exact=True).is_visible())
+
+    def test_mobile_dialog_escape_close_button_and_focus_return(self):
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.goto(PATH + "?size=M&sortBy=recent")
+        trigger = self.page.get_by_role("button", name="Filters", exact=True)
+        trigger.focus()
+        self.page.keyboard.press("Enter")
+        dialog = self.page.get_by_role("dialog", name="Filters")
+        dialog.wait_for(state="visible")
+        self.assertEqual(dialog.get_attribute("aria-modal"), "true")
+        close = dialog.get_by_role("button", name="Close Filters")
+        self.assertTrue(close.evaluate("(el) => el === document.activeElement"))
+        self.page.keyboard.press("Shift+Tab")
+        self.assertTrue(dialog.evaluate("(el) => el.contains(document.activeElement)"),
+                        "Reverse Tab may not leave modal")
+        self.page.keyboard.press("Escape")
+        dialog.wait_for(state="detached")
+        self.assertTrue(trigger.evaluate("(el) => el === document.activeElement"),
+                        "Escape restores the original Filters trigger")
+
+        trigger.focus()
+        self.page.keyboard.press("Space")
+        dialog.wait_for(state="visible")
+        dialog.get_by_role("button", name="Close Filters").focus()
+        self.page.keyboard.press("Space")
+        dialog.wait_for(state="detached")
+        self.assertTrue(trigger.evaluate("(el) => el === document.activeElement"),
+                        "Native close button restores focus after Space")
 
 
 if __name__ == "__main__":
