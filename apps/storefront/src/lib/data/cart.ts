@@ -60,8 +60,10 @@ export async function retrieveCart(cartId?: string) {
       fetchOptions: { headers, cache: 'no-cache' }
     })
     .then(({ cart }) => cart)
-    .catch(error => {
-      console.error('Failed to retrieve cart', error);
+    .catch(() => {
+      // Never log the raw Mercur SDK error: response/request headers,
+      // backend messages and tokens are untrusted even on a denied Cart route.
+      console.error('Storefront cart retrieval unavailable');
       return null;
     });
 }
