@@ -140,30 +140,73 @@ export async function verifyB20CompanyLauncher(input:{
       links:['#organizations-title','#organization-draft-title'],
       jobUnavailable:true,targetOrg:true,targetDraft:true,
     })
-    const initialEntryUrl=await owner.eval("location.href")
-    await owner.eval(`document.querySelector('#personal-entry a[href="#organizations-title"]').focus()`)
-    await key("Enter","Enter",13)
-    assert.equal(await owner.eval("location.href"),initialEntryUrl,
-      "Keyboard shortcut must not fire the security popstate navigation guard")
-    const firstFocus=await owner.eval("({focused:document.activeElement?.id,"+
-      "tag:document.activeElement?.tagName,workspaceHidden:document.getElementById('workspace').hidden})")
-    assert.deepEqual(firstFocus,{focused:'organizations-title',tag:'H2',workspaceHidden:false},
-      "Native Enter must move focus to the first personal workspace destination")
-    await owner.eval(`document.querySelector('#personal-entry a[href="#organizations-title"]').focus()`)
-    await key("Tab","Tab",9)
-    await owner.wait("document.activeElement?.getAttribute('href')==='#organization-draft-title'")
-    await key("Enter","Enter",13)
-    assert.equal(await owner.eval("location.href"),initialEntryUrl,
-      "Second personal destination must preserve authenticated URL and scope")
-    const draftFocus=await owner.eval("({focused:document.activeElement?.id,"+
-      "tag:document.activeElement?.tagName,workspaceHidden:document.getElementById('workspace').hidden})")
-    assert.deepEqual(draftFocus,{focused:'organization-draft-title',tag:'H2',workspaceHidden:false},
-      "Real Chrome second native link must retain heading focus")
-    assert.equal(await owner.eval(
-      "document.getElementById('organization-draft-panel').hidden"),false,
-      "Keyboard navigation opens the existing allowed company application form")
-    // Neither fragment navigation nor showing the missing Job Board adds authority.
-    assert.equal((await get(owner,organizationId)).status,200)
+    // Protect unsaved private Organization DRAFT inputs through both real
+    // keyboard navigations. Snapshot/restore only DOM state in the disposable
+    // Chrome fixture; never submit, create an Org, or alter protected data.
+    const draftSelectors=[
+      '#organization-draft-form input[name=legal_name]',
+      '#organization-draft-form input[name=landline_phone]',
+    ]
+    const draftBefore=await owner.eval("(()=>{const fields=["+
+      "'#organization-draft-form input[name=legal_name]',"+
+      "'#organization-draft-form input[name=landline_phone]'];"+
+      "return fields.map(s=>document.querySelector(s)?.value??null)})()")
+    assert.equal(Array.isArray(draftBefore)&&draftBefore.length===2&&
+      draftBefore.every((v:unknown)=>typeof v==='string'),true,
+      "Both private Organization DRAFT fields must exist")
+    const syntheticName='B20 özel test — henüz kaydedilmedi & 203'
+    const syntheticPhone='0212 000 2030'
+    const draftInputPreserved=()=>owner.eval(
+      "(()=>{const f=document.getElementById('organization-draft-form');"+
+      "return !f.hidden && f.elements.namedItem('legal_name').value==="+
+      JSON.stringify(syntheticName)+" && f.elements.namedItem('landline_phone').value==="+
+      JSON.stringify(syntheticPhone)+"})()")
+    try{
+      // Real CDP text entry, not mock DOM or artificial form submission.
+      for(const selector of draftSelectors)
+        await owner.eval("document.querySelector("+JSON.stringify(selector)+").value=''")
+      await owner.input(draftSelectors[0],syntheticName)
+      await owner.input(draftSelectors[1],syntheticPhone)
+      assert.equal(await draftInputPreserved(),true,
+        "Real Chrome must contain both unsaved draft values before navigation")
+      const initialEntryUrl=await owner.eval("location.href")
+      await owner.eval(`document.querySelector('#personal-entry a[href="#organizations-title"]').focus()`)
+      await key("Enter","Enter",13)
+      assert.equal(await owner.eval("location.href"),initialEntryUrl,
+        "Keyboard shortcut must not fire the security popstate navigation guard")
+      const firstFocus=await owner.eval("({focused:document.activeElement?.id,"+
+        "tag:document.activeElement?.tagName,workspaceHidden:document.getElementById('workspace').hidden})")
+      assert.deepEqual(firstFocus,{focused:'organizations-title',tag:'H2',workspaceHidden:false},
+        "Native Enter must move focus to the first personal workspace destination")
+      assert.equal(await draftInputPreserved(),true,
+        "Navigating to existing Organizations must preserve private unsaved draft bytes")
+      await owner.eval(`document.querySelector('#personal-entry a[href="#organizations-title"]').focus()`)
+      await key("Tab","Tab",9)
+      await owner.wait("document.activeElement?.getAttribute('href')==='#organization-draft-title'")
+      await key("Enter","Enter",13)
+      assert.equal(await owner.eval("location.href"),initialEntryUrl,
+        "Second personal destination must preserve authenticated URL and scope")
+      const draftFocus=await owner.eval("({focused:document.activeElement?.id,"+
+        "tag:document.activeElement?.tagName,workspaceHidden:document.getElementById('workspace').hidden})")
+      assert.deepEqual(draftFocus,{focused:'organization-draft-title',tag:'H2',workspaceHidden:false},
+        "Real Chrome second native link must retain heading focus")
+      assert.equal(await draftInputPreserved(),true,
+        "Returning to new Organization DRAFT must preserve both unsaved field bytes")
+      assert.equal(await owner.eval(
+        "document.getElementById('organization-draft-panel').hidden"),false,
+        "Keyboard navigation opens the existing allowed company application form")
+      // Neither fragment navigation nor showing the missing Job Board adds authority.
+      assert.equal((await get(owner,organizationId)).status,200)
+    }finally{
+      // Restore even on test failure, never write these synthetic values to DB.
+      await owner.callFunction(
+        "function(previous){const values=JSON.parse(previous);"+
+        "const form=document.getElementById('organization-draft-form');"+
+        "form.elements.namedItem('legal_name').value=values[0];"+
+        "form.elements.namedItem('landline_phone').value=values[1]}",
+        JSON.stringify(draftBefore))
+    }
+
 
     await tabTo("#company-launcher-list > li:nth-child(3) button[data-company-action='up']")
     await key("Enter","Enter",13)
