@@ -5567,10 +5567,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
   window.addEventListener('pageshow',event=>{if(event.persisted){concealPrivateView();load()}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)concealPrivateView(true);else load()});
   window.addEventListener('focus',()=>{if(el('workspace').hidden&&loadedScope==='')load();else observeAccess()});
-  // Native same-page links should retain meaningful keyboard focus even
-  // while the authenticated workspace has asynchronous private refreshes.
-  // This changes presentation focus only; all Organization access is checked
-  // by the existing server endpoint on each subsequent action.
+  // Keep a genuine same-page anchor, but transfer keyboard focus to
+  // its heading synchronously. A background Chrome page may throttle RAF.
+  // Neither fragment can grant Person/Organization/Store access.
   el('personal-entry').onclick=event=>{
     if(el('workspace').hidden)return;
     const node=event.target;
@@ -5579,10 +5578,9 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse) => {
     const hash=link.getAttribute('href');
     if(hash!=='#organizations-title'&&hash!=='#organization-draft-title')return;
     const heading=el(hash.slice(1));
-    requestAnimationFrame(()=>{
-      if(!el('workspace').hidden&&location.hash===hash)
-        heading.focus({preventScroll:true});
-    });
+    event.preventDefault();
+    if(location.hash!==hash)location.hash=hash;
+    heading.focus({preventScroll:false});
   };
   window.addEventListener('popstate',()=>{concealPrivateView();load()});
   setInterval(observeAccess,5000);

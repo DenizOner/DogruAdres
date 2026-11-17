@@ -143,13 +143,19 @@ export async function verifyB20CompanyLauncher(input:{
     await owner.eval(`document.querySelector('#personal-entry a[href="#organizations-title"]').focus()`)
     await key("Enter","Enter",13)
     await owner.wait("location.hash==='#organizations-title'")
-    await owner.wait("document.activeElement?.id==='organizations-title'")
+    const firstFocus=await owner.eval("({focused:document.activeElement?.id,"+
+      "tag:document.activeElement?.tagName,workspaceHidden:document.getElementById('workspace').hidden})")
+    assert.deepEqual(firstFocus,{focused:'organizations-title',tag:'H2',workspaceHidden:false},
+      "Native Enter must move focus to the first personal workspace destination")
     await owner.eval(`document.querySelector('#personal-entry a[href="#organizations-title"]').focus()`)
     await key("Tab","Tab",9)
     await owner.wait("document.activeElement?.getAttribute('href')==='#organization-draft-title'")
     await key("Enter","Enter",13)
     await owner.wait("location.hash==='#organization-draft-title'")
-    await owner.wait("document.activeElement?.id==='organization-draft-title'")
+    const draftFocus=await owner.eval("({focused:document.activeElement?.id,"+
+      "tag:document.activeElement?.tagName,workspaceHidden:document.getElementById('workspace').hidden})")
+    assert.deepEqual(draftFocus,{focused:'organization-draft-title',tag:'H2',workspaceHidden:false},
+      "Real Chrome second native link must retain heading focus")
     assert.equal(await owner.eval(
       "document.getElementById('organization-draft-panel').hidden"),false,
       "Keyboard navigation opens the existing allowed company application form")
