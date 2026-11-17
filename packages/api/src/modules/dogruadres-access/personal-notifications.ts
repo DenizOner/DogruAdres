@@ -124,6 +124,9 @@ export class PersonalNotifications {
           where m.person_id=d.person_id and m.organization_id=c.organization_id
             and m.role='owner' and m.protected_owner=true
             and m.status='active' and m.revoked_at is null and m.deleted_at is null)
+      // This is a Person-addressed critical Staff security alert, NOT a
+      // company operational receipt. Its direct recipient and live platform
+      // grant are the authorization boundary even when the company is paused.
       union all
       select n.id,n.created_at,n.read_at,
         'organization.store_platform_closing_mail_admin_alert' as action,
@@ -134,7 +137,7 @@ export class PersonalNotifications {
         and c.deadline_basis='admin_alert'
       join da_organization o on o.id=c.organization_id
         and o.deleted_at is null
-      where n.person_id=? and (?<>'' and c.organization_id=?)
+      where n.person_id=?
         and exists(select 1 from da_platform_staff_grant g
           where g.person_id=n.person_id and g.task='store.closing.manage'
             and g.resource='platform' and g.revoked_at is null
@@ -148,7 +151,7 @@ export class PersonalNotifications {
       [s.person_id, organization ?? '', organization ?? '',
        organization ?? '', organization ?? '',
        s.person_id, organization ?? '', organization ?? '',
-       s.person_id, organization ?? '', organization ?? '', offset])
+       s.person_id, offset])
     // Exactly one SQL statement determines the list, unread count and page.
     // A stored reason, actor identifier or staff grant never crosses the API.
     return {
@@ -298,12 +301,11 @@ export class PersonalNotifications {
         join da_store_platform_closing c on c.seller_id=n.seller_id
           and c.deadline_basis='admin_alert' and c.admin_alert_at is not null
         where n.id=? and n.person_id=?
-          and (?<>'' and c.organization_id=?)
           and exists(select 1 from da_platform_staff_grant g
             where g.person_id=n.person_id and g.task='store.closing.manage'
               and g.resource='platform' and g.revoked_at is null
               and (g.expires_at is null or g.expires_at>clock_timestamp()))
-        for update of n`,[id,s.person_id,organization??'',organization??''])
+        for update of n`,[id,s.person_id])
       admin=rows.length===1
     }
     if(rows.length===0){
