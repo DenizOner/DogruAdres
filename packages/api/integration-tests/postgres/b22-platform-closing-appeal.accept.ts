@@ -703,14 +703,14 @@ export async function verifyB22PlatformClosingAppeal(input:{
   const privateProbe="B22_PRIVATE_SENTINEL_NEVER_LOG"
   const controlled={wait:async(_expression:string):Promise<void>=>{throw Error(privateProbe)},
     eval:(expression:string)=>staff.eval(expression)}
-  let proof=""
+  let diagnosticProofText=""
   try {await waitForStaffFinalState(controlled,sellerId)}
-  catch(e){proof=e instanceof Error?e.message:"non-error failure"}
+  catch(e){diagnosticProofText=e instanceof Error?e.message:"non-error failure"}
   const prefix="B22 Staff final-state wait failed; sanitized diagnostics: "
-  assert.equal(proof.startsWith(prefix),true,"Controlled Staff failure must be classified")
-  assert.equal(proof.includes(privateProbe)||proof.includes(sellerId),false,
+  assert.equal(diagnosticProofText.startsWith(prefix),true,"Controlled Staff failure must be classified")
+  assert.equal(diagnosticProofText.includes(privateProbe)||diagnosticProofText.includes(sellerId),false,
     "Sanitized Staff diagnostic must not contain original error or Seller ID")
-  const safe=JSON.parse(proof.slice(prefix.length))
+  const safe=JSON.parse(diagnosticProofText.slice(prefix.length))
   const allowedStatus=["list_loading","list_ready","post_loading","post_accepted",
     "list_error","post_uncertain","post_rejected","other","empty"]
   const allowedMail=["mail_loading","verified_one","verified_other",
