@@ -90,7 +90,7 @@ export async function verifyB22CoownerNativeMemberReadback(input:{
   assert.deepEqual((await q("select read_at from da_notification_receipt "+
     "where id=$1",[ownReceipt.id]))[0],{read_at:ownReceipt.read_at},
     "Denied personal read must not write another workspace receipt")
-  process.stdout.write("PASS B19 Chrome/HTTPS/PG16: personal bell excludes company Store receipt and unread count; selected Owner workspace sees its own receipt; unscoped read denied without mutation\\n")
+  process.stdout.write("PASS B19 Chrome/HTTPS/PG16: personal bell excludes company Store receipt and unread count; selected Owner workspace sees its own receipt; unscoped read denied without mutation\n")
   // Native SellerMember alone never grants Owner-private notification access.
   const memberOnly=await privateClosing(reviewer,orgA)
   assert.deepEqual({status:memberOnly.status,body:memberOnly.body},
