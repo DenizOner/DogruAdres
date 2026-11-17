@@ -88,6 +88,7 @@ describe("notification bell workspace isolation (SQL contract; real PG/browser N
       // No Organization = the personal bell. Company groups must be absent
       // instead of merging every company where the Person is also an Owner.
       expect(companyGuards(sql)).toBe(3)
+      expect(sql).not.toMatch(/^\\s*\/\//m)
       // A direct Person-recipient Staff security alert requires a live
       // platform grant, not the selected company's membership.
       expect(sql).toContain("g.person_id=n.person_id and g.task='store.closing.manage'")
@@ -131,7 +132,7 @@ describe("notification bell workspace isolation (SQL contract; real PG/browser N
 
   it("keeps direct-to-Staff critical security alert readable without selecting the paused Organization",async()=>{
     const staffNotice="danal_"+"a".repeat(32)
-    const execute=jest.fn(async(sql:string)=>{
+    const execute=jest.fn(async(sql:string,_params:unknown[] = [])=>{
       if(sql.includes("from da_store_platform_closing_admin_notice n"))
         return [{id:staffNotice,read_at:new Date("2026-11-01T00:00:00Z")}]
       return []
