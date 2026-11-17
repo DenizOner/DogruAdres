@@ -1097,7 +1097,8 @@ export async function verifyB22PlatformClosingAppeal(input:{
     encodeURIComponent(ownerOrgId))).body.notifications.some((n:any)=>
       n.id===lateNotice.id),false,
     "Other Owner must not read a newly promoted person's private notice")
-  const readLate=await write(staff,"/personal/notifications",{id:lateNotice.id})
+  const readLate=await write(staff,"/personal/notifications?organization="+
+    encodeURIComponent(ownerOrgId),{id:lateNotice.id})
   assert.equal(readLate.status,200)
   const afterRead=await read(staff,"/personal/notifications?organization="+
     encodeURIComponent(ownerOrgId))
@@ -2140,7 +2141,8 @@ export async function verifyB22PlatformClosingSecondStageRequest(input:{
   assert.equal((await q("select count(*)::int n from da_notification_receipt "+
     "where audit_event_id=$1",[persisted[0].final_review_audit_event_id]))[0].n>=1,true)
   assert.equal(await foundation.storeOwnerPauseAcceptingOrders([reviewSellerId]),false)
-  const notifications=await read(browser,"/personal/notifications")
+  const notifications=await read(browser,"/personal/notifications?organization="+
+    encodeURIComponent(organizationId))
   assert.equal(notifications.status,200)
   assert.ok(notifications.body?.notifications?.some((item:any)=>
     item.title==="Üst inceleme başvurusu kaydedildi"),
@@ -2393,7 +2395,8 @@ export async function verifyB22IndependentStaffClosingDecision(input:{
   await ownerBrowser.click("#store-platform-appeal-refresh")
   await ownerBrowser.wait("document.getElementById('store-platform-review-decision').textContent.includes("+
     JSON.stringify(payload.reason)+")")
-  const privateNotice=await read(ownerBrowser,"/personal/notifications")
+  const privateNotice=await read(ownerBrowser,"/personal/notifications?organization="+
+    encodeURIComponent(organizationId))
   assert.equal(privateNotice.status,200)
   assert.ok(privateNotice.body?.notifications?.some((x:any)=>
     x.title==="Mağaza itirazı hakkında gerekçeli karar verildi"))
