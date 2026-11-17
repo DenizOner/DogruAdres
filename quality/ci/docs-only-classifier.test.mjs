@@ -146,3 +146,38 @@ test("GitHub file response with unknown status or incomplete list forces full CI
   const e = event([changed("AGENTS.md"), changed("README.md")]);
   assert.equal((await classifyGithubPullRequest(e, args(second.request))).mode, "full");
 });
+
+
+test("GitHub pagination accounts for 101 distinct docs paths, not just first page", async () => {
+  const files = Array.from({ length: 101 }, (_, i) =>
+    changed("docs/ci/procedure-" + i + ".md"));
+  const api = stubApi(files);
+  const result = await classifyGithubPullRequest(event(files), args(api.request));
+  assert.equal(result.docsOnly, true);
+  assert.equal(result.count, 101);
+  const listCalls = api.seen.filter(s => s.url.includes("/files?"));
+  assert.equal(listCalls.length, 2);
+  assert.ok(listCalls[0].url.includes("page=1"));
+  assert.ok(listCalls[1].url.includes("page=2"));
+});
+
+test("a dangerous file on a second page must force the complete workflow", async () => {
+  const files = Array.from({ length: 100 }, (_, i) =>
+    changed("docs/policy-" + i + ".md"));
+  files.push(changed(".github/workflows/identity-organization-foundation.yml"));
+  const api = stubApi(files);
+  const result = await classifyGithubPullRequest(event(files), args(api.request));
+  assert.equal(result.mode, "full");
+});
+
+test("tampered event repository or a non-main PR base never enables docs-only", async () => {
+  const files = [changed("AGENTS.md")];
+  const api = stubApi(files);
+  const wrongRepo = event(files);
+  wrongRepo.repository.full_name = "attacker/repository";
+  assert.equal((await classifyGithubPullRequest(wrongRepo, args(api.request))).mode, "full");
+  const wrongBase = event(files);
+  wrongBase.pull_request.base.ref = "feature/unsafe";
+  assert.equal((await classifyGithubPullRequest(wrongBase, args(api.request))).mode, "full");
+  assert.equal(api.seen.length, 0);
+});
