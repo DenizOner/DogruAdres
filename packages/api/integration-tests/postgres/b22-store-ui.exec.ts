@@ -4313,10 +4313,18 @@ async function verifyReasonedStoreRejectionDuringPause(x:{
   await reviewer.wait("document.visibilityState==='visible'")
   if(!await reviewer.eval("!document.getElementById('workspace').hidden && "+
       "!document.getElementById('platform-store-policy-panel').hidden")){
+    // A page reload restores the authenticated workspace, NOT a panel that
+    // the product intentionally initializes hidden. Do not bypass the
+    // session/privacy guard or directly alter DOM.hidden. A real Staff
+    // user must reopen the policy panel with the existing native UI button.
     await reviewer.send("Page.reload",{ignoreCache:true})
+    await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible' && "+
-      "!document.getElementById('workspace').hidden && "+
-      "!document.getElementById('platform-store-policy-panel').hidden")
+      "!document.getElementById('workspace').hidden")
+    if(await reviewer.eval("document.getElementById('platform-store-policy-panel').hidden")){
+      await reviewer.click("#platform-store-policy-open")
+      await reviewer.wait("!document.getElementById('platform-store-policy-panel').hidden")
+    }
   }
   // P2 #325: same production proof SQL against 51 unrelated, fully
   // source-backed current Store associations in disposable PostgreSQL 16.
