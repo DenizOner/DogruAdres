@@ -1,3 +1,5 @@
+import { pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
 /**
  * Advisory-only GitHub review metadata audit, not a protected branch gate.
  * It cannot authenticate distinct ChatGPT writers/reviewers or issue PASS.
@@ -29,7 +31,9 @@ export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, queu
   const latest = [...currentResults].sort((a,b) => (a.id || 0) - (b.id || 0)).at(-1)
   const body = String(latest.body || '')
   // Not a PASS verdict: text is self-reported, cannot establish independent identity.
-  const disposition = /\bFAIL\b/i.test(body.slice(0, 480)) ? 'REPORTED_FAIL' : /\bBLOCKED\b/i.test(body.slice(0, 480)) ? 'REPORTED_BLOCKED' : /\bSTALE\b/i.test(body.slice(0, 480)) ? 'REPORTED_STALE' : /\bPASS\b/i.test(body.slice(0, 480)) ? 'REPORTED_PASS' : 'UNCLASSIFIED'
+  const heading = /(?:^|\n)\s*##\s*DA-REVIEW-RESULT-v2[^\n]{0,240}\b(PASS|FAIL|BLOCKED|STALE)\b/im.exec(body)?.[1]
+  const decision = heading || /\bKARAR\s*:\s*\**(PASS|FAIL|BLOCKED|STALE)\b/i.exec(body)?.[1]
+  const disposition = decision ? 'REPORTED_' + decision.toUpperCase() : 'UNCLASSIFIED'
   return { ...evidence, state: 'RECORDED', reason: 'review_metadata_matches_current_sha', disposition, resultId: latest.id || null, matchingReviewCount: provenance.length, warning: 'Human review of identity, exact diff, tests and merge gates is still mandatory' }
 }
 
@@ -76,11 +80,12 @@ async function cli() {
   return auditLive({ owner, repo, prNumber: Number(opts.pr), queueIssue: Number(opts.queue || 216), token: process.env.GITHUB_TOKEN })
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const result = await cli()
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
-    process.exitCode = result.state === 'RECORDED' ? 0 : 2
+    // Advisory never becomes a green GitHub gate, even for self-reported PASS.
+    process.exitCode = 2
   } catch (error) {
     process.stdout.write(`${JSON.stringify({ state: 'UNKNOWN', reason: String(error.message || 'read_failure'), independentIdentity: 'UNVERIFIED', mergePermitted: false })}\n`)
     process.exitCode = 2
