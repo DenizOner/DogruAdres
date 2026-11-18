@@ -15,11 +15,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BRANCH = "fix/fikret-378-dashboard-csp-build-guard"
+BRANCHES = ("fix/fikret-378-dashboard-csp-build-guard", "test/fikret-378-275-csp-staff-ci-only-20261118")
 RUN_THIS_PR = (
     os.environ.get("GITHUB_ACTIONS") == "true"
     and os.environ.get("GITHUB_EVENT_NAME") == "pull_request"
-    and os.environ.get("GITHUB_HEAD_REF") == BRANCH
+    and os.environ.get("GITHUB_HEAD_REF") in BRANCHES
     and os.environ.get("GITHUB_REPOSITORY") == "DenizOner/DogruAdres"
     and bool(os.environ.get("RUNNER_TEMP"))
 )
