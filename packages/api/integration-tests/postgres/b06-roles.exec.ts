@@ -412,9 +412,10 @@ export default async function({container}:ExecArgs){
   const port=Number(new URL(origin).port)
   // Every outstanding HTTPS connection belongs to this task-owned server.
   const priorServer=server!
+  // Bun 1.4.2 needs task keep-alives closed BEFORE server.close().
+  priorServer.closeAllConnections()
   await new Promise<void>((resolve,reject)=>{
     priorServer.close(error=>error?reject(error):resolve())
-    priorServer.closeAllConnections()
   })
   server=undefined
   await app!.close();app=undefined
