@@ -4944,6 +4944,18 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
     const ownerStores=(await get(selected(pairOrg))).body.stores
     assert.ok(pair.every(x=>ownerStores.some((item:any)=>
       item.id===x.seller_id)),"Both approved Stores visible only in their authorized Organization")
+    // This Owner's earlier Beta membership was revoked. Opening two Alpha
+    // Stores must not restore Beta access or disclose either native Seller
+    // through a different Organization selector (including foreign Gamma).
+    for(const otherOrg of [organizations[1].id,organizations[2].id]){
+      const denied=await get(selected(otherOrg))
+      assert.equal(denied.status,403,
+        "Revoked/foreign Organization must not inherit approved Store access")
+      const response=JSON.stringify(denied.body)
+      assert.ok(pair.every(item=>!response.includes(item.seller_id)&&
+        !response.includes(item.name)),
+        "Cross-Organization denial must not reveal approved Store identities")
+    }
     await reviewChrome.send("Page.bringToFront")
     await reviewChrome.wait("document.visibilityState==='visible'")
     assert.equal(await reviewChrome.eval(
