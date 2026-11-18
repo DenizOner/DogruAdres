@@ -41,6 +41,14 @@ bun run dev
 
 Mercur'un kurulu sürüm belgeleri için `node_modules/@mercurjs/docs/llms.txt` ve yalnız ilgili `content/**/*.mdx` bölümlerini kullanın. Ürün gereksinimlerini upstream örnek ekranlardan, paketlerden veya geçmiş PR yorumlarından türetmeyin.
 
+## Mevcut sürümün kritik işletim sınırları
+
+- **Telemetri:** `packages/api/medusa-config.ts` Mercur sunucu telemetrisini kapatır ve zorla açma değişkenini reddeder. Mercur CLI işlemleri için `MERCUR_DISABLE_TELEMETRY=true` ayrı gereklidir. Kurulu Admin/Vendor içindeki kullanıcı başlatımlı Feedback gönderiminin bu ayarla kapandığını varsaymayın; özel gizlilik/egress kanıtı olmadan üretimde açmayın.
+- **Önbellek:** Mercur 2.4.1'in önbellek varsayılanından bağımsız olarak DoğruAdres `withMercur` yapılandırması `caching: false` kullanır. Yetki/tenant iptal ve veri tazelik kabulü olmadan bunu açmayın.
+- **Eski mağazalar ve arama:** Eski Store/Seller/Offer verisine otomatik bölge, fiyat/izin veya indeks yetkisi atamayın. `POST /admin/index/sync` yalnız izinli izole Admin ortamında, gerçek yetki/olumsuz-yol ve kaynak kanıtıyla kullanılabilir.
+- **Migration ve sürüm yükseltme:** `medusa db:migrate`, seller/region/payout/order group ve teklif bağları, invite-token hash gibi geçişler önce yetkili izole veride doğrulanır. Korunan veri ve üretim geçişi ayrı izin ve gerçek kurtarma/restore kanıtı gerektirir.
+- **Ödeme:** Kurulu `processPaymentWorkflow` veya bir paket/anahtarın varlığı, sipariş kalıcılığı öncesi capture/crash riskini gidermez. [#254](https://github.com/DenizOner/DogruAdres/issues/254) çözülmeden gerçek checkout, callback ve ödeme aktifleştirilmez.
+
 ## Ürün güvenliği
 
 Her korunan işlemde güncel sunucu kaynağından Person → Organization → Store yetki zinciri ve olumsuz senaryolar doğrulanır. Başka kuruluşun verisine erişim, eski yetkinin yeniden kullanımı, kişisel veri sızıntısı ve yetkisiz sipariş/ödeme kabul edilmez. Ödeme, checkout callback'i ve gerçek deployment ayrı onay olmadan **kapalıdır**. Güvenlik açığı ayrıntıları için [.github/SECURITY.md](.github/SECURITY.md) geçerlidir.
