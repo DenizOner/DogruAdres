@@ -8,7 +8,7 @@ Bu depo public'tir. Güvenlik açıklarının ayrıntılarını **herkese açık
 2. **Report a vulnerability** seçeneği etkinse raporu bu **özel** kanaldan gönderin. Bunun etkin olduğunu önceden varsaymayın.
 3. Özel bildirim seçeneği yoksa, yalnızca **"Gizli güvenlik bildirimi için iletişim kanalı gerekli"** başlıklı, teknik ayrıntı içermeyen genel bir Issue oluşturup bakımcıdan güvenli kanal talep edin.
 
-Parola, erişim anahtarı, OTP, kurtarma kodu, canlı kullanıcı bilgisi, özel yapılandırma, aktif istismar ayrıntısı veya güvenlik açığının kötüye kullanılmasını kolaylaştıran PoC'yi herkese açık kanallarda paylaşmayın.
+Parola, erişim anahtarı, OTP, kurtarma kodu, canlı kullanıcı bilgisi, özel yapılandırma, aktif istismar ayrıntısı veya güvenlik açığının kötüye kullanılmasını kolaylaştıran PoC'yi herkese açık kanallarda paylaşmayın. Denetçi ve geliştiriciler herkese açık Issue/PR üzerinden yalnızca **gizlenmiş, istismara yol açmayan** engel özeti, sorumlu kişi, güvenli sonraki adım ve kapatma ölçütünü paylaşabilir; hassas dosya/satır/istismar zinciri gerekiyorsa özel güvenlik kanalı kullanılır.
 
 ## Kapsam ve koordinasyon
 

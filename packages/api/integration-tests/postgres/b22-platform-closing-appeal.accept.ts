@@ -13,8 +13,44 @@ import {otp} from "./b19-browser"
 import {verifyB20CompanyLauncher} from "./b20-company-launcher.accept"
 import {runPlatformClosingEmailTick} from "../../src/jobs/dogruadres-platform-closing-email"
 
-type StaffFinalBrowser = Pick<B06Chrome,"wait"|"eval">
-async function waitForStaffFinalState(staff:StaffFinalBrowser,sellerId:string):Promise<void>{
+type StaffFinalNetwork = Partial<Pick<B06Chrome,"http"|"finishedRequests"|"failedRequests">>
+type StaffFinalBrowser = Pick<B06Chrome,"wait"|"eval"> & StaffFinalNetwork
+
+// Existing CDP response metadata only; missing responses never prove an HTTP
+// failure or completed request. Only fixed allowlist enums leave this helper.
+function classifyStaffClosingNetwork(staff:StaffFinalNetwork,requestStart?:number){
+  if(typeof requestStart!=="number"||!Number.isSafeInteger(requestStart)||
+     requestStart<0||!Array.isArray(staff.http)||
+     !(staff.finishedRequests instanceof Set)||
+     !(staff.failedRequests instanceof Set))return {capture:"unavailable"}
+  const responses=staff.http.slice(requestStart)
+  const allowed=(method:string,path:string)=>responses.filter(row=>
+    row?.method===method&&row?.path===path)
+  const post=allowed("POST","/personal/platform/store-closings")
+  const list=allowed("GET","/personal/platform/store-closings")
+  const mail=allowed("GET","/personal/platform/store-closing-email-readiness")
+  const summarize=(rows:any[])=>{
+    const last=rows.at(-1),code=typeof last?.status==="number"?last.status:0
+    const http=code>=200&&code<300?"2xx":code>=300&&code<400?"3xx":
+      code>=400&&code<500?"4xx":code>=500&&code<600?"5xx":"unknown"
+    const id=typeof last?.requestId==="string"?last.requestId:null
+    const completion=!id?"unknown":staff.failedRequests!.has(id)?"failed":
+      staff.finishedRequests!.has(id)?"finished":"response_received"
+    return {count:rows.length===0?"none":rows.length===1?"one":"multiple",
+      http,completion}
+  }
+  // Response ARRIVAL order, not request-start order or proof of root cause.
+  const firstMail=mail.at(-2),lastMail=mail.at(-1),lastList=list.at(-1)
+  const response_order=!firstMail||!lastMail||!lastList?"unknown":
+    responses.indexOf(firstMail)<responses.indexOf(lastList)&&
+    responses.indexOf(lastList)<responses.indexOf(lastMail)?
+      "mail_list_mail":"other_observed"
+  return {capture:"response_observed_only",post_closings:summarize(post),
+    get_closings:summarize(list),get_mail:summarize(mail),response_order}
+}
+
+async function waitForStaffFinalState(staff:StaffFinalBrowser,sellerId:string,
+  requestStart?:number):Promise<void>{
   // Diagnostic-only: timeout observations must never expose private UI text,
   // IDs, request URLs, notification content, tokens or transport payloads.
   // Keep the authorized Staff final-state condition unchanged.
@@ -33,6 +69,9 @@ async function waitForStaffFinalState(staff:StaffFinalBrowser,sellerId:string):P
         "const selected=document.querySelector('#platform-closing-form select[name=seller_id]')?.value;"+
         "return {document_hidden:document.hidden,workspace_hidden:!!document.getElementById('workspace')?.hidden,panel_hidden:!!document.getElementById('platform-closing-panel')?.hidden,selected_matches:selected==="+JSON.stringify(sellerId)+",status,mail,closing_http:http('/platform/store-closings'),mail_http:http('/platform/store-closing-email-readiness')};"+
         "})()")
+      if(diagnostic&&typeof diagnostic==="object"&&!Array.isArray(diagnostic))
+        diagnostic={...(diagnostic as Record<string,unknown>),
+          network:classifyStaffClosingNetwork(staff,requestStart)}
     } catch { /* Browser inspection may be unavailable after a timeout. */ }
     throw Error("B22 Staff final-state wait failed; sanitized diagnostics: "+JSON.stringify(diagnostic))
   }
@@ -682,11 +721,12 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(canSelect,true,"Real Staff UI must offer the same paginated Seller")
   await staff.input("#platform-closing-form textarea[name=reason]",reason)
   await staff.click("#platform-closing-form input[name=confirmed]")
+  const staffClosingRequestStart=staff.http.length
   await staff.click("#platform-closing-form button[type=submit]")
   // The POST's first mail-read is followed by a live Store-list refresh,
   // which starts a second authorized mail-read. Assert the FINAL refresh,
   // not its transient first result while the second displays "loading".
-  await waitForStaffFinalState(staff,sellerId)
+  await waitForStaffFinalState(staff,sellerId,staffClosingRequestStart)
   const mailUi=await staff.eval("(()=>{const e=document.getElementById('platform-closing-mail-status');return {text:e.textContent,role:e.getAttribute('role'),live:e.getAttribute('aria-live')}})()")
   assert.match(mailUi.text,/Korunan Owner 1, doğrulanmış e-posta kimliği 1/)
   assert.match(mailUi.text,/Owner 1: .*deneme [0-4]\/4/)
@@ -720,11 +760,44 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(allowedMail.includes(safe.mail),true)
   assert.equal(allowedHttp.includes(safe.closing_http),true)
   assert.equal(allowedHttp.includes(safe.mail_http),true)
+  assert.equal(safe.network?.capture,"unavailable")
   for(const field of ["document_hidden","workspace_hidden","panel_hidden",
     "selected_matches"])assert.equal(typeof safe[field],"boolean")
   assert.deepEqual(Object.keys(safe).sort(),
     ["document_hidden","workspace_hidden","panel_hidden","selected_matches",
-      "status","mail","closing_http","mail_http"].sort())
+      "status","mail","closing_http","mail_http","network"].sort())
+  // Fixed synthetic CDP response sample; private request IDs and unrelated
+  // endpoint data may exist internally, but must not appear in the result.
+  const fakeNetwork=classifyStaffClosingNetwork({
+    http:[
+      {method:"POST",path:"/personal/platform/store-closings",
+        status:503,requestId:privateProbe+"old"},
+      {method:"POST",path:"/personal/platform/store-closings",
+        status:201,requestId:privateProbe+"post"},
+      {method:"GET",path:"/personal/platform/store-closing-email-readiness",
+        status:200,requestId:privateProbe+"mail1"},
+      {method:"GET",path:"/personal/platform/store-closings",
+        status:200,requestId:privateProbe+"list"},
+      {method:"GET",path:"/personal/platform/store-closing-email-readiness",
+        status:403,requestId:privateProbe+"mail2"},
+      {method:"GET",path:"/personal/platform/store-closings/private",
+        status:500,requestId:privateProbe+"ignored"}],
+    finishedRequests:new Set([privateProbe+"post",privateProbe+"mail1",privateProbe+"list"]),
+    failedRequests:new Set([privateProbe+"mail2"])
+  },1)
+  assert.deepEqual(fakeNetwork,{
+    capture:"response_observed_only",
+    post_closings:{count:"one",http:"2xx",completion:"finished"},
+    get_closings:{count:"one",http:"2xx",completion:"finished"},
+    get_mail:{count:"multiple",http:"4xx",completion:"failed"},
+    response_order:"mail_list_mail"
+  })
+  assert.equal(JSON.stringify(fakeNetwork).includes(privateProbe),false)
+  const noResponse=classifyStaffClosingNetwork({
+    http:[],finishedRequests:new Set<string>(),failedRequests:new Set<string>()
+  },0)
+  assert.deepEqual(noResponse.post_closings,
+    {count:"none",http:"unknown",completion:"unknown"})
   let fallback=""
   try {await waitForStaffFinalState({wait:controlled.wait,
     eval:async(_expression:string)=>{throw Error(privateProbe)}},sellerId)}
