@@ -53,10 +53,14 @@ export default async function({container}:ExecArgs){
   process.stdout.write('B06_RESTART_HTTP_READY\n')
   await stop
  }finally{
-  if(listening)await new Promise<void>((resolve,reject)=>{
-   server.close(error=>error?reject(error):resolve())
+  if(listening){
+   // Bun 1.4.2: closeAllConnections AFTER close() can leave keep-alives open.
+   // Close only this task-owned worker's connections BEFORE server.close().
    server.closeAllConnections()
-  })
+   await new Promise<void>((resolve,reject)=>{
+    server.close(error=>error?reject(error):resolve())
+   })
+  }
   await app.close()
  }
  // The task-owned HTTP process must actually exit between restart phases.
