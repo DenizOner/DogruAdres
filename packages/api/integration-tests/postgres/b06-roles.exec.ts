@@ -299,7 +299,7 @@ export default async function({container}:ExecArgs){
   // Old cookie was minted before the preference revision. Keep it in memory
   // only to prove restart cannot resurrect a revoked/revision-stale session.
   const staleBeforePreferenceCookie=await b.token()
-  assert.match(staleBeforePreferenceCookie??'',/^[A-Za-z0-9_-]{43}$/)
+  assert.ok(/^[A-Za-z0-9_-]{43}$/.test(staleBeforePreferenceCookie??''),'B06 stale cookie requires opaque task-only token')
   const outboxBefore=await count('da_security_outbox')
   const auditBefore=(await q("select count(*)::int n from da_audit_event where action='mfa.person_preference.set'"))[0].n
   // Two simultaneous REAL HTTPS requests with the same strong session and
