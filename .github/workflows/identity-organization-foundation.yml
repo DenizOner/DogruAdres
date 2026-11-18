@@ -1015,3 +1015,61 @@ jobs:
       # The test erases its own schema in finally. GitHub Actions terminates and
       # removes this ephemeral PostgreSQL service on job exit/cancel. There is
       # no repository volume, persistent fixture or access to the M0 task DB.
+
+  # TEMPORARY #416: no-token only; draft PR #435 NEVER MERGE. This job
+  # remains skipped while draft; no live GET CLI/token step exists here.
+  hakan-416-pretoken-review-only:
+    name: Hakan #416 pre-token guard and exact Node31 (never merge)
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'ready_for_review' && github.event.pull_request.number == 435 && github.event.pull_request.draft == false && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout same-repo exact temporary source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Fail closed for event, fork, retry, ref and base
+        env:
+          HAKAN_416_PR: '435'
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          node --test quality/ci/hakan-416-pretoken.test.mjs
+          node quality/ci/hakan-416-pretoken.mjs
+      - name: Checkout pinned Kerem #433 exact source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 9692f95a6af20458adfb29bdccdb570d488ae0c8
+          path: _target
+          persist-credentials: false
+      - name: Verify two immutable source blobs and run tokenless Node31
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C _target rev-parse HEAD)" = "9692f95a6af20458adfb29bdccdb570d488ae0c8"
+          test "$(git -C _target hash-object quality/governance/review-freshness-audit.mjs)" = "b336f202a8f4d4021e712fc0bf307353f93d4276"
+          test "$(git -C _target hash-object quality/governance/review-freshness-audit.test.mjs)" = "0f094f624d4e8a5c05452d0ea2068b67d26800cc"
+          cd _target
+          env -u GH_TOKEN -u GITHUB_TOKEN node --test quality/governance/review-freshness-audit.test.mjs
+          env -u GH_TOKEN -u GITHUB_TOKEN node --input-type=module -e '
+            import {spawnSync} from "node:child_process";
+            const env={...process.env}; delete env.GITHUB_TOKEN; delete env.GH_TOKEN;
+            const result=spawnSync(process.execPath,["quality/governance/review-freshness-audit.mjs","--repo=DenizOner/DogruAdres","--pr=433","--queue=216"],{env,encoding:"utf8",timeout:15000});
+            const combined=String(result.stdout??"")+String(result.stderr??"");
+            if(result.status!==2 || !/UNKNOWN/.test(combined)) process.exit(1);
+            console.log("PASS no-token exit2/UNKNOWN; no response bodies logged");
+          '
+      # Deliberately NO github.token/CLI smoke step. A new exact review
+      # and separate authorization are required before any live GET attempt.
