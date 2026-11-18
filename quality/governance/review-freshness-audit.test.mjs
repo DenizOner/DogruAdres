@@ -26,3 +26,19 @@ test('top-level PR Conversation provenance is accepted as metadata but never ver
 test('a PR changing during pagination is UNKNOWN',async()=>{let count=0;const fetcher=async u=>({ok:true,json:async()=>u.includes('/git/ref/')?{object:{sha:b}}:u.includes('/pulls/418')&&!u.includes('/reviews')?(++count===1?pr:{...pr,head:{sha:old}}):[]});const x=await auditLive({owner:'DenizOner',repo:'DogruAdres',prNumber:418,token:'dummy',fetcher});assert.equal(x.state,'UNKNOWN');assert.equal(x.reason,'pr_changed_during_snapshot')})
 test('unsupported reviewer decision remains unclassified',()=>{const result=comment('REVIEW-RESULT');result.body='<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418\nExact HEAD: `'+h+'`\nbase: `'+b+'`\nKARAR: CHANGES REQUIRED; old tests PASS';const x=check({queueComments:[comment('REVIEW-REQUEST'),result]});assert.equal(x.disposition,'UNCLASSIFIED')})
 test('new READY on same SHA invalidates an older review result until a newer result',()=>{const x=check({queueComments:[comment('REVIEW-REQUEST'),comment('REVIEW-RESULT'),comment('REVIEW-REQUEST',h,b,4)]});assert.equal(x.state,'PENDING')})
+test('canonical #216 HEAD/base on a shared line matches READY, result and Review',()=>{
+  const realHead='e11bf406afeb00224ce610ea575d900708092c50'
+  const realBase='fef2de0173b0e2c3347ed887eedae94bf747fa7c'
+  const ready={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\n**DA-REVIEW-REQUEST-v2 — READY / PR #418**\n**Exact HEAD / stored base / canlı main:** `'+realHead+'` / `'+realBase+'` / aynı'}
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS (SCOPED)\n- **Exact PR HEAD / base / kontrol edilen canlı main:** `'+realHead+'` / `'+realBase+'` / aynı'}
+  const provenance={commit_id:realHead,body:'<!-- REVIEW-PROVENANCE-v1 -->\n**Exact target:** PR #418, OPEN. HEAD `'+realHead+'`; PR base `'+realBase+'`'}
+  const x=check({pr:{...pr,head:{sha:realHead},base:{sha:realBase}},mainSha:realBase,queueComments:[ready,result],reviews:[provenance]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_PASS')
+  assert.equal(x.independentIdentity,'UNVERIFIED')
+  assert.equal(x.mergePermitted,false)
+})
+test('combined HEAD/base line with only one SHA is never accepted as a valid base',()=>{
+  const onlyHead={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\nPR #418\nExact HEAD / stored base / main: `'+h+'`'}
+  assert.equal(check({queueComments:[onlyHead,comment('REVIEW-RESULT')]}).state,'STALE')
+})
