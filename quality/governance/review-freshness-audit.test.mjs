@@ -103,3 +103,28 @@ test('colonless missing base cannot borrow a following main SHA', () => {
   assert.equal(x.state,'UNVERIFIED')
   assert.equal(x.mergePermitted,false)
 })
+
+test('result targeting PR #419 with related PR #418 cannot override #418 BLOCKED', () => {
+  const blocked={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — BLOCKED\nExact HEAD: '+h+'\nbase: '+b+'\nKARAR: BLOCKED'}
+  const unrelated={id:102,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #419 — PASS\nRelated: PR #418\nExact HEAD: '+h+'\nbase: '+b+'\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),blocked,unrelated]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_BLOCKED')
+})
+test('a READY for PR #419 mentioning PR #418 is not a #418 READY', () => {
+  const unrelated={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\n## DA-REVIEW-REQUEST-v2 — PR #419\nRelated: PR #418\nExact HEAD: '+h+'\nbase: '+b}
+  assert.equal(check({queueComments:[unrelated]}).state,'MISSING')
+})
+test('Markdown-bold KARAR: BLOCKED contradicts PASS heading and is UNCLASSIFIED', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\n- **KARAR:** BLOCKED'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'UNCLASSIFIED')
+  assert.equal(x.mergePermitted,false)
+})
+test('Markdown-bold SONUÇ: BLOCKED with bold value is parsed explicitly', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418\nExact HEAD: '+h+'\nbase: '+b+'\n**SONUÇ:** **BLOCKED**'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.disposition,'REPORTED_BLOCKED')
+  assert.equal(x.mergePermitted,false)
+})

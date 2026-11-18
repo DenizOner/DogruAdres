@@ -7,14 +7,28 @@ import { resolve } from 'node:path'
  */
 const SHA = /^[0-9a-f]{40}$/i
 const marker = (body, kind) => String(body || '').slice(0, 300).includes(`DA-${kind}-v2`)
+// Associate queue evidence with its declared target, not incidental links.
+// A reference to another PR in the narrative is not a review of that PR.
 const prMarker = (body, n) => {
-  const first = String(body || '').slice(0, 440)
-  // Canonical #216 Denetçi results may use "## DA-REVIEW-RESULT-v2 — #422"
-  // without a literal "PR #422" in the first 440 characters.
-  const explicit = new RegExp(`(?:PR\\s*#|/pull/)${n}\\b`, 'i').test(first)
-  const canonicalHeading = new RegExp(`(?:^|\\n)\\s*##\\s*DA-REVIEW-(?:REQUEST|RESULT)-v2\\s*[-:–—]\\s*#${n}\\b`, 'i').test(first)
-  return explicit || canonicalHeading
+  const lines = String(body || '').slice(0, 1800).split(/\r?\n/)
+  const heading = lines.find(line => /^\s*(?:#{1,4}\s*)?\*{0,2}\s*DA-REVIEW-(?:REQUEST|RESULT)-v2\b/i.test(line))
+  if (heading) {
+    // Ignore history/related references after the actual heading decision.
+    const targetPart = heading.split(/\s+[-–—]\s+(?:PASS|FAIL|BLOCKED|STALE)\b/i)[0]
+    const explicit = [...targetPart.matchAll(/\bPR\s*#(\d+)\b/gi)].map(x => Number(x[1]))
+    if (explicit.length) return explicit.every(id => id === n)
+    // Canonical '#422 / #216': the first unlabeled number is the target.
+    // The second number is the coordination issue, not another target PR.
+    const canonical = /DA-REVIEW-(?:REQUEST|RESULT)-v2\s*[-:–—]\s*#(\d+)\b/i.exec(targetPart)
+    return canonical ? Number(canonical[1]) === n : false
+  }
+  // Older canonical READY/RESULT comments can use a standalone '## PR #418'
+  // or 'READY for PR #418' line. Do not search all prose for PR links.
+  const field = lines.find(line => /^\s*(?:#{1,4}\s*)?(?:\*{0,2}\s*)?(?:READY\s+for\s+)?PR\s*#\d+\b/i.test(line))
+  const match = field && /\bPR\s*#(\d+)\b/i.exec(field)
+  return Boolean(match && Number(match[1]) === n)
 }
+
 // Review evidence may show HEAD/base/main in one label row. Do not
 // interpret a later main SHA as an omitted or NOT VERIFIED base value.
 const shaCell = value => {
@@ -84,7 +98,7 @@ export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prCo
   // Read only explicit decision slots after a delimiter or KARAR/SONUÇ.
   const headingVotes = [...headingLine.matchAll(/[—–:-]\s*(PASS|FAIL|BLOCKED|STALE)\b/gi)]
     .map(match => match[1].toUpperCase())
-  const explicitVotes = [...body.matchAll(/(?:^|\n)\s*(?:[-*]\s*)?\*{0,2}(?:KARAR|SONUÇ)\*{0,2}\s*:\s*\*{0,2}(PASS|FAIL|BLOCKED|STALE)\b/gim)]
+  const explicitVotes = [...body.matchAll(/(?:^|\n)\s*(?:[-*]\s*)?\*{0,2}(?:KARAR|SONUÇ)\*{0,2}:\*{0,2}\s*\*{0,2}(PASS|FAIL|BLOCKED|STALE)\b/gim)]
     .map(match => match[1].toUpperCase())
   const choices = new Set([...headingVotes, ...explicitVotes])
   const decision = headingVotes.length > 1 || explicitVotes.length > 1 || choices.size > 1
