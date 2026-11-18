@@ -3504,11 +3504,17 @@ async function verifyRealNextStorefrontRenameUrls(
   // the PRODUCTION Medusa native HTTP entry, even with a publishable key or
   // caller-supplied Seller selector. The later test-only ApiLoader does NOT
   // override this approved M0 closed-reader boundary.
-  for(const extraHeaders of [{}, {"x-seller-id":storeId}]){
+  for(const injectForgedSeller of [false,true]){
+    // Explicit string-to-string headers prevent an optional undefined key
+    // from violating DOM HeadersInit's strict TypeScript overload.
+    const protectedHeaders:Record<string,string>={
+      "x-publishable-api-key":publishableKey
+    }
+    if(injectForgedSeller)protectedHeaders["x-seller-id"]=storeId
     const blockedOffer=await fetch(blockedOrigin+"/store/offers?"+
       new URLSearchParams({seller_id:storeId,
         fields:"+calculated_price,+inventory_quantity"}),{
-      headers:{"x-publishable-api-key":publishableKey,...extraHeaders},
+      headers:protectedHeaders,
       redirect:"manual",signal:AbortSignal.timeout(15000)
     })
     assert.equal(blockedOffer.status,401,
