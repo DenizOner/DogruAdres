@@ -607,6 +607,36 @@ describe("B22 private business application DRAFT — never an Organization",()=>
   })
 
 
+  it("rejects identical current draft document bytes without scanning or persisting another version",async()=>{
+    // Approved unlimited correction rounds are unaffected; this is only
+    // a same-SHA, already-current draft no-op, regardless of filename.
+    const pdf=Buffer.from("%PDF-1.7\\n1 0 obj\\n<<>>\\nendobj\\nxref\\n0 1\\n0000000000 65535 f\\ntrailer\\n<<>>\\nstartxref\\n9\\n%%EOF\\n","ascii")
+    const sha=require("node:crypto").createHash("sha256").update(pdf).digest("hex")
+    const sessionSpy=jest.spyOn(IdentitySessions.prototype,"current").mockResolvedValue({
+      person_id:"daprs_applicant",actor_type:"customer",actor_id:"cus_app"
+    } as any)
+    const scanSpy=safePreview.prepareScannedTaxCertificatePreview as jest.Mock
+    const sql=jest.fn(async(statement:string)=>{
+      if(statement.includes("from da_organization_application where id=? for update"))
+        return [{applicant_person_id:"daprs_applicant",status:"draft",version:4}]
+      if(statement.includes("select original_sha256 from da_organization_application_document"))
+        return [{original_sha256:sha}]
+      return []
+    })
+    try{
+      const result=await saveOrganizationDocument({execute:sql},"opaque",{
+        action:"upload_document",application_id:payload.application_id,
+        expected_version:4,filename:"renamed.pdf",file_base64:pdf.toString("base64")
+      },"unused-private-root")
+      expect(result).toEqual({conflict:true})
+      expect(sql.mock.calls.some(([statement])=>
+        String(statement).includes("select original_sha256 from da_organization_application_document"))).toBe(true)
+      expect(scanSpy).not.toHaveBeenCalled()
+      expect(sql.mock.calls.some(([statement])=>
+        /insert into |update da_/.test(String(statement)))).toBe(false)
+    }finally{sessionSpy.mockRestore()}
+  })
+
   it("reopens a correction only after a new private document revision, preserving the earlier file",async()=>{
     const os=require("node:os"),path=require("node:path"),fsp=require("node:fs/promises")
     const root=await fsp.mkdtemp(path.join(os.tmpdir(),"da-b22-correction-"))
