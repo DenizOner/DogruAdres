@@ -27,7 +27,9 @@ jobs:
   # sources locally (without changing repository security settings), check
   # SARIF and retain precise findings in this job's real CI log.
   codeql-javascript-typescript:
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    needs: static
+    # Preserve full scanning when Foundation itself fails; a failure must not conceal security jobs.
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.draft == false && (needs.static.result != 'success' || needs.static.outputs.docs_only != 'true') }}
     name: CodeQL — JavaScript/TypeScript (local SARIF)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -90,7 +92,8 @@ jobs:
           JS
 
   r1-windows-authz:
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    needs: static
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.draft == false && (needs.static.result != 'success' || needs.static.outputs.docs_only != 'true') }}
     name: R1 Windows native Authz — synthetic token/ACL only
     runs-on: windows-2025
     timeout-minutes: 6
@@ -172,6 +175,11 @@ jobs:
     name: Foundation static checks
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.docs_classify.outputs.docs_only }}
     steps:
       - name: Checkout PR merge ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -190,7 +198,45 @@ jobs:
         with:
           node-version: '24.22.1'
           package-manager-cache: false
+      # Authenticate against the immutable protected base, never execute PR-authored CI code.
+      # This is a fail-closed dependency on independently reviewed #417.
+      - name: Checkout protected PR base for trusted classifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci_trusted_base
+          persist-credentials: false
+      - name: Classify files with protected-base-only script
+        id: docs_classify
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C .ci_trusted_base rev-parse HEAD)" = "$EXPECTED_BASE"
+          if test -f .ci_trusted_base/quality/ci/docs-only-classifier.mjs && test -f .ci_trusted_base/quality/ci/docs-only-classifier.test.mjs; then
+            node .ci_trusted_base/quality/ci/docs-only-classifier.mjs
+          else
+            echo 'docs_only=false' >> "$GITHUB_OUTPUT"
+            echo 'classification=full' >> "$GITHUB_OUTPUT"
+            echo 'Trusted base has no approved classifier; full checks remain mandatory.'
+          fi
+      - name: Run trusted classifier contract tests on real Actions Node
+        if: ${{ hashFiles('.ci_trusted_base/quality/ci/docs-only-classifier.test.mjs') != '' }}
+        run: node --test .ci_trusted_base/quality/ci/docs-only-classifier.test.mjs
+      - name: Verify Markdown diff (document-only)
+        if: steps.docs_classify.outputs.docs_only == 'true'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$PR_BASE_SHA"
+          git diff --check "$PR_BASE_SHA" "$GITHUB_SHA"
+          echo 'Document-only: exact SHA/tree/patch checks, trusted Node negative tests, and Markdown diff whitespace passed. No Bun, Medusa, API build, Chrome, Windows or local CodeQL claimed.' >> "$GITHUB_STEP_SUMMARY"
       - name: Setup Bun
+        if: steps.docs_classify.outputs.docs_only != 'true'
         id: setup_bun
         continue-on-error: true
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -199,11 +245,13 @@ jobs:
           no-cache: true
       # Fallback is only for GitHub release download errors. Never skip tests.
       - name: Fallback to official pinned Bun from npm
-        if: steps.setup_bun.outcome == 'failure'
+        if: steps.docs_classify.outputs.docs_only != 'true' && steps.setup_bun.outcome == 'failure'
         run: npm install -g --no-audit --no-fund bun@1.4.2
       - name: Verify exact Bun runtime
+        if: steps.docs_classify.outputs.docs_only != 'true'
         run: test "$(bun --version)" = "1.4.2"
       - name: Install locked dependencies
+        if: steps.docs_classify.outputs.docs_only != 'true'
         id: install
         run: bun install --frozen-lockfile
       # Reuse the existing required Foundation job for the approved #159 build
@@ -361,7 +409,7 @@ jobs:
       # Reuse executed suites. The summary identifies evidence candidates, NOT full ASVS compliance.
       # An unsuccessful/skipped step remains visible; this step never overrides a failed job.
       - name: Publish ASVS 5.0 existing-test evidence index (no extra scans)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.docs_classify.outputs.docs_only != 'true' }}
         env:
           ASVS_SMTP_HTTP: ${{ steps.asvs_smtp_http.outcome }}
           ASVS_AUTHZ_UNIT: ${{ steps.asvs_authz_unit.outcome }}
@@ -392,11 +440,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Document-only required status — API compilation deliberately not run
+        if: needs.static.outputs.docs_only == 'true'
+        run: |
+          test "${{ needs.static.result }}" = 'success'
+          echo 'Document-only: required Foundation static verified Markdown and the trusted classifier. API backend compilation was NOT performed; this job retains the existing required context name without claiming an API build.' >> "$GITHUB_STEP_SUMMARY"
       - name: Checkout PR merge ref
+        if: needs.static.outputs.docs_only != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Record source provenance
+        if: needs.static.outputs.docs_only != 'true'
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_SHA: ${{ github.sha }}
@@ -405,11 +460,13 @@ jobs:
           echo "Merge ref: $MERGE_SHA"
           test "$(git rev-parse HEAD)" = "$MERGE_SHA"
       - name: Setup Node
+        if: needs.static.outputs.docs_only != 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.22.1'
           package-manager-cache: false
       - name: Setup Bun
+        if: needs.static.outputs.docs_only != 'true'
         id: setup_bun
         continue-on-error: true
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -418,13 +475,16 @@ jobs:
           no-cache: true
       # Fallback is only for GitHub release download errors. Never skip tests.
       - name: Fallback to official pinned Bun from npm
-        if: steps.setup_bun.outcome == 'failure'
+        if: needs.static.outputs.docs_only != 'true' && steps.setup_bun.outcome == 'failure'
         run: npm install -g --no-audit --no-fund bun@1.4.2
       - name: Verify exact Bun runtime
+        if: needs.static.outputs.docs_only != 'true'
         run: test "$(bun --version)" = "1.4.2"
       - name: Install locked dependencies
+        if: needs.static.outputs.docs_only != 'true'
         run: bun install --frozen-lockfile
       - name: Build API backend under test configuration
+        if: needs.static.outputs.docs_only != 'true'
         working-directory: packages/api
         env:
           NODE_ENV: test
@@ -441,6 +501,7 @@ jobs:
           export DOGRUADRES_INVITATION_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
           bun run build
       - name: Production Medusa CLI rejects scaffold JWT and cookie secrets (no database)
+        if: needs.static.outputs.docs_only != 'true'
         working-directory: packages/api
         timeout-minutes: 4
         env:
@@ -467,6 +528,7 @@ jobs:
           fi
           echo "PASS: production Medusa CLI rejected scaffold secrets before server startup"
       - name: Production Medusa build accepts unique synthetic secrets (no database)
+        if: needs.static.outputs.docs_only != 'true'
         working-directory: packages/api
         timeout-minutes: 10
         env:
@@ -487,8 +549,9 @@ jobs:
           timeout 420s bunx medusa build
 
   mfa-postgres16:
-    # Keep explicitly requested isolated dispatch runs available for drafts.
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+    # Preserve isolated workflow_dispatch even though static intentionally skips on dispatch.
+    needs: static
+    if: ${{ always() && !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && (needs.static.result != 'success' || needs.static.outputs.docs_only != 'true'))) }}
     name: MFA migration and transaction — isolated PostgreSQL 16
     runs-on: ubuntu-24.04
     timeout-minutes: 20
