@@ -610,7 +610,7 @@ describe("B22 private business application DRAFT — never an Organization",()=>
   it("rejects identical current draft document bytes without scanning or persisting another version",async()=>{
     // Approved unlimited correction rounds are unaffected; this is only
     // a same-SHA, already-current draft no-op, regardless of filename.
-    const pdf=Buffer.from("%PDF-1.7\\n1 0 obj\\n<<>>\\nendobj\\nxref\\n0 1\\n0000000000 65535 f\\ntrailer\\n<<>>\\nstartxref\\n9\\n%%EOF\\n","ascii")
+    const pdf=Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\n0 1\n0000000000 65535 f\ntrailer\n<<>>\nstartxref\n9\n%%EOF\n","ascii")
     const sha=require("node:crypto").createHash("sha256").update(pdf).digest("hex")
     const sessionSpy=jest.spyOn(IdentitySessions.prototype,"current").mockResolvedValue({
       person_id:"daprs_applicant",actor_type:"customer",actor_id:"cus_app"
