@@ -3500,6 +3500,24 @@ async function verifyRealNextStorefrontRenameUrls(
   })
   assert.equal(liveIngress.status,401,
     "DoğruAdres native public Seller ingress stays denied by approved policy")
+  // #171/#374: calculated Offer price and inventory stay inaccessible through
+  // the PRODUCTION Medusa native HTTP entry, even with a publishable key or
+  // caller-supplied Seller selector. The later test-only ApiLoader does NOT
+  // override this approved M0 closed-reader boundary.
+  for(const extraHeaders of [{}, {"x-seller-id":storeId}]){
+    const blockedOffer=await fetch(blockedOrigin+"/store/offers?"+
+      new URLSearchParams({seller_id:storeId,
+        fields:"+calculated_price,+inventory_quantity"}),{
+      headers:{"x-publishable-api-key":publishableKey,...extraHeaders},
+      redirect:"manual",signal:AbortSignal.timeout(15000)
+    })
+    assert.equal(blockedOffer.status,401,
+      "Native Offer price/stock must remain closed until approved Buyer reader")
+    const deniedBody=await blockedOffer.text()
+    assert.ok(!/calculated_price|inventory_quantity|offer_[A-Za-z0-9_-]+/.test(deniedBody),
+      "Denied native Offer HTTP must not include price, stock or Offer identity")
+  }
+  process.stdout.write("PASS B22 #171 native PG16/HTTP: Seller and Offer ingress 401 including forged Seller scope; no price/stock leakage, Buyer reader remains closed\\n")
 
   // A private, disposable read-only native API proves the genuine Mercur
   // route and Next renderer without changing the product's 401 boundary.
