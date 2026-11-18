@@ -405,6 +405,9 @@ export default async function({container}:ExecArgs){
   const beforeRestartMfaAudit=(await q(
     "select count(*)::int n from da_audit_event where action in ('mfa.platform_policy.set','mfa.person_preference.set')"
   ))[0].n
+  const beforeRestartPreferenceOutbox=(await q(
+    "select count(*)::int n from da_security_outbox o join da_audit_event e on e.id=o.audit_event_id where e.action in ('mfa.platform_policy.set','mfa.person_preference.set')"
+  ))[0].n
   assert.ok(beforeRestartPolicy.length===1&&beforeRestartPolicy[0].platform_mode==='optional'&&
     beforeRestartPolicy[0].version===1&&beforeRestartPersons.length===1&&
     beforeRestartPersons[0].person_id===actors[1].person&&beforeRestartPersons[0].user_enabled===true&&
@@ -512,16 +515,21 @@ export default async function({container}:ExecArgs){
   const afterRestartMfaAudit=(await q(
     "select count(*)::int n from da_audit_event where action in ('mfa.platform_policy.set','mfa.person_preference.set')"
   ))[0].n
+  const afterRestartPreferenceOutbox=(await q(
+    "select count(*)::int n from da_security_outbox o join da_audit_event e on e.id=o.audit_event_id where e.action in ('mfa.platform_policy.set','mfa.person_preference.set')"
+  ))[0].n
   assert.deepEqual(afterRestartPolicy,beforeRestartPolicy,'Native server restart must not change platform revision')
   assert.deepEqual(afterRestartPersons,beforeRestartPersons,'Person preferences must persist across process exit')
   assert.equal(afterRestartMfaAudit,beforeRestartMfaAudit,
     'Readback and new login must not append a policy/preference mutation audit')
+  assert.equal(afterRestartPreferenceOutbox,beforeRestartPreferenceOutbox,
+    'Readback and new login must not duplicate the MFA preference security outbox')
   report.restartAcceptance={twoFreshNativeMedusaWorkerProcesses:true,
     firstWorkerExitedBeforeSecond:true,distinctProcessIds:true,
     identicalTaskOnlyPg16Database:true,oldCookieDenied403:true,
     allFourFreshNativeTotpChromeHttp200:httpOutcomes.every(o=>o.a===200&&o.b===200),
     optionalPlatformRevisionPreserved:true,preferenceRevisionPreserved:true,
-    noPolicyOrPreferenceAuditMutation:true,realChromeHttps:true,
+    noPolicyOrPreferenceAuditMutation:true,noDuplicatePreferenceSecurityOutbox:true,realChromeHttps:true,
     userAcceptanceScope:'ONLY B06 PERSONAL RESTART; NOT PLATFORM STAFF OR 12-STATE ACCEPTANCE'}
 
   report.status='PASS pending independent exact-HEAD acceptance'
