@@ -1,10 +1,12 @@
 name: "Test / bağımsız kabul"
-description: "Bir geliştirmeyi gerçek kaynak ve negatif test kanıtlarıyla inceleyin."
+description: "Yalnız ayrı onaylı kullanıcı işlevi/kabul görevi için; rutin PR incelemesi PR ve #216 üzerinde yapılır."
 title: "[KABUL] "
 body:
   - type: markdown
     attributes:
       value: |
+        Rutin bağımsız PR kod incelemesi için yeni [KABUL] Issue açmayın: PR'da REVIEW-PROVENANCE-v1 ve tek kuyruk #216'da DA-REVIEW-RESULT-v2 kullanın.
+        Bu form yalnız mevcut bir Issue'nun kapsamadığı, ayrıca onaylı bağımsız fonksiyonel kabul işi varsa kullanılır; önce mevcut kayıtları kontrol edin.
         Başarılı CI, merge izni veya üretim kabulü demek değildir. Gerçekleşen / yalnız raporlanan / test edilmemiş alanları ayırın.
         Korunan gerçek veri yerine izinli izole sentetik ortam kullanın.
   - type: input
