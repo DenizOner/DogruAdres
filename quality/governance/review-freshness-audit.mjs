@@ -15,27 +15,43 @@ const prMarker = (body, n) => {
   const canonicalHeading = new RegExp(`(?:^|\\n)\\s*##\\s*DA-REVIEW-(?:REQUEST|RESULT)-v2\\s*[-:–—]\\s*#${n}\\b`, 'i').test(first)
   return explicit || canonicalHeading
 }
-// Canonical #216 records often put HEAD / base / main SHAs on one line.
-// The first two values are HEAD/base only when labels occur in that order;
-// a lone HEAD must never be accepted as a base (fail-closed).
+// Review evidence may show HEAD/base/main in one label row. Do not
+// interpret a later main SHA as an omitted or NOT VERIFIED base value.
+const shaCell = value => {
+  const clean = String(value ?? '').replace(/[\x60*]/g, '').trim()
+  return SHA.test(clean) ? clean.toLowerCase() : null
+}
+const labelledSha = (body, key) => {
+  const pattern = key === 'head'
+    ? /\bHEAD\b\s*\**\s*:\s*[\x60*\s]*([a-f0-9]{40})\b/i
+    : /\bbase\b\s*\**\s*:\s*[\x60*\s]*([a-f0-9]{40})\b/i
+  for (const line of String(body || '').split(/\r?\n/)) {
+    const match = pattern.exec(line)
+    if (match) return match[1].toLowerCase()
+  }
+  return null
+}
 const versionPairIn = body => {
   for (const line of String(body || '').split(/\r?\n/)) {
     const hi = line.search(/\bHEAD\b/i), bi = line.search(/\bbase\b/i)
     if (hi < 0 || bi < hi) continue
-    const values = [...line.matchAll(/\b[a-f0-9]{40}\b/ig)]
-    if (values.length >= 2 && values[0].index > hi && values[1].index > bi) {
-      return { head: values[0][0].toLowerCase(), base: values[1][0].toLowerCase() }
-    }
+    // 'HEAD: sha; base: sha' records have separately labeled fields.
+    const explicitHead = labelledSha(line, 'head')
+    const explicitBase = labelledSha(line, 'base')
+    if (explicitHead && explicitBase) return { head: explicitHead, base: explicitBase }
+    // In 'HEAD / stored base / main: head / base / main', require the
+    // FIRST TWO data cells to be exact hashes. Never skip a missing cell.
+    const colon = line.indexOf(':')
+    if (colon < 0 || hi > colon || bi > colon) continue
+    const cells = line.slice(colon + 1).split(/\s*\/\s*/)
+    if (cells.length < 2) continue
+    const head = shaCell(cells[0]), base = shaCell(cells[1])
+    if (head && base) return { head, base }
   }
   return null
 }
-const headIn = body => versionPairIn(body)?.head || /(?:exact\s+)?HEAD[^\n]{0,125}?([a-f0-9]{40})/i.exec(String(body || ''))?.[1]?.toLowerCase() || null
-const baseIn = body => {
-  const pair = versionPairIn(body)
-  if (pair) return pair.base
-  const line = String(body || '').split(/\r?\n/).find(l => /\bbase\b/i.test(l) && !/\bHEAD\b/i.test(l))
-  return line ? /\bbase[^\n]{0,125}?([a-f0-9]{40})/i.exec(line)?.[1]?.toLowerCase() || null : null
-}
+const headIn = body => versionPairIn(body)?.head || labelledSha(body, 'head')
+const baseIn = body => versionPairIn(body)?.base || labelledSha(body, 'base')
 
 export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prComments = [], queueIssue = 216 }) {
   if (!pr || !Number.isInteger(pr.number) || !SHA.test(pr.head?.sha || '') || !SHA.test(pr.base?.sha || '') || !SHA.test(mainSha || '') || !Array.isArray(queueComments) || !Array.isArray(reviews) || !Array.isArray(prComments)) {
@@ -62,9 +78,18 @@ export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prCo
   const latest = [...currentResults].sort((a,b) => (a.id || 0) - (b.id || 0)).at(-1)
   const body = String(latest.body || '')
   // Not a PASS verdict: text is self-reported, cannot establish independent identity.
-  const heading = /(?:^|\n)\s*##\s*DA-REVIEW-RESULT-v2[^\n]{0,240}\b(PASS|FAIL|BLOCKED|STALE)\b/im.exec(body)?.[1]
-  const decision = heading || /\bKARAR\s*:\s*\**(PASS|FAIL|BLOCKED|STALE)\b/i.exec(body)?.[1]
-  const disposition = decision ? 'REPORTED_' + decision.toUpperCase() : 'UNCLASSIFIED'
+  const headingLine = body.split(/\r?\n/).find(line =>
+    /^\s*##\s*DA-REVIEW-RESULT-v2\b/i.test(line)) || ''
+  // A historical PASS in '(previous PASS invalidated)' is not a decision.
+  // Read only explicit decision slots after a delimiter or KARAR/SONUÇ.
+  const headingVotes = [...headingLine.matchAll(/[—–:-]\s*(PASS|FAIL|BLOCKED|STALE)\b/gi)]
+    .map(match => match[1].toUpperCase())
+  const explicitVotes = [...body.matchAll(/(?:^|\n)\s*(?:[-*]\s*)?\*{0,2}(?:KARAR|SONUÇ)\*{0,2}\s*:\s*\*{0,2}(PASS|FAIL|BLOCKED|STALE)\b/gim)]
+    .map(match => match[1].toUpperCase())
+  const choices = new Set([...headingVotes, ...explicitVotes])
+  const decision = headingVotes.length > 1 || explicitVotes.length > 1 || choices.size > 1
+    ? null : explicitVotes[0] || headingVotes[0] || null
+  const disposition = decision ? 'REPORTED_' + decision : 'UNCLASSIFIED'
   return { ...evidence, state: 'RECORDED', reason: 'review_metadata_matches_current_sha', disposition, resultId: latest.id || null, matchingReviewCount: provenance.length, warning: 'Human review of identity, exact diff, tests and merge gates is still mandatory' }
 }
 

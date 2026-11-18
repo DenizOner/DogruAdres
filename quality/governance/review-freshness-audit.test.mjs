@@ -62,3 +62,30 @@ test('unrelated heading #216 / #422 is not assigned to PR #422',()=>{
   assert.equal(x.state,'PENDING')
   assert.equal(x.mergePermitted,false)
 })
+
+test('combined READY with missing base never borrows a following main SHA', () => {
+  const ready={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\nPR #418\nExact HEAD / stored base / main: '+h+' / NOT VERIFIED / '+b}
+  assert.equal(check({queueComments:[ready,comment('REVIEW-RESULT')]}).state,'STALE')
+})
+test('combined RESULT with missing base cannot match as a verdict', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD / stored base / main: '+h+' / NOT VERIFIED / '+b}
+  assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).state,'PENDING')
+})
+test('combined READY with missing HEAD cannot use base and main as the HEAD/base pair', () => {
+  const ready={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\nPR #418\nExact HEAD / stored base / main: NOT VERIFIED / '+h+' / '+b}
+  assert.equal(check({queueComments:[ready,comment('REVIEW-RESULT')]}).state,'STALE')
+})
+test('a BLOCKED heading ignores historical PASS in explanatory parentheses', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — BLOCKED (previous PASS invalidated)\nExact HEAD: '+h+'\nbase: '+b+'\nKARAR: BLOCKED'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_BLOCKED')
+  assert.equal(x.mergePermitted,false)
+})
+test('contradictory explicit decision fields remain UNCLASSIFIED', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nKARAR: BLOCKED'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'UNCLASSIFIED')
+  assert.equal(x.mergePermitted,false)
+})
