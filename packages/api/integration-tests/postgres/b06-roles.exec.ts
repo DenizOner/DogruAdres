@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import {randomBytes,createHash} from 'node:crypto'
 import {createServer,request} from 'node:https'
-import {spawnSync} from 'node:child_process'
+import {spawn,spawnSync,type ChildProcess} from 'node:child_process'
 import {mkdtempSync,readFileSync,writeFileSync,rmSync,mkdirSync,readdirSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -44,6 +44,7 @@ export default async function({container}:ExecArgs){
  const output=process.env.B06_EVIDENCE_DIR!;assert.ok(output&&output.startsWith(process.env.RUNNER_TEMP!+'/'));mkdirSync(output,{recursive:true})
  const temp=mkdtempSync(join(tmpdir(),'b06-tls-')),browsers:B06Chrome[]=[]
  let app:Awaited<ReturnType<typeof createPersonalHttpApp>>|undefined,server:ReturnType<typeof createServer>|undefined
+ let freshWorker:ChildProcess|undefined,workerCleanupOk=true
  const challenges:any[]=[]
  const original=auth.verifyAuthMfaChallenge.bind(auth)
  auth.verifyAuthMfaChallenge=async function(input:any){const r=await original(input);challenges.push({identity:r.auth_identity_id,id:r.id,completed:r.completed_at});return r}
@@ -295,6 +296,10 @@ export default async function({container}:ExecArgs){
   // would reject the same write even if CSRF validation were broken.
   await assertDeniedNoMutation(b,'mfa-missing-csrf',prefBody(0,true),403,'missing')
   await assertDeniedNoMutation(b,'mfa-invalid-csrf',prefBody(0,true),403,'bad')
+  // Old cookie was minted before the preference revision. Keep it in memory
+  // only to prove restart cannot resurrect a revoked/revision-stale session.
+  const staleBeforePreferenceCookie=await b.token()
+  assert.match(staleBeforePreferenceCookie??'',/^[A-Za-z0-9_-]{43}$/)
   const outboxBefore=await count('da_security_outbox')
   const auditBefore=(await q("select count(*)::int n from da_audit_event where action='mfa.person_preference.set'"))[0].n
   // Two simultaneous REAL HTTPS requests with the same strong session and
@@ -389,6 +394,126 @@ export default async function({container}:ExecArgs){
     productionSettingsChanged:false
   }
 
+
+  // #366: A real Medusa HTTP worker must EXIT and a second, independent
+  // native Medusa process must boot against the SAME disposable PostgreSQL DB.
+  // Merely closing/reopening a Node listener in this test process is NOT
+  // accepted as restart persistence. The source, YAML and shared runner stay
+  // untouched: the two extra Medusa exec workers are task-owned children.
+  const beforeRestartPolicy=await q("select platform_mode,version from da_mfa_policy where id='current'")
+  const beforeRestartPersons=await q('select person_id,user_enabled,version from da_person_mfa_preference order by person_id')
+  const beforeRestartMfaAudit=(await q(
+    "select count(*)::int n from da_audit_event where action in ('mfa.platform_policy.set','mfa.person_preference.set')"
+  ))[0].n
+  assert.ok(beforeRestartPolicy.length===1&&beforeRestartPolicy[0].platform_mode==='optional'&&
+    beforeRestartPolicy[0].version===1&&beforeRestartPersons.length===1&&
+    beforeRestartPersons[0].person_id===actors[1].person&&beforeRestartPersons[0].user_enabled===true&&
+    beforeRestartPersons[0].version===1,'B06 restart requires exact committed preference')
+  const port=Number(new URL(origin).port)
+  // Every outstanding HTTPS connection belongs to this task-owned server.
+  const priorServer=server!
+  await new Promise<void>((resolve,reject)=>{
+    priorServer.close(error=>error?reject(error):resolve())
+    priorServer.closeAllConnections()
+  })
+  server=undefined
+  await app!.close();app=undefined
+  const workerEnv={...process.env,B06_RESTART_PORT:String(port),
+    B06_RESTART_TLS_DIR:temp,B06_RESTART_SENTINEL:'b06-test-only-native-http-worker-v1',
+    DOGRUADRES_PUBLIC_ORIGIN:origin}
+  const launchFreshServer=async()=>{
+    assert.equal(freshWorker,undefined,'Only one task-owned Medusa HTTP worker can listen')
+    let ready=false,failed=false,tail=''
+    const worker=spawn(process.execPath,
+      ['run','medusa','exec','./integration-tests/postgres/b06-restart-http.exec.ts'],
+      {cwd:process.cwd(),env:workerEnv,stdio:['ignore','pipe','pipe']})
+    freshWorker=worker
+    // Do not surface Medusa stdout/stderr: it may contain sensitive text.
+    worker.stdout?.on('data',(chunk:Buffer)=>{
+      tail=(tail+String(chunk)).slice(-512)
+      if(tail.includes('B06_RESTART_HTTP_READY'))ready=true
+    })
+    worker.stderr?.on('data',()=>{})
+    worker.on('error',()=>{failed=true})
+    await until(async()=>ready&&!failed&&worker.exitCode===null,85000,
+      'fresh native Medusa HTTP worker within B06 disposable scope')
+    assert.ok(worker.pid&&worker.pid!==process.pid,'Restart worker must be a distinct OS process')
+    return worker.pid
+  }
+  const stopFreshServer=async()=>{
+    assert.ok(freshWorker&&freshWorker.pid,'Only own B06 worker may receive SIGTERM')
+    const worker=freshWorker
+    assert.ok(worker.kill('SIGTERM'),'Task worker graceful shutdown signal must succeed')
+    await until(async()=>worker.exitCode!==null||worker.signalCode!==null,20000,
+      'B06 task worker process exit')
+    assert.equal(worker.exitCode,0,'Task native Medusa HTTP worker must shut down cleanly')
+    freshWorker=undefined
+  }
+  const oldCookieStatus=async()=>new Promise<number>((resolve,reject)=>{
+    const r=request({hostname:'127.0.0.1',port,path:'/personal/mfa',
+      ca,servername:'',headers:{Cookie:'da_session='+staleBeforePreferenceCookie}},
+      response=>{response.resume();response.on('end',()=>resolve(response.statusCode??0))})
+    r.on('error',reject);r.end()
+  })
+  const reloginWithFreshWorker=async(c:B06Chrome,label:'A'|'B',person:string,phase:string)=>{
+    c.phase=phase
+    await c.eval("(()=>{document.getElementById('workspace').hidden=true;document.getElementById('login').hidden=false;for(const el of document.querySelectorAll('#login input,#challenge input'))el.value='';})()")
+    await c.input('#login input[name=email]',process.env['B06_EMAIL_'+label]!)
+    await c.input('#login input[name=password]',process.env['B06_PASSWORD_'+label]!)
+    await c.click('#login button')
+    await c.wait("!document.getElementById('challenge').hidden")
+    await c.input('#challenge input[name=code]',await c.nextLoginOtp())
+    await c.click('#challenge button')
+    await c.wait("!document.getElementById('workspace').hidden&&document.getElementById('person').textContent==="+JSON.stringify('Person: '+person))
+    const token=await c.token()
+    assert.ok(token,'Fresh worker must issue a strong native session cookie')
+    await q('begin')
+    try{
+      const own=await new IdentitySessions(sql).current(token,true)
+      assert.ok(own&&own.person_id===person&&own.auth_identity_id===
+        actors[label==='A'?0:1].identity&&own.mfa_purpose==='full',
+        'New worker native challenge must grant only exact verified Person')
+      await q('commit')
+    }catch(error){await q('rollback');throw error}
+    const result=await mfaGet(c,'/personal/mfa','include')
+    assert.ok(result.status===200&&result.cacheControl==='no-store'&&
+      result.body?.platform?.platform_mode==='optional'&&result.body?.platform?.version===1&&
+      result.body?.personal?.person_id===person&&
+      result.body?.personal?.user_enabled===(label==='B')&&
+      result.body?.personal?.version===(label==='B'?1:0)&&
+      result.body?.native_factor_state==='enabled','Restart must preserve exact Person and native MFA')
+    return result.status
+  }
+  const workerPids:number[]=[]
+  for(const stage of [1,2]){
+    workerPids.push(await launchFreshServer())
+    assert.equal(await oldCookieStatus(),403,'Old revoked Person cookie must remain denied after restart')
+    await Promise.all([
+      reloginWithFreshWorker(a,'A',actors[0].person,'mfa-restart-'+stage+'-person-a'),
+      reloginWithFreshWorker(b,'B',actors[1].person,'mfa-restart-'+stage+'-person-b')
+    ])
+    await stopFreshServer()
+  }
+  assert.notEqual(workerPids[0],workerPids[1],
+    'Restart requires two distinct terminated Medusa HTTP worker processes')
+  const afterRestartPolicy=await q("select platform_mode,version from da_mfa_policy where id='current'")
+  const afterRestartPersons=await q('select person_id,user_enabled,version from da_person_mfa_preference order by person_id')
+  const afterRestartMfaAudit=(await q(
+    "select count(*)::int n from da_audit_event where action in ('mfa.platform_policy.set','mfa.person_preference.set')"
+  ))[0].n
+  assert.deepEqual(afterRestartPolicy,beforeRestartPolicy,'Native server restart must not change platform revision')
+  assert.deepEqual(afterRestartPersons,beforeRestartPersons,'Person preferences must persist across process exit')
+  assert.equal(afterRestartMfaAudit,beforeRestartMfaAudit,
+    'Readback and new login must not append a policy/preference mutation audit')
+  report.restartAcceptance={twoFreshNativeMedusaWorkerProcesses:true,
+    firstWorkerExitedBeforeSecond:true,distinctProcessIds:true,
+    identicalTaskOnlyPg16Database:true,oldCookieDenied403:true,
+    personAFreshNativeTotpAndDefault:false===false,
+    personBFreshNativeTotpAndPreference:true,
+    optionalPlatformRevisionPreserved:true,preferenceRevisionPreserved:true,
+    noPolicyOrPreferenceAuditMutation:true,realChromeHttps:true,
+    userAcceptanceScope:'ONLY B06 PERSONAL RESTART; NOT PLATFORM STAFF OR 12-STATE ACCEPTANCE'}
+
   report.status='PASS pending independent exact-HEAD acceptance'
  }catch(error){
   report.status='FAIL / no retry'
@@ -396,9 +521,17 @@ export default async function({container}:ExecArgs){
   throw Error('B06 acceptance failed; inspect sanitized phase/frame evidence; no retry')
  }finally{
   auth.verifyAuthMfaChallenge=original
+  if(freshWorker){
+    const worker=freshWorker
+    try{
+      if(worker.exitCode===null&&worker.signalCode===null)worker.kill('SIGTERM')
+      await until(async()=>worker.exitCode!==null||worker.signalCode!==null,15000,
+        'B06 task child cleanup')
+    }catch{workerCleanupOk=false}
+  }
   for(const c of browsers){await c.close();report.browsers.push({actor:c.actor,http:c.http,cleanup:c.cleanup})}
   if(server)await new Promise<void>(resolve=>server!.close(()=>resolve()))
-  await app?.close();await pg.end();rmSync(temp,{recursive:true,force:true});report.cleanup={chromeProfiles:browsers.every(c=>c.cleanup),taskTlsRemoved:true}
+  await app?.close();await pg.end();rmSync(temp,{recursive:true,force:true});report.cleanup={chromeProfiles:browsers.every(c=>c.cleanup),taskTlsRemoved:true,medusaWorkerExited:workerCleanupOk&&!freshWorker?.pid}
   writeFileSync(join(output,'evidence.json'),JSON.stringify(report,null,2))
   const hashes=readdirSync(output).filter(n=>n!=='SHA256SUMS').map(n=>createHash('sha256').update(readFileSync(join(output,n))).digest('hex')+'  '+n)
   writeFileSync(join(output,'SHA256SUMS'),hashes.join('\n')+'\n')
