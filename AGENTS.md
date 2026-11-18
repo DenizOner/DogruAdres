@@ -171,7 +171,7 @@ For **every** DoğruAdres frontend and backend development change, before writin
 
 ## Core modification rule
 
-Mercur core must not be modified by default.
+**Under the currently approved DoğruAdres architecture, Mercur/Medusa upstream core MUST NOT be modified.** The escalation list below is for evaluating a hypothetical future Product Owner proposal, not permission to patch, fork or alter installed upstream sources now.
 
 Required escalation order:
 
@@ -181,7 +181,7 @@ Required escalation order:
 4. minimal isolated compatibility patch
 5. fork
 
-Steps 3-5 require explicit external/user approval before implementation.
+Steps 3–5 are **not authorized today**. They could only be reconsidered after a new explicit Product Owner decision that actually supersedes the current no-core rule; absence of that decision means stop only the core-changing action and continue approved extension work.
 
 ## Permanent cost and GitHub Issue language policy
 
@@ -249,9 +249,8 @@ When an action depends on a genuinely unresolved product or high-risk policy dec
 
 External approval is required for:
 
-- Mercur core modification
-- fork
-- upstream patch strategy
+- any proposal to change upstream Mercur/Medusa core (currently prohibited; an approval-gate entry is **not** authorization)
+- fork or upstream patch strategy (currently prohibited under the same no-core rule)
 - new major dependency
 - domain ownership/boundary change
 - database ownership/schema architecture change
@@ -453,7 +452,7 @@ Prefer the minimum dependency surface needed to solve the problem.
 This project is developed on a modest Windows laptop.
 
 - use Docker only when required
-- stop project containers and processes when work is complete
+- stop **only positively identified, exclusively task-owned and safe-to-stop** containers/processes after the work checkpoint; preserve unknown/shared/protected resources under #229. Never assume container stop grants volume deletion or database cleanup
 - prefer targeted builds and targeted tests over broad monorepo tasks
 - avoid duplicate runtimes or unnecessary background services
 - keep local development lightweight without sacrificing correctness
