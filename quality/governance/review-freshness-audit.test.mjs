@@ -89,3 +89,17 @@ test('contradictory explicit decision fields remain UNCLASSIFIED', () => {
   assert.equal(x.disposition,'UNCLASSIFIED')
   assert.equal(x.mergePermitted,false)
 })
+
+test('colonless explicit HEAD and PR base provenance is accepted', () => {
+  const provenance={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\n**Exact target:** PR #418, OPEN. HEAD '+h+'; PR base '+b}
+  const x=check({reviews:[provenance]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_PASS')
+  assert.equal(x.mergePermitted,false)
+})
+test('colonless missing base cannot borrow a following main SHA', () => {
+  const provenance={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\nExact target: PR #418. HEAD '+h+'; PR base NOT VERIFIED; main '+b}
+  const x=check({reviews:[provenance]})
+  assert.equal(x.state,'UNVERIFIED')
+  assert.equal(x.mergePermitted,false)
+})

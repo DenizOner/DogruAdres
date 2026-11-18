@@ -23,8 +23,8 @@ const shaCell = value => {
 }
 const labelledSha = (body, key) => {
   const pattern = key === 'head'
-    ? /\bHEAD\b\s*\**\s*:\s*[\x60*\s]*([a-f0-9]{40})\b/i
-    : /\bbase\b\s*\**\s*:\s*[\x60*\s]*([a-f0-9]{40})\b/i
+    ? /\bHEAD\b\s*(?:\*{0,2}\s*:)?\s*[\x60*\s]*([a-f0-9]{40})\b/i
+    : /\bbase\b\s*(?:\*{0,2}\s*:)?\s*[\x60*\s]*([a-f0-9]{40})\b/i
   for (const line of String(body || '').split(/\r?\n/)) {
     const match = pattern.exec(line)
     if (match) return match[1].toLowerCase()
