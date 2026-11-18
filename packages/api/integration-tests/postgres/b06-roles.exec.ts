@@ -231,8 +231,6 @@ export default async function({container}:ExecArgs){
   }
   // A Person enrolled under mandatory MFA cannot edit personal opt-in.
   await assertDeniedNoMutation(b,'mfa-required-blocks-personal-write',prefBody(0,true),403)
-  await assertDeniedNoMutation(b,'mfa-missing-csrf',prefBody(0,true),403,'missing')
-  await assertDeniedNoMutation(b,'mfa-invalid-csrf',prefBody(0,true),403,'bad')
   await assertDeniedNoMutation(b,'mfa-foreign-person-selector',{
     ...prefBody(0,true),person_id:actors[0].person
   },400)
@@ -293,6 +291,10 @@ export default async function({container}:ExecArgs){
     beforePreference.body?.native_factor_state==='enabled'&&
     beforePreference.body?.effective_mfa_target?.user_control_allowed===true,
     'Optional mode must preserve exact Person binding and native factor state')
+  // CSRF must be tested after optional-mode reauthentication; mandatory mode
+  // would reject the same write even if CSRF validation were broken.
+  await assertDeniedNoMutation(b,'mfa-missing-csrf',prefBody(0,true),403,'missing')
+  await assertDeniedNoMutation(b,'mfa-invalid-csrf',prefBody(0,true),403,'bad')
   const outboxBefore=await count('da_security_outbox')
   const auditBefore=(await q("select count(*)::int n from da_audit_event where action='mfa.person_preference.set'"))[0].n
   // Two simultaneous REAL HTTPS requests with the same strong session and
