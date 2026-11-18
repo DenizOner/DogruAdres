@@ -55,10 +55,10 @@ const Form = () => {
       await transferCart();
     } else {
       toast.error({ title: res.message || 'An error occurred. Please try again.' });
+      return;
     }
 
     setIsAuthError(false);
-    router.push('/user');
   };
 
   const clearApiError = () => {
