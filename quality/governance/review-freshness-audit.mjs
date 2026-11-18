@@ -8,8 +8,27 @@ import { resolve } from 'node:path'
 const SHA = /^[0-9a-f]{40}$/i
 const marker = (body, kind) => String(body || '').slice(0, 300).includes(`DA-${kind}-v2`)
 const prMarker = (body, n) => new RegExp(`(?:PR\\s*#|/pull/)${n}\\b`, 'i').test(String(body || '').slice(0, 440))
-const headIn = (body) => /(?:exact\s+)?HEAD[^\n]{0,125}?([a-f0-9]{40})/i.exec(String(body || ''))?.[1]?.toLowerCase() || null
-const baseIn = (body) => /\bbase[^\n]{0,125}?([a-f0-9]{40})/i.exec(String(body || ''))?.[1]?.toLowerCase() || null
+// Canonical #216 records often put HEAD / base / main SHAs on one line.
+// The first two values are HEAD/base only when labels occur in that order;
+// a lone HEAD must never be accepted as a base (fail-closed).
+const versionPairIn = body => {
+  for (const line of String(body || '').split(/\r?\n/)) {
+    const hi = line.search(/\bHEAD\b/i), bi = line.search(/\bbase\b/i)
+    if (hi < 0 || bi < hi) continue
+    const values = [...line.matchAll(/\b[a-f0-9]{40}\b/ig)]
+    if (values.length >= 2 && values[0].index > hi && values[1].index > bi) {
+      return { head: values[0][0].toLowerCase(), base: values[1][0].toLowerCase() }
+    }
+  }
+  return null
+}
+const headIn = body => versionPairIn(body)?.head || /(?:exact\s+)?HEAD[^\n]{0,125}?([a-f0-9]{40})/i.exec(String(body || ''))?.[1]?.toLowerCase() || null
+const baseIn = body => {
+  const pair = versionPairIn(body)
+  if (pair) return pair.base
+  const line = String(body || '').split(/\r?\n/).find(l => /\bbase\b/i.test(l) && !/\bHEAD\b/i.test(l))
+  return line ? /\bbase[^\n]{0,125}?([a-f0-9]{40})/i.exec(line)?.[1]?.toLowerCase() || null : null
+}
 
 export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prComments = [], queueIssue = 216 }) {
   if (!pr || !Number.isInteger(pr.number) || !SHA.test(pr.head?.sha || '') || !SHA.test(pr.base?.sha || '') || !SHA.test(mainSha || '') || !Array.isArray(queueComments) || !Array.isArray(reviews) || !Array.isArray(prComments)) {
