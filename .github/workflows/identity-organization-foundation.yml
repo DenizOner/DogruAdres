@@ -1019,7 +1019,7 @@ jobs:
   # TEMPORARY #416: no-token only; draft PR #435 NEVER MERGE. This job
   # remains skipped while draft; no live GET CLI/token step exists here.
   hakan-416-pretoken-review-only:
-    name: Hakan #416 pre-token guard and exact Node31 (never merge)
+    name: Hakan #416 pre-token guard and exact Node35 (never merge)
     if: ${{ github.event_name == 'pull_request' && github.event.action == 'ready_for_review' && github.event.pull_request.number == 435 && github.event.pull_request.draft == false && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -1051,25 +1051,29 @@ jobs:
       - name: Checkout pinned Kerem #433 exact source without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 9692f95a6af20458adfb29bdccdb570d488ae0c8
+          ref: 215d9d9779ae6a7a2ccac281f13aac36447d0fe1
           path: _target
           persist-credentials: false
-      - name: Verify two immutable source blobs and run tokenless Node31
+      - name: Verify two immutable source blobs and run tokenless Node35
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C _target rev-parse HEAD)" = "9692f95a6af20458adfb29bdccdb570d488ae0c8"
-          test "$(git -C _target hash-object quality/governance/review-freshness-audit.mjs)" = "b336f202a8f4d4021e712fc0bf307353f93d4276"
-          test "$(git -C _target hash-object quality/governance/review-freshness-audit.test.mjs)" = "0f094f624d4e8a5c05452d0ea2068b67d26800cc"
+          test "$(git -C _target rev-parse HEAD)" = "215d9d9779ae6a7a2ccac281f13aac36447d0fe1"
+          test "$(git -C _target hash-object quality/governance/review-freshness-audit.mjs)" = "dca161d05a25cb59fcae3845c9a0d7e90892d8ee"
+          test "$(git -C _target hash-object quality/governance/review-freshness-audit.test.mjs)" = "7a15214da9bc850638336cb7115a24b755e898ee"
           cd _target
-          env -u GH_TOKEN -u GITHUB_TOKEN node --test quality/governance/review-freshness-audit.test.mjs
           env -u GH_TOKEN -u GITHUB_TOKEN node --input-type=module -e '
             import {spawnSync} from "node:child_process";
             const env={...process.env}; delete env.GITHUB_TOKEN; delete env.GH_TOKEN;
-            const result=spawnSync(process.execPath,["quality/governance/review-freshness-audit.mjs","--repo=DenizOner/DogruAdres","--pr=433","--queue=216"],{env,encoding:"utf8",timeout:15000});
-            const combined=String(result.stdout??"")+String(result.stderr??"");
-            if(result.status!==2 || !/UNKNOWN/.test(combined)) process.exit(1);
-            console.log("PASS no-token exit2/UNKNOWN; no response bodies logged");
+            const run=spawnSync(process.execPath,["--test","--test-reporter=tap","quality/governance/review-freshness-audit.test.mjs"],{env,encoding:"utf8",timeout:120000,maxBuffer:1024*1024});
+            const tap=String(run.stdout??"");
+            const has=n=>new RegExp("^# "+n+"$","m").test(tap);
+            if(run.status!==0 || !has("tests 35") || !has("pass 35") || !has("fail 0") || !has("cancelled 0") || !has("skipped 0") || !has("todo 0"))process.exit(1);
+            console.log("PASS exact tokenless Node 35/35; zero failures/skips");
+            const cli=spawnSync(process.execPath,["quality/governance/review-freshness-audit.mjs","--repo=DenizOner/DogruAdres","--pr=433","--queue=216"],{env,encoding:"utf8",timeout:15000,maxBuffer:1024*1024});
+            let observed;try{observed=JSON.parse(String(cli.stdout??""));}catch{process.exit(1);}
+            if(cli.status!==2 || String(cli.stderr??"")!=="" || observed.state!=="UNKNOWN" || observed.mergePermitted!==false || observed.independentIdentity!=="UNVERIFIED" || !/read-only token/.test(String(observed.reason??"")))process.exit(1);
+            console.log("PASS no-token UNKNOWN/exit2, no merge permission; no response bodies logged");
           '
       # Deliberately NO github.token/CLI smoke step. A new exact review
       # and separate authorization are required before any live GET attempt.
