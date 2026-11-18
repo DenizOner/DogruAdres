@@ -485,13 +485,15 @@ export default async function({container}:ExecArgs){
     return result.status
   }
   const workerPids:number[]=[]
+  const httpOutcomes:{a:number;b:number}[]=[]
   for(const stage of [1,2]){
     workerPids.push(await launchFreshServer())
     assert.equal(await oldCookieStatus(),403,'Old revoked Person cookie must remain denied after restart')
-    await Promise.all([
-      reloginWithFreshWorker(a,'A',actors[0].person,'mfa-restart-'+stage+'-person-a'),
-      reloginWithFreshWorker(b,'B',actors[1].person,'mfa-restart-'+stage+'-person-b')
-    ])
+    // Both native Chrome sessions use the same bounded PG client for R1
+    // strong-auth checks; serialize that transaction instead of racing it.
+    const aStatus=await reloginWithFreshWorker(a,'A',actors[0].person,'mfa-restart-'+stage+'-person-a')
+    const bStatus=await reloginWithFreshWorker(b,'B',actors[1].person,'mfa-restart-'+stage+'-person-b')
+    httpOutcomes.push({a:aStatus,b:bStatus})
     await stopFreshServer()
   }
   assert.notEqual(workerPids[0],workerPids[1],
@@ -508,8 +510,7 @@ export default async function({container}:ExecArgs){
   report.restartAcceptance={twoFreshNativeMedusaWorkerProcesses:true,
     firstWorkerExitedBeforeSecond:true,distinctProcessIds:true,
     identicalTaskOnlyPg16Database:true,oldCookieDenied403:true,
-    personAFreshNativeTotpAndDefault:false===false,
-    personBFreshNativeTotpAndPreference:true,
+    allFourFreshNativeTotpChromeHttp200:httpOutcomes.every(o=>o.a===200&&o.b===200),
     optionalPlatformRevisionPreserved:true,preferenceRevisionPreserved:true,
     noPolicyOrPreferenceAuditMutation:true,realChromeHttps:true,
     userAcceptanceScope:'ONLY B06 PERSONAL RESTART; NOT PLATFORM STAFF OR 12-STATE ACCEPTANCE'}
