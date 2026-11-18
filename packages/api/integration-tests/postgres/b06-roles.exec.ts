@@ -457,6 +457,7 @@ export default async function({container}:ExecArgs){
   })
   const reloginWithFreshWorker=async(c:B06Chrome,label:'A'|'B',person:string,phase:string)=>{
     c.phase=phase
+    const newHttpStart=c.http.length
     await c.eval("(()=>{document.getElementById('workspace').hidden=true;document.getElementById('login').hidden=false;for(const el of document.querySelectorAll('#login input,#challenge input'))el.value='';})()")
     await c.input('#login input[name=email]',process.env['B06_EMAIL_'+label]!)
     await c.input('#login input[name=password]',process.env['B06_PASSWORD_'+label]!)
@@ -482,6 +483,13 @@ export default async function({container}:ExecArgs){
       result.body?.personal?.user_enabled===(label==='B')&&
       result.body?.personal?.version===(label==='B'?1:0)&&
       result.body?.native_factor_state==='enabled','Restart must preserve exact Person and native MFA')
+    await until(async()=>{
+      const fresh=c.http.slice(newHttpStart)
+      return fresh.some((entry:any)=>entry.phase===phase&&entry.method==='POST'&&
+        entry.path==='/personal/challenge'&&entry.status===200&&entry.tls?.protocol)&&
+        fresh.some((entry:any)=>entry.phase===phase&&entry.method==='GET'&&
+        entry.path==='/personal/mfa'&&entry.status===200&&entry.tls?.protocol)
+    },5000,'B06 restarted native TLS Chrome challenge and GET evidence')
     return result.status
   }
   const workerPids:number[]=[]
