@@ -42,3 +42,23 @@ test('combined HEAD/base line with only one SHA is never accepted as a valid bas
   const onlyHead={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\nPR #418\nExact HEAD / stored base / main: `'+h+'`'}
   assert.equal(check({queueComments:[onlyHead,comment('REVIEW-RESULT')]}).state,'STALE')
 })
+
+test('canonical Denetçi RESULT heading #422 is recognized without a PR prefix',()=>{
+  const head='03165b3208f33331d9ba8b04ef1ad9562b753d4b', base='13cf9b0379caa3fd9fcd66687386613b51e2b17b'
+  const ready={id:100,body:`<!-- DA-REVIEW-REQUEST-v2-422 -->\nREADY for PR #422\nExact HEAD / stored base / main: \`${head}\` / \`${base}\``}
+  const result={id:101,body:`<!-- DA-REVIEW-RESULT-v2-DENETCI-422 -->\n## DA-REVIEW-RESULT-v2 — #422 / #216 — BLOCKED\nExact HEAD / PR base / main: \`${head}\` / \`${base}\`\nKARAR: BLOCKED`}
+  const review={commit_id:head,body:`<!-- REVIEW-PROVENANCE-v1 -->\nExact HEAD: \`${head}\`\nbase: \`${base}\``}
+  const x=check({pr:{...pr,number:422,head:{sha:head},base:{sha:base}},mainSha:base,queueComments:[ready,result],reviews:[review]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_BLOCKED')
+  assert.equal(x.resultId,101)
+  assert.equal(x.mergePermitted,false)
+})
+test('unrelated heading #216 / #422 is not assigned to PR #422',()=>{
+  const head='03165b3208f33331d9ba8b04ef1ad9562b753d4b', base='13cf9b0379caa3fd9fcd66687386613b51e2b17b'
+  const ready={id:100,body:`<!-- DA-REVIEW-REQUEST-v2 -->\nREADY for PR #422\nExact HEAD / stored base / main: \`${head}\` / \`${base}\``}
+  const unrelated={id:101,body:`<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — #216 / #422 — PASS\nExact HEAD / PR base / main: \`${head}\` / \`${base}\``}
+  const x=check({pr:{...pr,number:422,head:{sha:head},base:{sha:base}},mainSha:base,queueComments:[ready,unrelated],reviews:[]})
+  assert.equal(x.state,'PENDING')
+  assert.equal(x.mergePermitted,false)
+})

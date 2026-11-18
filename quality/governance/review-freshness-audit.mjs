@@ -7,7 +7,14 @@ import { resolve } from 'node:path'
  */
 const SHA = /^[0-9a-f]{40}$/i
 const marker = (body, kind) => String(body || '').slice(0, 300).includes(`DA-${kind}-v2`)
-const prMarker = (body, n) => new RegExp(`(?:PR\\s*#|/pull/)${n}\\b`, 'i').test(String(body || '').slice(0, 440))
+const prMarker = (body, n) => {
+  const first = String(body || '').slice(0, 440)
+  // Canonical #216 Denetçi results may use "## DA-REVIEW-RESULT-v2 — #422"
+  // without a literal "PR #422" in the first 440 characters.
+  const explicit = new RegExp(`(?:PR\\s*#|/pull/)${n}\\b`, 'i').test(first)
+  const canonicalHeading = new RegExp(`(?:^|\\n)\\s*##\\s*DA-REVIEW-(?:REQUEST|RESULT)-v2\\s*[-:–—]\\s*#${n}\\b`, 'i').test(first)
+  return explicit || canonicalHeading
+}
 // Canonical #216 records often put HEAD / base / main SHAs on one line.
 // The first two values are HEAD/base only when labels occur in that order;
 // a lone HEAD must never be accepted as a base (fail-closed).
