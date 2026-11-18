@@ -3517,7 +3517,7 @@ async function verifyRealNextStorefrontRenameUrls(
     assert.ok(!/calculated_price|inventory_quantity|offer_[A-Za-z0-9_-]+/.test(deniedBody),
       "Denied native Offer HTTP must not include price, stock or Offer identity")
   }
-  process.stdout.write("PASS B22 #171 native PG16/HTTP: Seller and Offer ingress 401 including forged Seller scope; no price/stock leakage, Buyer reader remains closed\\n")
+  process.stdout.write("PASS B22 #171 native PG16/HTTP: Seller and Offer ingress 401 including forged Seller scope; no price/stock leakage, Buyer reader remains closed\n")
 
   // A private, disposable read-only native API proves the genuine Mercur
   // route and Next renderer without changing the product's 401 boundary.
