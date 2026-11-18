@@ -99,6 +99,27 @@ Follow [DoğruAdres engineering principles §11](#11-product-scope-and-dependenc
 - Agent executable task instructions remain **English**. New GitHub Issue titles, acceptance criteria, and user-facing reports remain **Turkish**. Source code, identifiers, test commands, review provenance, and canonical records retain their exact technical meaning. Reviewers must still inspect complete relevant source and report all findings precisely, even if the summary is simplified.
 - If asked for deeper technical detail, provide it separately without replacing or changing the plain-language conclusion. Never use simplification to hide a security concern, an unresolved independent-review requirement, a discrepancy in revisions, or a failed/untested path.
 
+
+<!-- DA-TRAFFIC-LIGHT-OWNER-APPROVED-20261118 -->
+## Agent traffic-light reporting — GitHub-evidence-based, no new gate
+
+Traffic-light status is an **owner-facing presentation of currently verified progress blockers**, not evidence that an agent is physically running or idle, an approval to merge, a replacement for #216 task/coordination records, or a new coordinator. On each requested traffic-light check, use the latest relevant #216 queue, active task Issues, all relevant open PRs (including drafts), coordination/Review comments, actual current HEAD/base/main and CI run status. Include all nine distinct developers (Ali, Barış, Cem, Demir, Fikret, Gökhan, Hakan, İsmail, Kerem), the separate read-only Denetçi, and any other explicitly active executor established in current GitHub records. Do not assume that silence means approval or that missing information means green.
+
+Apply these **mutually resolved** signals to the next safe actionable step; when several external blockers apply, priority is red, then blue, then yellow:
+
+| Signal | Meaning |
+| --- | --- |
+| 🔴 Kırmızı | A necessary Product Owner decision or intervention is the blocker; do not invent a new approval requirement. |
+| 🔵 Mavi | Another agent's reply, handoff, correction, coordination agreement or independent review is required before this task can progress safely. |
+| 🟡 Sarı | A relevant CI run is actually queued or in progress, and its result is the *only* remaining blocker for the next step. |
+| 🟢 Yeşil | No verified external blocker; the agent can independently proceed with approved safe work, or can proceed on the next `Devam et` request. This does **not** certify completed work or prove the agent is idle. A terminal CI failure needing the agent's own fix is not yellow. |
+| ⚪ Gri | Current evidence is unavailable, contradictory, stale or insufficient for a reliable classification. |
+
+**Dedicated traffic-light conversation:** Output **only one emoji plus agent name per line**, followed by the **five-row color explanation table** above; no individual diagnostic prose, fabricated status or unverified claims. Apply current roster rather than a historical five-agent example. A known blocker in a parked task does not color the entire agent red/blue if another already approved, independent safe task is actionable under DA-SWARM-v1.
+
+**Each individual agent/reviewer conversation:** At the **very end of the normal required three-heading #ELI5 report**, append **one line only**: `<emoji> <agent name> — <short, evidence-grounded reason and next actor/action>`. Do **not** repeat the whole explanation table. Keep `NOT TESTED`, `FAIL`, `BLOCKED`, current CI/HEAD/base freshness and review conditions explicit where material; a traffic light never replaces the report or canonical GitHub checkpoint. If GitHub cannot be checked, use ⚪ and say verification is unavailable. This formatting instruction does not authorize the read-only Denetçi to change code or any agent to write to another agent's owned branch.
+<!-- END DA-TRAFFIC-LIGHT-OWNER-APPROVED-20261118 -->
+
 ## Required Mercur workflow
 
 Before nontrivial framework-facing changes, verify the actual installed package versions, relevant bundled Mercur docs, project code and generated types. Use matching official Medusa docs for Medusa-specific behavior. If the installed sources are unavailable to the reviewer, identify what could and could not be verified; never invent an API contract or assume a feature is missing.
