@@ -2,6 +2,7 @@
 // This file is deliberately limited to local event/ref/permission validation.
 import { strict as assert } from 'node:assert';
 import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
 export const TARGET = Object.freeze({
   repository: 'DenizOner/DogruAdres',
@@ -26,7 +27,7 @@ export function guard(e, expectedHarnessPr) {
   return true;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const pr = Number.parseInt(process.env.HAKAN_416_PR ?? '', 10);
   const e = {
     event: process.env.EVENT_NAME, action: process.env.EVENT_ACTION,
