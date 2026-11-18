@@ -9,9 +9,9 @@ export const TARGET = Object.freeze({
   pr: 433,
   queue: 216,
   main: '62e32d753864f564ac13aa16cbc0e9e7c6dad4b1',
-  head: '9692f95a6af20458adfb29bdccdb570d488ae0c8',
-  sourceBlob: 'b336f202a8f4d4021e712fc0bf307353f93d4276',
-  testBlob: '0f094f624d4e8a5c05452d0ea2068b67d26800cc'
+  head: '215d9d9779ae6a7a2ccac281f13aac36447d0fe1',
+  sourceBlob: 'dca161d05a25cb59fcae3845c9a0d7e90892d8ee',
+  testBlob: '7a15214da9bc850638336cb7115a24b755e898ee'
 });
 
 const sha = /^[a-f0-9]{40}$/;
