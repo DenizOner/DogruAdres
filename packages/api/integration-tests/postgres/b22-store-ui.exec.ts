@@ -4947,7 +4947,7 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
     // This Owner's earlier Beta membership was revoked. Opening two Alpha
     // Stores must not restore Beta access or disclose either native Seller
     // through a different Organization selector (including foreign Gamma).
-    for(const otherOrg of [organizations[1].id,organizations[2].id]){
+    for(const [index,otherOrg] of [organizations[1].id,organizations[2].id].entries()){
       const denied=await get(selected(otherOrg))
       assert.equal(denied.status,403,
         "Revoked/foreign Organization must not inherit approved Store access")
@@ -4955,6 +4955,12 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
       assert.ok(pair.every(item=>!response.includes(item.seller_id)&&
         !response.includes(item.name)),
         "Cross-Organization denial must not reveal approved Store identities")
+      // Fixed redacted case-level evidence is emitted ONLY after both the
+      // real HTTP 403 and no-ID/no-name assertions pass. Existing parent CI
+      // forwards the "PASS B22 Chrome:" prefix without changing its runner.
+      process.stdout.write(index===0?
+        "PASS B22 Chrome: B22-02 revoked Beta Organization HTTP403, both Store IDs/names absent\n":
+        "PASS B22 Chrome: B22-02 foreign Gamma Organization HTTP403, both Store IDs/names absent\n")
     }
     await reviewChrome.send("Page.bringToFront")
     await reviewChrome.wait("document.visibilityState==='visible'")
