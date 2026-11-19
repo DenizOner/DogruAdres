@@ -40,6 +40,9 @@ class MockMedusa(BaseHTTPRequestHandler):
     auth_count = 0
     cart_transfers = 0
     permit_valid_login = False
+    # Synthetic-only HTTP status transitions; never touch a real Medusa service.
+    failure_status = 401
+    auth_http_statuses = []
     def log_message(self, fmt, *args):
         # Never log request body, Authorization, cookies or passwords.
         return
@@ -69,7 +72,16 @@ class MockMedusa(BaseHTTPRequestHandler):
             assert data.get("password") in ("invalid-synthetic", "valid-synthetic")
             MockMedusa.auth_count += 1
             if data["password"] == "invalid-synthetic" or not MockMedusa.permit_valid_login:
-                return self.reply(401, {"message": "Invalid login"})
+                status = MockMedusa.failure_status
+                assert status in (401, 429, 503), "unexpected synthetic failure status"
+                MockMedusa.auth_http_statuses.append(status)
+                message = {
+                    401: "Invalid login",
+                    429: "Too many attempts. Try again later.",
+                    503: "Service temporarily unavailable.",
+                }[status]
+                return self.reply(status, {"message": message})
+            MockMedusa.auth_http_statuses.append(200)
             hdr = base64.urlsafe_b64encode(b'{"alg":"none"}').decode().rstrip("=")
             payload = base64.urlsafe_b64encode(json.dumps(
                 {"exp": int(time.time()) + 900}).encode()).decode().rstrip("=")
@@ -211,12 +223,38 @@ def browser_assertions(base, port):
             assert not any("/user" in urlparse(url).path for url in visited), \
                 "Incorrect password attempted navigation to /user"
             assert MockMedusa.auth_count == 1, "Expected exactly one failed auth POST"
+            assert MockMedusa.auth_http_statuses == [401], "Expected native fake HTTP 401"
             assert MockMedusa.cart_transfers == 0, "Unexpected Cart transfer"
             assert page.get_by_test_id("login-form").is_visible()
             assert page.evaluate(
                 "document.documentElement.scrollWidth <= window.innerWidth + 2"), \
                 "320px viewport horizontally overflows"
-            print("PASS #372 real Next/Chrome: invalid login, error, zero /user, zero Cart")
+            print("PASS #372 real Next/Chrome: HTTP 401 invalid login, zero /user, zero Cart")
+
+            # Distinct real HTTP 429 and 503 from the *synthetic* Customer server:
+            # the same browser submit handler must never treat either as login success.
+            for status, password in ((429, "valid-synthetic"), (503, "invalid-synthetic")):
+                MockMedusa.failure_status = status
+                password_input.fill(password)
+                inline_error.wait_for(state="hidden", timeout=5000)
+                password_input.press("Enter")
+                inline_error.wait_for(state="visible", timeout=18000)
+                assert inline_error.get_attribute("role") == "status"
+                assert inline_error.inner_text().strip(), "HTTP failure must announce an error"
+                assert password_input.evaluate(
+                    "(el) => document.activeElement === el"), "HTTP failure lost keyboard focus"
+                assert MockMedusa.auth_count == len(MockMedusa.auth_http_statuses)
+                assert MockMedusa.auth_http_statuses[-1] == status, (
+                    "Synthetic backend returned an unexpected HTTP status")
+                assert urlparse(page.url).path == "/tr/login", "HTTP failure navigated"
+                assert not any("/user" in urlparse(url).path for url in visited), (
+                    "HTTP failure attempted navigation to /user")
+                assert MockMedusa.cart_transfers == 0, "HTTP failure transferred Cart"
+                assert page.get_by_test_id("login-form").is_visible()
+                print(f"PASS #372 real Next/Chrome: synthetic HTTP {status},"
+                      " inline status/focus, zero /user, zero Cart")
+
+            assert MockMedusa.auth_http_statuses == [401, 429, 503]
             # Separate synthetic Customer positive; no real Medusa or Person access.
             MockMedusa.permit_valid_login = True
             page.get_by_test_id("login-password-input").fill("valid-synthetic")
@@ -236,7 +274,9 @@ def browser_assertions(base, port):
                       "loopback_http_method_path_status=", http_observations[-16:],
                       flush=True)
                 raise
-            assert MockMedusa.auth_count == 2, "Expected one additional auth POST"
+            assert MockMedusa.auth_count == 4, "Expected one additional positive auth POST"
+            assert MockMedusa.auth_http_statuses == [401, 429, 503, 200], (
+                "Unexpected synthetic HTTP auth sequence")
             for _ in range(40):
                 if MockMedusa.cart_transfers:
                     break
