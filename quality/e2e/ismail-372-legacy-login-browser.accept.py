@@ -171,11 +171,13 @@ def browser_assertions(base, port):
                       "app_path=", urlparse(page.url).path, flush=True)
                 raise
             page.get_by_test_id("login-email-input").fill("synthetic372@example.invalid")
-            page.get_by_test_id("login-password-input").fill("invalid-synthetic")
-            page.get_by_test_id("login-submit-button").click()
+            password_input = page.get_by_test_id("login-password-input")
+            password_input.fill("invalid-synthetic")
+            # Real keyboard-only submission, not just a mouse event.
+            password_input.press("Enter")
+            inline_error = page.get_by_test_id("login-api-error")
             try:
-                page.get_by_text("Invalid login", exact=False).first.wait_for(
-                    state="visible", timeout=18000)
+                inline_error.wait_for(state="visible", timeout=18000)
             except PlaywrightTimeoutError:
                 # Fail-only enum/count diagnostics; no DOM, credentials, cookies or URLs with query strings.
                 print("FAIL-DIAG #372: auth_posts=", MockMedusa.auth_count,
@@ -187,6 +189,11 @@ def browser_assertions(base, port):
                       "browser_error_count=", len(browser_errors),
                       "loopback_http_method_path_status=", http_observations[-16:], flush=True)
                 raise
+            assert inline_error.get_attribute("role") == "status", (
+                "Visible API failure must be programmatically announced")
+            assert "Invalid login" in inline_error.inner_text()
+            assert password_input.evaluate(
+                "(el) => document.activeElement === el"), "Keyboard focus lost after error"
             page.wait_for_timeout(800)
             assert urlparse(page.url).path == "/tr/login", "Failed login navigated"
             assert not any("/user" in urlparse(url).path for url in visited), \
