@@ -29,6 +29,9 @@ export default async function({container}:ExecArgs){
   dir.startsWith(join(tmpdir(),'b06-tls-'))&&realpathSync(dir)===dir,
   'REFUSED: B06 restart worker requires its exact disposable CI boundary'
  )
+ // Privacy-safe fixed-state markers; never log credentials, Person, tokens,
+ // query results, TLS material, module errors or process environment.
+ process.stdout.write('B06_RESTART_STAGE_BOUNDARY\n')
  // The worker must see the already-activated disposable database; never
  // recreate, migrate or toggle the protected MFA activation latch.
  const pg=new Client({connectionString:u.toString()})
@@ -38,8 +41,10 @@ export default async function({container}:ExecArgs){
   assert.ok(r.rows.length===1&&r.rows[0].db===u.pathname.slice(1)&&r.rows[0].activated===true,
    'REFUSED: missing signed task-only MFA database activation')
  }finally{await pg.end()}
+ process.stdout.write('B06_RESTART_STAGE_LATCH\n')
  const stop=new Promise<void>(resolve=>process.once('SIGTERM',()=>resolve()))
  const app=await createPersonalHttpApp(container)
+ process.stdout.write('B06_RESTART_STAGE_API\n')
  const server=createServer({
   key:readFileSync(join(dir,'key.pem')),cert:readFileSync(join(dir,'ca.pem'))
  },app.app)
