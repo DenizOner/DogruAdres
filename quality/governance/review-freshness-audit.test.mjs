@@ -198,3 +198,25 @@ test('combined missing base does not borrow main SHA', () => {
   const ready={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\nPR #418\nExact HEAD / base / main: '+h+' / NOT VERIFIED / '+b}
   assert.equal(check({queueComments:[ready,comment('REVIEW-RESULT')]}).state,'STALE')
 })
+
+test('two conflicting current HEAD declarations invalidate an apparent PASS', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nExact HEAD: '+old+'\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'PENDING')
+  assert.equal(x.mergePermitted,false)
+})
+test('two conflicting current base declarations invalidate an apparent PASS', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nbase: '+old+'\nKARAR: PASS'}
+  assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).state,'PENDING')
+})
+test('conflicting current HEAD declarations in review provenance are UNVERIFIED', () => {
+  const review={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\nExact HEAD: '+h+'\nbase: '+b+'\nExact HEAD: '+old}
+  assert.equal(check({reviews:[review]}).state,'UNVERIFIED')
+})
+test('repeated identical current HEAD/base declarations remain valid metadata', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nExact HEAD: '+h+'\nbase: '+b+'\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_PASS')
+  assert.equal(x.mergePermitted,false)
+})

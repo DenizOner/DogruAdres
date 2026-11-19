@@ -74,7 +74,17 @@ const currentVersionIn = body => {
   const combined = currentLines.filter(line => /\bHEAD\b.*\bbase\b/i.test(line))
   const pairs = combined.map(line => versionPairIn(line)).filter(Boolean)
   const separate = currentLines.filter(line => !/\bHEAD\b.*\bbase\b/i.test(line)).join('\n')
-  const head = labelledSha(separate, 'head'), base = labelledSha(separate, 'base')
+  // Multiple separately labelled declarations may repeat only the SAME value.
+  // Read them all: picking only the first silently hides a conflicting revision.
+  const separateValues = key => {
+    const re = key === 'head'
+      ? /\bHEAD\b\s*(?:\*{0,2}\s*:)?\s*[\x60*\s]*([a-f0-9]{40})\b/gi
+      : /\bbase\b\s*(?:\*{0,2}\s*:)?\s*[\x60*\s]*([a-f0-9]{40})\b/gi
+    return [...separate.matchAll(re)].map(match => match[1].toLowerCase())
+  }
+  const heads = separateValues('head'), bases = separateValues('base')
+  if (new Set(heads).size > 1 || new Set(bases).size > 1) return null
+  const head = heads[0] || null, base = bases[0] || null
   if (Boolean(head) !== Boolean(base)) return null
   if (head && base) pairs.push({ head, base })
   if (!pairs.length) return null
