@@ -142,3 +142,21 @@ test('PASS heading cannot override unsupported SONUÇ or bold KARAR', () => {
     assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).disposition,'UNCLASSIFIED')
   }
 })
+
+test('current explicit HEAD/base cannot be replaced by a historical combined pair', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nHistorical HEAD / base: '+old+' / '+b+'\nKARAR: PASS'}
+  const x=check({pr:{...pr,head:{sha:old}},queueComments:[comment('REVIEW-REQUEST',old),result],reviews:[rv(old,b)]})
+  assert.equal(x.state,'PENDING')
+  assert.equal(x.mergePermitted,false)
+})
+test('current explicit HEAD/base remains recognized with history below', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nHistorical HEAD / base: '+old+' / '+b+'\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_PASS')
+  assert.equal(x.mergePermitted,false)
+})
+test('missing current base is not borrowed from a historical combined pair', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nHistorical HEAD / base: '+old+' / '+b}
+  assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).state,'PENDING')
+})

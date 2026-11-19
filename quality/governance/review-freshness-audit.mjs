@@ -64,8 +64,18 @@ const versionPairIn = body => {
   }
   return null
 }
-const headIn = body => versionPairIn(body)?.head || labelledSha(body, 'head')
-const baseIn = body => versionPairIn(body)?.base || labelledSha(body, 'base')
+// Explicit current target fields take precedence over explanatory historical refs.
+// Do not borrow a missing HEAD/base from a history row, even if its SHA matches.
+const currentVersionIn = body => {
+  const currentLines = String(body || '').split(/\r?\n/).filter(line =>
+    !/\b(?:historical|previous|older|old|tarihsel|önceki|eski)\b/i.test(line))
+  const current = currentLines.join('\n')
+  const head = labelledSha(current, 'head'), base = labelledSha(current, 'base')
+  if (head || base) return head && base ? { head, base } : null
+  return versionPairIn(current)
+}
+const headIn = body => currentVersionIn(body)?.head || null
+const baseIn = body => currentVersionIn(body)?.base || null
 
 export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prComments = [], queueIssue = 216 }) {
   if (!pr || !Number.isInteger(pr.number) || !SHA.test(pr.head?.sha || '') || !SHA.test(pr.base?.sha || '') || !SHA.test(mainSha || '') || !Array.isArray(queueComments) || !Array.isArray(reviews) || !Array.isArray(prComments)) {
