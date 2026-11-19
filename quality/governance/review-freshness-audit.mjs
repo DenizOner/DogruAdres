@@ -72,7 +72,10 @@ const currentVersionIn = body => {
   // A combined "HEAD / base: h / b" line must be parsed as TWO data cells,
   // not as a separate "base: h" label. Exclude such rows from single fields.
   const combined = currentLines.filter(line => /\bHEAD\b.*\bbase\b/i.test(line))
-  const pairs = combined.map(line => versionPairIn(line)).filter(Boolean)
+  const pairs = combined.map(line => versionPairIn(line))
+  // Every current combined declaration must be complete and valid. A broken
+  // second declaration cannot disappear behind an otherwise matching pair.
+  if (pairs.some(pair => !pair)) return null
   const separate = currentLines.filter(line => !/\bHEAD\b.*\bbase\b/i.test(line)).join('\n')
   // Multiple separately labelled declarations may repeat only the SAME value.
   // Read them all: picking only the first silently hides a conflicting revision.

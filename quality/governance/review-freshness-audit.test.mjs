@@ -220,3 +220,30 @@ test('repeated identical current HEAD/base declarations remain valid metadata', 
   assert.equal(x.disposition,'REPORTED_PASS')
   assert.equal(x.mergePermitted,false)
 })
+
+
+test('invalid combined current HEAD/base cannot be ignored in favor of separate PASS fields', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nExact HEAD / base: '+old+' / NOT VERIFIED\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'PENDING')
+  assert.equal(x.mergePermitted,false)
+})
+test('invalid combined current provenance prevents a matching REVIEW-PROVENANCE', () => {
+  const provenance={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\nExact HEAD: '+h+'\nbase: '+b+'\nExact HEAD / base: '+old+' / NOT VERIFIED'}
+  assert.equal(check({reviews:[provenance]}).state,'UNVERIFIED')
+})
+test('invalid combined current READY is STALE despite otherwise matching separate fields', () => {
+  const ready={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\nPR #418\nExact HEAD: '+h+'\nbase: '+b+'\nExact HEAD / base: '+old+' / NOT VERIFIED'}
+  assert.equal(check({queueComments:[ready,comment('REVIEW-RESULT')]}).state,'STALE')
+})
+test('invalid combined current SHA cannot be ignored beside another complete combined pair', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD / base: '+h+' / '+b+'\nExact HEAD / base: '+old+' / NOT VERIFIED\nKARAR: PASS'}
+  assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).state,'PENDING')
+})
+test('historical invalid combined SHA has no effect on valid current fields', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nHistorical HEAD / base: '+old+' / NOT VERIFIED\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_PASS')
+  assert.equal(x.mergePermitted,false)
+})
