@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "apps" / "storefront"
@@ -130,6 +130,14 @@ def browser_assertions(base, port):
             context.route("**/*", only_loopback)
             page = context.new_page()
             visited = []
+            http_observations = []
+            browser_errors = []
+            page.on("pageerror", lambda error: browser_errors.append(type(error).__name__))
+            def observe_response(res):
+                u = urlparse(res.url)
+                if u.hostname == "127.0.0.1" and len(http_observations) < 25:
+                    http_observations.append((res.request.method, u.path, res.status))
+            page.on("response", observe_response)
             page.on("framenavigated", lambda f: visited.append(f.url)
                     if f == page.main_frame else None)
             response = page.goto(base + "/tr/login",
@@ -139,8 +147,20 @@ def browser_assertions(base, port):
             page.get_by_test_id("login-email-input").fill("synthetic372@example.invalid")
             page.get_by_test_id("login-password-input").fill("invalid-synthetic")
             page.get_by_test_id("login-submit-button").click()
-            page.get_by_text("Invalid login", exact=False).first.wait_for(
-                state="visible", timeout=30000)
+            try:
+                page.get_by_text("Invalid login", exact=False).first.wait_for(
+                    state="visible", timeout=18000)
+            except PlaywrightTimeoutError:
+                # Fail-only enum/count diagnostics; no DOM, credentials, cookies or URLs with query strings.
+                print("FAIL-DIAG #372: auth_posts=", MockMedusa.auth_count,
+                      "cart_transfers=", MockMedusa.cart_transfers,
+                      "path=", urlparse(page.url).path,
+                      "form_visible=", page.get_by_test_id("login-form").is_visible(),
+                      "toast_nodes=", page.locator("[data-sonner-toast]").count(),
+                      "role_alert_count=", page.get_by_role("alert").count(),
+                      "browser_error_count=", len(browser_errors),
+                      "loopback_http_method_path_status=", http_observations[-16:], flush=True)
+                raise
             page.wait_for_timeout(800)
             assert urlparse(page.url).path == "/tr/login", "Failed login navigated"
             assert not any("/user" in urlparse(url).path for url in visited), \
