@@ -34,7 +34,7 @@ const handlerSource = source.slice(start, end)
   .replace("(data: FieldValues)", "(data)");
 
 function setup(authResult) {
-  const calls = { navigation: [], transfers: 0, errors: [], resets: [], submitted: [] };
+  const calls = { navigation: [], transfers: 0, errors: [], resets: [], errorMessages: [], submitted: [] };
   const context = {
     FormData,
     login: async form => {
@@ -48,6 +48,7 @@ function setup(authResult) {
     transferCart: async () => { calls.transfers++; },
     toast: { error: message => calls.errors.push(message) },
     setIsAuthError: value => calls.resets.push(value),
+    setAuthErrorMessage: message => calls.errorMessages.push(message),
   };
   const submit = runInNewContext(handlerSource + "\nsubmit;", context, {
     timeout: 1000,
@@ -67,7 +68,9 @@ test("#372 invalid password never navigates or transfers Cart", async () => {
   assert.equal(calls.transfers, 0, "failed login cannot transfer the legacy Cart");
   assert.equal(calls.errors.length, 1, "failed login must show one error");
   assert.equal(calls.errors[0].title, "Invalid login");
-  assert.deepEqual(calls.resets, [], "failure must not clear auth error state");
+  assert.deepEqual(calls.resets, [true], "failure highlights affected inputs");
+  assert.deepEqual(calls.errorMessages, ["Invalid login"],
+    "failure must expose a programmatically announced inline status");
 });
 
 test("#372 error response without message stays put and displays safe fallback", async () => {
@@ -77,7 +80,8 @@ test("#372 error response without message stays put and displays safe fallback",
   assert.equal(calls.transfers, 0);
   assert.equal(calls.errors.length, 1);
   assert.equal(calls.errors[0].title, "An error occurred. Please try again.");
-  assert.deepEqual(calls.resets, [], "failure must not reset auth-error state");
+  assert.deepEqual(calls.resets, [true]);
+  assert.deepEqual(calls.errorMessages, ["An error occurred. Please try again."]);
 });
 
 // These are synthetic login() response messages, NOT actual HTTP 429/503 checks.
@@ -92,7 +96,8 @@ for (const [failure, message] of [
     assert.equal(calls.transfers, 0, "failed response cannot transfer Cart");
     assert.equal(calls.errors.length, 1, "failed response must show one error");
     assert.equal(calls.errors[0].title, message);
-    assert.deepEqual(calls.resets, [], "failed response must keep auth-error state");
+    assert.deepEqual(calls.resets, [true], "failed response must highlight auth error");
+    assert.deepEqual(calls.errorMessages, [message]);
   });
 }
 
@@ -104,4 +109,5 @@ test("#372 successful existing customer login navigates once and transfers Cart 
   assert.equal(calls.transfers, 1, "preserve existing transferCart call count");
   assert.equal(calls.errors.length, 0);
   assert.deepEqual(calls.resets, [false], "success clears auth error once");
+  assert.deepEqual(calls.errorMessages, [null], "success removes old visible error");
 });
