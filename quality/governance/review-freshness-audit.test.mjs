@@ -174,3 +174,27 @@ test('unsupported heading with no body is UNCLASSIFIED; supported heading still 
   assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),unsupported]}).disposition,'UNCLASSIFIED')
   assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),supported]}).disposition,'REPORTED_BLOCKED')
 })
+
+test('combined Exact HEAD / base matches READY and RESULT at exact current version', () => {
+  const ready={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\nPR #418\nExact HEAD / base: '+h+' / '+b}
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD / base: '+h+' / '+b+'\nKARAR: PASS'}
+  const x=check({queueComments:[ready,result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_PASS')
+  assert.equal(x.mergePermitted,false)
+})
+test('combined Exact HEAD / base matches review provenance', () => {
+  const review={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\nExact HEAD / base: '+h+' / '+b}
+  const x=check({reviews:[review]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.independentIdentity,'UNVERIFIED')
+  assert.equal(x.mergePermitted,false)
+})
+test('conflicting separate and combined current SHA fields are not silently accepted', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nExact HEAD / base: '+old+' / '+b+'\nKARAR: PASS'}
+  assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).state,'PENDING')
+})
+test('combined missing base does not borrow main SHA', () => {
+  const ready={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\nPR #418\nExact HEAD / base / main: '+h+' / NOT VERIFIED / '+b}
+  assert.equal(check({queueComments:[ready,comment('REVIEW-RESULT')]}).state,'STALE')
+})

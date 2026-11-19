@@ -69,10 +69,19 @@ const versionPairIn = body => {
 const currentVersionIn = body => {
   const currentLines = String(body || '').split(/\r?\n/).filter(line =>
     !/\b(?:historical|previous|older|old|tarihsel|önceki|eski)\b/i.test(line))
-  const current = currentLines.join('\n')
-  const head = labelledSha(current, 'head'), base = labelledSha(current, 'base')
-  if (head || base) return head && base ? { head, base } : null
-  return versionPairIn(current)
+  // A combined "HEAD / base: h / b" line must be parsed as TWO data cells,
+  // not as a separate "base: h" label. Exclude such rows from single fields.
+  const combined = currentLines.filter(line => /\bHEAD\b.*\bbase\b/i.test(line))
+  const pairs = combined.map(line => versionPairIn(line)).filter(Boolean)
+  const separate = currentLines.filter(line => !/\bHEAD\b.*\bbase\b/i.test(line)).join('\n')
+  const head = labelledSha(separate, 'head'), base = labelledSha(separate, 'base')
+  if (Boolean(head) !== Boolean(base)) return null
+  if (head && base) pairs.push({ head, base })
+  if (!pairs.length) return null
+  // Conflicting current metadata is not trustworthy even when one pair matches.
+  const first = pairs[0]
+  return pairs.every(pair => pair.head === first.head && pair.base === first.base)
+    ? first : null
 }
 const headIn = body => currentVersionIn(body)?.head || null
 const baseIn = body => currentVersionIn(body)?.base || null
