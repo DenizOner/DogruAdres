@@ -9,9 +9,13 @@ const SHA = /^[0-9a-f]{40}$/i
 const marker = (body, kind) => String(body || '').slice(0, 300).includes(`DA-${kind}-v2`)
 // Associate queue evidence with its declared target, not incidental links.
 // A reference to another PR in the narrative is not a review of that PR.
+const reviewHeadingKind = line => {
+  const m = /^\s*(?:#{1,4}\s*)?\*{0,2}\s*DA-REVIEW-(REQUEST|RESULT)-v2\b/i.exec(String(line || ''))
+  return m ? m[1].toUpperCase() : null
+}
 const prMarker = (body, n) => {
   const lines = String(body || '').slice(0, 1800).split(/\r?\n/)
-  const heading = lines.find(line => /^\s*(?:#{1,4}\s*)?\*{0,2}\s*DA-REVIEW-(?:REQUEST|RESULT)-v2\b/i.test(line))
+  const heading = lines.find(line => reviewHeadingKind(line))
   if (heading) {
     // Ignore history/related references after the actual heading decision.
     const targetPart = heading.split(/\s+[-–—]\s+(?:PASS|FAIL|BLOCKED|STALE)\b/i)[0]
@@ -152,7 +156,7 @@ export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prCo
   const body = String(latest.body || '')
   // Not a PASS verdict: text is self-reported, cannot establish independent identity.
   const headingLine = body.split(/\r?\n/).find(line =>
-    /^\s*#{1,4}\s*DA-REVIEW-RESULT-v2\b/i.test(line)) || ''
+    reviewHeadingKind(line) === 'RESULT') || ''
   // A historical PASS in '(previous PASS invalidated)' is not a decision.
   // Read only explicit decision slots after a delimiter or KARAR/SONUÇ.
   // Keep every declared heading decision slot, including unsupported values.

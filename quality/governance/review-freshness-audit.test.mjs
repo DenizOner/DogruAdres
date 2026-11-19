@@ -351,3 +351,27 @@ test('triple Markdown heading with unsupported CHANGES REQUIRED cannot be overri
   assert.equal(x.disposition,'UNCLASSIFIED')
   assert.equal(x.mergePermitted,false)
 })
+
+test('bold and unmarked BLOCKED headings contradict body PASS', () => {
+  for (const [prefix,suffix] of [['**','**'],['',''],['### **','**'],['*','*']]) {
+    const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n'+prefix+'DA-REVIEW-RESULT-v2 — PR #418 — BLOCKED'+suffix+'\nExact HEAD: '+h+'\nbase: '+b+'\nKARAR: PASS'}
+    const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+    assert.equal(x.state,'RECORDED')
+    assert.equal(x.disposition,'UNCLASSIFIED')
+    assert.equal(x.mergePermitted,false)
+  }
+})
+test('bold and plain headings keep unopposed BLOCKED decision', () => {
+  for (const [prefix,suffix] of [['**','**'],['',''],['### **','**']]) {
+    const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n'+prefix+'DA-REVIEW-RESULT-v2 — PR #418 — BLOCKED'+suffix+'\nExact HEAD: '+h+'\nbase: '+b}
+    const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+    assert.equal(x.state,'RECORDED')
+    assert.equal(x.disposition,'REPORTED_BLOCKED')
+  }
+})
+test('unsupported bold CHANGES REQUIRED cannot be overridden by body PASS', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n**DA-REVIEW-RESULT-v2 — PR #418 — CHANGES REQUIRED**\nExact HEAD: '+h+'\nbase: '+b+'\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'UNCLASSIFIED')
+})
