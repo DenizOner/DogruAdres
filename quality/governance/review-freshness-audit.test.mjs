@@ -325,3 +325,29 @@ test('wrong PR in explicit provenance heading cannot qualify', () => {
   const unrelated={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\n## REVIEW-PROVENANCE-v1 — PR #419\nExact HEAD: '+h+'\nbase: '+b}
   assert.equal(check({reviews:[unrelated]}).state,'UNVERIFIED')
 })
+
+test('all prMarker-supported Markdown heading levels detect BLOCKED against body PASS', () => {
+  for (const level of [1, 3, 4]) {
+    const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n'+'#'.repeat(level)+' DA-REVIEW-RESULT-v2 — PR #418 — BLOCKED\nExact HEAD: '+h+'\nbase: '+b+'\nKARAR: PASS'}
+    const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+    assert.equal(x.state,'RECORDED')
+    assert.equal(x.disposition,'UNCLASSIFIED')
+    assert.equal(x.mergePermitted,false)
+  }
+})
+test('supported single and triple Markdown headings retain their sole BLOCKED verdict', () => {
+  for (const level of [1, 3]) {
+    const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n'+'#'.repeat(level)+' DA-REVIEW-RESULT-v2 — PR #418 — BLOCKED\nExact HEAD: '+h+'\nbase: '+b}
+    const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+    assert.equal(x.state,'RECORDED')
+    assert.equal(x.disposition,'REPORTED_BLOCKED')
+    assert.equal(x.mergePermitted,false)
+  }
+})
+test('triple Markdown heading with unsupported CHANGES REQUIRED cannot be overridden by body PASS', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n### DA-REVIEW-RESULT-v2 — PR #418 — CHANGES REQUIRED\nExact HEAD: '+h+'\nbase: '+b+'\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'UNCLASSIFIED')
+  assert.equal(x.mergePermitted,false)
+})

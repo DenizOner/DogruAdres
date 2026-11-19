@@ -152,7 +152,7 @@ export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prCo
   const body = String(latest.body || '')
   // Not a PASS verdict: text is self-reported, cannot establish independent identity.
   const headingLine = body.split(/\r?\n/).find(line =>
-    /^\s*##\s*DA-REVIEW-RESULT-v2\b/i.test(line)) || ''
+    /^\s*#{1,4}\s*DA-REVIEW-RESULT-v2\b/i.test(line)) || ''
   // A historical PASS in '(previous PASS invalidated)' is not a decision.
   // Read only explicit decision slots after a delimiter or KARAR/SONUÇ.
   // Keep every declared heading decision slot, including unsupported values.
