@@ -164,9 +164,21 @@ export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prCo
   // after a decision does not add another vote.
   const headingSlots = headingLine.split(/\s+[—–-]\s+/).slice(1)
     .filter(segment => !/^\s*(?:PR\s*)?#\d+\b/i.test(segment))
+  // A heading must declare one unambiguous CURRENT decision. A second verdict
+  // separated by a slash, semicolon or prose cannot silently become PASS.
+  // Explicitly historical parenthetical status is not a current vote.
+  const headingDecision = slot => {
+    const clean = slot.trim().replace(/^\*+/, '')
+    const leading = /^(PASS|FAIL|BLOCKED|STALE)\b/i.exec(clean)
+    if (!leading) return null
+    const current = clean.replace(/\([^)]*\b(?:previous|historical|older|old|tarihsel|önceki|eski)\b[^)]*\)/gi, '')
+    const votes = [...current.matchAll(/\b(?:PASS|FAIL|BLOCKED|STALE|CHANGES\s+REQUIRED)\b/gi)]
+    return votes.length === 1 ? leading[1].toUpperCase() : null
+  }
   const headingVotes = headingSlots.length
-    ? headingSlots.map(slot => /^(PASS|FAIL|BLOCKED|STALE)\b/i.exec(slot.trim().replace(/^\*+/, ''))?.[1].toUpperCase() || null)
-    : [...headingLine.matchAll(/[—–:-]\s*(PASS|FAIL|BLOCKED|STALE)\b/gi)].map(match => match[1].toUpperCase())
+    ? headingSlots.map(headingDecision)
+    : [...headingLine.matchAll(/[—–:-]\s*(PASS|FAIL|BLOCKED|STALE)\b/gi)]
+      .map(match => headingDecision(headingLine.slice(match.index + match[0].lastIndexOf(match[1]))))
   // Unsupported explicit decisions cannot be silently skipped behind a PASS heading.
   const explicitFields = [...body.matchAll(/(?:^|\n)\s*(?:[-*]\s*)?\*{0,2}(?:KARAR|SONUÇ)\*{0,2}:\*{0,2}\s*\*{0,2}([^\r\n;]+)/gim)]
     .map(match => match[1].replace(/\*+/g, '').trim())
