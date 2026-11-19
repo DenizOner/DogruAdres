@@ -80,13 +80,16 @@ const currentVersionIn = body => {
   // Multiple separately labelled declarations may repeat only the SAME value.
   // Read them all: picking only the first silently hides a conflicting revision.
   const separateValues = key => {
+    // Capture declarations BEFORE checking their values: an explicit
+    // "base: NOT VERIFIED" must invalidate the record, not disappear.
     const re = key === 'head'
-      ? /\bHEAD\b\s*(?:\*{0,2}\s*:)?\s*[\x60*\s]*([a-f0-9]{40})\b/gi
-      : /\bbase\b\s*(?:\*{0,2}\s*:)?\s*[\x60*\s]*([a-f0-9]{40})\b/gi
-    return [...separate.matchAll(re)].map(match => match[1].toLowerCase())
+      ? /\bHEAD\b\s*(?:\*{0,2}\s*:)?\s*[\x60*\s]*([^\s\x60*;,/]+)/gi
+      : /\bbase\b\s*(?:\*{0,2}\s*:)?\s*[\x60*\s]*([^\s\x60*;,/]+)/gi
+    return [...separate.matchAll(re)].map(match => shaCell(match[1]))
   }
   const heads = separateValues('head'), bases = separateValues('base')
-  if (new Set(heads).size > 1 || new Set(bases).size > 1) return null
+  if (heads.includes(null) || bases.includes(null) ||
+      new Set(heads).size > 1 || new Set(bases).size > 1) return null
   const head = heads[0] || null, base = bases[0] || null
   if (Boolean(head) !== Boolean(base)) return null
   if (head && base) pairs.push({ head, base })

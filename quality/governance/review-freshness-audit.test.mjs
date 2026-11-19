@@ -247,3 +247,31 @@ test('historical invalid combined SHA has no effect on valid current fields', ()
   assert.equal(x.disposition,'REPORTED_PASS')
   assert.equal(x.mergePermitted,false)
 })
+
+
+test('invalid separately labelled base declaration blocks a reported PASS', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nbase: NOT VERIFIED\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'PENDING')
+  assert.equal(x.mergePermitted,false)
+})
+test('invalid separately labelled HEAD declaration blocks a reported PASS', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nExact HEAD: NOT VERIFIED\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'PENDING')
+})
+test('invalid separate base in READY is STALE despite a complete first pair', () => {
+  const ready={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\nPR #418\nExact HEAD: '+h+'\nbase: '+b+'\nbase: NOT VERIFIED'}
+  assert.equal(check({queueComments:[ready,comment('REVIEW-RESULT')]}).state,'STALE')
+})
+test('invalid separate base in provenance is UNVERIFIED', () => {
+  const review={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\nExact HEAD: '+h+'\nbase: '+b+'\nbase: NOT VERIFIED'}
+  assert.equal(check({reviews:[review]}).state,'UNVERIFIED')
+})
+test('historical invalid separate base cannot invalidate current exact metadata', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nHistorical base: NOT VERIFIED\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_PASS')
+  assert.equal(x.mergePermitted,false)
+})
