@@ -460,12 +460,16 @@ export default async function({container}:ExecArgs){
       // Classified by bounded states below. The original exception could
       // include child data; do not propagate it into CI artifacts.
     }
-    if(outcome!=='ready')throw Error(
-      'B06 native restart pre-readiness: '+JSON.stringify({
+    if(outcome!=='ready'){
+      // Outer B06 error handler intentionally redacts error.message. Preserve
+      // ONLY fixed-state diagnostics in its already-sanitized evidence object.
+      report.restartStartupFailure={
         outcome,lastStage,readyMarkerSeen:ready,stdoutObserved,stderrObserved,
         spawnError,exitCode:worker.exitCode,
         terminatedBySignal:worker.signalCode!==null
-      }))
+      }
+      throw Error('B06 native Medusa restart failed before HTTP readiness; see redacted restartStartupFailure')
+    }
     assert.ok(worker.pid&&worker.pid!==process.pid,'Restart worker must be a distinct OS process')
     return worker.pid
   }
