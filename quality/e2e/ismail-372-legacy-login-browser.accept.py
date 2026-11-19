@@ -4,6 +4,7 @@ NOT actual Medusa, Person/MFA, production data, DB, full AT, or checkout accepta
 """
 from __future__ import annotations
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -132,7 +133,19 @@ def browser_assertions(base, port):
             visited = []
             http_observations = []
             browser_errors = []
-            page.on("pageerror", lambda error: browser_errors.append(type(error).__name__))
+            def classify_page_error(error):
+                # No raw browser messages, DOM, cookies, credentials or URLs.
+                message = str(error)
+                for label in ("Hydration failed", "Invalid hook call",
+                              "Cannot read properties", "useContext",
+                              "Minified React error", "NEXT_REDIRECT",
+                              "TypeError", "ReferenceError", "React"):
+                    if label.lower() in message.lower():
+                        return label
+                return "unknown-sha256:" + hashlib.sha256(
+                    message.encode()).hexdigest()[:12]
+            page.on("pageerror", lambda error: browser_errors.append(
+                classify_page_error(error)))
             def observe_response(res):
                 u = urlparse(res.url)
                 if u.hostname == "127.0.0.1" and len(http_observations) < 25:
@@ -144,6 +157,97 @@ def browser_assertions(base, port):
                                  wait_until="domcontentloaded", timeout=60000)
             assert response and response.status == 200
             page.get_by_test_id("login-form").wait_for(state="visible", timeout=30000)
+            # SSR-visible fields alone do not prove React attached the submit
+            # handler. Fail closed rather than clicking an unhydrated form.
+            try:
+                page.wait_for_function("""() => {
+                    const form = document.querySelector('[data-testid="login-form"]');
+                    return !!form && Object.keys(form).some(
+                        k => k.startsWith('__reactProps
+            page.get_by_test_id("login-password-input").fill("invalid-synthetic")
+            page.get_by_test_id("login-submit-button").click()
+            try:
+                page.get_by_text("Invalid login", exact=False).first.wait_for(
+                    state="visible", timeout=18000)
+            except PlaywrightTimeoutError:
+                # Fail-only enum/count diagnostics; no DOM, credentials, cookies or URLs with query strings.
+                print("FAIL-DIAG #372: auth_posts=", MockMedusa.auth_count,
+                      "cart_transfers=", MockMedusa.cart_transfers,
+                      "path=", urlparse(page.url).path,
+                      "form_visible=", page.get_by_test_id("login-form").is_visible(),
+                      "toast_nodes=", page.locator("[data-sonner-toast]").count(),
+                      "role_alert_count=", page.get_by_role("alert").count(),
+                      "browser_error_count=", len(browser_errors),
+                      "loopback_http_method_path_status=", http_observations[-16:], flush=True)
+                raise
+            page.wait_for_timeout(800)
+            assert urlparse(page.url).path == "/tr/login", "Failed login navigated"
+            assert not any("/user" in urlparse(url).path for url in visited), \
+                "Incorrect password attempted navigation to /user"
+            assert MockMedusa.auth_count == 1, "Expected exactly one failed auth POST"
+            assert MockMedusa.cart_transfers == 0, "Unexpected Cart transfer"
+            assert page.get_by_test_id("login-form").is_visible()
+            assert page.evaluate(
+                "document.documentElement.scrollWidth <= window.innerWidth + 2"), \
+                "320px viewport horizontally overflows"
+            print("PASS #372 real Next/Chrome: invalid login, error, zero /user, zero Cart")
+            # Separate synthetic Customer positive; no real Medusa or Person access.
+            MockMedusa.permit_valid_login = True
+            page.get_by_test_id("login-password-input").fill("valid-synthetic")
+            page.get_by_test_id("login-submit-button").click()
+            page.get_by_text("Welcome Synthetic", exact=False).first.wait_for(
+                state="visible", timeout=30000)
+            assert MockMedusa.auth_count == 2, "Expected one additional auth POST"
+            assert MockMedusa.cart_transfers == 0, "No preexisting Cart cookie"
+            assert "/user" in urlparse(page.url).path, "Success did not reach /user"
+            print("PASS #372 real Next/Chrome: synthetic Customer success renders /user")
+            context.close()
+        finally:
+            chrome.close()
+
+def main():
+    fixture = ThreadingHTTPServer(("127.0.0.1", 0), MockMedusa)
+    fixture.daemon_threads = True
+    threading.Thread(target=fixture.serve_forever, daemon=True).start()
+    port = free_port()
+    base = f"http://127.0.0.1:{port}"
+    # Explicit allowlist prevents passing any CI secrets or protected DB settings.
+    env = {k: os.environ[k] for k in ("PATH", "HOME", "TMPDIR", "TZ", "LANG")
+           if k in os.environ}
+    env.update({
+        "NODE_ENV": "development", "NEXT_TELEMETRY_DISABLED": "1",
+        "NEXT_PUBLIC_DEFAULT_REGION": "tr", "NEXT_PUBLIC_BASE_URL": base,
+        "NEXT_PUBLIC_SITE_NAME": "Synthetic 372",
+        "MEDUSA_BACKEND_URL": f"http://127.0.0.1:{fixture.server_port}",
+        "NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY": "pk_synthetic_372_no_authority",
+    })
+    proc = subprocess.Popen(
+        ["node", str(NEXT), "dev", "-H", "127.0.0.1", "-p", str(port)],
+        cwd=APP, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for_login(base, proc)
+        assert_anonymous_redirect(base)
+        browser_assertions(base, port)
+    finally:
+        proc.terminate()
+        try: proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+        fixture.shutdown()
+        fixture.server_close()
+
+if __name__ == "__main__":
+    main()
+));
+                }""", timeout=30000)
+            except PlaywrightTimeoutError:
+                print("FAIL-DIAG #372 hydration-not-ready",
+                      "browser_error_categories=", browser_errors[:5],
+                      "auth_posts=", MockMedusa.auth_count,
+                      "form_visible=", page.get_by_test_id("login-form").is_visible(),
+                      "app_path=", urlparse(page.url).path, flush=True)
+                raise
             page.get_by_test_id("login-email-input").fill("synthetic372@example.invalid")
             page.get_by_test_id("login-password-input").fill("invalid-synthetic")
             page.get_by_test_id("login-submit-button").click()
