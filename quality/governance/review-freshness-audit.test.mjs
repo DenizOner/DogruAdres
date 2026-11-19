@@ -391,3 +391,27 @@ test('one current verdict preserves scoped and explicitly historical context', (
     assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).disposition,expected)
   }
 })
+
+test('multiple active and unsupported verdicts in a body field fail closed, not REPORTED_PASS', () => {
+  for (const field of [
+    'KARAR: PASS / BLOCKED',
+    'KARAR: PASS / CHANGES REQUIRED',
+    'SONUÇ: PASS; FAIL',
+    '**KARAR:** **PASS then BLOCKED**'
+  ]) {
+    const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418\nExact HEAD: '+h+'\nbase: '+b+'\n'+field}
+    const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+    assert.equal(x.state,'RECORDED')
+    assert.equal(x.disposition,'UNCLASSIFIED',field)
+    assert.equal(x.mergePermitted,false)
+  }
+})
+test('body fields retain valid historical context and scoped decisions', () => {
+  for (const [field,expected] of [
+    ['KARAR: BLOCKED (previous PASS invalidated)','REPORTED_BLOCKED'],
+    ['KARAR: PASS (SCOPED)','REPORTED_PASS']
+  ]) {
+    const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418\nExact HEAD: '+h+'\nbase: '+b+'\n'+field}
+    assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).disposition,expected,field)
+  }
+})
