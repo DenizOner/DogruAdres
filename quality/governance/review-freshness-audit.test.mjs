@@ -160,3 +160,17 @@ test('missing current base is not borrowed from a historical combined pair', () 
   const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nHistorical HEAD / base: '+old+' / '+b}
   assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).state,'PENDING')
 })
+
+test('unsupported heading CHANGES REQUIRED cannot be overridden by explicit body PASS', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — CHANGES REQUIRED\nExact HEAD: '+h+'\nbase: '+b+'\nKARAR: PASS'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'UNCLASSIFIED')
+  assert.equal(x.mergePermitted,false)
+})
+test('unsupported heading with no body is UNCLASSIFIED; supported heading still matches', () => {
+  const unsupported={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — CHANGES REQUIRED\nExact HEAD: '+h+'\nbase: '+b}
+  const supported={id:102,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — BLOCKED\nExact HEAD: '+h+'\nbase: '+b}
+  assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),unsupported]}).disposition,'UNCLASSIFIED')
+  assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),supported]}).disposition,'REPORTED_BLOCKED')
+})

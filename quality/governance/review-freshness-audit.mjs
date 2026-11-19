@@ -106,14 +106,20 @@ export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prCo
     /^\s*##\s*DA-REVIEW-RESULT-v2\b/i.test(line)) || ''
   // A historical PASS in '(previous PASS invalidated)' is not a decision.
   // Read only explicit decision slots after a delimiter or KARAR/SONUÇ.
-  const headingVotes = [...headingLine.matchAll(/[—–:-]\s*(PASS|FAIL|BLOCKED|STALE)\b/gi)]
-    .map(match => match[1].toUpperCase())
+  // Keep every declared heading decision slot, including unsupported values.
+  // The PR target segment is metadata, not a decision; history in parentheses
+  // after a decision does not add another vote.
+  const headingSlots = headingLine.split(/\s+[—–-]\s+/).slice(1)
+    .filter(segment => !/^\s*(?:PR\s*)?#\d+\b/i.test(segment))
+  const headingVotes = headingSlots.length
+    ? headingSlots.map(slot => /^(PASS|FAIL|BLOCKED|STALE)\b/i.exec(slot.trim().replace(/^\*+/, ''))?.[1].toUpperCase() || null)
+    : [...headingLine.matchAll(/[—–:-]\s*(PASS|FAIL|BLOCKED|STALE)\b/gi)].map(match => match[1].toUpperCase())
   // Unsupported explicit decisions cannot be silently skipped behind a PASS heading.
   const explicitFields = [...body.matchAll(/(?:^|\n)\s*(?:[-*]\s*)?\*{0,2}(?:KARAR|SONUÇ)\*{0,2}:\*{0,2}\s*\*{0,2}([^\r\n;]+)/gim)]
     .map(match => match[1].replace(/\*+/g, '').trim())
   const explicitVotes = explicitFields.map(value => /^(PASS|FAIL|BLOCKED|STALE)\b/i.exec(value)?.[1].toUpperCase() || null)
   const choices = new Set([...headingVotes, ...explicitVotes])
-  const decision = explicitVotes.includes(null) || headingVotes.length > 1 || explicitVotes.length > 1 || choices.size > 1
+  const decision = headingVotes.includes(null) || explicitVotes.includes(null) || headingVotes.length > 1 || explicitVotes.length > 1 || choices.size > 1
     ? null : explicitVotes[0] || headingVotes[0] || null
   const disposition = decision ? 'REPORTED_' + decision : 'UNCLASSIFIED'
   return { ...evidence, state: 'RECORDED', reason: 'review_metadata_matches_current_sha', disposition, resultId: latest.id || null, matchingReviewCount: provenance.length, warning: 'Human review of identity, exact diff, tests and merge gates is still mandatory' }
