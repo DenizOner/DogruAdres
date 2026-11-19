@@ -128,3 +128,17 @@ test('Markdown-bold SONUÇ: BLOCKED with bold value is parsed explicitly', () =>
   assert.equal(x.disposition,'REPORTED_BLOCKED')
   assert.equal(x.mergePermitted,false)
 })
+
+test('PASS heading with unsupported explicit CHANGES REQUIRED is UNCLASSIFIED', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\nKARAR: CHANGES REQUIRED'}
+  const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'UNCLASSIFIED')
+  assert.equal(x.mergePermitted,false)
+})
+test('PASS heading cannot override unsupported SONUÇ or bold KARAR', () => {
+  for (const field of ['SONUÇ: NEEDS REWORK','- **KARAR:** CHANGES REQUIRED']) {
+    const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\n'+field}
+    assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).disposition,'UNCLASSIFIED')
+  }
+})
