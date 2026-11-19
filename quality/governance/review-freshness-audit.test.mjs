@@ -275,3 +275,24 @@ test('historical invalid separate base cannot invalidate current exact metadata'
   assert.equal(x.disposition,'REPORTED_PASS')
   assert.equal(x.mergePermitted,false)
 })
+
+
+test('inspected source narrative with HEAD/base does not invalidate exact provenance', () => {
+  const review={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\nExact HEAD: '+h+'\nbase: '+b+'\ninspected: complete HEAD/base diff'}
+  const x=check({reviews:[review]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.independentIdentity,'UNVERIFIED')
+  assert.equal(x.mergePermitted,false)
+})
+test('ordinary HEAD/base explanatory text cannot stale current READY and result', () => {
+  const ready={id:100,body:'<!-- DA-REVIEW-REQUEST-v2 -->\nPR #418\nExact HEAD: '+h+'\nbase: '+b+'\ninspected: full HEAD/base diff'}
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\ninspected: complete HEAD/base diff\nKARAR: PASS'}
+  const x=check({queueComments:[ready,result]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_PASS')
+  assert.equal(x.mergePermitted,false)
+})
+test('unverified combined target declaration is still rejected beside source narrative', () => {
+  const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\ninspected: HEAD/base diff\nExact HEAD / base: '+old+' / NOT VERIFIED\nKARAR: PASS'}
+  assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).state,'PENDING')
+})

@@ -71,12 +71,20 @@ const currentVersionIn = body => {
     !/\b(?:historical|previous|older|old|tarihsel|önceki|eski)\b/i.test(line))
   // A combined "HEAD / base: h / b" line must be parsed as TWO data cells,
   // not as a separate "base: h" label. Exclude such rows from single fields.
-  const combined = currentLines.filter(line => /\bHEAD\b.*\bbase\b/i.test(line))
+  // Only declarations beginning with a target metadata label are SHA evidence.
+  // Review prose such as "inspected: complete HEAD/base diff" is not a target.
+  const isCombinedTarget = line =>
+    /^\s*(?:[-*]\s*)?\*{0,2}(?:exact\s+)?(?:PR\s+)?HEAD\b/i.test(line) &&
+    /\bbase\b/i.test(line)
+  const isSeparateTarget = line =>
+    /^\s*(?:[-*]\s*)?\*{0,2}(?:(?:exact\s+)?(?:PR\s+)?(?:HEAD|base)|(?:exact\s+)?target)\b/i.test(line)
+  const combined = currentLines.filter(isCombinedTarget)
   const pairs = combined.map(line => versionPairIn(line))
   // Every current combined declaration must be complete and valid. A broken
   // second declaration cannot disappear behind an otherwise matching pair.
   if (pairs.some(pair => !pair)) return null
-  const separate = currentLines.filter(line => !/\bHEAD\b.*\bbase\b/i.test(line)).join('\n')
+  const separate = currentLines.filter(line =>
+    !isCombinedTarget(line) && isSeparateTarget(line)).join('\n')
   // Multiple separately labelled declarations may repeat only the SAME value.
   // Read them all: picking only the first silently hides a conflicting revision.
   const separateValues = key => {
