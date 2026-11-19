@@ -84,7 +84,12 @@ class MockMedusa(BaseHTTPRequestHandler):
             }})
         if self.command == "POST" and p.startswith("/store/carts/") and p.endswith("/customer"):
             MockMedusa.cart_transfers += 1
-            return self.reply(403, {"message": "Cart operations disabled"})
+            # Strictly synthetic Cart-only branch; deny every other ID/actor.
+            if (p != "/store/carts/cart_372_synthetic/customer" or
+                    not MockMedusa.permit_valid_login or
+                    not self.headers.get("authorization", "").startswith("Bearer ")):
+                return self.reply(403, {"message": "Synthetic Cart request denied"})
+            return self.reply(200, {"cart": {"id": "cart_372_synthetic"}})
         return self.reply(403, {"message": "Synthetic fixture denies this route"})
     def do_GET(self): self.dispatch()
     def do_POST(self): self.dispatch()
@@ -122,6 +127,13 @@ def browser_assertions(base, port):
                   "--disable-background-networking"])
         try:
             context = chrome.new_context(viewport={"width": 320, "height": 640})
+            # Existing Cart regression: only a fake cart cookie on local Next.
+            # Wrong password must not transfer it; successful Customer login
+            # must make exactly one fake backend transfer request.
+            context.add_cookies([{
+                "name": "_medusa_cart_id", "value": "cart_372_synthetic",
+                "url": base, "httpOnly": True, "sameSite": "Strict"
+            }])
             def only_loopback(route):
                 u = urlparse(route.request.url)
                 if u.hostname == "localhost" and u.port == port:
@@ -225,9 +237,16 @@ def browser_assertions(base, port):
                       flush=True)
                 raise
             assert MockMedusa.auth_count == 2, "Expected one additional auth POST"
-            assert MockMedusa.cart_transfers == 0, "No preexisting Cart cookie"
+            for _ in range(40):
+                if MockMedusa.cart_transfers:
+                    break
+                page.wait_for_timeout(250)
+            page.wait_for_timeout(400)
+            assert MockMedusa.cart_transfers == 1, (
+                "Expected one synthetic Cart transfer after valid Customer login")
             assert "/user" in urlparse(page.url).path, "Success did not reach /user"
-            print("PASS #372 real Next/Chrome: synthetic Customer success renders /user")
+            print("PASS #372 real Next/Chrome: synthetic Customer success,"
+                  " exactly one synthetic Cart transfer")
             context.close()
         finally:
             chrome.close()
