@@ -375,3 +375,19 @@ test('unsupported bold CHANGES REQUIRED cannot be overridden by body PASS', () =
   assert.equal(x.state,'RECORDED')
   assert.equal(x.disposition,'UNCLASSIFIED')
 })
+
+test('multiple simultaneous or unsupported verdicts in one heading fail closed', () => {
+  for (const heading of ['PASS / BLOCKED', 'PASS; BLOCKED', 'PASS then BLOCKED', 'PASS (but BLOCKED)', 'PASS / CHANGES REQUIRED']) {
+    const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — '+heading+'\nExact HEAD: '+h+'\nbase: '+b}
+    const x=check({queueComments:[comment('REVIEW-REQUEST'),result]})
+    assert.equal(x.state,'RECORDED')
+    assert.equal(x.disposition,'UNCLASSIFIED',heading)
+    assert.equal(x.mergePermitted,false)
+  }
+})
+test('one current verdict preserves scoped and explicitly historical context', () => {
+  for (const [heading,expected] of [['PASS (SCOPED)','REPORTED_PASS'],['BLOCKED (previous PASS invalidated)','REPORTED_BLOCKED']]) {
+    const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — '+heading+'\nExact HEAD: '+h+'\nbase: '+b}
+    assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).disposition,expected)
+  }
+})
