@@ -180,9 +180,9 @@ export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prCo
     : [...headingLine.matchAll(/[—–:-]\s*(PASS|FAIL|BLOCKED|STALE)\b/gi)]
       .map(match => headingDecision(headingLine.slice(match.index + match[0].lastIndexOf(match[1]))))
   // Unsupported explicit decisions cannot be silently skipped behind a PASS heading.
-  const explicitFields = [...body.matchAll(/(?:^|\n)\s*(?:[-*]\s*)?\*{0,2}(?:KARAR|SONUÇ)\*{0,2}:\*{0,2}\s*\*{0,2}([^\r\n;]+)/gim)]
+  const explicitFields = [...body.matchAll(/(?:^|\n)\s*(?:[-*]\s*)?\*{0,2}(?:KARAR|SONUÇ)\*{0,2}:\*{0,2}\s*\*{0,2}([^\r\n]+)/gim)]
     .map(match => match[1].replace(/\*+/g, '').trim())
-  const explicitVotes = explicitFields.map(value => /^(PASS|FAIL|BLOCKED|STALE)\b/i.exec(value)?.[1].toUpperCase() || null)
+  const explicitVotes = explicitFields.map(headingDecision)
   const choices = new Set([...headingVotes, ...explicitVotes])
   const decision = headingVotes.includes(null) || explicitVotes.includes(null) || headingVotes.length > 1 || explicitVotes.length > 1 || choices.size > 1
     ? null : explicitVotes[0] || headingVotes[0] || null
