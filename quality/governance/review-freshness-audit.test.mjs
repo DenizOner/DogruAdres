@@ -296,3 +296,32 @@ test('unverified combined target declaration is still rejected beside source nar
   const result={id:101,body:'<!-- DA-REVIEW-RESULT-v2 -->\n## DA-REVIEW-RESULT-v2 — PR #418 — PASS\nExact HEAD: '+h+'\nbase: '+b+'\ninspected: HEAD/base diff\nExact HEAD / base: '+old+' / NOT VERIFIED\nKARAR: PASS'}
   assert.equal(check({queueComments:[comment('REVIEW-REQUEST'),result]}).state,'PENDING')
 })
+
+
+test('review provenance targeting another PR cannot certify the current PR', () => {
+  const unrelated={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\n**Exact target:** PR #419, OPEN. HEAD '+h+'; PR base '+b}
+  const x=check({reviews:[unrelated]})
+  assert.equal(x.state,'UNVERIFIED')
+  assert.equal(x.reason,'no_matching_review_provenance')
+  assert.equal(x.mergePermitted,false)
+})
+test('top-level PR Conversation provenance for a different target cannot qualify', () => {
+  const unrelated={body:'<!-- REVIEW-PROVENANCE-v1 -->\nExact target: PR #419, OPEN. HEAD '+h+'; PR base '+b}
+  const x=check({reviews:[],prComments:[unrelated]})
+  assert.equal(x.state,'UNVERIFIED')
+})
+test('correct provenance target ignores a related PR in ordinary narrative', () => {
+  const related={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\nExact target: PR #418, OPEN. HEAD '+h+'; PR base '+b+'\nRelated: PR #419 was considered separately'}
+  const x=check({reviews:[related]})
+  assert.equal(x.state,'RECORDED')
+  assert.equal(x.disposition,'REPORTED_PASS')
+  assert.equal(x.mergePermitted,false)
+})
+test('conflicting explicit provenance targets fail closed', () => {
+  const conflicting={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\nExact target: PR #418, OPEN. HEAD '+h+'; PR base '+b+'\nExact target: PR #419, OPEN. HEAD '+h+'; PR base '+b}
+  assert.equal(check({reviews:[conflicting]}).state,'UNVERIFIED')
+})
+test('wrong PR in explicit provenance heading cannot qualify', () => {
+  const unrelated={commit_id:h,body:'<!-- REVIEW-PROVENANCE-v1 -->\n## REVIEW-PROVENANCE-v1 — PR #419\nExact HEAD: '+h+'\nbase: '+b}
+  assert.equal(check({reviews:[unrelated]}).state,'UNVERIFIED')
+})

@@ -110,6 +110,20 @@ const currentVersionIn = body => {
 const headIn = body => currentVersionIn(body)?.head || null
 const baseIn = body => currentVersionIn(body)?.base || null
 
+// A review with an explicit target must not be borrowed by another PR with
+// identical HEAD/base SHAs. Incidental "Related: PR #..." prose is not a target.
+const provenanceMatchesPr = (body, number) => {
+  const lines = String(body || '').slice(0, 1800).split(/\r?\n/)
+  const targetLines = lines.filter(line =>
+    /^\s*(?:[-*]\s*)?\*{0,2}(?:Exact\s+target|Target\s+PR)\*{0,2}\s*:/i.test(line) ||
+    /^\s*#{1,4}\s*REVIEW-PROVENANCE-v1\b.*\bPR\s*#\d+/i.test(line))
+  if (!targetLines.length) return true // legacy SHA-only provenance
+  return targetLines.every(line => {
+    const ids = [...line.matchAll(/\bPR\s*#(\d+)\b/gi)].map(m => Number(m[1]))
+    return ids.length === 1 && ids[0] === number
+  })
+}
+
 export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prComments = [], queueIssue = 216 }) {
   if (!pr || !Number.isInteger(pr.number) || !SHA.test(pr.head?.sha || '') || !SHA.test(pr.base?.sha || '') || !SHA.test(mainSha || '') || !Array.isArray(queueComments) || !Array.isArray(reviews) || !Array.isArray(prComments)) {
     return { state: 'UNKNOWN', reason: 'missing_or_invalid_metadata', independentIdentity: 'UNVERIFIED', ci: 'NOT_CHECKED', mergePermitted: false }
@@ -130,7 +144,9 @@ export function assessReviewEvidence({ pr, mainSha, queueComments, reviews, prCo
     ...reviews.filter(r => r.commit_id?.toLowerCase() === head),
     // PR Conversation issue comments have no commit_id; check exact SHA in their body.
     ...prComments
-  ].filter(r => /REVIEW-PROVENANCE-v1/.test(String(r.body || '').slice(0, 300)) && headIn(r.body) === head && baseIn(r.body) === base)
+  ].filter(r => /REVIEW-PROVENANCE-v1/.test(String(r.body || '').slice(0, 300)) &&
+    provenanceMatchesPr(r.body, pr.number) &&
+    headIn(r.body) === head && baseIn(r.body) === base)
   if (!provenance.length) return { ...evidence, state: 'UNVERIFIED', reason: 'no_matching_review_provenance', resultCount: currentResults.length }
   const latest = [...currentResults].sort((a,b) => (a.id || 0) - (b.id || 0)).at(-1)
   const body = String(latest.body || '')
