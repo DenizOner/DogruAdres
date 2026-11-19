@@ -124,7 +124,7 @@ def browser_assertions(base, port):
             context = chrome.new_context(viewport={"width": 320, "height": 640})
             def only_loopback(route):
                 u = urlparse(route.request.url)
-                if u.hostname == "127.0.0.1" and u.port == port:
+                if u.hostname == "localhost" and u.port == port:
                     route.continue_()
                 else:
                     route.abort()
@@ -147,7 +147,7 @@ def browser_assertions(base, port):
                 classify_page_error(error)))
             def observe_response(res):
                 u = urlparse(res.url)
-                if u.hostname == "127.0.0.1" and len(http_observations) < 25:
+                if u.hostname == "localhost" and len(http_observations) < 25:
                     http_observations.append((res.request.method, u.path, res.status))
             page.on("response", observe_response)
             page.on("framenavigated", lambda f: visited.append(f.url)
@@ -202,8 +202,21 @@ def browser_assertions(base, port):
             MockMedusa.permit_valid_login = True
             page.get_by_test_id("login-password-input").fill("valid-synthetic")
             page.get_by_test_id("login-submit-button").click()
-            page.get_by_text("Welcome Synthetic", exact=False).first.wait_for(
-                state="visible", timeout=30000)
+            try:
+                page.get_by_text("Welcome Synthetic", exact=False).first.wait_for(
+                    state="visible", timeout=30000)
+            except PlaywrightTimeoutError:
+                # Fail-only status/cookie-presence metadata; never print token values.
+                browser_cookie_names = [c.get("name", "") for c in context.cookies()]
+                print("FAIL-DIAG #372 synthetic-positive",
+                      "auth_posts=", MockMedusa.auth_count,
+                      "cart_transfers=", MockMedusa.cart_transfers,
+                      "path=", urlparse(page.url).path,
+                      "jwt_cookie_present=", "_medusa_jwt" in browser_cookie_names,
+                      "browser_error_categories=", browser_errors[:5],
+                      "loopback_http_method_path_status=", http_observations[-16:],
+                      flush=True)
+                raise
             assert MockMedusa.auth_count == 2, "Expected one additional auth POST"
             assert MockMedusa.cart_transfers == 0, "No preexisting Cart cookie"
             assert "/user" in urlparse(page.url).path, "Success did not reach /user"
@@ -217,7 +230,9 @@ def main():
     fixture.daemon_threads = True
     threading.Thread(target=fixture.serve_forever, daemon=True).start()
     port = free_port()
-    base = f"http://127.0.0.1:{port}"
+    # Next's Server Action redirects use localhost. Keep all browser requests
+    # and cookies on that exact origin; the fake backend remains 127.0.0.1 only.
+    base = f"http://localhost:{port}"
     # Explicit allowlist prevents passing any CI secrets or protected DB settings.
     env = {k: os.environ[k] for k in ("PATH", "HOME", "TMPDIR", "TZ", "LANG")
            if k in os.environ}
