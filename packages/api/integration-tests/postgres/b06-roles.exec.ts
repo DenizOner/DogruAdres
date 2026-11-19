@@ -427,20 +427,45 @@ export default async function({container}:ExecArgs){
     DOGRUADRES_PUBLIC_ORIGIN:origin}
   const launchFreshServer=async()=>{
     assert.equal(freshWorker,undefined,'Only one task-owned Medusa HTTP worker can listen')
-    let ready=false,failed=false,tail=''
+    let ready=false,spawnError=false,stderrObserved=false,stdoutObserved=false
+    let lastStage:'none'|'boundary'|'latch'|'api'='none'
+    let markerTail=''
     const worker=spawn(process.execPath,
       ['run','medusa','exec','./integration-tests/postgres/b06-restart-http.exec.ts'],
       {cwd:process.cwd(),env:workerEnv,stdio:['ignore','pipe','pipe']})
     freshWorker=worker
-    // Do not surface Medusa stdout/stderr: it may contain sensitive text.
+    // Keep only fixed startup-stage evidence; never persist or publish raw
+    // Medusa logs, credentials, native tokens, Person IDs or stderr text.
     worker.stdout?.on('data',(chunk:Buffer)=>{
-      tail=(tail+String(chunk)).slice(-512)
-      if(tail.includes('B06_RESTART_HTTP_READY'))ready=true
+      stdoutObserved=true
+      const scan=markerTail+String(chunk)
+      for(const [token,stage] of [
+        ['B06_RESTART_STAGE_BOUNDARY','boundary'],
+        ['B06_RESTART_STAGE_LATCH','latch'],
+        ['B06_RESTART_STAGE_API','api']
+      ] as const)if(scan.includes(token))lastStage=stage
+      if(scan.includes('B06_RESTART_HTTP_READY'))ready=true
+      markerTail=scan.slice(-32) // only an in-memory split-marker overlap
     })
-    worker.stderr?.on('data',()=>{})
-    worker.on('error',()=>{failed=true})
-    await until(async()=>ready&&!failed&&worker.exitCode===null,85000,
-      'fresh native Medusa HTTP worker within B06 disposable scope')
+    worker.stderr?.on('data',()=>{stderrObserved=true})
+    worker.on('error',()=>{spawnError=true})
+    let outcome:'ready'|'exited'|'timeout'='timeout'
+    try{
+      outcome=await until(async()=>{
+        if(spawnError||worker.exitCode!==null||worker.signalCode!==null)
+          return 'exited' as const
+        return ready?'ready' as const:false
+      },85000,'bounded task-only native Medusa worker readiness')
+    }catch{
+      // Classified by bounded states below. The original exception could
+      // include child data; do not propagate it into CI artifacts.
+    }
+    if(outcome!=='ready')throw Error(
+      'B06 native restart pre-readiness: '+JSON.stringify({
+        outcome,lastStage,readyMarkerSeen:ready,stdoutObserved,stderrObserved,
+        spawnError,exitCode:worker.exitCode,
+        terminatedBySignal:worker.signalCode!==null
+      }))
     assert.ok(worker.pid&&worker.pid!==process.pid,'Restart worker must be a distinct OS process')
     return worker.pid
   }
@@ -545,11 +570,12 @@ export default async function({container}:ExecArgs){
       if(worker.exitCode===null&&worker.signalCode===null)worker.kill('SIGTERM')
       await until(async()=>worker.exitCode!==null||worker.signalCode!==null,15000,
         'B06 task child cleanup')
+      freshWorker=undefined
     }catch{workerCleanupOk=false}
   }
   for(const c of browsers){await c.close();report.browsers.push({actor:c.actor,http:c.http,cleanup:c.cleanup})}
   if(server)await new Promise<void>(resolve=>server!.close(()=>resolve()))
-  await app?.close();await pg.end();rmSync(temp,{recursive:true,force:true});report.cleanup={chromeProfiles:browsers.every(c=>c.cleanup),taskTlsRemoved:true,medusaWorkerExited:workerCleanupOk&&!freshWorker?.pid}
+  await app?.close();await pg.end();rmSync(temp,{recursive:true,force:true});report.cleanup={chromeProfiles:browsers.every(c=>c.cleanup),taskTlsRemoved:true,medusaWorkerExited:workerCleanupOk&&freshWorker===undefined}
   writeFileSync(join(output,'evidence.json'),JSON.stringify(report,null,2))
   const hashes=readdirSync(output).filter(n=>n!=='SHA256SUMS').map(n=>createHash('sha256').update(readFileSync(join(output,n))).digest('hex')+'  '+n)
   writeFileSync(join(output,'SHA256SUMS'),hashes.join('\n')+'\n')
