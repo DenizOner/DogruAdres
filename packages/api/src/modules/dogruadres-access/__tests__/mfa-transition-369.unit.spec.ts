@@ -54,7 +54,7 @@ function syntheticTransition() {
       return []
     }
     if (sql.startsWith("insert into da_audit_event")) {
-      auditActions.push(parameters[3] as string)
+      auditActions.push(parameters[4] as string)
       return []
     }
     if (sql.startsWith("insert into da_security_outbox")) {
