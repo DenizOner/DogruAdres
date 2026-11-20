@@ -56,10 +56,18 @@ jobs:
           actual="$(git rev-parse HEAD)"
           test "$actual" = "$GITHUB_SHA"
           parents="$(git show -s --format=%P HEAD)"
-          test "$parents" = "$EXPECTED_BASE_SHA $EXPECTED_HEAD_SHA"
+          read -r merged_base merged_head extra <<< "$parents"
+          test -z "${extra:-}"
+          test "$merged_head" = "$EXPECTED_HEAD_SHA"
+          # The PR event's stored base SHA may lag the actual GitHub merge base.
+          # Fail closed against the current protected main instead of that stale field.
+          live_main="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
+          test -n "$live_main"
+          test "$merged_base" = "$live_main"
           test -f packages/api/src/modules/dogruadres-access/__tests__/mfa-transition-369.unit.spec.ts
           echo "PR #449 source HEAD: $EXPECTED_HEAD_SHA"
-          echo "Target main base SHA: $EXPECTED_BASE_SHA"
+          echo "Recorded PR event base SHA: $EXPECTED_BASE_SHA"
+          echo "Verified live main/merge first parent: $live_main"
           echo "Tested GitHub synthetic merge: $actual"
           echo "Scope: SQL-mock Jest only; not native Medusa/Chrome/PG16 or #208 acceptance"
 
