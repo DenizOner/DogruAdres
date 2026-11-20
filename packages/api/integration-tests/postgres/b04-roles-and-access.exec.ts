@@ -1,6 +1,6 @@
 /** B04 only. Real native providers, shipped HTTP middleware/routes and separate
  * PostgreSQL readback in the existing CLI harness's one disposable database.
- * Admin and Member role acceptance, revoked membership denial, suspended Organization denial.
+ * Legacy Admin/Member Owner-only denials, revoked membership denial, suspended Organization denial.
  * No grants, MFA factors, invitations, external delivery or protected resources.
  */
 import assert from "node:assert/strict"
@@ -22,7 +22,9 @@ export default async function({ container }: ExecArgs) {
     process.env.PG_MFA_NATIVE_TEST_DATABASE === u.pathname.slice(1) && process.env.DOGRUADRES_IDENTITY_ENABLED === "true" &&
     process.env.DOGRUADRES_MFA_RUNTIME_ENABLED === "false", "REFUSED: wrong disposable B04 environment")
   const pg = new Client({ connectionString: u.toString() }); await pg.connect()
-  const report: any = { scope: ui ? "B04 real Chrome UI/HTTP/SQL" : "B04 native HTTP/SQL only; no Chrome", http: [], checks: {}, acceptance: "OPEN" }
+  const report: any = { scope: ui ? "B04 real Chrome UI/HTTP/SQL" : "B04 native HTTP/SQL only; no Chrome", http: [], checks: {}, acceptance: "OPEN",
+    notTested: ["Protected Owner HTTP membership 200 and five-field DTO (existing B04 permits only Person B login)",
+      "Protected Owner Chrome management controls (one Person B browser session; no second credential/fixture allowed)"] }
   let http: Awaited<ReturnType<typeof createPersonalHttpApp>> | undefined, server: any
   const rows = async (q: string, p: any[] = []) => (await pg.query(q, p)).rows
   const count = async (t: string) => Number((await rows(`select count(*)::int n from "${t}"`))[0].n)
@@ -195,12 +197,20 @@ export default async function({ container }: ExecArgs) {
       role: "admin",
     })
 
-    // Permitted actions for Admin: Can read memberships in Org 1
-    const org1Memberships = await call("Person B read Org 1 memberships as Admin", `/personal/memberships?organization=${org1.id}`, { cookie })
-    assert.equal(org1Memberships.status, 200)
-    const org1MembershipsData = await org1Memberships.json() as any
-    assert.ok(Array.isArray(org1MembershipsData.memberships))
-    assert.equal(org1MembershipsData.memberships.length, 2)
+    // Legacy Admin has no protected Owner membership-list privilege, even in its own Org.
+    // Inspect only synthetic identifiers in the refusal body; never record raw data.
+    const expectMembershipDenied = async (response: Awaited<ReturnType<typeof call>>, organizationId: string) => {
+      assert.equal(response.status, 403)
+      assert.match(response.headers.get("cache-control") ?? "", /\\bno-store\\b/)
+      const body = await response.json() as any
+      assert.equal(body?.message, "Access denied")
+      assert.equal(Object.hasOwn(body, "memberships"), false)
+      const sanitized = JSON.stringify(body)
+      for (const privateId of [organizationId, personA.id, personB.id, mOwner1.id, mOwner2.id, mAdminB.id, mMemberB.id])
+        assert.equal(sanitized.includes(privateId), false, "Membership denial leaked a synthetic tenant/person identifier")
+    }
+    const org1Memberships = await call("Person B legacy Admin membership list denied", `/personal/memberships?organization=${org1.id}`, { cookie })
+    await expectMembershipDenied(org1Memberships, org1.id)
 
     // Step 3: Verify Organization 2 (Member)
     const org2Res = await call("Person B select Org 2 (Member)", `/personal/organizations?id=${org2.id}`, { cookie })
@@ -217,8 +227,7 @@ export default async function({ container }: ExecArgs) {
 
     // No Admin or Owner privilege in Org 2: Cannot read memberships in Org 2
     const org2Memberships = await call("Person B read Org 2 memberships as Member denied", `/personal/memberships?organization=${org2.id}`, { cookie })
-    assert.equal(org2Memberships.status, 403)
-    assert.equal((await org2Memberships.json() as any).message, "Access denied")
+    await expectMembershipDenied(org2Memberships, org2.id)
 
     // Refresh simulation: re-querying Org 2 succeeds with Member role
     const org2Refresh = await call("Person B refresh Org 2 scope", `/personal/organizations?id=${org2.id}`, { cookie })
@@ -353,7 +362,7 @@ export default async function({ container }: ExecArgs) {
 
     report.checks = {
       adminAccessSuccess: true,
-      adminMembershipReadSuccess: true,
+      legacyAdminMembershipReadDenied: true,
       memberAccessSuccess: true,
       memberMembershipReadDenied: true,
       memberScopeSurvivedRefresh: true,
