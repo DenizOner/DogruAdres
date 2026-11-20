@@ -201,7 +201,7 @@ export default async function({ container }: ExecArgs) {
     // Inspect only synthetic identifiers in the refusal body; never record raw data.
     const expectMembershipDenied = async (response: Awaited<ReturnType<typeof call>>, organizationId: string) => {
       assert.equal(response.status, 403)
-      assert.match(response.headers.get("cache-control") ?? "", /\\bno-store\\b/)
+      assert.ok((response.headers.get("cache-control") ?? "").includes("no-store"), "Membership denial must not be cached")
       const body = await response.json() as any
       assert.equal(body?.message, "Access denied")
       assert.equal(Object.hasOwn(body, "memberships"), false)
