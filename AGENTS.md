@@ -91,8 +91,6 @@ The authoritative order belongs in the **existing task Issue**; #216 links its c
 4. **Observe → verify → remedy → measure → feedback only in initiated sessions:** each actual Coordinator run identifies the affected user journey/agents/PRs, distinguishes observed cause from hypothesis, chooses the smallest already-approved safe action with a named source/test/runner actor and STOP criterion, then measures genuinely cleared dependency blockers and `DONE_ACCEPTED` journeys against prior evidence (unknown = NOT VERIFIED). Carry a demonstrated helpful normative improvement into root AGENTS only through a separately assigned one-writer docs branch/PR, actual applicable CI and independent #208 review; no silent policy mutation, background automation, fabricated PASS or repeated unevidenced proposals.
 <!-- END DA-OWNER-LIVING-MERGE-POSTMERGE-POLICY-20261120 -->
 
-
-
 <!-- DA-SELF-SERVICE-TEST-FIRST-LOCAL-HANDOFF-20261119 -->
 ### Self-service test first, controlled local-Agent handoff only as last resort
 
@@ -159,7 +157,7 @@ Follow [DoğruAdres engineering principles §11](#11-product-scope-and-dependenc
 <!-- DA-TRAFFIC-LIGHT-OWNER-APPROVED-20261118 -->
 ## Koordinatör / Trafik Lambası — central assignment and verified reporting
 
-A new DoğruAdres project chat invoked by standalone **Trafik Lambası** or starter **[AJAN ADI] = Koordinatör** is the same coordinator session. On first actual execution and **Devam et**, inspect #216/orders, all open/draft PRs, real HEAD/base/main, claims, CI and review; issue only approved **DA-TASK-ORDER-v1** / deduplicated coordination/index comments. This supersedes the prior read-only-only traffic-light role; it never grants code, branch, test, DB, PR merge/closure, deployment, Product Owner approval or independent review power. A Coordinator's process-only, evidence-bounded MERGE GO/NO-GO follows the newer explicit Owner decision below; it is not the act of merging. Never invent assignments from stale evidence.
+A new DoğruAdres project chat invoked by standalone **Trafik Lambası** or starter **[AJAN ADI] = Koordinatör** is the same coordinator session. On first actual execution and **Devam et**, inspect #216/orders, all open/draft PRs, real HEAD/base/main, claims, CI and review; issue only approved **DA-TASK-ORDER-v1** / deduplicated coordination/index comments. This supersedes the prior read-only-only traffic-light role; it never grants code, branch, test, DB, PR merge/closure, deployment, Product Owner approval or independent review power. A Coordinator's process-only, evidence-bounded MERGE GO/NO-GO follows the newer explicit Owner decision linked above; it is not the act of merging. Never invent assignments from stale evidence.
 
 **Binding report format** ([19 November five-heading owner decision](https://github.com/DenizOner/DogruAdres/issues/216#issuecomment-7003793798), [last/next-run decision](https://github.com/DenizOner/DogruAdres/issues/216#issuecomment-7004180547), [ten-developer and Issue/PR links decision](https://github.com/DenizOner/DogruAdres/issues/216#issuecomment-7004373047)): report in the following logical order, **omitting conditional headings when they have no actionable content and renumbering visible headings consistently**:
 
