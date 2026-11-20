@@ -1,7 +1,7 @@
 /**
  * #377 test-first source-scoped negative cases. No real HTTP, browser, DB,
  * cache or Person/Organization authorization is exercised by this suite.
- * Failing tests are intentional RED evidence, never product acceptance.
+ * RED-to-GREEN source evidence is not runtime authorization or product acceptance.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -23,20 +23,25 @@ const valid = (id, date) => ({ id, line_items: [{ line_item_id: 'synthetic-' + i
 const rowA = valid('A', '2026-11-01T00:00:00Z');
 const rowB = valid('B', '2026-11-02T00:00:00Z');
 
-test('control: zero and one records avoid the comparator', () => {
+test('control: zero and one records avoid the comparator; valid records keep newest-first order', () => {
+  assert.deepEqual(sortRows([rowA, rowB]).map(row => row.id), ['B', 'A']);
   assert.deepEqual(sortRows([]), []);
   assert.equal(sortRows([{ id: 'synthetic-empty', line_items: [] }]).length, 1);
 });
 
-test('RED: two records including empty line_items must not crash sorting', () => {
-  assert.doesNotThrow(() => sortRows([rowA, { id: 'synthetic-empty', line_items: [] }]));
+test('regression: two records including empty line_items must not crash sorting', () => {
+  const rows = [rowA, { id: 'synthetic-empty', line_items: [] }];
+  assert.doesNotThrow(() => sortRows(rows));
+  assert.equal(sortRows(rows)[1].id, 'synthetic-empty');
 });
 
-test('RED: undefined line_items must fail safely rather than throw', () => {
-  assert.doesNotThrow(() => sortRows([{ id: 'synthetic-missing' }, rowB]));
+test('regression: undefined line_items must fail safely rather than throw', () => {
+  const rows = [{ id: 'synthetic-missing' }, rowB];
+  assert.doesNotThrow(() => sortRows(rows));
+  assert.equal(sortRows(rows)[0].id, 'B');
 });
 
-test('RED: foreign Person/Organization retrieval cannot precede customer gate', () => {
+test('regression: foreign Person/Organization retrieval cannot precede customer gate', () => {
   // Fake A/B identifiers only. Source call order is NOT actual tenant/no-leak proof.
   const actorA = { person: 'synthetic-person-A', organization: 'synthetic-org-A' };
   const actorB = { person: 'synthetic-person-B', organization: 'synthetic-org-B' };
@@ -44,7 +49,8 @@ test('RED: foreign Person/Organization retrieval cannot precede customer gate', 
   const gate = page.indexOf('await retrieveCustomer()');
   const fetch = page.indexOf('await getReturns()');
   assert.ok(gate >= 0 && fetch >= 0, 'Expected current identity and return calls');
-  assert.ok(gate < fetch, 'getReturns runs before retrieveCustomer; runtime leak NOT TESTED');
+  const denied = page.indexOf('if (!user) return <LoginForm />;');
+  assert.ok(gate < denied && denied < fetch, 'Missing customer must return before fetching returns; runtime leak NOT TESTED');
 });
 
 test('source-only control: native return-request remains default-denied', () => {
