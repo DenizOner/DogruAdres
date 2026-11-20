@@ -55,9 +55,15 @@ jobs:
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
           test "$actual" = "$GITHUB_SHA"
-          parents="$(git show -s --format=%P HEAD)"
-          read -r merged_base merged_head extra <<< "$parents"
-          test -z "${extra:-}"
+          # A depth-1 checkout may mark HEAD shallow, hiding parents from git show %P.
+          # Read the raw commit object and require exactly two real parent headers.
+          mapfile -t merge_parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')
+          echo "Synthetic merge raw parent count: ${#merge_parents[@]}"
+          test "${#merge_parents[@]}" -eq 2
+          merged_base="${merge_parents[0]}"
+          merged_head="${merge_parents[1]}"
+          echo "Synthetic merge source parent: $merged_head"
+          echo "Synthetic merge target parent: $merged_base"
           test "$merged_head" = "$EXPECTED_HEAD_SHA"
           # The PR event's stored base SHA may lag the actual GitHub merge base.
           # Fail closed against the current protected main instead of that stale field.
