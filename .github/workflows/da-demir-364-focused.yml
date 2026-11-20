@@ -1,0 +1,116 @@
+# Demir #364 r6 — task-only synthetic Jest on DRAFT PR #450; not native B22 acceptance.
+name: "DA Demir #364 — Owner appeal 10+20 focused Jest"
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/da-demir-364-focused.yml"
+      - "packages/api/src/api/personal/__tests__/platform-owner-appeal-context.unit.spec.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: da-demir-364-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  owner-appeal-privacy:
+    name: "Demir #364 — four synthetic Owner appeal UI cases (advisory)"
+    # Refuse all other PRs, forks, branches, repositories and target branches.
+    # This stays runnable for the authorized DRAFT PR; no draft/ready flip.
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.repository == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.number == 450 &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.base.repo.full_name == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.head.ref == 'test/demir-364-owner-appeal-context'
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      CI: "true"
+      TEST_TYPE: unit
+      NODE_OPTIONS: "--experimental-vm-modules"
+      EXPECTED_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      EXPECTED_PR_BASE: ${{ github.event.pull_request.base.sha }}
+      EXPECTED_MERGE: ${{ github.sha }}
+      EXPECTED_PR_NUMBER: "${{ github.event.pull_request.number }}"
+
+    steps:
+      - name: Verify exact task-only PR identity before checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "pull_request"
+          test "$GITHUB_REPOSITORY" = "DenizOner/DogruAdres"
+          test "$EXPECTED_PR_NUMBER" = "450"
+          test -n "$EXPECTED_PR_HEAD"
+          test -n "$EXPECTED_PR_BASE"
+          test -n "$EXPECTED_MERGE"
+          echo "Allowed Demir #364 same-repository PR #450, target branch main"
+
+      - name: Checkout GitHub PR merge ref without persistent credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Verify exact GitHub merge, head and protected-base provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE"
+          read -r actual_base actual_head extra <<< "$(git show -s --format=%P HEAD)"
+          test -n "$actual_base"
+          test -n "$actual_head"
+          test -z "${extra:-}"
+          test "$actual_head" = "$EXPECTED_PR_HEAD"
+          # A PR's originally stored base can predate its CI-created merge.
+          # Do not silently use it in place of the current protected main.
+          test "$(git remote get-url origin)" = "https://github.com/DenizOner/DogruAdres"
+          live_base="$(git ls-remote --exit-code origin refs/heads/main | cut -f1)"
+          test -n "$live_base"
+          test "$actual_base" = "$live_base"
+          test -f packages/api/src/api/personal/__tests__/platform-owner-appeal-context.unit.spec.ts
+          printf 'PR head=%s event base=%s live main=%s merged=%s\n' \
+            "$actual_head" "$EXPECTED_PR_BASE" "$actual_base" "$EXPECTED_MERGE"
+          echo "SCOPE: synthetic Owner UI Jest; real HTTP/PG16/Chrome/calendar NOT TESTED"
+
+      - name: Set up SHA-pinned Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Set up SHA-pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+          no-cache: true
+
+      - name: Check pinned runtimes and install frozen dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v24.22.1"
+          test "$(bun --version)" = "1.4.2"
+          bun install --frozen-lockfile
+
+      - name: Run exactly four Owner appeal privacy Jest cases; retain RED
+        working-directory: packages/api
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUN TARGET: src/api/personal/__tests__/platform-owner-appeal-context.unit.spec.ts"
+          bun run jest --runInBand --runTestsByPath src/api/personal/__tests__/platform-owner-appeal-context.unit.spec.ts 2>&1 | tee "$RUNNER_TEMP/demir-364-focused-jest.log"
+          # Fail if Jest did not actually discover and run all four.
+          grep -Eq 'Test Suites:[[:space:]]+1 passed, 1 total' "$RUNNER_TEMP/demir-364-focused-jest.log"
+          grep -Eq 'Tests:[[:space:]]+4 passed, 4 total' "$RUNNER_TEMP/demir-364-focused-jest.log"
+          echo "PASS: one exact Jest suite / four actual synthetic Owner UI cases"
+          echo "NOT TESTED: real 10+20 days, two-Organization HTTP/Chrome/PG16, audit/outbox and independent #208 review"
