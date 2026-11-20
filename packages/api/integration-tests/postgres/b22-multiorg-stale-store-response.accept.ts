@@ -193,7 +193,7 @@ export async function verifyB22MultiOrgStaleStoreResponse(input:{
     }
   }
     process.stdout.write(
-      "PASS B22-08: real Chrome/HTTPS/PG16 Alpha native GET200 delivered after "+
+      "PASS B22 Chrome: #365 B22-08 real Alpha HTTPS GET200 delivered after "+
       "Gamma GET200; no stale private Store DOM/controls, no browser POST, "+
       "audit/outbox unchanged; browser-local JS ordering only\n")
 }
