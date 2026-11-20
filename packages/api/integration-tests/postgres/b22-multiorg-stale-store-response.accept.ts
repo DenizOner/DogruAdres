@@ -162,10 +162,6 @@ export async function verifyB22MultiOrgStaleStoreResponse(input:{
     assert.equal(Number((await q(
       "select count(*)::int n from da_audit_outbox"))[0].n),outboxBefore,
       "Response inversion must not enqueue notifications or outbox writes")
-    process.stdout.write(
-      "PASS B22-08: real Chrome/HTTPS/PG16 Alpha native GET200 delivered after "+
-      "Gamma GET200; no stale private Store DOM/controls, no browser POST, "+
-      "audit/outbox unchanged; browser-local JS ordering only\\n")
   }finally{
     if(installed){
       // On every error, first settle any held native Response (avoid pending
@@ -185,4 +181,8 @@ export async function verifyB22MultiOrgStaleStoreResponse(input:{
         "Browser fetch cleanup must restore the original in every outcome")
     }
   }
+    process.stdout.write(
+      "PASS B22-08: real Chrome/HTTPS/PG16 Alpha native GET200 delivered after "+
+      "Gamma GET200; no stale private Store DOM/controls, no browser POST, "+
+      "audit/outbox unchanged; browser-local JS ordering only\n")
 }
