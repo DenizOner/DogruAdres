@@ -5056,16 +5056,37 @@ async function verifyB22ConcurrentOwnerOrganizationStores(input:{
           !gammaPrivate.includes(concurrentNames[n]),
           "Gamma cannot read either Alpha Store identity or name")
 
-      // The old Beta admin grant was revoked; Foreign Gamma is a different
-      // Organization from this legitimate second Owner's sellerGamma.
-      for(const deniedOrg of [organizations[1].id,organizations[2].id]){
-        const denied=await get(selected(deniedOrg))
-        assert.equal(denied.status,403)
-        const deniedText=JSON.stringify(denied.body)
-        assert.ok(concurrentSellerIds.every((id,i)=>
-          !deniedText.includes(id)&&!deniedText.includes(concurrentNames[i])),
-          "Revoked/foreign requests must not disclose ANY approved Store")
-      }
+      // A's Beta Admin membership is still active at this stage; only the
+      // separate Store-draft grant was revoked. The actual protected Owner
+      // membership revocation later in this runner MUST still return 403.
+      // Do not mislabel an authorized scope as an unauthorized one.
+      const betaMembership=await q(
+        "select role,status,protected_owner from da_organization_membership "+
+        "where person_id=$1 and organization_id=$2 and revoked_at is null",
+        [A.person,organizations[1].id])
+      assert.deepEqual(betaMembership,[{
+        role:"admin",status:"active",protected_owner:false
+      }],"Beta Admin must remain active until the later Owner revocation")
+      const betaAuthorized=await get(selected(organizations[1].id))
+      assert.equal(betaAuthorized.status,200,
+        "Active Beta Admin is not a revoked Organization member")
+      assert.deepEqual(betaAuthorized.body.stores,[],
+        "Authorized Beta scope must not list Alpha or Gamma Stores")
+      const betaText=JSON.stringify(betaAuthorized.body)
+      assert.ok(concurrentSellerIds.every((id,i)=>
+        !betaText.includes(id)&&!betaText.includes(concurrentNames[i])),
+        "Active Beta Admin cannot see other Organizations' Store IDs or names")
+
+      // A has no membership in this unrelated foreign Organization.
+      // A real unauthorized 403 (and all-store ID/name no-leak) remains
+      // mandatory now; Beta's real post-revocation 403 is asserted later.
+      const deniedForeign=await get(selected(organizations[2].id))
+      assert.equal(deniedForeign.status,403,
+        "Foreign Organization must reject the current Owner session")
+      const foreignText=JSON.stringify(deniedForeign.body)
+      assert.ok(concurrentSellerIds.every((id,i)=>
+        !foreignText.includes(id)&&!foreignText.includes(concurrentNames[i])),
+        "Foreign denial must not disclose ANY approved Store")
       const forgedSeller=await browser.callFunction(
         "async function(url,id){const r=await fetch(url,{headers:{'x-seller-id':id}});"+
         "return {status:r.status,body:await r.json()}}",
