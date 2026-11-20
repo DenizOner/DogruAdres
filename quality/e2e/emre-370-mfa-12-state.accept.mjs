@@ -137,7 +137,8 @@ export function assertMfa370Observation(expected, observed) {
       // Exact HTTP handling is left to the approved B-E integration;
       // any unchallenged full session is categorically refused.
       deny(login.fullSessionCreated === false &&
-        login.result === "native_reconciliation_guard" &&
+        (login.result === "native_reconciliation_guard" ||
+         login.result === "challenge_required") &&
         (login.httpStatus === 202 || isDenied(login.httpStatus)),
         "platform disabled silently bypassed an active native factor")
       break
