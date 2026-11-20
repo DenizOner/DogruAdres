@@ -1,0 +1,73 @@
+# Emre #370 / PR #453 — narrowly scoped CI-first capability probe.
+# This intentionally FAILS while the real isolated 12-state Chrome/PG16
+# execution driver and B-E owner agreement are missing. An exit 2 is NOT
+# a passing end-to-end test. Do not replace it with a synthetic PASS.
+name: Emre #370 MFA 12-state — real runtime NOT TESTED
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/da-emre-370-focused.yml'
+      - 'quality/e2e/emre-370-mfa-12-state.accept.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: da-emre-370-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mfa370-acceptance:
+    name: '#370 exact no-driver target — BLOCKED/NOT TESTED'
+    # Running only the named author-owned same-repo PR prevents unrelated,
+    # fork, replayed or misdirected PR events from executing this job.
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.repository == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.number == 453 &&
+        github.event.pull_request.head.ref == 'test/emre-370-mfa-12-state-20261120' &&
+        github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.base.repo.full_name == 'DenizOner/DogruAdres'
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout actual PR merge ref without persistent credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, pinned
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Refuse stale, unrelated or unmerged source
+        shell: bash
+        env:
+          EXPECTED_MERGE: ${{ github.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE"
+          test "$(git rev-parse HEAD^1)" = "$EXPECTED_BASE"
+          test "$(git rev-parse HEAD^2)" = "$EXPECTED_HEAD"
+          test -f quality/e2e/emre-370-mfa-12-state.accept.mjs
+          echo 'PR merge-ref and both exact parents verified; only #370 source target is eligible.'
+
+      - name: Setup pinned Node (no dependency installation)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0, pinned
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+
+      - name: Run exact MFA 12-state source target; preserve no-driver failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'Running the real #370 target command, not a copied/mock implementation.'
+          echo 'No authorized native Chrome/HTTPS/PG16 driver has been supplied; expected terminal status: FAIL / NOT TESTED.'
+          node quality/e2e/emre-370-mfa-12-state.accept.mjs
+          echo 'This line should be unreachable until an authorized real driver exists.'
