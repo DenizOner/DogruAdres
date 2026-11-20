@@ -77,10 +77,10 @@ jobs:
           set -euo pipefail
           test "$(node --version)" = "v24.22.1"
           node --test quality/e2e/ismail-368-person-mfa-ui-negative.unit.test.mjs | tee "$RUNNER_TEMP/ismail368-target.tap"
-          grep -Eq '^# tests 6$' "$RUNNER_TEMP/ismail368-target.tap"
-          grep -Eq '^# pass 6$' "$RUNNER_TEMP/ismail368-target.tap"
-          grep -Eq '^# fail 0$' "$RUNNER_TEMP/ismail368-target.tap"
-          grep -Eq '^# skipped 0$' "$RUNNER_TEMP/ismail368-target.tap"
+          grep -Eq '^(#|ℹ) tests 6$' "$RUNNER_TEMP/ismail368-target.tap"
+          grep -Eq '^(#|ℹ) pass 6$' "$RUNNER_TEMP/ismail368-target.tap"
+          grep -Eq '^(#|ℹ) fail 0$' "$RUNNER_TEMP/ismail368-target.tap"
+          grep -Eq '^(#|ℹ) skipped 0$' "$RUNNER_TEMP/ismail368-target.tap"
           printf '%s\n' \
             '### #368 synthetic-only Person MFA UI Node test' \
             '6 source-extracted Node tests executed. This is NOT native Medusa MFA, PostgreSQL, Chrome, WCAG/AT, or final #208 review.' \
