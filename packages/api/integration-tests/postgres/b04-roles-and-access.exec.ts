@@ -204,7 +204,7 @@ export default async function({ container }: ExecArgs) {
       assert.ok((response.headers.get("cache-control") ?? "").includes("no-store"), "Membership denial must not be cached")
       const body = await response.json() as any
       assert.equal(body?.message, "Access denied")
-      assert.equal(Object.hasOwn(body, "memberships"), false)
+      assert.equal(Object.prototype.hasOwnProperty.call(body, "memberships"), false)
       const sanitized = JSON.stringify(body)
       for (const privateId of [organizationId, personA.id, personB.id, mOwner1.id, mOwner2.id, mAdminB.id, mMemberB.id])
         assert.equal(sanitized.includes(privateId), false, "Membership denial leaked a synthetic tenant/person identifier")
