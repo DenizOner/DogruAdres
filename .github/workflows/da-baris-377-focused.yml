@@ -1,0 +1,85 @@
+# Barış #377 r5 — self-contained, synthetic-only PR target; not native acceptance.
+name: "DA Baris #377 focused OrderGroup actor isolation"
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/da-baris-377-focused.yml"
+      - "quality/e2e/baris-377-commerce-same-person-two-org-order.unit.test.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: da-baris-377-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  same-customer-two-organizations:
+    # Fail closed on any other PR, branch, event, base, or fork.
+    # Deliberately run on own DRAFT PR: no fake ready_for_review transition.
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.repository == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.number == 451 &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.head.ref == 'test/baris-377-commerce-same-person-two-org-20261120'
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact PR merge ref without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 3
+
+      - name: Verify two-parent PR merge provenance
+        shell: bash
+        env:
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_BASE"
+          test -n "$EXPECTED_HEAD"
+          read -r actual_base actual_head unexpected <<< "$(git show -s --format=%P HEAD)"
+          test -n "$actual_base"
+          test -n "$actual_head"
+          test -z "${unexpected:-}"
+          test "$actual_base" = "$EXPECTED_BASE"
+          test "$actual_head" = "$EXPECTED_HEAD"
+          test -f quality/e2e/baris-377-commerce-same-person-two-org-order.unit.test.mjs
+          test -f packages/api/src/api/personal/order-groups/route.ts
+          printf 'Verified task-only PR merge HEAD=%s base=%s\n' "$actual_head" "$actual_base"
+
+      - name: Set up pinned Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Set up pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+          no-cache: true
+
+      - name: Install frozen dependencies and verify runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v24.22.1"
+          test "$(bun --version)" = "1.4.2"
+          bun install --frozen-lockfile
+          node -e "if (require('typescript/package.json').version !== '5.9.3') process.exit(1); console.log('Verified TypeScript 5.9.3')"
+
+      - name: Execute exact same-Customer cross-Organization Node tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test quality/e2e/baris-377-commerce-same-person-two-org-order.unit.test.mjs
