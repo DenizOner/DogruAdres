@@ -1,0 +1,53 @@
+name: DA Fikret 378 SMTP reply focused negative
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/da-fikret-378-focused.yml'
+      - 'quality/e2e/test_fikret_378_smtp_reply_bounds.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: da-fikret-378-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  smtp-reply-contract:
+    if: >-
+      github.event.pull_request.number == 454 &&
+      github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
+      github.event.pull_request.head.ref == 'test/fikret-378-smtp-reply-bounds-20261120' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.repository == 'DenizOner/DogruAdres'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact GitHub PR merge test ref without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Setup Node 24 for actual project parser
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - name: Verify exact event and code provenance
+        shell: bash
+        env:
+          EXPECTED_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -f quality/e2e/test_fikret_378_smtp_reply_bounds.py
+          test -f packages/api/src/modules/dogruadres-access/smtp-client.ts
+          printf 'PR=%s HEAD=%s BASE=%s MERGE=%s\n' "454" "$EXPECTED_PR_HEAD" "$EXPECTED_PR_BASE" "$(git rev-parse HEAD)"
+          python3 --version
+          node --version
+      - name: Run isolated real SMTP reply parser positive and fail-first negative
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s quality/e2e -p 'test_fikret_378_smtp_reply_bounds.py' -v
