@@ -152,6 +152,12 @@ export default function PlatformMfaSettingsPage() {
         !/^[A-Za-z0-9_-]{43}$/.test(csrfToken) ||
         !options.some(option => option.value === selected) ||
         selected === policy.platform.platform_mode) return
+    const chosen = options.find(option => option.value === selected)
+    if (!chosen || !window.confirm(
+      "Platform MFA politikasını değiştirmek istiyor musunuz? " +
+      chosen.name + ": " + chosen.effect +
+      " Mevcut native faktörler güvenli uzlaştırma olmadan atlanamaz."
+    )) return
     inFlight.current = true
     setSaving(true)
     setLocked(true)
