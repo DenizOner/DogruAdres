@@ -1,0 +1,91 @@
+# #369 — task-owned, advisory target Jest only; not MFA/Chrome/PG16 acceptance.
+# Only Cem's existing draft PR #449 may execute this workflow.
+name: "Cem #369 — pending MFA challenge Jest (targeted)"
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/da-cem-369-focused.yml"
+      - "packages/api/src/modules/dogruadres-access/__tests__/mfa-transition-369.unit.spec.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: da-cem-369-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pending-challenge:
+    name: "Cem #369 — synthetic transition Jest (advisory)"
+    if: ${{ github.event_name == 'pull_request' && github.repository == 'DenizOner/DogruAdres' && github.event.pull_request.number == 449 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' && github.event.pull_request.head.ref == 'test/cem-369-mfa-transition-guard-20261120' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      CI: "true"
+      TEST_TYPE: unit
+      EXPECTED_PR_NUMBER: "${{ github.event.pull_request.number }}"
+      EXPECTED_HEAD_SHA: "${{ github.event.pull_request.head.sha }}"
+      EXPECTED_BASE_SHA: "${{ github.event.pull_request.base.sha }}"
+    steps:
+      - name: Refuse wrong repository, PR or branch before checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "pull_request"
+          test "$GITHUB_REPOSITORY" = "DenizOner/DogruAdres"
+          test "$EXPECTED_PR_NUMBER" = "449"
+          test "${{ github.event.pull_request.base.ref }}" = "main"
+          test "${{ github.event.pull_request.head.repo.full_name }}" = "DenizOner/DogruAdres"
+          test "${{ github.event.pull_request.head.ref }}" = "test/cem-369-mfa-transition-guard-20261120"
+          test -n "$EXPECTED_HEAD_SHA"
+          test -n "$EXPECTED_BASE_SHA"
+          echo "Allowed PR #449: exact head/base metadata present"
+
+      - name: Checkout ephemeral PR merge ref without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify actual checked-out PR merge provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$GITHUB_SHA"
+          parents="$(git show -s --format=%P HEAD)"
+          test "$parents" = "$EXPECTED_BASE_SHA $EXPECTED_HEAD_SHA"
+          test -f packages/api/src/modules/dogruadres-access/__tests__/mfa-transition-369.unit.spec.ts
+          echo "PR #449 source HEAD: $EXPECTED_HEAD_SHA"
+          echo "Target main base SHA: $EXPECTED_BASE_SHA"
+          echo "Tested GitHub synthetic merge: $actual"
+          echo "Scope: SQL-mock Jest only; not native Medusa/Chrome/PG16 or #208 acceptance"
+
+      - name: Setup pinned Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Setup pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+          no-cache: true
+
+      - name: Install exact lockfile dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(bun --version)" = "1.4.2"
+          bun install --frozen-lockfile
+
+      - name: Run exact six MFA transition Jest cases (do not hide RED)
+        working-directory: packages/api
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUN TARGET: src/modules/dogruadres-access/__tests__/mfa-transition-369.unit.spec.ts"
+          bun run jest --runInBand --runTestsByPath src/modules/dogruadres-access/__tests__/mfa-transition-369.unit.spec.ts
