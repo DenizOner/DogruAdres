@@ -65,9 +65,11 @@ async function waitForStaffFinalState(staff:StaffFinalBrowser,sellerId:string,
         "const classify=(value,parts)=>{for(const [token,label] of parts)if(value.includes(token))return label;return value?'other':'empty'};"+
         "const status=classify(text('platform-closing-status'),[['Yetkili mağazalar doğrulanıyor','list_loading'],['Gerekçe ile yeni satışları','list_ready'],['Gerekçeli karar güvenli biçimde','post_loading'],['Yeni satışlar derhal durdu','post_accepted'],['Mağaza listesi doğrulanamadı','list_error'],['Sonuç belirsiz','post_uncertain'],['Yetki veya mağaza kararı','post_rejected']]);"+
         "const mail=classify(text('platform-closing-mail-status'),[['Owner e-posta bildirimleri kontrol ediliyor','mail_loading'],['doğrulanmış e-posta kimliği 1','verified_one'],['Korunan Owner','verified_other'],['Bu mağaza için henüz kapatma kaydı','missing_closure'],['E-posta durumları doğrulanamadı','mail_error']]);"+
+        "const list_ready=text('platform-closing-status').includes('Gerekçe ile yeni satışları derhal durdurabilirsiniz.');"+
+        "const verified_mail_ready=text('platform-closing-mail-status').includes('doğrulanmış e-posta kimliği 1');"+
         "const http=path=>{const entries=performance.getEntriesByType('resource').filter(item=>{try{const url=new URL(item.name);return url.origin===location.origin&&url.pathname.endsWith(path)}catch{return false}});const code=Number(entries.at(-1)?.responseStatus||0);return code>=200&&code<300?'2xx':code>=300&&code<400?'3xx':code>=400&&code<500?'4xx':code>=500&&code<600?'5xx':'unknown'};"+
         "const selected=document.querySelector('#platform-closing-form select[name=seller_id]')?.value;"+
-        "return {document_hidden:document.hidden,workspace_hidden:!!document.getElementById('workspace')?.hidden,panel_hidden:!!document.getElementById('platform-closing-panel')?.hidden,selected_matches:selected==="+JSON.stringify(sellerId)+",status,mail,closing_http:http('/platform/store-closings'),mail_http:http('/platform/store-closing-email-readiness')};"+
+        "return {document_hidden:document.hidden,workspace_hidden:!!document.getElementById('workspace')?.hidden,panel_hidden:!!document.getElementById('platform-closing-panel')?.hidden,selected_matches:selected==="+JSON.stringify(sellerId)+",status,mail,list_ready,verified_mail_ready,closing_http:http('/platform/store-closings'),mail_http:http('/platform/store-closing-email-readiness')};"+
         "})()")
       if(diagnostic&&typeof diagnostic==="object"&&!Array.isArray(diagnostic))
         diagnostic={...(diagnostic as Record<string,unknown>),
@@ -762,10 +764,10 @@ export async function verifyB22PlatformClosingAppeal(input:{
   assert.equal(allowedHttp.includes(safe.mail_http),true)
   assert.equal(safe.network?.capture,"unavailable")
   for(const field of ["document_hidden","workspace_hidden","panel_hidden",
-    "selected_matches"])assert.equal(typeof safe[field],"boolean")
+    "selected_matches","list_ready","verified_mail_ready"])assert.equal(typeof safe[field],"boolean")
   assert.deepEqual(Object.keys(safe).sort(),
     ["document_hidden","workspace_hidden","panel_hidden","selected_matches",
-      "status","mail","closing_http","mail_http","network"].sort())
+      "status","mail","list_ready","verified_mail_ready","closing_http","mail_http","network"].sort())
   // Fixed synthetic CDP response sample; private request IDs and unrelated
   // endpoint data may exist internally, but must not appear in the result.
   const fakeNetwork=classifyStaffClosingNetwork({
