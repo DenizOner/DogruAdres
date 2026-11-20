@@ -28,7 +28,7 @@ const valid = Object.freeze({
   platform: {platform_mode: 'optional'},
   personal: {user_enabled: false},
   native_factor_state: 'enabled',
-  effective_mfa_target: {next_step: 'verify_mfa'},
+  effective_mfa_target: {required: true, next_step: 'verify_mfa', user_control_allowed: true},
   can_manage_platform: false,
 });
 
@@ -96,4 +96,54 @@ test('#368 malformed platform mode must fail closed (no Person/platform controls
     can_manage_platform: true});
   await ui.refreshMfa();
   assertMfaControlsClosed(ui);
+});
+
+test('#368 each supported mode preserves valid native factor and override decisions', async () => {
+  const cases = [
+    {mode: 'required', user: false, native: 'not_enrolled', required: true,
+      step: 'enroll_mfa', enrollHidden: false},
+    {mode: 'optional', user: false, native: 'not_enrolled', required: false,
+      step: 'allow_primary', enrollHidden: false},
+    {mode: 'optional', user: true, native: 'pending', required: true,
+      step: 'enroll_mfa', enrollHidden: false},
+    {mode: 'disabled', user: true, native: 'not_enrolled', required: false,
+      step: 'allow_primary', enrollHidden: true},
+    {mode: 'disabled', user: true, native: 'enabled', required: true,
+      step: 'reconcile_native_factor', enrollHidden: true},
+  ];
+  for (const c of cases) {
+    const data = {...valid, platform: {platform_mode: c.mode},
+      personal: {user_enabled: c.user}, native_factor_state: c.native,
+      effective_mfa_target: {required: c.required, next_step: c.step,
+        user_control_allowed: c.mode === 'optional'}};
+    const ui = harness(data);
+    await ui.refreshMfa();
+    assert.equal(ui.state(), data, 'valid documented contract must be accepted');
+    assert.equal(ui.el('mfa-person').hidden, false);
+    assert.equal(ui.el('mfa-enroll-launch').hidden, c.enrollHidden);
+    assert.equal(ui.el('mfa-person').elements.user_enabled.disabled,
+      c.mode !== 'optional', 'platform mode overrides personal controls');
+    assert.doesNotMatch(ui.el('mfa-info').textContent, /undefined/);
+  }
+});
+
+test('#368 invalid Person MFA boolean and effective-state values cannot render controls', async () => {
+  for (const mutation of [
+    {personal: {user_enabled: 'false'}},
+    {can_manage_platform: 'false'},
+    {effective_mfa_target: {required: 'true', next_step: 'verify_mfa',
+      user_control_allowed: true}},
+    {effective_mfa_target: {required: true, next_step: 'disabled_bypass',
+      user_control_allowed: true}},
+    {effective_mfa_target: {required: false, next_step: 'verify_mfa',
+      user_control_allowed: true}},
+    {effective_mfa_target: {required: true, next_step: 'verify_mfa',
+      user_control_allowed: false}},
+    {platform: null},
+    {effective_mfa_target: null},
+  ]) {
+    const ui = harness({...valid, ...mutation});
+    await ui.refreshMfa();
+    assertMfaControlsClosed(ui);
+  }
 });
