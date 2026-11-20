@@ -104,7 +104,7 @@ export async function verifyB05Ui(p: {
       evidence.http.push({ phase, evidence: "REAL BACKEND", method: "GET", scope: r.scope, status: 200, rows: n, dtoKeys: ["id", "person_id", "role", "status", "protected_owner"], noStore: true, sqlMatched: true })
     }
     const denied = async (scope: "Org1" | "Org2", role: "admin" | "member") => {
-      await wait(`${status('Uye listesi ve davet yonetimi icin yetki gerekli.')}&&document.querySelectorAll('#memberships p,#memberships button,#memberships select').length===0&&!(visible('memberships-refresh'))&&!(visible('invite-member'))&&!(visible('audit-timeline-section'))`, "Non-owner controls concealed")
+      await wait(`${status('Uye listesi ve davet yonetimi icin yetki gerekli.')}&&document.querySelectorAll('#memberships p,#memberships button,#memberships select').length===0&&!(${visible('memberships-refresh')})&&!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})`, "Non-owner controls concealed")
       const org = scope === "Org1" ? p.org1 : p.org2
       assert.equal(await evaluate(`(()=>{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(org.id)}&&d.role===${JSON.stringify(role)}})()`), true, "Non-owner selected scope")
       assert.equal(await evaluate(`document.getElementById('memberships').textContent.includes(${JSON.stringify(p.personId)})`), false)
@@ -134,7 +134,6 @@ export async function verifyB05Ui(p: {
       note("Owner sees two active SQL-matched rows; exact DTO/no-store")
       phase = "refresh"; arm(); await click("#memberships-refresh"); await loading(); await release(); await realList(2)
       note("Owner refresh reauthorizes Org1 and clears stale rows")
-    } else {
       phase = "owner-after-revoke"; await p.revoke(); arm(); await click("#memberships-refresh"); await loading(); await release(); await realList(1)
       note("Native single revoke; Owner genuine HTTP200 list contains only active Owner; revoked row retained in SQL")
       // Browser-local controlled results never go to Foundation or count as DB evidence.
