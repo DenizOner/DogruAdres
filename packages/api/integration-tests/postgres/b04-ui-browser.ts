@@ -21,6 +21,7 @@ export async function verifyB04Ui(p: {
   const responses: { phase: string; path: string; status: number }[] = []
   const requests = new Map<string, string>()
   const posts: string[] = []
+  const unauthorizedMembershipGets: string[] = [] // Only sanitized phase labels; no IDs, tokens or raw URLs.
   p.report.browser = { engine: "real Chrome --headless=new / CDP", observations: [], cleanup: false }
   const observation = (name: string) => p.report.browser.observations.push({ phase, check: name, passed: true })
   const alias = (url: string) => {
@@ -52,6 +53,8 @@ export async function verifyB04Ui(p: {
       }
       if (m.method === "Network.requestWillBeSent") {
         requests.set(m.params.requestId, phase)
+        if (m.params.request.method === "GET" && alias(m.params.request.url).split("?")[0] === "/personal/memberships")
+          unauthorizedMembershipGets.push(phase)
         if (m.params.request.method !== "GET") posts.push(alias(m.params.request.url))
       }
       if (m.method === "Network.responseReceived") responses.push({ phase: requests.get(m.params.requestId) ?? phase,
@@ -81,10 +84,15 @@ export async function verifyB04Ui(p: {
       await wait(`(()=>{try{const d=JSON.parse(document.getElementById('detail').textContent);return d.id===${JSON.stringify(org.id)}&&d.role===${JSON.stringify(role)}&&location.search==='?organization='+${JSON.stringify(org.id)}&&document.getElementById('status').textContent==='Kuruluş erişimi doğrulandı'}catch{return false}})()`, "scoped role DOM and URL")
       await network(`/personal/organizations?scope=${org === p.org1 ? "Org1" : "Org2"}`, 200)
     }
+    const nonOwnerConcealment = async () => {
+      assert.equal(await evaluate(`${visible('invite-member')}||${visible('audit-timeline-section')}||${visible('memberships-refresh')}||!!document.querySelector('#memberships button,#memberships select')`),
+        false, "Non-Owner inherited Owner-only controls")
+      assert.equal(await evaluate(`document.getElementById('memberships').textContent==='' `), true, "Non-Owner membership data visible")
+      assert.deepEqual(unauthorizedMembershipGets, [], "Non-Owner Chrome must not request Owner-only memberships")
+    }
     const memberConcealment = async () => {
-      assert.equal(await evaluate(`${visible('invite-member')}||${visible('audit-timeline-section')}||!!document.querySelector('#memberships button,#memberships select')`), false, "Member inherited management controls")
+      await nonOwnerConcealment()
       assert.equal(await evaluate(`['detail','memberships','audit-timeline-entries','invite-result'].some(id=>document.getElementById(id).textContent.includes(${JSON.stringify(p.org1.id)})||document.getElementById(id).textContent.includes(${JSON.stringify(p.org1.name)}))`), false, "Stale Org1 private data")
-      await network("/personal/memberships?scope=Org2", 403)
     }
     await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable")
     phase = "login"
@@ -104,9 +112,8 @@ export async function verifyB04Ui(p: {
       await click(`#organizations button:nth-child(${index + 1})`)
     }
     await select(p.org1); await scoped(p.org1, "admin")
-    await wait(`${visible('invite-member')}&&${visible('audit-timeline-section')}&&document.querySelectorAll('#memberships p').length===2&&!!document.querySelector('#memberships select')`, "Admin management panels")
-    await network("/personal/memberships?scope=Org1", 200)
-    observation("Org1 selected by visible chooser; Admin role, membership controls, invitation and audit panels")
+    await nonOwnerConcealment()
+    observation("Org1 chooser selected legacy Admin; Owner-only membership, invitation and audit controls concealed; no membership GET")
     phase = "member"
     await select(p.org2); await scoped(p.org2, "member"); await memberConcealment()
     observation("Org2 selected by visible chooser; Member role; management concealed; no stale Org1 private panel data")
@@ -114,10 +121,10 @@ export async function verifyB04Ui(p: {
     await send("Page.reload", { ignoreCache: true })
     await scoped(p.org2, "member"); await memberConcealment()
     observation("Actual Page.reload retained Org2 URL, Member role and concealed management DOM")
-    // Reopen Admin private content before revocation, then use actual reload
-    // for revalidation. No dependence on the 5s observer leaving a form visible.
+    // Reopen the legitimate Org1 selection (not Owner-only private panels) before revocation.
+    // Actual reload must then clear the former Org1 context and deny stale access.
     phase = "admin-before-revoke"
-    await select(p.org1); await scoped(p.org1, "admin")
+    await select(p.org1); await scoped(p.org1, "admin"); await nonOwnerConcealment()
     phase = "revoked"
     await p.revoke()
     await send("Page.reload", { ignoreCache: true })
@@ -134,7 +141,9 @@ export async function verifyB04Ui(p: {
     await network("/personal/organizations?scope=Org2", 403)
     await wait(`${visible('workspace')}&&document.querySelectorAll('#organizations button').length===0&&document.getElementById('detail').textContent===''&&document.getElementById('memberships').textContent===''&&!(${visible('invite-member')})&&!(${visible('audit-timeline-section')})&&location.search===''`, "suspended private DOM removal and empty chooser")
     observation("Suspended Org2 reload returned 403; empty chooser and cleared private DOM")
+    assert.deepEqual(unauthorizedMembershipGets, [], "No legacy Admin/Member/Revoked/Suspended membership GET may be sent by Chrome")
     assert.deepEqual(posts, ["/personal/session"], "Exactly one browser mutation: credential login")
+    p.report.browser.ownerControls = "NOT TESTED: Person A Owner has no Chrome session in this one-login B04 fixture"
     p.report.http = responses
     p.report.browser.checksPassed = true
   } finally {
