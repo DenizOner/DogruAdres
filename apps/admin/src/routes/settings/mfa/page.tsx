@@ -74,6 +74,14 @@ export default function PlatformMfaSettingsPage() {
   const sequence = useRef(0)
   const inFlight = useRef(false)
 
+  // A rejected or uncertain mutation invalidates the previously displayed
+  // policy. Do not label a stale version as the current saved setting.
+  function concealStalePolicy() {
+    setPolicy(null)
+    setCsrfToken("")
+    setConfirmed(false)
+  }
+
   // GET is safe to repeat. A failed or uncertain POST is never retried.
   const refresh = useCallback(async (expected?: PlatformMode, previousVersion?: number) => {
     const seq = ++sequence.current
@@ -181,17 +189,18 @@ export default function PlatformMfaSettingsPage() {
         }),
       })
       if (response.status === 401 || response.status === 403) {
-        setPolicy(null)
-        setCsrfToken("")
+        concealStalePolicy()
         setDenied(true)
         setMessage("Bu işlem için güncel MFA platform görevi ve güçlü oturum gerekli.")
         return
       }
       if (response.status === 409) {
+        concealStalePolicy()
         setMessage("Ayar başka oturumda değişti. Yeniden okuyup sürümü karşılaştırın.")
         return
       }
       if (!response.ok) {
+        concealStalePolicy()
         setMessage("Kayıt doğrulanamadı. Aynı isteği tekrar göndermeyin; önce güncel ayarı okuyun.")
         return
       }
@@ -199,6 +208,7 @@ export default function PlatformMfaSettingsPage() {
       const posted = body && typeof body === "object" && !Array.isArray(body)
         ? parsePolicy((body as Record<string, unknown>).platform) : null
       if (!posted || posted.platform_mode !== selected || posted.version <= previousVersion) {
+        concealStalePolicy()
         setMessage("Sunucu yanıtı tutarsız. Tekrar göndermeden önce güncel ayarı okuyun.")
         return
       }
@@ -206,6 +216,7 @@ export default function PlatformMfaSettingsPage() {
       // readback, nor does it disable an already-enabled Medusa factor.
       await refresh(selected, previousVersion)
     } catch {
+      concealStalePolicy()
       setMessage("Ağ yanıtı belirsiz. Tekrar göndermeden önce güncel ayarı okuyun.")
     } finally {
       inFlight.current = false
