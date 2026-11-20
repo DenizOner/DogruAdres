@@ -115,3 +115,37 @@ test("accessible radio controls disclose each option and native-factor limitatio
   assert.match(source, /native faktör/i)
   assert.match(source, /politika sürümü/i)
 })
+
+
+test("a failed or uncertain platform save conceals stale policy and its CSRF proof", () => {
+  // Execute the actual production function body, without a DOM, server or
+  // client-owned authorization state. Stale data must never look current.
+  const extracted = source.match(/  function concealStalePolicy\(\) \{[\s\S]*?\n  \}/)
+  assert.ok(extracted, "Production must provide a stale-display guard")
+  const calls = []
+  const conceal = new Function(
+    "setPolicy", "setCsrfToken", "setConfirmed",
+    extracted[0] + "; return concealStalePolicy"
+  )(
+    value => calls.push(["policy", value]),
+    value => calls.push(["csrf", value]),
+    value => calls.push(["confirmed", value]),
+  )
+  conceal()
+  assert.deepEqual(calls, [
+    ["policy", null], ["csrf", ""], ["confirmed", false],
+  ])
+
+  const mutator = source.slice(source.indexOf("  async function save("),
+    source.indexOf("  const hasChange ="))
+  assert.ok(mutator.includes("concealStalePolicy()"))
+  for (const failureCase of [
+    /if \(response\.status === 401 \|\| response\.status === 403\) \{[\s\S]*?concealStalePolicy\(\)/,
+    /if \(response\.status === 409\) \{\s*concealStalePolicy\(\)/,
+    /if \(!response\.ok\) \{\s*concealStalePolicy\(\)/,
+    /if \(!posted \|\| posted\.platform_mode !== selected \|\| posted\.version <= previousVersion\) \{\s*concealStalePolicy\(\)/,
+    /\} catch \{\s*concealStalePolicy\(\)/,
+  ]) assert.match(mutator, failureCase)
+  assert.match(mutator, /setLocked\(true\)/)
+  assert.doesNotMatch(mutator, /retry|setTimeout|setInterval/i)
+})
