@@ -24,6 +24,17 @@ export async function verifyB22MultiOrgStaleStoreResponse(input:{
     "select count(*)::int n from da_audit_event"))[0].n)
   const outboxBefore=Number((await q(
     "select count(*)::int n from da_audit_outbox"))[0].n)
+  // Initial Alpha selection itself starts multiple legitimate list GETs
+  // (primary stores, buyer-block picker, owner grants). Let them ALL settle.
+  // Gate a single user-triggered native stores-refresh GET, not an arbitrary
+  // first request from that parallel navigation batch.
+  await browser.select(alpha.name,"owner")
+  await browser.wait("!document.getElementById('workspace').hidden&&"+
+    "!document.getElementById('org-stores-refresh').disabled&&"+
+    "document.getElementById('org-stores').textContent.includes("+
+      JSON.stringify(alpha.storeNames[0])+")&&"+
+    "document.getElementById('org-stores').textContent.includes("+
+      JSON.stringify(alpha.storeNames[1])+")")
   const httpStart=browser.http.length
   let installed=false
   try{
@@ -82,7 +93,7 @@ export async function verifyB22MultiOrgStaleStoreResponse(input:{
 
     // The current signed MFA browser profile is already the authorized Owner.
     // Selector clicks are real Chrome UI actions; no synthesized session or DTO.
-    await browser.select(alpha.name,"owner")
+    await browser.click("#org-stores-refresh")
     await browser.wait("!!globalThis.__da365StaleRace&&"+
       "(globalThis.__da365StaleRace.alphaReady||"+
       "globalThis.__da365StaleRace.alphaFailed)")
