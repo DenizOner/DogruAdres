@@ -3,7 +3,6 @@ import { ChevronUpDown } from "@medusajs/icons"
 import { clx } from "@medusajs/ui"
 import { Fragment, useMemo } from "react"
 
-import { Radio } from "@/components/atoms/Radio/Radio"
 
 import { HttpTypes } from "@medusajs/types"
 import compareAddresses from "@/lib/helpers/compare-addresses"
@@ -11,7 +10,7 @@ import clsx from "clsx"
 
 type AddressSelectProps = {
   addresses: HttpTypes.StoreCustomerAddress[]
-  addressInput: HttpTypes.StoreCartAddress | null
+  addressInput: Record<string, string> | null
   onSelect: (
     address: HttpTypes.StoreCartAddress | undefined,
     email?: string

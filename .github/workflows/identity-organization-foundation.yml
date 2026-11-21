@@ -10,6 +10,8 @@ on:
         options: [b02, b04, b04-ui, b05-ui, b06-ui, b07-ui, b08-ui]
   pull_request:
     branches: [main]
+    # Draft changes use targeted local checks; complete CI starts when ready.
+    # Subsequent commits to ready PRs must run all required checks again.
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
@@ -20,8 +22,78 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The repository already uses GitHub's default CodeQL setup, which
+  # rejects separate advanced-setup SARIF uploads. Analyze the actual JS/TS
+  # sources locally (without changing repository security settings), check
+  # SARIF and retain precise findings in this job's real CI log.
+  codeql-javascript-typescript:
+    needs: static
+    # Preserve full scanning when Foundation itself fails; a failure must not conceal security jobs.
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.draft == false && (needs.static.result != 'success' || needs.static.outputs.docs_only != 'true') }}
+    name: CodeQL — JavaScript/TypeScript (local SARIF)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout exact PR merge ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize JavaScript and TypeScript CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4, 2026-11-04
+        with:
+          languages: javascript-typescript
+          build-mode: none
+      - name: Analyze JavaScript and TypeScript without conflicting SARIF upload
+        id: js_ts_scan
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4, 2026-11-04
+        with:
+          category: /language:javascript-typescript
+          upload: never
+          upload-database: false
+          output: ${{ runner.temp }}/dogruadres-codeql-js-ts
+      - name: Read actual CodeQL JavaScript/TypeScript SARIF results
+        shell: bash
+        env:
+          CODEQL_SARIF_DIR: ${{ steps.js_ts_scan.outputs.sarif-output }}
+        run: |
+          node <<'JS'
+          const fs=require('node:fs'),path=require('node:path')
+          const dir=process.env.CODEQL_SARIF_DIR
+          if(!dir||!fs.existsSync(dir))throw Error('CodeQL JS/TS results directory missing')
+          const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>
+            e.isDirectory()?walk(path.join(d,e.name)):
+              e.isFile()&&e.name.endsWith('.sarif')?[path.join(d,e.name)]:[])
+          const files=walk(dir)
+          if(files.length!==1)throw Error('Expected exactly one CodeQL JS/TS SARIF file')
+          const sarif=JSON.parse(fs.readFileSync(files[0],'utf8'))
+          if(!Array.isArray(sarif.runs)||sarif.runs.length!==1)
+            throw Error('Invalid CodeQL analysis run')
+          const run=sarif.runs[0]
+          if(!/codeql/i.test(String(run.tool?.driver?.name??'')))
+            throw Error('Unexpected SARIF analyzer')
+          const results=run.results??[]
+          if(!Array.isArray(results))throw Error('Invalid CodeQL findings')
+          const counts={error:0,warning:0,note:0,other:0}
+          for(const r of results){
+            const level=r.level??'warning'
+            counts[level in counts?level:'other']++
+          }
+          console.log('CodeQL JS/TS local SARIF analysis completed: '+JSON.stringify(counts))
+          for(const r of results.slice(0,40)){
+            const location=r.locations?.[0]?.physicalLocation
+            const file=String(location?.artifactLocation?.uri??'unknown')
+            const line=location?.region?.startLine??0
+            console.log('CodeQL finding '+String(r.level??'warning')+' '+String(r.ruleId??'unknown')+' '+file+':'+line)
+          }
+          if(counts.error>0||counts.warning>0)throw Error('CodeQL JS/TS error/warning findings require review')
+          JS
+
   r1-windows-authz:
-    if: github.event_name != 'workflow_dispatch'
+    needs: static
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.draft == false && (needs.static.result != 'success' || needs.static.outputs.docs_only != 'true') }}
     name: R1 Windows native Authz — synthetic token/ACL only
     runs-on: windows-2025
     timeout-minutes: 6
@@ -98,10 +170,16 @@ jobs:
           Write-Output 'PASS: real Windows Authz in-memory allow/deny, private process token and rejected substitutions; protected sandbox NOT TESTED'
 
   static:
+    # Required checks must execute even for drafts; a skipped required check can count as success.
     if: github.event_name != 'workflow_dispatch'
     name: Foundation static checks
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.docs_classify.outputs.docs_only }}
     steps:
       - name: Checkout PR merge ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -120,29 +198,173 @@ jobs:
         with:
           node-version: '24.22.1'
           package-manager-cache: false
+      # Authenticate against the immutable protected base, never execute PR-authored CI code.
+      # This is a fail-closed dependency on independently reviewed #417.
+      - name: Checkout protected PR base for trusted classifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci_trusted_base
+          persist-credentials: false
+      - name: Classify files with protected-base-only script
+        id: docs_classify
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C .ci_trusted_base rev-parse HEAD)" = "$EXPECTED_BASE"
+          if test -f .ci_trusted_base/quality/ci/docs-only-classifier.mjs && test -f .ci_trusted_base/quality/ci/docs-only-classifier.test.mjs; then
+            node .ci_trusted_base/quality/ci/docs-only-classifier.mjs
+          else
+            echo 'docs_only=false' >> "$GITHUB_OUTPUT"
+            echo 'classification=full' >> "$GITHUB_OUTPUT"
+            echo 'Trusted base has no approved classifier; full checks remain mandatory.'
+          fi
+      - name: Run trusted classifier contract tests on real Actions Node
+        if: ${{ hashFiles('.ci_trusted_base/quality/ci/docs-only-classifier.test.mjs') != '' }}
+        run: node --test .ci_trusted_base/quality/ci/docs-only-classifier.test.mjs
+      - name: Verify Markdown diff (document-only)
+        if: steps.docs_classify.outputs.docs_only == 'true'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$PR_BASE_SHA"
+          git diff --check "$PR_BASE_SHA" "$GITHUB_SHA"
+          echo 'Document-only: exact SHA/tree/patch checks, trusted Node negative tests, and Markdown diff whitespace passed. No Bun, Medusa, API build, Chrome, Windows or local CodeQL claimed.' >> "$GITHUB_STEP_SUMMARY"
       - name: Setup Bun
+        if: steps.docs_classify.outputs.docs_only != 'true'
+        id: setup_bun
+        continue-on-error: true
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: '1.4.2'
           no-cache: true
+      # Fallback is only for GitHub release download errors. Never skip tests.
+      - name: Fallback to official pinned Bun from npm
+        if: steps.docs_classify.outputs.docs_only != 'true' && steps.setup_bun.outcome == 'failure'
+        run: npm install -g --no-audit --no-fund bun@1.4.2
+      - name: Verify exact Bun runtime
+        if: steps.docs_classify.outputs.docs_only != 'true'
+        run: test "$(bun --version)" = "1.4.2"
       - name: Install locked dependencies
+        if: steps.docs_classify.outputs.docs_only != 'true'
         id: install
         run: bun install --frozen-lockfile
+      # Reuse the existing required Foundation job for the approved #159 build
+      # repair and #309 Next.js security patch branches only.
+      # Never skip or suppress TypeScript, ESLint or Next production failures.
+      - name: Storefront #159 type, lint and production build diagnostics
+        if: ${{ github.event_name == 'pull_request' && (github.head_ref == 'fix/storefront-build-eslint-types-159' || github.head_ref == 'fix/security-next-15528-309' || github.head_ref == 'fix/storefront-image-allowlist-175') && steps.install.outcome == 'success' }}
+        timeout-minutes: 8
+        working-directory: apps/storefront
+        shell: bash
+        run: |
+          set -euo pipefail
+          # CI-only page is built and served on an isolated runner, never committed
+          # or deployed. It tests actual SafeImage hydration/error fallback.
+          if [ "$GITHUB_HEAD_REF" = "fix/storefront-image-allowlist-175" ]; then
+            # Isolated HTTPS fixture: only runner loopback, never production configuration.
+            export DOGRUADRES_STOREFRONT_MEDIA_BASE_URL="https://media-image175-ci.example.org/static"
+            export IMAGE175_TLS_CERT="$RUNNER_TEMP/image175-ci-cert.pem"
+            export IMAGE175_TLS_KEY="$RUNNER_TEMP/image175-ci-key.pem"
+            openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+              -keyout "$IMAGE175_TLS_KEY" -out "$IMAGE175_TLS_CERT" \
+              -subj "/CN=media-image175-ci.example.org" \
+              -addext "subjectAltName=DNS:media-image175-ci.example.org" > /dev/null 2>&1
+            printf '127.0.0.1 media-image175-ci.example.org\n' | sudo tee -a /etc/hosts > /dev/null
+            if [ "$(sysctl -n net.ipv4.ip_unprivileged_port_start)" -gt 0 ]; then
+              sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0 > /dev/null
+            fi
+            export NODE_EXTRA_CA_CERTS="$IMAGE175_TLS_CERT"
+            mkdir -p src/app/images/image-175-ci-only
+            cat > src/app/images/image-175-ci-only/page.tsx <<'TSX'
+          'use client'
+          import Image from '@/components/molecules/SafeImage/SafeImage'
+          import { useState } from 'react'
+          export default function Image175TestPage() {
+            const [mediaLoaded, setMediaLoaded] = useState(false)
+            return (
+              <main>
+                <Image data-testid="image175-remote"
+                  src="https://untrusted.example.test/no-image.png"
+                  alt="Blocked source" width={96} height={96} priority />
+                <Image data-testid="image175-allowed"
+                  src="https://media-image175-ci.example.org/static/fixture.jpg"
+                  alt="Approved CI fixture" width={96} height={96} priority
+                  onLoad={() => setMediaLoaded(true)} />
+                <p data-testid="image175-media-result">{mediaLoaded ? 'loaded' : 'pending'}</p>
+              </main>
+            )
+          }
+          TSX
+            trap 'rm -rf src/app/images/image-175-ci-only' EXIT
+          fi
+          # Use the existing official Mercur CLI route codegen, never a
+          # synthetic hand-written route map or unconditional unsafe cast.
+          (cd ../../packages/api && bun run codegen)
+          test -s ../../packages/api/.mercur/routes.d.ts
+          set +e
+          node ../../node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json > "$RUNNER_TEMP/storefront-159-types.log" 2>&1
+          type_status=$?
+          # Every Storefront ESLint warning is an acceptance failure; keep all rules active.
+          node ../../node_modules/eslint/bin/eslint.js . --max-warnings 0 > "$RUNNER_TEMP/storefront-159-lint.log" 2>&1
+          lint_status=$?
+          bun run build > "$RUNNER_TEMP/storefront-159-build.log" 2>&1
+          build_status=$?
+          set -e
+          echo "Storefront #159 type exit=$type_status"
+          echo "Storefront #159 TS diagnostics: $(grep -cE 'error TS[0-9]+' "$RUNNER_TEMP/storefront-159-types.log" || true)"
+          awk '/error TS[0-9]+/ && ++n<=180 { print }' "$RUNNER_TEMP/storefront-159-types.log"
+          echo "Storefront #159 lint exit=$lint_status"
+          awk '/  error  / {e++} /  warning  / {w++} END {printf "Storefront #159 complete lint totals: errors=%d warnings=%d\\n", e, w}' "$RUNNER_TEMP/storefront-159-lint.log"
+          sed -n '1,350p' "$RUNNER_TEMP/storefront-159-lint.log"
+          echo "Storefront #159 production build exit=$build_status"
+          sed -n '1,110p' "$RUNNER_TEMP/storefront-159-build.log"
+          # Negative probe: a broken TypeScript export must be rejected.
+          probe="src/__storefront_159_bad_syntax_probe__.ts"
+          trap 'rm -f "$probe"' EXIT
+          printf 'export const = ;\n' > "$probe"
+          if node ../../node_modules/eslint/bin/eslint.js "$probe" > "$RUNNER_TEMP/storefront-159-negative.log" 2>&1; then
+            echo "FAIL: ESLint accepted invalid TypeScript syntax"
+            exit 1
+          fi
+          grep -Eiq 'parsing error|unexpected token|unexpected character' "$RUNNER_TEMP/storefront-159-negative.log" || {
+            echo "FAIL: ESLint did not report a syntax diagnostic for the negative probe"
+            sed -n '1,30p' "$RUNNER_TEMP/storefront-159-negative.log"
+            exit 1
+          }
+          echo "PASS: ESLint rejects deliberately invalid TypeScript syntax"
+          # #159: focused native-price DTO and invalid-value regressions, using existing Bun.
+          bun test src/lib/helpers/get-product-price.test.ts
+          test "$type_status" -eq 0 && test "$lint_status" -eq 0 && test "$build_status" -eq 0
+          if [ "$GITHUB_HEAD_REF" = "fix/storefront-image-allowlist-175" ]; then
+            bun test next.config.image.test.ts
+            node scripts/verify-image-optimizer.mjs
+            node scripts/verify-image-dev.mjs
+          fi
       - name: Native SMTP HTTPS privacy negative regressions
+        id: asvs_smtp_http
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: |
           node --test integration-tests/postgres/smtp-response-privacy-guard.test.mjs
           bun test integration-tests/postgres/smtp-response-privacy-guard.test.mjs
       - name: Focused security and authorization unit tests
+        id: asvs_authz_unit
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: bun test src/modules/dogruadres-access/__tests__/security.unit.spec.ts src/utils/__tests__/organization-authorization.unit.spec.ts src/scripts/__tests__/task-mfa-bootstrap.unit.spec.ts src/scripts/__tests__/reviewer-execution-grant.unit.spec.ts src/scripts/__tests__/native-fixture-runtime.unit.spec.ts src/scripts/__tests__/r1-readiness.unit.spec.ts src/scripts/__tests__/r1-readback.unit.spec.ts src/scripts/__tests__/r1-activation.unit.spec.ts
       - name: Production HTTP secret guard regressions
+        id: asvs_secrets_unit
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: bun test src/utils/__tests__/production-secrets.unit.test.ts
       - name: Inactive session policy and DTO unit contracts
+        id: asvs_session_unit
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         run: bun test src/modules/dogruadres-access/__tests__/session-policy.unit.spec.ts src/api/dogruadres/__tests__/session-policy-contract.unit.spec.ts
@@ -163,6 +385,7 @@ jobs:
           grep -Fq '/dashboard/assets/' dist/index.html
           test -n "$(find dist/assets -maxdepth 1 -type f -print -quit)"
       - name: Token privacy and native SMTP notification regressions
+        id: asvs_token_privacy_unit
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
         env:
@@ -173,7 +396,7 @@ jobs:
         working-directory: packages/api
         env:
           TEST_TYPE: unit
-        run: bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts src/modules/dogruadres-access/__tests__/person-mobile.unit.spec.ts src/modules/dogruadres-access/__tests__/person-registration.unit.spec.ts src/modules/dogruadres-access/__tests__/legal-store-ownership.unit.spec.ts src/modules/dogruadres-access/__tests__/memberships-service.unit.spec.ts src/modules/dogruadres-access/__tests__/invitation-resend-service.unit.spec.ts src/modules/dogruadres-access/__tests__/actor-delegation.unit.spec.ts src/modules/dogruadres-access/__tests__/account-linking.unit.spec.ts src/utils/__tests__/ingress-config.unit.spec.ts src/api/personal/__tests__/ingress.unit.spec.ts src/api/personal/__tests__/profile.unit.spec.ts src/api/personal/__tests__/register.unit.spec.ts src/api/personal/__tests__/organization-applications.unit.spec.ts src/api/personal/__tests__/organization-selection.unit.spec.ts src/api/personal/__tests__/organization-stores.unit.spec.ts src/api/personal/__tests__/store-approvals.unit.spec.ts src/api/personal/__tests__/store-product-permissions.unit.spec.ts src/api/personal/__tests__/buyer-permissions.unit.spec.ts src/api/personal/__tests__/buyer-context.unit.spec.ts src/api/personal/__tests__/catalog.unit.spec.ts src/api/personal/__tests__/native-try-list-price.unit.spec.ts src/api/personal/__tests__/native-group-try-reference.unit.spec.ts src/api/personal/__tests__/store-price-groups.unit.spec.ts src/api/personal/__tests__/product-drafts.unit.spec.ts src/api/personal/__tests__/launcher-b22.unit.spec.ts src/api/personal/__tests__/workspace-lifetime.unit.spec.ts src/api/personal/__tests__/notifications.unit.spec.ts src/api/personal/__tests__/memberships.unit.spec.ts src/api/personal/__tests__/invitations.unit.spec.ts src/api/dogruadres/__tests__/audit-timeline.unit.spec.ts src/api/personal/__tests__/audit-timeline.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-login-decision.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-persistence.unit.spec.ts src/modules/dogruadres-access/__tests__/audit-persistence.unit.spec.ts src/modules/dogruadres-audit-index/__tests__/envelope.unit.spec.ts src/workflows/dogruadres-audit-relay/__tests__/relay.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-settings-service.unit.spec.ts src/modules/dogruadres-access/__tests__/native-mfa-summary.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-enrollment-ticket.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-session-scope.unit.spec.ts src/api/personal/__tests__/mfa-settings.unit.spec.ts src/api/personal/__tests__/mfa-management.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-management.unit.spec.ts src/api/personal/__tests__/mfa-shell.unit.spec.ts src/api/personal/__tests__/mfa-enrollment.unit.spec.ts src/api/personal/__tests__/mfa-login-runtime.unit.spec.ts src/api/personal/__tests__/mfa-challenge-recovery.unit.spec.ts src/modules/dogruadres-access/__tests__/provision-personal-organization.unit.spec.ts src/api/personal/__tests__/platform.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-client.unit.spec.ts src/api/personal/__tests__/platform-smtp.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-settings.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-crypto.unit.spec.ts
+        run: bun run jest --runInBand --forceExit --runTestsByPath src/modules/dogruadres-access/__tests__/identity-session.unit.spec.ts src/modules/dogruadres-access/__tests__/person-mobile.unit.spec.ts src/modules/dogruadres-access/__tests__/person-registration.unit.spec.ts src/modules/dogruadres-access/__tests__/legal-store-ownership.unit.spec.ts src/modules/dogruadres-access/__tests__/memberships-service.unit.spec.ts src/modules/dogruadres-access/__tests__/invitation-resend-service.unit.spec.ts src/modules/dogruadres-access/__tests__/actor-delegation.unit.spec.ts src/modules/dogruadres-access/__tests__/account-linking.unit.spec.ts src/utils/__tests__/ingress-config.unit.spec.ts src/api/personal/__tests__/ingress.unit.spec.ts src/api/personal/__tests__/profile.unit.spec.ts src/api/personal/__tests__/register.unit.spec.ts src/api/personal/__tests__/organization-applications.unit.spec.ts src/modules/dogruadres-access/__tests__/tax-certificate-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/tax-certificate-scanner.unit.spec.ts src/api/personal/__tests__/organization-selection.unit.spec.ts src/api/personal/__tests__/organization-stores.unit.spec.ts src/api/personal/__tests__/store-owner-pause.unit.spec.ts src/api/personal/__tests__/store-owner-closing.unit.spec.ts src/api/personal/__tests__/store-approvals.unit.spec.ts src/api/personal/__tests__/store-product-permissions.unit.spec.ts src/api/personal/__tests__/store-member-connections.unit.spec.ts src/api/personal/__tests__/buyer-permissions.unit.spec.ts src/api/personal/__tests__/buyer-context.unit.spec.ts src/api/personal/__tests__/catalog.unit.spec.ts src/api/personal/__tests__/native-try-list-price.unit.spec.ts src/api/personal/__tests__/native-group-try-reference.unit.spec.ts src/api/personal/__tests__/store-price-groups.unit.spec.ts src/api/personal/__tests__/product-drafts.unit.spec.ts src/api/personal/__tests__/launcher-b22.unit.spec.ts src/api/personal/__tests__/workspace-lifetime.unit.spec.ts src/api/personal/__tests__/notifications.unit.spec.ts src/api/personal/__tests__/memberships.unit.spec.ts src/api/personal/__tests__/invitations.unit.spec.ts src/api/dogruadres/__tests__/audit-timeline.unit.spec.ts src/api/personal/__tests__/audit-timeline.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-policy.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-login-decision.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-persistence.unit.spec.ts src/modules/dogruadres-access/__tests__/audit-persistence.unit.spec.ts src/modules/dogruadres-audit-index/__tests__/envelope.unit.spec.ts src/workflows/dogruadres-audit-relay/__tests__/relay.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-settings-service.unit.spec.ts src/modules/dogruadres-access/__tests__/native-mfa-summary.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-enrollment-ticket.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-session-scope.unit.spec.ts src/api/personal/__tests__/mfa-settings.unit.spec.ts src/api/personal/__tests__/mfa-management.unit.spec.ts src/modules/dogruadres-access/__tests__/mfa-management.unit.spec.ts src/api/personal/__tests__/mfa-shell.unit.spec.ts src/api/personal/__tests__/mfa-enrollment.unit.spec.ts src/api/personal/__tests__/mfa-login-runtime.unit.spec.ts src/api/personal/__tests__/mfa-challenge-recovery.unit.spec.ts src/modules/dogruadres-access/__tests__/provision-personal-organization.unit.spec.ts src/api/personal/__tests__/platform.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-client.unit.spec.ts src/api/personal/__tests__/platform-smtp.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-settings.unit.spec.ts src/modules/dogruadres-access/__tests__/smtp-crypto.unit.spec.ts src/api/personal/__tests__/store-applications.unit.spec.ts src/api/personal/__tests__/store-rename-requests.unit.spec.ts src/api/personal/__tests__/platform-store-renames.unit.spec.ts
       - name: Closed public front door unit contract
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: packages/api
@@ -183,18 +406,52 @@ jobs:
         working-directory: packages/api
         run: node --check integration-tests/http/dogruadres-foundation.native.test.mjs
 
+      # Reuse executed suites. The summary identifies evidence candidates, NOT full ASVS compliance.
+      # An unsuccessful/skipped step remains visible; this step never overrides a failed job.
+      - name: Publish ASVS 5.0 existing-test evidence index (no extra scans)
+        if: ${{ !cancelled() && steps.docs_classify.outputs.docs_only != 'true' }}
+        env:
+          ASVS_SMTP_HTTP: ${{ steps.asvs_smtp_http.outcome }}
+          ASVS_AUTHZ_UNIT: ${{ steps.asvs_authz_unit.outcome }}
+          ASVS_SECRETS_UNIT: ${{ steps.asvs_secrets_unit.outcome }}
+          ASVS_SESSION_UNIT: ${{ steps.asvs_session_unit.outcome }}
+          ASVS_TOKEN_PRIVACY_UNIT: ${{ steps.asvs_token_privacy_unit.outcome }}
+        run: |
+          {
+            echo '### OWASP ASVS 5.0 — existing test evidence (partial, not compliance)'
+            echo '| Related ASVS area | Existing test step | Actual step outcome | Evidence limit |'
+            echo '|---|---|---|---|'
+            echo "| V8.2 / V8.3 | Focused security and authorization unit tests | ${ASVS_AUTHZ_UNIT} | Unit authorization contracts; not full tenant HTTP proof |"
+            echo "| V7 | Inactive session policy and DTO unit contracts | ${ASVS_SESSION_UNIT} | Domain/DTO contracts; not full session termination E2E |"
+            echo "| V13 | Production HTTP secret guard regressions | ${ASVS_SECRETS_UNIT} | Rejects weak secrets; does not establish secrets vault controls |"
+            echo "| V14 / V16 | Native SMTP HTTPS privacy negative regressions | ${ASVS_SMTP_HTTP} | Synthetic HTTP negative tests; not production egress verification |"
+            echo "| V14 | Token privacy and native SMTP notification regressions | ${ASVS_TOKEN_PRIVACY_UNIT} | Unit privacy contracts; not all sensitive-data flows |"
+            echo ''
+            echo 'Other pre-existing checks: CodeQL JS/TS (separate ready PR job), isolated PostgreSQL 16/Chrome (separate ready PR job), Governance Chromium (separate ready workflow). Inspect their actual runs; this summary does not infer their outcomes.'
+            echo ''
+            echo 'Step success is evidence that the named tests ran, **not** PASS for every ASVS requirement in that area. Uncovered, partial, and NOT TESTED requirements remain for risk-based manual review under AGENTS.md and the ASVS auditor skill.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build:
+    # Required checks must execute even for drafts; a skipped required check can count as success.
     if: github.event_name != 'workflow_dispatch'
     name: API backend build — test configuration
     needs: static
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Document-only required status — API compilation deliberately not run
+        if: needs.static.outputs.docs_only == 'true'
+        run: |
+          test "${{ needs.static.result }}" = 'success'
+          echo 'Document-only: required Foundation static verified Markdown and the trusted classifier. API backend compilation was NOT performed; this job retains the existing required context name without claiming an API build.' >> "$GITHUB_STEP_SUMMARY"
       - name: Checkout PR merge ref
+        if: needs.static.outputs.docs_only != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Record source provenance
+        if: needs.static.outputs.docs_only != 'true'
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_SHA: ${{ github.sha }}
@@ -203,18 +460,31 @@ jobs:
           echo "Merge ref: $MERGE_SHA"
           test "$(git rev-parse HEAD)" = "$MERGE_SHA"
       - name: Setup Node
+        if: needs.static.outputs.docs_only != 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.22.1'
           package-manager-cache: false
       - name: Setup Bun
+        if: needs.static.outputs.docs_only != 'true'
+        id: setup_bun
+        continue-on-error: true
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: '1.4.2'
           no-cache: true
+      # Fallback is only for GitHub release download errors. Never skip tests.
+      - name: Fallback to official pinned Bun from npm
+        if: needs.static.outputs.docs_only != 'true' && steps.setup_bun.outcome == 'failure'
+        run: npm install -g --no-audit --no-fund bun@1.4.2
+      - name: Verify exact Bun runtime
+        if: needs.static.outputs.docs_only != 'true'
+        run: test "$(bun --version)" = "1.4.2"
       - name: Install locked dependencies
+        if: needs.static.outputs.docs_only != 'true'
         run: bun install --frozen-lockfile
       - name: Build API backend under test configuration
+        if: needs.static.outputs.docs_only != 'true'
         working-directory: packages/api
         env:
           NODE_ENV: test
@@ -231,6 +501,7 @@ jobs:
           export DOGRUADRES_INVITATION_SECRET="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('hex'))")"
           bun run build
       - name: Production Medusa CLI rejects scaffold JWT and cookie secrets (no database)
+        if: needs.static.outputs.docs_only != 'true'
         working-directory: packages/api
         timeout-minutes: 4
         env:
@@ -257,6 +528,7 @@ jobs:
           fi
           echo "PASS: production Medusa CLI rejected scaffold secrets before server startup"
       - name: Production Medusa build accepts unique synthetic secrets (no database)
+        if: needs.static.outputs.docs_only != 'true'
         working-directory: packages/api
         timeout-minutes: 10
         env:
@@ -277,6 +549,9 @@ jobs:
           timeout 420s bunx medusa build
 
   mfa-postgres16:
+    # Preserve isolated workflow_dispatch even though static intentionally skips on dispatch.
+    needs: static
+    if: ${{ always() && !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && (needs.static.result != 'success' || needs.static.outputs.docs_only != 'true'))) }}
     name: MFA migration and transaction — isolated PostgreSQL 16
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -315,10 +590,18 @@ jobs:
           node-version: '24.22.1'
           package-manager-cache: false
       - name: Setup Bun
+        id: setup_bun
+        continue-on-error: true
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: '1.4.2'
           no-cache: true
+      # Fallback is only for GitHub release download errors. Never skip tests.
+      - name: Fallback to official pinned Bun from npm
+        if: steps.setup_bun.outcome == 'failure'
+        run: npm install -g --no-audit --no-fund bun@1.4.2
+      - name: Verify exact Bun runtime
+        run: test "$(bun --version)" = "1.4.2"
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
       - name: Exercise MFA transactions and real migration ledger on same disposable PG16
@@ -332,6 +615,10 @@ jobs:
           bun integration-tests/postgres/mfa-persistence.pg16.test.ts
           bun integration-tests/postgres/mfa-migrator-ledger.pg16.test.ts
           bun integration-tests/postgres/foundation-membership-transaction.pg16.test.ts
+          # Focused B22 delivery-clock PG16 acceptance is independent of the
+          # later, still-MANDATORY ClamAV/Chrome gates. An upstream APT mirror
+          # outage must not erase the evidence for this isolated user risk.
+          bun integration-tests/postgres/b22-platform-closing-email.pg16.test.ts
       - name: Existing Chrome task CA support for B22 scoped browser acceptance
         if: github.event_name != 'workflow_dispatch'
         run: |
@@ -342,10 +629,129 @@ jobs:
           command -v openssl
           command -v certutil
           command -v google-chrome
+      - name: B22 free ClamAV signature database and isolated renderer — task-only PR
+        if: github.event_name != 'workflow_dispatch'
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          # These packages are free and confined to this disposable CI runner.
+          # A blocked signature download or unavailable sandbox MUST fail;
+          # never downgrade the document review to header/magic-byte checks.
+          # Two real PR runs stalled resolving the GitHub runner's Azure mirror.
+          # Prefer the official Ubuntu archive on this throwaway runner only;
+          # keep genuine distro package signatures, FreshClam and sandbox gates.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i \
+              -e 's#http://azure.archive.ubuntu.com/ubuntu/#https://archive.ubuntu.com/ubuntu/#g' \
+              -e 's#https://azure.archive.ubuntu.com/ubuntu/#https://archive.ubuntu.com/ubuntu/#g' \
+              /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Acquire::Retries=1 -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 install -y -qq --no-install-recommends \
+            clamav-daemon clamav-freshclam bubblewrap poppler-utils imagemagick \
+            apparmor-profiles apparmor-utils acl
+          # Ubuntu 24.04 blocks unprivileged bwrap namespaces by default.
+          # Load ONLY its distribution-supplied restrictive bwrap profile in
+          # this throwaway CI VM. Never disable global AppArmor or userns rules.
+          test -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = "1"
+          sudo systemctl stop clamav-freshclam.service >/dev/null 2>&1 || true
+          # This CI task starts its own private clamd AFTER the official
+          # signatures are installed. Suppress only FreshClam's notification
+          # to the unrelated distro daemon, not database verification.
+          # FreshClam switches to the restricted clamav account; its
+          # configuration must stay readable after privilege drop. This
+          # modifies only this disposable CI runner, never a host install.
+          sudo sed -i '/^NotifyClamd[[:space:]]/d' /etc/clamav/freshclam.conf
+          sudo freshclam --config-file=/etc/clamav/freshclam.conf --stdout
+          test -s /var/lib/clamav/daily.cvd || test -s /var/lib/clamav/daily.cld
+          test -s /var/lib/clamav/main.cvd || test -s /var/lib/clamav/main.cld
+          echo "PASS B22: genuine updated ClamAV database installed"
+
+          # Probe unprivileged namespaces. Never change host sysctl, AppArmor,
+          # service privileges or Docker access to force a test to pass.
+          /usr/bin/bwrap --unshare-all --new-session --ro-bind /usr /usr \
+            --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64 \
+            --proc /proc --dev /dev --tmpfs /tmp -- /usr/bin/true
+          echo "PASS B22: Ubuntu restricted Bubblewrap namespace with no network"
+
+          # The Ubuntu package already provides an AppArmor-confined daemon
+          # and its local Unix socket. Do not invent a second daemon/socket:
+          # /usr/sbin/clamd is forbidden from binding under RUNNER_TEMP.
+          conf=/etc/clamav/clamd.conf
+          test -r "$conf"
+          sock=$(awk '$1=="LocalSocket" {print $2}' "$conf" | head -n1)
+          case "$sock" in
+            /run/clamav/clamd.ctl|/var/run/clamav/clamd.ctl) ;;
+            *) echo "REFUSED: unexpected ClamAV socket"; exit 1;;
+          esac
+          if grep -Eq '^[[:space:]]*TCPSocket[[:space:]]+[0-9]+' "$conf"; then
+            echo "REFUSED: ClamAV must have no TCP listener"
+            exit 1
+          fi
+          sudo systemctl restart clamav-daemon.socket clamav-daemon.service
+          for attempt in {1..100}; do
+            if [ -S "$sock" ] && sudo systemctl is-active --quiet clamav-daemon.service; then break; fi
+            sleep 1
+          done
+          if [ ! -S "$sock" ] || ! sudo systemctl is-active --quiet clamav-daemon.service; then
+            echo "B22 official AppArmor-confined daemon unavailable"
+            sudo systemctl status clamav-daemon.service --no-pager --lines=18 || true
+            exit 1
+          fi
+          # Grant ONLY this ephemeral CI process-user socket access. Keep the
+          # distro's restrictive AppArmor profile, socket mode and TCP denial.
+          sudo setfacl -m "u:$(id -un):rw" "$sock"
+          test -r "$sock"
+          echo "PASS B22: official local-only ClamAV daemon and scoped socket ACL"
+          # This uses only safe, in-memory synthetic fixtures. It isolates
+          # scanner protocol, live EICAR detection and sandboxed PNG rendering
+          # before the longer real Chrome acceptance. No real document paths.
+          DOGRUADRES_CLAMD_SOCKET="$sock" bun -e '
+            import { verifyTaxCertificateWithClamd, TaxCertificateScannerUnavailable } from "./packages/api/src/modules/dogruadres-access/tax-certificate-scanner.ts";
+            import { makeSafeTaxCertificatePreview } from "./packages/api/src/modules/dogruadres-access/tax-certificate-safe-preview.ts";
+            const png=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8//8/AwMDEwMDAwMDAwAkBgMB/DXemwAAAABJRU5ErkJggg==","base64");
+            await verifyTaxCertificateWithClamd(png);
+            console.log("PASS B22: real ClamAV clean PNG stream accepted");
+            const eicar=Buffer.from(String.raw`X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*`);
+            let denied=false;
+            try { await verifyTaxCertificateWithClamd(eicar); }
+            catch(error) { denied=error instanceof TaxCertificateScannerUnavailable; }
+            if(!denied) throw Error("Official ClamAV EICAR detection failed");
+            console.log("PASS B22: real ClamAV harmless EICAR test file denied");
+            const raster=await makeSafeTaxCertificatePreview(png,"image/png");
+            if(raster.length<64 || !raster.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))
+              throw Error("Sandbox did not produce a valid synthetic PNG");
+            console.log("PASS B22: real isolated scanner-to-raster preview");
+            const twoPagePdf=Buffer.from("JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9jdW1lbnQgKG9wZW5zb3VyY2UpCjEgMCBvYmoKPDwKL0YxIDIgMCBSCj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9CYXNlRm9udCAvSGVsdmV0aWNhIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nIC9OYW1lIC9GMSAvU3VidHlwZSAvVHlwZTEgL1R5cGUgL0ZvbnQKPj4KZW5kb2JqCjMgMCBvYmoKPDwKL0NvbnRlbnRzIDggMCBSIC9NZWRpYUJveCBbIDAgMCA2MTIgNzkyIF0gL1BhcmVudCA3IDAgUiAvUmVzb3VyY2VzIDw8Ci9Gb250IDEgMCBSIC9Qcm9jU2V0IFsgL1BERiAvVGV4dCAvSW1hZ2VCIC9JbWFnZUMgL0ltYWdlSSBdCj4+IC9Sb3RhdGUgMCAvVHJhbnMgPDwKCj4+IAogIC9UeXBlIC9QYWdlCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9Db250ZW50cyA5IDAgUiAvTWVkaWFCb3ggWyAwIDAgNjEyIDc5MiBdIC9QYXJlbnQgNyAwIFIgL1Jlc291cmNlcyA8PAovRm9udCAxIDAgUiAvUHJvY1NldCBbIC9QREYgL1RleHQgL0ltYWdlQiAvSW1hZ2VDIC9JbWFnZUkgXQo+PiAvUm90YXRlIDAgL1RyYW5zIDw8Cgo+PiAKICAvVHlwZSAvUGFnZQo+PgplbmRvYmoKNSAwIG9iago8PAovUGFnZU1vZGUgL1VzZU5vbmUgL1BhZ2VzIDcgMCBSIC9UeXBlIC9DYXRhbG9nCj4+CmVuZG9iago2IDAgb2JqCjw8Ci9BdXRob3IgKGFub255bW91cykgL0NyZWF0aW9uRGF0ZSAoRDoyMDI2MTEwNzA5NDM1MSswMCcwMCcpIC9DcmVhdG9yIChhbm9ueW1vdXMpIC9LZXl3b3JkcyAoKSAvTW9kRGF0ZSAoRDoyMDI2MTEwNzA5NDM1MSswMCcwMCcpIC9Qcm9kdWNlciAoUmVwb3J0TGFiIFBERiBMaWJyYXJ5IC0gXChvcGVuc291cmNlXCkpIAogIC9TdWJqZWN0ICh1bnNwZWNpZmllZCkgL1RpdGxlICh1bnRpdGxlZCkgL1RyYXBwZWQgL0ZhbHNlCj4+CmVuZG9iago3IDAgb2JqCjw8Ci9Db3VudCAyIC9LaWRzIFsgMyAwIFIgNCAwIFIgXSAvVHlwZSAvUGFnZXMKPj4KZW5kb2JqCjggMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggMTA5Cj4+CnN0cmVhbQpHYXBRaDBFPUYsMFVcSDNUXHBOWVReUUtrP3RjPklQLDtXI1UxXjIzaWhQRU1fP0NXNEtJU2k8OmJYYWE6XkcwQ2N1QVJiJDRdbz1FLS07KG5GdU8yZTVRXnE7QChZT1dFOCFaIShGNC0mSH4+ZW5kc3RyZWFtCmVuZG9iago5IDAgb2JqCjw8Ci9GaWx0ZXIgWyAvQVNDSUk4NURlY29kZSAvRmxhdGVEZWNvZGUgXSAvTGVuZ3RoIDExMgo+PgpzdHJlYW0KR2FwUWgwRT1GLDBVXEgzVFxwTllUXlFLaz90Yz5JUCw7VyNVMV4yM2loUEVNXz9DVzRLSVNpPDpiWGFhOl5HMENjajRmO3BAaVcqI11PbTA8PSY5aCRrLjovPCFeVEQjZ2ldZjs7X0tVSmttJzZ+PmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDEwCjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDA2MSAwMDAwMCBuIAowMDAwMDAwMDkyIDAwMDAwIG4gCjAwMDAwMDAxOTkgMDAwMDAgbiAKMDAwMDAwMDM5MiAwMDAwMCBuIAowMDAwMDAwNTg1IDAwMDAwIG4gCjAwMDAwMDA2NTMgMDAwMDAgbiAKMDAwMDAwMDkxNCAwMDAwMCBuIAowMDAwMDAwOTc5IDAwMDAwIG4gCjAwMDAwMDExNzggMDAwMDAgbiAKMDAwMDAwMDk3OSAwMDAwMCBuIAowMDAwMDAxMTc4IDAwMDAwIG4gCnRyYWlsZXIKPDwKL0lEIFs8NzZjYzE0NWFkY2E1NTJhOWM5MzRmMzllNDFiMTJlZDQ+PDc2Y2MxNDVhZGNhNTUyYTljOTM0ZjM5ZTQxYjEyZWQ0Pl0KJSBSZXBvcnRMYWIgZ2VuZXJhdGVkIFBERiBkb2N1bWVudCAtLSBkaWdlc3QgKG9wZW5zb3VyY2UpCgovSW5mbyA2IDAgUgovUm9vdCA1IDAgUgovU2l6ZSAxMAo+PgpzdGFydHhyZWYKMTM4MAolJUVPRgo=","base64");
+            const allPages=await makeSafeTaxCertificatePreview(twoPagePdf,"application/pdf");
+            if(allPages.subarray(0,8).compare(Buffer.from([137,80,78,71,13,10,26,10]))!==0 ||
+               allPages.readUInt32BE(20)<1700)
+              throw Error("Two-page PDF was not completely rendered in isolation");
+            console.log("PASS B22: real isolated PDF all-page preview");
+            let malformedRejected=false;
+            try { await makeSafeTaxCertificatePreview(Buffer.from("%PDF-1.7\\n%%EOF","ascii"),"application/pdf"); }
+            catch { malformedRejected=true; }
+            if(!malformedRejected)throw Error("Malformed PDF was incorrectly reviewable");
+            console.log("PASS B22: malformed PDF preview fails closed");
+          '
+          echo "DOGRUADRES_CLAMD_SOCKET=$sock" >> "$GITHUB_ENV"
+          echo "DOGRUADRES_B22_SAFE_REVIEW_TEST=true" >> "$GITHUB_ENV"
+      # This existing job also performs focused WCAG 2.2 axe-core A/AA and Staff
+      # keyboard checks on real authenticated Chrome UI (not full WCAG conformance).
+      # Keep heavyweight testing on ready PRs; do not add a second scanner/job.
       - name: B22 real Chrome after signed R1 activation on separate disposable database
         if: github.event_name != 'workflow_dispatch'
         working-directory: packages/api
-        # Includes a genuine native Redis Cart 120-second post-crash lease.
+        # Includes a genuine native Redis Cart 120-second post-crash lease,
+        # plus isolated migrations and signed R1 activation. Keep all checks.
         timeout-minutes: 13
         env:
           CI: 'true'

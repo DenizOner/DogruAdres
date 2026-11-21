@@ -9,7 +9,8 @@ import { useState } from "react"
 import { ReturnSummaryTab } from "./ReturnSummaryTab"
 import { ReturnMethodsTab } from "./ReturnMethodsTab"
 import { StepProgressBar } from "@/components/cells/StepProgressBar/StepProgressBar"
-import { createReturnRequest } from "@/lib/data/orders"
+import { createReturnRequest, type ReturnableStoreOrder } from "@/lib/data/orders"
+import type { HttpTypes } from "@medusajs/types"
 import { useRouter } from "next/navigation"
 
 export const OrderReturnSection = ({
@@ -17,14 +18,18 @@ export const OrderReturnSection = ({
   returnReasons,
   shippingMethods,
 }: {
-  order: any
-  returnReasons: any[]
-  shippingMethods: any[]
+  order: ReturnableStoreOrder
+  returnReasons: HttpTypes.StoreReturnReason[]
+  shippingMethods: unknown
 }) => {
   const [tab, setTab] = useState(0)
-  const [selectedItems, setSelectedItems] = useState<any[]>([])
+  const [selectedItems, setSelectedItems] = useState<Array<{
+    line_item_id: string
+    quantity: number
+    reason_id: string
+  }>>([])
   const [error, setError] = useState<boolean>(false)
-  const [returnMethod, setReturnMethod] = useState<any>(null)
+  const [returnMethod, setReturnMethod] = useState<string | null>(null)
   const router = useRouter()
 
   const handleTabChange = (tab: number) => {
@@ -36,11 +41,11 @@ export const OrderReturnSection = ({
     }
   }
 
-  const handleSetReturnMethod = (method: any) => {
+  const handleSetReturnMethod = (method: string) => {
     setReturnMethod(method)
   }
 
-  const handleSelectItem = (item: any, reason_id: string = "") => {
+  const handleSelectItem = (item: HttpTypes.StoreOrderLineItem, reason_id: string = "") => {
     setError(false)
     if (!reason_id && selectedItems.some((i) => i.line_item_id === item.id)) {
       setSelectedItems(selectedItems.filter((i) => i.line_item_id !== item.id))
@@ -112,7 +117,7 @@ export const OrderReturnSection = ({
             </div>
             {tab === 0 && (
               <ReturnItemsTab
-                order={order}
+                order={{ ...order, items: order.items ?? [] }}
                 selectedItems={selectedItems}
                 handleSelectItem={handleSelectItem}
                 returnReasons={returnReasons}
@@ -133,7 +138,7 @@ export const OrderReturnSection = ({
             <ReturnSummaryTab
               currency_code={order.currency_code}
               selectedItems={selectedItems}
-              items={order.items}
+              items={order.items ?? []}
               handleTabChange={handleTabChange}
               tab={tab}
               returnMethod={returnMethod}

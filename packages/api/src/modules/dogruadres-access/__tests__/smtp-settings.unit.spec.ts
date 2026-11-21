@@ -1,5 +1,7 @@
 import {
   PlatformSmtpPersistence,
+  assertSmtpCredentialReuse,
+  SmtpCredentialScopeChanged,
   SmtpConcurrentUpdateError,
   InvalidSmtpSettingsState,
   type SmtpAuditActor,
@@ -104,6 +106,110 @@ describe("smtp-settings unit tests", () => {
     expect(auditQuery).toBeDefined()
     expect(auditQuery?.params[4]).toBe("platform.smtp_settings_updated")
     expect(auditQuery?.params[9]).not.toContain("SG.supersecret") // Never leaks plaintext secret in audit!
+  })
+
+
+  it("requires explicit credentials for a changed SMTP connection identity (including env bootstrap)", async () => {
+    const old = { host: "smtp-old.example.invalid", port: 465, security: "ssl" as const, username: "old-user" }
+    for (const next of [
+      { ...old, host: "smtp-new.example.invalid" },
+      { ...old, port: 587 },
+      { ...old, security: "tls" as const },
+      { ...old, username: "other-user" },
+    ]) {
+      expect(() => assertSmtpCredentialReuse(old, next, true, undefined))
+        .toThrow(SmtpCredentialScopeChanged)
+      expect(() => assertSmtpCredentialReuse(old, next, true, "explicit-new-credential"))
+        .not.toThrow()
+      expect(() => assertSmtpCredentialReuse(old, next, true, null))
+        .not.toThrow() // Explicit removal is not secret reuse.
+      expect(() => assertSmtpCredentialReuse(old, next, false, undefined))
+        .not.toThrow() // No secret to disclose.
+    }
+    expect(() => assertSmtpCredentialReuse(old, old, true, undefined)).not.toThrow()
+
+    const executed: string[] = []
+    const persisted = {
+      enabled: true, host: old.host, port: old.port, security: old.security,
+      username: old.username, password_encrypted: "v1:synthetic-encrypted-only",
+      from_email: "sender@example.invalid", from_name: "Synthetic", version: 2,
+    }
+    const store = new PlatformSmtpPersistence({
+      execute: jest.fn(async (sql: string) => {
+        executed.push(sql)
+        if (sql.includes("select pg_advisory_xact_lock")) return []
+        if (sql.includes("from da_platform_smtp_settings")) return [persisted]
+        throw Error("No settings, audit, or outbox write may occur on mismatched SMTP endpoint")
+      }),
+    })
+    await expect(store.updateSettings({
+      enabled: true, host: "smtp-new.example.invalid", port: old.port,
+      security: old.security, username: old.username, from_email: persisted.from_email,
+      expected_version: 2,
+    }, dummyActor)).rejects.toThrow(SmtpCredentialScopeChanged)
+    expect(executed).toHaveLength(2)
+
+    const prior = Object.fromEntries(
+      ["SMTP_HOST", "SMTP_PORT", "SMTP_SECURITY", "SMTP_USERNAME", "SMTP_PASSWORD"]
+        .map(key => [key, process.env[key]])
+    )
+    try {
+      process.env.SMTP_HOST = old.host
+      process.env.SMTP_PORT = String(old.port)
+      process.env.SMTP_SECURITY = old.security
+      process.env.SMTP_USERNAME = old.username
+      process.env.SMTP_PASSWORD = "synthetic-bootstrap-password"
+      const bootstrapSql: string[] = []
+      const bootstrap = new PlatformSmtpPersistence({
+        execute: jest.fn(async (sql: string) => {
+          bootstrapSql.push(sql)
+          if (sql.includes("select pg_advisory_xact_lock")) return []
+          if (sql.includes("from da_platform_smtp_settings")) return []
+          throw Error("No first-row write or audit on unsafe env credential reuse")
+        }),
+      })
+      await expect(bootstrap.updateSettings({
+        enabled: true, host: "another-relay.example.invalid", port: old.port,
+        security: old.security, username: old.username,
+        from_email: persisted.from_email, expected_version: 0,
+      }, dummyActor)).rejects.toThrow(SmtpCredentialScopeChanged)
+      expect(bootstrapSql).toHaveLength(2)
+    } finally {
+      for (const [key, value] of Object.entries(prior))
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+    }
+  })
+
+  it("preserves an encrypted password when only non-connection sender settings change", async () => {
+    const encrypted = "v1:synthetic-encrypted-only"
+    const row = {
+      enabled: true, host: "smtp.example.invalid", port: 465, security: "ssl",
+      username: "smtp-user", password_encrypted: encrypted,
+      from_email: "old@example.invalid", from_name: "Old", version: 3,
+    }
+    const updates: Array<{ sql: string; values: any[] }> = []
+    const store = new PlatformSmtpPersistence({
+      execute: jest.fn(async (sql: string, values: any[] = []) => {
+        updates.push({ sql, values })
+        if (sql.includes("select pg_advisory_xact_lock")) return []
+        if (sql.includes("from da_platform_smtp_settings")) return [row]
+        if (sql.includes("returning version")) return [{ version: 4 }]
+        return []
+      }),
+    })
+    const result = await store.updateSettings({
+      enabled: false, host: row.host, port: row.port, security: "ssl",
+      username: row.username, from_email: "new@example.invalid",
+      from_name: "New", expected_version: 3,
+    }, dummyActor)
+    expect(result.version).toBe(4)
+    expect(result.has_password).toBe(true)
+    const changed = updates.find(u => u.sql.includes("update da_platform_smtp_settings"))
+    expect(changed?.values[5]).toBe(encrypted)
+    expect(updates.some(u => u.sql.includes("insert into da_security_outbox"))).toBe(true)
+    expect(JSON.stringify(updates.filter(u => u.sql.includes("insert into da_audit_event"))))
+      .not.toContain(encrypted)
   })
 
   it("throws SmtpConcurrentUpdateError when version does not match expected_version", async () => {

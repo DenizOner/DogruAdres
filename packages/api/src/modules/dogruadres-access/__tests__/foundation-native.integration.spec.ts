@@ -83,6 +83,32 @@ moduleIntegrationTestRunner<AccessService>({
         expect(JSON.stringify(envelope)).not.toContain("new_values")
       }
     })
+    it("fails closed on direct protected Owner demotion/revocation when two Owners are active",async()=>{
+      await ensureSecurityTables()
+      const initial=await service.provisionOrganization(operation)
+      expect(initial.memberships).toHaveLength(2)
+      const actorPerson=await service.resolvePersonForActor(actor)
+      expect(actorPerson?.id).toBeTruthy()
+      const second=initial.memberships.find(x=>x.person_id!==actorPerson!.id)
+      expect(second).toBeDefined()
+      const before=await Promise.all(["da_organization_membership","da_audit_event",
+        "da_audit_outbox","da_security_outbox"].map(table=>
+          q("select count(*)::int n from "+table).then((rows:any[])=>Number(rows[0].n))))
+      const input={organization_id:initial.organization.id,membership_id:second!.id,
+        actor_person_id:actorPerson!.id,actor_type:"user",actor_id:actor.actor_id}
+      await expect(service.changeMembership({...input,role:"admin"}))
+        .rejects.toThrow("Protected Owner reduction requires the approved safety workflow")
+      await expect(service.changeMembership({...input,status:"revoked"}))
+        .rejects.toThrow("Protected Owner reduction requires the approved safety workflow")
+      const owners=await q(`select role,status,protected_owner from da_organization_membership
+        where organization_id=? order by id`,[initial.organization.id])
+      expect(owners).toHaveLength(2)
+      expect(owners.every(x=>x.role==="owner"&&x.status==="active"&&x.protected_owner===true)).toBe(true)
+      const after=await Promise.all(["da_organization_membership","da_audit_event",
+        "da_audit_outbox","da_security_outbox"].map(table=>
+          q("select count(*)::int n from "+table).then((rows:any[])=>Number(rows[0].n))))
+      expect(after).toEqual(before)
+    })
     it("rolls back ORM Person, Organization and audit if canonical outbox INSERT fails",async()=>{
       const before=await Promise.all(["da_person","da_actor_mapping","da_organization",
         "da_organization_membership","da_audit_event","da_audit_outbox"].map(

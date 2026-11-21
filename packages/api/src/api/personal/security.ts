@@ -94,15 +94,31 @@ export async function nativeIngress(req: MedusaRequest, res: MedusaResponse, nex
       (path==="/personal/catalog" && req.method==="GET") ||
       (path==="/personal/store-follows" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/store-applications" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/store-rename-requests" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/store-owner-pause" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/store-owner-closing" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/store-platform-closing" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/store-platform-closing-final-review" && req.method==="POST") ||
+      (path==="/personal/platform/store-closings" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/platform/store-closing-reviews" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/platform/store-closing-email-readiness" && req.method==="GET") ||
+      (path==="/personal/store-platform-closing-email-visit" && req.method==="POST") ||
+      (path==="/personal/store-draft-permissions" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/store-product-permissions" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/store-member-connections" && req.method==="POST") ||
       (path==="/personal/buyer-permissions" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/store-buyer-blocks" && req.method==="POST") ||
       (path==="/personal/store-price-groups" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/buyer-context" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/order-groups" && req.method==="GET") ||
       (path==="/personal/product-drafts" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/platform/stores" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/platform/store-renames" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/platform/store-name-transfers" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/platform/store-application-policy" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/audit-timeline" && req.method==="GET") ||
       (path==="/personal/launcher" && ["GET","POST"].includes(req.method)) ||
+      (path==="/personal/company-launcher" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/notifications" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/links" && ["GET","POST"].includes(req.method)) ||
       (path==="/personal/memberships" && ["GET","POST"].includes(req.method)) ||

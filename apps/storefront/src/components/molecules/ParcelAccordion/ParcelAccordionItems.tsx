@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import type { HttpTypes } from '@medusajs/types';
 
 import { Card } from '@/components/atoms';
 import { OrderProductListItem } from '@/components/cells';
@@ -9,12 +10,16 @@ import { convertToLocale } from '@/lib/helpers/money';
 import { parcelStatuses, steps } from '@/lib/helpers/parcel-statuses';
 import { cn } from '@/lib/utils';
 
+export type MarketplaceParcelOrder = HttpTypes.StoreOrder & {
+  seller: { name: string };
+};
+
 export const ParcelAccordionItems = ({
   order,
   currency_code,
   shippingPriceTestId
 }: {
-  order: any;
+  order: MarketplaceParcelOrder;
   index: number;
   currency_code: string;
   shippingPriceTestId?: string;
@@ -38,7 +43,8 @@ export const ParcelAccordionItems = ({
 
   const status = parcelStatuses(order.fulfillment_status);
 
-  const totalItems = order.items.reduce((acc: number, item: any) => acc + item.quantity, 0);
+  const items = order.items ?? [];
+  const totalItems = items.reduce((acc, item) => acc + item.quantity, 0);
 
   return (
     <Card
@@ -86,7 +92,7 @@ export const ParcelAccordionItems = ({
         }}
       >
         <div className="p-4">
-          {order.items.map((item: any) => (
+          {items.map((item) => (
             <OrderProductListItem
               key={item.id + item.variant_id}
               item={item}

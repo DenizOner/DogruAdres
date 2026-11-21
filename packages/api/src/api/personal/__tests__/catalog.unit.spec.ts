@@ -1,9 +1,14 @@
+// Foundation CI runs an explicit B22 catalog suite list. Keep the new
+// scoped historic order security cases inside that existing test boundary
+// without editing the shared workflow used by PR #263.
+import "./order-groups.unit.spec"
 import {GET} from "../catalog/route"
 import {access,enabled,sessionToken} from "../security"
 import {MercurModules} from "@mercurjs/types"
 import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
 import {nativeDirectTryListPrice} from "../catalog/native-try-list-price"
 import {nativeBuyerGroupTryReference} from "../catalog/native-group-try-reference"
+import {nativeSellerTradingAt} from "../../../modules/dogruadres-access/native-seller-trading"
 
 jest.mock("../security",()=>({
   access:jest.fn(),enabled:jest.fn(),sessionToken:jest.fn()
@@ -46,6 +51,7 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
       personalBuyerOrganization:jest.fn().mockResolvedValue({
         person_id:"daprs_a",organization_id:"daorg_a"
       }),
+      storeOwnerPauseAcceptingOrders:jest.fn().mockResolvedValue(true),
       personalStoreBuyerBlockDecision:jest.fn().mockResolvedValue({
         blocked:false,ownership_verified:true
       }),
@@ -84,6 +90,142 @@ describe("B22 selected Buyer Organization's bounded published Store Offer discov
     expect(svc.personalStoreBuyerBlockDecision).toHaveBeenCalledTimes(4)
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control","private, no-store")
     expect(res.setHeader).toHaveBeenCalledWith("X-Robots-Tag","noindex, nofollow, noarchive")
+  })
+  it("hides an Owner-paused Store even when native Seller remains OPEN",async()=>{
+    svc.storeOwnerPauseAcceptingOrders.mockImplementation(async(ids:string[])=>ids[0]!=="sel_a")
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    const payload=res.json.mock.lastCall?.[0]
+    expect(payload.stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+    expect(offerRead).not.toHaveBeenCalledWith({seller_id:"sel_a"},expect.anything())
+  })
+  it("denies stale catalogue output if Owner pauses during response",async()=>{
+    let reads=0
+    svc.storeOwnerPauseAcceptingOrders.mockImplementation(async(ids:string[])=>{
+      if(ids[0]==="sel_a")return ++reads<2
+      return true
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+  })
+  it("respects native scheduled closures independent of Foundation pause",async()=>{
+    stores[0]={...stores[0],closed_from:new Date(Date.now()-60000).toISOString()}
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(200)
+    expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+  })
+  it("uses one half-open native closure interval for private catalogue discovery",async()=>{
+    const now=Date.now(),iso=(offset:number)=>new Date(now+offset).toISOString()
+    for(const [from,to,visible] of [
+      [iso(120000),iso(240000),true],   // before planned closure
+      [iso(-120000),iso(120000),false], // inside the closed interval
+      [iso(-240000),iso(-120000),true], // after planned reopening
+    ] as const){
+      stores[0]={...stores[0],closed_from:from,closed_to:to}
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(200)
+      expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(
+        visible?["sel_a","sel_b"]:["sel_b"])
+    }
+    // One-sided native closures retain their previous safe meaning.
+    stores[0]={...stores[0],closed_from:iso(-120000),closed_to:null}
+    await GET(req,res)
+    expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+    stores[0]={...stores[0],closed_from:null,closed_to:iso(120000)}
+    await GET(req,res)
+    expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+  })
+  it("hides a native open Seller with invalid approval metadata but keeps an approved Store visible",async()=>{
+    const badApprovals:unknown[]=["not-a-timestamp","1","2026-02-30","11/02/2026",true,42,new Date(NaN),{},null]
+    for(const approved_at of badApprovals){
+      stores[0]={...stores[0],approved_at}
+      offerRead.mockClear()
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(200)
+      expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+      expect(offerRead.mock.calls.some(([filter])=>filter.seller_id==="sel_a")).toBe(false)
+    }
+    const now=Date.now()
+    expect(nativeSellerTradingAt({status:"open",approved_at:new Date(now-1000)},now)).toBe(true)
+    expect(nativeSellerTradingAt({status:"open",approved_at:"2026-11-02"},now)).toBe(true)
+    expect(nativeSellerTradingAt({status:"open",approved_at:"2026-11-02T12:34:56.123Z"},now)).toBe(true)
+    expect(nativeSellerTradingAt({status:"open",approved_at:"2026-11-02 12:34:56+00"},now)).toBe(true)
+    for(const approved_at of badApprovals){
+      expect(nativeSellerTradingAt({status:"open",approved_at},now)).toBe(false)
+    }
+  })
+  it("denies future-dated native Seller approvals before any Offer read",async()=>{
+    const future=new Date(Date.now()+3600000)
+    for(const approved_at of [future,future.toISOString(),"9999-12-31T00:00:00Z"]){
+      stores[0]={...stores[0],approved_at}
+      offerRead.mockClear()
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(200)
+      expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+      expect(offerRead.mock.calls.some(([filter])=>filter.seller_id==="sel_a")).toBe(false)
+    }
+    const now=Date.now()
+    for(const approved_at of [new Date(now),new Date(now).toISOString()]){
+      expect(nativeSellerTradingAt({status:"open",approved_at},now)).toBe(true)
+    }
+    for(const approved_at of [new Date(now+1),new Date(now+1).toISOString()]){
+      expect(nativeSellerTradingAt({status:"open",approved_at},now)).toBe(false)
+    }
+    // The shared predicate is also used by the native pre-Order gate.
+    expect(nativeSellerTradingAt({
+      status:"open",approved_at:"9999-12-31T00:00:00Z",
+      closed_from:null,closed_to:null
+    },now)).toBe(false)
+  })
+  it("denies stale catalog output when native Seller approval moves to the future",async()=>{
+    sellerRead.mockImplementation(async(filter:any,config:any={})=>{
+      if(filter.id==="sel_a")return [{
+        ...stores[0],approved_at:new Date(Date.now()+3600000).toISOString()
+      }]
+      const found=filter.id?stores.filter(s=>s.id===filter.id):
+        stores.filter(s=>s.status===filter.status).sort((a,b)=>a.id.localeCompare(b.id))
+      const skip=config.skip??0,take=config.take??found.length
+      return found.slice(skip,skip+take)
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+  })
+  it("denies a catalog response if native approval is revoked or corrupted during final recheck",async()=>{
+    sellerRead.mockImplementation(async(filter:any,config:any={})=>{
+      if(filter.id==="sel_a")return [{...stores[0],approved_at:"invalid-date"}]
+      const found=filter.id?stores.filter(s=>s.id===filter.id):
+        stores.filter(s=>s.status===filter.status).sort((a,b)=>a.id.localeCompare(b.id))
+      const skip=config.skip??0,take=config.take??found.length
+      return found.slice(skip,skip+take)
+    })
+    await GET(req,res)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({message:"Access denied"})
+  })
+  it("rejects malformed or reversed native closure timestamps instead of allowing a sale",async()=>{
+    const now=Date.now(),iso=(offset:number)=>new Date(now+offset).toISOString()
+    for(const [from,to] of [
+      ["bad-date",iso(120000)],
+      [iso(-120000),"bad-date"],
+      [iso(120000),iso(-120000)],
+      [iso(120000),iso(120000)]
+    ]){
+      stores[0]={...stores[0],closed_from:from,closed_to:to}
+      await GET(req,res)
+      expect(res.status).toHaveBeenLastCalledWith(200)
+      expect(res.json.mock.lastCall?.[0].stores.map((x:any)=>x.id)).toEqual(["sel_b"])
+    }
+    // Exact boundary semantics are reused by the final native Cart hook.
+    const seller={status:"open",approved_at:iso(-240000),
+      closed_from:iso(10000),closed_to:iso(20000)}
+    expect(nativeSellerTradingAt(seller,now+9999)).toBe(true)
+    expect(nativeSellerTradingAt(seller,now+10000)).toBe(false)
+    expect(nativeSellerTradingAt(seller,now+19999)).toBe(false)
+    expect(nativeSellerTradingAt(seller,now+20000)).toBe(true)
+    expect(nativeSellerTradingAt({...seller,status:"suspended"},now)).toBe(false)
+    expect(nativeSellerTradingAt({...seller,approved_at:null},now)).toBe(false)
+    expect(nativeSellerTradingAt({...seller,closed_to:"garbled"},now)).toBe(false)
   })
   it("renders direct TRY list amount for exact Store Offer but no final checkout price",async()=>{
     ;(nativeDirectTryListPrice as jest.Mock).mockImplementation(async(_req:any,o:any)=>

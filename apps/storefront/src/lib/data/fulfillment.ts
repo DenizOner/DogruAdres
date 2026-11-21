@@ -5,7 +5,7 @@ import { sdk } from '@/lib/client';
 
 import { getAuthHeaders, getCacheOptions } from './cookies';
 
-export const listCartShippingMethods = async (cartId: string, is_return: boolean = false) => {
+export const listCartShippingMethods = async (cartId: string) => {
   const next = {
     ...(await getCacheOptions('fulfillment'))
   };

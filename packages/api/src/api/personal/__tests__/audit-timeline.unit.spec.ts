@@ -137,17 +137,16 @@ describe("Personal audit timeline route (GET /personal/audit-timeline)", () => {
     expect(getBody()).toEqual({ message: "Access denied" })
   })
 
-  it("denies narrowed protected Owner and ungranted Admin before Index read; restores Owner",async()=>{
+  it("keeps protected Owner audit access under legacy setting and denies ungranted Admin",async()=>{
     const original=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     try{
       process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=
         "buyer.purchase,products.edit,invitation.manage,membership.manage,membership.list"
       const {req,indexService}=mockRequest({role:"owner"})
-      const denied=mockResponse()
-      await GET(req,denied.res)
-      expect(denied.getStatus()).toBe(403)
-      expect(denied.getBody()).toEqual({message:"Access denied"})
-      expect(indexService.readOrganizationTimeline).not.toHaveBeenCalled()
+      const stillAllowed=mockResponse()
+      await GET(req,stillAllowed.res)
+      expect(stillAllowed.getStatus()).toBe(200)
+      expect(indexService.readOrganizationTimeline).toHaveBeenCalledTimes(1)
 
       const admin=mockRequest({role:"admin"})
       const deniedAdmin=mockResponse()

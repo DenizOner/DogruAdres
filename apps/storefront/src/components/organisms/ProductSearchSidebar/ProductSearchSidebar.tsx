@@ -1,12 +1,10 @@
 "use client"
 
-import { Button, Chip, Input } from "@/components/atoms"
+import { Button, Chip } from "@/components/atoms"
 import { Accordion, FilterCheckboxOption, Modal } from "@/components/molecules"
 import useFilters from "@/hooks/useFilters"
-import useUpdateSearchParams from "@/hooks/useUpdateSearchParams"
 import { cn } from "@/lib/utils"
-import { useSearchParams } from "next/navigation"
-import React, { useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 import { ProductListingActiveFilters } from "../ProductListingActiveFilters/ProductListingActiveFilters"
 import useGetAllSearchParams from "@/hooks/useGetAllSearchParams"
 import type { SearchFacets } from "@/lib/data/products"
@@ -98,7 +96,7 @@ function AttributeFilter({
     return (
       <Accordion heading={heading} defaultOpen={defaultOpen}>
         <ul className="grid grid-cols-4 mt-2 gap-2">
-          {(items || []).map(({ value, count }) => (
+          {(items || []).map(({ value }) => (
             <li key={value} className="mb-4">
               <Chip
                 selected={isFilterActive(value)}
@@ -160,65 +158,3 @@ function AttributeFilter({
   )
 }
 
-function PriceFilter({ defaultOpen = true }: { defaultOpen?: boolean }) {
-  const [min, setMin] = useState("")
-  const [max, setMax] = useState("")
-
-  const updateSearchParams = useUpdateSearchParams()
-  const searchParams = useSearchParams()
-
-  useEffect(() => {
-    setMin(searchParams.get("min_price") || "")
-    setMax(searchParams.get("max_price") || "")
-  }, [searchParams])
-
-  const updateMinPriceHandler = (
-    e: React.FormEvent<HTMLFormElement> | React.FocusEvent<HTMLInputElement>
-  ) => {
-    e.preventDefault()
-    updateSearchParams("min_price", min)
-  }
-
-  const updateMaxPriceHandler = (
-    e: React.FormEvent<HTMLFormElement> | React.FocusEvent<HTMLInputElement>
-  ) => {
-    e.preventDefault()
-    updateSearchParams("max_price", max)
-  }
-  return (
-    <Accordion heading="Price" defaultOpen={defaultOpen}>
-      <div className="flex gap-2 mb-4">
-        <form method="POST" onSubmit={updateMinPriceHandler}>
-          <Input
-            placeholder="Min"
-            onChange={(e) => setMin(e.target.value)}
-            value={min}
-            onBlur={(e) => {
-              setTimeout(() => {
-                updateMinPriceHandler(e)
-              }, 500)
-            }}
-            type="number"
-            className="no-arrows-number-input"
-          />
-          <input type="submit" className="hidden" />
-        </form>
-        <form method="POST" onSubmit={updateMaxPriceHandler}>
-          <Input
-            placeholder="Max"
-            onChange={(e) => setMax(e.target.value)}
-            onBlur={(e) => {
-              setTimeout(() => {
-                updateMaxPriceHandler(e)
-              }, 500)
-            }}
-            value={max}
-            type="number"
-            className="no-arrows-number-input"
-          />
-          <input type="submit" className="hidden" />
-        </form>
-      </div>
-    </Accordion>
-  )
-}

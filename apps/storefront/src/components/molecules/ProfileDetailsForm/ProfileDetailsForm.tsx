@@ -57,7 +57,7 @@ const Form: React.FC<Props> = ({ handleClose }) => {
     }
 
     setError('');
-    handleClose && handleClose();
+    handleClose?.();
   };
 
   return (

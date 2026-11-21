@@ -12,7 +12,6 @@ interface CategoryDropdownContainerProps {
 
 export const CategoryDropdownContainer = ({
   children,
-  isVisible,
   onMouseEnter,
   onMouseLeave,
 }: CategoryDropdownContainerProps) => {

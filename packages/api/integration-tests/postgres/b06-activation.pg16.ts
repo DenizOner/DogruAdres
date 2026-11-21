@@ -19,7 +19,19 @@ async function main(){
  // Only AFTER the non-protected CI target boundary. Generated key never leaves memory.
  const key=generateKeyPairSync('ed25519'),pem=key.publicKey.export({format:'pem',type:'spki'}).toString(),privatePem=key.privateKey.export({format:'pem',type:'pkcs8'}).toString(),fp=computePublicKeyFingerprint(pem)
  const control=new Client({connectionString:u.toString()});await control.connect();let facts:any
- try{facts=await readR1Readiness(control)}finally{await control.end()}
+ // A just-closed disposable Medusa fixture connection can still appear in
+ // pg_stat_activity. Wait only for actual zero other sessions *before* signing
+ // the manifest; never relax R1's own exclusive pre-write CAS guard.
+ try{
+   const until=Date.now()+10000
+   while(true){
+     facts=await readR1Readiness(control)
+     if(facts.other_sessions===0)break
+     if(Date.now()>=until)
+       throw Error('REFUSED: disposable R1 test database still has active sessions')
+     await new Promise(resolve=>setTimeout(resolve,200))
+   }
+ }finally{await control.end()}
  const now=new Date().toISOString(),expires=new Date(Date.now()+300000).toISOString(),runId='r1-b06-TEST_FIXTURE-'+randomBytes(12).toString('hex'),sid='S-1-5-21-111-222-333-444',sha='c'.repeat(40)
  const manifest:R1ActivationManifest['manifest'] & {testFixture:string}={manifestVersion:'1.1.0',runId,nonce:randomBytes(32).toString('hex'),taskEnvironmentId:'TEST_FIXTURE_NOT_AUTHORITY',targetDatabase:dbName,targetHost:'127.0.0.1',targetPort:'5432',targetContainerName:'TEST_FIXTURE',targetVolumeName:'NONE',authorizedOperator:{executorType:'automation_agent',operatorId:'TEST_FIXTURE_NOT_AUTHORITY',windowsSecurityPrincipal:sid,approvalReference:'https://github.com/DenizOner/DogruAdres/issues/238#issuecomment-6366377036'},targetCommitSha:sha,issuedAt:now,expiresAt:expires,actionScope:'ACTIVATE_MFA_DEPLOYMENT_LATCH',runtimeResourceBinding:{postgresSystemIdentifier:facts.cluster},expectedTransition:{from:false,to:true,fromVersion:1,toVersion:2},preconditions:facts,runtimeFlags:Object.fromEntries(MFA_RUNTIME_FLAGS.map(k=>[k,'true'])),testFixture:'NOT_AUTHORITY'}
  const signed:R1ActivationManifest={manifest,signerKeyFingerprint:fp,signatureBase64:sign(null,Buffer.from(canonical(manifest)),privatePem).toString('base64')}
@@ -29,7 +41,23 @@ async function main(){
  const dir=await mkdtemp(path.join(os.tmpdir(),'r1-TEST_FIXTURE-')),nonce=new NativeFileAtomicNonceAdapter(dir)
  const deps={connectionString:u.toString(),privateKeyPem:privatePem,evidenceDirectory:dir,nonce,env,assertAuthority:async()=>{verifyR1ActivationInput(input,env)}}
 
- try { const result=await executeR1Activation(input,deps);assert.equal(result.outcome.status,'ARMED');const evidence=process.env.B06_EVIDENCE_DIR!;assert.ok(evidence.startsWith(process.env.RUNNER_TEMP!+'/'));await mkdir(evidence,{recursive:true});await writeFile(path.join(evidence,'activation.json'),JSON.stringify({label:'TEST_FIXTURE NOT_AUTHORITY',source:sha,status:result.outcome.status,entities:result.evidence.committedEntities.length,manifestSha256:createHash('sha256').update(canonical(manifest)).digest('hex'),armedSha256:createHash('sha256').update(canonical(result.outcome)).digest('hex'),at:new Date().toISOString()}));console.log('PASS B06 disposable native activation via existing R1 CAS/readback; TEST_FIXTURE NOT_AUTHORITY') } finally { await rm(dir,{recursive:true,force:true}) }
+ // Diagnose a refused pre-write R1 preflight only on this disposable CI DB.
+ // Print numeric counts/booleans, never identities, DB identifiers or signer material.
+ const brief=(v:any)=>({latch_off:v?.latch===false,version_one:v?.version===1,
+   users:v?.users,identities:v?.identities,people:v?.people,
+   mappings:v?.mappings,bindings:v?.bindings,factors:v?.factors,
+   recovery:v?.recovery,guards:v?.guards,other_sessions:v?.other_sessions})
+ try { const result=await executeR1Activation(input,deps);assert.equal(result.outcome.status,'ARMED');const evidence=process.env.B06_EVIDENCE_DIR!;assert.ok(evidence.startsWith(process.env.RUNNER_TEMP!+'/'));await mkdir(evidence,{recursive:true});await writeFile(path.join(evidence,'activation.json'),JSON.stringify({label:'TEST_FIXTURE NOT_AUTHORITY',source:sha,status:result.outcome.status,entities:result.evidence.committedEntities.length,manifestSha256:createHash('sha256').update(canonical(manifest)).digest('hex'),armedSha256:createHash('sha256').update(canonical(result.outcome)).digest('hex'),at:new Date().toISOString()}));console.log('PASS B06 disposable native activation via existing R1 CAS/readback; TEST_FIXTURE NOT_AUTHORITY') } catch(error) {
+   if(String(error).includes('REFUSED: R1 clean state')){
+     let after:any=null
+     const observation=new Client({connectionString:u.toString()})
+     try{await observation.connect();after=brief(await readR1Readiness(observation))}
+     catch{after={unavailable:true}}
+     finally{await observation.end().catch(()=>{})}
+     console.error('B22_DISPOSABLE_R1_PREFLIGHT_COUNTS '+JSON.stringify({before:brief(facts),after}))
+   }
+   throw error
+ } finally { await rm(dir,{recursive:true,force:true}) }
 }
 main().then(()=>process.exit(0)).catch((err)=>{console.error('B06 activation failed:',err instanceof Error?err.stack:String(err));process.exit(1)})
 

@@ -13,6 +13,12 @@ function harness() {
   const pending:Array<{path:string;resolve:(x:any)=>void;reject:(e:Error)=>void}>=[]
   const state={status:'',url:'/personal',pending,el}
   const context=createContext({el,clearNotifications:()=>{el('notification-list').replaceChildren();el('notification-bell').hidden=true},notifications:async()=>{},status:(s:string)=>{state.status=s},history:{replaceState:(_:unknown,__:unknown,url:string)=>{state.url=url}},document:{createElement:()=>({textContent:''})},api:(path:string)=>new Promise((resolve,reject)=>pending.push({path,resolve,reject}))})
+  // Evaluate the real private email-link cleanup used by selectOrg.
+  const privateStart=source.indexOf("  function clearPrivateClosingEmailLink(")
+  const privateEnd=source.indexOf("  const hashMatch",privateStart)
+  if(privateStart<0||privateEnd<=privateStart)throw Error("Missing private cleanup")
+  runInContext("let platformMailLinkToken='',platformMailLinkRequest=0,platformMailLinkOpened=false,platformMailLinkPreservedPerson='';\n"+
+    source.slice(privateStart,privateEnd),context)
   runInContext(source.slice(begin,end),context)
   return {...state,context,state,select:(id:string)=>runInContext(`selectOrg(${JSON.stringify(id)})`,context)}
 }
@@ -84,6 +90,67 @@ describe('B22 selected Organization Store presentation (UI scheduling, not API a
     expect(h.el('org-stores').children).toHaveLength(1)
     expect(h.el('org-stores').children[0].textContent).toContain('B Mağazası')
     expect(h.el('org-stores').children[0].textContent).not.toContain('A Özel')
+  })
+
+  it('clears a prior private closing email explanation and capability on Organization switch',async()=>{
+    const h=harness(),a=h.select('A');await finishSelection(h,'A',a)
+    h.el('platform-closing-email-link-status').textContent='PRIVATE CLOSING A'
+    h.el('platform-closing-email-link-panel').hidden=false
+    runInContext("platformMailLinkToken='synthetic-only'",h.context)
+    const denied=h.select('foreign')
+    expect(h.el('platform-closing-email-link-status').textContent).toBe('')
+    expect(h.el('platform-closing-email-link-panel').hidden).toBe(true)
+    expect(runInContext('platformMailLinkToken',h.context)).toBe('')
+    h.pending.find(p=>p.path==='organizations?id=foreign')!.reject(new Error('Access denied'))
+    await denied
+    expect(h.el('platform-closing-email-link-status').textContent).toBe('')
+  })
+
+  it('preserves only an unopened email link across a hidden-tab clear, never the old private reason',()=>{
+    const h=harness()
+    runInContext("currentPersonId='owner-A';platformMailLinkToken='synthetic-unopened'",h.context)
+    runInContext("clearPrivateClosingEmailLink(true)",h.context)
+    expect(runInContext('platformMailLinkToken',h.context)).toBe('synthetic-unopened')
+    expect(runInContext('platformMailLinkPreservedPerson',h.context)).toBe('owner-A')
+    expect(h.el('platform-closing-email-link-status').textContent).toBe('')
+    expect(h.el('platform-closing-email-link-panel').hidden).toBe(true)
+    runInContext("currentPersonId='';clearPrivateClosingEmailLink(true)",h.context)
+    expect(runInContext('platformMailLinkPreservedPerson',h.context)).toBe('owner-A')
+    runInContext("clearPrivateClosingEmailLink()",h.context)
+    expect(runInContext('platformMailLinkToken',h.context)).toBe('')
+    expect(runInContext('platformMailLinkPreservedPerson',h.context)).toBe('')
+  })
+
+  it('never interprets a pagehide event object as permission to keep an unopened private link',()=>{
+    const h=harness()
+    runInContext("currentPersonId='owner-A';platformMailLinkToken='unopened';clearPrivateClosingEmailLink({type:'pagehide'})",h.context)
+    expect(runInContext('platformMailLinkToken',h.context)).toBe('')
+    expect(runInContext('platformMailLinkPreservedPerson',h.context)).toBe('')
+  })
+
+  it('drops an attempted or already displayed email-link reason on a hidden-tab clear',()=>{
+    const h=harness()
+    runInContext("currentPersonId='owner-A';platformMailLinkToken='synthetic-attempted';platformMailLinkOpened=true",h.context)
+    runInContext("clearPrivateClosingEmailLink(true)",h.context)
+    expect(runInContext('platformMailLinkToken',h.context)).toBe('')
+    runInContext("platformMailLinkToken='synthetic-displayed';platformMailLinkOpened=false",h.context)
+    h.el('platform-closing-email-link-status').textContent='OLD PRIVATE REASON'
+    runInContext("clearPrivateClosingEmailLink(true)",h.context)
+    expect(runInContext('platformMailLinkToken',h.context)).toBe('')
+    expect(h.el('platform-closing-email-link-status').textContent).toBe('')
+  })
+
+  it('discards a displayed private email-link reason even before first Organization selection',async()=>{
+    const h=harness()
+    h.el('platform-closing-email-link-status').textContent='OLD PRIVATE REASON'
+    h.el('platform-closing-email-link-panel').hidden=false
+    runInContext("platformMailLinkToken='synthetic-only'",h.context)
+    const request=h.select('foreign')
+    expect(h.el('platform-closing-email-link-status').textContent).toBe('')
+    expect(h.el('platform-closing-email-link-panel').hidden).toBe(true)
+    expect(runInContext('platformMailLinkToken',h.context)).toBe('')
+    h.pending.find(p=>p.path==='organizations?id=foreign')!.reject(new Error('Access denied'))
+    await request
   })
 
   it('clears the previous Store view immediately on a denied Organization switch',async()=>{

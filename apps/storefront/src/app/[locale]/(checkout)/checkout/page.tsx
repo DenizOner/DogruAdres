@@ -36,7 +36,7 @@ async function CheckoutPageContent({}) {
     return notFound();
   }
 
-  const shippingMethods = await listCartShippingMethods(cart.id, false);
+  const shippingMethods = await listCartShippingMethods(cart.id);
   const paymentMethods = await listCartPaymentMethods(cart.region?.id ?? '');
   const customer = await retrieveCustomer();
 
@@ -51,7 +51,7 @@ async function CheckoutPageContent({}) {
             />
             <CartShippingMethodsSection
               cart={cart}
-              availableShippingMethods={shippingMethods as any}
+              availableShippingMethods={shippingMethods}
             />
             <CartPaymentSection
               cart={cart}

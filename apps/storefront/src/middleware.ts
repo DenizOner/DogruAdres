@@ -99,7 +99,7 @@ async function getCountryCode(
     }
 
     return countryCode;
-  } catch (error) {
+  } catch {
     if (process.env.NODE_ENV === 'development') {
       console.error(
         'Middleware.ts: Error getting the country code. Did you set up regions in your Medusa Admin and define a MEDUSA_BACKEND_URL environment variable? Note that the variable is no longer named NEXT_PUBLIC_MEDUSA_BACKEND_URL.'
@@ -109,11 +109,75 @@ async function getCountryCode(
 }
 
 export async function middleware(request: NextRequest) {
-  if (request.nextUrl.pathname.includes('.')) {
-    return NextResponse.next();
+  const { pathname } = request.nextUrl;
+
+  // Check protected pages BEFORE public URL exceptions: a dynamic order ID can
+  // contain a dot or the words "verify-email" without becoming a public asset.
+  // Resolve encoded country prefixes before splitting. A raw /%74r/
+  // otherwise bypasses the /tr/ closed-demo guard and can reach SSR.
+  let decodedPath: string;
+  try {
+    decodedPath = decodeURIComponent(pathname).replace(/\/{2,}/g, '/');
+  } catch {
+    return new NextResponse(null, {
+      status: 400,
+      headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow, noarchive' }
+    });
+  }
+  const urlSegment = decodedPath.split('/')[1];
+  const looksLikeLocale = /^[a-z]{2}$/i.test(urlSegment || '');
+  const pathnameWithoutLocale = looksLikeLocale ? decodedPath.replace(/^\/[^/]+/, '') : decodedPath;
+  const isProtectedRoute = PROTECTED_ROUTES.some(route => pathnameWithoutLocale.startsWith(route));
+
+  if (isProtectedRoute) {
+    const jwtCookie = request.cookies.get('_medusa_jwt');
+    const token = jwtCookie?.value;
+    const locale = looksLikeLocale ? urlSegment : DEFAULT_REGION;
+
+    if (!jwtCookie) {
+      return makeAuthRedirect(request, locale, 'sessionRequired');
+    }
+
+    if (token && isTokenExpired(token)) {
+      return makeAuthRedirect(request, locale, 'sessionExpired');
+    }
   }
 
-  const { pathname } = request.nextUrl;
+  // #243 closed B4B: these are unapproved Mercur B2C demo pages, not the
+  // accepted Organization-scoped /personal/catalog reader. Deny their SSR,
+  // metadata and external links before region lookup or the dot-path bypass.
+  // Preserve the independently accepted Seller rename 404/200 HTTP contract:
+  // /sellers/[handle] is excluded, with native /store/sellers still closed.
+  // This is deliberately all-session until an approved Buyer-specific page
+  // exists; a Medusa JWT alone is not Buyer Organization authorization.
+  const demoPath = pathnameWithoutLocale.toLowerCase();
+  if (demoPath === '' || demoPath === '/' ||
+      /^\/(?:products|categories|collections|cart|checkout|order)(?:\/|$)/.test(demoPath)) {
+    // Default or URL-supplied country is not necessarily a configured region.
+    // Reuse the existing public region bootstrap, not a new auth mechanism.
+    let locale: string | undefined;
+    try {
+      const cacheId = request.cookies.get('_medusa_cache_id')?.value || crypto.randomUUID();
+      const regionMap = await getRegionMap(cacheId);
+      locale = looksLikeLocale && regionMap.has(urlSegment.toLowerCase())
+        ? urlSegment.toLowerCase()
+        : await getCountryCode(request, regionMap);
+    } catch {
+      // Region service failure never authorizes public B2C demo rendering.
+    }
+    if (!locale) return new NextResponse(null, {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow, noarchive' }
+    });
+    const response = NextResponse.redirect(new URL('/' + locale + '/login', request.url), 307);
+    response.headers.set('Cache-Control', 'private, no-store');
+    response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+    response.headers.set('Referrer-Policy', 'no-referrer');
+    return response;
+  }
+  if (pathname.includes('.')) {
+    return NextResponse.next();
+  }
 
   // Auth routes (like email verification) do not depend on store regions or publishable keys
   if (pathname.includes('/auth/verify-email') || pathname.includes('/verify-email')) {
@@ -130,36 +194,24 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
+  // A real public password-recovery route exists at both URL shapes.
+  // Avoid rewriting Server Action POST requests while preserving no-referrer
+  // and no-store on the one-time bearer landing page.
+  if (pathname === '/reset-password' || /^\/[a-z]{2}\/reset-password$/i.test(pathname)) {
+    const response = NextResponse.next();
+    response.headers.set('Referrer-Policy', 'no-referrer');
+    response.headers.set('Cache-Control', 'no-store');
+    return response;
+  }
+
   const cacheIdCookie = request.cookies.get('_medusa_cache_id');
   const cacheId = cacheIdCookie?.value || crypto.randomUUID();
-
-  const urlSegment = pathname.split('/')[1];
-  const looksLikeLocale = /^[a-z]{2}$/i.test(urlSegment || '');
-
-  const pathnameWithoutLocale = looksLikeLocale ? pathname.replace(/^\/[^/]+/, '') : pathname;
-
-  const isProtectedRoute = PROTECTED_ROUTES.some(route => pathnameWithoutLocale.startsWith(route));
-
-  if (isProtectedRoute) {
-    const jwtCookie = request.cookies.get('_medusa_jwt');
-    const token = jwtCookie?.value;
-
-    const locale = looksLikeLocale ? urlSegment : DEFAULT_REGION;
-
-    if (!jwtCookie) {
-      return makeAuthRedirect(request, locale, 'sessionRequired');
-    }
-
-    if (token && isTokenExpired(token)) {
-      return makeAuthRedirect(request, locale, 'sessionExpired');
-    }
-  }
 
   if (looksLikeLocale && cacheIdCookie) {
     return NextResponse.next();
   }
 
-  let response = NextResponse.next();
+  const response = NextResponse.next();
 
   if (!cacheIdCookie) {
     response.cookies.set('_medusa_cache_id', cacheId, {

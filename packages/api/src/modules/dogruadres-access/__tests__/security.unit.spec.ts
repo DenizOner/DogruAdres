@@ -78,30 +78,22 @@ describe("DogruAdres organization security rules", () => {
     expect(verifiedEmailForActor({ ...context, verifications: [{ ...context.verifications[0], deleted_at: new Date() }] })).toBeNull()
     expect(verifiedEmailForActor({ ...context, authProvider: undefined })).toBeNull()
   })
-  it("B22: member grants and private lists honor the centrally narrowed Owner role", () => {
-    const previous = process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
+  it("B22: protected Owner permissions stay fixed; legacy member grants remain separate", () => {
+    const previous=process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
     try {
-      delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
-      // Default protected Owner manages member rights without a personal grant.
-      expect(organizationActionAllowed("owner","membership.manage",true,false)).toBe(true)
-      expect(organizationActionAllowed("owner","membership.list",true,false)).toBe(true)
-      expect(organizationActionAllowed("owner","buyer.purchase",true,false)).toBe(true)
-      expect(organizationActionAllowed("owner","products.edit",true,false)).toBe(true)
-      // A narrowed role may still buy or edit, but cannot manage others' rights.
-      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,products.edit"
-      expect(organizationActionAllowed("owner","membership.manage",true,false)).toBe(false)
-      expect(organizationActionAllowed("owner","membership.list",true,false)).toBe(false)
-      expect(organizationActionAllowed("owner","buyer.purchase",true,false)).toBe(true)
-      expect(organizationActionAllowed("owner","products.edit",true,false)).toBe(true)
-      // Personal grants and role labels never bypass a narrowed Owner policy.
-      expect(organizationActionAllowed("owner","membership.manage",true,true)).toBe(false)
+      for(const setting of ["", "buyer.purchase,products.edit", "buyer.purchase,buyer.purchase", "unrecognized.action"]){
+        process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=setting
+        for(const action of ["membership.manage","membership.list","buyer.purchase","products.edit"] as const)
+          expect(organizationActionAllowed("owner",action,true,false)).toBe(true)
+      }
+      // An unprotected label or personal grant cannot manufacture Owner status.
+      expect(organizationActionAllowed("owner","membership.manage",false,true)).toBe(false)
       expect(organizationActionAllowed("owner","membership.list",false,true)).toBe(false)
       expect(organizationActionAllowed("admin","membership.manage",false,true)).toBe(false)
       expect(organizationActionAllowed("member","membership.list",false,true)).toBe(false)
-      // Malformed deployment policy cannot silently restore full authority.
-      process.env.DOGRUADRES_OWNER_ROLE_ACTIONS="buyer.purchase,buyer.purchase"
-      expect(organizationActionAllowed("owner","membership.manage",true,false)).toBe(false)
-    } finally {
+      expect(organizationActionAllowed("member","buyer.purchase",false,true)).toBe(true)
+      expect(organizationActionAllowed("member","buyer.purchase",false,false)).toBe(false)
+    }finally {
       if(previous===undefined)delete process.env.DOGRUADRES_OWNER_ROLE_ACTIONS
       else process.env.DOGRUADRES_OWNER_ROLE_ACTIONS=previous
     }

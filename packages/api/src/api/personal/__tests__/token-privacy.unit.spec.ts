@@ -3,6 +3,7 @@ import { runInNewContext, createContext, runInContext } from "node:vm"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 jest.mock("../security", () => ({ enabled: () => true }))
+import { trustedInlineScripts } from "./trusted-inline-scripts"
 async function page() {
   const res: any = { setHeader: jest.fn(), type: jest.fn().mockReturnThis(), send: jest.fn() }
   await GET({} as any, res)
@@ -12,7 +13,7 @@ describe("bearer URL privacy (executed page scripts, not backend/browser accepta
   it("sets the personal HTML policy and scrubs once before any fetch without losing the invitation", async () => {
     const { res, html } = await page()
     expect(res.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer")
-    const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1])
+    const scripts = trustedInlineScripts(html)
     expect(scripts).toHaveLength(2)
     const token = "synthetic-invitation/?secret"
     const url = new URL("https://app.example.invalid/personal?organization=synthetic&invitation_token="+encodeURIComponent(token)+"#section")
@@ -46,7 +47,7 @@ describe("bearer URL privacy (executed page scripts, not backend/browser accepta
   })
   it.each(["mismatch", "replay"])("keeps %s denials generic and never navigates with the secret", async () => {
     const { html } = await page()
-    const code = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)][1][1]
+    const code = trustedInlineScripts(html)[1]
     const accept = code.match(/el\('accept-invitation-btn'\)\.onclick=(async\(\)=>\{[\s\S]*?\n  \});/)![1]
     const nodes: Record<string, any> = {}
     const token = "synthetic-private-invitation"
@@ -77,7 +78,11 @@ describe("bearer URL privacy (executed page scripts, not backend/browser accepta
     expect(html).toContain("Korunmuş Owner, kendi aktif kuruluşu için ayrıca satın alma izni almaz.")
     expect(html).toContain("Diğer aktif üyeler için satın alma iznini Owner verir veya iptal eder.")
     expect(html).toContain("Mağazanın alıcı kuruluş engeli herkese uygulanır.")
-    expect(html).toContain("Korunmuş Owner, kendi kuruluşunun onaylı mağazalarında ayrıca ürün düzenleme izni almadan işlem yapabilir.")
+    expect(html).toContain("Korunan Owner grubunun izinleri sabittir; bu ekrandan değiştirilemez.")
+    expect(html).toContain("Grup Yetkisi henüz uygulanmadığından miras seçeneği gösterilmez.")
+    expect(html).toContain('value="grant">Yetkili — açık izin ver')
+    expect(html).toContain('value="revoke">Yetkisiz — açık izni geri al')
+    expect(html).toContain('id="product-grants-effective"')
     expect(html).not.toContain("Owner rolü veya kişisel müşteri hesabı kendiliğinden satın alma yetkisi vermez.")
     expect(html).not.toContain("Yalnız ayrıca ürün düzenleme izniniz bulunan")
   })
@@ -88,6 +93,18 @@ describe("bearer URL privacy (executed page scripts, not backend/browser accepta
     expect(source).toContain('const [token] = useState(() => searchParams.get("token") || "")')
     expect(source.indexOf('url.searchParams.delete("token")')).toBeLessThan(source.indexOf('async function checkTokenStatus'))
     expect(source.match(/referrerPolicy: "no-referrer"/g)).toHaveLength(2)
-    expect(middleware.match(/response.headers.set\('Referrer-Policy', 'no-referrer'\)/g)).toHaveLength(2)
+    // Keep both verification headers, while allowing additional protected auth routes.
+    expect((middleware.match(/response.headers.set\('Referrer-Policy', 'no-referrer'\)/g) || []).length).toBeGreaterThanOrEqual(2)
+    const resetStart = middleware.indexOf("if (pathname === '/reset-password'")
+    const resetEnd = middleware.indexOf("const cacheIdCookie", resetStart)
+    expect(resetStart).toBeGreaterThanOrEqual(0)
+    expect(resetEnd).toBeGreaterThan(resetStart)
+    const resetGuard = middleware.slice(resetStart, resetEnd)
+    const directPage = readFileSync(path.join(root, "apps/storefront/src/app/reset-password/page.tsx"), "utf8")
+    expect(directPage).toContain('export { default, metadata } from "../[locale]/(reset-password)/reset-password/page"')
+    expect(resetGuard).toContain("const response = NextResponse.next()")
+    expect(resetGuard).not.toContain("NextResponse.rewrite(")
+    expect(resetGuard).toContain("response.headers.set('Referrer-Policy', 'no-referrer')")
+    expect(resetGuard).toContain("response.headers.set('Cache-Control', 'no-store')")
   })
 })

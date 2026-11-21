@@ -5,6 +5,8 @@ import { revalidateTag } from 'next/cache';
 import { redirect } from 'next/navigation';
 
 import { sdk } from '../client';
+
+type CustomerActionResult = { success: boolean; error: string | null };
 import {
   getAuthHeaders,
   getCacheOptions,
@@ -101,8 +103,8 @@ export async function signup(formData: FormData) {
     await transferCart();
 
     return createdCustomer;
-  } catch (error: any) {
-    return error.toString();
+  } catch (error: unknown) {
+    return String(error);
   }
 }
 
@@ -155,7 +157,7 @@ export async function transferCart() {
   revalidateTag(cartCacheTag);
 }
 
-export const addCustomerAddress = async (formData: FormData): Promise<any> => {
+export const addCustomerAddress = async (formData: FormData): Promise<CustomerActionResult> => {
   const address = {
     address_name: formData.get('address_name') as string,
     first_name: formData.get('first_name') as string,
@@ -204,7 +206,7 @@ export const deleteCustomerAddress = async (addressId: string): Promise<void> =>
     });
 };
 
-export const updateCustomerAddress = async (formData: FormData): Promise<any> => {
+export const updateCustomerAddress = async (formData: FormData): Promise<CustomerActionResult> => {
   const addressId = formData.get('addressId') as string;
 
   if (!addressId) {
@@ -246,7 +248,7 @@ export const updateCustomerAddress = async (formData: FormData): Promise<any> =>
     });
 };
 
-export const updateCustomerPassword = async (password: string, token: string): Promise<any> => {
+export const updateCustomerPassword = async (password: string, token: string): Promise<CustomerActionResult> => {
   const res = await (sdk.auth.$actorType.$authProvider.update
     .mutate({
       $actorType: 'customer',
@@ -255,13 +257,22 @@ export const updateCustomerPassword = async (password: string, token: string): P
       fetchOptions: { headers: { authorization: `Bearer ${token}` } }
     } as never) as unknown as Promise<unknown>)
     .then(async () => {
-      await removeAuthToken();
+      // Anonymous password recovery has no session to clear. Setting a blank
+      // session cookie unnecessarily re-renders the entire Next.js route
+      // after the credential was already updated.
+      const authHeaders = await getAuthHeaders();
+      if ('authorization' in authHeaders) {
+        await removeAuthToken();
+      }
       const customerCacheTag = await getCacheTag('customers');
-      revalidateTag(customerCacheTag);
+      if (customerCacheTag) {
+        revalidateTag(customerCacheTag);
+      }
       return { success: true, error: null };
     })
-    .catch((err: any) => {
-      return { success: false, error: err.toString() };
+    .catch(() => {
+      // A reset error must never reveal backend details or bearer values.
+      return { success: false, error: 'Password reset could not be completed. Please request a new link.' };
     });
 
   return res;
@@ -277,8 +288,9 @@ export const sendResetPasswordEmail = async (email: string) => {
     .then(() => {
       return { success: true, error: null };
     })
-    .catch((err: any) => {
-      return { success: false, error: err.toString() };
+    .catch(() => {
+      // The public reset request must not expose provider errors, accounts or internal detail.
+      return { success: false, error: 'Password reset is temporarily unavailable. Please try again.' };
     });
 
   return res;

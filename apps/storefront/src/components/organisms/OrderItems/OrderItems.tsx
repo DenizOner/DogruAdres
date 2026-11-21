@@ -1,6 +1,4 @@
-import { Divider } from "@/components/atoms"
 import { HttpTypes } from "@medusajs/types"
-import { Table } from "@medusajs/ui"
 import { Item } from "./Item"
 
 type ItemsProps = {

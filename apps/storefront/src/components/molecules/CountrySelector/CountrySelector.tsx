@@ -28,27 +28,26 @@ type CountrySelectProps = {
 }
 
 const CountrySelect = ({ regions }: CountrySelectProps) => {
-  const [current, setCurrent] = useState<
-    | { country: string | undefined; region: string; label: string | undefined }
-    | undefined
-  >(undefined)
+  const [current, setCurrent] = useState<CountryOption | undefined>(undefined)
 
   const { locale: countryCode } = useParams()
   const router = useRouter()
   const currentPath = usePathname().split(`/${countryCode}`)[1]
 
-  const options = useMemo(() => {
-    return regions
-      ?.map((r) => {
-        return r.countries?.map((c) => ({
-          country: c.iso_2,
-          region: r.id,
-          label: c.display_name,
-        }))
-      })
-      .flat()
-      .sort((a, b) => (a?.label ?? "").localeCompare(b?.label ?? ""))
-  }, [regions])
+  // Only selectable countries have both a valid code and a display label.
+  const options = useMemo<CountryOption[]>(
+    () =>
+      regions
+        .flatMap((r) =>
+          (r.countries ?? []).flatMap((c) =>
+            c.iso_2 && c.display_name
+              ? [{ country: c.iso_2, region: r.id, label: c.display_name }]
+              : []
+          )
+        )
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [regions]
+  )
 
   useEffect(() => {
     if (countryCode) {
@@ -71,10 +70,13 @@ const CountrySelect = ({ regions }: CountrySelectProps) => {
 
       router.push(result.newPath)
       router.refresh()
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast.error({
         title: "Error switching region",
-        description: error?.message || "Failed to update region. Please try again.",
+        description:
+          error instanceof Error
+            ? error.message
+            : "Failed to update region. Please try again.",
       })
     }
   }
@@ -95,7 +97,6 @@ const CountrySelect = ({ regions }: CountrySelectProps) => {
             <div className="txt-compact-small flex items-start mx-auto">
               {current && (
                 <span className="txt-compact-small flex items-center gap-x-2">
-                  {/* @ts-ignore */}
                   <ReactCountryFlag
                     alt={`${current.country?.toUpperCase()} flag`}
                     svg
@@ -126,8 +127,7 @@ const CountrySelect = ({ regions }: CountrySelectProps) => {
                       className="cursor-pointer select-none relative w-16 hover:bg-gray-50 py-2 border-b"
                     >
                       <span className="flex items-center gap-x-2 pl-2">
-                        {/* @ts-ignore */}
-                        <ReactCountryFlag
+                              <ReactCountryFlag
                           svg
                           style={{
                             width: "16px",

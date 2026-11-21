@@ -99,6 +99,168 @@ export default async function({container}:any){
       assert.equal((await q("select count(*)::int n from da_audit_index_entry where source_event_id=$1",[staffEvents[0].id]))[0].n,1)
       assert.equal((await q("select count(*)::int n from da_audit_event where id=any($1::text[])",[staffEvents.map(e=>e.id)]))[0].n,2)
       process.stdout.write("PASS B22 audit worker: real Medusa Access/Index job delivered canonical Staff events, ACK and single Index entry on lost-ACK replay; crash recovery NOT TESTED\n")
+
+      // Reuse the installed Access/Index worker against the exact Owner
+      // pause/resume sources created by the real Chrome/HTTPS journey above.
+      // This is genuine same-disposable-DB outbox -> Index -> durable ACK.
+      const ownerPauseEvents=await q(
+        "select e.id,e.organization_id,e.target_id,e.role_context,e.action,e.resource,"+
+        " e.new_values->>'request_id' as request_id,o.id as outbox_id,"+
+        " o.created_at,o.status from da_audit_event e"+
+        " join da_audit_outbox o on o.source_audit_event_id=e.id"+
+        " where e.module='dogruadres-access' and e.resource='store-owner-pause'"+
+        " and e.role_context='owner'"+
+        " and e.action in ('organization.store_owner_paused','organization.store_owner_resumed')"+
+        " and o.status='pending' order by e.occurred_at,e.id")
+      assert.equal(ownerPauseEvents.length,4,
+        "Real Chrome pause/resume + concurrent pause/resume must create four valid sources")
+      assert.deepEqual(ownerPauseEvents.map(e=>e.action).sort(),
+        ["organization.store_owner_paused","organization.store_owner_paused",
+         "organization.store_owner_resumed","organization.store_owner_resumed"].sort())
+      assert.equal(new Set(ownerPauseEvents.map(e=>e.target_id)).size,1)
+      assert.ok(ownerPauseEvents.every(e=>e.organization_id===ownerPauseEvents[0].organization_id))
+      const ownerPauseOutboxIds=ownerPauseEvents.map(e=>e.outbox_id)
+      try{
+        const shifted=await q(
+          "update da_audit_outbox set created_at=(select min(created_at) from da_audit_outbox)-interval '7 days'"+
+          " where id=any($1::text[]) and status='pending' and lease_token is null returning id",
+          [ownerPauseOutboxIds])
+        assert.equal(shifted.length,4)
+        const delivered=await runAuditRelayBatch(container,4)
+        assert.equal(delivered.delivered,4)
+        for(const e of ownerPauseEvents){
+          const [indexed]=await q(
+            "select o.status,o.delivered_at,o.lease_token,o.attempt_count,"+
+            " i.source_event_id,i.organization_id,i.target_id,i.action,i.resource,i.envelope"+
+            " from da_audit_outbox o join da_audit_index_entry i"+
+            " on i.source_event_id=o.source_audit_event_id where o.id=$1",[e.outbox_id])
+          assert.ok(indexed&&indexed.delivered_at&&indexed.lease_token===null)
+          assert.equal(indexed.status,"delivered")
+          assert.equal(indexed.attempt_count,1)
+          assert.equal(indexed.source_event_id,e.id)
+          assert.equal(indexed.organization_id,e.organization_id)
+          assert.equal(indexed.target_id,e.target_id)
+          assert.equal(indexed.action,e.action)
+          assert.equal(indexed.resource,"store-owner-pause")
+          const envelope=typeof indexed.envelope==="string"?
+            JSON.parse(indexed.envelope):indexed.envelope
+          assert.equal(envelope.actor.role_context,"owner")
+          assert.equal(envelope.source_event_id,e.id)
+          assert.equal(envelope.source_module,"dogruadres-access")
+          assert.deepEqual(Object.keys(envelope).sort(),
+            ["action","actor","occurred_at","organization_id","resource",
+              "source_event_id","source_module","target_id","version"])
+          assert.ok(!JSON.stringify(envelope).includes(e.request_id),
+            "Owner pause request token never reaches the indexed envelope")
+          assert.equal((await q(
+            "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
+            [e.id]))[0].n,1)
+        }
+        const replayed=ownerPauseEvents[0]
+        assert.equal((await q(
+          "update da_audit_outbox set status='pending',delivered_at=null"+
+          " where id=$1 and status='delivered' and attempt_count=1 returning id",
+          [replayed.outbox_id])).length,1)
+        assert.equal((await runAuditRelayBatch(container,1)).delivered,1,
+          "Reconciliation must ACK the existing Index record, not insert another")
+        assert.equal((await q("select attempt_count from da_audit_outbox where id=$1",
+          [replayed.outbox_id]))[0].attempt_count,2)
+        assert.equal((await q(
+          "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
+          [replayed.id]))[0].n,1)
+        process.stdout.write("PASS B22 real audit relay: Owner temporary pause/resume events delivered to Index with redacted envelopes, durable ACKs and single row on retry\n")
+      }finally{
+        for(const event of ownerPauseEvents)
+          await q("update da_audit_outbox set created_at=$2 where id=$1",
+            [event.outbox_id,event.created_at])
+      }
+      // The real Owner 30-day closing and withdrawal also produce canonical
+      // Foundation records. Verify delivery to the existing Index rather
+      // than treating in-transaction outbox creation as successful delivery.
+      const ownerClosingEvents=await q(
+        "select e.id,e.organization_id,e.target_id,e.action,e.resource,"+
+        " e.new_values->>'request_id' as request_id,"+
+        " e.new_values->>'due_at' as due_at,"+
+        " o.id as outbox_id,o.created_at,o.status"+
+        " from da_audit_event e join da_audit_outbox o on o.source_audit_event_id=e.id"+
+        " where e.module='dogruadres-access' and e.resource='store-owner-closing'"+
+        " and e.new_values->>'fixture_source' is null"+
+        " and e.role_context='owner' and e.action in"+
+        " ('organization.store_owner_closing_started','organization.store_owner_closing_withdrawn')"+
+        " and o.status='pending' and o.lease_token is null"+
+        " order by e.occurred_at,e.id")
+      assert.equal(ownerClosingEvents.length,6,
+        "Three real closing start/withdraw pairs including late Owner enrollment")
+      assert.deepEqual(ownerClosingEvents.map(e=>e.action).sort(),
+        ["organization.store_owner_closing_started",
+         "organization.store_owner_closing_started",
+         "organization.store_owner_closing_started",
+         "organization.store_owner_closing_withdrawn",
+         "organization.store_owner_closing_withdrawn",
+         "organization.store_owner_closing_withdrawn"].sort())
+      assert.equal(new Set(ownerClosingEvents.map(e=>e.target_id)).size,1)
+      assert.equal(new Set(ownerClosingEvents.map(e=>e.organization_id)).size,1)
+      assert.ok(ownerClosingEvents.every(e=>/^dasc_[a-f0-9]{32}$/.test(e.request_id)))
+      const closingOutboxIds=ownerClosingEvents.map(e=>e.outbox_id)
+      try{
+        const shifted=await q(
+          "update da_audit_outbox set"+
+          " created_at=(select min(created_at) from da_audit_outbox)-interval '8 days'"+
+          " where id=any($1::text[]) and status='pending' and lease_token is null"+
+          " returning id",[closingOutboxIds])
+        assert.equal(shifted.length,6)
+        const delivered=await runAuditRelayBatch(container,6)
+        assert.equal(delivered.delivered,6,
+          "All 6 canonical closing events must reach the installed native Index")
+        for(const event of ownerClosingEvents){
+          const rows=await q(
+            "select o.status,o.delivered_at,o.attempt_count,o.lease_token,"+
+            " i.source_module,i.source_event_id,i.organization_id,i.target_id,"+
+            " i.action,i.resource,i.envelope"+
+            " from da_audit_outbox o join da_audit_index_entry i"+
+            " on i.source_event_id=o.source_audit_event_id"+
+            " where o.id=$1",[event.outbox_id])
+          assert.equal(rows.length,1)
+          const indexed=rows[0]
+          assert.equal(indexed.status,"delivered")
+          assert.ok(indexed.delivered_at)
+          assert.equal(indexed.attempt_count,1)
+          assert.equal(indexed.lease_token,null)
+          assert.equal(indexed.source_module,"dogruadres-access")
+          assert.equal(indexed.source_event_id,event.id)
+          assert.equal(indexed.organization_id,event.organization_id)
+          assert.equal(indexed.target_id,event.target_id)
+          assert.equal(indexed.action,event.action)
+          assert.equal(indexed.resource,"store-owner-closing")
+          const envelope=typeof indexed.envelope==="string"?
+            JSON.parse(indexed.envelope):indexed.envelope
+          assert.equal(envelope.actor.role_context,"owner")
+          assert.deepEqual(Object.keys(envelope).sort(),
+            ["action","actor","occurred_at","organization_id","resource",
+             "source_event_id","source_module","target_id","version"])
+          assert.ok(!JSON.stringify(envelope).includes(event.request_id))
+          assert.ok(!JSON.stringify(envelope).includes(event.due_at),
+            "Private countdown and request keys must not reach derived Index")
+          assert.equal(Number((await q(
+            "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
+            [event.id]))[0].n),1)
+        }
+        const replayed=ownerClosingEvents[0]
+        assert.equal((await q(
+          "update da_audit_outbox set status='pending',delivered_at=null"+
+          " where id=$1 and status='delivered' and attempt_count=1 returning id",
+          [replayed.outbox_id])).length,1)
+        assert.equal((await runAuditRelayBatch(container,1)).delivered,1)
+        assert.equal(Number((await q(
+          "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
+          [replayed.id]))[0].n),1,
+          "Lost ACK retry must never create a second Index record")
+        process.stdout.write("PASS B22 real audit relay: Owner 30-day closing/withdrawal delivered to Index, private countdown redacted, durable ACK and lost-ACK retry deduplicated\n")
+      }finally{
+        for(const event of ownerClosingEvents)
+          await q("update da_audit_outbox set created_at=$2 where id=$1",
+            [event.outbox_id,event.created_at])
+      }
       // Real Owner-created follow/unfollow events must reach Index as well.
       // Exercise the installed Access/Index relay on the same disposable DB.
       const followEvents=await q(
@@ -151,6 +313,246 @@ export default async function({container}:any){
         process.stdout.write("PASS B22 real audit relay: native Owner Store follow/unfollow delivered by Medusa worker to Buyer-only Audit Index, two matching envelopes and durable ACKs\n")
       }finally{
         for(const original of outboxOriginal)
+          await q("update da_audit_outbox set created_at=$2 where id=$1",
+            [original.id,original.created_at])
+      }
+      // The real B22 Chrome Staff POSTs persist company-policy changes in
+      // canonical Access audit/outbox. Exercise the EXISTING native Medusa
+      // Access -> Index relay on User and Customer events (no synthetic producer).
+      const policyReasons=[
+        "B22 synthetic company application pause",
+        "B22 synthetic company application reopen",
+        "B22 primary Customer Staff policy pause",
+        "B22 primary Customer Staff policy reopen",
+      ]
+      const policyEvents=await q(
+        "select e.id,e.organization_id,e.target_id,e.action,e.resource,e.actor_type,e.actor_id,"+
+        " o.id as outbox_id,o.created_at,o.status"+
+        " from da_audit_event e join da_audit_outbox o on o.source_audit_event_id=e.id"+
+        " where e.module='dogruadres-access' and e.role_context='platform_staff'"+
+        " and e.resource='organization' and e.target_id=e.organization_id"+
+        " and e.action in ('organization.store_application_right_disabled',"+
+        " 'organization.store_application_right_enabled')"+
+        " and e.new_values->>'reason'=any($1::text[])"+
+        " and o.status='pending' and o.attempt_count=0 and o.lease_token is null"+
+        " order by e.action,e.actor_type",[policyReasons])
+      assert.deepEqual(policyEvents.map(e=>e.action+"/"+e.actor_type),[
+        "organization.store_application_right_disabled/customer",
+        "organization.store_application_right_disabled/user",
+        "organization.store_application_right_enabled/customer",
+        "organization.store_application_right_enabled/user",
+      ],"Both User and linked Customer Staff policy pairs must be pending")
+      const policyOrg=policyEvents[0].organization_id
+      assert.ok(policyEvents.every(e=>e.organization_id===policyOrg &&
+        e.target_id===policyOrg && e.resource==="organization"))
+      const policyOriginal=policyEvents.map(e=>({
+        id:e.outbox_id,created_at:e.created_at,
+      }))
+      try{
+        const due=await q(
+          "update da_audit_outbox set"+
+          " created_at=(select min(created_at) from da_audit_outbox)-interval '3 days'"+
+          " + (array_position($1::text[],id)-1)*interval '1 second'"+
+          " where id=any($1::text[]) and status='pending' and attempt_count=0"+
+          " and lease_token is null returning id",
+          [policyEvents.map(e=>e.outbox_id)])
+        assert.equal(due.length,4)
+        const delivered=await runAuditRelayBatch(container,4)
+        assert.equal(delivered.delivered,4,
+          "Real Medusa worker must deliver both User and Customer Staff pairs")
+        for(const event of policyEvents){
+          const rows=await q(
+            "select o.status,o.delivered_at,o.lease_token,"+
+            " i.organization_id,i.source_event_id,i.action,i.resource,i.target_id,i.envelope"+
+            " from da_audit_outbox o join da_audit_index_entry i"+
+            " on i.source_event_id=o.source_audit_event_id"+
+            " where o.id=$1",[event.outbox_id])
+          assert.equal(rows.length,1,"Canonical policy outbox must join one Index record")
+          const row=rows[0]
+          assert.equal(row.status,"delivered")
+          assert.ok(row.delivered_at)
+          assert.equal(row.lease_token,null)
+          assert.equal(row.organization_id,policyOrg)
+          assert.equal(row.source_event_id,event.id)
+          assert.equal(row.action,event.action)
+          assert.equal(row.resource,"organization")
+          assert.equal(row.target_id,policyOrg)
+          const envelope=typeof row.envelope==="string"?JSON.parse(row.envelope):row.envelope
+          assert.equal(envelope.actor.role_context,"platform_staff")
+          assert.equal(envelope.actor.type,event.actor_type)
+          assert.deepEqual(Object.keys(envelope).sort(),[
+            "action","actor","occurred_at","organization_id","resource",
+            "source_event_id","source_module","target_id","version"])
+          for(const reason of policyReasons)
+            assert.equal(JSON.stringify(envelope).includes(reason),false)
+          assert.equal(JSON.stringify(envelope).includes("staff_grant_id"),false)
+          assert.equal(JSON.stringify(envelope).includes("reason"),false)
+        }
+        // This is the Index-backed path behind the Owner-authorized HTTP
+        // timeline. The separate HTTP privacy test already checks denied roles.
+        const auditIndex=container.resolve("dogruadresAuditIndex") as any
+        const timeline=await auditIndex.readOrganizationTimeline(policyOrg,100)
+        for(const event of policyEvents)
+          // readOrganizationTimeline is already SQL-filtered by policyOrg.
+          // The read DTO deliberately omits organization_id; do not expand
+          // private timeline fields merely to satisfy this acceptance test.
+          assert.ok(timeline.some((e:any)=>e.source_event_id===event.id &&
+            e.target_id===policyOrg && e.action===event.action),
+            "Company policy event must appear in the scoped Audit Index timeline")
+        process.stdout.write("PASS B22 real audit relay: platform company policy disable/reopen delivered by native Medusa Access/Index, redacted envelopes, durable ACKs and scoped timeline\n")
+        process.stdout.write("PASS B22 real audit relay: primary native Customer Staff HTTPS policy events delivered with Customer actor, redacted durable ACKs and scoped Owner timeline\n")
+      }finally{
+        for(const row of policyOriginal)
+          await q("update da_audit_outbox set created_at=$2 where id=$1",
+            [row.id,row.created_at])
+      }
+      // Deliver two genuine Owner draft events created by the Chrome journey
+      // on this same disposable PostgreSQL database. The existing native
+      // Medusa Access->Index relay and canonical outbox/ACK are reused.
+      const draftEvents=await q(
+        "select e.id,e.organization_id,e.target_id,e.action,e.resource,e.actor_type,"+
+        " o.id as outbox_id,o.created_at,o.status,d.name as draft_name,d.email as draft_email"+
+        " from da_audit_event e join da_audit_outbox o on o.source_audit_event_id=e.id"+
+        " join da_store_application_draft d on d.id=e.target_id and d.organization_id=e.organization_id"+
+        " where e.module='dogruadres-access' and e.role_context='owner'"+
+        " and e.action='organization.store_application_draft_saved'"+
+        " and e.resource='store-application-draft' and o.status='pending'"+
+        " and o.attempt_count=0 and o.lease_token is null"+
+        " and (d.name like 'B22 late reply %' or d.name like 'B22 corrupt reply %')"+
+        " order by e.target_id,e.occurred_at,e.id")
+      const draftByTarget=new Map<string,any>()
+      for(const event of draftEvents)
+        if(!draftByTarget.has(event.target_id))draftByTarget.set(event.target_id,event)
+      const draftPair=[...draftByTarget.values()]
+      assert.equal(draftPair.length,2,
+        "Real browser must persist two distinct draft targets and canonical pending audit events")
+      assert.equal(draftPair[0].organization_id,draftPair[1].organization_id)
+      assert.notEqual(draftPair[0].target_id,draftPair[1].target_id)
+      const draftOriginal=draftPair.map(e=>({id:e.outbox_id,created_at:e.created_at}))
+      try{
+        const due=await q(
+          "update da_audit_outbox set"+
+          " created_at=(select min(created_at) from da_audit_outbox)-interval '4 days'"+
+          " + (array_position($1::text[],id)-1)*interval '1 second'"+
+          " where id=any($1::text[]) and status='pending' and attempt_count=0"+
+          " and lease_token is null returning id",[draftPair.map(e=>e.outbox_id)])
+        assert.equal(due.length,2)
+        const delivered=await runAuditRelayBatch(container,2)
+        assert.equal(delivered.delivered,2)
+        assert.equal(delivered.lastOutcome,'delivered')
+        for(const event of draftPair){
+          const rows=await q(
+            "select o.status,o.delivered_at,o.lease_token,o.attempt_count,"+
+            " i.source_event_id,i.source_module,i.organization_id,i.target_id,"+
+            " i.action,i.resource,i.envelope"+
+            " from da_audit_outbox o join da_audit_index_entry i"+
+            " on i.source_event_id=o.source_audit_event_id"+
+            " where o.id=$1",[event.outbox_id])
+          assert.equal(rows.length,1,"One native Index record per real draft audit source")
+          const row=rows[0]
+          assert.equal(row.status,'delivered')
+          assert.ok(row.delivered_at,"Native worker ACK must be persisted")
+          assert.equal(row.lease_token,null)
+          assert.equal(row.attempt_count,1)
+          assert.equal(row.source_event_id,event.id)
+          assert.equal(row.source_module,'dogruadres-access')
+          assert.equal(row.organization_id,event.organization_id)
+          assert.equal(row.target_id,event.target_id)
+          assert.equal(row.action,'organization.store_application_draft_saved')
+          assert.equal(row.resource,'store-application-draft')
+          const envelope=typeof row.envelope==='string'?JSON.parse(row.envelope):row.envelope
+          assert.equal(envelope.actor.role_context,'owner')
+          assert.equal(envelope.actor.type,event.actor_type)
+          assert.deepEqual(Object.keys(envelope).sort(),[
+            'action','actor','occurred_at','organization_id','resource',
+            'source_event_id','source_module','target_id','version'])
+          assert.deepEqual(Object.keys(envelope.actor).sort(),[
+            'id','person_id','role_context','type'])
+          assert.equal(envelope.source_event_id,event.id)
+          assert.equal(envelope.target_id,event.target_id)
+          assert.equal(JSON.stringify(envelope).includes(event.draft_name),false)
+          assert.equal(JSON.stringify(envelope).includes(event.draft_email),false)
+          assert.equal((await q(
+            "select count(*)::int n from da_audit_index_entry where source_event_id=$1",
+            [event.id]))[0].n,1)
+        }
+        process.stdout.write("PASS B22 real audit relay: two Owner Store draft sources delivered by native Medusa worker; redacted per-Organization envelopes, single Index rows and durable ACKs\n")
+      }finally{
+        for(const original of draftOriginal)
+          await q("update da_audit_outbox set created_at=$2 where id=$1",
+            [original.id,original.created_at])
+      }
+      // Deliver the real Owner grant, real Member draft save, and Owner
+      // revocation from the same Chrome/HTTPS/PG16 task database. Native
+      // relay must accept Member draft role but never private draft fields.
+      const [memberDraft]=await q(`select id,organization_id,created_by_person_id,
+        name,email from da_store_application_draft
+        where name like 'B22 delegate %'`)
+      assert.ok(memberDraft&&/^dasdraft_[0-9a-f]{32}$/.test(memberDraft.id),
+        "The real Member draft must exist before audit indexing")
+      const delegatedEvents=await q(`select e.id,e.action,e.resource,e.role_context,
+        e.organization_id,e.target_id,o.id as outbox_id,o.created_at
+        from da_audit_event e join da_audit_outbox o
+          on o.source_audit_event_id=e.id
+        where e.module='dogruadres-access'
+          and e.organization_id=$1
+          and ((e.action='organization.store_application_draft_saved'
+                  and e.target_id=$2 and e.role_context='member')
+            or (e.action in ('organization.store_draft_permission_granted',
+                             'organization.store_draft_permission_revoked')
+                  and e.target_id=$3 and e.role_context='owner'))
+          and o.status='pending' and o.attempt_count=0
+          and o.lease_token is null order by e.action,e.id`,
+        [memberDraft.organization_id,memberDraft.id,memberDraft.created_by_person_id])
+      assert.equal(delegatedEvents.length,3,
+        "Owner grant, Member save and Owner revoke each create one native audit/outbox")
+      assert.deepEqual(delegatedEvents.map(e=>e.action).sort(),[
+        "organization.store_application_draft_saved",
+        "organization.store_draft_permission_granted",
+        "organization.store_draft_permission_revoked"])
+      const delegatedOriginal=delegatedEvents.map(e=>({
+        id:e.outbox_id,created_at:e.created_at}))
+      try{
+        const shifted=await q(`update da_audit_outbox
+          set created_at=(select min(created_at) from da_audit_outbox)-interval '6 days'
+            +(array_position($1::text[],id)-1)*interval '1 second'
+          where id=any($1::text[]) and status='pending'
+            and attempt_count=0 and lease_token is null returning id`,
+          [delegatedEvents.map(e=>e.outbox_id)])
+        assert.equal(shifted.length,3)
+        const delivered=await runAuditRelayBatch(container,3)
+        assert.equal(delivered.delivered,3)
+        assert.equal(delivered.lastOutcome,'delivered')
+        for(const event of delegatedEvents){
+          const rows=await q(`select o.status,o.delivered_at,o.attempt_count,
+            o.lease_token,i.source_event_id,i.organization_id,i.target_id,
+            i.action,i.resource,i.envelope
+            from da_audit_outbox o join da_audit_index_entry i
+              on i.source_event_id=o.source_audit_event_id
+            where o.id=$1`,[event.outbox_id])
+          assert.equal(rows.length,1,"One durable Index event per delegated source")
+          const row=rows[0]
+          assert.equal(row.status,"delivered")
+          assert.ok(row.delivered_at)
+          assert.equal(row.attempt_count,1)
+          assert.equal(row.lease_token,null)
+          assert.equal(row.source_event_id,event.id)
+          assert.equal(row.organization_id,event.organization_id)
+          assert.equal(row.target_id,event.target_id)
+          assert.equal(row.action,event.action)
+          assert.equal(row.resource,event.resource)
+          const envelope=typeof row.envelope==="string"?JSON.parse(row.envelope):row.envelope
+          assert.equal(envelope.actor.role_context,event.role_context)
+          assert.equal(envelope.source_event_id,event.id)
+          assert.equal(envelope.target_id,event.target_id)
+          assert.equal(JSON.stringify(envelope).includes(memberDraft.name),false)
+          assert.equal(JSON.stringify(envelope).includes(memberDraft.email),false)
+          assert.equal((await q(`select count(*)::int n from da_audit_index_entry
+            where source_event_id=$1`,[event.id]))[0].n,1)
+        }
+        process.stdout.write("PASS B22 real audit relay: Owner grant, Member private Store draft and Owner revocation delivered through native Medusa worker, redacted envelopes, one Index row/ACK each\n")
+      }finally{
+        for(const original of delegatedOriginal)
           await q("update da_audit_outbox set created_at=$2 where id=$1",
             [original.id,original.created_at])
       }

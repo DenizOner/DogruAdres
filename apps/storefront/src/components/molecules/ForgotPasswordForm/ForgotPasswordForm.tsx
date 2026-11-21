@@ -1,9 +1,7 @@
 'use client';
 
-import { useState } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ClientError } from '@mercurjs/client';
 import Link from 'next/link';
 import { FieldError, FormProvider, useForm, useFormContext } from 'react-hook-form';
 
@@ -50,7 +48,7 @@ const Form = () => {
     reset({ email: '' });
 
     toast.success({
-      title: `Password reset was requested. If an account exists for ${data.email}, you’ll receive an email with a reset link. Check your inbox and spam folder - the link is valid for one hour.`
+      title: `Password reset was requested. If an account exists for ${data.email}, you’ll receive an email with a reset link. Check your inbox and spam folder - the link is valid for 15 minutes.`
     });
   };
 

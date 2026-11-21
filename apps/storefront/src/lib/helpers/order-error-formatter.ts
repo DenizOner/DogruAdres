@@ -1,4 +1,4 @@
-export const orderErrorFormatter = (error: any) => {
+export const orderErrorFormatter = (error: { message: string }): string | null => {
   if (error.message === "NEXT_REDIRECT") {
     return null
   }

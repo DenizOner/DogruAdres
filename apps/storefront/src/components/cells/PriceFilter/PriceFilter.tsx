@@ -3,29 +3,21 @@ import { useEffect, useState } from "react"
 import { useSearchParams } from "next/navigation"
 
 import { Input } from "@/components/atoms"
-import { Accordion, FilterCheckboxOption } from "@/components/molecules"
+import { Accordion } from "@/components/molecules"
 import useUpdateSearchParams from "@/hooks/useUpdateSearchParams"
 import { DollarIcon } from "@/icons"
-import useFilters from "@/hooks/useFilters"
 
 export const PriceFilter = () => {
   const [min, setMin] = useState("")
   const [max, setMax] = useState("")
 
   const updateSearchParams = useUpdateSearchParams()
-  const { updateFilters } = useFilters("sale")
   const searchParams = useSearchParams()
-
-  const selected = searchParams.get("sale")
 
   useEffect(() => {
     setMin(searchParams.get("min_price") || "")
     setMax(searchParams.get("max_price") || "")
   }, [searchParams])
-
-  const selectHandler = (option: string) => {
-    updateFilters(option)
-  }
 
   const updateMinPriceHandler = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()

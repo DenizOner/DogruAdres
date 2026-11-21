@@ -4,11 +4,15 @@ import {ActorDelegation} from "./actor-delegation"
 
 export type StoreRequest = Readonly<{
   organization_id:string; application_id:string; name:string;
-  email:string; currency_code:string
+  email:string; currency_code:string;
+  // Present only for Owner-approved submission of a persisted private draft.
+  // The existing direct Store application fingerprint is left unchanged.
+  draft_id?:string; draft_version?:number
 }>
 export const storeRequestFingerprint=(request:StoreRequest)=>
   createHash("sha256").update(JSON.stringify([
-    request.organization_id,request.name,request.email,request.currency_code
+    request.organization_id,request.name,request.email,request.currency_code,
+    ...(request.draft_id===undefined?[]:["submitted-draft-v1",request.draft_id,request.draft_version])
   ])).digest("hex")
 
 export async function eligibleOwner(db:SecuritySql,token:string,org:string){
@@ -23,6 +27,12 @@ export async function eligibleOwner(db:SecuritySql,token:string,org:string){
   // for the lifetime of the supplied transaction; a role label alone is not
   // an approval or an irrevocable native Seller credential.
   if(!await isCurrentProtectedOwner(db,s.person_id,org))return null
+  // A company may be active with existing open Stores while NEW Store
+  // applications are barred by the platform. SHARE holds through the native
+  // creation transaction, serializing against the platform's toggle UPDATE.
+  const policy=await db.execute(`select store_application_enabled from da_organization
+    where id=? and status='active' and deleted_at is null for share`,[org])
+  if(policy.length!==1||policy[0].store_application_enabled!==true)return null
   const bound=await new ActorDelegation(db).binding(token,"member")
   if(!bound || bound.binding.person_id!==s.person_id ||
      !bound.binding.auth_identity_id || !bound.binding.actor_id)return null

@@ -1,7 +1,7 @@
 "use client"
 
-import React, { useEffect, useState, useRef, useTransition } from "react"
-import { useSearchParams, useRouter, useParams } from "next/navigation"
+import React, { useEffect, useState, useRef } from "react"
+import { useSearchParams, useParams } from "next/navigation"
 import Link from "next/link"
 
 type VerificationState = "loading" | "pending" | "submitting" | "confirmed" | "expired" | "consumed" | "invalid" | "unavailable"
@@ -90,7 +90,6 @@ const copy = {
 
 export default function VerifyEmailPage() {
   const searchParams = useSearchParams()
-  const router = useRouter()
   const params = useParams()
 
   const rawLocale = (params?.locale as string)?.toLowerCase()
@@ -100,7 +99,6 @@ export default function VerifyEmailPage() {
   const [state, setState] = useState<VerificationState>("loading")
 
   const [errorMessage, setErrorMessage] = useState<string>("")
-  const [isPendingTransition, startTransition] = useTransition()
   const isTerminalRef = useRef(false)
 
   const [token] = useState(() => searchParams.get("token") || "")
@@ -195,7 +193,7 @@ export default function VerifyEmailPage() {
         } else {
           setState("invalid")
         }
-      } catch (err) {
+      } catch {
         if (!isMounted) return
         setState("invalid")
       }
@@ -250,7 +248,7 @@ export default function VerifyEmailPage() {
         setState("invalid")
         setErrorMessage("")
       }
-    } catch (err) {
+    } catch {
       setState("invalid")
     }
   }

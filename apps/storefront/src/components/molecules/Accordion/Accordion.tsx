@@ -2,7 +2,7 @@
 import { Card } from "@/components/atoms"
 import { CollapseIcon } from "@/icons"
 import { cn } from "@/lib/utils"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 
 export const Accordion = ({
   children,
@@ -16,33 +16,38 @@ export const Accordion = ({
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const [height, setHeight] = useState(0)
   const contentRef = useRef<HTMLDivElement>(null)
+  const panelId = useId()
 
   useEffect(() => {
-    setTimeout(() => {
-      if (contentRef.current) {
-        setHeight(contentRef.current.scrollHeight)
-      }
+    if (!isOpen) return
+    const timer = setTimeout(() => {
+      if (contentRef.current) setHeight(contentRef.current.scrollHeight)
     }, 100)
-  }, [children])
-
-  const openHandler = () => {
-    setIsOpen(!isOpen)
-  }
+    return () => clearTimeout(timer)
+  }, [children, isOpen])
 
   return (
     <Card>
+      <h4 className="label-lg uppercase px-2">
+        <button
+          type="button"
+          aria-expanded={isOpen}
+          aria-controls={panelId}
+          onClick={() => setIsOpen(open => !open)}
+          className="flex w-full items-center justify-between cursor-pointer text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        >
+          <span>{heading}</span>
+          <CollapseIcon
+            size={20}
+            className={cn("transition-all duration-300", isOpen && "rotate-180")}
+          />
+        </button>
+      </h4>
       <div
-        onClick={openHandler}
-        className="flex justify-between items-center cursor-pointer px-2"
-      >
-        <h4 className="label-lg uppercase">{heading}</h4>
-        <CollapseIcon
-          size={20}
-          className={cn("transition-all duration-300", isOpen && "rotate-180")}
-        />
-      </div>
-      <div
-        className={cn("transition-all duration-300 overflow-hidden")}
+        id={panelId}
+        hidden={!isOpen}
+        aria-hidden={!isOpen}
+        className="transition-all duration-300 overflow-hidden"
         style={{
           maxHeight: isOpen ? `${height}px` : "0px",
           opacity: isOpen ? 1 : 0,

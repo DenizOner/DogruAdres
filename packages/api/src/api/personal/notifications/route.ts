@@ -8,7 +8,10 @@ const query = z.object({
   organization: z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/).optional(),
   offset: z.string().regex(/^(0|[1-9][0-9]{0,8})$/).optional(),
 }).strict()
-const body = z.object({ id: z.string().regex(/^danot_[0-9a-f-]{36}$/) }).strict()
+// Existing personal receipts retain danot UUID ids; dedicated platform
+// Staff escalation receipts use danal + 32 hex, authorized only by the
+// underlying live Person/grant checks (never by this input-shape gate).
+const body = z.object({ id: z.string().regex(/^(?:danot_[0-9a-f-]{36}|danal_[0-9a-f]{32})$/) }).strict()
 
 async function handle(req: MedusaRequest, res: MedusaResponse, write: boolean) {
   res.setHeader('Cache-Control','no-store')

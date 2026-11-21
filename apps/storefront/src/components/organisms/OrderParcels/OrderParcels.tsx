@@ -4,8 +4,10 @@ import { retrieveCustomer } from "@/lib/data/customer"
 import { OrderParcelItems } from "@/components/molecules/OrderParcelItems/OrderParcelItems"
 import { OrderParcelStatus } from "@/components/molecules/OrderParcelStatus/OrderParcelStatus"
 import { OrderParcelActions } from "@/components/molecules/OrderParcelActions/OrderParcelActions"
+import type { HttpTypes } from "@medusajs/types"
+import type { SellerDTO } from "@mercurjs/types"
 
-export const OrderParcels = async ({ orders }: { orders: any[] }) => {
+export const OrderParcels = async ({ orders }: { orders: Array<HttpTypes.StoreOrder & { seller?: SellerDTO }> }) => {
   const user = await retrieveCustomer()
 
   return (
@@ -24,16 +26,18 @@ export const OrderParcels = async ({ orders }: { orders: any[] }) => {
                 <Avatar src={order.seller?.logo || undefined} />
                 <p className="text-primary">{order.seller?.name}</p>
               </div>
-              <Chat
-                user={user}
-                seller={order.seller}
-                order_id={order.id}
-                buttonClassNames="label-md text-action-on-secondary uppercase flex items-center gap-2"
-              />
+              {order.seller && (
+                <Chat
+                  user={user}
+                  seller={order.seller}
+                  order_id={order.id}
+                  buttonClassNames="label-md text-action-on-secondary uppercase flex items-center gap-2"
+                />
+              )}
             </div>
             <div className="p-4 border-b">
               <OrderParcelItems
-                items={order.items}
+                items={order.items ?? []}
                 currency_code={order.currency_code}
               />
             </div>

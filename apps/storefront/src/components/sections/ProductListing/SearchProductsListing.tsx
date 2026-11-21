@@ -101,7 +101,7 @@ export const SearchProductsListing = ({
 
         setProducts(result.products)
         setCount(result.count)
-      } catch (error) {
+      } catch {
         setProducts([])
         setCount(0)
       } finally {

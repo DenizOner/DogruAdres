@@ -1,6 +1,7 @@
 import net from "node:net"
 import { SmtpNotificationProviderService } from "../index"
 import subscriber from "../../../subscribers/auth-verification-requested"
+import resetSubscriber from "../../../subscribers/auth-password-reset"
 
 // Real loopback protocol transport, not a mocked sendSmtpEmail. The production
 // transport permits plaintext only for NODE_ENV=test + literal loopback.
@@ -63,6 +64,39 @@ describe("SMTP provider controlled transport", () => {
     expect(messages).toHaveLength(2)
     expect(messages[1]).toContain("second@example.invalid")
     expect(attempts).toBe(2)
+  })
+  it("delivers the customer reset via the actual loopback SMTP transport and never dispatches staff reset", async () => {
+    const instance = provider()
+    const createNotifications = jest.fn(async (notification: any) => instance.send(notification))
+    const logger = { info: jest.fn(), error: jest.fn() }
+    const container = { resolve: (key: string) => key === "notification" ? { createNotifications } : logger } as any
+    const token = "eyJhbGciOiJIUzI1NiJ9.eyJwdXJwb3NlIjoicmVzZXQifQ.synthetic"
+    const args: any = {
+      container,
+      pluginOptions: {},
+      event: {
+        name: "auth.password_reset",
+        data: { actor_type: "customer", entity_id: input.to, token },
+      },
+    }
+
+    await resetSubscriber(args)
+    expect(createNotifications).toHaveBeenCalledTimes(1)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toContain("/reset-password?token=")
+    expect(messages[0]).toContain("15 dakika")
+    expect(attempts).toBe(1)
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(token)
+
+    await resetSubscriber({ ...args, event: { ...args.event, data: { ...args.event.data, actor_type: "user" } } })
+    expect(createNotifications).toHaveBeenCalledTimes(1)
+    expect(messages).toHaveLength(1)
+
+    mode = "auth"
+    await expect(resetSubscriber(args)).rejects.toEqual(new Error("Password reset notification dispatch failed"))
+    expect(messages).toHaveLength(1)
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain(token)
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain(input.to)
   })
   it.each(["auth", "network", "tls", "disabled"])("rejects %s without delivery or false success", async failure => {
     mode = failure

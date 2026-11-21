@@ -1,17 +1,29 @@
-export default function medusaError(error: any): never {
-  if (error.response) {
-    const u = new URL(error.config.url, error.config.baseURL)
-    console.error("Resource:", u.toString())
-    console.error("Response data:", error.response.data)
-    console.error("Status code:", error.response.status)
-    console.error("Headers:", error.response.headers)
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
 
-    const message = error.response.data.message || error.response.data
+export default function medusaError(error: unknown): never {
+  const details = isRecord(error) ? error : null
+  const response = details && isRecord(details.response) ? details.response : null
 
-    throw new Error(message.charAt(0).toUpperCase() + message.slice(1) + ".")
-  } else if (error.request) {
-    throw new Error("No response received: " + error.request)
-  } else {
-    throw new Error("Error setting up the request: " + error.message)
+  if (response) {
+    // A failed SDK response can contain third-party messages, personal data
+    // and credentials. Only a bounded numeric HTTP status is safe to log.
+    const status = response.status
+    if (typeof status === "number" && Number.isInteger(status) &&
+        status >= 100 && status <= 599) {
+      console.error("Status code:", status)
+    }
+
+    // Never promote untrusted response.data.message/body/headers into a
+    // thrown Error: Server Actions and server logs may surface that message.
+    throw new Error("Request failed")
   }
+
+  if (details?.request) {
+    throw new Error("No response received")
+  }
+
+  // Native Mercur/Medusa SDK and transport errors may include the request
+  // URL, query, token or response body in error.message. Do not reflect it.
+  throw new Error("Error setting up the request")
 }

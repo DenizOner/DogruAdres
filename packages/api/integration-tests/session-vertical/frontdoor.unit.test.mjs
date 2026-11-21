@@ -4,6 +4,105 @@ import http from 'node:http'
 import {once} from 'node:events'
 import {allowedPublicRequest,startFrontdoor} from '../../scripts/personal-frontdoor.mjs'
 
+test("B22 Owner temporary pause permits only exact GET/POST first-party relay",()=>{
+  for(const method of ["GET","POST"])
+    assert.equal(allowedPublicRequest(method,"/personal/store-owner-pause"),true)
+  for(const method of ["HEAD","OPTIONS","PUT","DELETE","PATCH"])
+    assert.equal(allowedPublicRequest(method,"/personal/store-owner-pause"),false)
+  for(const path of ["/personal/store-owner-pause/","/personal/store-owner-pause/sel_any",
+    "/vendor/sellers/me","/admin/sellers/sel_test","/store/carts/cart_test/complete"])
+    for(const method of ["GET","POST"])
+      assert.equal(allowedPublicRequest(method,path),false)
+})
+
+test('B22 Owner and Staff Store rename API paths require exact GET/POST relay',()=>{
+  for(const path of ['/personal/store-rename-requests','/personal/platform/store-renames']){
+    for(const method of ['GET','POST'])
+      assert.equal(allowedPublicRequest(method,path),true)
+    for(const method of ['HEAD','OPTIONS','PUT','PATCH','DELETE'])
+      assert.equal(allowedPublicRequest(method,path),false)
+    for(const nested of [path+'/',path+'/other'])
+      for(const method of ['GET','POST'])
+        assert.equal(allowedPublicRequest(method,nested),false)
+  }
+})
+
+test('B22 real frontdoor HTTP forwards exact Owner/Staff rename methods and rejects alternatives',async()=>{
+  const seen=[]
+  const upstream=http.createServer(async(req,res)=>{
+    const chunks=[]
+    for await(const chunk of req)chunks.push(chunk)
+    seen.push({method:req.method,path:req.url,
+      cookie:req.headers.cookie,csrf:req.headers['x-csrf-token'],
+      body:Buffer.concat(chunks).toString('utf8')})
+    res.setHeader('Content-Type','application/json')
+    res.end('{"synthetic":true}')
+  })
+  upstream.listen(0,'127.0.0.1');await once(upstream,'listening')
+  const reservation=http.createServer()
+  reservation.listen(0,'127.0.0.1');await once(reservation,'listening')
+  const port=reservation.address().port
+  await new Promise(resolve=>reservation.close(resolve))
+  const origin='http://127.0.0.1:'+port
+  const front=startFrontdoor({NODE_ENV:'test',DOGRUADRES_PUBLIC_ORIGIN:origin,
+    DOGRUADRES_PRIVATE_API:'http://127.0.0.1:'+upstream.address().port,
+    DOGRUADRES_FRONTDOOR_HOST:'127.0.0.1',DOGRUADRES_FRONTDOOR_PORT:String(port)})
+  await once(front,'listening')
+  try{
+    const routes=['/personal/store-rename-requests','/personal/platform/store-renames']
+    for(const path of routes){
+      for(const method of ['GET','POST']){
+        const target=path+'?organization_id=daorg_synthetic'
+        const response=await fetch(origin+target,{method,
+          headers:{cookie:'da_session=synthetic','x-csrf-token':'synthetic-csrf',
+            'content-type':'application/json'},
+          ...(method==='POST'?{body:'{"synthetic":true}'}:{})})
+        assert.equal(response.status,200,'Exact '+method+' '+path+' must relay')
+        assert.deepEqual(await response.json(),{synthetic:true})
+        const relayed=seen.at(-1)
+        assert.equal(relayed.method,method)
+        assert.equal(relayed.path,target)
+        assert.equal(relayed.cookie,'da_session=synthetic')
+        assert.equal(relayed.csrf,'synthetic-csrf')
+        assert.equal(relayed.body,method==='POST'?'{"synthetic":true}':'')
+      }
+    }
+    const allowedCount=seen.length
+    assert.equal(allowedCount,4)
+    for(const path of routes){
+      for(const method of ['HEAD','OPTIONS','PUT','PATCH','DELETE']){
+        const response=await fetch(origin+path,{method})
+        assert.equal(response.status,401,'Reject '+method+' '+path)
+        await response.arrayBuffer()
+        assert.equal(seen.length,allowedCount,'Forbidden verb reached private upstream')
+      }
+      for(const nested of [path+'/',path+'/other']){
+        for(const method of ['GET','POST']){
+          const response=await fetch(origin+nested,{method})
+          assert.equal(response.status,401,'Reject '+method+' '+nested)
+          await response.arrayBuffer()
+          assert.equal(seen.length,allowedCount,'Nested route reached private upstream')
+        }
+      }
+      const encoded=await fetch(origin+path+'%2fother')
+      assert.equal(encoded.status,400,'Encoded path must fail before upstream')
+      await encoded.arrayBuffer()
+      assert.equal(seen.length,allowedCount)
+    }
+  }finally{
+    front.closeAllConnections();upstream.closeAllConnections()
+    await Promise.all([new Promise(done=>front.close(done)),new Promise(done=>upstream.close(done))])
+  }
+})
+
+test("B22 historic order read uses only the exact personal GET relay",()=>{
+  assert.equal(allowedPublicRequest("GET","/personal/order-groups"),true)
+  for(const method of ["POST","PUT","PATCH","DELETE","HEAD","OPTIONS"])
+    assert.equal(allowedPublicRequest(method,"/personal/order-groups"),false)
+  for(const path of ["/personal/order-groups/","/personal/order-groups/og_other",
+    "/store/order-groups","/store/order-groups/og_other","/personal/ORDER-GROUPS"])
+    assert.equal(allowedPublicRequest("GET",path),false)
+})
 test("B22 Store follow has exact private GET and CSRF POST ingress only",()=>{
   for(const method of ["GET","POST"])
     assert.equal(allowedPublicRequest(method,"/personal/store-follows"),true)
@@ -17,11 +116,14 @@ test("B22 Store follow has exact private GET and CSRF POST ingress only",()=>{
 
 test("B22 Store applications and active Store read have exact public method/path contracts",()=>{
   for(const method of ["GET","POST"])
-    assert.equal(allowedPublicRequest(method,"/personal/store-applications"),true)
+    for(const path of ["/personal/store-applications","/personal/store-draft-permissions"])
+      assert.equal(allowedPublicRequest(method,path),true)
   assert.equal(allowedPublicRequest("GET","/personal/organization-stores"),true)
   assert.equal(allowedPublicRequest("GET","/personal/catalog"),true)
   assert.equal(allowedPublicRequest("POST","/personal/catalog"),false)
   for(const [path,method] of [
+    ["/personal/store-draft-permissions","PATCH"],["/personal/store-draft-permissions","DELETE"],
+    ["/personal/store-draft-permissions","OPTIONS"],["/personal/store-draft-permissions/other","POST"],
     ["/personal/store-applications","PATCH"],["/personal/store-applications","DELETE"],
     ["/personal/store-applications","OPTIONS"],["/personal/store-applications","HEAD"],
     ["/personal/store-applications/other","POST"],["/personal/organization-stores","POST"],
@@ -161,7 +263,7 @@ test('closed B4B frontdoor rejects catalog and search before contacting native A
 
 // Verify privacy metadata at the actual public HTTP boundary, including
 // denied requests. Never trust/cache/index an upstream override.
-test('B22 scoped catalogue has fixed noindex and Cookie Vary at the frontdoor',async()=>{
+test('B22 private catalogue and historical order both have fixed noindex and Cookie Vary at the frontdoor',async()=>{
   const seen=[]
   const upstream=http.createServer((req,res)=>{
     seen.push(req.url)
@@ -183,20 +285,21 @@ test('B22 scoped catalogue has fixed noindex and Cookie Vary at the frontdoor',a
     DOGRUADRES_FRONTDOOR_HOST:'127.0.0.1',DOGRUADRES_FRONTDOOR_PORT:String(port)})
   await once(front,'listening')
   try{
-    for(const [cookie,expected] of [['da_session=synthetic',200],['',403]]){
-      const response=await fetch(origin+'/personal/catalog?organization_id=daorg_test',{
-        headers:cookie?{cookie}:{}
-      })
-      assert.equal(response.status,expected)
-      assert.match(response.headers.get('cache-control')??'',/no-store/)
-      assert.equal(response.headers.get('vary'),'Cookie')
-      assert.equal(response.headers.get('x-robots-tag'),'noindex, nofollow, noarchive')
-      await response.json()
-    }
-    assert.deepEqual(seen,[
+    const restrictedPaths=[
       '/personal/catalog?organization_id=daorg_test',
-      '/personal/catalog?organization_id=daorg_test'
-    ])
+      '/personal/order-groups?organization_id=daorg_test&order_group_id=og_test'
+    ]
+    for(const path of restrictedPaths){
+      for(const [cookie,expected] of [['da_session=synthetic',200],['',403]]){
+        const response=await fetch(origin+path,{headers:cookie?{cookie}:{}})
+        assert.equal(response.status,expected)
+        assert.match(response.headers.get('cache-control')??'',/no-store/)
+        assert.equal(response.headers.get('vary'),'Cookie')
+        assert.equal(response.headers.get('x-robots-tag'),'noindex, nofollow, noarchive')
+        await response.json()
+      }
+    }
+    assert.deepEqual(seen,restrictedPaths.flatMap(path=>[path,path]))
     // Do not expand the public relay or apply catalogue-specific policy
     // indiscriminately to unrelated purpose-bound routes.
     const other=await fetch(origin+'/personal/session')
@@ -303,4 +406,42 @@ test('real public email CORS enforces configured Storefront origin and exact JSO
     front.closeAllConnections();upstream.closeAllConnections()
     await Promise.all([new Promise(done=>front.close(done)),new Promise(done=>upstream.close(done))])
   }
+})
+
+test('B22 independent Staff decision exposes exact protected GET/POST only',()=>{
+  const path='/personal/platform/store-closing-reviews'
+  for(const method of ['GET','POST'])
+    assert.equal(allowedPublicRequest(method,path),true)
+  for(const method of ['PUT','PATCH','DELETE','OPTIONS'])
+    assert.equal(allowedPublicRequest(method,path),false)
+  for(const nested of [path+'/id',path+'/',path+'/native'])
+    for(const method of ['GET','POST'])
+      assert.equal(allowedPublicRequest(method,nested),false)
+})
+
+test('B22 second-stage Owner review accepts exact POST only at the public TLS ingress',()=>{
+  const path='/personal/store-platform-closing-final-review'
+  assert.equal(allowedPublicRequest('POST',path),true)
+  for(const method of ['GET','PUT','PATCH','DELETE','OPTIONS'])
+    assert.equal(allowedPublicRequest(method,path),false)
+  for(const nested of [path+'/x',path+'/',path+'/sel_foreign'])
+    assert.equal(allowedPublicRequest('POST',nested),false)
+})
+
+test('B22 Owner email link accepts exact POST only, not scanner GET or native paths',()=>{
+  const path='/personal/store-platform-closing-email-visit'
+  assert.equal(allowedPublicRequest('POST',path),true)
+  for(const method of ['GET','PUT','PATCH','DELETE','OPTIONS'])
+    assert.equal(allowedPublicRequest(method,path),false)
+  for(const nested of [path+'/x',path+'/',path+'/sel_other'])
+    assert.equal(allowedPublicRequest('POST',nested),false)
+})
+
+test('B22 mandatory Owner email preflight relays only exact GET, never native or write verbs',()=>{
+  const path='/personal/platform/store-closing-email-readiness'
+  assert.equal(allowedPublicRequest('GET',path),true)
+  for(const method of ['POST','PUT','PATCH','DELETE','OPTIONS'])
+    assert.equal(allowedPublicRequest(method,path),false)
+  for(const nested of [path+'/x',path+'/',path+'/sel_foreign'])
+    assert.equal(allowedPublicRequest('GET',nested),false)
 })

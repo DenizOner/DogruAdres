@@ -15,7 +15,8 @@ const roleChangeInput = z.object({
   action: z.literal('role').optional(),
   organization_id: org,
   membership_id: membershipId,
-  role: z.enum(['member', 'admin']),
+  // Approved #253: no new Organization Admin assignments; legacy only.
+  role: z.literal('member'),
 }).strict()
 
 // B07 uses an explicit action; ordinary B06 can never assign Owner.

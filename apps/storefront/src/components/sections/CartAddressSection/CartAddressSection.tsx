@@ -41,13 +41,13 @@ export const CartAddressSection = ({
       : true
   )
 
-  const [message, formAction] = useActionState(setAddresses, sameAsBilling)
+  const [message, formAction] = useActionState<string | undefined, FormData>(setAddresses, undefined)
 
   useEffect(() => {
     if (!isAddress) {
       router.replace(pathname + "?step=address")
     }
-  }, [isAddress])
+  }, [isAddress, pathname, router])
 
   const handleEdit = () => {
     router.replace(pathname + "?step=address")
@@ -93,7 +93,7 @@ export const CartAddressSection = ({
               Save
             </Button>
             <ErrorMessage
-              error={message !== "success" && message}
+              error={message && message !== "success" ? message : null}
               data-testid="address-error-message"
             />
           </div>

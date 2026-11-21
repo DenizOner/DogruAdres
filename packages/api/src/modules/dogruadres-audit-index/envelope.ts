@@ -17,7 +17,32 @@ const resources = {
   "organization.invitation_accepted": "invitation",
   "organization.store_followed": "buyer-store-follow",
   "organization.store_unfollowed": "buyer-store-follow",
+  "organization.store_owner_paused": "store-owner-pause",
+  "organization.store_owner_resumed": "store-owner-pause",
+  "organization.store_owner_closing_started": "store-owner-closing",
+  "organization.store_owner_closing_withdrawn": "store-owner-closing",
+  "organization.store_platform_closing_started": "store-platform-closing",
+  "organization.store_platform_closing_appealed": "store-platform-closing",
+  "organization.store_platform_closing_final_review_requested": "store-platform-closing",
+  "organization.store_platform_closing_review_decided": "store-platform-closing",
+  "organization.store_platform_closing_deadline_started": "store-platform-closing",
+  "organization.store_application_right_disabled": "organization",
+  "organization.store_application_right_enabled": "organization",
+  "organization.store_application_rejected": "store-application",
+  "organization.store_rename_requested": "store-rename-request",
+  "organization.store_rename_withdrawn": "store-rename-request",
+  "organization.store_rename_rejected": "store-rename-request",
+  "organization.store_rename_approved": "store-rename-request",
+  "organization.store_reactivation_claimed": "store-application",
+  "organization.store_reactivation_released": "store-application",
+  "organization.store_reactivated": "store-application",
+  "organization.store_application_draft_saved": "store-application-draft",
+  "organization.store_draft_permission_granted": "store-draft-permission",
+  "organization.store_draft_permission_revoked": "store-draft-permission",
 } as const
+const isCompanyPolicyAction = (action: string) =>
+  action === "organization.store_application_right_disabled" ||
+  action === "organization.store_application_right_enabled"
 const schema = z.object({
   version: z.literal(1),
   source_module: z.literal(FOUNDATION_AUDIT_SOURCE),
@@ -27,10 +52,10 @@ const schema = z.object({
     person_id: reference,
     type: z.enum(["user", "member", "customer"]),
     id: reference,
-    role_context: z.enum(["platform_administrator", "platform_staff", "owner", "admin", "member"]).nullable(),
+    role_context: z.enum(["platform_administrator", "platform_staff", "platform_automation", "owner", "admin", "member"]).nullable(),
   }).strict(),
   action: z.enum(Object.keys(resources) as [keyof typeof resources, ...(keyof typeof resources)[]]),
-  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow"]),
+  resource: z.enum(["organization", "membership", "invitation", "buyer-store-follow", "store-application", "store-application-draft", "store-draft-permission", "store-owner-pause", "store-owner-closing", "store-platform-closing", "store-rename-request"]),
   target_id: reference,
   occurred_at: timestamp,
 }).strict()
@@ -41,11 +66,85 @@ const schema = z.object({
     (value.actor.role_context === "owner" &&
      /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
      /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
-  // Only the two provisioning actions are emitted by the canonical Staff
-  // producer. A valid role alone must not make a different action authentic.
+  // Only the protected Organization Owner's canonical Store action crosses Index.
+  // A valid envelope alone never grants source-side mutation permission.
+  .refine(value => value.resource !== "store-owner-pause" ||
+    (value.actor.role_context === "owner" &&
+     /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
+  // The closing intent is exclusively a protected Organization Owner action,
+  // not a native Seller/Member capability or a platform Staff grant.
+  .refine(value => value.resource !== "store-owner-closing" ||
+    (value.actor.role_context === "owner" &&
+     /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
+  // Explicit platform decision, Owner appeal and automatic clock are distinct.
+  // The clock's automation attribution is NOT a new Staff privilege.
+  .refine(value => value.resource !== "store-platform-closing" ||
+    (/^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^sel_[A-Za-z0-9_-]+$/.test(value.target_id) &&
+     (["organization.store_platform_closing_started",
+        "organization.store_platform_closing_review_decided"].includes(value.action)
+       ?value.actor.role_context==="platform_staff"
+       :["organization.store_platform_closing_appealed",
+          "organization.store_platform_closing_final_review_requested"].includes(value.action)
+         ?value.actor.role_context==="owner"
+         :value.action==="organization.store_platform_closing_deadline_started"
+           ?["owner","platform_automation"].includes(value.actor.role_context??"")
+           :false)))
+  .refine(value => value.actor.role_context !== "platform_automation" ||
+    value.action === "organization.store_platform_closing_deadline_started")
+  // Owner or explicitly authorized Member may prepare private draft input.
+  // The writer verifies the live membership+audited grant, not this envelope.
+  .refine(value => value.action !== "organization.store_application_draft_saved" ||
+    (["owner","member"].includes(value.actor.role_context??"") &&
+     /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^dasdraft_[0-9a-f]{32}$/.test(value.target_id)))
+  // Only the protected Owner may delegate/revoke an Organization draft action.
+  .refine(value => !["organization.store_draft_permission_granted",
+                     "organization.store_draft_permission_revoked"].includes(value.action) ||
+    (value.actor.role_context === "owner" &&
+     /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^daprs_[A-Za-z0-9_-]+$/.test(value.target_id)))
+  // The real Staff permission is granted to the canonical Person after
+  // strong authentication, regardless of which verified native actor type
+  // ('user' / 'member' / 'customer') their current Person session binds.
+  // Keep role, Organization scope and target restrictions fail-closed.
+  .refine(value => !isCompanyPolicyAction(value.action) ||
+    (value.actor.role_context === "platform_staff" &&
+     /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     value.target_id === value.organization_id))
+  // A pending Seller rejection is a platform Staff decision, never an
+  // Organization Owner role or a native SellerMember implicit entitlement.
+  .refine(value => !["organization.store_application_rejected","organization.store_reactivation_claimed","organization.store_reactivation_released","organization.store_reactivated"].includes(value.action) ||
+    (value.actor.role_context === "platform_staff" &&
+     /^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^sel_[A-Za-z0-9_-]+$/.test(value.target_id)))
+  // Source rename events record a real Store in an active Organization; the
+  // Index accepts only the expected Owner/Staff role, never a native role grant.
+  .refine(value => value.resource !== "store-rename-request" ||
+    (/^daorg_[A-Za-z0-9_-]{1,80}$/.test(value.organization_id) &&
+     /^sel_[A-Za-z0-9_-]+$/.test(value.target_id) &&
+     (["organization.store_rename_requested",
+       "organization.store_rename_withdrawn"].includes(value.action)
+       ? value.actor.role_context === "owner"
+       : ["organization.store_rename_rejected",
+          "organization.store_rename_approved"].includes(value.action) &&
+         value.actor.role_context === "platform_staff")))
+  // Only explicitly registered canonical Staff actions may cross the Index
+  // boundary. A valid Staff role alone does not authorize arbitrary events.
   .refine(value => value.actor.role_context !== "platform_staff" ||
     value.action === "organization.provisioned" ||
-    value.action === "organization.owner_assigned")
+    value.action === "organization.owner_assigned" ||
+    value.action === "organization.store_application_rejected" ||
+    value.action === "organization.store_rename_rejected" ||
+    value.action === "organization.store_rename_approved" ||
+    value.action === "organization.store_reactivation_claimed" ||
+    value.action === "organization.store_reactivation_released" ||
+    value.action === "organization.store_reactivated" ||
+    value.action === "organization.store_platform_closing_started" ||
+    value.action === "organization.store_platform_closing_review_decided" ||
+    isCompanyPolicyAction(value.action))
 
 export type AuditIndexEnvelopeV1 = z.infer<typeof schema>
 export function validateAuditIndexEnvelope(value: unknown): AuditIndexEnvelopeV1 {

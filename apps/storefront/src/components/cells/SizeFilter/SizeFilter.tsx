@@ -1,15 +1,7 @@
 "use client"
 import { Chip } from "@/components/atoms"
-import { Accordion, SelectField } from "@/components/molecules"
+import { Accordion } from "@/components/molecules"
 import useFilters from "@/hooks/useFilters"
-import useUpdateSearchParams from "@/hooks/useUpdateSearchParams"
-import { useSearchParams } from "next/navigation"
-
-const sizeType = [
-  { label: "US", value: "us" },
-  { label: "UK", value: "uk" },
-  { label: "EUR", value: "eur" },
-]
 
 const sizeOptions = [
   "One size",
@@ -29,16 +21,7 @@ const sizeOptions = [
 ]
 
 export const SizeFilter = () => {
-  const updateSearchParams = useUpdateSearchParams()
   const { updateFilters, isFilterActive } = useFilters("size")
-  const searchParams = useSearchParams()
-
-  const size_region = searchParams.get("size_region") || "us"
-
-  const selectSizeRegionHandler = (region: string) => {
-    updateSearchParams("size_region", region)
-  }
-
   const selectSizeHandler = (size: string) => {
     updateFilters(size)
   }

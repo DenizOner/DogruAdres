@@ -1,0 +1,147 @@
+// Browser-only security check for the actual SellerHeading.tsx component.
+// The child SellerInfo/Chat widgets are isolated. This is NOT a full Next.js page test.
+import { build } from "esbuild";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const storefront = join(repo, "apps", "storefront");
+const helper = join(storefront, "src/lib/helpers/sanitize-rich-text.ts");
+const helperRequire = createRequire(helper);
+const packageJson = helperRequire("sanitize-html/package.json");
+const physical = helperRequire.resolve("sanitize-html");
+if (packageJson.version !== "2.18.1") {
+  throw new Error("Expected sanitize-html@2.18.1, resolved " + packageJson.version);
+}
+if (!process.env.RUNNER_TEMP) {
+  throw new Error("Isolated GitHub runner temporary directory required");
+}
+const output = join(process.env.RUNNER_TEMP, "da-seller-heading-browser.js");
+
+const entry = [
+  'import React from "react";',
+  'import { createRoot } from "react-dom/client";',
+  'import { SellerHeading } from "./src/components/organisms/SellerHeading/SellerHeading";',
+  'const mount = document.getElementById("app");',
+  'if (!mount) throw Error("Synthetic mount not found");',
+  'const root = createRoot(mount);',
+  'window.__daRenderSeller = (description) => root.render(React.createElement(SellerHeading, {',
+  '  header: true, user: null,',
+  '  seller: { id: "sel_synthetic", handle: "synthetic", name: "Sentetik mağaza",',
+  '    description, logo: null, email: "synthetic@example.invalid" }',
+  '}));'
+].join("\n");
+
+const fixture = {
+  name: "seller-heading-child-isolation",
+  setup(plugin) {
+    plugin.onResolve({ filter: /^@\/components\/molecules$/ }, () =>
+      ({ path: "seller-info", namespace: "synthetic-child" }));
+    plugin.onResolve({ filter: /^\.\.\/Chat\/Chat$/ }, () =>
+      ({ path: "chat", namespace: "synthetic-child" }));
+    plugin.onResolve({ filter: /^@medusajs\/ui$/ }, () =>
+      ({ path: "unused-ui", namespace: "synthetic-child" }));
+    plugin.onResolve({ filter: /^@\/lib\/helpers\/sanitize-rich-text$/ }, () =>
+      ({ path: helper }));
+    plugin.onLoad({ filter: /.*/, namespace: "synthetic-child" }, args => ({
+      loader: "js",
+      resolveDir: storefront,
+      contents: args.path === "seller-info"
+        ? 'import React from "react"; export const SellerInfo = ({seller}) => React.createElement("h2", null, seller.name);'
+        : args.path === "chat"
+          ? "export const Chat = () => null;"
+          : "export const Button = () => null;"
+    }));
+  }
+};
+
+await build({
+  absWorkingDir: storefront,
+  stdin: { contents: entry, resolveDir: storefront, sourcefile: "seller-heading-browser-entry.tsx", loader: "tsx" },
+  outfile: output,
+  bundle: true,
+  platform: "browser",
+  format: "iife",
+  target: "chrome120",
+  jsx: "automatic",
+  plugins: [fixture],
+  logLevel: "warning"
+});
+
+console.log("SOURCE: apps/storefront/src/components/organisms/SellerHeading/SellerHeading.tsx");
+console.log("SANITIZER: " + physical + " (v" + packageJson.version + ")");
+console.log("BROWSER BUNDLE: " + output);
+console.log("SCOPE: Real SellerHeading component with synthetic SellerInfo/Chat; not full Next.js/HTTP acceptance");
+
+// Reuse this existing GitHub Chromium build step for the approved #374 component test.
+// Both bundles stay in the runner's task-owned temporary directory.
+await import("./build_chip_keyboard_browser.mjs");
+
+// Scope the full Storefront compile gate to #374 on its own disposable PR runner.
+// Do not impose extra work on main, unrelated PRs, or Ali/Cem runs.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    ["fix/baris-374-chip-keyboard-filters", "fix/baris-374-filter-dialog-keyboard"].includes(process.env.GITHUB_HEAD_REF)) {
+  await import("./verify_storefront_build.mjs");
+}
+
+// #243: a separate branch-scoped real Next.js production HTTP denial check.
+// Do not run this on main, Ali/Cem PRs or the previous #374 branch.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-243-anon-b4b-guest-deny") {
+  await import("./verify_b4b_guest_routes.mjs");
+}
+
+// #172: one isolated synthetic-secret Next.js production HTTP regression.
+// Runs ONLY on Barış's approved PR branch inside this existing free runner.
+// No new workflow, shared DB, local worktree, external network, or deploy.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-172-revalidate-bounded-tags") {
+  await import("./verify_revalidate_http.mjs");
+}
+
+
+// #170: branch-owned real native Subscriber HTTP delivery regression.
+// Reuse the current free Governance runner; no workflow, DB, or external host.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-170-cache-revalidate-http-failure") {
+  const { spawnSync } = await import("node:child_process");
+  const run = spawnSync("bun", [
+    "run", "jest", "--runInBand", "--runTestsByPath",
+    "src/subscribers/__tests__/storefront-cache-revalidate.unit.spec.ts",
+  ], {
+    cwd: join(repo, "packages/api"),
+    env: { ...process.env, TEST_TYPE: "unit" },
+    encoding: "utf8", timeout: 120000, maxBuffer: 12 * 1024 * 1024,
+  });
+  if (run.error || run.status !== 0) {
+    console.error((run.stdout || "").slice(-8000), (run.stderr || "").slice(-8000));
+    throw new Error("IR12 FAIL native real HTTP delivery acceptance " +
+      (run.error?.message || run.status));
+  }
+  console.log("IR12 PASS native Subscriber real 127.0.0.1 HTTP 204/401/403/413/429/500/503/transport/replay acceptance");
+  console.log((run.stdout || "").slice(-800), (run.stderr || "").slice(-800));
+}
+
+
+// #173: synthetic private marker must never leave native Mercur SDK/Next error boundary.
+// Task-only real Next.js production HTTP test; never runs on main/other agents.
+// No Docker, protected DB/worktree, payment, production secrets or new workflow.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-173-medusa-error-redaction") {
+  await import("./verify_medusa_error_http.mjs");
+}
+
+
+// #173 phase 2: scoped live Next RootLayout Cart SDK error-log redaction.
+// This pre-existing free Governance job only runs the check for this PR head.
+if (process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GITHUB_EVENT_NAME === "pull_request" &&
+    process.env.GITHUB_HEAD_REF === "fix/baris-173-cart-raw-error-log") {
+  await import("./verify_cart_error_log_http.mjs");
+}

@@ -12,7 +12,7 @@ export default async function ReturnOrderPage({
 }) {
   const { id } = await params
 
-  const order = (await retrieveOrder(id)) as any
+  const order = await retrieveOrder(id)
   const returnReasons = await retrieveReturnReasons()
   const returnMethods = await retriveReturnMethods(id)
 
@@ -21,7 +21,7 @@ export default async function ReturnOrderPage({
       <OrderReturnSection
         order={order}
         returnReasons={returnReasons}
-        shippingMethods={returnMethods as any}
+        shippingMethods={returnMethods}
       />
     </main>
   )

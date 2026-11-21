@@ -86,7 +86,9 @@ const create = z.object({
   action: z.literal("create"),
   organization_id: organization,
   email: z.string().trim().email().max(320),
-  role: z.enum(["member", "admin"]),
+  // A company has no Admin role; historical invitations remain visible
+  // for Owner review/revocation but cannot create new company Admins.
+  role: z.literal("member"),
 }).strict()
 const accept = z.object({
   action: z.literal("accept"),

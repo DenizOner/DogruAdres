@@ -47,6 +47,30 @@ describe("Foundation outbox relay decisions (mocked, NOT database acceptance)", 
     expect(JSON.stringify(f.index.indexFoundationAuditEvent.mock.calls)).not.toContain("do-not-copy")
     expect((f.index.indexFoundationAuditEvent.mock.calls[0][0] as {id: string}).id).toBe(f.event.id)
   })
+  it.each(["organization.store_owner_paused","organization.store_owner_resumed"])(
+    "delivers Owner %s, reconciles duplicate and refuses forged Staff",async action=>{
+      const f=fixture()
+      Object.assign(f.event,{action,resource:"store-owner-pause",target_id:"sel_test",
+        new_values:{request_id:"private-token",reason:"private-reason"}})
+      expect(await relayOneFoundationAudit(f.source,f.index)).toBe("delivered")
+      expect(f.index.indexFoundationAuditEvent).toHaveBeenCalledTimes(1)
+      const forwarded=f.index.indexFoundationAuditEvent.mock.calls[0][0]
+      expect(forwarded).toEqual(expect.objectContaining({action,
+        resource:"store-owner-pause",target_id:"sel_test",role_context:"owner"}))
+      expect(JSON.stringify(forwarded)).not.toContain("private-token")
+      expect(f.source.acknowledgeFoundationAudit).toHaveBeenCalledTimes(1)
+      const again=fixture()
+      Object.assign(again.event,{action,resource:"store-owner-pause",target_id:"sel_test"})
+      again.index.inspectFoundationAuditEvent.mockResolvedValueOnce("matching")
+      expect(await relayOneFoundationAudit(again.source,again.index)).toBe("delivered")
+      expect(again.index.indexFoundationAuditEvent).not.toHaveBeenCalled()
+      const forged=fixture()
+      Object.assign(forged.event,{action,resource:"store-owner-pause",target_id:"sel_test",
+        role_context:"platform_staff"})
+      expect(await relayOneFoundationAudit(forged.source,forged.index)).toBe("quarantined")
+      expect(forged.source.quarantineFoundationAudit).toHaveBeenCalledWith(forged.claim,"ENVELOPE_INVALID")
+      expect(forged.index.indexFoundationAuditEvent).not.toHaveBeenCalled()
+    })
   it("quarantines a contract rejection without Index mutation", async () => {
     const f = fixture(); f.event.action = "unknown.action"
     expect(await relayOneFoundationAudit(f.source,f.index)).toBe("quarantined")
@@ -130,6 +154,28 @@ describe("Foundation outbox relay decisions (mocked, NOT database acceptance)", 
     expect(f.index.indexFoundationAuditEvent).not.toHaveBeenCalled()
     expect(f.source.quarantineFoundationAudit).not.toHaveBeenCalled()
   })
+  it.each(["organization.store_application_right_disabled",
+    "organization.store_application_right_enabled"])(
+    "delivers a redacted canonical Staff company policy %s through the actual relay", async action => {
+      for(const actorType of ["user","member","customer"] as const) {
+        const f=fixture()
+        Object.assign(f.event,{role_context:"platform_staff",actor_type:actorType,
+          action,resource:"organization",target_id:"daorg_test",
+          previous_values:{secret:"do-not-index"},
+          new_values:{reason:"do-not-index",staff_grant_id:"do-not-index"}})
+        expect(await relayOneFoundationAudit(f.source,f.index)).toBe("delivered")
+        expect(f.source.quarantineFoundationAudit).not.toHaveBeenCalled()
+        expect(f.index.indexFoundationAuditEvent).toHaveBeenCalledTimes(1)
+        const forwarded=f.index.indexFoundationAuditEvent.mock.calls[0][0]
+        expect(forwarded).toEqual(expect.objectContaining({
+          action,resource:"organization",target_id:"daorg_test",
+          organization_id:"daorg_test",role_context:"platform_staff",
+          actor_type:actorType,
+        }))
+        expect(JSON.stringify(forwarded)).not.toContain("do-not-index")
+        expect(f.source.acknowledgeFoundationAudit).toHaveBeenCalledTimes(1)
+      }
+    })
   it("quarantines a canonical-shaped Staff membership event without ACK or Index write", async () => {
     const f = fixture()
     f.event.role_context = "platform_staff"

@@ -1,26 +1,10 @@
-import { Footer, Header } from "@/components/organisms"
-import { checkRegion } from "@/lib/helpers/check-region"
-import { redirect } from "next/navigation"
-
-export default async function ResetPasswordLayout({
+/**
+ * A customer password-recovery link is a public security route, not a catalog
+ * visit. It must work without selecting a commercial region or fetching stores.
+ * Avoid unrelated navigation and external images around a one-time bearer.
+ */
+export default function ResetPasswordLayout({
   children,
-  params,
-}: Readonly<{
-  children: React.ReactNode
-  params: Promise<{ locale: string }>
-}>) {
-  const { locale } = await params
-  const regionCheck = await checkRegion(locale)
-
-  if (!regionCheck) {
-    return redirect("/")
-  }
-
-  return (
-    <>
-      <Header locale={locale} />
-      {children}
-      <Footer />
-    </>
-  )
+}: Readonly<{ children: React.ReactNode }>) {
+  return <>{children}</>
 }

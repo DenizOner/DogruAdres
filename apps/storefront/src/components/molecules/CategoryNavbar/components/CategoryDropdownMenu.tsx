@@ -4,7 +4,6 @@ import { HttpTypes } from "@medusajs/types"
 import { CategoryDropdownContainer } from "./CategoryDropdownContainer"
 import { CategoryDropdownContent } from "./CategoryDropdownContent"
 import { ChildCategories } from "./ChildCategories"
-import { FeaturedCategory } from "./FeaturedCategory"
 
 interface CategoryDropdownMenuProps {
   category: HttpTypes.StoreProductCategory

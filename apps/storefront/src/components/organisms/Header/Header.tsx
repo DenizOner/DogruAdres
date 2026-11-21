@@ -11,15 +11,17 @@ import { listRegions } from "@/lib/data/regions"
 import { retrieveCustomer } from "@/lib/data/customer"
 import { ParentCategoryLinks } from "@/components/molecules/ParentCategoryLinks/ParentCategoryLinks"
 
-export const Header = async ({ locale } : {
-  locale: string
-}) => {
+export const Header = async ({}: { locale: string }) => {
   const user = await retrieveCustomer().catch(() => null)
   const isLoggedIn = Boolean(user)
 
   const regions = await listRegions()
 
-  const { categories, parentCategories } = (await listCategories({ query: { include_ancestors_tree: true } })) as {
+  // The closed B4B API deliberately denies native public categories.
+  // Keep login/verification usable without pretending a catalog exists.
+  // An unavailable catalog must never reveal stale products or categories.
+  const { categories, parentCategories } = (await listCategories({ query: { include_ancestors_tree: true } })
+    .catch(() => ({ categories: [], parentCategories: [] }))) as {
     categories: HttpTypes.StoreProductCategory[]
     parentCategories: HttpTypes.StoreProductCategory[]
   }

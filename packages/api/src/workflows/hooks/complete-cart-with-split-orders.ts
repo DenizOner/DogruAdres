@@ -1,6 +1,7 @@
 import { MedusaError } from "@medusajs/framework/utils"
 import { completeCartWithSplitOrdersWorkflow } from "@mercurjs/core/workflows"
 import { DOGRUADRES_ACCESS_MODULE } from "../../modules/dogruadres-access"
+import { nativeSellerTradingAt } from "../../modules/dogruadres-access/native-seller-trading"
 
 type CheckoutCartSnapshot = {
   id?: unknown
@@ -25,6 +26,8 @@ type NativeSellerService = {
     id: string
     status: string
     approved_at?: Date | string | null
+    closed_from?: Date | string | null
+    closed_to?: Date | string | null
   }>>
 }
 
@@ -89,8 +92,7 @@ completeCartWithSplitOrdersWorkflow.hooks.validate(
         if (
           rows.length !== 1 ||
           rows[0].id !== sellerId ||
-          rows[0].status !== "open" ||
-          !rows[0].approved_at
+          !nativeSellerTradingAt(rows[0])
         ) {
           denyCheckout()
         }

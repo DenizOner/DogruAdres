@@ -1,0 +1,1042 @@
+/** Task-only real HTTPS/Chrome/PG16 acceptance: no real commercial accounts. */
+import assert from "node:assert/strict"
+import {randomBytes} from "node:crypto"
+import {B06Chrome} from "./b06-ui-browser"
+import {createProductsWorkflow,createOffersWorkflow,completeCartWithSplitOrdersWorkflow} from "@mercurjs/core/workflows"
+import {addToCartWorkflow} from "@medusajs/medusa/core-flows"
+type Rows=(sql:string,params?:any[])=>Promise<any[]>
+type Store={application_id:string;seller_id:string;organization_id:string}
+type CartHistory={query:any;cartId:string;customerId:string;snapshot:unknown}
+/** Pre-existing native source Order generated once with the *installed*
+ * Medusa/Mercur workflow in task-owned PG16. Never enables public checkout.
+ * A successful no-payment Order is required before A's name is transferred.
+ */
+export async function createB22CompletedSourceOrderFixture(input:{
+  container:any;rand:string;sourceSellerId:string;productCreatorSellerId:string;
+  memberId:string;shippingProfileId:string;customerId:string;
+  regionId:string;salesChannelId:string;buyerOrgId:string;
+  q:Rows;query:any;
+  claim:(cartId:string)=>Promise<{status:number;body:any}>;
+  authorize:(cartId:string)=>Promise<boolean>;
+}):Promise<CompletedOrderHistory>{
+  const {container,rand,sourceSellerId,productCreatorSellerId,
+    memberId,shippingProfileId,customerId,regionId,salesChannelId,buyerOrgId,
+    q,query,claim,authorize}=input
+  assert.equal((await q("select status from seller where id=$1",
+    [sourceSellerId]))[0].status,"open")
+  const {result:[product]}=await createProductsWorkflow(container).run({
+    input:{created_by:productCreatorSellerId,products:[{
+      title:"B22 historical source order "+rand,status:"published",
+      variants:[{title:"Zero historical item",sku:"B22-ORDER-SOURCE-"+rand}]
+    }]}
+  })
+  const [variant]=await container.resolve("product")
+    .listProductVariants({product_id:product.id})
+  assert.ok(variant?.id)
+  const sku="B22-HIST-OFFER-"+rand
+  const {result:[offer]}=await createOffersWorkflow(container).run({
+    input:{offers:[{
+      seller_id:sourceSellerId,created_by:memberId,
+      sku,variant_id:variant.id,shipping_profile_id:shippingProfileId,
+      inventory_items:[{sku,stock_levels:[]}],
+      prices:[{amount:0,currency_code:"eur"}],
+      manage_inventory:false,allow_backorder:true
+    }]}
+  })
+  assert.equal(offer.seller_id,sourceSellerId)
+  const cartService=container.resolve("cart")
+  const cart=await cartService.createCarts({
+    currency_code:"eur",customer_id:customerId
+  })
+  await cartService.updateCarts(cart.id,{
+    region_id:regionId,sales_channel_id:salesChannelId
+  })
+  await addToCartWorkflow(container).run({input:{
+    cart_id:cart.id,items:[{variant_id:variant.id,offer_id:offer.id,
+      quantity:1,requires_shipping:false,metadata:{offer_id:offer.id}} as any]
+  }})
+  const {data:[before]}=await query.graph({entity:"cart",
+    fields:["id","total","customer.id","completed_at","items.offer.seller_id"],
+    filters:{id:cart.id}})
+  assert.equal(Number(before.total),0)
+  assert.equal(before.customer?.id,customerId)
+  assert.equal(before.completed_at,null)
+  assert.equal(before.items?.length,1)
+  assert.equal(before.items[0].offer?.seller_id,sourceSellerId)
+  const claimed=await claim(cart.id)
+  assert.equal(claimed.status,200)
+  assert.equal(claimed.body.organization_id,buyerOrgId)
+  assert.equal(claimed.body.checkout_ready,false,
+    "Native workflow proof never enables visitor checkout")
+  assert.equal(await authorize(cart.id),true,
+    "Live Buyer/Store authority required before zero-total native Order")
+  // A future approval timestamp cannot authorize a native Order even if
+  // the Seller is marked OPEN and the Buyer/Store permission snapshot is valid.
+  // Only the disposable task-owned Seller is changed, with exact restoration.
+  const [sellerBeforeApproval]=await q(
+    "select approved_at from seller where id=$1",[sourceSellerId])
+  assert.ok(sellerBeforeApproval?.approved_at,
+    "Task-owned source Seller must already have a native approval")
+  try{
+    const futureApproval=await q(`update seller
+      set approved_at=clock_timestamp()+interval '1 day'
+      where id=$1 returning approved_at`,[sourceSellerId])
+    assert.equal(futureApproval.length,1)
+    assert.ok(new Date(futureApproval[0].approved_at).getTime()>Date.now(),
+      "Test must actually move native approval into the future")
+    const blocked=await completeCartWithSplitOrdersWorkflow(container).run({
+      input:{cart_id:cart.id},throwOnError:false
+    }).then((result:any)=>result,(error:unknown)=>({errors:[error]}))
+    const messages=(blocked.errors??[]).map((entry:any)=>
+      String(entry.error?.message??entry.error??entry.message??"")).join("\n")
+    assert.match(messages,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
+      "Real native pre-Order hook must reject future Seller approval")
+    assert.equal((await q(
+      "select count(*)::int n from order_group where cart_id=$1",[cart.id]))[0].n,0)
+    assert.equal((await q(
+      "select completed_at from cart where id=$1",[cart.id]))[0].completed_at,null,
+      "Future approval must not consume or complete the native Cart")
+  }finally{
+    const restored=await q(`update seller set approved_at=$2
+      where id=$1 returning approved_at`,
+      [sourceSellerId,sellerBeforeApproval.approved_at])
+    assert.equal(restored.length,1)
+    assert.deepEqual(restored[0],sellerBeforeApproval,
+      "Restore the exact task-owned Seller approval timestamp")
+  }
+  process.stdout.write("PASS B22 PG16: future native Seller approval denies real zero-payment pre-Order hook; no OrderGroup/Cart mutation; approval timestamp restored\n")
+  // The real native workflow's B22 pre-Order hook must deny a Seller in
+  // its scheduled closed window, even when the Buyer/Store L snapshot is valid.
+  // Operate only on this disposable Seller and restore the exact native dates.
+  const [sellerBeforeWindow]=await q(
+    "select closed_from,closed_to from seller where id=$1",[sourceSellerId])
+  assert.ok(sellerBeforeWindow,"Task-owned native source Seller required")
+  const altered=await q(`update seller
+    set closed_from=clock_timestamp()-interval '1 hour',
+        closed_to=clock_timestamp()+interval '1 hour'
+    where id=$1 returning closed_from,closed_to`,[sourceSellerId])
+  assert.equal(altered.length,1)
+  try{
+    const blocked=await completeCartWithSplitOrdersWorkflow(container).run({
+      input:{cart_id:cart.id},throwOnError:false
+    }).then((result:any)=>result,(error:unknown)=>({errors:[error]}))
+    const messages=(blocked.errors??[]).map((entry:any)=>
+      String(entry.error?.message??entry.error??entry.message??"")).join("\n")
+    assert.match(messages,/B22_CHECKOUT_AUTHORIZATION_DENIED/,
+      "Real native Cart hook must deny scheduled closure before Order write")
+    assert.equal((await q(
+      "select count(*)::int n from order_group where cart_id=$1",[cart.id]))[0].n,0)
+    assert.equal((await q(
+      "select completed_at from cart where id=$1",[cart.id]))[0].completed_at,null,
+      "Denied scheduled Cart must remain open for a later lawful attempt")
+  }finally{
+    const restored=await q(`update seller set closed_from=$2,closed_to=$3
+      where id=$1 returning closed_from,closed_to`,
+      [sourceSellerId,sellerBeforeWindow.closed_from,sellerBeforeWindow.closed_to])
+    assert.equal(restored.length,1)
+    assert.deepEqual(restored[0],sellerBeforeWindow,
+      "Native closed-window fixture must be restored, including null bounds")
+  }
+  const result=await completeCartWithSplitOrdersWorkflow(container).run({
+    input:{cart_id:cart.id},throwOnError:false
+  })
+  assert.equal(result.errors?.length??0,0,
+    "Existing Mercur workflow must create completed zero-total source Order")
+  assert.match(result.result?.order_group_id??"",/^og_[A-Za-z0-9_-]+$/)
+  const snapshot=await snapshotB22CompletedSourceOrder({
+    q,query,cartId:cart.id,customerId,
+    organizationId:buyerOrgId,sourceSellerId
+  })
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: native scheduled Seller closure denies actual zero-payment Cart before OrderGroup, preserves open Cart, and restores exact PG16 bounds; subsequent lawful native Order completes once\n")
+  process.stdout.write("B22 task-only: pre-transfer source OrderGroup/Order from native zero-total workflow; no payment\n")
+  return {query,cartId:cart.id,customerId,organizationId:buyerOrgId,
+    sourceSellerId,snapshot}
+}
+
+type CompletedOrderHistory={query:any;cartId:string;customerId:string;
+  organizationId:string;sourceSellerId:string;snapshot:unknown}
+/** Native completed source Order, made once before name transfer on
+ * disposable PG16. This function never initiates checkout or payment.
+ */
+export async function snapshotB22CompletedSourceOrder(input:{
+  q:Rows;query:any;cartId:string;customerId:string;
+  organizationId:string;sourceSellerId:string
+}):Promise<unknown>{
+  const {q,query,cartId,customerId,organizationId,sourceSellerId}=input
+  const [cart]=await q("select id,customer_id,completed_at from cart where id=$1",[cartId])
+  assert.equal(cart?.id,cartId)
+  assert.equal(cart.customer_id,customerId)
+  assert.ok(cart.completed_at,"Historical native Cart must be completed")
+  const groups=await q("select id,cart_id,customer_id from order_group where cart_id=$1",[cartId])
+  assert.equal(groups.length,1,"Exactly one real historical OrderGroup required")
+  assert.equal(groups[0].cart_id,cartId)
+  assert.equal(groups[0].customer_id,customerId)
+  assert.match(groups[0].id,/^og_[A-Za-z0-9_-]+$/)
+  const {data:g}=await query.graph({entity:"order_group",filters:{id:groups[0].id},
+    fields:["id","cart_id","customer_id","orders.id","orders.items.id",
+      "orders.items.title","orders.items.quantity"]})
+  assert.equal(g.length,1)
+  assert.equal(g[0].id,groups[0].id)
+  assert.equal(g[0].cart_id,cartId)
+  assert.equal(g[0].customer_id,customerId)
+  const orders=(g[0].orders??[]).map((o:any)=>({
+    id:String(o.id),items:(o.items??[]).map((i:any)=>({
+      id:String(i.id),title:String(i.title),quantity:Number(i.quantity)
+    })).sort((a:any,b:any)=>a.id.localeCompare(b.id))
+  }))
+  assert.equal(orders.length,1)
+  assert.match(orders[0].id,/^order_[A-Za-z0-9_-]+$/)
+  assert.equal(orders[0].items.length,1)
+  assert.ok(orders[0].items[0].id&&orders[0].items[0].title)
+  assert.equal(orders[0].items[0].quantity,1)
+  const {data:links}=await query.graph({entity:"order_cart",
+    fields:["cart_id","order_id"],filters:{cart_id:cartId}})
+  assert.deepEqual(links.map((x:any)=>({cart_id:x.cart_id,order_id:x.order_id})),
+    [{cart_id:cartId,order_id:orders[0].id}])
+  const {data:carts}=await query.graph({entity:"cart",
+    fields:["id","customer.id","completed_at","items.id",
+      "items.offer.id","items.offer.seller_id"],filters:{id:cartId}})
+  assert.equal(carts.length,1)
+  assert.equal(carts[0].customer?.id,customerId)
+  const items=(carts[0].items??[]).map((i:any)=>({
+    id:String(i.id),offer_id:String(i.offer?.id??""),
+    seller_id:String(i.offer?.seller_id??"")
+  }))
+  assert.equal(items.length,1)
+  assert.equal(items[0].seller_id,sourceSellerId,
+    "Completed historical Order Cart must belong to original source Seller")
+  assert.ok(items[0].offer_id)
+  const a=await q(`select cart_id,organization_id,customer_id,person_id,
+    source_audit_event_id from da_buyer_cart_attribution where cart_id=$1`,[cartId])
+  assert.equal(a.length,1)
+  assert.equal(a[0].organization_id,organizationId)
+  assert.equal(a[0].customer_id,customerId)
+  assert.ok(a[0].person_id&&a[0].source_audit_event_id)
+  const {data:payments}=await query.graph({entity:"cart_payment_collection",
+    fields:["payment_collection_id"],filters:{cart_id:cartId}})
+  assert.equal(payments.length,0,"No payment collection in zero-total fixture")
+  return {cart:{id:cart.id,customer_id:cart.customer_id,
+      completed_at:String(cart.completed_at)},
+    group:groups[0],orders,links:links.map((x:any)=>({
+      cart_id:x.cart_id,order_id:x.order_id})),items,
+    attribution:a[0],payment_links:payments.length}
+}
+async function assertSourceOrderUnchanged(q:Rows,h:CompletedOrderHistory,phase:string){
+  assert.deepEqual(await snapshotB22CompletedSourceOrder({
+    q,query:h.query,cartId:h.cartId,customerId:h.customerId,
+    organizationId:h.organizationId,sourceSellerId:h.sourceSellerId
+  }),h.snapshot,phase+" cannot alter historical OrderGroup/Order ID/FK and Buyer attribution")
+}
+
+/** Exact pre-existing Medusa Cart/Offer ownership snapshot for B22 name right
+ * assignment. Uses installed Mercur/Medusa native query graph, not a second
+ * Cart model. A source Seller must have a real persisted offer in this Cart.
+ * The fixture intentionally has NO historical Order: do not claim Order
+ * retention acceptance from an empty OrderGroup / order_cart snapshot.
+ */
+export async function snapshotB22TransferredStoreCart(input:{
+  q:Rows;query:any;cartId:string;sourceSellerId:string;
+  organizationId:string;customerId:string
+}):Promise<unknown>{
+  const {q,query,cartId,sourceSellerId,organizationId,customerId}=input
+  const [native]=await q(`select id,customer_id,completed_at
+    from cart where id=$1`,[cartId])
+  assert.equal(native?.id,cartId,"Pre-existing native Cart must exist")
+  assert.equal(native.customer_id,customerId)
+  assert.equal(native.completed_at,null,"Historical fixture remains uncompleted")
+  const {data:carts}=await query.graph({entity:"cart",fields:[
+    "id","customer.id","completed_at","items.id",
+    "items.offer.id","items.offer.seller_id"
+  ],filters:{id:cartId}})
+  assert.equal(carts.length,1)
+  assert.equal(carts[0].id,cartId)
+  assert.equal(carts[0].customer?.id,customerId)
+  const items=(carts[0].items??[]).map((line:any)=>({
+    line_id:String(line.id),
+    offer_id:String(line.offer?.id??""),
+    seller_id:String(line.offer?.seller_id??"")
+  })).sort((x:any,y:any)=>x.line_id.localeCompare(y.line_id))
+  assert.equal(items.length,2,"Existing two-Seller native Cart required")
+  assert.equal(new Set(items.map((x:any)=>x.line_id)).size,2)
+  assert.equal(new Set(items.map((x:any)=>x.seller_id)).size,2,
+    "Historical Cart must contain offers from two distinct native Sellers")
+  assert.ok(items.some((x:any)=>x.seller_id===sourceSellerId),
+    "Source Store must have an actual native Cart item before assignment")
+  assert.ok(items.every((x:any)=>x.offer_id&&x.seller_id))
+  const attribution=await q(`select cart_id,organization_id,customer_id,
+    person_id,source_audit_event_id from da_buyer_cart_attribution
+    where cart_id=$1`,[cartId])
+  assert.equal(attribution.length,1)
+  assert.equal(attribution[0].organization_id,organizationId)
+  assert.equal(attribution[0].customer_id,customerId)
+  assert.ok(attribution[0].source_audit_event_id)
+  const groups=await q(`select id from order_group where cart_id=$1 order by id`,
+    [cartId])
+  const {data:orderLinks}=await query.graph({entity:"order_cart",
+    fields:["order_id"],filters:{cart_id:cartId}})
+  assert.equal(groups.length,0,"Fixture has no historical OrderGroup")
+  assert.equal(orderLinks.length,0,"Fixture has no historical native Order")
+  return {
+    cart:{id:native.id,customer_id:native.customer_id,
+      completed_at:native.completed_at},
+    items,
+    attribution:{
+      cart_id:attribution[0].cart_id,
+      organization_id:attribution[0].organization_id,
+      customer_id:attribution[0].customer_id,
+      person_id:attribution[0].person_id,
+      source_audit_event_id:attribution[0].source_audit_event_id
+    },
+    order_groups:groups.length,
+    order_links:orderLinks.length
+  }
+}
+
+export async function verifyB22ExceptionalNameRight(input:{
+  owner:B06Chrome;reviewer:B06Chrome;
+  source:Store;target:Store;q:Rows
+}):Promise<{formerName:string;formerHandle:string}>{
+  const {owner,reviewer,source,target,q}=input
+  const [original]=await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [source.seller_id])
+  const [recipient]=await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [target.seller_id])
+  assert.equal(original?.id,source.seller_id)
+  assert.equal(original.status,"suspended")
+  assert.ok(original.approved_at)
+  assert.equal(recipient?.id,target.seller_id)
+  assert.equal(recipient.status,"open")
+  assert.ok(recipient.approved_at)
+  assert.notEqual(source.organization_id,target.organization_id)
+  assert.notEqual(source.seller_id,target.seller_id)
+  const values={source_application_id:source.application_id,
+    source_seller_id:source.seller_id,
+    target_application_id:target.application_id,
+    target_seller_id:target.seller_id}
+  const path="/personal/platform/store-name-transfers"
+  const preview=async(browser:B06Chrome)=>browser.callFunction(
+    "async function(payload){const params=new URLSearchParams(JSON.parse(payload));"+
+    "const r=await fetch('/personal/platform/store-name-transfers?'+params.toString(),"+
+    "{cache:'no-store'});return {status:r.status,body:await r.json()}}",
+    JSON.stringify(values))
+  const p=await preview(reviewer)
+  assert.equal(p.status,200)
+  assert.equal(p.body.source.seller_id,source.seller_id)
+  assert.equal(p.body.source.status,"suspended")
+  assert.equal(p.body.source.name,original.name)
+  assert.equal(p.body.source.handle,original.handle)
+  assert.equal(p.body.target.seller_id,target.seller_id)
+  assert.equal(p.body.target.name,recipient.name)
+  assert.equal(p.body.target.status,"open")
+  assert.equal((await preview(owner)).status,403,
+    "Business Owner cannot see confidential platform transfer candidates")
+  const post=async(browser:B06Chrome,payload:object,csrfValid=true)=>
+    browser.callFunction(
+      "async function(path,payload,valid){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json',"+
+      "'x-csrf-token':valid==='yes'?s.csrf_token:'invalid'},body:payload});"+
+      "return {status:r.status,body:await r.json()}}",
+      path,JSON.stringify(payload),csrfValid?"yes":"no")
+  const decisionReason="Verified exceptional platform decision for the Store name right"
+  const attempt={...values,transfer_id:"dastr_"+"e".repeat(32),
+    expected_name:original.name,expected_handle:original.handle,
+    reason:decisionReason}
+  // A previous Staff-approved native rename is a valid CURRENT name, not
+  // the immutable initial application name. Missing durable audit/outbox
+  // must reject BOTH Staff preview and transfer POST without recording a
+  // decision. The disposable database is restored even on a failed assert.
+  let originalClaimExpiry:unknown
+  const historical=await q(`select x.id outbox_id
+    from da_store_rename_request r
+    join da_audit_event e on e.organization_id=r.organization_id
+      and e.target_id=r.seller_id
+      and e.action='organization.store_rename_approved'
+      and e.module='dogruadres-access' and e.resource='store-rename-request'
+      and e.new_values->>'request_id'=r.id and e.deleted_at is null
+    join da_audit_outbox x on x.source_audit_event_id=e.id
+      and x.source_module='dogruadres-access' and x.deleted_at is null
+    where r.seller_id=$1 and r.organization_id=$2 and r.status='approved'
+      and r.proposed_name=$3 and r.proposed_handle=$4`,
+    [source.seller_id,source.organization_id,original.name,original.handle])
+  if(historical.length){
+    assert.equal(historical.length,1,"One audit-backed preceding rename required")
+    const [initialClaim]=await q(`select store_name_hash,name_claim_released_at
+      from da_store_application where id=$1 and seller_id=$2`,
+      [source.application_id,source.seller_id])
+    assert.ok(initialClaim?.name_claim_released_at,
+      "The original application claim must retain its 30-day expiry")
+    originalClaimExpiry=initialClaim.name_claim_released_at
+    const [currentHash]=await q(`select encode(sha256(convert_to(lower(
+      regexp_replace(btrim(normalize($1,NFKC)),'[[:space:]]+',' ','g')),
+      'UTF8')),'hex') hash`,[original.name])
+    assert.notEqual(currentHash.hash,initialClaim.store_name_hash)
+    const removed=await q(`update da_audit_outbox
+      set deleted_at=clock_timestamp() where id=$1 and deleted_at is null
+      returning id`,[historical[0].outbox_id])
+    assert.equal(removed.length,1)
+    try{
+      assert.equal((await preview(reviewer)).status,409,
+        "Missing approved-rename outbox must deny Staff preview")
+      assert.equal((await post(reviewer,attempt)).status,409,
+        "Missing approved-rename outbox must deny transfer POST")
+      assert.equal((await q(`select count(*)::int n from da_store_name_transfer
+        where source_seller_id=$1`,[source.seller_id]))[0].n,0)
+    }finally{
+      const restored=await q(`update da_audit_outbox
+        set deleted_at=null where id=$1 and deleted_at is not null
+        returning id`,[historical[0].outbox_id])
+      assert.equal(restored.length,1)
+    }
+    assert.equal((await preview(reviewer)).status,200,
+      "Restored Staff-approved rename with durable audit is transferable")
+  }
+  assert.equal((await post(owner,attempt)).status,403)
+  assert.equal((await post(reviewer,attempt,false)).status,403)
+  assert.equal((await post(reviewer,{...attempt,target_seller_id:source.seller_id})).status,400)
+  assert.equal((await q("select count(*)::int n from da_store_name_transfer where source_seller_id=$1",
+    [source.seller_id]))[0].n,0)
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  await reviewer.click("#store-approval-refresh")
+  // The panel can remain visible with STALE rows during a real HTTPS refresh.
+  // Await the completed response, not merely the existing panel's visibility.
+  await reviewer.wait("!document.getElementById('store-approval-panel').hidden && "+
+    "!document.getElementById('store-approval-status').textContent.includes('kontrol ediliyor')")
+  // Search only the Staff-paginated list; never fabricate a DOM approval.
+  let found=false
+  for(let page=0;page<6;page++){
+    await reviewer.wait("!document.getElementById('store-approval-panel').hidden")
+    found=await reviewer.eval("!!document.querySelector("+JSON.stringify(
+      '[data-store-transfer-source="'+source.seller_id+'"]')+")")
+    if(found)break
+    const older=await reviewer.eval("!document.getElementById('store-approval-older').hidden")
+    if(!older)break
+    await reviewer.click("#store-approval-older")
+    await reviewer.wait("document.getElementById('store-approval-status').textContent.includes("+
+      JSON.stringify("sayfa "+(page+2))+")")
+  }
+  assert.equal(found,true,"Suspended original Seller must be in verified Staff queue")
+  const control='[data-store-transfer-source="'+source.seller_id+'"]'
+  await reviewer.click(control)
+  const fields='[data-transfer-source="'+source.seller_id+'"] '
+  await reviewer.wait("!document.querySelector("+JSON.stringify(
+    '[data-transfer-source="'+source.seller_id+'"]')+").hidden")
+  await reviewer.input(fields+'input[name=target_application_id]',target.application_id)
+  await reviewer.input(fields+'input[name=target_seller_id]',target.seller_id)
+  await reviewer.input(fields+'textarea[name=reason]',decisionReason)
+  await reviewer.click('[data-transfer-preview="'+source.seller_id+'"]')
+  // Wait for completion rather than a particular message. Categorize only
+  // fixed UI states and HTTP status codes; never log Store/Person details.
+  try{
+    await reviewer.wait("!document.querySelector("+JSON.stringify(
+      '[data-transfer-preview="'+source.seller_id+'"]')+").disabled")
+  }catch{
+    // Diagnose the actual browser/HTTPS outcome without retaining any Person,
+    // cookie, Seller name, request body or private UI text.
+    const state=await reviewer.callFunction(
+      "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
+      ".find(e=>e.dataset.transferSource===id);"+
+      "const btn=Array.from(document.querySelectorAll('[data-transfer-preview]'))"+
+      ".find(e=>e.dataset.transferPreview===id);"+
+      "const txt=box?.querySelector('[role=status]')?.textContent??'';"+
+      "return {visible:!!box&&!box.hidden,button:btn?.disabled?'busy':btn?'idle':'missing',"+
+      "status:txt.startsWith('Kaynak:')?'ready':"+
+      "txt.includes('doğrulanamadı')?'denied':"+
+      "txt.includes('Geçerli ve farklı')?'invalid':'other'}}",
+      source.seller_id)
+    const http=reviewer.http.filter((e:any)=>
+      e.path==="/personal/platform/store-name-transfers")
+      .slice(-3).map((e:any)=>({method:e.method,status:e.status}))
+    throw new Error("Transfer preview did not complete: "+JSON.stringify({state,http}))
+  }
+  const previewCategory=await reviewer.callFunction(
+    "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
+    ".find(e=>e.dataset.transferSource===id);"+
+    "const text=box?.querySelector('[role=status]')?.textContent??'';"+
+    "const btn=Array.from(document.querySelectorAll('[data-transfer-decide]'))"+
+    ".find(e=>e.dataset.transferDecide===id);"+
+    "return !btn?.disabled && text.startsWith('Kaynak:')?'ready':"+
+    "text.includes('doğrulanamadı')?'denied':"+
+    "text.includes('Geçerli ve farklı')?'invalid':"+
+    "text.includes('yeniden doğrulayın')?'reset':'empty'}",
+    source.seller_id)
+  const metadata=reviewer.http.filter((x:any)=>
+    x.path==="/personal/platform/store-name-transfers").slice(-3)
+    .map((x:any)=>({method:x.method,status:x.status}))
+  assert.equal(previewCategory,"ready","Staff preview category="+
+    previewCategory+"; HTTP metadata="+JSON.stringify(metadata))
+  const actualPreview=await reviewer.eval("document.querySelector("+
+    JSON.stringify('[data-transfer-source="'+source.seller_id+'"] [role=status]')+
+    ").textContent.includes("+JSON.stringify(recipient.name)+")")
+  assert.equal(actualPreview,true,"Staff preview must display verified recipient")
+  const readyToDecide=await reviewer.callFunction(
+    "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
+    ".find(x=>x.dataset.transferSource===id);"+
+    "const reason=box?.querySelector('textarea[name=reason]')?.value??'';"+
+    "const button=Array.from(document.querySelectorAll('[data-transfer-decide]'))"+
+    ".find(x=>x.dataset.transferDecide===id);"+
+    "return {reason_length:reason.trim().length,letters:[...reason.matchAll(/[\\p{L}\\p{N}]/gu)].length,"+
+    "ready:!!button&&!button.disabled}}",
+    source.seller_id)
+  assert.deepEqual(readyToDecide,{
+    reason_length:decisionReason.length,letters:decisionReason.replace(/[^A-Za-z0-9]/g,"").length,
+    ready:true
+  },"Real Staff reason and server-verified preview must remain in the same visible form")
+  const click=await reviewer.callFunction(
+    "function(id){const b=document.querySelector('[data-transfer-decide=\"'+id+'\"]');"+
+    "if(!b||b.disabled)return false;const former=window.confirm;"+
+    "window.confirm=()=>true;try{b.click()}finally{window.confirm=former}return true}",
+    source.seller_id)
+  assert.equal(click,true,"Real Staff UI submits only the verified decision")
+  try{
+    await reviewer.wait("document.getElementById('store-approval-status').textContent.includes('Ad hakkı kararı kaydedildi') || "+
+      "document.querySelector("+JSON.stringify('[data-transfer-source="'+source.seller_id+'"] [role=status]')+
+      ")?.textContent.includes('Devir sonucu belirsiz') || "+
+      "document.querySelector("+JSON.stringify('[data-transfer-source="'+source.seller_id+'"] [role=status]')+
+      ")?.textContent.includes('Önce hedefi doğrulayın')")
+  }catch{
+    const http=reviewer.http.filter((e:any)=>
+      e.path==="/personal/platform/store-name-transfers")
+      .slice(-5).map((e:any)=>({method:e.method,status:e.status}))
+    const browserState=await reviewer.callFunction(
+      "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
+      ".find(x=>x.dataset.transferSource===id);"+
+      "const msg=document.getElementById('store-approval-status')?.textContent??'';"+
+      "const status=box?.querySelector('[role=status]')?.textContent??'';"+
+      "return {visible:!!box&&!box.hidden,global:msg.includes('Ad hakkı kararı kaydedildi')?'saved':"+
+      "msg.includes('gönderiliyor')?'sending':'other',"+
+      "row:status.includes('Devir sonucu belirsiz')?'uncertain':"+
+      "status.includes('Önce hedefi doğrulayın')?'guard-denied':"+
+      "status.includes('Kaynak:')?'preview':'other'}}",
+      source.seller_id)
+    // PostgreSQL state classification ONLY: never select query, person, IDs,
+    // server address, passwords or table/row contents into GitHub logs.
+    const locks=await q(`select coalesce(wait_event_type,'running') kind,
+      coalesce(wait_event,'none') event,count(*)::int n from pg_stat_activity
+      where datname=current_database() and pid<>pg_backend_pid()
+        and backend_type='client backend'
+      group by 1,2 order by 1,2`)
+    throw new Error("Staff transfer decision timed out: "+
+      JSON.stringify({http,browserState,locks}))
+  }
+  const stage=await reviewer.callFunction(
+    "function(id){const box=Array.from(document.querySelectorAll('[data-transfer-source]'))"+
+    ".find(e=>e.dataset.transferSource===id);"+
+    "const row=box?.querySelector('[role=status]')?.textContent??'';"+
+    "const global=document.getElementById('store-approval-status')?.textContent??'';"+
+    "return global.includes('Ad hakkı kararı kaydedildi')?'success':"+
+    "row.includes('Devir sonucu belirsiz')?'uncertain':"+
+    "row.includes('Önce hedefi doğrulayın')?'guard-denied':'other'}",
+    source.seller_id)
+  const transferHttp=reviewer.http.filter((e:any)=>
+    e.path==="/personal/platform/store-name-transfers")
+    .slice(-4).map((e:any)=>({method:e.method,status:e.status}))
+  assert.equal(stage,"success","Real transfer POST outcome="+stage+
+    "; HTTP metadata="+JSON.stringify(transferHttp))
+  const decisions=await q("select id,source_seller_id,target_seller_id,old_name,old_handle,name_hash,reason,source_audit_event_id from da_store_name_transfer where source_seller_id=$1",
+    [source.seller_id])
+  assert.equal(decisions.length,1)
+  const d=decisions[0]
+  assert.match(d.id,/^dastr_[a-f0-9]{32}$/)
+  assert.equal(d.source_seller_id,source.seller_id)
+  assert.equal(d.target_seller_id,target.seller_id)
+  assert.equal(d.old_name,original.name)
+  assert.equal(d.old_handle,original.handle)
+  assert.equal(d.reason,decisionReason)
+  const audit=await q(
+    "select e.action,x.id outbox_id from da_audit_event e join da_audit_outbox x"+
+    " on x.source_audit_event_id=e.id where e.id=$1",
+    [d.source_audit_event_id])
+  assert.equal(audit.length,1)
+  assert.equal(audit[0].action,"organization.store_name_right_assigned")
+  assert.ok(audit[0].outbox_id)
+  const claim=await q("select name_claim_released_at from da_store_application where id=$1",
+    [source.application_id])
+  assert.ok(claim[0]?.name_claim_released_at)
+  if(originalClaimExpiry!==undefined)
+    assert.equal(String(claim[0].name_claim_released_at),
+      String(originalClaimExpiry),
+      "Exceptional assignment must not shorten the original 30-day hold")
+  assert.deepEqual((await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [source.seller_id]))[0],original,
+    "Right assignment must NEVER mutate the suspended native Store")
+  assert.deepEqual((await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [target.seller_id]))[0],recipient,
+    "Recipient native Store, Cart and Order history must remain independent")
+  const replay=await post(reviewer,{...attempt,transfer_id:d.id})
+  assert.equal(replay.status,200)
+  assert.equal((await post(reviewer,{...attempt,transfer_id:"dastr_"+"f".repeat(32)})).status,409)
+  assert.equal((await q("select count(*)::int n from da_store_name_transfer where source_seller_id=$1",
+    [source.seller_id]))[0].n,1)
+  // The Staff Stores endpoint (different URL) must refuse the vacated right.
+  const blocked=await reviewer.callFunction(
+    "async function(payload){const s=await(await fetch('/personal/session')).json();"+
+    "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+    "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+    "body:payload});return r.status}",
+    JSON.stringify({action:"unsuspend",application_id:source.application_id,
+      seller_id:source.seller_id}))
+  assert.equal(blocked,409,"Transferred old right never reopens the original Store")
+  assert.equal((await q("select status from seller where id=$1",
+    [source.seller_id]))[0].status,"suspended")
+  return {formerName:original.name,formerHandle:original.handle}
+}
+
+
+/** A real Owner may request the assigned name in target B only AFTER the
+ * source has vacated both native name and URL. C never inherits that right.
+ * All mutations run through existing Owner/Staff HTTPS endpoints. */
+export async function verifyAssignedRecipientUse(input:{
+  owner:B06Chrome;reviewer:B06Chrome;q:Rows;
+  source:Store;target:Store;competitor:Pick<Store,'seller_id'|'organization_id'>;
+  targetOrganizationName:string;competitorOrganizationName:string;
+  formerName:string;formerHandle:string;sourceVacated:boolean;
+  cartHistory:CartHistory;completedOrder:CompletedOrderHistory;
+  suspend?:()=>Promise<void>
+}):Promise<void>{
+  const {owner,reviewer,q,source,target,competitor,formerName,
+    formerHandle,sourceVacated,targetOrganizationName,
+    competitorOrganizationName}=input
+  const proposal=(store:Pick<Store,'seller_id'|'organization_id'>)=>({
+    request_id:"dasrn_"+randomBytes(16).toString("hex"),
+    organization_id:store.organization_id,seller_id:store.seller_id,
+    name:formerName,handle:formerHandle,risk_acknowledged:true,
+    risk_version:"store-rename-risks-v2"
+  })
+  const post=async(browser:B06Chrome,payload:object)=>browser.callFunction(
+    "async function(json){const s=await(await fetch('/personal/session')).json();"+
+    "const r=await fetch('/personal/store-rename-requests',{method:'POST',"+
+    "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+    "body:json});return {status:r.status,body:await r.json()}}",
+    JSON.stringify(payload))
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible'")
+  await owner.select(competitorOrganizationName,"owner")
+  const [competitorNative]=await q("select name,handle,status from seller where id=$1",
+    [competitor.seller_id])
+  assert.equal(competitorNative?.status,"open")
+  assert.notEqual(competitorNative?.name,formerName)
+  assert.equal((await q("select count(*)::int n from da_store_rename_request where seller_id=$1 and status in ('pending_review','approving')",
+    [competitor.seller_id]))[0].n,0,
+    "Third Store must have no unrelated pending request that could mask reservation denial")
+  const c=proposal(competitor)
+  assert.equal((await post(owner,c)).status,409,
+    "Third Store C cannot claim another Store's assigned right")
+  assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
+    [c.request_id]))[0].n,0,"Denied C request must not persist")
+  if(sourceVacated){
+    // The transfer's permanent B-only reservation must still exclude C when
+    // A's ordinary approved old-name hold has expired. Alter only the
+    // isolated task-owned historical decision timestamp, then restore it.
+    // At this point B has NOT acquired the native name, so C's 409 cannot
+    // be explained by a collision with B's current Seller name/URL.
+    const priorHold=await q(`select id,approved_at from da_store_rename_request
+      where seller_id=$1 and old_name=$2 and old_handle=$3 and status='approved'`,
+      [source.seller_id,formerName,formerHandle])
+    assert.equal(priorHold.length,1,"One exact source old-name hold expected")
+    assert.ok(priorHold[0].approved_at)
+    const changed=await q(`update da_store_rename_request
+      set approved_at=clock_timestamp()-interval '30 days 1 second'
+      where id=$1 and status='approved' returning id`,[priorHold[0].id])
+    assert.equal(changed.length,1)
+    try{
+      const [clock]=await q(`select (approved_at<=clock_timestamp()-interval '30 days')
+        as expired from da_store_rename_request where id=$1`,[priorHold[0].id])
+      assert.equal(clock.expired,true,"Source A's 30-day hold must actually be over")
+      const cExpired=proposal(competitor)
+      assert.equal((await post(owner,cExpired)).status,409,
+        "C must not take the assigned name even after the normal 30-day hold")
+      assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
+        [cExpired.request_id]))[0].n,0)
+      assert.equal((await q(`select count(*)::int n from da_audit_event
+        where action='organization.store_rename_requested'
+          and new_values->>'request_id'=$1`,[cExpired.request_id]))[0].n,0,
+        "Post-hold denied C must not create a canonical request audit")
+      assert.equal((await q(`select count(*)::int n from da_store_name_transfer
+        where status='assigned' and source_seller_id=$1 and target_seller_id=$2`,
+        [source.seller_id,target.seller_id]))[0].n,1,
+        "B-only transfer reservation remains durable past day 30")
+    }finally{
+      const restored=await q(`update da_store_rename_request set approved_at=$2
+        where id=$1 and status='approved' returning approved_at`,
+        [priorHold[0].id,priorHold[0].approved_at])
+      assert.equal(restored.length,1)
+      assert.equal(String(restored[0].approved_at),String(priorHold[0].approved_at),
+        "Isolated historical approval timestamp must be restored exactly")
+    }
+  }
+  await owner.select(targetOrganizationName,"owner")
+  const [before]=await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [target.seller_id])
+  assert.equal(before?.id,target.seller_id)
+  assert.equal(before.status,"open")
+  const b=proposal(target)
+  if(sourceVacated){
+    // The exception requires the original transfer decision's durable
+    // audit/outbox; corrupt only this task-owned disposable PostgreSQL row,
+    // assert no Owner request survives, then restore it even on failure.
+    const audited=await q(`select x.id from da_store_name_transfer t
+      join da_audit_outbox x on x.source_audit_event_id=t.source_audit_event_id
+        and x.source_module='dogruadres-access' and x.deleted_at is null
+      where t.source_seller_id=$1 and t.target_seller_id=$2 and t.status='assigned'`,
+      [source.seller_id,target.seller_id])
+    assert.equal(audited.length,1)
+    assert.equal((await q(`update da_audit_outbox
+      set deleted_at=clock_timestamp() where id=$1 and deleted_at is null
+      returning id`,[audited[0].id])).length,1)
+    try{
+      const tampered=proposal(target)
+      assert.equal((await post(owner,tampered)).status,409,
+        "Missing audited transfer must never waive a protected old name")
+      assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
+        [tampered.request_id]))[0].n,0)
+    }finally{
+      assert.equal((await q(`update da_audit_outbox
+        set deleted_at=null where id=$1 and deleted_at is not null
+        returning id`,[audited[0].id])).length,1)
+    }
+  }
+  const result=await post(owner,b)
+  if(!sourceVacated){
+    assert.equal(result.status,409,
+      "B cannot take the transferred name while A still uses it")
+    assert.deepEqual((await q("select id,name,handle,status,approved_at from seller where id=$1",
+      [target.seller_id]))[0],before)
+    assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
+      [b.request_id]))[0].n,0)
+    return
+  }
+  const [oldSource]=await q("select name,handle from seller where id=$1",
+    [source.seller_id])
+  assert.notEqual(oldSource?.name,formerName)
+  assert.notEqual(oldSource?.handle,formerHandle)
+  assert.equal(result.status,201,
+    "Assigned B must request the old name via existing Owner API")
+  assert.equal(result.body?.status,"pending_review")
+  const [pending]=await q("select id,status from da_store_rename_request where id=$1",
+    [b.request_id])
+  assert.equal(pending?.status,"pending_review")
+  // Simulate the first durable approval claim on disposable PG16, without
+  // invoking native Mercur or actually killing a process. Restore even on FAIL.
+  const decisionAudits=async()=>Number((await q(`select count(*)::int n
+    from da_audit_event where new_values->>'request_id'=$1 and
+    action in ('organization.store_rename_approved','organization.store_rename_rejected')`,
+    [b.request_id]))[0].n)
+  const auditBefore=await decisionAudits()
+  assert.equal((await q(`update da_store_rename_request set status='approving'
+    where id=$1 and status='pending_review' returning id`,[b.request_id])).length,1)
+  try{
+    const ownerRead=await owner.callFunction(
+      "async function(url){const r=await fetch(url);return {status:r.status,body:await r.json()}}",
+      "/personal/store-rename-requests?"+new URLSearchParams({
+        organization_id:target.organization_id,seller_id:target.seller_id
+      }).toString())
+    assert.equal(ownerRead.status,200)
+    assert.equal(ownerRead.body?.requests?.find((r:any)=>r.id===b.request_id)?.status,
+      "approving","Owner must read the durable unresolved claim")
+    const staffRead=await reviewer.callFunction(
+      "async function(){const r=await fetch('/personal/platform/store-renames?page=0');"+
+      "return {status:r.status,body:await r.json()}}")
+    assert.equal(staffRead.status,200)
+    assert.equal(staffRead.body?.pending?.find((r:any)=>r.request_id===b.request_id)?.status,
+      "approving","Live Staff grant must reveal the same unresolved claim")
+    const repeat=await reviewer.callFunction(
+      "async function(body){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/platform/store-renames',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body});return r.status}",
+      JSON.stringify({action:"approve",request_id:b.request_id,seller_id:b.seller_id}))
+    assert.equal(repeat,409,"Claimed approval must not run native Mercur twice")
+    assert.equal(await decisionAudits(),auditBefore,
+      "Rejected replay and readback have zero decision audit side effects")
+    await owner.send("Page.bringToFront")
+    await owner.wait("document.visibilityState==='visible'")
+    await owner.wait("!document.getElementById('store-rename-panel').hidden")
+    await owner.click("#store-rename-refresh")
+    await owner.wait("document.getElementById('store-rename-status').textContent.includes('platform uzlaştırması gerekir')")
+    const ownerUI=await owner.callFunction(
+      "function(){return {disabled:document.querySelector("+
+      "'#store-rename-form button[type=submit]').disabled,"+
+      "visible:document.getElementById('store-rename-history').textContent.includes('Onay işlemi belirsiz')}}")
+    assert.deepEqual(ownerUI,{disabled:true,visible:true},
+      "Owner must see uncertain status and cannot submit a new rename")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+    await reviewer.click("#store-rename-review-refresh")
+    await reviewer.wait("document.getElementById('store-rename-review-list').textContent.includes('Onay işlemi belirsiz')")
+    const staffUI=await reviewer.callFunction(
+      "function(name){const row=Array.from(document.querySelectorAll("+
+      "'#store-rename-review-list > div')).find(e=>e.textContent.includes(name));"+
+      "return {visible:!!row,buttons:row?.querySelectorAll('button').length??-1}}",
+      formerName)
+    assert.deepEqual(staffUI,{visible:true,buttons:0},
+      "Staff uncertain claim must be visible without approve/reject controls")
+  }finally{
+    assert.equal((await q(`update da_store_rename_request set status='pending_review'
+      where id=$1 and status='approving' returning id`,[b.request_id])).length,1,
+      "Disposable PG16 status must be restored exactly")
+  }
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: in-flight rename claim Owner+Staff read, safe disabled UI, POST409, no new decision audit; synthetic PG status restored\n")
+  await reviewer.send("Page.bringToFront")
+  await reviewer.wait("document.visibilityState==='visible'")
+  await reviewer.click("#store-rename-review-refresh")
+  // A previous 'approving' readback row stays in the DOM while the
+  // authorized pending-review GET refresh is running. Never treat that stale
+  // read-only row as a freshly actionable approval target.
+  await reviewer.wait("Array.from(document.querySelectorAll('#store-rename-review-list > div'))"+
+    ".some(e=>e.textContent.includes("+JSON.stringify(formerName)+") && "+
+    "Array.from(e.querySelectorAll('button')).some(b=>"+
+    "b.textContent.includes('Yeni ad ve bağlantıyı onayla')&&!b.disabled))")
+  const clicked=await reviewer.callFunction(
+    "function(name){const row=Array.from(document.querySelectorAll("+
+    "'#store-rename-review-list > div')).find(e=>e.textContent.includes(name));"+
+    "const btn=Array.from(row?.querySelectorAll('button')??[])"+
+    ".find(b=>b.textContent.includes('Yeni ad ve bağlantıyı onayla'));"+
+    "if(!btn||btn.disabled)return false;const previous=window.confirm;"+
+    "window.confirm=()=>true;try{btn.click()}finally{window.confirm=previous}return true}",
+    formerName)
+  assert.equal(clicked,true,"Real Staff approval button must decide B")
+  await reviewer.wait("document.getElementById('store-rename-review-status').textContent.includes('etkinleşti')")
+  const [after]=await q("select id,name,handle,status,approved_at from seller where id=$1",
+    [target.seller_id])
+  assert.equal(after.id,before.id,"B retains its native Seller ID")
+  assert.equal(after.name,formerName)
+  assert.equal(after.handle,formerHandle)
+  assert.equal(after.status,before.status)
+  assert.equal(String(after.approved_at),String(before.approved_at))
+  const proof=await q(`select r.status,e.action,x.id outbox_id
+    from da_store_rename_request r
+    join da_audit_event e on e.organization_id=r.organization_id
+      and e.target_id=r.seller_id
+      and e.action='organization.store_rename_approved'
+      and e.new_values->>'request_id'=r.id and e.deleted_at is null
+    join da_audit_outbox x on x.source_audit_event_id=e.id and x.deleted_at is null
+    where r.id=$1`,[b.request_id])
+  assert.equal(proof.length,1)
+  assert.equal(proof[0].status,"approved")
+  assert.ok(proof[0].outbox_id)
+  const [stillHeld]=await q(`select count(*)::int n from da_store_rename_request
+    where seller_id=$1 and old_name=$2 and old_handle=$3 and status='approved'
+      and approved_at>clock_timestamp()-interval '30 days'`,
+    [source.seller_id,formerName,formerHandle])
+  assert.equal(stillHeld.n,1,"A's normal 30-day hold stays active")
+  const [assignment]=await q(`select source_seller_id,target_seller_id,status
+    from da_store_name_transfer where source_seller_id=$1 and
+      target_seller_id=$2 and old_name=$3 and old_handle=$4`,
+    [source.seller_id,target.seller_id,formerName,formerHandle])
+  assert.equal(assignment?.status,"assigned")
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible'")
+  await owner.select(competitorOrganizationName,"owner")
+  const cAfter=proposal(competitor)
+  assert.equal((await post(owner,cAfter)).status,409,
+    "C cannot take the transferred name after B adopts it")
+  assert.equal((await q("select count(*)::int n from da_store_rename_request where id=$1",
+    [cAfter.request_id]))[0].n,0)
+  const cartHistory=await snapshotB22TransferredStoreCart({
+    q,query:input.cartHistory.query,cartId:input.cartHistory.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.cartHistory.customerId
+  })
+  assert.deepEqual(cartHistory,input.cartHistory.snapshot,
+    "B's native name adoption cannot transfer original Cart/Offer/Seller attribution")
+  await assertSourceOrderUnchanged(q,input.completedOrder,"Recipient B native adoption")
+  if(sourceVacated){
+    // Source A's ordinary 30-day old-name hold stays live. A canonical
+    // assignment ONLY exempts the named recipient B after A vacates both
+    // its native name and URL; an unrelated C never receives the exemption.
+    const nativeBeforeReopen=(await q(
+      "select id,name,handle,status,approved_at from seller where id=$1",
+      [target.seller_id]))[0]
+    assert.equal(nativeBeforeReopen.status,"open")
+    assert.equal(nativeBeforeReopen.name,formerName)
+    assert.equal(nativeBeforeReopen.handle,formerHandle)
+    const readEvents=()=>q(
+      "select e.id,e.action,e.new_values,x.id outbox_id "+
+      "from da_audit_event e left join da_audit_outbox x "+
+      "on x.source_audit_event_id=e.id and x.source_module='dogruadres-access' "+
+      "and x.deleted_at is null where e.organization_id=$1 and e.target_id=$2 "+
+      "and e.action in ('organization.store_reactivation_claimed',"+
+      "'organization.store_reactivated') and e.deleted_at is null "+
+      "order by e.occurred_at,e.id",[target.organization_id,target.seller_id])
+    const beforeEvents=await readEvents()
+    const beforeIds=new Set(beforeEvents.map((r:any)=>r.id))
+    const postReopen=(actor:B06Chrome)=>actor.callFunction(
+      "async function(body){const s=await(await fetch('/personal/session')).json();"+
+      "const r=await fetch('/personal/platform/stores',{method:'POST',"+
+      "headers:{'content-type':'application/json','x-csrf-token':s.csrf_token},"+
+      "body});return {status:r.status,body:await r.json()}}",
+      JSON.stringify({action:"unsuspend",application_id:target.application_id,
+        seller_id:target.seller_id}))
+    const staffList=()=>reviewer.callFunction(
+      "async function(id){const r=await fetch('/personal/platform/stores?page=0');"+
+      "const body=await r.json();return {status:r.status,"+
+      "row:body.suspended?.find(x=>x.seller_id===id)}}",target.seller_id)
+    const suspend=input.suspend
+    if(!suspend)throw new Error("Native suspend required for transferred recipient reopening")
+    await suspend()
+    const suspended=(await q(
+      "select id,name,handle,status,approved_at from seller where id=$1",
+      [target.seller_id]))[0]
+    assert.deepEqual(suspended,{...nativeBeforeReopen,status:"suspended"},
+      "Native Seller suspension must retain B's identity, new name/URL and approval")
+    await owner.send("Page.bringToFront")
+    await owner.wait("document.visibilityState==='visible'")
+    await owner.select(targetOrganizationName,"owner")
+    assert.equal((await postReopen(owner)).status,403,
+      "Owner B cannot invoke the platform Staff unsuspend endpoint")
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
+
+    // A forged or missing canonical transfer outbox MUST NOT waive A's hold.
+    const proof=await q(
+      "select x.id outbox_id from da_store_name_transfer t "+
+      "join da_audit_event e on e.id=t.source_audit_event_id "+
+      "and e.action='organization.store_name_right_assigned' "+
+      "and e.deleted_at is null "+
+      "join da_audit_outbox x on x.source_audit_event_id=e.id "+
+      "and x.source_module='dogruadres-access' and x.deleted_at is null "+
+      "where t.status='assigned' and t.source_seller_id=$1 "+
+      "and t.target_seller_id=$2 and t.old_name=$3 and t.old_handle=$4",
+      [source.seller_id,target.seller_id,formerName,formerHandle])
+    assert.equal(proof.length,1,"One canonical audited transfer is required")
+    assert.equal((await q(
+      "update da_audit_outbox set deleted_at=clock_timestamp() "+
+      "where id=$1 and deleted_at is null returning id",
+      [proof[0].outbox_id])).length,1)
+    try{
+      assert.equal((await postReopen(reviewer)).status,409,
+        "A transfer without its canonical outbox must not reopen B during A's hold")
+      const blocked=await staffList()
+      assert.equal(blocked.status,200)
+      assert.equal(blocked.row?.name_review_required,true,
+        "Staff must see review-only state while B's entitlement proof is missing")
+      assert.deepEqual((await q(
+        "select id,name,handle,status,approved_at from seller where id=$1",
+        [target.seller_id]))[0],suspended)
+      assert.deepEqual(await readEvents(),beforeEvents,
+        "Denied reopening must have zero claimed/completed audit or outbox effects")
+    }finally{
+      assert.equal((await q(
+        "update da_audit_outbox set deleted_at=null "+
+        "where id=$1 and deleted_at is not null returning id",
+        [proof[0].outbox_id])).length,1,
+        "Restore task-owned canonical outbox after negative test")
+    }
+    const eligible=await staffList()
+    assert.equal(eligible.status,200)
+    assert.equal(eligible.row?.name_review_required,false,
+      "Source-proven transferred B must be eligible before day 30")
+    const opened=await postReopen(reviewer)
+    assert.equal(opened.status,200,
+      "Authorized Staff must reopen B despite source A's active old-name hold")
+    assert.equal(opened.body?.status,"open")
+    assert.deepEqual((await q(
+      "select id,name,handle,status,approved_at from seller where id=$1",
+      [target.seller_id]))[0],nativeBeforeReopen,
+      "Real native unsuspend must preserve B's Seller ID, name, URL and approved_at")
+    const afterEvents=await readEvents()
+    const fresh=afterEvents.filter((e:any)=>!beforeIds.has(e.id))
+    assert.equal(fresh.filter((e:any)=>e.action==="organization.store_reactivation_claimed").length,1)
+    assert.equal(fresh.filter((e:any)=>e.action==="organization.store_reactivated").length,1)
+    assert.equal(fresh.length,2,"Exactly one canonical claim and completion must be added")
+    assert.ok(fresh.every((e:any)=>e.outbox_id),
+      "Both new native reactivation phases need durable source outbox")
+    const claim=fresh.find((e:any)=>e.action==="organization.store_reactivation_claimed")
+    const completed=fresh.find((e:any)=>e.action==="organization.store_reactivated")
+    assert.equal(completed.new_values.claim_audit_id,claim.id,
+      "Completion must link the exact new reactivation claim")
+    const [notice]=await q(
+      "select count(*)::int n from da_notification_receipt where audit_event_id=$1",
+      [completed.id])
+    assert.ok(notice.n>=1,"The current Owner gets a private completion receipt")
+    assert.equal((await postReopen(reviewer)).status,409,
+      "A replay must not run native unsuspend or create additional events")
+    assert.deepEqual(await readEvents(),afterEvents)
+    assert.equal((await q(
+      "select count(*)::int n from da_store_rename_request "+
+      "where seller_id=$1 and old_name=$2 and old_handle=$3 "+
+      "and status='approved' and approved_at>clock_timestamp()-interval '30 days'",
+      [source.seller_id,formerName,formerHandle]))[0].n,1,
+      "Reopening B must not shorten or delete A's 30-day hold")
+    process.stdout.write("PASS B22 Chrome/HTTPS/PG16: assigned recipient B reopens same native Seller before source A 30-day hold expires, Staff HTTP200, Owner403, replay409; missing transfer outbox HTTP409 review-only with zero audit; one claim+completion outbox and Owner receipt\n")
+  }
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: completed native source OrderGroup/Order IDs, Order-Cart FK, source Seller/Offer and immutable Buyer attribution unchanged across A→B transfer, A same-ID recovery and B name adoption; zero payment\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: pre-existing native two-Seller Cart identity, Customer, line/Offer/Seller links and immutable Buyer attribution unchanged across A→B name right assignment, A same-ID recovery and B native adoption; historical Orders NOT TESTED\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: recipient B native name and URL adopted after source A vacates, historical 30-day hold retained, unrelated Store C HTTP409 before/after, Staff approval and audit/outbox durable\n")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: transferred old name remains reserved for B after source hold day 30, C HTTPS409 without request/audit, original timestamp restored, B native adoption succeeds\n")
+}
+
+/** Complete the previously assigned right with the existing real Owner-rename
+ * and Staff-unsuspend journey; keep the unrelated checkout fixture isolated.
+ */
+export async function verifyB22TransferredRecovery(input:{
+  owner:B06Chrome;reviewer:B06Chrome;q:Rows;
+  source:Store;target:Store;targetExpectedName:string;
+  query:any;cartId:string;customerId:string;
+  completedOrder:CompletedOrderHistory;
+  competitor:Pick<Store,'seller_id'|'organization_id'>;targetOrganizationName:string;competitorOrganizationName:string;
+  renameAndReopen:()=>Promise<void>;
+  restoreFixture:()=>Promise<unknown>
+}):Promise<{formerName:string;formerHandle:string;cartHistory:CartHistory;completedOrder:CompletedOrderHistory}>{
+  const {owner,reviewer,q,source,target,targetExpectedName}=input
+  const initialCart=await snapshotB22TransferredStoreCart({
+    q,query:input.query,cartId:input.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.customerId
+  })
+  const cartHistory:CartHistory={
+    query:input.query,cartId:input.cartId,customerId:input.customerId,
+    snapshot:initialCart
+  }
+  const before=(await q(
+    "select id,name,handle,status,approved_at from seller where id=$1",
+    [source.seller_id]))[0]
+  assert.equal(before?.status,"suspended")
+  const assignment=await verifyB22ExceptionalNameRight({
+    owner,reviewer,q,source,target
+  })
+  assert.equal(assignment.formerName,before.name)
+  assert.deepEqual(await snapshotB22TransferredStoreCart({
+    q,query:input.query,cartId:input.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.customerId
+  }),initialCart,"Name right decision must not reassign existing Medusa Cart links")
+  await assertSourceOrderUnchanged(q,input.completedOrder,"Initial Staff name-right assignment")
+  const recipientScope={owner,reviewer,q,source,target,cartHistory,
+    completedOrder:input.completedOrder,competitor:input.competitor,
+    targetOrganizationName:input.targetOrganizationName,
+    competitorOrganizationName:input.competitorOrganizationName,
+    ...assignment}
+  await verifyAssignedRecipientUse({...recipientScope,sourceVacated:false})
+  await owner.send("Page.bringToFront")
+  await owner.wait("document.visibilityState==='visible'")
+  await input.renameAndReopen()
+  const recovered=(await q(
+    "select id,name,handle,status,approved_at from seller where id=$1",
+    [source.seller_id]))[0]
+  assert.equal(recovered.id,before.id)
+  assert.equal(recovered.status,"open")
+  assert.notEqual(recovered.name,assignment.formerName)
+  assert.equal(String(recovered.approved_at),String(before.approved_at))
+  const recipient=(await q("select name,status from seller where id=$1",
+    [target.seller_id]))[0]
+  assert.equal(recipient.name,targetExpectedName)
+  assert.equal(recipient.status,"open")
+  // B's native adoption runs AFTER the unrelated Gamma rename regression
+  // tests, so their historical 'first rename' fixture is not invalidated.
+  // Later independent Cart fixture expects the historical source suspended.
+  await input.restoreFixture()
+  assert.equal((await q("select status from seller where id=$1",
+    [source.seller_id]))[0].status,"suspended")
+  assert.equal((await q("select id from seller where id=$1",
+    [source.seller_id]))[0].id,source.seller_id)
+  assert.deepEqual(await snapshotB22TransferredStoreCart({
+    q,query:input.query,cartId:input.cartId,
+    sourceSellerId:source.seller_id,organizationId:source.organization_id,
+    customerId:input.customerId
+  }),initialCart,"Same-ID source recovery must retain native Cart identity")
+  await assertSourceOrderUnchanged(q,input.completedOrder,"Source A same-ID recovery")
+  process.stdout.write("PASS B22 Chrome/HTTPS/PG16: exceptional suspended Seller name-right assigned to approved separate Store; Owner new name and Staff reopen same ID, native/Order untouched before rename, foreign/CSRF/replay denied, audit/outbox and recipient reservation\n")
+  return {...assignment,cartHistory,completedOrder:input.completedOrder}
+}

@@ -1,7 +1,7 @@
-import { isStripe, paymentInfoMap } from "@/lib/constants"
+import { paymentInfoMap } from "@/lib/constants"
 import { convertToLocale } from "@/lib/helpers/money"
 import { HttpTypes } from "@medusajs/types"
-import { Container, Text } from "@medusajs/ui"
+import { Text } from "@medusajs/ui"
 
 type ShippingDetailsProps = {
   order: HttpTypes.StoreOrder
@@ -47,7 +47,7 @@ const OrderShipping = ({ order }: ShippingDetailsProps) => {
           Delivery method
         </Text>
         <Text className="txt-medium text-ui-fg-subtle">
-          {(order as any).shipping_methods[0]?.name} (
+          {order.shipping_methods?.[0]?.name} (
           {convertToLocale({
             amount: order.shipping_methods?.[0].total ?? 0,
             currency_code: order.currency_code,

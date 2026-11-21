@@ -43,6 +43,42 @@ describe("M0 B12 safe invitation resend", () => {
 
   afterEach(() => jest.restoreAllMocks())
 
+  it("refuses retired Admin through the direct invitation service without even reading targets",async()=>{
+    const {service,context,tx,create,update,audit}=setup()
+    const find=jest.spyOn(service as any,"getActiveMembership")
+    await expect(service.createOrganizationInvitation({...input,role:"admin"},context))
+      .rejects.toThrow("Organization Admin invitations are not permitted")
+    expect(find).not.toHaveBeenCalled()
+    expect(tx.execute).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(audit).not.toHaveBeenCalled()
+  })
+
+  it("refuses an old pending Admin invitation without activating membership or changing the invitation",async()=>{
+    const {service,context,tx,create,update,audit}=setup()
+    const token=deriveInvitationToken("dainv_legacy")
+    const legacy={
+      id:"dainv_legacy",organization_id:"daorg_test",role:"admin",
+      recipient_email:"recipient@example.test",status:"pending",
+      token_hash:hashInvitationToken(token),expires_at:new Date(Date.now()+60000)
+    }
+    const list=jest.spyOn(service as any,"listInvitations").mockResolvedValue([legacy])
+    const lock=jest.spyOn(service as any,"lockInvitation_").mockResolvedValue(undefined)
+    const memberships=jest.spyOn(service as any,"createMemberships").mockResolvedValue([])
+    await expect(service.acceptOrganizationInvitation({
+      token,email:"recipient@example.test",email_verified:true,
+      actor:{actor_type:"user",actor_id:"user_recipient"} as any
+    },context)).rejects.toThrow("Legacy Organization Admin invitations cannot be accepted")
+    expect(list).toHaveBeenCalledTimes(2)
+    expect(lock).toHaveBeenCalledWith("dainv_legacy",context)
+    expect(tx.execute).not.toHaveBeenCalled()
+    expect(memberships).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(audit).not.toHaveBeenCalled()
+  })
+
   it("reuses a valid pending token without revoking, creating or auditing again", async () => {
     const {service,tx,context,create,update,audit}=setup()
     const existing = {

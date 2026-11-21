@@ -8,7 +8,20 @@ import { organizationActionAllowed } from "./role-action-policy"
  * without backfilling or widening access. All events need source outbox.
  * This read is NOT a Person permission grant or a legal ownership judgment.
  */
-export async function platformApprovedSellerIds(db: SecuritySql, organizationId: string): Promise<string[]> {
+/** The optional candidate list is ONLY for a bounded, read-only history page.
+ * All other callers keep the existing entire-Organization 50-row guard.
+ * Never turn a truncated Organization-wide result into an authorization grant.
+ */
+export async function platformApprovedSellerIds(
+  db: SecuritySql, organizationId: string, candidateSellerIds?: readonly string[]
+): Promise<string[]> {
+  if (candidateSellerIds !== undefined &&
+      (candidateSellerIds.length>30 ||
+       candidateSellerIds.some(id=>!/^sel_[A-Za-z0-9_-]+$/.test(id)) ||
+       new Set(candidateSellerIds).size!==candidateSellerIds.length))
+    throw new IdentityAccessDenied()
+  if (candidateSellerIds?.length===0) return []
+  const sellerPredicate=candidateSellerIds===undefined?"":`and o.seller_id in (${candidateSellerIds.map(()=>"?").join(",")})`
   const rows = await db.execute(
     `select o.seller_id
        from da_organization_seller_ownership o
@@ -29,10 +42,11 @@ export async function platformApprovedSellerIds(db: SecuritySql, organizationId:
           or (e.action='organization.store_association_approved'
            and e.resource='store-association'))
        where o.organization_id=? and o.revoked_at is null
+         ${sellerPredicate}
          and exists (select 1 from da_audit_outbox x
            where x.source_audit_event_id=e.id
              and x.source_module='dogruadres-access' and x.deleted_at is null)
-       order by o.seller_id`, [organizationId]
+       order by o.seller_id`, [organizationId,...(candidateSellerIds??[])]
   ) as { seller_id: unknown }[]
   if (rows.length>50 || rows.some(r=>typeof r.seller_id!=="string" ||
       !/^sel_[A-Za-z0-9_-]+$/.test(r.seller_id as string)) ||

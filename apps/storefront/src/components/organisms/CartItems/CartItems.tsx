@@ -4,12 +4,13 @@ import {
   CartItemsProducts,
 } from "@/components/cells"
 import { HttpTypes } from "@medusajs/types"
+import type { CartItemsBySeller, CartLineWithOffer } from "@/types/cart"
 import { EmptyCart } from "./EmptyCart"
 
 export const CartItems = ({ cart }: { cart: HttpTypes.StoreCart | null }) => {
   if (!cart) return null
 
-  const groupedItems: any = groupItemsBySeller(cart)
+  const groupedItems = groupItemsBySeller(cart)
 
   if (!Object.keys(groupedItems).length) return <EmptyCart />
 
@@ -29,14 +30,14 @@ export const CartItems = ({ cart }: { cart: HttpTypes.StoreCart | null }) => {
 }
 
 function groupItemsBySeller(cart: HttpTypes.StoreCart) {
-  const groupedBySeller: any = {}
+  const groupedBySeller: CartItemsBySeller = {}
 
-  cart.items?.forEach((item: any) => {
+  cart.items?.forEach((item: CartLineWithOffer) => {
     const seller = item.offer?.seller
     if (seller) {
       if (!groupedBySeller[seller.id]) {
         groupedBySeller[seller.id] = {
-          seller: { ...seller, photo: seller.photo ?? seller.logo },
+          seller: { ...seller, photo: seller.photo ?? seller.logo ?? undefined },
           items: [],
         }
       }

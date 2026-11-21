@@ -1,3 +1,5 @@
+import type { HttpTypes } from "@medusajs/types"
+import type { StorefrontReturnRequest } from "@/lib/data/orders"
 import { OrdersPagination } from "@/components/organisms/OrdersPagination/OrdersPagination"
 import { SingleOrderReturn } from "@/components/organisms/SingleOrderReturn/SingleOrderReturn"
 import { Heading } from "@medusajs/ui"
@@ -12,11 +14,11 @@ export const OrderReturnRequests = ({
   currentReturn,
   returnReasons,
 }: {
-  returns: any[]
-  user: any
+  returns: StorefrontReturnRequest[]
+  user: HttpTypes.StoreCustomer | null
   page: string
   currentReturn: string
-  returnReasons: any[]
+  returnReasons: HttpTypes.StoreReturnReason[]
 }) => {
   const pages = Math.ceil(returns.length / LIMIT)
   const currentPage = +page || 1

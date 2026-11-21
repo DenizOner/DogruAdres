@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { RadioGroup } from '@headlessui/react';
 import { CheckCircleSolid, CreditCard } from '@medusajs/icons';
 import { Container, Heading, Text } from '@medusajs/ui';
+import type { HttpTypes } from '@medusajs/types';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { Button } from '@/components/atoms';
@@ -16,23 +17,17 @@ import PaymentContainer, {
   StripeCardContainer
 } from '../../organisms/PaymentContainer/PaymentContainer';
 
-type StoreCardPaymentMethod = any & {
-  service_zone?: {
-    fulfillment_set: {
-      type: string;
-    };
-  };
-};
+type StoreCardPaymentMethod = HttpTypes.StorePaymentProvider;
 
 const CartPaymentSection = ({
   cart,
   availablePaymentMethods
 }: {
-  cart: any;
+  cart: HttpTypes.StoreCart;
   availablePaymentMethods: StoreCardPaymentMethod[] | null;
 }) => {
   const activeSession = cart.payment_collection?.payment_sessions?.find(
-    (paymentSession: any) => paymentSession.status === 'pending'
+    (paymentSession) => paymentSession.status === 'pending'
   );
 
   const [isLoading, setIsLoading] = useState(false);
@@ -61,9 +56,10 @@ const CartPaymentSection = ({
     }
   };
 
-  const paidByGiftcard = cart?.gift_cards && cart?.gift_cards?.length > 0 && cart?.total === 0;
+  const giftCards = 'gift_cards' in cart && Array.isArray(cart.gift_cards) ? cart.gift_cards : [];
+  const paidByGiftcard = giftCards.length > 0 && cart.total === 0;
 
-  const paymentReady = (activeSession && cart?.shipping_methods.length !== 0) || paidByGiftcard;
+  const paymentReady = (activeSession && (cart.shipping_methods?.length ?? 0) !== 0) || paidByGiftcard;
 
   const createQueryString = useCallback(
     (name: string, value: string) => {
@@ -99,8 +95,8 @@ const CartPaymentSection = ({
           scroll: false
         });
       }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Unable to set payment method');
     } finally {
       setIsLoading(false);
     }

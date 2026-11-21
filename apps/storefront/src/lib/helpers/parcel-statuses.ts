@@ -1,7 +1,7 @@
 export const steps = ["Received", "Preparing", "Shipped", "Delivered"]
 
 export const parcelStatuses = (
-  order: "not_fulfilled" | "fulfilled" | "delivered" | "shipped"
+  order: string | null | undefined
 ) => {
   switch (order) {
     case "not_fulfilled":

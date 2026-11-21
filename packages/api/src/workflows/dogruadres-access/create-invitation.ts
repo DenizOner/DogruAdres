@@ -8,7 +8,7 @@ type Input = Readonly<{
   actor_type: string
   actor_id: string
   email: string
-  role: "admin" | "member"
+  role: "member"
 }>
 
 const createInvitationStep = createStep(

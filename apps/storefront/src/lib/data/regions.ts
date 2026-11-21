@@ -52,7 +52,7 @@ export const getRegion = async (countryCode: string) => {
     });
 
     return regionMap.get(countryCode) ?? regionMap.get('us');
-  } catch (e) {
+  } catch {
     return null;
   }
 };

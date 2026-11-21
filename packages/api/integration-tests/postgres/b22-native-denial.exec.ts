@@ -107,6 +107,8 @@ export default async function({container}:any){
       {path:"/store/offers",method:"GET"},
       {path:"/store/sellers",method:"GET"},
       {path:"/store/product-categories",method:"GET"},
+      // #244/#295: Keep native order-group reads closed even for arbitrary IDs.
+      {path:"/store/order-groups/og_synthetic",method:"GET"},
       {path:"/store/search",method:"POST"},
     ]
     for(const target of deniedCatalog){
@@ -129,6 +131,18 @@ export default async function({container}:any){
     const personalDenied=await personalOnly.json()
     assert.deepEqual(personalDenied,{message:"Personal session ingress required"})
     assertNoPrivateCatalogData(personalDenied)
+    // A genuine personal session is not an authorized Buyer Organization.
+    // Exercise the exact order-group read used by Storefront, rather than
+    // assuming that a closed product catalogue also closes order details.
+    const personalOrder=await fetch(base+"/store/order-groups/og_synthetic",{
+      headers:{cookie,"x-publishable-api-key":publishable.token},
+      redirect:"manual",signal:AbortSignal.timeout(15000)})
+    assert.equal(personalOrder.redirected,false,"Private order read must not redirect")
+    assert.equal(personalOrder.status,401,"Personal session alone must not read native order groups")
+    const orderDenied=await personalOrder.json()
+    assert.deepEqual(orderDenied,{message:"Personal session ingress required"})
+    assertNoPrivateCatalogData(orderDenied)
+    process.stdout.write("PASS #244 native order-group HTTP denied: anonymous and personal-session reads stay closed before native data\n")
     // Medusa may reject a malformed native Bearer at the framework boundary
     // with 400 before nativeIngress can return 401. Either is a closed result.
     // Pass a genuine publishable key so the test cannot pass simply because

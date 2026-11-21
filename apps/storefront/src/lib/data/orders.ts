@@ -8,6 +8,37 @@ import { sdk } from '../client';
 import medusaError from '../helpers/medusa-error';
 import { getAuthHeaders, getCacheOptions } from './cookies';
 
+// Legacy returns endpoints remain on the existing authorized SDK route.
+export type StorefrontOrderGroup = {
+  id: string;
+  display_id: number;
+  created_at: string;
+  orders: Array<HttpTypes.StoreOrder & { seller?: SellerDTO }>;
+  total?: number | null;
+  currency_code?: string | null;
+};
+
+export type ReturnableStoreOrder = HttpTypes.StoreOrder & {
+  seller: SellerDTO;
+  order_group: { id: string };
+};
+
+// Current return-request view contract of the existing Mercur store endpoint.
+// This is a declared response shape, not runtime acceptance evidence.
+export type StorefrontReturnRequest = {
+  id: string;
+  status: string;
+  line_items: Array<{
+    line_item_id: string;
+    reason_id?: string | null;
+    created_at: string;
+  }>;
+  order: HttpTypes.StoreOrder & {
+    seller: SellerDTO;
+    items: HttpTypes.StoreOrderLineItem[];
+  };
+};
+
 // TODO: legacy returns endpoints — migrate when the returns module lands
 type LooseRoute = {
   query: <T = unknown>(i?: never) => Promise<T>;
@@ -24,7 +55,7 @@ export const retrieveOrderGroup = async (id: string) => {
         headers: { ...(await getAuthHeaders()) },
         cache: 'no-cache'
       }
-    } as never) as unknown as Promise<{ order_group: Record<string, unknown> }>
+    } as never) as unknown as Promise<{ order_group: StorefrontOrderGroup }>
   )
     .then(({ order_group }) => order_group)
     .catch(err => medusaError(err));
@@ -45,9 +76,9 @@ export const retrieveOrder = async (id: string) => {
         next,
         cache: 'force-cache'
       }
-    } as never) as unknown as Promise<
-      HttpTypes.StoreOrderResponse & { seller: SellerDTO }
-    >
+    } as never) as unknown as Promise<{
+      order: ReturnableStoreOrder
+    }>
   )
     .then(({ order }) => order)
     .catch(err => medusaError(err));
@@ -67,12 +98,7 @@ export const createReturnRequest = async (data: Record<string, unknown>) => {
 export const getReturns = async () => {
   return storeLoose.returnRequest
     .query<{
-      order_return_requests: Array<
-        { line_items: Array<{ created_at: string; reason_id?: string }> } & Record<
-          string,
-          unknown
-        >
-      >;
+      order_return_requests: StorefrontReturnRequest[];
     }>({
       fields: '*line_items.reason_id',
       fetchOptions: {
@@ -123,7 +149,7 @@ export const listOrders = async (
       orders: Array<
         HttpTypes.StoreOrder & {
           seller: { id: string; name: string };
-          order_group: { id: string };
+          order_group: { id: string; created_at: string; display_id: number };
         }
       >;
     }>

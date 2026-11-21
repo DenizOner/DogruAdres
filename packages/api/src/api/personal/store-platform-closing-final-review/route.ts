@@ -1,0 +1,50 @@
+import type {MedusaRequest,MedusaResponse} from "@medusajs/framework/http"
+import {z} from "@medusajs/framework/zod"
+import {access,csrf,enabled,sessionToken} from "../security"
+import {IdentityAccessDenied} from "../../../modules/dogruadres-access/identity-session"
+
+export const AUTHENTICATE=false
+const request=z.object({
+  organization_id:z.string().regex(/^daorg_[A-Za-z0-9_-]{1,80}$/),
+  seller_id:z.string().regex(/^sel_[A-Za-z0-9_-]+$/),
+  request_id:z.string().regex(/^dasfr_[a-f0-9]{32}$/),
+  expected_version:z.literal(1),
+  reason:z.string().trim().min(10).max(500)
+}).strict()
+
+/** Only the current protected Owner may file the independent second-stage
+ * request. The action records a pending review; no Store reopening or
+ * irreversible closing decision is made here.
+ */
+export const POST=async(req:MedusaRequest,res:MedusaResponse)=>{
+  res.setHeader("Cache-Control","private, no-store")
+  res.setHeader("Vary","Cookie")
+  if(!enabled())return res.status(503).json({message:"Unavailable"})
+  let valid=false;try{valid=await csrf(req)}catch{}
+  if(!valid||req.headers.authorization!==undefined||
+     req.headers["x-seller-id"]!==undefined)
+    return res.status(403).json({message:"Access denied"})
+  const parsed=request.safeParse(req.body)
+  if(!parsed.success)return res.status(400).json({message:"Invalid input"})
+  try{
+    const result=await access(req).personalRequestPlatformStoreClosingFinalReview(
+      sessionToken(req),parsed.data)
+    if(!result)return res.status(403).json({message:"Access denied"})
+    if(result.status==="conflict")
+      return res.status(409).json({message:"Review window or status changed; reread"})
+    if(result.status!=="review_requested")
+      return res.status(503).json({message:"Outcome uncertain; reread"})
+    const state=await access(req).personalPlatformStoreClosingState(
+      sessionToken(req),parsed.data.organization_id,parsed.data.seller_id)
+    if(!state||state.final_review_requested!==true)
+      return res.status(503).json({message:"Outcome uncertain; reread"})
+    return res.status(200).json({...result,
+      organization_id:parsed.data.organization_id,seller_id:parsed.data.seller_id,
+      final_review_requested:true,permanent_finalization_enabled:false})
+  }catch(error){
+    return res.status(error instanceof IdentityAccessDenied?403:503).json({
+      message:error instanceof IdentityAccessDenied?"Access denied":
+        "Outcome uncertain; reread"
+    })
+  }
+}

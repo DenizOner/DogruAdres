@@ -67,8 +67,8 @@ export const ProductDetailsHeader = ({
     : allSearchParams
 
   const variantId =
-    product.variants?.find(({ options }: { options: any }) =>
-      options?.every((option: any) =>
+    product.variants?.find(({ options }) =>
+      options?.every((option) =>
         selectedVariant[option.option?.title.toLowerCase() || ""]?.includes(
           option.value
         )
@@ -135,7 +135,7 @@ export const ProductDetailsHeader = ({
         quantity: 1,
         countryCode: locale,
       })
-    } catch (error) {
+    } catch {
       toast.error({
         title: "Error adding to cart",
         description: "This offer does not have the required inventory",

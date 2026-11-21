@@ -3,6 +3,7 @@ import { listProducts } from "@/lib/data/products"
 import { listOffers } from "@/lib/data/offers"
 import { StoreOffer } from "@/lib/helpers/buybox"
 import { HomeProductSection } from "../HomeProductSection/HomeProductSection"
+import type { Product } from "@/types/product"
 import NotFound from "@/app/not-found"
 
 export const ProductDetailsPage = async ({
@@ -19,9 +20,13 @@ export const ProductDetailsPage = async ({
 
   if (!prod) return null
 
-  if (prod.seller?.store_status === "SUSPENDED") {
-    return NotFound()
-  }
+  // Preserve the pre-#159 optional seller presentation when an older
+  // Storefront API provides it. Master product DTOs do not promise this field.
+  const legacySeller = (prod as typeof prod & {
+    seller?: { store_status?: string; products?: Product[] }
+  }).seller
+
+  if (legacySeller?.store_status === "SUSPENDED") return NotFound()
 
   const { offers } = await listOffers({
     productId: prod.id,
@@ -45,7 +50,7 @@ export const ProductDetailsPage = async ({
       <div className="my-8">
         <HomeProductSection
           heading="Similar items"
-          products={prod.seller?.products}
+          products={legacySeller?.products}
           locale={locale}
         />
       </div>

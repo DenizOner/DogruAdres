@@ -1,20 +1,41 @@
 import { convertToLocale } from "./money"
 
-export const getPricesForVariant = (variant: any) => {
-  if (!variant?.prices[0]?.amount) {
+type SellerVariantPrice = {
+  amount: number
+  currency_code: string
+}
+
+type SellerVariant = {
+  id: string
+  sku?: string | null
+  prices?: SellerVariantPrice[] | null
+}
+
+type SellerProduct = {
+  id: string
+  variants?: SellerVariant[] | null
+}
+
+type PricedSellerVariant = SellerVariant & {
+  prices: [SellerVariantPrice, ...SellerVariantPrice[]]
+}
+
+export const getPricesForVariant = (variant: SellerVariant | null | undefined) => {
+  const price = variant?.prices?.[0]
+  if (!price?.amount) {
     return null
   }
 
   return {
-    calculated_price_number: variant.prices[0].amount,
+    calculated_price_number: price.amount,
     calculated_price: convertToLocale({
-      amount: variant.prices[0].amount,
-      currency_code: variant.prices[0].currency_code,
+      amount: price.amount,
+      currency_code: price.currency_code,
     }),
-    original_price_number: variant.prices[0].amount,
+    original_price_number: price.amount,
     original_price: convertToLocale({
-      amount: variant.prices[0].amount,
-      currency_code: variant.prices[0].currency_code,
+      amount: price.amount,
+      currency_code: price.currency_code,
     }),
   }
 }
@@ -23,7 +44,7 @@ export function getSellerProductPrice({
   product,
   variantId,
 }: {
-  product: any
+  product: SellerProduct | null | undefined
   variantId?: string
 }) {
   if (!product || !product.id) {
@@ -35,11 +56,9 @@ export function getSellerProductPrice({
       return null
     }
 
-    const cheapestVariant: any = product.variants
-      .filter((v: any) => !!v.prices?.[0])
-      .sort((a: any, b: any) => {
-        return a.prices?.[0].amount - b.prices?.[0].amount
-      })[0]
+    const cheapestVariant = product.variants
+      .filter((v): v is PricedSellerVariant => !!v.prices?.[0])
+      .sort((a, b) => a.prices[0].amount - b.prices[0].amount)[0]
 
     return getPricesForVariant(cheapestVariant)
   }
@@ -49,8 +68,8 @@ export function getSellerProductPrice({
       return null
     }
 
-    const variant: any = product.variants?.find(
-      (v: any) => v.id === variantId || v.sku === variantId
+    const variant = product.variants?.find(
+      (v) => v.id === variantId || v.sku === variantId
     )
 
     if (!variant) {
