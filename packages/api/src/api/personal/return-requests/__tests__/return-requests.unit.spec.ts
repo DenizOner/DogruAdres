@@ -66,7 +66,9 @@ describe("Buyer Organization Returns read — fail closed, GET only", () => {
       order_b: [{ id: "return_b", order_id: "order_b", status: "received", created_at: dateB }],
     }
     graph = jest.fn(async ({ entity, filters }: any) => {
-      if (entity === "order") return { data: [...orders] }
+      if (entity === "order") return { data: filters.id
+        ? orders.filter(o => o.id === filters.id)
+        : orders.filter(o => o.customer_id === filters.customer_id) }
       if (entity === "order_seller") return { data: orderSellers[filters.order_id] ?? [] }
       if (entity === "order_cart") return { data: orderCarts[filters.order_id] ?? [] }
       if (entity === "return") return { data: returns[filters.order_id] ?? [] }
@@ -114,7 +116,7 @@ describe("Buyer Organization Returns read — fail closed, GET only", () => {
       expect(body).not.toContain(hidden)
     }
     const returnQueries = graph.mock.calls.filter(([q]) => q.entity === "return")
-    expect(returnQueries).toHaveLength(1)
+    expect(returnQueries).toHaveLength(2)
     expect(returnQueries[0][0].filters).toEqual({ order_id: "order_a" })
   })
 
@@ -128,7 +130,7 @@ describe("Buyer Organization Returns read — fail closed, GET only", () => {
       page: 0,
     })
     const ret = graph.mock.calls.filter(([q]) => q.entity === "return")
-    expect(ret).toHaveLength(1)
+    expect(ret).toHaveLength(2)
     expect(ret[0][0].filters.order_id).toBe("order_b")
   })
 
@@ -274,6 +276,43 @@ describe("Buyer Organization Returns read — fail closed, GET only", () => {
     await GET(req, res)
     expect(checked).toBeGreaterThanOrEqual(2)
     expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("return_a")
+  })
+
+  it("403: an Order reassigned to a different Customer before response must not expose Return", async () => {
+    const original = graph.getMockImplementation()!
+    let checked = 0
+    graph.mockImplementation(async (q: any) => {
+      if (q.entity === "order" && q.filters.id === "order_a") {
+        checked++
+        return { data: [{ id: "order_a", customer_id: "cus_foreign", status: "completed" }] }
+      }
+      return original(q)
+    })
+    await GET(req, res)
+    expect(checked).toBeGreaterThanOrEqual(1)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({ message: "Access denied" })
+    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "private, no-store")
+    expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("return_a")
+  })
+
+  it("403: a Return moved to a foreign Order after private read must not be sent", async () => {
+    const original = graph.getMockImplementation()!
+    let checked = 0
+    graph.mockImplementation(async (q: any) => {
+      if (q.entity === "return" && q.filters.order_id === "order_a") {
+        checked++
+        // Native graph's real order_id filter excludes the relinked Return.
+        if (checked === 2) return { data: [] }
+      }
+      return original(q)
+    })
+    await GET(req, res)
+    expect(checked).toBeGreaterThanOrEqual(2)
+    expect(res.status).toHaveBeenLastCalledWith(403)
+    expect(res.json).toHaveBeenLastCalledWith({ message: "Access denied" })
+    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "private, no-store")
     expect(JSON.stringify(res.json.mock.lastCall?.[0])).not.toContain("return_a")
   })
 
