@@ -10962,7 +10962,7 @@ export default async function({container}:any){
     // completion, OrderGroup or payment is exercised in this test.
     await reviewer.send("Page.bringToFront")
     await reviewer.wait("document.visibilityState==='visible'")
-    await q("update da_browser_session set last_strong_auth_at=clock_timestamp(), last_activity_at=clock_timestamp() where person_id=$1 and status='active'",[B.person])
+    await q("update da_browser_session set last_strong_auth_at=clock_timestamp(), last_activity_at=clock_timestamp() where status='active'")
     const buyerRevokeBarrier=new Client({connectionString:u.toString()})
     await buyerRevokeBarrier.connect()
     let pendingBuyerRevoke:Promise<{status:number;error?:string}>|undefined
@@ -11014,6 +11014,8 @@ export default async function({container}:any){
       "Even an Owner cannot replace an existing Alpha immutable Cart attribution")
     // Keep this test a safe native checkout DENIAL: a fresh Owner Store block
     // (not self-grant revocation) causes the actual Mercur hook to refuse.
+    await browser.send("Page.bringToFront")
+    await q("update da_browser_session set last_strong_auth_at=clock_timestamp(), last_activity_at=clock_timestamp() where status='active'")
     assert.equal((await betaSellerBlock("block",sellerGamma.id,gammaSellerId)).status,200)
     assert.equal(await foundation.authorizeBuyerCheckout(
       hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
@@ -11108,6 +11110,7 @@ export default async function({container}:any){
     await browser.send("Page.bringToFront")
     await browser.wait("document.visibilityState==='visible'")
     await browser.wait("!document.getElementById('buyer-grants-panel').hidden")
+    await q("update da_browser_session set last_strong_auth_at=clock_timestamp(), last_activity_at=clock_timestamp() where status='active'")
     await browser.eval(`document.querySelector('#buyer-grants-form select[name=membership_id]').value=${JSON.stringify(alphaMember.id)}`)
     await browser.click('#buyer-grants-form button[value="revoke"]')
     await until(async()=>{
