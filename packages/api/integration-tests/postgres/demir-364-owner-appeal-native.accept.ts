@@ -318,12 +318,15 @@ export default async function({container}:any){
       const p=payload(s)
       const response=await browserPost(staff,root,p)
       assert.equal(response.status,200,"Authorized strong Staff closure must succeed")
-      assert.equal(response.body?.permanent_finalization_enabled,false)
+      assert.notEqual(response.body?.permanent_finalization_enabled,true,
+        "Staff close response cannot authorize irreversible finalization")
       assert.equal((await browserPost(staff,root,{...p,request_id:
         "dascp_"+randomBytes(16).toString("hex")})).status,409,
         "Different request must not start a second closing")
-      assert.equal((await browserPost(staff,root,p)).status,409,
-        "Exact request replay must not duplicate a closure")
+      const sameReplay=await browserPost(staff,root,p)
+      assert.equal(sameReplay.status,200,"Exact Staff request replay is idempotent")
+      assert.equal(sameReplay.body?.replayed,true,
+        "Real Staff replay must report no new closure")
       const rows=await q("select state,version from da_store_platform_closing where seller_id=$1",[s])
       assert.deepEqual(rows.map((x:any)=>({state:x.state,version:Number(x.version)})),
         [{state:"notification_unverified",version:1}])
