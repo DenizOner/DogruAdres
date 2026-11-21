@@ -1,0 +1,87 @@
+# Barış #377 r9 / PR #441 — original Returns scoped tests, not native user acceptance.
+name: "DA Baris #377 Returns focused negative"
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/da-baris-377-returns-focused.yml"
+      - "quality/e2e/returns-empty-line-negative.unit.test.mjs"
+      - "apps/storefront/src/app/**/user/returns/page.tsx"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: da-baris-377-returns-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  original-returns-auth-empty-line:
+    # Fail closed outside this original same-repo author-owned draft PR.
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.repository == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.number == 441 &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.head.ref == 'test/baris-377-returns-empty-line-negative-20261119'
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact PR merge ref without stored credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify exact two-parent source, current protected base and narrow paths
+        shell: bash
+        env:
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_BASE" && test -n "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          read -r actual_base actual_head unexpected <<< "$(git show -s --format=%P HEAD)"
+          test -n "$actual_base" && test -n "$actual_head"
+          test -z "${unexpected:-}"
+          test "$actual_head" = "$EXPECTED_HEAD"
+          if [ "$actual_base" != "$EXPECTED_BASE" ]; then
+            git merge-base --is-ancestor "$EXPECTED_BASE" "$actual_base" || {
+              echo "FAIL: PR merge base is unrelated to protected main"
+              exit 1
+            }
+          fi
+          test -f "apps/storefront/src/app/[locale]/(main)/user/returns/page.tsx"
+          test -f "quality/e2e/returns-empty-line-negative.unit.test.mjs"
+          merge_base="$(git merge-base "$EXPECTED_BASE" "$EXPECTED_HEAD")"
+          changed="$(git diff --name-only "$merge_base" "$EXPECTED_HEAD")"
+          test -n "$changed"
+          while IFS= read -r changed_path; do
+            case "$changed_path" in
+              "apps/storefront/src/app/[locale]/(main)/user/returns/page.tsx" | \
+              "quality/e2e/returns-empty-line-negative.unit.test.mjs" | \
+              ".github/workflows/da-baris-377-returns-focused.yml") ;;
+              *) echo "FAIL: change outside #377 r9 writer claim"; exit 1 ;;
+            esac
+          done <<< "$changed"
+          printf 'PASS: verified own #441 HEAD=%s protected parent=%s allowed changed paths only\n' "$actual_head" "$actual_base"
+
+      - name: Set up pinned Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Execute actual ReturnsPage source-targeted negative/positive tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v24.22.1"
+          node --test quality/e2e/returns-empty-line-negative.unit.test.mjs
+          echo "PASS: #377 Returns source-only Node target executed; real HTTP/Chrome/PG16 NOT TESTED"
