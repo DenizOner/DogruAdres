@@ -17,6 +17,7 @@ import {Client} from "@medusajs/framework/pg"
 import {approveSellerWorkflow} from "@mercurjs/core/workflows"
 import {createPersonalHttpApp} from "../../src/scripts/personal-http-runtime"
 import {B06Chrome} from "./b06-ui-browser"
+import {otp} from "./b19-browser"
 
 const testPath="./integration-tests/postgres/demir-364-owner-appeal-native.accept.ts"
 const adminUrl=new URL(process.env.PG_MFA_TEST_URL??"postgres://invalid/invalid")
@@ -54,8 +55,9 @@ function child(args:string[],env:NodeJS.ProcessEnv,stage:string,timeout=210000){
     // Emit ONLY our fixed step names and numeric line numbers from THIS own source.
     const text=String(task.stdout??"")+"\n"+String(task.stderr??"")
     const allowed=[
-      "identities-ready","organizations-ready","stores-ready","email-proof-ready",
+      "identities-ready","organizations-ready","member-native-ready","stores-ready","email-proof-ready",
       "https-ready","owner-browser-started","owner-strong-session",
+      "member-link-started","member-link-verified",
       "staff-browser-started","staff-strong-session","staff-grant",
       "first-closure","staff-owner-denied","owner-privacy-read","foreign-org-denied",
       "mail-queued","mail-link-created","foreign-link-denied","csrf-link-denied",
@@ -244,6 +246,30 @@ export default async function({container}:any){
       {organization_id:orgs[2].id,person_id:A.person,role:"owner",status:"active",protected_owner:true}
     ])
     marker("STEP DEMIR364 scenario: organizations-ready")
+    // The protected Owner's Store access needs a genuinely verified
+    // Person→native Member delegation. A legal membership alone is NOT enough.
+    const memberEmail="demir-owner-member-"+nonce+"@example.invalid"
+    const [nativeMember]=await seller.createMembers([{email:memberEmail,is_active:true}])
+    const memberPassword=randomBytes(32).toString("base64url")
+    const memberRegistration=await auth.register("emailpass",{
+      body:{email:memberEmail,password:memberPassword}
+    })
+    assert.ok(memberRegistration.success&&memberRegistration.authIdentity?.id)
+    await auth.updateAuthIdentities({
+      id:memberRegistration.authIdentity.id,
+      app_metadata:{member_id:nativeMember.id}
+    })
+    const memberMfa=await auth.startAuthMfa({
+      auth_identity_id:memberRegistration.authIdentity.id,
+      provider:"totp",issuer:"Demir isolated Owner native SellerMember"
+    })
+    const memberEnrollCounter=Math.floor(Date.now()/30000)
+    await auth.verifyAuthMfa({
+      id:memberMfa.mfa.id,
+      auth_identity_id:memberRegistration.authIdentity.id,
+      code:otp(memberMfa.secret)
+    })
+    marker("STEP DEMIR364 scenario: member-native-ready")
     const nativeStores:string[]=[]
     for(let i=0;i<2;i++){
       const [s]=await seller.createSellers([{
@@ -255,6 +281,9 @@ export default async function({container}:any){
       const confirmed=(await seller.listSellers({id:s.id}))[0]
       assert.equal(confirmed?.status,"open")
       assert.ok(confirmed?.approved_at)
+      await seller.createSellerMembers([{
+        seller_id:s.id,member_id:nativeMember.id,is_owner:true
+      }])
       // Canonical legacy association is a fixture in a BRAND NEW task DB.
       // It does not grant ownership from a forged header or change production.
       const audit="daaud_"+randomBytes(16).toString("hex")
@@ -316,6 +345,32 @@ export default async function({container}:any){
     marker("STEP DEMIR364 scenario: owner-browser-started")
     await owner.login(A.email,A.password,A.person)
     marker("STEP DEMIR364 scenario: owner-strong-session")
+    await owner.select(orgs[2].name,"owner")
+    const ownerPreLink="/personal/store-platform-closing?"+
+      new URLSearchParams({organization_id:orgs[2].id,
+        seller_id:nativeStores[0]}).toString()
+    assert.equal((await browserGet(owner,ownerPreLink)).status,403,
+      "Legal Owner alone cannot bypass native Member linkage")
+    await owner.input("#link-account input[name=email]",memberEmail)
+    await owner.input("#link-account input[name=password]",memberPassword)
+    await owner.click("#link-account button")
+    await owner.wait("!document.getElementById('link-confirm').hidden")
+    marker("STEP DEMIR364 scenario: member-link-started")
+    assert.ok(Math.floor(Date.now()/30000)>memberEnrollCounter,
+      "Secondary native MFA code must be newer than enrollment")
+    await owner.input("#link-confirm input[name=code]",otp(memberMfa.secret))
+    await owner.click("#link-confirm button")
+    await owner.wait("document.getElementById('status').textContent==='Hesap bağlantısı tamamlandı'")
+    const verifiedMember=await q("select actor_id,proof_reference from da_verified_actor_binding "+
+      "where person_id=$1 and actor_type='member' and revoked_at is null",[A.person])
+    assert.equal(verifiedMember.length,1)
+    assert.equal(verifiedMember[0].actor_id,nativeMember.id)
+    assert.match(verifiedMember[0].proof_reference,/^dual-proof:/)
+    const ownerLinked=await browserGet(owner,ownerPreLink)
+    assert.equal(ownerLinked.status,200,
+      "Native Member+Person dual MFA must unlock only own current approved Store")
+    assert.equal(ownerLinked.body?.state,"none")
+    marker("STEP DEMIR364 scenario: member-link-verified")
     await staff.start(crt,45000)
     marker("STEP DEMIR364 scenario: staff-browser-started")
     await staff.login(B.email,B.password,B.person)
