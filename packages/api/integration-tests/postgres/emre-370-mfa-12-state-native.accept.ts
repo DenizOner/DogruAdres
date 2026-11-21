@@ -342,12 +342,32 @@ async function parent(){
     const run=(label:string,args:string[],phase?:string)=>{
       const child=spawnSync(process.execPath,args,{
         cwd:process.cwd(),
-        env:{...env,EMRE370_CHILD:phase},
+        // Foundation migrates before enabling Person runtime. Keep the
+        // migration step in its own safe off-mode; native children use the
+        // explicit identity flag on the separately created synthetic DB.
+        env:{...env,
+          ...(phase ? {} : {
+            DOGRUADRES_IDENTITY_ENABLED:"false",
+            REDIS_URL:"redis://127.0.0.1:1",
+          }),
+          EMRE370_CHILD:phase,
+        },
         encoding:"utf8",timeout:200000,maxBuffer:2*1024*1024,
       })
       // Don't pass arbitrary Medusa stdout/stderr into public GitHub logs.
       if(child.error || child.status!==0) {
-        process.stderr.write("EMRE370 FAIL: "+label+" (secret-bearing child logs withheld)\n")
+        // Classify a small, allowlisted set of errors. Never publish raw
+        // Medusa CLI stdout/stderr: it may contain URLs or test credentials.
+        const captured=String(child.stderr??"")+"\n"+String(child.stdout??"")
+        const code=child.error?"SPAWN":child.status===null?"SIGNAL":"EXIT_"+child.status
+        const categories={
+          configuration:/could not load the Medusa config/i.test(captured),
+          module_missing:/module not found|cannot find module/i.test(captured),
+          connection:/econnrefused|connection refused/i.test(captured),
+          migration:/migration failed|migrations failed/i.test(captured),
+          runtime:/typeerror|syntaxerror|referenceerror/i.test(captured),
+        }
+        process.stderr.write("EMRE370 FAIL: "+label+" "+code+" "+JSON.stringify(categories)+"; secret-bearing output withheld.\n")
         throw Error("native stage failed")
       }
       const safe=phase==="seed"?"EMRE370_REAL_NATIVE_SEED_OK":"EMRE370_REAL_NATIVE_CHROME_TLS_PG16_PREFLIGHT_OK"
