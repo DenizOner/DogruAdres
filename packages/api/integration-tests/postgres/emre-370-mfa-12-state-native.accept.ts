@@ -33,7 +33,7 @@ const USER = "mfa_test"
 const HOST = "127.0.0.1"
 const BRANCH = "test/emre-370-mfa-12-state-20261120"
 const FILE = "./integration-tests/postgres/emre-370-mfa-12-state-native.accept.ts"
-const TASK_DB = /^emre370_ci_[a-f0-9]{16}$/
+const TASK_DB = /^mfa_cli_ci_[a-f0-9]{16}$/
 const assertTaskUrl = (url: URL, target = false) => {
   assert.equal(url.protocol, "postgres:")
   assert.equal(url.hostname, HOST)
@@ -313,7 +313,7 @@ async function parent(){
   assertTaskUrl(adminUrl)
   const admin=new Client({connectionString:adminUrl.toString()})
   await admin.connect()
-  const dbName="emre370_ci_"+randomBytes(8).toString("hex")
+  const dbName="mfa_cli_ci_"+randomBytes(8).toString("hex")
   const target=new URL(adminUrl)
   target.pathname="/"+dbName
   let created=false
@@ -330,13 +330,20 @@ async function parent(){
       ...process.env,
       DATABASE_URL:target.toString(),
       EMRE370_DB:dbName,
+      PG_MFA_NATIVE_TEST_DATABASE:dbName,
       NODE_ENV:"test",
-      REDIS_URL:"redis://127.0.0.1:6379",
+      // Use the established native Medusa no-Redis mode inside this task
+      // while the job's own isolated Redis container remains disposable.
+      REDIS_URL:undefined,
       MERCUR_DISABLE_TELEMETRY:"true",
       JWT_SECRET:randomBytes(48).toString("hex"),
       COOKIE_SECRET:randomBytes(48).toString("hex"),
       DOGRUADRES_INVITATION_SECRET:randomBytes(48).toString("hex"),
       DOGRUADRES_MFA_ENCRYPTION_KEY:randomBytes(48).toString("hex"),
+      DOGRUADRES_PUBLIC_ORIGIN:"http://127.0.0.1:19041",
+      DOGRUADRES_PRIVATE_API:"http://127.0.0.1:19042",
+      DOGRUADRES_FRONTDOOR_HOST:"127.0.0.1",
+      DOGRUADRES_FRONTDOOR_PORT:"19041",
       DOGRUADRES_IDENTITY_ENABLED:"true",
       DOGRUADRES_MFA_RUNTIME_ENABLED:"false",
       DOGRUADRES_MFA_ENROLLMENT_ENABLED:"false",
@@ -375,6 +382,10 @@ async function parent(){
           migration:/migration failed|migrations failed/i.test(captured),
           runtime:/typeerror|syntaxerror|referenceerror/i.test(captured),
           assertion:/assertionerror|assertion failed/i.test(captured),
+          startup:/failed to initialize|failed to start|failed to load/i.test(captured),
+          database:/postgres|database/i.test(captured),
+          redis:/redis/i.test(captured),
+          cli:/command not found|unknown command|invalid argument/i.test(captured),
         }
         const markers=String(child.stdout??"").split("\n").filter(
           line=>/^EMRE370_STAGE (?:CHILD_ENV_ACCEPTED|CHILD_PG_CONNECTED|SEED_STARTED|EMPTY_NATIVE_TABLES_OK|ACTOR_[AB]_(?:START|OK)|ORGANIZATIONS_START|MEMBERSHIPS_START)$/.test(line))
