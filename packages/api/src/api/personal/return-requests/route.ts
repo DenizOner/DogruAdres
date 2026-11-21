@@ -142,6 +142,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const seen = new Set<string>()
     const attributedCarts = new Set<string>()
     const verifiedOrderCarts = new Map<string, string>()
+    // Snapshot exactly which Return rows were authorized for each native Order.
+    const verifiedOrderReturns = new Map<string, ReturnSummary[]>()
     for (const order of orderRows) {
       if (!order || !orderId.test(order.id) ||
           order.customer_id !== customerId ||
@@ -190,6 +192,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       if (!Array.isArray(rows) || rows.length > MAX_RETURNS_PER_ORDER ||
           (typeof result.metadata?.count === "number" &&
            result.metadata.count > MAX_RETURNS_PER_ORDER)) return denied()
+      const projectedRows: ReturnSummary[] = []
       for (const row of rows) {
         const createdAt = validDate(row?.created_at)
         if (!row || typeof row.id !== "string" || !returnId.test(row.id) ||
@@ -197,8 +200,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             !validReturnStatus.has(row.status) || createdAt === null)
           return denied()
         seen.add(row.id)
-        summaries.push({ id: row.id, status: row.status, created_at: createdAt })
+        const projected = { id: row.id, status: row.status, created_at: createdAt }
+        summaries.push(projected)
+        projectedRows.push(projected)
       }
+      verifiedOrderReturns.set(order.id, projectedRows)
     }
 
     // Fail closed on a Store/Cart relink after the private Return read.
@@ -249,6 +255,51 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     for (const cartId of attributedCarts) {
       if (await foundation.personalBuyerCartAttribution(
         token, organizationId, cartId, customerId) !== true) return denied()
+    }
+
+    // Last private-data gate: do not trust the earlier Order→Customer or
+    // Return→Order association after Store/Cart/BuyerOrg checks await I/O.
+    // Requery only bounded, previously authorized native Orders and Returns;
+    // missing/relinked/new/changed Return rows fail closed without any DTO.
+    // This is a response-bound read consistency check, not a DB snapshot/lock.
+    for (const [verifiedOrderId, projectedRows] of verifiedOrderReturns) {
+      const currentOrder = await query.graph({
+        entity: "order",
+        fields: ["id", "customer_id", "status"],
+        filters: { id: verifiedOrderId },
+        pagination: { take: 2 },
+      })
+      if (!exactlyOne<OrderRow>(currentOrder.data) ||
+          currentOrder.data[0]?.id !== verifiedOrderId ||
+          currentOrder.data[0]?.customer_id !== customerId ||
+          !["completed", "pending"].includes(currentOrder.data[0]?.status))
+        return denied()
+
+      const latestReturns = await query.graph({
+        entity: "return",
+        fields: ["id", "order_id", "status", "created_at"],
+        filters: { order_id: verifiedOrderId },
+        pagination: { take: MAX_RETURNS_PER_ORDER + 1 },
+      })
+      const latestRows = latestReturns.data as ReturnRow[]
+      if (!Array.isArray(latestRows) ||
+          latestRows.length !== projectedRows.length ||
+          latestRows.length > MAX_RETURNS_PER_ORDER ||
+          (typeof latestReturns.metadata?.count === "number" &&
+           latestReturns.metadata.count > MAX_RETURNS_PER_ORDER))
+        return denied()
+
+      const expected = new Map(projectedRows.map(row => [row.id, row]))
+      const rechecked = new Set<string>()
+      for (const row of latestRows) {
+        const saved = row && expected.get(row.id)
+        if (!saved || rechecked.has(row.id) ||
+            row.order_id !== verifiedOrderId ||
+            row.status !== saved.status ||
+            validDate(row.created_at) !== saved.created_at)
+          return denied()
+        rechecked.add(row.id)
+      }
     }
 
     summaries.sort((a, b) =>
