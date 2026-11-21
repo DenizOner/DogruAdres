@@ -141,6 +141,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const summaries: ReturnSummary[] = []
     const seen = new Set<string>()
     const attributedCarts = new Set<string>()
+    const verifiedOrderCarts = new Map<string, string>()
     for (const order of orderRows) {
       if (!order || !orderId.test(order.id) ||
           order.customer_id !== customerId ||
@@ -176,6 +177,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       if (await foundation.personalBuyerCartAttribution(
         token, organizationId, cartId, customerId) !== true) continue
       attributedCarts.add(cartId)
+      verifiedOrderCarts.set(order.id, cartId)
 
       // Only now read returns of this verified Customer+Store+Org order.
       const result = await query.graph({
@@ -197,6 +199,31 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         seen.add(row.id)
         summaries.push({ id: row.id, status: row.status, created_at: createdAt })
       }
+    }
+
+    // Fail closed on a Store/Cart relink after the private Return read.
+    // A prior Seller or Cart attribution is not a response-time grant.
+    for (const [verifiedOrderId, verifiedCartId] of verifiedOrderCarts) {
+      const sellerLinksNow = (await query.graph({
+        entity: "order_seller", fields: ["order_id", "seller_id"],
+        filters: { order_id: verifiedOrderId },
+      })).data as LinkRow[]
+      if (!exactlyOne<LinkRow>(sellerLinksNow) ||
+          sellerLinksNow[0].order_id !== verifiedOrderId ||
+          sellerLinksNow[0].seller_id !== sellerId) return denied()
+      const cartLinksNow = (await query.graph({
+        entity: "order_cart", fields: ["order_id", "cart_id"],
+        filters: { order_id: verifiedOrderId },
+      })).data as LinkRow[]
+      if (!exactlyOne<LinkRow>(cartLinksNow) ||
+          cartLinksNow[0].order_id !== verifiedOrderId ||
+          cartLinksNow[0].cart_id !== verifiedCartId) return denied()
+      const cartNow = await carts.listCarts({
+        id: verifiedCartId, customer_id: customerId,
+      })
+      if (!exactlyOne(cartNow) || cartNow[0].id !== verifiedCartId ||
+          cartNow[0].customer_id !== customerId ||
+          cartNow[0].completed_at == null) return denied()
     }
 
     // Revalidate at the response boundary. A role, native binding, buyer
