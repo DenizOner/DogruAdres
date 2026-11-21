@@ -1,3 +1,4 @@
+import { LoginForm } from '@/components/molecules';
 import { UserNavigation } from '@/components/molecules/UserNavigation/UserNavigation';
 import { OrderReturnRequests } from '@/components/sections/OrderReturnRequests/OrderReturnRequests';
 import { retrieveCustomer } from '@/lib/data/customer';
@@ -8,10 +9,11 @@ export default async function ReturnsPage({
 }: {
   searchParams: Promise<{ page: string; return: string }>;
 }) {
+  const user = await retrieveCustomer();
+  if (!user) return <LoginForm />;
+
   const { order_return_requests } = await getReturns();
   const returnReasons = await retrieveReturnReasons();
-
-  const user = await retrieveCustomer();
 
   const { page, return: returnId } = await searchParams;
 
@@ -24,8 +26,8 @@ export default async function ReturnsPage({
           <OrderReturnRequests
             returns={order_return_requests.sort(
               (a, b) =>
-                new Date(b.line_items[0].created_at).getTime() -
-                new Date(a.line_items[0].created_at).getTime()
+                (new Date(b.line_items?.[0]?.created_at ?? 0).getTime() || 0) -
+                (new Date(a.line_items?.[0]?.created_at ?? 0).getTime() || 0)
             )}
             user={user}
             page={page}
