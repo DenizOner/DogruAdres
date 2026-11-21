@@ -1,4 +1,4 @@
-import { createCipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto"
+import { createCipheriv, createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
 import { generateJwtToken } from "@medusajs/framework/utils"
 import { DEFAULT_SESSION_POLICY, evaluateSessionEligibility, parseSessionPolicy } from "./session-policy"
 
@@ -28,6 +28,9 @@ export const mfaRuntimeEnforced = () =>
   process.env.DOGRUADRES_MFA_RUNTIME_ENABLED === "true"
 export type BrowserMfaPurpose = "legacy" | "mfa_enroll" | "full"
 type MfaRevision = Readonly<{platform:number;person:number}>
+type PendingChallengeState = Readonly<{
+  personId:string; epoch:string; activated:boolean; revisions:MfaRevision|null
+}>
 function revision(value:unknown):number {
   if(!Number.isSafeInteger(value) || (value as number)<0 || (value as number)>2147483647)
     throw new IdentityAccessDenied()
@@ -265,8 +268,68 @@ export class IdentitySessions {
     return rows.length === 1 ? {...s,grant_id:rows[0].id} : null
   }
 
+  /**
+   * A pending native MFA ticket keeps the existing 43-char opaque cookie and
+   * SHA-256 primary key. Its 128-bit random nonce + 128-bit keyed tag bind the
+   * issuing Person, verified native identity/challenge, current MFA versions,
+   * activation and logout-all epoch. No stored columns, client claims or
+   * changes to native Medusa factor identifiers are required.
+   */
+  private async pendingChallengeState(authIdentityId:string, initializeEpoch:boolean):Promise<PendingChallengeState> {
+    if(typeof authIdentityId!=="string" || !authIdentityId)throw new IdentityAccessDenied()
+    // Keep canonical Person -> security lock order used by create(). Both
+    // getters run within the same module transaction (@InjectTransactionManager).
+    const bindings=await this.db.execute(`select b.*,p.disabled_at from da_login_binding b
+      join da_person p on p.id=b.person_id and p.deleted_at is null
+      join da_actor_mapping a on a.person_id=p.id and a.actor_type=b.actor_type and a.actor_id=b.actor_id and a.deleted_at is null
+      where b.auth_identity_id=? and b.revoked_at is null and b.verified_at is not null for update of b,p`,[authIdentityId])
+    if(bindings.length!==1 || bindings[0].disabled_at ||
+       typeof bindings[0].person_id!=="string" || !bindings[0].person_id)throw new IdentityAccessDenied()
+    const personId=bindings[0].person_id as string
+    if(initializeEpoch)
+      await this.db.execute(`insert into da_person_security(person_id,epoch) values (?,0) on conflict do nothing`,[personId])
+    const security=await this.db.execute(`select epoch from da_person_security where person_id=? for update`,[personId])
+    if(security.length!==1 || (typeof security[0].epoch==="number" &&
+       !Number.isSafeInteger(security[0].epoch)))throw new IdentityAccessDenied()
+    const epoch=String(security[0].epoch)
+    if(!/^(0|[1-9][0-9]*)$/.test(epoch))throw new IdentityAccessDenied()
+    // Policy/preference mutations acquire these same transaction advisory
+    // locks after their session/epoch authorization checks. Acquire after
+    // Person/security to preserve that lock order and avoid TOCTOU at create.
+    await this.db.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-mfa-platform'))`)
+    await this.db.execute(`select pg_advisory_xact_lock(hashtext('dogruadres-mfa-person'),hashtext(?))`,[personId])
+    const latch=await this.db.execute(`select coalesce(to_jsonb(q)->>'mfa_activated','false') as mfa_activated
+      from da_session_policy q where q.id='current' for share`)
+    if(latch.length!==1 || !["true","false"].includes(latch[0].mfa_activated))throw new IdentityAccessDenied()
+    const activated=latch[0].mfa_activated==="true"
+    if(activated!==mfaRuntimeEnforced())throw new IdentityAccessDenied()
+    const revisions=activated?await this.mfaRevision(personId):null
+    return {personId,epoch,activated,revisions}
+  }
+
+  private pendingTicketTag(nonce:Buffer,authIdentityId:string,challengeId:string,state:PendingChallengeState) {
+    const secret=process.env.COOKIE_SECRET
+    if(!secret || Buffer.byteLength(secret)<32)throw new IdentityAccessDenied()
+    return createHmac("sha256",secret)
+      .update("dogruadres-pending-native-mfa-v1:").update(nonce)
+      .update(JSON.stringify([authIdentityId,challengeId,state.personId,state.epoch,
+        state.activated,state.revisions?.platform??null,state.revisions?.person??null]))
+      .digest().subarray(0,16)
+  }
+
+  private pendingTicketMatches(token:string,authIdentityId:string,challengeId:string,state:PendingChallengeState):boolean {
+    if(!/^[A-Za-z0-9_-]{43}$/.test(token))return false
+    const bytes=Buffer.from(token,"base64url")
+    if(bytes.length!==32 || bytes.toString("base64url")!==token)return false
+    return timingSafeEqual(bytes.subarray(16),this.pendingTicketTag(
+      bytes.subarray(0,16),authIdentityId,challengeId,state))
+  }
+
   async pending(authIdentityId:string, challengeId:string) {
-    const token=opaque()
+    if(typeof challengeId!=="string" || !challengeId)throw new IdentityAccessDenied()
+    const state=await this.pendingChallengeState(authIdentityId,true)
+    const nonce=randomBytes(16)
+    const token=Buffer.concat([nonce,this.pendingTicketTag(nonce,authIdentityId,challengeId,state)]).toString("base64url")
     await this.db.execute(`insert into da_login_challenge(id,auth_identity_id,challenge_id,expires_at) values (?,?,?,clock_timestamp()+interval '5 minutes')`,[digest(token),authIdentityId,challengeId])
     return {token,csrf:csrfToken(token)}
   }
@@ -317,13 +380,33 @@ export class IdentitySessions {
   async challenge(token:string) {
     if(!/^[A-Za-z0-9_-]{43}$/.test(token))return null
     const rows=await this.db.execute(`select auth_identity_id,challenge_id from da_login_challenge where id=? and consumed_at is null and expires_at>clock_timestamp()`,[digest(token)])
-    return rows.length===1?rows[0]:null
+    if(rows.length!==1)return null
+    try {
+      const state=await this.pendingChallengeState(rows[0].auth_identity_id,false)
+      return this.pendingTicketMatches(token,rows[0].auth_identity_id,rows[0].challenge_id,state)?rows[0]:null
+    }catch(error) {
+      if(error instanceof IdentityAccessDenied)return null
+      throw error // DB failures remain service-unavailable, never an authorization success.
+    }
   }
   async complete(token:string,completedAt:Date) {
-    const rows=await this.db.execute(`update da_login_challenge set consumed_at=clock_timestamp() where id=? and consumed_at is null and expires_at>clock_timestamp() returning auth_identity_id`,[digest(token)])
-    if(rows.length!==1 || !Number.isFinite(completedAt.getTime()) || completedAt.getTime()>Date.now())throw new IdentityAccessDenied()
+    if(!/^[A-Za-z0-9_-]{43}$/.test(token) ||
+       !(completedAt instanceof Date) || !Number.isFinite(completedAt.getTime()) ||
+       completedAt.getTime()>Date.now())throw new IdentityAccessDenied()
+    const rows=await this.db.execute(`update da_login_challenge set consumed_at=clock_timestamp()
+      where id=? and consumed_at is null and expires_at>clock_timestamp()
+      returning auth_identity_id,challenge_id`,[digest(token)])
+    if(rows.length!==1)throw new IdentityAccessDenied()
+    // The transaction rolls back consumed_at on denial; no session/audit/outbox
+    // is inserted. This second check also closes the native-verify time gap.
+    const state=await this.pendingChallengeState(rows[0].auth_identity_id,false)
+    if(!this.pendingTicketMatches(token,rows[0].auth_identity_id,rows[0].challenge_id,state))
+      throw new IdentityAccessDenied()
+    // create() rechecks the revision under the same Person/security and policy
+    // advisory locks before inserting a new session. Epoch cannot advance
+    // while this module transaction holds its security row FOR UPDATE.
     return this.create(rows[0].auth_identity_id,completedAt,
-      mfaRuntimeEnforced()?"full":"legacy")
+      state.activated?"full":"legacy",state.revisions??undefined)
   }
 }
 
