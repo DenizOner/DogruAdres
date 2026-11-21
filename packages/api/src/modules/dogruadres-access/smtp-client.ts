@@ -293,6 +293,13 @@ export class SmtpConnection {
           if (line.length >= 4 && line[3] === " ") {
             const code = parseInt(line.substring(0, 3), 10)
             if (!isNaN(code)) {
+              // No SMTP PIPELINING is used here: unsolicited bytes after a
+              // complete reply cannot belong to a command not sent yet.
+              // Fail closed before accepting this response or crossing TLS.
+              if (this.buffer.length > 0) {
+                failBound()
+                return
+              }
               cleanup()
               resolve({ code, message: replyLines.join("\r\n") + "\r\n" })
               return
@@ -339,8 +346,9 @@ export class SmtpConnection {
       this.socket.on("data", onData)
       this.socket.on("error", onError)
       this.socket.on("close", onClose)
-      // A prior TCP chunk may contain bytes after the previous final line.
-      if (this.buffer.length > 0) onData(Buffer.alloc(0))
+      // A complete response from an earlier command is never a reply
+      // to a newly sent command. Do not replay a cached pre-TLS response.
+      if (this.buffer.length > 0) failBound()
     })
   }
 
