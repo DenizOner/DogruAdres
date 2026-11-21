@@ -49,22 +49,47 @@ const labelledSha = (body, key) => {
   }
   return null
 }
+// Keep every explicit value on a current-target line. A second conflicting
+// HEAD/base (or "NOT VERIFIED") must not hide behind the first valid pair.
+const labelledValues = (line, key) => {
+  const pattern = key === 'head'
+    ? /\bHEAD\b\s*(?:\*{0,2}\s*:)?\s*[\x60*\s]*([^\s\x60*;,/]+)/gi
+    : /\bbase\b\s*(?:\*{0,2}\s*:)?\s*[\x60*\s]*([^\s\x60*;,/]+)/gi
+  return [...String(line || '').matchAll(pattern)].map(match => shaCell(match[1]))
+}
 const versionPairIn = body => {
   for (const line of String(body || '').split(/\r?\n/)) {
     const hi = line.search(/\bHEAD\b/i), bi = line.search(/\bbase\b/i)
     if (hi < 0 || bi < hi) continue
-    // 'HEAD: sha; base: sha' records have separately labeled fields.
+    // 'HEAD: sha; base: sha' may contain repeated labels on the SAME line.
+    // Do not return only the first valid values and overlook a later conflict.
     const explicitHead = labelledSha(line, 'head')
     const explicitBase = labelledSha(line, 'base')
-    if (explicitHead && explicitBase) return { head: explicitHead, base: explicitBase }
+    if (explicitHead && explicitBase) {
+      const heads = labelledValues(line, 'head')
+      const bases = labelledValues(line, 'base')
+      if (heads.length && bases.length &&
+          heads.every(value => value === explicitHead) &&
+          bases.every(value => value === explicitBase)) {
+        return { head: explicitHead, base: explicitBase }
+      }
+      return null
+    }
     // In 'HEAD / stored base / main: head / base / main', require the
     // FIRST TWO data cells to be exact hashes. Never skip a missing cell.
     const colon = line.indexOf(':')
     if (colon < 0 || hi > colon || bi > colon) continue
-    const cells = line.slice(colon + 1).split(/\s*\/\s*/)
+    const data = line.slice(colon + 1)
+    const cells = data.split(/\s*\/\s*/)
     if (cells.length < 2) continue
     const head = shaCell(cells[0]), base = shaCell(cells[1])
-    if (head && base) return { head, base }
+    if (head && base) {
+      // Also reject extra labelled declarations appended after the slash pair;
+      // the header's "stored base" descriptor is not a base value.
+      if (labelledValues(data, 'head').some(value => value !== head) ||
+          labelledValues(data, 'base').some(value => value !== base)) return null
+      return { head, base }
+    }
   }
   return null
 }
