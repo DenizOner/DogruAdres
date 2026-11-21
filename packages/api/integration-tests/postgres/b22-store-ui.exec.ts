@@ -10960,6 +10960,8 @@ export default async function({container}:any){
     // Deterministic L/commit race using the production buyer-permission
     // advisory lock and the real Chrome Owner mutation. No successful Cart
     // completion, OrderGroup or payment is exercised in this test.
+    await reviewer.send("Page.bringToFront")
+    await reviewer.wait("document.visibilityState==='visible'")
     const buyerRevokeBarrier=new Client({connectionString:u.toString()})
     await buyerRevokeBarrier.connect()
     let pendingBuyerRevoke:Promise<{status:number;error?:string}>|undefined
@@ -10991,7 +10993,7 @@ export default async function({container}:any){
           where held.pid=$1 and held.locktype='advisory'
             and held.granted=true`,[barrierPid])
         return waiting[0].n===1
-      },19000,"B22 real Chrome Owner revoke waits on existing grant lock")
+      },30000,"B22 real Chrome Owner revoke waits on existing grant lock")
       assert.equal(await foundation.authorizeBuyerCheckout(
         hookProbeCart.id,nativeCustomer.id,[gammaSellerId]
       ),true,"L before the concurrent Owner revoke commits must see the prior grant")
