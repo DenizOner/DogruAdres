@@ -480,6 +480,7 @@ export default async function({container}:any){
       "e.value=store;e.dispatchEvent(new Event('change',{bubbles:true}));return e.value===store}",
       nativeStores[0])
     assert.equal(chosen,true,"Native approved store must be selectable in Owner UI")
+    await owner.wait("!document.getElementById('store-platform-appeal-panel').hidden")
     await owner.click("#store-platform-appeal-refresh")
     await owner.wait("document.getElementById('store-platform-appeal-reason').textContent.includes('"+reason+"')")
     assert.equal(await owner.eval("!document.querySelector('#store-platform-appeal-form button').disabled"),true)
@@ -505,6 +506,9 @@ export default async function({container}:any){
       await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz "+
         "where seller_id=$2 and deadline_started_at=$3::timestamptz",
         [day11,nativeStores[1],start2])
+      await q("update da_audit_event set new_values=jsonb_set(new_values,'{deadline_started_at}',to_jsonb($1::text)) "+
+        "where target_id=$2 and action='organization.store_platform_closing_deadline_started'",
+        [day11,nativeStores[1]])
       const second=await browserGet(owner,ownerUrl(nativeStores[1]))
       assert.equal(second.status,200)
       assert.equal(second.body?.first_appeal_open,false)
@@ -528,9 +532,13 @@ export default async function({container}:any){
         [nativeStores[1]])
       assert.equal(finalAudit.length,1,"One second-stage audit/outbox")
       for(const day of [30,31]){
+        const dayTime=new Date(Date.now()-day*86400000).toISOString()
         await q("update da_store_platform_closing "+
           "set deadline_started_at=$1::timestamptz where seller_id=$2",
-          [new Date(Date.now()-day*86400000).toISOString(),nativeStores[1]])
+          [dayTime,nativeStores[1]])
+        await q("update da_audit_event set new_values=jsonb_set(new_values,'{deadline_started_at}',to_jsonb($1::text)) "+
+          "where target_id=$2 and action='organization.store_platform_closing_deadline_started'",
+          [dayTime,nativeStores[1]])
         const expired=await browserGet(owner,ownerUrl(nativeStores[1]))
         assert.equal(expired.status,200)
         assert.equal(expired.body?.permanent_finalization_enabled,false)
@@ -539,6 +547,9 @@ export default async function({container}:any){
     }finally{
       await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz "+
         "where seller_id=$2",[start2,nativeStores[1]])
+      await q("update da_audit_event set new_values=jsonb_set(new_values,'{deadline_started_at}',to_jsonb($1::text)) "+
+        "where target_id=$2 and action='organization.store_platform_closing_deadline_started'",
+        [start2,nativeStores[1]])
     }
     marker("STEP DEMIR364 scenario: day30-31")
     const denied=await browserGet(staff,ownerUrl(nativeStores[0]))
