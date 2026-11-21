@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/da-fikret-378-focused.yml'
       - 'quality/e2e/test_fikret_378_smtp_reply_bounds.py'
+      - 'packages/api/src/modules/dogruadres-access/smtp-client.ts'
 
 permissions:
   contents: read

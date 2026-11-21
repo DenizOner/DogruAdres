@@ -234,29 +234,81 @@ export class SmtpConnection {
   }
 
   private async readReply(): Promise<{ code: number; message: string }> {
+    // RFC 5321 limits reply lines to 512 octets including CRLF. Permit up to
+    // 128 such lines (64 KiB total) for legitimate multiline EHLO replies,
+    // while bounding both the unfinished line and the complete response.
+    const maxLineOctets = 512
+    const maxReplyLines = 128
+    const maxReplyOctets = maxLineOctets * maxReplyLines
+
     return new Promise((resolve, reject) => {
+      let receivedOctets = 0
+      let receivedLines = 0
+      const replyLines: string[] = []
+
       const timeout = setTimeout(() => {
         cleanup()
         reject(new Error(`SMTP response timeout (${this.config.socketTimeoutMs || DEFAULT_TIMEOUT_MS}ms)`))
       }, this.config.socketTimeoutMs || DEFAULT_TIMEOUT_MS)
 
+      const failBound = () => {
+        cleanup()
+        this.buffer = ""
+        this.socket?.destroy()
+        reject(new Error("SMTP response exceeds protocol bounds"))
+      }
+
       const onData = (data: Buffer) => {
-        this.buffer += data.toString("utf-8")
-        const lines = this.buffer.split("\r\n")
-        // The final split segment has not yet received CRLF. SMTP must not
-        // accept a partial "250 " as the end of a response.
-        for (let i = 0; i < lines.length - 1; i++) {
-          const line = lines[i]
+        // Test the incoming chunk BEFORE decoding or retaining its bytes.
+        // The retained tail may already include a partial next reply.
+        const pendingOctets = Buffer.byteLength(this.buffer, "utf8")
+        if (data.length > maxReplyOctets - receivedOctets - pendingOctets) {
+          failBound()
+          return
+        }
+
+        this.buffer += data.toString("utf8")
+        let terminator = this.buffer.indexOf("\r\n")
+
+        // Consume each complete line exactly once instead of repeatedly
+        // splitting an ever-growing buffer on every small TCP fragment.
+        while (terminator !== -1) {
+          const line = this.buffer.slice(0, terminator)
+          const lineOctets = Buffer.byteLength(line, "utf8") + 2
+          if (
+            lineOctets > maxLineOctets ||
+            receivedLines >= maxReplyLines ||
+            receivedOctets + lineOctets > maxReplyOctets
+          ) {
+            failBound()
+            return
+          }
+
+          this.buffer = this.buffer.slice(terminator + 2)
+          receivedOctets += lineOctets
+          receivedLines++
+          replyLines.push(line)
+
+          // Do not accept a partial terminal "250 " until its CRLF arrives.
           if (line.length >= 4 && line[3] === " ") {
             const code = parseInt(line.substring(0, 3), 10)
             if (!isNaN(code)) {
               cleanup()
-              const message = lines.slice(0, i + 1).join("\r\n") + "\r\n"
-              this.buffer = lines.slice(i + 1).join("\r\n")
-              resolve({ code, message })
+              resolve({ code, message: replyLines.join("\r\n") + "\r\n" })
               return
             }
           }
+          terminator = this.buffer.indexOf("\r\n")
+        }
+
+        const unfinishedOctets = Buffer.byteLength(this.buffer, "utf8")
+        // A trailing CR may still be the first half of a valid CRLF.
+        const trailingCrOctets = this.buffer.endsWith("\r") ? 1 : 0
+        if (
+          unfinishedOctets - trailingCrOctets > maxLineOctets - 2 ||
+          receivedOctets + unfinishedOctets > maxReplyOctets
+        ) {
+          failBound()
         }
       }
 
@@ -287,10 +339,12 @@ export class SmtpConnection {
       this.socket.on("data", onData)
       this.socket.on("error", onError)
       this.socket.on("close", onClose)
+      // A prior TCP chunk may contain bytes after the previous final line.
+      if (this.buffer.length > 0) onData(Buffer.alloc(0))
     })
   }
 
-  public async sendCommand(command: string, expectedCode?: number): Promise<{ code: number; message: string }> {
+    public async sendCommand(command: string, expectedCode?: number): Promise<{ code: number; message: string }> {
     if (!this.socket) {
       throw new Error("Socket not connected")
     }

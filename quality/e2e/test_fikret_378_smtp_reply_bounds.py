@@ -57,6 +57,24 @@ async function normalReplyMustWork() {
   }
 }
 
+async function fragmentedStarttlsMustWork() {
+  const client = connection();
+  const pipe = new PassThrough();
+  client.socket = pipe;
+  try {
+    const reply = client.readReply();
+    pipe.write(Buffer.from('250-mail.synthetic\r\n250 '));
+    pipe.write(Buffer.from('START'));
+    pipe.write(Buffer.from('TLS\r'));
+    pipe.write(Buffer.from('\n'));
+    const result = await reply;
+    assert.equal(result.code, 250);
+    assert.equal(result.message, '250-mail.synthetic\r\n250 STARTTLS\r\n');
+  } finally {
+    client.close();
+  }
+}
+
 async function oversizedUnterminatedReplyMustFailClosed() {
   const client = connection();
   const pipe = new PassThrough();
@@ -91,6 +109,7 @@ async function oversizedUnterminatedReplyMustFailClosed() {
 }
 
 await normalReplyMustWork();
+await fragmentedStarttlsMustWork();
 await oversizedUnterminatedReplyMustFailClosed();
 console.log('PASS #378 SMTP bounded external reply: short multiline accepted, oversized unterminated rejected and stream closed');
 """
