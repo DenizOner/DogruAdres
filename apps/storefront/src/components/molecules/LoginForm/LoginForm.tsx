@@ -33,6 +33,7 @@ export const LoginForm = () => {
 
 const Form = () => {
   const [isAuthError, setIsAuthError] = useState(false);
+  const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
   const {
     handleSubmit,
     register,
@@ -54,15 +55,20 @@ const Form = () => {
       router.push('/user');
       await transferCart();
     } else {
-      toast.error({ title: res.message || 'An error occurred. Please try again.' });
+      const message = res.message || 'An error occurred. Please try again.';
+      setIsAuthError(true);
+      setAuthErrorMessage(message);
+      toast.error({ title: message });
+      return;
     }
 
     setIsAuthError(false);
-    router.push('/user');
+    setAuthErrorMessage(null);
   };
 
   const clearApiError = () => {
     if (isAuthError) setIsAuthError(false);
+    if (authErrorMessage) setAuthErrorMessage(null);
   };
 
   const getAuthMessage = () => {
@@ -126,6 +132,13 @@ const Form = () => {
                   onChange: clearApiError
                 })}
               />
+              {authErrorMessage && (
+                <Alert
+                  title={authErrorMessage}
+                  className="w-full"
+                  data-testid="login-api-error"
+                />
+              )}
             </div>
 
             <Link
