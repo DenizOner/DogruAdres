@@ -1,0 +1,100 @@
+# #370 — Emre new SOURCE-ONLY adapter offline Jest.
+# No MFA runtime, signer, Staff grant, database, PostgreSQL, Chrome, secrets or payment.
+name: 'Emre #370 F adapter — pure offline deny cases'
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/da-emre-370-adapter-focused.yml'
+      - 'packages/api/src/scripts/mfa-f-isolated-activation-adapter.ts'
+      - 'packages/api/src/scripts/__tests__/mfa-f-isolated-activation-adapter.unit.spec.ts'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: emre-370-adapter-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  offline-adapter-denials:
+    name: '#370 — offline pure adapter Jest (NOT native acceptance)'
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.repository == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.number == 463 &&
+        github.event.pull_request.head.repo.full_name == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.base.repo.full_name == 'DenizOner/DogruAdres' &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.head.ref == 'test/emre-370-mfa-f-isolated-adapter-20261121'
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      CI: 'true'
+      TEST_TYPE: unit
+      NODE_OPTIONS: --experimental-vm-modules
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      EXPECTED_PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Verify exact authorized PR event metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "DenizOner/DogruAdres"
+          test "$GITHUB_EVENT_NAME" = "pull_request"
+          test "$EXPECTED_PR" = "463"
+          test "${{ github.event.pull_request.head.repo.full_name }}" = "DenizOner/DogruAdres"
+          test "${{ github.event.pull_request.base.ref }}" = "main"
+          test "${{ github.event.pull_request.head.ref }}" = "test/emre-370-mfa-f-isolated-adapter-20261121"
+          test "${#EXPECTED_HEAD}" = 40
+
+      - name: Checkout own ephemeral GitHub synthetic PR merge without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Verify exact task-owned source HEAD and current protected main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mapfile -t parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')
+          test "${#parents[@]}" -eq 2
+          test "${parents[1]}" = "$EXPECTED_HEAD"
+          live_main="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
+          test -n "$live_main"
+          test "${parents[0]}" = "$live_main"
+          test -f packages/api/src/scripts/__tests__/mfa-f-isolated-activation-adapter.unit.spec.ts
+          echo 'Verified source task #370 PR #463 exact HEAD and current main merge ref; source-only scope.'
+
+      - name: Setup pinned Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+
+      - name: Setup pinned Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+          no-cache: true
+
+      - name: Install frozen source dependencies, no services
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(bun --version)" = "1.4.2"
+          bun install --frozen-lockfile
+
+      - name: Run exact offline Jest negative target (RED is not PASS)
+        working-directory: packages/api
+        shell: bash
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          echo 'RUN SOURCE-ONLY Jest target: no signer/DB/Staff/Chrome/runtime'
+          bun run jest --runInBand --runTestsByPath src/scripts/__tests__/mfa-f-isolated-activation-adapter.unit.spec.ts

@@ -23,6 +23,7 @@ import {requireOrganizationAccess} from "../../src/api/dogruadres/authorization"
 import {completeCartWithSplitOrdersWorkflow,approveSellerWorkflow,suspendSellerWorkflow,unsuspendSellerWorkflow,createProductsWorkflow,createOffersWorkflow,createSellerCustomerGroupsWorkflow,createSellerPriceListsWorkflow,linkSellerRegionsWorkflow} from "@mercurjs/core/workflows"
 import {createShippingProfilesWorkflow,addToCartWorkflow,createApiKeysWorkflow,linkSalesChannelsToApiKeyWorkflow,createRegionsWorkflow,updateRegionsWorkflow,createPaymentCollectionForCartWorkflow,createPaymentSessionsWorkflow,capturePaymentWorkflow} from "@medusajs/medusa/core-flows"
 import {B06Chrome} from "./b06-ui-browser"
+import {verifyB22MultiOrgStaleStoreResponse} from "./b22-multiorg-stale-store-response.accept"
 import {verifyB22TransferredRecovery,verifyAssignedRecipientUse,createB22CompletedSourceOrderFixture} from "./b22-store-name-transfer.accept"
 import {verifyB22ScheduledSellerWindow} from "./b22-scheduled-seller-window.accept"
 import {verifyRepeatedApprovedStoreRenameHistory} from "./b22-repeated-rename-history.accept"
@@ -4971,6 +4972,187 @@ async function verifyB22TwoStoreIndependentStaffApproval(input:{
 
 }
 
+/** #361 B22-02 source-only concurrent Owner Org / Store acceptance.
+ * Keep the exact real Chrome/HTTP/PG16 assertions outside the legacy giant
+ * runner to preserve enforceable TypeScript control-flow analysis (TS2563).
+ * The caller still uses its one real session and task-only disposable fixture.
+ */
+async function verifyB22ConcurrentOwnerOrganizationStores(input:{
+  A:{person:string};
+  organizations:Array<{id:string;name:string}>;
+  sellerGamma:{id:string;name:string};
+  ownerStoreId:string;secondOwnerStoreId:string;gammaSellerId:string;
+  container:any;native:any;browser:B06Chrome;
+  q:(sql:string,args?:unknown[])=>Promise<any[]>;
+  get:(path:string,additional?:Record<string,string>)=>Promise<any>;
+  selected:(org:string)=>string;
+}):Promise<void>{
+  const {A,organizations,sellerGamma,ownerStoreId,secondOwnerStoreId,
+    gammaSellerId,container,native,browser,q,get,selected}=input
+    // #361 B22-02: prove one real Person owns two simultaneously active
+    // Organizations while Alpha has TWO independently Staff-approved Stores
+    // and Gamma has its own approved Store. Older fixtures suspended Alpha's
+    // second Store before Gamma approval, so their individual positives never
+    // proved this concurrent scope. Reopen ONLY this disposable Seller, then
+    // restore its pre-existing suspended state before name-transfer tests.
+    const concurrentSellerIds=[ownerStoreId,secondOwnerStoreId,gammaSellerId]
+    const concurrentSecondBefore=(await native.listSellers({id:secondOwnerStoreId}))[0]
+    assert.equal(concurrentSecondBefore?.status,"suspended")
+    assert.ok(concurrentSecondBefore?.approved_at,
+      "Second Alpha Store must retain its independent Staff approval")
+    const concurrentLinksBefore=await q(
+      "select o.organization_id,o.seller_id,e.action,x.id as outbox_id "+
+      "from da_organization_seller_ownership o "+
+      "join da_audit_event e on e.id=o.verification_audit_event_id "+
+      "join da_audit_outbox x on x.source_audit_event_id=e.id "+
+      "where o.seller_id=any($1::text[]) and o.revoked_at is null",
+      [concurrentSellerIds])
+    assert.equal(concurrentLinksBefore.length,3)
+    assert.deepEqual(
+      new Set(concurrentLinksBefore.map((item:any)=>
+        item.organization_id+":"+item.seller_id)),
+      new Set([organizations[0].id+":"+ownerStoreId,
+        organizations[0].id+":"+secondOwnerStoreId,
+        sellerGamma.id+":"+gammaSellerId]))
+    assert.ok(concurrentLinksBefore.every((item:any)=>
+      item.action==="organization.store_application_created"&&item.outbox_id),
+      "Three distinct Owner-to-Store approvals require durable audit/outbox links")
+    try{
+      await unsuspendSellerWorkflow(container).run({input:{
+        seller_id:secondOwnerStoreId
+      }})
+      const concurrentNative=await Promise.all(concurrentSellerIds.map(id=>
+        native.listSellers({id})))
+      assert.ok(concurrentNative.every((rows:any[])=>rows.length===1&&
+        rows[0].status==="open"&&rows[0].approved_at),
+        "All three separate Staff-approved native Stores must be open together")
+      const concurrentNames=concurrentNative.map((rows:any[])=>String(rows[0].name))
+      const concurrentOwners=await q(
+        "select organization_id from da_organization_membership "+
+        "where person_id=$1 and organization_id=any($2::text[]) "+
+        "and role='owner' and status='active' and protected_owner=true",
+        [A.person,[organizations[0].id,sellerGamma.id]])
+      assert.deepEqual(new Set(concurrentOwners.map((x:any)=>x.organization_id)),
+        new Set([organizations[0].id,sellerGamma.id]),
+        "One real Person must own two different active Organizations")
+      const auditBeforeConcurrentReads=Number((await q(
+        "select count(*)::int n from da_audit_event"))[0].n)
+      const alphaConcurrent=await get(selected(organizations[0].id))
+      const gammaConcurrent=await get(selected(sellerGamma.id))
+      assert.equal(alphaConcurrent.status,200)
+      assert.equal(gammaConcurrent.status,200)
+      assert.equal(alphaConcurrent.body.organization_id,organizations[0].id)
+      assert.equal(gammaConcurrent.body.organization_id,sellerGamma.id)
+      assert.deepEqual(new Set(alphaConcurrent.body.stores.map((x:any)=>x.id)),
+        new Set([ownerStoreId,secondOwnerStoreId]))
+      assert.deepEqual(gammaConcurrent.body.stores.map((x:any)=>x.id),
+        [gammaSellerId])
+      const alphaPrivate=JSON.stringify(alphaConcurrent.body)
+      const gammaPrivate=JSON.stringify(gammaConcurrent.body)
+      assert.ok(!alphaPrivate.includes(gammaSellerId)&&
+        !alphaPrivate.includes(concurrentNames[2]),
+        "Alpha cannot read Gamma Seller identity or name")
+      for(let n=0;n<2;n++)
+        assert.ok(!gammaPrivate.includes(concurrentSellerIds[n])&&
+          !gammaPrivate.includes(concurrentNames[n]),
+          "Gamma cannot read either Alpha Store identity or name")
+
+      // A's Beta Admin membership is still active at this stage; only the
+      // separate Store-draft grant was revoked. The actual protected Owner
+      // membership revocation later in this runner MUST still return 403.
+      // Do not mislabel an authorized scope as an unauthorized one.
+      const betaMembership=await q(
+        "select role,status,protected_owner from da_organization_membership "+
+        "where person_id=$1 and organization_id=$2 and revoked_at is null",
+        [A.person,organizations[1].id])
+      assert.deepEqual(betaMembership,[{
+        role:"admin",status:"active",protected_owner:false
+      }],"Beta Admin must remain active until the later Owner revocation")
+      const betaAuthorized=await get(selected(organizations[1].id))
+      assert.equal(betaAuthorized.status,200,
+        "Active Beta Admin is not a revoked Organization member")
+      assert.deepEqual(betaAuthorized.body.stores,[],
+        "Authorized Beta scope must not list Alpha or Gamma Stores")
+      const betaText=JSON.stringify(betaAuthorized.body)
+      assert.ok(concurrentSellerIds.every((id,i)=>
+        !betaText.includes(id)&&!betaText.includes(concurrentNames[i])),
+        "Active Beta Admin cannot see other Organizations' Store IDs or names")
+
+      // A has no membership in this unrelated foreign Organization.
+      // A real unauthorized 403 (and all-store ID/name no-leak) remains
+      // mandatory now; Beta's real post-revocation 403 is asserted later.
+      const deniedForeign=await get(selected(organizations[2].id))
+      assert.equal(deniedForeign.status,403,
+        "Foreign Organization must reject the current Owner session")
+      const foreignText=JSON.stringify(deniedForeign.body)
+      assert.ok(concurrentSellerIds.every((id,i)=>
+        !foreignText.includes(id)&&!foreignText.includes(concurrentNames[i])),
+        "Foreign denial must not disclose ANY approved Store")
+      const forgedSeller=await browser.callFunction(
+        "async function(url,id){const r=await fetch(url,{headers:{'x-seller-id':id}});"+
+        "return {status:r.status,body:await r.json()}}",
+        selected(sellerGamma.id),ownerStoreId)
+      assert.equal(forgedSeller.status,400)
+      assert.deepEqual(forgedSeller.body,{message:"Invalid context"})
+
+      // Same existing signed MFA session and real Chrome Organization selector;
+      // no second login, synthetic cookie, hidden-tab spoofing or mock DTO.
+      await browser.send("Page.bringToFront")
+      await browser.wait("document.visibilityState==='visible'")
+      await browser.select(organizations[0].name,"owner")
+      await browser.wait("!document.getElementById('workspace').hidden&&"+
+        "document.getElementById('org-stores').textContent.includes("+
+        JSON.stringify(concurrentNames[0])+")&&"+
+        "document.getElementById('org-stores').textContent.includes("+
+        JSON.stringify(concurrentNames[1])+")")
+      assert.equal(await browser.eval(
+        "document.getElementById('org-stores').textContent.includes("+
+        JSON.stringify(concurrentNames[2])+")"),false)
+      await browser.select(sellerGamma.name,"owner")
+      await browser.wait("!document.getElementById('workspace').hidden&&"+
+        "document.getElementById('org-stores').textContent.includes("+
+        JSON.stringify(concurrentNames[2])+")")
+      for(let n=0;n<2;n++)
+        assert.equal(await browser.eval(
+          "document.getElementById('org-stores').textContent.includes("+
+          JSON.stringify(concurrentNames[n])+")"),false)
+      await verifyB22MultiOrgStaleStoreResponse({
+        browser,
+        alpha:{id:organizations[0].id,name:organizations[0].name,
+          storeIds:[ownerStoreId,secondOwnerStoreId],
+          storeNames:[concurrentNames[0],concurrentNames[1]]},
+        gamma:{id:sellerGamma.id,name:sellerGamma.name,
+          storeId:gammaSellerId,storeName:concurrentNames[2]},
+        q
+      })
+      assert.equal(Number((await q(
+        "select count(*)::int n from da_audit_event"))[0].n),
+        auditBeforeConcurrentReads,
+        "Real scoped GETs, selector changes and denials must remain read-only")
+      assert.deepEqual(await q(
+        "select o.organization_id,o.seller_id,e.action,x.id as outbox_id "+
+        "from da_organization_seller_ownership o "+
+        "join da_audit_event e on e.id=o.verification_audit_event_id "+
+        "join da_audit_outbox x on x.source_audit_event_id=e.id "+
+        "where o.seller_id=any($1::text[]) and o.revoked_at is null",
+        [concurrentSellerIds]),concurrentLinksBefore,
+        "Cross-Organization reads must preserve three durable Store links")
+    }finally{
+      // The next historical name-recovery fixture requires this Store to be
+      // suspended. Restore even when the new concurrent assertion fails.
+      const state=(await native.listSellers({id:secondOwnerStoreId}))[0]
+      if(state?.status==="open")
+        await suspendSellerWorkflow(container).run({input:{
+          seller_id:secondOwnerStoreId,
+          reason:"B22 task-only restore second Store before legacy name recovery"
+        }})
+      assert.equal((await native.listSellers({id:secondOwnerStoreId}))[0]?.status,
+        "suspended","B22 concurrent proof must restore legacy Store fixture")
+    }
+    process.stdout.write("PASS B22 Chrome: one MFA Owner in two active Organizations, Alpha two Staff-approved Stores plus Gamma one; both scoped 200, revoked/foreign 403 and no IDs/names, forged header 400, durable links/outboxes; original fixture restored\n")
+
+}
+
 export default async function({container}:any){
   const u=new URL(process.env.DATABASE_URL??"postgres://invalid/invalid")
   const preparing=process.env.B22_UI_PREPARE==="true"
@@ -9209,6 +9391,11 @@ export default async function({container}:any){
       [ownerStoreId],
       "Gamma must not enter Alpha; previously suspended second Alpha Store stays excluded")
     assert.equal(alphaAfterGamma.some((store:any)=>store.id===gammaSellerId),false)
+
+    await verifyB22ConcurrentOwnerOrganizationStores({
+      A,organizations,sellerGamma,ownerStoreId,secondOwnerStoreId,gammaSellerId,
+      container,native,browser,q,get,selected
+    })
 
     await preparePreviouslyRenamedStoreForTransfer({
       owner:browser,reviewer,organizationId:organizations[0].id,
