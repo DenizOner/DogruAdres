@@ -50,10 +50,29 @@ function child(args:string[],env:NodeJS.ProcessEnv,stage:string,timeout=210000){
     cwd:process.cwd(),env,timeout,encoding:"utf8",maxBuffer:1024*1024
   })
   if(task.error||task.status!==0){
-    // Never copy raw Medusa logs: they can contain temporary identities or tokens.
+    // Raw child output could contain ephemeral passwords, sessions and Owner reasons.
+    // Emit ONLY our fixed step names and numeric line numbers from THIS own source.
+    const text=String(task.stdout??"")+"\n"+String(task.stderr??"")
+    const allowed=[
+      "identities-ready","organizations-ready","stores-ready","email-proof-ready",
+      "https-ready","owner-browser-started","owner-strong-session",
+      "staff-browser-started","staff-strong-session","staff-grant",
+      "first-closure","first-clock","first-appeal","second-closure",
+      "second-clock","day11-request","day30-31","privacy-clean"
+    ] as const
+    const matched=[...text.matchAll(/STEP DEMIR364 scenario: ([a-z0-9-]+)/g)]
+      .map(x=>x[1]).filter(x=>allowed.some(a=>a===x))
+    const stageAt=matched.at(-1)??"none"
+    const localFrames=[...text.matchAll(/demir-364-owner-appeal-native\.accept\.ts:(\d+):(\d+)/g)]
+      .map(x=>({line:Number(x[1]),col:Number(x[2])}))
+      .filter(x=>Number.isSafeInteger(x.line)&&x.line>=1&&x.line<=1500&&
+        Number.isSafeInteger(x.col)&&x.col>=1&&x.col<=300)
+    const ownFrame=localFrames.at(-1)
+    const safeLine=ownFrame?String(ownFrame.line)+":"+String(ownFrame.col):"unavailable"
     throw Error("NATIVE_STAGE_FAIL "+stage+" exit="+String(task.status??"null")+
       " signal="+String(task.signal??"none")+
-      " code="+String((task.error as NodeJS.ErrnoException|undefined)?.code??"none"))
+      " code="+String((task.error as NodeJS.ErrnoException|undefined)?.code??"none")+
+      " checkpoint="+stageAt+" own_source_line="+safeLine)
   }
   if(stage==="prepare")assert.ok(task.stdout?.includes("PASS DEMIR364 prepare"))
   if(stage==="activation")assert.ok(task.stdout?.includes("PASS B06 disposable native activation"))
@@ -210,6 +229,7 @@ export default async function({container}:any){
         actor:rows[0].actor as string,authId:rows[0].auth_id as string}
     }
     const A=await current("A"),B=await current("B")
+    marker("STEP DEMIR364 scenario: identities-ready")
     const nonce=randomBytes(8).toString("hex")
     const orgs=await foundation.createOrganizations([
       {name:"Demir Alpha "+nonce,status:"active"},
@@ -221,6 +241,7 @@ export default async function({container}:any){
       {organization_id:orgs[1].id,person_id:B.person,role:"owner",status:"active",protected_owner:true},
       {organization_id:orgs[2].id,person_id:A.person,role:"owner",status:"active",protected_owner:true}
     ])
+    marker("STEP DEMIR364 scenario: organizations-ready")
     const nativeStores:string[]=[]
     for(let i=0;i<2;i++){
       const [s]=await seller.createSellers([{
@@ -249,12 +270,14 @@ export default async function({container}:any){
         ["daown_"+randomBytes(16).toString("hex"),orgs[2].id,s.id,audit])
       nativeStores.push(s.id as string)
     }
+    marker("STEP DEMIR364 scenario: stores-ready")
     const proof=await auth.requestAuthVerification({
       auth_identity_id:A.authId,entity_id:A.email,entity_type:"email",code_provider:"token"
     })
     assert.ok(typeof proof.code==="string")
     await auth.confirmAuthVerification({auth_identity_id:A.authId,
       code:proof.code,code_provider:"token"})
+    marker("STEP DEMIR364 scenario: email-proof-ready")
     const crt=join(temp,"ca.pem"),key=join(temp,"key.pem")
     mkdirSync(join(temp,"tax"),{recursive:true,mode:0o700})
     process.env.DOGRUADRES_TAX_CERTIFICATE_DIR=join(temp,"tax")
@@ -284,12 +307,17 @@ export default async function({container}:any){
     process.env.DOGRUADRES_TLS_CERT=crt
     process.env.DOGRUADRES_TLS_KEY=key
     process.env.DOGRUADRES_FRONTDOOR_PORT=String((tls.address() as any).port)
+    marker("STEP DEMIR364 scenario: https-ready")
     const owner=new B06Chrome(origin,"A"),staff=new B06Chrome(origin,"B")
     browsers.push(owner,staff)
     await owner.start(crt,45000)
+    marker("STEP DEMIR364 scenario: owner-browser-started")
     await owner.login(A.email,A.password,A.person)
+    marker("STEP DEMIR364 scenario: owner-strong-session")
     await staff.start(crt,45000)
+    marker("STEP DEMIR364 scenario: staff-browser-started")
     await staff.login(B.email,B.password,B.person)
+    marker("STEP DEMIR364 scenario: staff-strong-session")
     const root="/personal/platform/store-closings"
     const ownerBase="/personal/store-platform-closing"
     const ownerUrl=(s:string)=>ownerBase+"?"+
@@ -308,6 +336,7 @@ export default async function({container}:any){
       "(id,person_id,task,resource,granted_by_person_id,reason) "+
       "values($1,$2,'store.closing.manage','platform',$2,$3)",
       [grantId,B.person,"Synthetic Demir #364 independent strong Staff"])
+    marker("STEP DEMIR364 scenario: staff-grant")
     assert.equal((await browserPost(staff,root,
       {...payload(nativeStores[0]),organization_id:orgs[1].id})).status,403)
     assert.equal((await browserPost(staff,root,payload(nativeStores[0]),true)).status,403)
@@ -333,6 +362,7 @@ export default async function({container}:any){
       return p
     }
     await close(nativeStores[0])
+    marker("STEP DEMIR364 scenario: first-closure")
     assert.equal((await browserGet(staff,ownerUrl(nativeStores[0]))).status,403)
     assert.equal((await browserGet(owner,ownerUrl(nativeStores[0]))).status,200)
     const forbidden=await browserGet(owner,ownerBase+"?"+
@@ -364,6 +394,7 @@ export default async function({container}:any){
       return original
     }
     const start1=await clock(nativeStores[0])
+    marker("STEP DEMIR364 scenario: first-clock")
     const first=await browserGet(owner,ownerUrl(nativeStores[0]))
     assert.equal(first.status,200)
     assert.equal(first.body?.first_appeal_open,true)
@@ -391,6 +422,7 @@ export default async function({container}:any){
     await owner.click("#store-platform-appeal-form button")
     await owner.wait("document.getElementById('store-platform-appeal-status').textContent.includes('İtiraz kaydedildi')")
     assert.equal((await browserGet(owner,ownerUrl(nativeStores[0]))).body?.state,"appealed")
+    marker("STEP DEMIR364 scenario: first-appeal")
     const firstAudit=await q("select e.id,x.id outbox from da_audit_event e "+
       "join da_audit_outbox x on x.source_audit_event_id=e.id "+
       "where e.target_id=$1 and e.action='organization.store_platform_closing_appealed'",
@@ -399,7 +431,9 @@ export default async function({container}:any){
     // Separate live Seller: no first appeal; stage two is checked with a
     // strictly synthetic clock, never actual waiting or a payment flow.
     await close(nativeStores[1])
+    marker("STEP DEMIR364 scenario: second-closure")
     const start2=await clock(nativeStores[1])
+    marker("STEP DEMIR364 scenario: second-clock")
     const day11=new Date(Date.now()-11*86400000).toISOString()
     try{
       await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz "+
@@ -421,6 +455,7 @@ export default async function({container}:any){
       assert.equal(final.status,200,"Day11 real Owner HTTPS second-stage request")
       assert.equal(final.body.final_review_requested,true)
       assert.equal(final.body.permanent_finalization_enabled,false)
+      marker("STEP DEMIR364 scenario: day11-request")
       const finalAudit=await q("select e.id,x.id outbox from da_audit_event e "+
         "join da_audit_outbox x on x.source_audit_event_id=e.id "+
         "where e.target_id=$1 and e.action='organization.store_platform_closing_final_review_requested'",
@@ -439,6 +474,7 @@ export default async function({container}:any){
       await q("update da_store_platform_closing set deadline_started_at=$1::timestamptz "+
         "where seller_id=$2",[start2,nativeStores[1]])
     }
+    marker("STEP DEMIR364 scenario: day30-31")
     const denied=await browserGet(staff,ownerUrl(nativeStores[0]))
     assert.equal(denied.status,403)
     await owner.select(orgs[0].name,"owner")
@@ -455,6 +491,7 @@ export default async function({container}:any){
     const groups=Number((await q("select count(*)::int n from order_group"))[0].n)
     const carts=Number((await q("select count(*)::int n from cart"))[0].n)
     assert.equal(orders,0);assert.equal(groups,0);assert.equal(carts,0)
+    marker("STEP DEMIR364 scenario: privacy-clean")
     marker("PASS DEMIR364 native Owner appeal: two Organizations, strong Staff/Owner Chrome HTTPS, first appeal, synthetic day11/day30/day31, foreign/CSRF, PG16 audit/outbox; zero Cart/Order/OrderGroup/payment and finalizer disabled")
     marker("NOT TESTED DEMIR364: external mailbox delivery, real 30-day wait, independent review, full WCAG axe, concurrent replay race")
   }finally{
