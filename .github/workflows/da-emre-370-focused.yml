@@ -1,8 +1,7 @@
-# Emre #370 / PR #453 — narrowly scoped CI-first capability probe.
-# This intentionally FAILS while the real isolated 12-state Chrome/PG16
-# execution driver and B-E owner agreement are missing. An exit 2 is NOT
-# a passing end-to-end test. Do not replace it with a synthetic PASS.
-name: 'Emre #370 MFA 12-state — real runtime NOT TESTED'
+# Emre #370 r4: exclusive same-repo PR #453 disposable native acceptance.
+# Actual Medusa/Chrome/HTTPS/PG16 preflight is not full 12-case MFA PASS.
+# Deliberate no-driver sentinel was superseded; exit 2 remains NOT TESTED.
+name: 'Emre #370 MFA 12-state — disposable native target'
 
 on:
   pull_request:
@@ -11,6 +10,7 @@ on:
     paths:
       - '.github/workflows/da-emre-370-focused.yml'
       - 'quality/e2e/emre-370-mfa-12-state.accept.mjs'
+      - 'packages/api/integration-tests/postgres/emre-370-mfa-12-state-native.accept.ts'
 
 permissions:
   contents: read
@@ -20,10 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mfa370-acceptance:
-    name: '#370 exact no-driver target — BLOCKED/NOT TESTED'
-    # Running only the named author-owned same-repo PR prevents unrelated,
-    # fork, replayed or misdirected PR events from executing this job.
+  mfa370-native:
+    name: '#370 owned Medusa / Chrome / TLS / PostgreSQL16 — staged RED'
     if: >-
       ${{
         github.event_name == 'pull_request' &&
@@ -35,42 +33,96 @@ jobs:
         github.event.pull_request.base.repo.full_name == 'DenizOner/DogruAdres'
       }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 18
+    services:
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_USER: mfa_test
+          POSTGRES_PASSWORD: ci-disposable-only-not-a-real-secret
+          POSTGRES_DB: mfa_ci_ephemeral
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mfa_test -d mfa_ci_ephemeral"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
-      - name: Checkout actual PR merge ref without persistent credentials
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, pinned
+      - name: Exact own PR merge-ref checkout with no persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 2
 
-      - name: Verify approved live-main merge parent and exact PR source
+      - name: Verify own HEAD second parent and nonempty current base
         shell: bash
         env:
           EXPECTED_MERGE: ${{ github.sha }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-          # The PR event base.sha can be the stored historical base on an old PR.
-          # Validate actual merge parent against the r2-approved live main,
-          # not an event base field that GitHub can leave stale.
-          APPROVED_LIVE_MAIN: 'e87c03772b78b2226a7b8b7d1b5b2994abe99f00'
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE"
-          test "$(git rev-parse HEAD^1)" = "$APPROVED_LIVE_MAIN"
           test "$(git rev-parse HEAD^2)" = "$EXPECTED_HEAD"
+          base="$(git rev-parse HEAD^1)"
+          test "${#base}" = 40
+          test "$base" != "$EXPECTED_HEAD"
+          test -f packages/api/integration-tests/postgres/emre-370-mfa-12-state-native.accept.ts
           test -f quality/e2e/emre-370-mfa-12-state.accept.mjs
-          echo 'PR merge-ref, approved live-main parent and own exact HEAD verified. Historical event base SHA is not elevated to a current-main fact.'
+          echo 'Emre own PR HEAD and current merge-ref base verified (base content not called product PASS).'
 
-      - name: Setup pinned Node (no dependency installation)
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0, pinned
+      - name: Setup pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.22.1'
           package-manager-cache: false
 
-      - name: Run exact MFA 12-state source target; preserve no-driver failure
+      - name: Setup pinned Bun runtime
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+          no-cache: true
+
+      - name: Install own isolated source dependencies from frozen lockfile
         shell: bash
         run: |
           set -euo pipefail
-          echo 'Running the real #370 target command, not a copied/mock implementation.'
-          echo 'No authorized native Chrome/HTTPS/PG16 driver has been supplied; expected terminal status: FAIL / NOT TESTED.'
-          node quality/e2e/emre-370-mfa-12-state.accept.mjs
-          echo 'This line should be unreachable until an authorized real driver exists.'
+          test "$(bun --version)" = "1.4.2"
+          bun install --frozen-lockfile
+
+      - name: Check native prerequisites on task-owned runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v certutil >/dev/null; then
+            sudo apt-get -o Acquire::Retries=1 update -qq
+            sudo apt-get -o Acquire::Retries=1 install -y -qq libnss3-tools
+          fi
+          command -v openssl
+          command -v certutil
+          command -v google-chrome
+
+      - name: Run exact owned real Medusa Chrome HTTPS PG16 target (no synthetic PASS)
+        shell: bash
+        timeout-minutes: 12
+        working-directory: packages/api
+        env:
+          CI: 'true'
+          DA_EMRE370_TASK_JOB: own-ephemeral-services-v1
+          DA_EMRE370_PR: ${{ github.event.pull_request.number }}
+          PG_MFA_TEST_SENTINEL: mfa-pg16-disposable-ci-v1
+          PG_MFA_TEST_URL: postgres://mfa_test:ci-disposable-only-not-a-real-secret@127.0.0.1:5432/mfa_ci_ephemeral
+        run: |
+          set -euo pipefail
+          echo 'Real task-only Medusa/PG16/TLS/Chrome acceptance entry point; NOT a 12-case success declaration.'
+          bun integration-tests/postgres/emre-370-mfa-12-state-native.accept.ts
+          echo '12-case completion evidence must be independently verified; never infer it from job execution.'
